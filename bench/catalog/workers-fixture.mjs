@@ -12,7 +12,7 @@ import { apparatus, digest, sourceProof, workerCommand, workerPhaseSchema, worke
 import { verifyTimedPhase } from "./timed.mjs";
 import { preflightArtifacts, preflightBinding, preflightCases, preflightSchema, requiredRoundArtifacts } from "./preflight.mjs";
 
-export function legacyRound(failure = null) {
+export function legacyRound(failure = null, { wideGenerator = false } = {}) {
   const files = new Map(), put = (key, value) => files.set(key, typeof value === "string" ? value : JSON.stringify(value));
   const reader = { readText(key) { if (!files.has(key)) throw Object.assign(new Error(`missing ${key}`), { missing: true }); return files.get(key); },
     readJson: (key) => JSON.parse(reader.readText(key)) };
@@ -25,6 +25,10 @@ export function legacyRound(failure = null) {
     savedEvidence: { fixtureSha256 }, measurement: { encoding: "identity", fixedRate: options.rate, cpus: cpuSettings({}), appMemoryBytes: 2 ** 30 }, apps: {},
     tools: { upstream: { image: upstreamImage, imageId }, checker: { image: checkerImage, imageId },
       k6: k6Provenance({ Id: imageId, RepoDigests: [k6Image], Os: "linux", Architecture: "amd64" }, "k6 v2.4.0 (synthetic)") } };
+  if (wideGenerator) {
+    summary.measurement.loadLayout = "c16-generator-v1";
+    summary.measurement.cpus = cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-15" }, summary.measurement.loadLayout);
+  }
   put("fixture.json", fixture); put("cleanup.json", { runId: summary.runId, containers: [], networks: [] });
   const check = { jsonRecords: 500, pages: expectedPageChecks(catalog), profiles: [false, true].flatMap((javaScriptEnabled) =>
     ["desktop-light", "desktop-dark", "phone-light", "phone-dark"].map((profile) => ({ profile, javaScriptEnabled, forms: true, related: true, styles: true }))),
@@ -46,7 +50,7 @@ export function legacyRound(failure = null) {
       clock: "Docker host wall clock; container start, not process exec; polling interval 10ms" };
     summary.apps[app].runs[`${profile.source}-page`] = [{ pass, evidence: { app, ...profile, imageId }, cold, complete: true, phases: {} }];
     put(`${raw}/container.json`, { id: createHash("sha256").update(raw).digest("hex"), imageId, source: profile.source, runId: summary.runId,
-      quotaNanoCpus: 1e9, cpuset: "", memoryBytes: 2 ** 30 }); put(`${raw}/app.log`, "");
+      quotaNanoCpus: 1e9, cpuset: summary.measurement.cpus.app.cpuset ?? "", memoryBytes: 2 ** 30 }); put(`${raw}/app.log`, "");
   }
   return timedFixture({ files, put, reader, summary, commit }, failure);
 }
@@ -66,8 +70,8 @@ export function syntheticDocumentHeaders(catalog, source) {
       "cross-origin-opener-policy": "same-origin", "permissions-policy": "geolocation=()", "cache-control": "no-store" })
       .map(([name, value]) => ({ name, value })) }));
 }
-export function workerRound(failure = null, { historical = false } = {}) {
-  const f = legacyRound(failure), s = f.summary, initial = Date.parse(s.startedAt);
+export function workerRound(failure = null, { historical = false, wideGenerator = false } = {}) {
+  const f = legacyRound(failure, { wideGenerator }), s = f.summary, initial = Date.parse(s.startedAt);
   if (!historical) s.group = groupDescriptor("catalog-page");
   const catalog = records();
   s.savedEvidence.schema = workerRawSchema; s.measurement.apparatus = apparatus; s.measurement.upstreamMemoryBytes = 512 * 2 ** 20;
@@ -96,6 +100,15 @@ export function workerRound(failure = null, { historical = false } = {}) {
     const boundary = f.reader.readJson(`${prefix}/${subject.phase}-boundary.json`), { phase } = subject;
     boundary.schema = workerPhaseSchema;
     command(boundary.before.upstream); command(boundary.after.upstream);
+    if (s.measurement.loadLayout === "c16-generator-v1") {
+      const { id } = boundary.after.load, { binding, observations } = boundary.loadLimits;
+      for (const observation of observations) {
+        observation.path = observation.path.replace(binding.container, id);
+        observation.membershipBefore = observation.membershipAfter = `0::${observation.path}\n`;
+        observation.quotas[0].path = observation.path;
+      }
+      binding.container = id;
+    }
     f.put(`${prefix}/${phase}-boundary.json`, boundary);
     const start = Date.parse(boundary.after.load.state.StartedAt), end = Date.parse(boundary.after.load.state.FinishedAt);
     const epoch = start - initial + epochOffset, before = control(epoch), after = control(epoch);
@@ -190,6 +203,15 @@ export function workerRound(failure = null, { historical = false } = {}) {
     hashes: Object.fromEntries(preflightArtifacts().map((key) => [key, digest(f.reader.readText(key))])) });
   for (const entry of Object.values(s.apps)) for (const [key, runs] of Object.entries(entry.runs))
     entry.phases[key] = Object.fromEntries(phases.map((p) => [p, { ...aggregate(runs.map((r) => r.phases[p])), asked: s.options.passes }]));
+  if (wideGenerator) for (const [app, entry] of Object.entries(s.apps)) {
+    for (const runs of Object.values(entry.runs)) for (const run of runs) {
+      const raw = `${run.evidence.source}/${app}/p${run.pass}-page`, appName = `${s.runId}-${app}`;
+      f.put(`${raw}/cold-probe.json`, { id: digest(`${raw}/cold-probe`), name: `/${appName}-probe`,
+        imageId: s.tools.upstream.imageId, runId: s.runId, startedAt: run.cold.containerStartedAt,
+        finishedAt: run.cold.first200At, quotaNanoCpus: 4e9, cpuset: "4-7", memoryBytes: 256 * 2 ** 20,
+        command: ["node", "/bench/catalog/cold.mjs", `http://${appName}:8080`, "/catalog/record_1", String(s.options.startupTimeout)] });
+    }
+  }
   indexRound(f); return f;
 }
 

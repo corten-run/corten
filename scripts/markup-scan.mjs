@@ -8,10 +8,10 @@ const cases = JSON.parse(readFileSync(new URL("../crates/corten/src/html/scan-ca
 export async function checkMarkupScanner(browser) {
   const page = await browser.newPage();
   try {
-    for (const { name, html, patch = false, scripting = false, tags, browserTags, closedShadowHost, hint = false, key = false, idless = false } of cases) {
+    for (const { name, html, patch = false, scripting = false, tags, browserTags, closedShadowHost, hint = false, hintText, liveVars, key = false, idless = false } of cases) {
       const documentHtml = "<!doctype html><html><head></head><body>" + html;
       if (scripting) await page.setContent(documentHtml);
-      const got = await page.evaluate(({ html, documentHtml, patch, scripting, closedShadowHost }) => {
+      const got = await page.evaluate(({ html, documentHtml, patch, scripting, closedShadowHost, recordHintText, recordLiveVars }) => {
         let written;
         let live;
         if (patch) {
@@ -60,18 +60,23 @@ export async function checkMarkupScanner(browser) {
         };
         const pageElements = elements(live, false);
         const shown = pageElements.find((el) => el.id === "qty-hint");
+        const nonblank = shown && hasText(shown);
         const control = pageElements.find((el) => el.id === "qty");
         return {
           tags,
-          hint: Boolean(shown && hasText(shown) &&
+          hint: Boolean(nonblank &&
             (control ? !control.getAttribute("aria-describedby")?.split(/\s+/).includes("qty-hint") : !patch)),
+          ...(recordHintText ? { hintText: !shown ? "absent" : nonblank ? "nonblank" : "blank" } : {}),
+          ...(recordLiveVars ? { liveVars: pageElements.filter((el) => el.hasAttribute("data-vars")).map((el) => el.getAttribute("data-vars")) } : {}),
           key: !patch && pageElements.some((el) => el instanceof HTMLInputElement &&
             el.getAttribute("data-submit") === "" && !el.hasAttribute("value")),
           idless: patch && Array.from(live.childNodes).some((node) =>
             node.nodeType === Node.TEXT_NODE ? hasText(node) : node.nodeType === Node.ELEMENT_NODE && !node.id),
         };
-      }, { html, documentHtml, patch, scripting, closedShadowHost });
-      deepStrictEqual(got, { tags: browserTags ?? tags, hint, key, idless }, name);
+      }, { html, documentHtml, patch, scripting, closedShadowHost, recordHintText: hintText !== undefined, recordLiveVars: liveVars !== undefined });
+      deepStrictEqual(got, { tags: browserTags ?? tags, hint, key, idless,
+        ...(hintText !== undefined ? { hintText } : {}), ...(liveVars !== undefined ? { liveVars } : {}),
+      }, name);
     }
     return cases.length;
   } finally {

@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, syntheticInspection } from "./cloud-fixtures.mjs";
 import { fleetMain, fleetWorkerPaths, parseFleetArgs, productionChild, watchSupervisedHost } from "./fleet.mjs";
-import { fleetPlan, reservation, tags } from "./cloud-contract.mjs";
+import { fleetPlan, reservation, savedLoadLayout, tags } from "./cloud-contract.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
@@ -80,7 +80,7 @@ function fixture(t, flags = {}) {
     const evidence = join(local, "evidence-Synthetic"), folder = join(evidence, "campaign"), campaign = `r21-${state.token}`;
     const report = syntheticInspection("verified");
     Object.assign(report, { schema: "benchmark-isolated-group-campaign-inspection/v1", campaign,
-      selection: state.selection, groups: report.groups.filter((g) => g.group === group) });
+      selection: state.selection, groups: report.groups.filter((g) => g.group === group), loadLayout: savedLoadLayout(state) });
     mkdirSync(join(folder, campaign), { recursive: true });
     writeFileSync(join(folder, ".host-attempt.json"), JSON.stringify({ id: campaign, commit, campaignSha256: report.campaignSha256 }));
     report.reservationSha256 = fileHash(join(folder, ".host-attempt.json"));

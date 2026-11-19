@@ -969,6 +969,9 @@ before it (a route that says `unstaged` goes through none;
    ([design Limit 21](../design.md#limit-etag)), then compression. A middleware sees the `200` with the
    whole body, also when the client gets the `304`.
 
+Corten's stages hold the request once and hand it to the first middleware, or straight to the
+handler when there is none. The outer stages keep only what they need to finish the response.
+
 Access logging (`App::access_log`) is outside this order, and outside `App::layer`: it sees the
 finished response, including refusals that never reached a middleware and an error page or
 `304` that replaced what the middleware saw. An `unstaged` route is logged too when enabled.
@@ -1842,9 +1845,12 @@ a failure of its own adds it to its `default` response: JSON for a `JsonResponse
 (`item_price_get`). A route added by hand (`Api::route`, an MCP endpoint) is not in it.
 
 The document is built once, when the router is, so a type in it with no JSON Schema fails then,
-naming the type, and serving it costs a clone of its bytes. A test keeps a copy in the repository,
-for a generator or a reviewer to diff, with `corten::openapi::sync`, which rewrites the file and
-fails the test when the routes changed, as `Types::sync` does:
+naming the type, and serving it costs a clone of its bytes. Distinct Rust types with the same
+name, even the same printed path from two dependency versions, get separate component schemas
+(`Payload`, `Payload2`) and references to their own definitions. Avoid the name `Problem` for an
+app schema when using the default Problem Details response: it takes that component name. A test
+keeps a copy in the repository, for a generator or a reviewer to diff, with `corten::openapi::sync`,
+which rewrites the file and fails the test when the routes changed, as `Types::sync` does:
 
 ```rust,ignore
 #[tokio::test]

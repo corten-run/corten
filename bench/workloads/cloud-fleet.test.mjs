@@ -28,7 +28,7 @@ const droplet = (row, id = 123) => ({ id, name: row.name, tags: [...contract.tag
 test("fleet fixes the complete current registry to one unique host per group", () => {
   const fleet = plan();
   assert.equal(contract.validateFleet(fleet), fleet);
-  assert.equal(fleet.schema, "benchmark-group-fleet/v2");
+  assert.equal(fleet.schema, "benchmark-group-fleet/v3");
   assert.deepEqual(fleet.selection, contract.selection());
   assert.deepEqual(fleet.jobs.map((row) => row.group), groupNames);
   assert.equal(new Set(fleet.jobs.map((row) => row.token)).size, groupNames.length);
@@ -42,19 +42,47 @@ test("fleet fixes the complete current registry to one unique host per group", (
     assert.deepEqual(s.fleet, fleet);
     const job = contract.remoteFiles(s)["job.sh"];
     assert.ok(job.includes(`campaign-entry.mjs r21 --commit ${fleet.commit} --state-dir /bench/campaign --group ${group}`));
+    assert.equal(job.includes("--load-layout c16-generator-v1"), group === "catalog-page");
     assert.ok(!job.includes("--apps") && !job.includes("--duration") && !job.includes("--passes"));
   }
 });
 
-test("new grouped fleets bind sfo3 without retargeting an sfo2 reservation", () => {
-  const fleet = plan(), s = state(fleet), actual = droplet(fleet.jobs[0]);
-  assert.equal(catalogHost.region, "sfo2");
-  assert.deepEqual(fleet.host, { ...catalogHost, region: "sfo3" });
-  assert.deepEqual(s.host, fleet.host);
-  assert.equal(contract.assertFleetCensus([actual], fleet), true);
-  assert.throws(() => contract.assertFleetCensus([{ ...actual, region: { slug: "sfo2" } }], fleet));
-  assert.throws(() => contract.validateState({ ...s, host: catalogHost }, s.round));
-  assert.throws(() => contract.validateFleet({ ...fleet, host: catalogHost }));
+test("the reviewed roster binds only catalog to c-16/sfo2, including census and recovery", () => {
+  const fleet = plan(), s = state(fleet), [catalog, sibling] = fleet.jobs;
+  const actual = { ...droplet(catalog), size_slug: "c-16", region: { slug: "sfo2" } };
+  assert.equal(catalog.group, "catalog-page");
+  assert.deepEqual(catalog.host, { ...catalogHost, size: "c-16", region: "sfo2" });
+  assert.equal(catalog.loadLayout, "c16-generator-v1");
+  assert.deepEqual(s.host, catalog.host);
+  assert.deepEqual(fleet.host, { ...catalogHost, size: "c-8", region: "sfo3" });
+  for (const job of fleet.jobs.slice(1)) {
+    assert.equal(job.host, undefined); assert.equal(job.loadLayout, undefined);
+    assert.deepEqual(state(fleet, job.group).host, fleet.host);
+  }
+  assert.equal(contract.assertFleetCensus([actual, droplet(sibling, 124)], fleet), true);
+  assert.equal(contract.ownedDroplet([actual], s), actual);
+  for (const wrong of [droplet(catalog), { ...actual, size_slug: "c-8" }, { ...actual, region: { slug: "sfo3" } }]) {
+    assert.throws(() => contract.assertFleetCensus([wrong], fleet));
+    assert.throws(() => contract.ownedDroplet([wrong], s));
+  }
+  assert.throws(() => contract.validateState({ ...s, host: fleet.host }, s.round));
+  const { fleetSha256, ...body } = structuredClone(fleet);
+  body.jobs[0].loadLayout = "arbitrary";
+  assert.throws(() => contract.validateFleet({ ...body, fleetSha256: digest(JSON.stringify(body)) }));
+});
+
+test("uniform v2 receipts stay bound to c-8/sfo3 and cannot authorize a new launch", () => {
+  const current = plan(), { fleetSha256, ...body } = structuredClone(current);
+  body.schema = "benchmark-group-fleet/v2";
+  delete body.jobs[0].host; delete body.jobs[0].loadLayout;
+  const fleet = { ...body, fleetSha256: digest(JSON.stringify(body)) };
+  const s = { ...state(current), fleet, host: fleet.host }, owned = droplet(fleet.jobs[0]);
+  assert.equal(contract.validateFleet(fleet), fleet);
+  assert.equal(contract.validateState(s, s.round), s);
+  assert.equal(contract.ownedDroplet([owned], s), owned);
+  assert.match(remoteFiles(s)["job.sh"], /nproc\)" -ge 8/);
+  assert.doesNotMatch(remoteFiles(s)["job.sh"], /--load-layout/);
+  assert.throws(() => contract.validateLaunchFleet(fleet), /historical fleet cannot authorize launch/);
 });
 
 // Captured by evaluating the committed 9f3d3588 generator and its committed
@@ -261,16 +289,21 @@ test("group inspection is distinct from whole-campaign evidence and retains term
   const { h, options } = configured(t); await h.task({}, options).launch();
   const report = finishSupervisedFixture(h, "verified");
   report.schema = "benchmark-isolated-group-campaign-inspection/v1";
+  report.loadLayout = "c16-generator-v1";
   report.selection.groups = report.selection.groups.filter((row) => row.group === options.group);
   report.groups = report.groups.filter((row) => row.group === options.group);
   assert.equal(campaignOutcome(report, h.saved(), 0).evidenceOutcome, "validated");
   for (const alter of [(r) => r.schema = "benchmark-isolated-campaign-inspection/v1",
+    (r) => delete r.loadLayout, (r) => r.loadLayout = "arbitrary",
     (r) => r.selection.groups[0].apps.pop(), (r) => r.groups = [], (r) => r.uncollectedNativeRoots = ["partial"],
     (r) => r.collectionIntegrity = "unverified", (r) => r.commandLifecycle = "uncertain"]) {
     const r = structuredClone(report); alter(r); assert.throws(() => campaignOutcome(r, h.saved(), 0));
   }
   h.setArchive(archive([...metadata().map((row) => row.name === "exit-code" ? { ...row, body: "0\n" } : row),
     { name: "campaign/" }, { name: "campaign/fake.json", body: "{}" }]));
+  const { loadLayout, ...narrowReport } = report;
+  await assert.rejects(h.task({ inspect: async () => narrowReport }).collect(), /native campaign validation unavailable or invalid/);
+  assert.equal(h.deletes, 0);
   assert.equal(await h.task({ inspect: async () => report }).collect(), 0);
   assert.equal(h.deletes, 1); assert.ok(h.saved().destroyedAt);
   assert.equal(h.saved().fullGroupQualified, false);

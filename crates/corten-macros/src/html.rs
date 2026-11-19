@@ -14,17 +14,70 @@ use crate::tokens::{
 
 /// Elements that never have children or a closing tag.
 const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
-/// Elements whose text is not HTML (written as is, never escaped).
+/// Elements that use raw text in HTML. The parser pre-escapes their literals in known foreign content.
 const RAW_TEXT: &[&str] = &["script", "style"];
 
-/// Whether `name` is a `<script>` or `<style>` (`RAW_TEXT`, as `Gen` writes it) holding literal
-/// text with a `<` in it. `Gen` writes that text as is, so it may end its holder (`</script>`),
-/// keep a script open past its end tag (`<!--<script>`) or, in an `<svg>` or a `<math>`, open
-/// an element, and what follows it is not shown by the markup, as after `raw`. A `<` split
-/// across adjacent literals is in one of them.
+/// Whether the literal text can change how the tags after the holder are read. Foreign text is
+/// already escaped; unescaped text with an unknown context cannot contain '<'.
 fn writes_tags(name: &str, children: &[Node]) -> bool {
-    RAW_TEXT.contains(&name) && children.iter().any(|child| matches!(child, Node::Text(text) if text.contains('<')))
+    RAW_TEXT.contains(&name) && raw_text_boundary(name, children) != RawTextBoundary::Unchanged
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RawTextBoundary {
+    Unchanged,
+    EarlyClose,
+    StillOpen,
+}
+
+/// Check only the lexical transitions that can move the boundary of an HTML raw-text holder.
+/// A matching end tag with a delimiter may end it early; do not try to recover the tree after
+/// it. A script in the double-escaped state consumes its generated end tag as text.
+fn raw_text_boundary(name: &str, children: &[Node]) -> RawTextBoundary {
+    if !children.iter().any(|node| matches!(node, Node::Text(text) if text.contains('<'))) {
+        return RawTextBoundary::Unchanged;
+    }
+    let mut text = String::new();
+    for child in children {
+        match child {
+            Node::Text(literal) | Node::Markup(literal) => text.push_str(literal),
+            Node::Let(_) => {}
+            _ => break,
+        }
+    }
+    let tag = |tail: &str| {
+        let bytes = tail.as_bytes();
+        bytes.get(..name.len()).is_some_and(|start| start.eq_ignore_ascii_case(name.as_bytes()))
+            && matches!(bytes.get(name.len()), Some(b' ' | b'\t' | b'\n' | b'\r' | b'\x0c' | b'/' | b'>'))
+    };
+    let script = name == "script";
+    let mut escaped = false;
+    let mut double = false;
+    for tail in text.split('<').skip(1) {
+        if tail.strip_prefix('/').is_some_and(tag) {
+            if !double {
+                return RawTextBoundary::EarlyClose;
+            }
+            double = false;
+        } else if script {
+            if !escaped && tail.starts_with("!--") {
+                escaped = true;
+            } else if escaped && tag(tail) {
+                double = true;
+            }
+        }
+        if escaped && tail.contains("-->") {
+            escaped = false;
+            double = false;
+        }
+    }
+    if double {
+        RawTextBoundary::StillOpen
+    } else {
+        RawTextBoundary::Unchanged
+    }
+}
+
 /// The other elements whose content a browser parsing HTML reads as text (the HTML standard's
 /// RCDATA and RAWTEXT elements, `<noscript>` aside, which `<template>`'s handling covers): an
 /// element written in one is text to the browser, so `html!` refuses it there where the markup
@@ -45,7 +98,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
     // `borrowing`); any other owns it, since it may be returned.
     let capture = if inside { "" } else { "move " };
     let (scope, input) = scope_marker(input);
-    match Cursor::new(input).nodes(None).and_then(|mut nodes| {
+    match Cursor::new(input).nodes(None, false).and_then(|mut nodes| {
         if let Some(scope) = &scope {
             mark_scope(&mut nodes, scope)?;
         }
@@ -381,7 +434,7 @@ pub fn view_of(body: &Group, class: &str, params: &[(String, Vec<TokenTree>)], s
             )
         }
     };
-    let nodes = Cursor::of(&markup).nodes(None)?;
+    let nodes = Cursor::of(&markup).nodes(None, false)?;
     let mut roots = nodes.iter().filter(|n| !matches!(n, Node::Let(_)));
     let root = match (roots.next(), roots.next()) {
         (Some(root @ Node::Element { .. }), None) => root,
@@ -1053,8 +1106,7 @@ const BREAKOUT: &[&str] = &[
 const MATH_HTML_POINTS: &[&str] = &["mi", "mo", "mn", "ms", "mtext"];
 
 /// How a browser parses the content at a point of the markup, as far as this markup shows: an
-/// `html!` does not see where its view is written, so what it cannot show is `Unknown`, and a
-/// rule that depends on it does not act there.
+/// `html!` does not see where its view is written, so what it cannot show is `Unknown`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Parsing {
     /// As HTML: under an element that is HTML's wherever it lands (one of `BREAKOUT`, which a
@@ -1114,10 +1166,16 @@ fn annotation_parsing(attrs: &[Attr]) -> Parsing {
 fn breaks_out(name: &str, attrs: &[Attr]) -> bool {
     BREAKOUT.iter().any(|t| name.eq_ignore_ascii_case(t))
         || (name.eq_ignore_ascii_case("font")
-            && attrs.iter().any(|a| {
-                matches!(a, Attr::Static(n, _) | Attr::Bare(n)
-                    if ["color", "face", "size"].iter().any(|f| n.eq_ignore_ascii_case(f)))
-            }))
+            && attrs.iter().any(|a| matches!(a, Attr::Static(n, _) | Attr::Bare(n) if font_breakout_attr(n))))
+}
+
+fn font_breakout_attr(name: &str) -> bool {
+    ["color", "face", "size"].iter().any(|attr| name.eq_ignore_ascii_case(attr))
+}
+
+fn may_break_out(name: &str, attrs: &[Attr]) -> bool {
+    name.eq_ignore_ascii_case("font")
+        && attrs.iter().any(|a| matches!(a, Attr::Spread(_)) || matches!(a, Attr::Expr(n, _) if font_breakout_attr(n)))
 }
 
 /// How the children of `name` with `attrs` are parsed, in content parsed as `outer`.
@@ -1234,12 +1292,11 @@ struct Cursor {
     text_only: Option<String>,
     /// How a browser parses the content here, as far as this markup shows.
     parsing: Parsing,
-    /// Inside a `<script>` or a `<style>`, whose text `Gen` writes as is (`writes_tags`).
-    raw_text: bool,
-    /// How many nodes the markup does not show come before this point (`nesting::holds_unseen`).
-    /// After one a browser may be reading text that no later literal end tag ends (a `<script>`
-    /// whose text holds `<!--<script>`, a `<plaintext>`, a comment), so from there to the end of
-    /// the `html!` no literal element shows how it is parsed or that it holds text.
+    /// Context at the start of a `<script>` or `<style>`, whose text `Gen` writes as prepared here.
+    raw_text: Option<Parsing>,
+    /// Count of possible context changes, so a body can tell whether it added any. After
+    /// opaque output a browser may be reading text no later literal tag ends (a `<plaintext>`,
+    /// a comment, or a script whose text holds `<!--<script>`).
     opaque: usize,
 }
 
@@ -1252,7 +1309,7 @@ impl Cursor {
             aria_svg: false,
             text_only: None,
             parsing: Parsing::Unknown,
-            raw_text: false,
+            raw_text: None,
             opaque: 0,
         }
     }
@@ -1265,7 +1322,7 @@ impl Cursor {
             aria_svg: false,
             text_only: None,
             parsing: Parsing::Unknown,
-            raw_text: false,
+            raw_text: None,
             opaque: 0,
         }
     }
@@ -1315,7 +1372,8 @@ impl Cursor {
     }
 
     /// Nodes until the end, or until `</` when inside the element named `closing`.
-    fn nodes(&mut self, closing: Option<&str>) -> Result<Vec<Node>, Error> {
+    fn nodes(&mut self, closing: Option<&str>, mut html_noscript: bool) -> Result<Vec<Node>, Error> {
+        let raw_holder = closing.filter(|name| self.text_only.as_deref() == Some(*name) && RAW_TEXT.contains(name));
         let mut nodes = Vec::new();
         while !self.at_end() {
             if is_punct(self.peek(), '<') && is_punct(self.peek2(), '/') {
@@ -1333,28 +1391,59 @@ impl Cursor {
                 };
                 return err(span, format!("unexpected closing tag </{name}>{hint}"));
             }
-            let node = self.node()?;
-            // An element's own content is followed as it is read (`tag`).
-            if !matches!(node, Node::Element { .. }) && nesting::holds_unseen(std::slice::from_ref(&node)) {
-                self.unseen();
+            // An early end tag can release the text-only check. A script that will consume
+            // its closing tag is still a text holder here. Neither depends on literal encoding.
+            if let Some(name) = raw_holder.filter(|_| self.text_only.is_some()) {
+                if is_punct(self.peek(), '<')
+                    && !is_punct(self.peek2(), '!')
+                    && raw_text_boundary(name, &nodes) == RawTextBoundary::EarlyClose
+                {
+                    self.unseen();
+                }
             }
-            // Text a `<script>` or `<style>` writes as is may end it or open an element.
-            if self.raw_text && matches!(&node, Node::Text(text) if text.contains('<')) {
-                self.unseen();
+            let span = self.span();
+            let node = self.node(html_noscript)?;
+            if html_noscript {
+                // With scripting on the stylesheet is part of noscript's raw text; with it
+                // off the style is itself raw text. Keep the proof only across a static
+                // prefix that preserves both contexts, including head's metadata tags.
+                html_noscript = match &node {
+                    Node::Element { name, children, .. } if name == "style" => {
+                        let stable = children.iter().all(|node| matches!(node, Node::Text(_) | Node::Let(_)))
+                            && !writes_tags(name, children)
+                            && raw_text_boundary("noscript", children) == RawTextBoundary::Unchanged;
+                        if !stable && has_raw_delimiters(children, true) {
+                            return err(
+                                span,
+                                ambiguous_raw_text("a fallback stylesheet must be literal and leave both tag boundaries intact"),
+                            );
+                        }
+                        stable
+                    }
+                    Node::Element { name, .. } => matches!(name.as_str(), "link" | "meta"),
+                    Node::Text(text) => text.bytes().all(|byte| byte.is_ascii_whitespace()),
+                    Node::Let(_) => true,
+                    _ => false,
+                };
             }
             nodes.push(node);
+        }
+        if let Some(name) = raw_holder.filter(|_| self.text_only.is_some()) {
+            if writes_tags(name, &nodes) {
+                self.unseen();
+            }
         }
         Ok(nodes)
     }
 
-    fn node(&mut self) -> Result<Node, Error> {
+    fn node(&mut self, html_noscript: bool) -> Result<Node, Error> {
         let span = self.span();
         match self.peek().cloned() {
-            Some(TokenTree::Punct(p)) if p.as_char() == '<' => self.tag(),
+            Some(TokenTree::Punct(p)) if p.as_char() == '<' => self.tag(html_noscript),
             Some(TokenTree::Literal(lit)) => {
                 self.next();
                 match string_value(&lit).or_else(|| literal_text(&lit)) {
-                    Some(text) => Ok(Node::Text(text)),
+                    Some(text) => self.text(text, span),
                     None => err(span, "write text as a string literal: \"...\""),
                 }
             }
@@ -1367,6 +1456,7 @@ impl Cursor {
                 if is_punct(inner.first(), '.') && is_punct(inner.get(1), '.') {
                     return err(span, "{..attributes} goes inside a start tag, like <input {..attrs}>");
                 }
+                self.unseen();
                 Ok(Node::Expr(borrowing(&lent_args(g.stream()))))
             }
             Some(TokenTree::Ident(id)) => match id.to_string().as_str() {
@@ -1388,6 +1478,25 @@ impl Cursor {
             ),
             None => err(span, "unexpected end of markup"),
         }
+    }
+
+    fn text(&mut self, mut text: String, span: Span) -> Result<Node, Error> {
+        if let Some(parsing) = self.raw_text.filter(|_| text.contains(['&', '<'])) {
+            match parsing {
+                Parsing::Unknown => {
+                    return err(
+                        span,
+                        ambiguous_raw_text("the surrounding markup does not show whether it is HTML or foreign content"),
+                    )
+                }
+                Parsing::Html | Parsing::MathText => {}
+                Parsing::Svg | Parsing::Math | Parsing::AnnotationXml | Parsing::Foreign => {
+                    // Gen writes these bytes as is; the browser reads them in the data state.
+                    text = text.replace('&', "&amp;").replace('<', "&lt;");
+                }
+            }
+        }
+        Ok(Node::Text(text))
     }
 
     /// A tag name: `div`, `listing-sort`, `Card` or `ui::Card`. Returns the name, its tokens and
@@ -1426,7 +1535,7 @@ impl Cursor {
         Ok((name, stream(tokens), span))
     }
 
-    fn tag(&mut self) -> Result<Node, Error> {
+    fn tag(&mut self, html_noscript: bool) -> Result<Node, Error> {
         let open = self.span();
         self.next();
         if is_punct(self.peek(), '!') {
@@ -1444,7 +1553,7 @@ impl Cursor {
         }
         if is_punct(self.peek(), '>') {
             self.next();
-            let children = self.nodes(Some(""))?;
+            let children = self.nodes(Some(""), false)?;
             self.closing("", open)?;
             return Ok(Node::Block { head: vec![TokenStream::new()], bodies: vec![children], arms: false });
         }
@@ -1678,6 +1787,15 @@ impl Cursor {
             if let Some(why) = foreign_breakout(self.parsing, &name, &attrs) {
                 return err(name_span, why);
             }
+            if !as_html(self.parsing) && may_break_out(&name, &attrs) {
+                // A rendered color, face or size can pop the foreign ancestors, affecting both
+                // this element's children and any markup after it.
+                self.unseen();
+            }
+        } else {
+            // A component's children go where it writes them, and its output is unseen even
+            // when it takes no children.
+            self.unseen();
         }
         if !component && !self.aria_svg {
             if let Some(why) = unnamed_label(&name, &attrs) {
@@ -1695,15 +1813,9 @@ impl Cursor {
         } else {
             let outer = self.aria_svg;
             self.aria_svg = within_aria_svg(outer, &name);
-            // A component's children go where it writes them, after what it writes first, which
-            // this markup does not see. After what it does not see, a literal element shows
-            // neither how its content is parsed nor that it is read as text: a browser may still
-            // be reading a script's text there.
-            if component {
-                self.unseen();
-            }
+            let known_noscript = self.opaque == 0 && as_html(self.parsing) && name.eq_ignore_ascii_case("noscript");
             // What a `<noscript>` holds, or an element read as text where the markup does not show
-            // it is HTML's, may be text: none of it shows how anything is parsed.
+            // it is HTML's, may be text: no context-dependent structural checks reach inside.
             let hidden = !component && may_read_as_text(self.parsing, &name);
             if hidden {
                 self.opaque += 1;
@@ -1713,9 +1825,11 @@ impl Cursor {
             let outer_text = std::mem::replace(&mut self.text_only, holder);
             let inner = if shown { parsing_within(self.parsing, &name, &attrs) } else { Parsing::Unknown };
             let outer_parsing = std::mem::replace(&mut self.parsing, inner);
-            let outer_raw = std::mem::replace(&mut self.raw_text, !component && RAW_TEXT.contains(&name.as_str()));
+            let encoding = if html_noscript && name == "style" { Parsing::Html } else { inner };
+            let raw = (!component && RAW_TEXT.contains(&name.as_str())).then_some(encoding);
+            let outer_raw = std::mem::replace(&mut self.raw_text, raw);
             let seen = self.opaque;
-            let children = self.nodes(Some(&name));
+            let children = self.nodes(Some(&name), known_noscript);
             self.aria_svg = outer;
             self.text_only = outer_text;
             self.parsing = outer_parsing;
@@ -1838,21 +1952,38 @@ impl Cursor {
 
     fn block_for(&mut self) -> Result<Node, Error> {
         let keyword = self.next().unwrap();
+        let span = keyword.span();
         let (head, body) = self.until_brace("for ... in ...", true)?;
         let mut tokens = stream([keyword]);
         tokens.extend(head);
-        Ok(Node::Block { head: vec![tokens], bodies: vec![self.inner(&body).nodes(None)?], arms: false })
+        let mut changed = false;
+        let body = self.branch(&body, &mut changed)?;
+        if changed {
+            if has_raw_delimiters(&body, self.raw_text.is_some()) {
+                return err(span, ambiguous_raw_text("the loop body can change the parsing context of later iterations"));
+            }
+            self.unseen();
+        }
+        Ok(Node::Block { head: vec![tokens], bodies: vec![body], arms: false })
+    }
+
+    fn branch(&self, group: &Group, changed: &mut bool) -> Result<Vec<Node>, Error> {
+        let mut cursor = self.inner(group);
+        let nodes = cursor.nodes(None, false)?;
+        *changed |= cursor.opaque != self.opaque;
+        Ok(nodes)
     }
 
     fn block_if(&mut self) -> Result<Node, Error> {
         let mut heads = Vec::new();
         let mut bodies = Vec::new();
         let mut keyword = stream([self.next().unwrap()]);
+        let mut changed = false;
         loop {
             let (cond, body) = self.until_brace("if", false)?;
             keyword.extend(cond);
             heads.push(keyword);
-            bodies.push(self.inner(&body).nodes(None)?);
+            bodies.push(self.branch(&body, &mut changed)?);
             if !is_ident(self.peek(), "else") {
                 break;
             }
@@ -1865,11 +1996,14 @@ impl Cursor {
             match self.next() {
                 Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => {
                     heads.push(keyword);
-                    bodies.push(self.inner(&g).nodes(None)?);
+                    bodies.push(self.branch(&g, &mut changed)?);
                     break;
                 }
                 _ => return err(span, "expected { ... } or if after else"),
             }
+        }
+        if changed {
+            self.unseen();
         }
         Ok(Node::Block { head: heads, bodies, arms: false })
     }
@@ -1882,6 +2016,7 @@ impl Cursor {
         head.extend(scrutinee);
         let mut heads = vec![head];
         let mut bodies = Vec::new();
+        let mut changed = false;
         while !cursor.at_end() {
             let start = cursor.span();
             let mut pattern = Vec::new();
@@ -1900,17 +2035,44 @@ impl Cursor {
                 Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => {
                     let g = g.clone();
                     cursor.next();
-                    cursor.inner(&g).nodes(None)?
+                    self.branch(&g, &mut changed)?
                 }
-                _ => vec![cursor.node()?],
+                _ => {
+                    let node = cursor.node(false)?;
+                    changed |= cursor.opaque != self.opaque;
+                    cursor.opaque = self.opaque;
+                    cursor.parsing = self.parsing;
+                    cursor.text_only.clone_from(&self.text_only);
+                    vec![node]
+                }
             };
             bodies.push(body);
             if is_punct(cursor.peek(), ',') {
                 cursor.next();
             }
         }
+        if changed {
+            self.unseen();
+        }
         Ok(Node::Block { head: heads, bodies, arms: true })
     }
+}
+
+fn ambiguous_raw_text(reason: &str) -> String {
+    format!(
+        "<script> or <style> text containing '<' or '&' cannot be written here: {reason}; move it to markup with a known parsing context, use a #[component(js)] for behavior or a component's CSS file for styles. For a fixed HTML-only data slot, pass the complete static tag via trusted raw(...), without untrusted input"
+    )
+}
+
+/// A loop is parsed once. Even a literal already escaped for its first iteration (and now
+/// containing '&') cannot be reused if the next iteration may enter a different context.
+fn has_raw_delimiters(nodes: &[Node], raw: bool) -> bool {
+    nodes.iter().any(|node| match node {
+        Node::Element { name, children, .. } => has_raw_delimiters(children, RAW_TEXT.contains(&name.as_str())),
+        Node::Block { bodies, .. } => bodies.iter().any(|body| has_raw_delimiters(body, raw)),
+        Node::Text(text) => raw && text.contains(['<', '&']),
+        _ => false,
+    })
 }
 
 /// Generated statements, with adjacent static markup merged into one `push_str`.
@@ -2033,7 +2195,7 @@ const PARSE_REFUSALS: &str = "https://github.com/corten-run/corten/blob/main/doc
 /// `<form>` of fields after a `<tr>`), so it is left to the debug check in `Action::patch` and
 /// `corten::live`, which finds it when it is sent. Like every refusal of `html!`, each rests only
 /// on the markup between the two elements: an expression, a component, or a `<script>` or
-/// `<style>` whose text holds a `<` (`writes_tags`) before the lost element's start tag (in the
+/// `<style>` whose text may change the parsing context (`writes_tags`) before the lost element's start tag (in the
 /// first element, between the two, or in a later element that holds the lost one, before it) may
 /// write unbalanced markup (`raw("<table>")` keeps a later row in its table), so after one nothing
 /// is refused and the debug check is left to find it. What a lost top-level element holds does
@@ -2827,9 +2989,8 @@ impl Gen {
     }
 }
 
-/// Inside `<script>` and `<style>` only literal text: the browser reads their text as it is, so
-/// an expression there, written escaped as HTML, would not read back as what it was (JSON with
-/// `&quot;` is not JSON), and written as it is it could end the element.
+/// Inside `<script>` and `<style>` only literal text: in HTML an escaped expression would not
+/// read back as what it was (JSON with `&quot;` is not JSON), and unescaped it could end the element.
 fn check_raw_text(nodes: &[Node], inside: Option<&str>) -> Result<(), Error> {
     for node in nodes {
         let span = match node {
@@ -3098,11 +3259,33 @@ fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream
 #[cfg(test)]
 mod tests {
     use super::{
-        breaks_out, foreign_breakout, local_path, parsing_within, patch_top, reads_as_text, refused_path, text_only_element,
-        Attr, Node, Parsing, TopRead, BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, SVG_HTML_POINTS, TABLE_PARTS, TEMPLATE_HEAD,
-        TEXT_ONLY,
+        breaks_out, foreign_breakout, local_path, parsing_within, patch_top, raw_text_boundary, reads_as_text, refused_path,
+        text_only_element, Attr, Node, Parsing, RawTextBoundary, TopRead, BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, SVG_HTML_POINTS,
+        TABLE_PARTS, TEMPLATE_HEAD, TEXT_ONLY,
     };
     use proc_macro::TokenStream;
+
+    #[test]
+    fn html_raw_text_boundary_depends_on_the_holder_and_delimiter() {
+        use RawTextBoundary::{EarlyClose, StillOpen, Unchanged};
+        for (name, literals, expected) in [
+            ("script", &["a < b && c"][..], Unchanged),
+            ("script", &["</scripture> </script <"], EarlyClose),
+            ("script", &["</scripture> </script"], Unchanged),
+            ("script", &["</sCr", "IpT", "\t>"], EarlyClose),
+            ("style", &["</script> <!--<script>"], Unchanged),
+            ("style", &["<", "/STYLE/>"], EarlyClose),
+            ("script", &["<!", "--<scr", "ipt>"], StillOpen),
+            ("script", &["<!-- a < b"], Unchanged),
+            ("script", &["<!-- --> <script>"], Unchanged),
+            ("script", &["<!--<script> -->"], Unchanged),
+            ("script", &["<!--<script></script>"], Unchanged),
+            ("script", &["<!--<script></script></script>"], EarlyClose),
+        ] {
+            let children: Vec<_> = literals.iter().map(|literal| Node::Text((*literal).into())).collect();
+            assert_eq!(raw_text_boundary(name, &children), expected, "{literals:?}");
+        }
+    }
 
     /// Each element read as text, as each parse would read it: text in HTML, at an `<svg>`'s
     /// integration points too, and an element in an `<svg>`, a `<math>` or where the markup does

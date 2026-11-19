@@ -479,8 +479,9 @@ URL, say) refuses it, so `subscribe()` loads the snapshot again after a backoff 
 once. Against a feed that answers every stream with `sync`, one page made 544 snapshot requests
 in 3.5 s with the runtime before the backoff and 3 with it in Chromium (Firefox 328 and 3, WebKit
 221 and 3; measured with the check in `scripts/smoke.mjs`, which holds the 3). `corten-cluster`
-runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream), on
-async-nats 0.53 and SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why).
+runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream).
+The integration tests use PostgreSQL 18 and NATS JetStream. The crate uses async-nats 0.53 and
+SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why).
 An app upgrading `corten-cluster` must set `async-nats = "0.53"` in its own `Cargo.toml` too:
 `Cluster::start` takes its `async_nats::Client`.
 
@@ -575,10 +576,23 @@ bytes plus two copies each of the generation and sequence. Look on `corten::feed
   on failure). A disconnect can interrupt other feeds and other users of the shared client.
 
 The relay pipelines up to 256 ordinary patches in outbox-ID order (feed-sequence order
-within a generation) before waiting for acknowledgements. Two failures can change the
-order JetStream stores:
+within a generation) and reads ready acknowledgements while sending. The relay uses one
+NATS reply subscription while it holds the lease, with separate reply slots for each patch
+or reload-marker batch. It closes the subscription when a batch is abandoned or the relay
+stops. Missing acknowledgements do not build up reply registrations across retries, and
+a late reply to an abandoned attempt cannot retire a row. At a tiny client
+`subscription_capacity`, a pipelined burst can fill the queue and the client drops
+replies. If some patch replies arrive but others time out, the whole selection is retried,
+including rows JetStream already stored. This adds broker work even when JetStream
+deduplicates by message ID within its configured window. The relay publisher then keeps
+one patch reply outstanding at a time for its remaining lifetime, without opening more
+subscriptions. It bounds each serial pass by the lease, retires acknowledged rows while
+still holding it, and continues pending rows on later passes. No minimum
+`subscription_capacity` above the NATS client's own requirements is needed.
 
-- If an ordinary send or acknowledgement fails, all IDs selected for that attempt stay
+Two failures can change the order JetStream stores:
+
+- If a pipelined patch send or acknowledgement fails, all IDs selected for that attempt stay
   pending, even those already acknowledged. After a mid-batch disconnect, queued later
   patches of a feed can reach JetStream on the new socket before the earlier patch is
   stored on retry or a reload marker is stored in its place.

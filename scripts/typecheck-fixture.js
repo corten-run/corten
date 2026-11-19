@@ -20,6 +20,15 @@ import { register } from "corten";
 /** @typedef {import("../examples/seller-desk/types/app").Level} Level Generated from the Rust struct. */
 /** @import { FeedUrl } from "corten" */
 
+/** @import { as, AsReference } from "../crates/corten/src/type_tests/types/contextual-name" */
+
+/** @param {as} named @param {AsReference} union */
+export function contextualSchemaName(named, union) {
+  // @ts-expect-error An interface named `as` still has the field type generated from Rust.
+  named.amount.trim();
+  return named.amount.toFixed() + (typeof union === "number" ? union.toFixed() : union.amount.toFixed());
+}
+
 /** @param {import("corten").TrustedHTML} html @param {import("corten").TrustedPolicy} policy @param {AbortSignal} signal */
 export async function patchHTML(html, policy, signal) {
   await patch(html);

@@ -2,6 +2,7 @@ import streamSource from "./control-stream-source.mjs";
 
 export default String.raw`"""Fixed SSH/SFTP guardian and outside-session observer. No provider or kill API."""
 import contextlib
+import errno
 import hashlib
 import ipaddress
 import json
@@ -138,8 +139,12 @@ def proc(pid):
             exe = (directory / "exe").stat()
             executable = {"device": str(exe.st_dev), "inode": str(exe.st_ino)}
         except FileNotFoundError:
-            # Zombies still have a PID/start identity and must prevent drainage.
-            assert raw.rsplit(") ", 1)[1].split()[0] in ("Z", "X"), "userspace executable unresolved"
+            # PF_EXITING (stat field 9) may precede Z/X. Keep this identity until reaped.
+            closing = (directory / "stat").read_text()
+            current = closing.rsplit(") ", 1)[1].split()
+            assert (closing.startswith(str(pid) + " (") and current[19] == fields[18]
+                    and (current[0] in ("Z", "X") or int(current[6]) & 0x4)), "userspace executable unresolved"
+            raw = closing
     value = {"pid": pid, "startTicks": fields[18], "cgroup": cgroup, "stat": raw,
              "executable": executable, "commandSha256": sha((directory / "cmdline").read_bytes())}
     assert (directory / "stat").read_text().split(") ")[-1].split()[19] == value["startTicks"]
@@ -183,8 +188,13 @@ def scope_read(scope, rows):
     assert all(p not in (".", "..") for p in scope.split("/"))
     path = pathlib.Path("/sys/fs/cgroup" + scope)
     assert path.resolve() == path
-    exists = path.exists()
-    return {"path": scope, "exists": exists, "events": (path / "cgroup.events").read_text() if exists else None,
+    try:
+        events = (path / "cgroup.events").read_text() if path.exists() else None
+    except OSError as error:
+        if error.errno not in (errno.ENOENT, errno.ENODEV) or path.exists():
+            raise
+        events = None
+    return {"path": scope, "exists": events is not None, "events": events,
             "members": sorted(p["pid"] for p in rows.values() if member(p, scope))}
 
 
@@ -277,6 +287,7 @@ def watch(root, identifier):
     samples = []
     rows_count = 0
     while time.monotonic_ns() < deadline:
+        before = scope_read(scope, {})["events"] if samples else None
         rows = inventory()
         selected = {pid: p for pid, p in rows.items() if key(p) in known}
         changed = True
@@ -289,6 +300,11 @@ def watch(root, identifier):
                     changed = True
         assert len(known) <= 8192
         scoped = scope_read(scope, rows)
+        # A short-lived member may exit after /proc was read. Preserve both
+        # actual cgroup reads and every observed PID; this is never a final sample.
+        if (scoped["members"] and before and (not scoped["exists"]
+                or before.startswith("populated 1\n") and scoped["events"].startswith("populated 0\n"))):
+            scoped["eventsBeforeInventory"] = before
         assert all(pid in selected for pid in scoped["members"]), "unowned scope participant"
         for p in (listener, observer):
             actual = rows[p["pid"]]
@@ -446,6 +462,7 @@ def inspect_epoch(root, epoch):
     receipts, watchers = [], []
     for invocation in ledger:
         identifier = invocation["id"]
+        assert not (root / ("watch-failure-" + identifier + ".json")).exists(), "control watcher failed"
         path = root / ("receipt-" + identifier + ".json")
         if not path.exists():
             start = load(root, "start-" + identifier + ".json")
@@ -605,7 +622,7 @@ def custody(root):
         destination.mkdir(mode=0o700)
     total = 0
     for path in sorted(root.iterdir()):
-        assert re.fullmatch(r"(?:helper\.py|mutex|binding\.json|window\.json|campaign-active\.json|stream-(?:registration|lease|state|invalid|terminal|sealed|drain|audit-json-api|audit-mixed-production)\.json|stream-observations\.jsonl|(?:request|start|launcher|registration|result|receipt|intrusion)-[a-f0-9]{32}\.json|(?:seal|admission|admission-blocked)-(?:bootstrap|audit-json-api|audit-mixed-production|collection)\.json)", path.name)
+        assert re.fullmatch(r"(?:helper\.py|mutex|binding\.json|window\.json|campaign-active\.json|stream-(?:registration|lease|state|invalid|terminal|sealed|drain|audit-json-api|audit-mixed-production)\.json|stream-observations\.jsonl|(?:request|start|launcher|registration|result|receipt|intrusion|watch-failure)-[a-f0-9]{32}\.json|(?:seal|admission|admission-blocked)-(?:bootstrap|audit-json-api|audit-mixed-production|collection)\.json)", path.name)
         data = read(path, 64 * 1024 * 1024 if path.name == 'stream-observations.jsonl' else LIMIT)
         total += len(data)
         assert total <= 64 * 1024 * 1024
@@ -647,7 +664,17 @@ def main(args):
         sys.stdout.buffer.write(encoded(proof))
     elif mode == "watch":
         assert re.fullmatch(r"[a-f0-9]{32}", args[2])
-        watch(root, args[2])
+        try:
+            watch(root, args[2])
+        except Exception as error:
+            # Only a line in this exact hashed helper, never exception text or process data.
+            frame, line = error.__traceback__, 0
+            while frame:
+                if frame.tb_frame.f_code.co_filename == watch.__code__.co_filename:
+                    line = frame.tb_lineno
+                frame = frame.tb_next
+            write(root / ("watch-failure-" + args[2] + ".json"), encoded({"helperLine": line}))
+            raise
     elif mode == "inspect":
         assert args[2] in ("bootstrap", "audit-json-api", "audit-mixed-production")
         admission = inspect_epoch(root, args[2])

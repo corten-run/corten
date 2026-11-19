@@ -1,6 +1,6 @@
 // Synthetic offline observations only. These are not native qualification evidence.
 import { createHash } from "node:crypto";
-import { phaseEnvironment, phaseSchema, readTimedLoad, timedRawSchema, verifyTimedPhase } from "./timed.mjs";
+import { loadLimitsBinding, phaseEnvironment, phaseSchema, readTimedLoad, timedRawSchema, verifyTimedPhase } from "./timed.mjs";
 import { aggregate, phases } from "./contract.mjs";
 import { summarizeSamples } from "./stats.mjs";
 import { timingPlan } from "./group.mjs";
@@ -60,6 +60,9 @@ export function timedFixture(f, failure = { app: "fastapi", source: "api", pass:
       ["node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, `http://${upstreamName}:8080`, "/results/checks.json"], null, [],
       [mount(checkout, "/repo"), { ...mount(`${checkout}/bench/catalog/results/${s.round}/${source}/${app}`, "/results"), RW: true }], "exited");
     checker.id = id(`${source}/${app}/checker`); checker.budget.NetworkMode = `container:${runtime.id}`;
+    if (s.measurement.loadLayout === "c16-generator-v1") {
+      checker.budget.NanoCpus = 4e9; checker.budget.CpusetCpus = "4-7";
+    }
     checker.state.FinishedAt = stamp(tick + 100);
     f.put(`${source}/${app}/checker.json`, { runtime: checkInfo(runtime), upstream: checkInfo(upstreamInfo()), checker: checkInfo(checker),
       exit: { code: 0, signal: null, expired: false, interrupted: false } });
@@ -91,9 +94,19 @@ export function timedFixture(f, failure = { app: "fastapi", source: "api", pass:
       Object.assign(afterLoad.state, { Status: "exited", Running: false, ExitCode: basic.outcome === "failed" ? 99 : 0, StartedAt: stamp(nativeStart), FinishedAt: stamp(nativeEnd) });
       const receipt = { schema: phaseSchema, exit: { code: afterLoad.state.ExitCode, signal: null, expired: false, interrupted: false }, errors: [],
         before: { runtime, upstream, load }, after: { runtime, upstream, load: afterLoad }, observedAt: finishedAt + 10 };
+      if (s.measurement.loadLayout === "c16-generator-v1") {
+        const path = `/system.slice/docker-${load.id}.scope`, events = "populated 1\nfrozen 0\n";
+        receipt.loadLimits = { binding: loadLimitsBinding(s, { app, source, target: "page", phase }, load.id, afterLoad.state.StartedAt),
+          pid: 42, observations: Array.from({ length: seconds + 1 }, (_, i) => ({
+            startedAt: nativeStart + i * 1000 + 10, finishedAt: nativeStart + i * 1000 + 11, path,
+            pid: 42, membershipBefore: `0::${path}\n`, membershipAfter: `0::${path}\n`,
+            mount: "35 24 0:31 / /sys/fs/cgroup ro - cgroup2 cgroup rw",
+            eventsBefore: events, eventsAfter: events, effectiveCpus: "4-15\n",
+            quotas: [{ path, cpuMax: "1200000 100000\n" }, { path: "/system.slice", cpuMax: "max 100000\n" }, { path: "/", cpuMax: null }] })) };
+      }
       const names = [appName, ...(source === "api" ? [upstreamName] : [])], sampled = [...names, loadName];
       const samples = Object.fromEntries(sampled.map((name) => [name, Array.from({ length: seconds + 1 }, (_, i) => ({ t: nativeStart + i * 1000,
-        cpu: name === appName ? 99 : name === loadName ? 50 : 4, mem: 8 }))]));
+        cpu: name === appName ? 99 : name === loadName ? (s.measurement.loadLayout ? 391.36 : 50) : 4, mem: 8 }))]));
       const stats = Object.fromEntries(sampled.map((name) => [name, summarizeSamples(samples[name])]));
       const before = { [appName]: appCounter, ...(source === "api" ? { [upstreamName]: upstreamCounter } : {}) };
       const after = Object.fromEntries(names.map((name) => [name, before[name] + seconds * (name === appName ? 900000 : 40000)]));

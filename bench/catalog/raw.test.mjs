@@ -660,7 +660,7 @@ test("timed saved native replay composes failed apps with exit1, never exit99 or
     for (const [path, bytes] of f.files) { mkdirSync(dirname(join(folder, path)), { recursive: true }); writeFileSync(join(folder, path), bytes); }
     const binding = { request: { group: "catalog-page", round: f.summary.round, commit: f.commit },
       selection: { apps: f.summary.group.apps, contractSha256: f.summary.group.contractSha256 },
-      execution: { effectiveOptions: f.summary.options }, resources: { expectedCpus: f.summary.measurement.cpus }, preparation: { fixtures: [] },
+      execution: { effectiveOptions: f.summary.options }, resources: { requestedCpuEnv: {}, expectedCpus: f.summary.measurement.cpus }, preparation: { fixtures: [] },
       latestStable: { schema: latestStableSchema, group: "catalog-page", valid: true, status: "not-applicable", groupComparisonEligible: null } };
     const saved = validateSaved({ folder, round: f.summary.round, commit: f.commit });
     assert.equal(saved.status, "verified"); assert.equal(saved.report.baseline, false);
@@ -865,7 +865,7 @@ test("catalog saved API and isolated bridge reject source overlays and interrupt
       assert.equal(saved.status, "invalid"); assert.equal(saved.complete, false);
       const b = { request: { group: "catalog-page", round: f.summary.round, commit: f.commit },
         selection: { apps: f.summary.group.apps, contractSha256: f.summary.group.contractSha256 },
-        execution: { effectiveOptions: f.summary.options }, resources: { expectedCpus: f.summary.measurement.cpus } };
+        execution: { effectiveOptions: f.summary.options }, resources: { requestedCpuEnv: {}, expectedCpus: f.summary.measurement.cpus } };
       const report = await inspectNative(b, folder);
       assert.equal(report.status, "invalid"); assert.equal(report.attemptComplete, false);
       assert.ok(report.outcomes.every((row) => row.outcome === "not-run"));
@@ -880,7 +880,7 @@ test("the real catalog saved API feeds the fixed isolated replay for positive an
       for (const [path, bytes] of f.files) { mkdirSync(dirname(join(folder, path)), { recursive: true }); writeFileSync(join(folder, path), bytes); }
       const b = { request: { group: "catalog-page", round: f.summary.round, commit: f.commit },
         selection: { apps: f.summary.group.apps, contractSha256: f.summary.group.contractSha256 },
-        execution: { effectiveOptions: f.summary.options }, resources: { expectedCpus: f.summary.measurement.cpus } };
+        execution: { effectiveOptions: f.summary.options }, resources: { requestedCpuEnv: {}, expectedCpus: f.summary.measurement.cpus } };
       const report = await inspectNative(b, folder), failed = !!f.summary.timingDisposition;
       assert.equal(report.status, failed ? "failed" : "verified"); assert.equal(report.attemptComplete, true);
       assert.deepEqual(report.comparisonEligibleApps, failed ? [] : b.selection.apps);

@@ -1009,7 +1009,7 @@ fn placed_meters_listing(
 }
 
 /// Markup rendered ahead into a `Rendered` keeps its values, so its page's style block has their
-/// rules; the same markup placed with `raw` has none, which `corten dev` reports.
+/// rules; the same markup placed with `raw` has none, which a debug build in dev mode reports.
 #[tokio::test]
 async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_reported() {
     let rules = r#"[data-vars="--meter__fill:42.5%"]{--meter__fill:42.5%!important}[data-vars="--meter__fill:7%"]{--meter__fill:7%!important}"#;
@@ -1021,8 +1021,12 @@ async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_rep
     let (status, _, body) = call(placed_meters(false, |body| Box::new(crate::raw(body.as_str().to_string()))), "GET", None).await;
     assert!(status == 200 && !body.contains("<style>"), "raw markup's values are not noted: {body}");
     let (status, _, body) = call(placed_meters(true, |body| Box::new(crate::raw(body.as_str().to_string()))), "GET", None).await;
-    assert_eq!(status, 500, "{body}");
-    assert!(body.contains("data-vars=&quot;--meter__fill:42.5%&quot; and no rule for it"), "{body}");
+    if cfg!(debug_assertions) {
+        assert_eq!(status, 500, "{body}");
+        assert!(body.contains("data-vars=&quot;--meter__fill:42.5%&quot; and no rule for it"), "{body}");
+    } else {
+        assert!(status == 200 && !body.contains("<style>"), "release runs no markup check in dev mode: {body}");
+    }
     // In a debug build, a component rendered ahead counts as rendered where it is placed. A
     // release build does not note a view's components, so only a debug build reports it.
     // Outside `corten dev` too, as an app's own router test runs (#1029): the message describes the
@@ -4175,14 +4179,24 @@ async fn a_patch_the_browser_would_lose_part_of_is_sent_in_release_builds() {
     }
 }
 
-#[derive(crate::view::Id)]
-struct NoteScriptId;
+// These fixtures exercise the patch parser on exact script bytes, including text a macro at
+// an unknown insertion point cannot write as a literal.
+fn note_script(text: &'static str) -> impl crate::Patch {
+    use std::sync::atomic::AtomicUsize;
+    static SIZE: AtomicUsize = AtomicUsize::new(0);
+    crate::view::Html::new(&SIZE, move |out: &mut String| {
+        out.push_str(r#"<script id="note-script" type="text/x-template">"#);
+        out.push_str(text);
+        out.push_str("</script>");
+        crate::view::__private::Yes
+    })
+}
 
 /// A data block whose text has `<!--` and a tag that begins like `<script` (`<scriptx>`, which
 /// hides no end tag), then the message and the row.
 fn lost_after_script() -> impl crate::Patch {
     html! {
-        <script id={NoteScriptId} type="text/x-template">"<!-- <scriptx> -->"</script>
+        {note_script("<!-- <scriptx> -->")}
         <SavedNote />
         <LostRow />
     }
@@ -4281,7 +4295,7 @@ async fn a_patch_whose_script_text_carries_it_past_an_element_is_logged_in_debug
         "/blocks",
         crate::router::post(|req: Req| async move {
             req.action().ok_or_else(crate::Error::not_found)?.patch::<ForOne, AnyAnswer>(html! {
-                <script id={NoteScriptId} type="text/x-template">"<!--<script>"</script>
+                {note_script("<!--<script>")}
                 <SavedNote />
                 <script id={NoteEndId} type="text/x-template">"-->"</script>
                 <LostRow />

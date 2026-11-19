@@ -494,6 +494,65 @@ async function parsesAsHtmlMeans(browser) {
         !!document.querySelector("svg > style > g") &&
         !!document.querySelector("svg > textarea > g"),
     ],
+    // The escaped variants are the serialized literals asserted in markup_roots.rs.
+    ...["svg", "math"].flatMap((root) =>
+      ["style", "script"].flatMap((tag) => {
+        const shape = (/** @type {string} */ text) =>
+          `<${root}><${tag}${tag === "script" ? ' type="text/plain"' : ""}>${text}</${tag}></${root}>`;
+        return /** @type {typeof shapes} */ ([
+          [
+            `unescaped <${tag}> text in <${root}> opens a child and decodes a reference`,
+            shape("a <g></g> &lt; &&"),
+            () => {
+              const element = document.body.firstElementChild?.firstElementChild;
+              return element?.textContent === "a  < &&" && element.firstElementChild?.localName === "g";
+            },
+          ],
+          [
+            `escaped <${tag}> text in <${root}> is kept literally`,
+            shape("a &lt;g>&lt;/g> &amp;lt; &amp;&amp;"),
+            () => {
+              const element = document.body.firstElementChild?.firstElementChild;
+              return element?.textContent === "a <g></g> &lt; &&" && element.children.length === 0;
+            },
+          ],
+        ]);
+      }),
+    ),
+    ...["", ' color="red"'].map((attr) => /** @type {typeof shapes[number]} */ ([
+      `a foreign <font>${attr || " without color"} ${attr ? "moves" : "keeps"} styles`,
+      `<div><svg><font${attr}><style>g { fill: red }</style></font><style>g { fill: blue }</style></svg></div>`,
+      ({ XHTML, markup }) => {
+        const styles = [...document.querySelectorAll("style")];
+        const expected = markup.includes(' color="red"') ? XHTML : "http://www.w3.org/2000/svg";
+        return styles.length === 2 && styles.every((style) => style.namespaceURI === expected) &&
+          styles[0].textContent === "g { fill: red }" && styles[1].textContent === "g { fill: blue }";
+      },
+    ])),
+    [
+      "an ordinary < in repeated HTML script data does not change how the following style parses",
+      `<div><script type="text/plain">a < b</script><script type="text/plain">a < b</script><style>.card { & .title { color: red } }</style></div>`,
+      ({ XHTML }) => {
+        const scripts = [...document.querySelectorAll("div > script")];
+        const style = document.querySelector("div > style");
+        return scripts.length === 2 && scripts.every((script) => script.namespaceURI === XHTML && script.textContent === "a < b") &&
+          style?.namespaceURI === XHTML && style.textContent === ".card { & .title { color: red } }";
+      },
+    ],
+    [
+      "a comparison does not make element markup in an HTML script into an element (refused by html!)",
+      `<div><script type="text/plain">a < b<b>Draft</b></script></div>`,
+      () => !document.querySelector("b") && document.querySelector("div > script")?.textContent === "a < b<b>Draft</b>",
+    ],
+    [
+      "closing SVG between loop iterations makes the second style HTML's",
+      `<div><svg><style>a &lt; b &amp;&amp; c</style></svg><style>a < b && c</style><svg></svg></div>`,
+      ({ XHTML }) => {
+        const [foreign, html] = [...document.querySelectorAll("style")];
+        return foreign?.namespaceURI === "http://www.w3.org/2000/svg" && html?.namespaceURI === XHTML &&
+          foreign.textContent === "a < b && c" && html.textContent === "a < b && c";
+      },
+    ],
     [
       "an element in a <title> in an <mi> is text (refused by html!)",
       `<p><math><mi><title><b>x</b></title></mi></math></p>`,
@@ -1036,6 +1095,42 @@ async function run(browser) {
     check("abort sees the patch's replacement or removal, not a script's removal, and drawn open survives script edits",
       roots.replaced === "smoke-patch-root" && roots.expired && roots.drawn && roots.removed === "removed" && roots.script === "none",
       JSON.stringify(roots));
+    await scoped.route("**/patch-order.js", (route) => route.fulfill({ contentType: "text/javascript", body: `
+      export const seen = { heard: 0 };
+      let old;
+      export function watch(signal) {
+        old = signal;
+        document.addEventListener("smoke-patch-connect", () => { seen.heard += 1; }, { signal });
+      }
+      export function focus(refs) { seen.ref = refs.map((ref) => ref.textContent); }
+      export function connect(el, refs) {
+        seen.connectRefs = refs.map((ref) => ref.textContent);
+        seen.aborted = old.aborted;
+        seen.vars = getComputedStyle(el).getPropertyValue("--smoke-state").trim();
+        seen.current = el.querySelector("a").getAttribute("aria-current");
+        document.dispatchEvent(new Event("smoke-patch-connect"));
+      }
+    ` }));
+    const order = await scoped.evaluate(async () => {
+      const { patch } = await import("corten");
+      const __html = /** @type {any} */ (window).__html;
+      const main = document.querySelector("main");
+      main?.insertAdjacentHTML("beforeend", __html('<section id="smoke-order"></section>'));
+      const first = '<div id="smoke-first" tabindex="0" data-on="focus:patch-order.focus(*part)';
+      await patch(__html(`<section id="smoke-order" data-scope="smoke-order"><span data-ref="part">kept</span>${first} connect:patch-order.watch($s)"></div><div id="smoke-later"></div></section>`));
+      // Warm the cache with a ref that stays attached, then add a ref in the replacement.
+      document.getElementById("smoke-first")?.focus();
+      await patch(__html(`${first}"><span data-ref="part">new</span></div><nav id="smoke-later" data-vars="--smoke-state:ready" data-on="connect:patch-order.connect($t,*part)"><a data-nav href="/smoke/scoped">Here</a></nav>`));
+      const scripts = document.querySelector('meta[name="corten-scripts"]')?.getAttribute("content");
+      const { seen } = await import(new URL(`${scripts}patch-order.js`, location.href).href);
+      return seen;
+    });
+    check("a ref-taking focus handler sees the first replacement before the patch ends", order.ref?.join() === "kept,new", JSON.stringify(order));
+    check("a later patch connect sees the surviving and added refs", order.connectRefs?.join() === "kept,new", JSON.stringify(order));
+    check("a removed component is aborted before a later patch connect dispatches an event",
+      order.aborted && order.heard === 0, JSON.stringify(order));
+    check("a later patch connect sees the applied CSS variables and current nav link",
+      order.vars === "ready" && order.current === "page", JSON.stringify(order));
     await scoped.close();
   }
   // Without the Navigation API every navigation is a full page load, the documented fallback: the

@@ -48,11 +48,12 @@ function documentHeaderScope(summary, group, apps) {
   return { contract: documentHeaderContract, scope: recorded === undefined ? "inferred from header evidence" : "recorded by the runner",
     checked: apps.filter((app) => leanApps.includes(app)), unchecked: apps.filter((app) => !leanApps.includes(app)) };
 }
-function validCpuSettings(cpus) {
+function validCpuSettings(cpus, loadLayout, grouped) {
   try {
     const roles = ["app", "load", "api"];
     if (!roles.every((role) => cpus?.[role]?.cpuset === null || (typeof cpus?.[role]?.cpuset === "string" && cpus[role].cpuset.length > 0))) return false;
-    const checked = cpuSettings(Object.fromEntries(roles.map((role) => [`CATALOG_${role.toUpperCase()}_CPUS`, cpus[role].cpuset])));
+    if (loadLayout !== undefined && !grouped) return false;
+    const checked = cpuSettings(Object.fromEntries(roles.map((role) => [`CATALOG_${role.toUpperCase()}_CPUS`, cpus[role].cpuset])), loadLayout);
     return roles.every((role) => cpus[role].quota === checked[role].quota);
   } catch { return false; }
 }
@@ -97,7 +98,7 @@ export function inspectCatalog(summary, expectedCommit) {
     ...(group ? { commitAfter: summary.commitAfter, dirtyAfter: summary.dirtyAfter } : {}) };
   const configurationComplete = [config.duration, config.warmup, config.rate].every((n) => Number.isSafeInteger(n) && n > 0)
     && config.encoding === "identity" && summary.measurement?.fixedRate === config.rate
-    && validCpuSettings(config.cpus);
+    && validCpuSettings(config.cpus, summary.measurement?.loadLayout, group?.descriptor?.group === "catalog-page" && workers);
   if (!configurationComplete) warnings.push("Measurement configuration is missing or inconsistent; duration, warmup, fixed rate, encoding and CPU placement must be recorded.");
   let everyCheck = true;
   let everyPass = true;

@@ -20,7 +20,7 @@ import { createClientWorkload } from "../client.mjs";
 import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../live/native.mjs";
 import { fanoutProfile } from "../../live/fanout.mjs";
 import { budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
-import { providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
+import { catalogFleetPlacement, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
 
 export const schema = "benchmark-isolated-contract/v1";
 const root = fileURLToPath(new URL("../../../", import.meta.url));
@@ -129,7 +129,8 @@ const selection = (group) => ({ registry: registrySchema, group, contractSha256:
   definition: clone(definition(group)), apps: selectedApps(group), retainedFamilies: clone(retainedFamilies) });
 
 function subjectFor(r, sources, campaignMode) {
-  assert.ok(campaignMode === "dedicated" || campaignMode === "legacy", "unknown campaign placement");
+  assert.ok(campaignMode === "dedicated" || campaignMode === "legacy"
+    || campaignMode === catalogFleetPlacement.loadLayout && r.group === "catalog-page", "unknown campaign placement");
   const inputs = Object.fromEntries(Object.entries(latestStableSources).filter(([key]) => key === "policy" || r.group === "client-heavy").map(([key, path]) => {
     const bytes = git(["show", `${r.commit}:${path}`]);
     assert.equal(sources.files.find((file) => file.path === path)?.sha256, sha256(bytes), `${path}: latest-stable source differs`);
@@ -222,7 +223,7 @@ function native(group, round, recipe, reviewId) {
       note: "Build/output/review-reference options are explicit preparation, not timing-default changes" } };
 }
 
-function resources(group, recipe) {
+function resources(group, recipe, campaignMode) {
   if (group === "mixed-production") return { functional: { app: { cpu: 1, memoryBytes: 2 ** 30 },
     upstream: { cpu: 2, memoryBytes: 512 * 2 ** 20 }, capture: { cpu: 2, memoryBytes: 2 ** 30 }, pinning: "not available in functional capture" },
     measurement: ["mixed-measure", "mixed-production-measure"].includes(recipe) ? { cpu: cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
@@ -231,9 +232,11 @@ function resources(group, recipe) {
     state: "unknown", requiredEvidence: "separate functional and measured participants, actual runtime limits/cpusets, calibration/headroom and quiet-host observations" };
   const prefix = { "catalog-page": "CATALOG", "json-api": "JSON_API", "localized-marketplace": "MARKETPLACE", "mixed-production": "MIXED_PRODUCTION" }[group];
   if (prefix) {
-    const env = Object.fromEntries(Object.entries({ APP: "1", API: "2-3", LOAD: "4-7" }).map(([role, value]) => [`${prefix}_${role}_CPUS`, value]));
+    const wide = campaignMode === catalogFleetPlacement.loadLayout;
+    const env = wide ? { ...catalogFleetPlacement.cpuEnv, CATALOG_LOAD_LAYOUT: campaignMode }
+      : Object.fromEntries(Object.entries({ APP: "1", API: "2-3", LOAD: "4-7" }).map(([role, value]) => [`${prefix}_${role}_CPUS`, value]));
     return { nativeCpuDefaults: cpuSettings({}), requestedCpuEnv: env,
-      expectedCpus: cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
+      expectedCpus: wide ? cpuSettings(env, campaignMode) : cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
       memoryBytes: { app: 2 ** 30, upstream: 512 * 2 ** 20, load: 2 ** 31 },
       hostProcesses: "unisolated driver; JSON functional checker also runs on host", state: "unknown",
       requiredEvidence: "actual per-role container quotas/cpusets/memory, tool identities, host topology and quiet-host/headroom observations" };
@@ -289,7 +292,7 @@ function build(r, sources, review, campaignMode) {
   const checks = validation(r.group, execution.operationalOptions.artifactRoot);
   if (checks.validator?.commitOption) checks.validator.argv.push(checks.validator.commitOption, r.commit);
   const body = { ...subject, subjectSha256, sources, review: declaredReview, execution,
-    preparation: preparation(r.group), resources: resources(r.group, r.recipe), validation: checks,
+    preparation: preparation(r.group), resources: resources(r.group, r.recipe, campaignMode), validation: checks,
     coverage: coverage(r.group), status: { binding: "verified-offline", nativeEvidence: "unknown", ready: false, executionAuthorized: false,
       blockers: ["offline binding has not executed a native worker or collected evidence", "merged-source and independent parity/deployment review not established",
         "fresh host, actual runtime configuration, isolation and cleanup evidence not observed",

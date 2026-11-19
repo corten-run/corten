@@ -2,16 +2,20 @@
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { memoryMiB, summarizeSamples } from "./stats.mjs";
 import { leanApps, leanProfile } from "./contract.mjs";
 import { workerAware, workerPhaseSchema, workerCommand, verifyWorkers, workerHeadroom } from "./apparatus.mjs";
+import { observeLoadLimits, verifyLoadLimits } from "./cgroup.mjs";
 
 export const timedRawSchema = "catalog-saved-evidence/v3";
 export const phaseSchema = "catalog-timed-phase/v1";
 const same = (a, b, message) => assert.ok(isDeepStrictEqual(a, b), message);
 const count = (n) => Number.isSafeInteger(n) && n >= 0;
 const finite = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0;
+const wideGenerator = (summary) => summary.measurement.loadLayout === "c16-generator-v1";
+export const loadLimitsBinding = ({ runId }, { app, source, target, phase }, container, startedAt) => ({ runId, app, source, target, phase, container, startedAt });
 export const phaseEnvironment = (name, target, phase, seconds, rate) => ({
   BASE: `http://${name}:8080`, TARGET: target, DURATION: `${seconds}s`, MODE: phase === "fixed" ? "fixed" : "closed",
   RATE: String(rate), VUS: String(phase === "sat256" ? 256 : phase === "warmup" ? 32 : 64), CATALOG_TIMED_EVIDENCE: "1",
@@ -83,12 +87,14 @@ function healthy(info, summary, name, image, role, memory, status) {
   if (status === "created") assert.ok(Date.parse(info.state.StartedAt) <= 0, "load container was already started");
 }
 
-export function verifyTimedPhase(summary, { app, source, target, phase, seconds, instance }, { readJson, readText }, previous = {}) {
+export function verifyTimedPhase(summary, subject, { readJson, readText }, previous = {}) {
+  const { app, source, target, phase, seconds, instance } = subject;
   const metrics = readTimedLoad(readJson(`${phase}.json`)), proof = readJson(`${phase}-cpu-counters.json`), receipt = readJson(`${phase}-boundary.json`);
   const appName = `${summary.runId}-${app}`, upstreamName = `${summary.runId}-upstream`, loadName = `${summary.runId}-k6`;
   const workers = workerAware(summary);
   const names = [appName, ...(source === "api" || workers ? [upstreamName] : [])], sampled = [...names, loadName];
-  same(Object.keys(receipt).sort(), ["schema", "exit", "errors", "before", "after", "observedAt"].sort(), "timed boundary fields differ");
+  const wide = wideGenerator(summary);
+  same(Object.keys(receipt).sort(), ["schema", "exit", "errors", "before", "after", "observedAt", ...(wide ? ["loadLimits"] : [])].sort(), "timed boundary fields differ");
   assert.equal(receipt.schema, workers ? workerPhaseSchema : phaseSchema); same(receipt.errors, [], "timed apparatus errors retained");
   same(receipt.exit, { code: metrics.outcome === "failed" ? 99 : 0, signal: null, expired: false, interrupted: false }, "timed native exit is not a normal matching threshold exit");
   assert.ok(Number.isSafeInteger(proof.startedAt) && Number.isSafeInteger(proof.finishedAt) && proof.startedAt >= Date.parse(summary.startedAt)
@@ -131,6 +137,18 @@ export function verifyTimedPhase(summary, { app, source, target, phase, seconds,
   assert.equal(load.state.ExitCode, receipt.exit.code);
   assert.ok(Number.isFinite(start) && Number.isFinite(end) && start >= proof.startedAt && end <= proof.finishedAt
     && end - start >= seconds * 1000 && end - start <= (seconds + 25) * 1000, "timed native duration incomplete");
+  if (wide) {
+    same(receipt.loadLimits?.binding, loadLimitsBinding(summary, subject, load.id, load.state.StartedAt), "load cgroup phase binding differs");
+    const { observations, pid } = receipt.loadLimits;
+    assert.ok(Array.isArray(observations) && observations.length >= 2 && observations.length <= (seconds + 25) * 4, "load cgroup sample count differs");
+    let last = start;
+    for (const sample of observations) {
+      verifyLoadLimits(sample, load.id, { start, end, pid, ...summary.measurement.cpus.load });
+      assert.ok(sample.startedAt >= last && sample.finishedAt - last <= 2000, "load cgroup sampling gap");
+      last = sample.finishedAt;
+    }
+    assert.ok(end - last <= 2000, "load cgroup sampling stopped early");
+  }
   for (const key of ["ids", "before", "after"]) same(Object.keys(proof[key]).sort(), [...names].sort(), "timed CPU inventory differs");
   const deltas = readJson(`${phase}-cpu.json`), stats = readJson(`${phase}-stats.log.json`);
   same(Object.keys(deltas).sort(), [...names].sort(), "timed CPU delta inventory differs");
@@ -164,8 +182,10 @@ export function verifyTimedPhase(summary, { app, source, target, phase, seconds,
   const workerEvidence = workers ? readJson(`${phase}-workers.json`) : null;
   const workerPeaks = workers ? verifyWorkers(summary, { app, source, target, phase }, workerEvidence,
     { start, end, container: receipt.after.upstream }) : null;
-  if (metrics.outcome === "failed") {
+  if (metrics.outcome === "failed" || wide) {
     assert.ok(derived[loadName].cpuMaxPct < summary.measurement.cpus.load.quota * 80, "load generator has no demonstrated CPU headroom");
+  }
+  if (metrics.outcome === "failed") {
     if (source === "api") {
       if (workers) workerHeadroom(workerPeaks, derived[upstreamName].cpuMaxPct);
       else assert.ok(derived[upstreamName].cpuMaxPct < 80, "busy upstream cannot establish an app request outcome");
@@ -212,18 +232,47 @@ export function verifyTimedContinuity(observations) {
   }
 }
 
+export async function collectLoadLimits(docker, summary, subject, id, readLimits = observeLoadLimits) {
+  const deadline = performance.now() + (subject.seconds + 25) * 1000;
+  const observations = [];
+  let binding, pid;
+  do {
+    const state = JSON.parse(await docker(["inspect", "--format", "{{json .State}}", id], { timeout: 2000 }));
+    if (state.Running && state.Status === "running") {
+      binding ??= loadLimitsBinding(summary, subject, id, state.StartedAt);
+      pid ??= state.Pid;
+      assert.ok(state.Pid === pid && state.StartedAt === binding.startedAt, "live generator changed");
+      try { observations.push(readLimits(id, pid)); }
+      catch (e) {
+        // Procfs/cgroupfs can disappear before Docker publishes its exit. The
+        // final inspect after start -a establishes exit; replay checks that
+        // the retained samples reach that exit, not this observer's clock.
+        if (!observations.length || !["ENOENT", "ESRCH"].includes(e.code)) throw e;
+        break;
+      }
+      await sleep(500);
+      continue;
+    }
+    if (state.Status === "exited") break;
+    assert.ok(!binding && state.Status === "created", "unexpected load state during cgroup observation");
+    await sleep(50);
+  } while (performance.now() < deadline);
+  return { binding, pid, observations };
+}
+
 // Dependencies are the native runner's existing bounded commands, never saved code.
 export async function collectTimedPhase(context, subject) {
   const { summary, raw, docker, owned, inspect, remove, cpu, sampleStats, cpus, mount, k6Image, upstreamControl } = context;
   const { app, source, target, phase, seconds } = subject, name = `${summary.runId}-${app}`, container = `${summary.runId}-k6`;
   const workers = workerAware(summary);
+  const wide = wideGenerator(summary);
   const names = [name, ...(source === "api" || workers ? [`${summary.runId}-upstream`] : [])];
   const receipt = { schema: workers ? workerPhaseSchema : phaseSchema, exit: null, errors: [], before: {}, after: {}, observedAt: null };
   const error = (stage, e) => receipt.errors.push({ stage, message: e.message ?? String(e) });
   const attempt = async (stage, fn) => { try { return await fn(); } catch (e) { error(stage, e); } };
   const participants = async () => Object.fromEntries(await Promise.all([["runtime", name], ["upstream", `${summary.runId}-upstream`], ["load", container]]
     .map(async ([role, id]) => [role, timedContainerEvidence(await inspect(id))])));
-  let before, after, sampler, startedAt, finishedAt, workerBefore, workerAfter, observation, observing = false;
+  let before, after, sampler, startedAt, finishedAt, workerBefore, workerAfter, observation, loadLimits, observing = false;
   try {
     await attempt("create", () => owned(["create", "--network", `${summary.runId}-net`, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount,
       ...Object.entries(phaseEnvironment(name, target, phase, seconds, summary.options.rate)).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
@@ -238,11 +287,15 @@ export async function collectTimedPhase(context, subject) {
     if (!receipt.errors.length) {
       sampler = await attempt("sampler start", () => sampleStats([...names, container], join(raw, `${phase}-stats.log`), seconds + 35));
       if (!receipt.errors.length) try {
-        await docker(["start", "-a", container], { timeout: (seconds + 25) * 1000, file: join(raw, `${phase}.log`) });
+        const load = wide ? receipt.before.load.id : container;
+        const loadCommand = docker(["start", "-a", load], { timeout: (seconds + 25) * 1000, file: join(raw, `${phase}.log`) });
+        if (wide) loadLimits = attempt("live load cgroup", () => collectLoadLimits(docker, summary, subject, load));
+        await loadCommand;
         receipt.exit = { code: 0, signal: null, expired: false, interrupted: false };
       } catch (e) { receipt.exit = e.exit ?? null; if (!e.exit || e.exit.code !== 99 || e.exit.signal !== null || e.exit.expired || e.exit.interrupted) error("load command", e); }
     }
   } finally {
+    if (wide) receipt.loadLimits = await loadLimits ?? null;
     if (sampler) await attempt("sampler stop", () => sampler.stop());
     if (observing) {
       observation = await attempt("worker sampler stop", () => upstreamControl({ observation: "end" }));

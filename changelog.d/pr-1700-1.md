@@ -1,0 +1,1 @@
+- The deploy guide's nginx sample and the site config limit shared caching to versioned public assets, leaving private pages free to return `304` on reload.
