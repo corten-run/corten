@@ -338,6 +338,8 @@ fn ShipForm() -> impl Render {
     let f = Shipment::FIELDS;
     let out = refs();
     let parcel = f.parcels.at(&1).weight;
+    // An alias keeps the deliberate mismatch a runtime test.
+    let service = f.service;
     html! {
         <div>
             <form id={ShipFormId} on:dblclick={js::mark(f.weight, target)}>
@@ -352,7 +354,7 @@ fn ShipForm() -> impl Render {
                     <li>"Mark from the list"</li>
                 </ul>
                 <button type="button" on:click={js::count(f.extras, target)}>"Count extras"</button>
-                <button type="button" on:click={js::count(f.service, target)}>"Count services"</button>
+                <button type="button" on:click={js::count(service, target)}>"Count services"</button>
             </form>
             <form><button type="button" on:click={js::weigh(f.weight)}>"Weigh elsewhere"</button></form>
             <button type="button" form={ShipFormId} on:click={js::mark(f.weight, target)}>"Mark from outside"</button>

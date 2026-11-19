@@ -651,8 +651,9 @@ deref!(Form);
 /// A handler is given a field as its control (`js::fill(f.weight)`): a parameter typed
 /// `HTMLInputElement`, `HTMLSelectElement`, `HTMLTextAreaElement` or `HTMLInputElement[]` (radios
 /// or checkboxes that share the name) takes one, and the runtime finds it by its name in the
-/// handler's form when the handler runs. Which kind the form draws is not in the name, so the call
-/// is checked against the parameter's type and the runtime checks the control
+/// handler's form when the handler runs. Which kind the form draws is not in the name. When
+/// `html!` sees a matching `name={..}` in the same form it also checks the drawn control against
+/// the parameter; the runtime always checks the control it finds
 /// (`docs/guide/scripts.md`, Form fields):
 ///
 /// ```
@@ -670,6 +671,24 @@ deref!(Form);
 /// select(f.weight);
 /// note(f.weight);
 /// group(f.gift);
+/// ```
+///
+/// A select drawn for a field in the handler's form cannot be passed as an input:
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// corten::script::script!(mod shipping = "field_check.js");
+///
+/// #[derive(Fields)]
+/// struct Ship { weight: String }
+///
+/// let f = Ship::FIELDS;
+/// let _ = html! {
+///     <form>
+///         <select name={f.weight}></select>
+///         <button on:click={shipping::input(f.weight)}>"Fill"</button>
+///     </form>
+/// };
 /// ```
 ///
 /// It is not text, so a script is never given a name to look a control up by:

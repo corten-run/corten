@@ -119,6 +119,94 @@ fn an_option_in_an_attribute_says_what_it_takes() {
     assert!(ok, "an Option of a UrlValue enum: {stderr}");
 }
 
+#[test]
+fn a_form_field_mismatch_names_its_drawn_kind_and_parameter_type() {
+    let dir = "field-kind-message";
+    let script = include_str!("../src/field_check.js");
+    write(&Path::new(env!("CARGO_TARGET_TMPDIR")).join(dir).join("src/field_check.js"), script);
+    let app = |controls: &str, handler: &str| {
+        format!(
+            r#"#![forbid(unreachable_code)]
+            use corten::prelude::*;
+            corten::script::script!(mod js = "field_check.js");
+            #[derive(Fields)]
+            struct Ship {{ weight: String }}
+            #[derive(Id)]
+            struct ShipId;
+            fn main() {{
+                let f = Ship::FIELDS;
+                let _ = html! {{
+                    <button form={{ShipId}} on:click={{{handler}}}>"Fill"</button>
+                    <form id={{ShipId}}>{controls}</form>
+                }};
+            }}"#
+        )
+    };
+    for (controls, handler, kind) in [
+        ("<select name={f.weight}></select>", "js::input(f.weight)", "HTMLSelectElement"),
+        ("<textarea name={f.weight}></textarea>", "js::input(f.weight)", "HTMLTextAreaElement"),
+        (r#"<input type="radio" name={f.weight}><input type="radio" name={f.weight}>"#, "js::input(f.weight)", "Array<"),
+    ] {
+        let (ok, stderr) = build_main(dir, &app(controls, handler));
+        assert!(!ok, "the field drawn as {kind} compiled as an input");
+        let headline = stderr.lines().find(|line| line.starts_with("error[E0277]")).unwrap_or("");
+        assert!(headline.contains("does not match the handler's JSDoc type") && headline.contains(kind), "{stderr}");
+        assert!(headline.contains("HTMLInputElement"), "{stderr}");
+    }
+    for (controls, handler) in [
+        (r#"<input type={"checkbox"} name={f.weight}><input type="checkbox" name={f.weight}>"#, "js::input(f.weight)"),
+        ("<select name={f.weight}></select>", "js::input({ let w = f.weight; w })"),
+        (r#"<input type="checkbox" name={f.weight}>"#, "js::inputs(f.weight)"),
+    ] {
+        let (ok, stderr) = build_main(dir, &app(controls, handler));
+        assert!(ok, "{stderr}");
+    }
+    let (ok, stderr) = build_main(
+        dir,
+        r#"use corten::prelude::*;
+        corten::script::script!(mod js = "field_check.js");
+        #[derive(Fields)]
+        struct Ship { weight: String }
+        #[derive(Id)]
+        struct ShipId;
+        fn main() {
+            let f = Ship::FIELDS;
+            let weight = f.weight;
+            let id: Option<ShipId> = None;
+            let _ = html! {
+                <form id={id}><select name={f.weight}></select></form>
+                <form>
+                    <input name={weight}>
+                    <button form={id} on:click={js::input(f.weight)}>"Fill"</button>
+                </form>
+            };
+        }"#,
+    );
+    assert!(ok, "an optional ID may leave the button in the form around it: {stderr}");
+    let (ok, stderr) = build_main(
+        dir,
+        r#"use corten::prelude::*;
+        corten::script::script!(mod js = "field_check.js");
+        #[derive(Fields)]
+        struct Ship { weight: String }
+        #[derive(Id)]
+        struct ShipId(String);
+        fn take(_: ShipId) -> &'static str { "" }
+        fn main() {
+            let f = Ship::FIELDS;
+            let _ = html! {
+                let id = ShipId(String::from("weight"));
+                <form id={id}>
+                    <input form={id} name={f.weight}>
+                    {take(id)}
+                    <button on:click={js::input(f.weight)}>"Fill"</button>
+                </form>
+            };
+        }"#,
+    );
+    assert!(ok, "a form ID need not still be available in the handler: {stderr}");
+}
+
 /// A number for the fourteenth of a handler's sixteen parameters is refused at the number, in
 /// Corten's words, as a wrong first argument is; no error's headline names the private `Args`
 /// that holds the arguments (nor `Both`, which holds them past twelve), as the twelve-argument

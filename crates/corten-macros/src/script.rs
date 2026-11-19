@@ -287,6 +287,17 @@ impl Module {
 /// `Args` to (its `args!` list). The two change together.
 const TUPLE: usize = 12;
 
+/// The path to an argument in the tuple (or tree of tuples) that a call returns.
+pub(crate) fn arg_position(i: usize, len: usize) -> TokenStream {
+    if len <= TUPLE {
+        format!("::corten::script::__private::Slot<{i}>").parse().expect("a type parses")
+    } else {
+        let half = len / 2;
+        let (side, pos) = if i < half { ("Left", arg_position(i, half)) } else { ("Right", arg_position(i - half, len - half)) };
+        q(&format!("::corten::script::__private::{side}<__A0>"), &[pos])
+    }
+}
+
 /// `items` as one tuple when it takes them (`()` for none, `(a,)` for one), else `both` (`Both(..)`
 /// for a value, `Both<..>` for its type) of its two halves, each made the same way.
 fn tree(items: &[TokenStream], both: &str) -> TokenStream {

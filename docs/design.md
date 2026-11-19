@@ -5368,9 +5368,10 @@ rules something out.
     for either), keeps the controls whose `name` is the field's (the index also holds ids), and
     gives the one control of the name with the kind's tag, or every input of it for a group (`[]`
     for none); a control a patch replaced is the new one, as a ref's is. Anything else runs nothing
-    and throws what the call takes and what the form has instead, in the words `corten dev` uses. Whether the form draws the field as the kind the
-    handler takes cannot be known when the crate compiles ([Limit 32](#limit-field-kind)), so
-    `corten dev` reports such a call, with what the form has, when a page or a later draw puts it
+    and throws what the call takes and what the form has instead, in the words `corten dev` uses.
+    Where a call and a matching control are drawn in one `html!`, the compiler also checks the
+    control's kind without changing the binding it writes. For the cases it cannot see
+    ([Limit 32](#limit-field-kind)), `corten dev` reports a mismatch when a page or a later draw puts the call
     on the page. Behavior is still a function the markup calls, and the field is an argument as a
     ref is: no second way to attach behavior, and nothing to learn but the parameter's type.
 
@@ -5436,7 +5437,7 @@ rules something out.
     tag; the smoke's field checks in Chromium, Firefox and WebKit); reasoned (a posted name
     denotes one field of the form, a single control or the radios or checkboxes of a group that
     share it, so the form is where a name finds that field's controls; the kind a form draws
-    is another component's markup, which no one `html!` sees); value (in the README's conflict
+    may be in another component's markup, which no one `html!` sees); value (in the README's conflict
     order: correctness first (the control is found when the handler runs, and no other is given),
     then performance (README Value 1: the lookup is a module only the pages that call it load, not
     bytes every page pays for a call few make), then compile-time safety, which is what the
@@ -5447,8 +5448,8 @@ rules something out.
     handler is outside the form, reads one of several that share a name through the control around
     the event, or is a widget's that draws its own)).
 
-    Revisit when: `Fields` or `html!` comes to know the kind a form draws a field as, when the
-    kind check moves to the compiler and the runtime's goes; an app needs a control outside any
+    Revisit when: the compiler can determine a field's kind across components or through
+    markup the current check cannot see ([Limit 32](#limit-field-kind)); an app needs a control outside any
     form, which is a ref's; a handler is measured spending time in the lookup; or most pages come to
     load the field module, when its bytes belong in the runtime.
 
@@ -7347,13 +7348,21 @@ by design; where it is known, a limit says what would lift it or why it is so.
     meets either navigates to the URL, and the browser follows the redirect or the sign-in
     ([Choice 55](#choice-screen-read)).
 
-32. <a id="limit-field-kind"></a>A form field given to a handler (`js::fill(f.weight)`) is checked
-    against the handler's parameter when the crate compiles, but whether its form draws that
-    control is checked only when the handler runs ([Choice 57](#choice-field-arguments)). A
-    field's name carries what it reads (`FieldName<Condition>`), not whether a form draws it as a
-    select or as radios, a call may name a field no control on the page has, and the markup that
-    draws the control may be another component's, often in another crate, so no one expansion of
-    `html!` sees both the call and the control. A call that takes a single control (`i`, `s`,
+32. <a id="limit-field-kind"></a>When a direct handler argument such as `f.weight` matches the
+    tokens of `name={f.weight}` on a control drawn in the same `html!` and the same form,
+    the compiler checks the control's kind against the parameter's JSDoc. The form is the one
+    around the element or the one an explicit `form={Id}` names; the kind comes from the tag
+    and an input's literal `type=`. Two or more visible radios or checkboxes of the same name
+    require `HTMLInputElement[]`; one visible input can be taken alone or in an array
+    (the runtime accepts either). The check does not cross a branch, a `let` that may shadow
+    the expression, or a component's boundary, or infer ownership for displaced table content,
+    templates, foreign content, a spread or a `form=` expression it cannot prove writes an ID.
+    A computed `type=`,
+    a field passed inside a JSDoc group, or a different expression (including a variable bound
+    to the same field) leaves the control check to the runtime. A field's name carries what it
+    reads (`FieldName<Condition>`), not what another component draws, and the call may name a
+    field no control on the page has ([Choice 57](#choice-field-arguments)).
+    A call that takes a single control (`i`, `s`,
     `t`) whose form has no control of the name, more than one, or one of another kind, or that
     takes a group (`*`) whose form has a control of the name that is not an input, runs nothing
     and throws what it takes and what the form has instead
@@ -7366,12 +7375,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     mistake those make shows only as the runtime's error when the handler runs. It reports a call
     once, when it is drawn: a call drawn before a later patch or script adds its control keeps that
     report in the console though the handler then finds the control, so a report on a page that
-    draws its controls after its calls is checked against the page as it is. A call and its control
-    drawn in one `html!` expansion (a `<select name={f.service}>` given to a handler that takes an
-    input, in the same form) could be checked when the crate compiles, since the macro sees both;
-    it is not yet ([#1536 A form field's control kind is not checked at compile time when the call and the control are in the same html! expansion](https://github.com/corten-run/corten/issues/1536)),
-    and that would not reach the case this Choice is for, fields another component draws. It lifts
-    when the kind a form draws for a field is known where the call is checked.
+    draws its controls after its calls is checked against the page as it is. The remaining
+    limit lifts where the compiler can see what a form actually draws for a field.
 
 33. <a id="limit-developer-markup-scan"></a>The developer checks for patch ids, form hints,
     empty submit keys and `data-vars` share the

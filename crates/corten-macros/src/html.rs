@@ -6,6 +6,7 @@
 
 use proc_macro::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
 
+mod fields;
 mod nesting;
 
 use crate::tokens::{
@@ -108,13 +109,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
         if could_patch(&nodes) {
             check_patch_top(&nodes)?;
         }
-        Ok(nodes)
+        let proofs = fields::check(&mut nodes);
+        Ok((nodes, proofs))
     }) {
-        Ok(nodes) if is_document(&nodes) => {
+        Ok((nodes, proofs)) if is_document(&nodes) => {
             if let Err((span, message)) = check_document(&nodes) {
                 return compile_error(span, &message);
             }
-            let mut gen = Gen::default();
+            let mut gen = Gen::with_field_proofs(&proofs);
             gen.doc_nodes(&nodes);
             q(
                 &"::corten::view::DocHtml::new({
@@ -135,7 +137,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         // One component: the component itself, its props evaluated where the markup is, so a
         // layout stays a document and borrows what the handler has (`req={&req}`). Its children
         // own what they use, as a view does.
-        Ok(nodes) if matches!(nodes.as_slice(), [Node::Component { .. }]) => {
+        Ok((nodes, _)) if matches!(nodes.as_slice(), [Node::Component { .. }]) => {
             let [Node::Component { path, props, children }] = nodes.as_slice() else { unreachable!() };
             let gen = Gen::default();
             let built = gen.component(path, props, children, !inside);
@@ -150,7 +152,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         }
         // `let`s, then one component: a view that owns what the `let`s make (a title it formats,
         // a link it builds), and a document when the component is one.
-        Ok(nodes) if lets_then_component(&nodes) => {
+        Ok((nodes, _)) if lets_then_component(&nodes) => {
             let mut gen = Gen::default();
             let (component, lets) = nodes.split_last().expect("a component");
             gen.nodes(lets, false);
@@ -169,8 +171,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 &[gen.finish()],
             )
         }
-        Ok(nodes) => {
-            let mut gen = Gen::default();
+        Ok((nodes, proofs)) => {
+            let mut gen = Gen::with_field_proofs(&proofs);
             // The closure returns the view's shape, which says whether it is a patch (see
             // `corten::view::Patch`). A view with a part that cannot be one is written as before.
             let body = if could_patch(&nodes) {
@@ -2077,12 +2079,14 @@ fn has_raw_delimiters(nodes: &[Node], raw: bool) -> bool {
 
 /// Generated statements, with adjacent static markup merged into one `push_str`.
 #[derive(Default)]
-struct Gen {
+struct Gen<'a> {
     out: TokenStream,
     text: String,
     /// Type checks that print nothing, emitted before the writes so they do not split runs of
     /// static markup.
     checks: TokenStream,
+    /// Explicit form associations use a type witness inferred where `id=` is drawn.
+    field_proofs: Option<&'a fields::Proofs>,
     /// In a document, which parts what is written now belongs to.
     level: Level,
     /// Set while a patch's top-level element opens: the local its `id={..}` binds its shape to.
@@ -2410,7 +2414,11 @@ enum Level {
     Layout,
 }
 
-impl Gen {
+impl<'a> Gen<'a> {
+    fn with_field_proofs(proofs: &'a fields::Proofs) -> Self {
+        Self { out: proofs.lets.clone(), field_proofs: Some(proofs), ..Self::default() }
+    }
+
     fn flush(&mut self) {
         if !self.text.is_empty() {
             let text = std::mem::take(&mut self.text);
@@ -2613,7 +2621,7 @@ impl Gen {
                     let mut inner = TokenStream::new();
                     for (i, body) in bodies.iter().enumerate() {
                         let slot = slots.slot();
-                        let mut gen = Gen::default();
+                        let mut gen = Gen { field_proofs: self.field_proofs, ..Gen::default() };
                         let shape = gen.top_nodes(body, slots);
                         let mut code = gen.finish();
                         code.extend(q("__A0 = ::core::option::Option::Some(__A1);", &[slot.clone(), shape]));
@@ -2646,7 +2654,8 @@ impl Gen {
 
     /// `nodes` written in a block of their own, in a context not known when `unknown_context`.
     fn body_in(&self, nodes: &[Node], raw: bool, unknown_context: bool) -> TokenTree {
-        let mut gen = Gen { svg: self.svg, aria_svg: self.aria_svg, unknown_context, ..Gen::default() };
+        let mut gen =
+            Gen { svg: self.svg, aria_svg: self.aria_svg, unknown_context, field_proofs: self.field_proofs, ..Gen::default() };
         gen.nodes(nodes, raw);
         TokenTree::Group(Group::new(Delimiter::Brace, gen.finish()))
     }
@@ -2671,6 +2680,9 @@ impl Gen {
         // into, until its tag is written, whatever an attribute's expression renders meanwhile.
         let tag = (has_ref && keyed).then(|| self.debug_local("::corten::script::__private::KeyTag::open(__OUT)"));
         for attr in attrs {
+            if let Some(proof) = self.field_proofs.and_then(|proofs| proofs.infer(attr)) {
+                self.code(proof);
+            }
             match attr {
                 Attr::Bare(attr) => {
                     self.text.push(' ');

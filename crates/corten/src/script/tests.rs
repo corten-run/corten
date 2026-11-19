@@ -102,6 +102,37 @@ fn Shipping<'a>(key: &'a String) -> impl Render {
     }
 }
 
+#[test]
+fn a_field_check_keeps_the_existing_binding() {
+    #[derive(Id)]
+    struct ShipmentId;
+
+    let f = Shipment::FIELDS;
+    let built = html! {
+        <div>
+            <table>
+                <tbody>
+                    <tr>
+                        <td>
+                            <button form={ShipmentId} on:click={shared::fill(f.weight, f.format, f.note, f.size)}>"Fill"</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            <form id={ShipmentId}>
+                <input type="checkbox" name={f.weight}>
+                <textarea name={f.note}></textarea>
+                <input type="radio" name={f.size} value="small">
+            </form>
+            <select name={f.format} form={ShipmentId}></select>
+            <input type="radio" name={f.size} form={ShipmentId} value="large">
+            <form><textarea name={f.weight}></textarea></form>
+        </div>
+    }
+    .to_html();
+    assert!(built.contains(r#"data-on='click:shared.fill(~i"weight",~s"format",~t"note",~*"size")'"#), "{built}");
+}
+
 /// A `string[]` parameter takes a slice, an array or a `Vec` of strings, with no feature.
 #[component]
 fn Named<'a>(list: &'a [&'a str]) -> impl Render {

@@ -3259,8 +3259,34 @@ pub mod __private {
         }
     }
 
+    /// An argument's position in a call's tree of tuples.
+    pub struct Slot<const I: usize>;
+    pub struct Left<I>(PhantomData<I>);
+    pub struct Right<I>(PhantomData<I>);
+
+    pub trait ArgumentAt<I> {
+        type Argument;
+    }
+    impl<L: ArgumentAt<I>, R, I> ArgumentAt<Left<I>> for Both<L, R> {
+        type Argument = L::Argument;
+    }
+    impl<L, R: ArgumentAt<I>, I> ArgumentAt<Right<I>> for Both<L, R> {
+        type Argument = R::Argument;
+    }
+
+    macro_rules! argument_slots {
+        ($all:tt;) => {};
+        (($($all:ident),+); $name:ident: $index:literal $(, $rest:ident: $next:literal)*) => {
+            impl<$($all),+> ArgumentAt<Slot<$index>> for ($($all,)+) {
+                type Argument = $name;
+            }
+            argument_slots!(($($all),+); $($rest: $next),*);
+        };
+    }
+
     macro_rules! args {
-        ($(($($name:ident),*)),*) => {$(
+        ($(($($name:ident: $index:literal),*)),*) => {$(
+            argument_slots!(($($name),*); $($name: $index),*);
             impl<$($name: WriteArg),*> Args for ($($name,)*) {
                 #[allow(non_snake_case, unused_variables, unused_assignments, unused_mut)]
                 fn write_args(&self, ctx: &Ctx, out: &mut String) {
@@ -3279,18 +3305,18 @@ pub mod __private {
     // held in `Both`. The two change together.
     args!(
         (),
-        (A),
-        (A, B),
-        (A, B, C),
-        (A, B, C, D),
-        (A, B, C, D, E),
-        (A, B, C, D, E, F),
-        (A, B, C, D, E, F, G),
-        (A, B, C, D, E, F, G, H),
-        (A, B, C, D, E, F, G, H, I),
-        (A, B, C, D, E, F, G, H, I, J),
-        (A, B, C, D, E, F, G, H, I, J, K),
-        (A, B, C, D, E, F, G, H, I, J, K, L)
+        (A:0),
+        (A:0, B:1),
+        (A:0, B:1, C:2),
+        (A:0, B:1, C:2, D:3),
+        (A:0, B:1, C:2, D:3, E:4),
+        (A:0, B:1, C:2, D:3, E:4, F:5),
+        (A:0, B:1, C:2, D:3, E:4, F:5, G:6),
+        (A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7),
+        (A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8),
+        (A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8, J:9),
+        (A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8, J:9, K:10),
+        (A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8, J:9, K:10, L:11)
     );
 
     /// One field of a group (a JSDoc `@typedef` the markup builds as a Rust struct):
@@ -3723,7 +3749,7 @@ pub mod __private {
     /// A parameter type a form field fits (`js::fill(f.weight)`): the controls of the field's
     /// name in the form of the element with the handler, which the runtime finds when the handler
     /// runs and checks are of this kind. The markup that draws them may be another component's,
-    /// so the compiler cannot see which kind they are (`docs/design.md#choice-field-arguments`).
+    /// so the compiler does not always see which kind they are (`docs/design.md#choice-field-arguments`).
     #[diagnostic::on_unimplemented(
         message = "a form field gives its handler an HTMLInputElement, an HTMLSelectElement, an HTMLTextAreaElement or HTMLInputElement[], and this parameter is {Self}",
         label = "a form field, found by its name in the handler's form when the handler runs",
@@ -3746,6 +3772,63 @@ pub mod __private {
     impl ControlParam for ts::Array<el::HTMLInputElement> {
         const KIND: char = '*';
     }
+
+    /// A type-only pairing of a call's argument and the control drawn in the same markup.
+    pub struct FieldCheck<B, I, K, O = ()>(PhantomData<(B, I, K, O)>);
+
+    impl<B, I, K> FieldCheck<B, I, K> {
+        pub fn new(_: &B) -> Self {
+            Self(PhantomData)
+        }
+
+        pub fn in_form<Id>(self, _: PhantomData<fn() -> Id>) -> FieldCheck<B, I, K, ExplicitForm<Id>> {
+            FieldCheck(PhantomData)
+        }
+    }
+
+    /// Infer the type at the `id=` attribute, without holding or re-evaluating its value.
+    pub fn form_id_type<Id>(_: PhantomData<fn() -> Id>, _: &Id) {}
+
+    /// A braced `form=` links controls only when it really writes an ID, not, for example,
+    /// an optional value the renderer can omit.
+    pub struct ExplicitForm<Id>(PhantomData<Id>);
+    pub trait KnownForm {}
+    impl KnownForm for () {}
+    impl<Id: crate::view::Id> KnownForm for ExplicitForm<Id> {}
+
+    impl<A, I, K, O: KnownForm, T, Pl, P: ControlParam> FieldCheck<Call<A>, I, K, O>
+    where
+        A: ArgumentAt<I, Argument = Typed<crate::form::FieldName<T, Pl>, P>>,
+    {
+        pub fn check(&self)
+        where
+            K: FitsControl<P>,
+        {
+        }
+    }
+
+    /// Same name in the markup does not make a non-field argument a field, or a Rust bind a
+    /// generated handler call. The inherent method above takes precedence only for typed fields.
+    pub trait UncheckedField {
+        fn check(&self);
+    }
+    impl<B, I, K, O> UncheckedField for FieldCheck<B, I, K, O> {
+        fn check(&self) {}
+    }
+
+    #[diagnostic::on_unimplemented(
+        message = "this form field is drawn as {Self}, which does not match the handler's JSDoc type {P}",
+        label = "the control drawn for this field does not fit the handler",
+        note = "type the handler parameter as the control drawn in this form: HTMLInputElement, HTMLSelectElement, HTMLTextAreaElement or HTMLInputElement[]"
+    )]
+    pub trait FitsControl<P: ControlParam> {}
+
+    impl FitsControl<el::HTMLInputElement> for el::HTMLInputElement {}
+    // The runtime accepts a group with one or no inputs as well as one with several.
+    impl FitsControl<ts::Array<el::HTMLInputElement>> for el::HTMLInputElement {}
+    impl FitsControl<ts::Array<el::HTMLInputElement>> for ts::Array<el::HTMLInputElement> {}
+    impl FitsControl<el::HTMLSelectElement> for el::HTMLSelectElement {}
+    impl FitsControl<el::HTMLTextAreaElement> for el::HTMLTextAreaElement {}
 
     /// `~i"weight"`: the field's name as posted (`rules[1].kind` in a row), as a JSON string.
     impl<T, Pl: crate::form::Place, P: ControlParam> Arg<P> for crate::form::FieldName<T, Pl> {

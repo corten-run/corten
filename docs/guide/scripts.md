@@ -691,9 +691,14 @@ its controls' names, so it costs a run a few microseconds however many controls 
 the one `Fields` writes, so a renamed field is renamed in both places; text where a field belongs,
 and a field where the handler takes text or another element, do not compile.
 
-What the compiler cannot see is the control. A field's name carries what it reads
-(`FieldName<Condition>`), not whether the form draws it as a select or as radios, and the markup
-that draws it may be another component's. So the runtime checks it: a call that takes one
+When `html!` sees the same expression in a direct handler argument and a control's `name={..}`
+in the same form, it checks the kind against the handler's JSDoc. For example, the select in the
+form above cannot be passed to a parameter that takes an `HTMLInputElement`. A control joined to
+the form by a matching `form={Id}` is checked too. Inputs with a computed `type=`, a name that
+is passed through a differently named variable, and markup drawn by another component are still
+checked at runtime ([design Limit 32](../design.md#limit-field-kind)).
+
+The runtime always checks the controls it finds: a call that takes one
 control (an input, select or textarea) whose form has none of that name, more than one, or one of
 another kind, and a call that takes a group whose form has a control of the name that is not an
 input, runs nothing and throws what it takes and what the form has instead (none, more than one,

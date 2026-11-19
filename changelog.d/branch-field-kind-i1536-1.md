@@ -1,0 +1,1 @@
+- Check a handler's form field against the control drawn for it in the same `html!` and form when the macro can match them. Keep the runtime and `corten dev` checks for controls drawn elsewhere.
