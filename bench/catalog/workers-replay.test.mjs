@@ -56,11 +56,15 @@ test("wide generator raw replay checks twelve CPUs for k6, four for checker, and
   assert.equal(load.budget.NanoCpus, 12e9); assert.equal(load.budget.CpusetCpus, "4-15");
   assert.equal(phase(f).resources[`${f.summary.runId}-k6`].cpuMaxPct, 391.36);
   const limitsKey = `${prefix}/sat256-boundary.json`, originalLimits = f.reader.readText(limitsKey);
+  const finishing = JSON.parse(originalLimits);
+  finishing.loadLimits.observations.pop(); // Kernel dropped the PID before the last scheduled sample.
+  f.put(limitsKey, finishing); phase(f); // Final Docker exit is still inside the measured window.
   for (const [mutate, message] of [
     [(r) => { r.observations[1].membershipBefore = "0::/other.scope\n"; }, /PID cgroup membership/],
     [(r) => { r.observations[1].pid++; }, /PID cgroup membership/],
     [(r) => { r.observations[1].quotas[1].cpuMax = "800000 100000\n"; }, /parent quota restricts/],
     [(r) => { r.observations = r.observations.slice(0, 1); }, /sample count/],
+    [(r) => { r.observations = r.observations.slice(0, 2); }, /sampling stopped early/],
   ]) {
     const boundary = JSON.parse(originalLimits); mutate(boundary.loadLimits);
     f.put(limitsKey, boundary);

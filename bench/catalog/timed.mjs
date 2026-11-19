@@ -244,8 +244,10 @@ async function collectLoadLimits(docker, summary, subject, id) {
       assert.ok(state.Pid === pid && state.StartedAt === binding.startedAt, "live generator changed");
       try { observations.push(observeLoadLimits(id, pid)); }
       catch (e) {
-        // The process may exit between Docker inspect and reading procfs.
-        if (e.code !== "ENOENT" || (await docker(["inspect", "--format", "{{.State.Status}}", id], { timeout: 2000 })).trim() !== "exited") throw e;
+        // Procfs/cgroupfs can disappear before Docker publishes its exit. The
+        // final inspect after start -a establishes exit; replay checks that
+        // the retained samples reach that exit, not this observer's clock.
+        if (!observations.length || !["ENOENT", "ESRCH"].includes(e.code)) throw e;
         break;
       }
       await sleep(500);
