@@ -21,7 +21,7 @@ const ABORTED = `Failed to load resource: ${CHANGED}`;
  * Returns `browser`, every page it opens from now on (`newPage`, or `newContext` then
  * `newPage`) retrying `goto` and `reload` once on `ERR_NETWORK_CHANGED`, and the console
  * listeners of every page in its contexts (a popup too) not told of a resource that error aborted
- * (`quiet`). The affected suites can also gate a fresh context's first Linux WebKit navigation
+ * (`quiet`). The affected suites can also gate each new page's first Linux WebKit navigation
  * (`gateInitialLoad`).
  * @template {import("@playwright/test").Browser} B
  * @param {B} browser
@@ -36,13 +36,10 @@ export function steady(browser, { gateInitialWebKitLoad = false } = {}) {
     const context = await newContext(...args);
     context.on("page", quiet);
     const newPage = context.newPage.bind(context);
-    let first = gate;
     // Playwright emits "page" before `newPage` returns; `quiet` here is in case it does not.
     context.newPage = async () => {
-      const initial = first;
-      first = false;
       const page = quiet(retrying(await newPage()));
-      return initial ? gateInitialLoad(page) : page;
+      return gate ? gateInitialLoad(page) : page;
     };
     return context;
   };
@@ -55,7 +52,7 @@ export function steady(browser, { gateInitialWebKitLoad = false } = {}) {
  * WebKit bug 325840). Intercept the initial document request in the old process. Playwright only
  * releases it after the UI process forwards the interception, behind the start on the same IPC
  * connection. No response is replaced and no navigation retried. Restrict interception (which
- * disables HTTP caching while installed) to the first load in a fresh context.
+ * disables HTTP caching while installed) to the first load from each new page's about:blank.
  * @param {import("@playwright/test").Page} page
  */
 export function gateInitialLoad(page) {

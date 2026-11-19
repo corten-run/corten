@@ -102,6 +102,32 @@ test("the WebKit gate releases only the initial HTTP navigation and keeps its op
   assert.deepEqual(calls, ["about:blank", "route", `${url}#meter`, "fallback", "unroute", url]);
 });
 
+test("steady gates both fresh tabs in the same context only on Linux WebKit", async () => {
+  for (const name of ["webkit", "chromium", "firefox"]) {
+    let routed = 0;
+    const context = Object.assign(new EventEmitter(), {
+      async newPage() {
+        return Object.assign(new Page(), {
+          url: () => "about:blank",
+          isClosed: () => false,
+          async route() { routed++; },
+          async unroute() {},
+        });
+      },
+    });
+    const plain = /** @type {import("@playwright/test").Browser} */ (/** @type {unknown} */ ({
+      browserType: () => ({ name: () => name }),
+      newContext: async () => context,
+    }));
+    const opened = await steady(plain, { gateInitialWebKitLoad: true }).newContext();
+    for (let tab = 0; tab < 2; tab++) {
+      const page = await opened.newPage();
+      await page.goto("http://localhost:18482/orders");
+    }
+    assert.equal(routed, process.platform === "linux" && name === "webkit" ? 2 : 0, name);
+  }
+});
+
 test("the WebKit gate cleans up after a navigation that times out without retrying it", async () => {
   const failure = new Error("Timeout 30000ms exceeded");
   const calls = [];
