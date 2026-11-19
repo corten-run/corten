@@ -103,8 +103,13 @@ export function modal(dialog, options) {
       const back = opener && doc.contains(opener) ? opener : counterpart(opener, patchRoot(opener));
       const focus = opener && back instanceof HTMLElement && localName(back) === localName(opener) ? back : null;
       if (to?.open) {
-        const carried = modals.get(to);
-        if (carried) carried.opener = focus;
+        const carry = () => {
+          const carried = modals.get(to);
+          if (carried) carried.opener = focus;
+        };
+        // If the old signal aborted early, the observer is already queued to connect the new one.
+        if (modals.has(to)) carry();
+        else queueMicrotask(carry);
         return;
       }
       if (to && (drawnOpen(to) || nativeCloses.has(to))) return;

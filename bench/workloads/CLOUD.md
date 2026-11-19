@@ -405,6 +405,18 @@ and evidence gates. Neither retirement path can delete a running benchmark.
 
 The common-bootstrap marker precedes native entry. It is not native evidence or
 a reason to strand a terminal host whose entry failed before writing any data.
+If the job writes its exit marker before publishing its first campaign state,
+the monitor invalidates the stream rather than renewing an idle connection.
+This is a failure signal, not a terminal result or proof that deletion is safe.
+If an SSH or SFTP watcher raises an exception, its archived
+`control/watch-failure-<id>.json` records only the line in the archive's
+`control/helper.py`. Match the ID to the sealed ledger to find the failed check.
+This is diagnostic evidence, never a terminal watcher receipt. A missing receipt
+still prevents admission, even when the associated command exited successfully.
+An intermediate process sample may catch a member just before it exits. When the
+scope switches from populated to empty during the inventory read, its sample
+retains both raw event observations and the member's identity. The watcher
+still needs a later sample with no remaining session member to prove drainage.
 Setup retirement permits only that exact source-bound marker, preserving an
 already-recorded bootstrap observation. A foreign, malformed, symlinked or
 missing previously observed marker refuses, as does any native campaign data.
@@ -1052,6 +1064,17 @@ state reset. Active or transitioning units, a live service PID and a missing
 mask still fail. After any reset, the mask, inactive state and zero service PID
 are checked again; reset failure is fatal. This does not exempt firmware or any
 other user process from native cleanup evidence.
+
+On dedicated group hosts, the benchmark and Docker run as system services.
+Root SSH still needs a normal logind session, but not a separate user manager.
+During provisioning, a runtime systemd drop-in skips new starts of
+`user@0.service` while the host's control binding exists. It does not stop
+the current manager or change SSH or PAM. Before publishing the bootstrap
+marker, the job waits up to two minutes for the manager to exit naturally.
+The run log records which property it is querying and the observed state and
+main PID, so a busy manager can be distinguished from a stalled query.
+If it stays busy the group fails setup, without terminating anyone's work.
+The normal login inventory and registered-monitor checks still apply.
 
 The generated job records a fixed preparation stage, source line and original
 exit code on command failure, never the failed command or an environment dump.

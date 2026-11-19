@@ -328,20 +328,27 @@ function scopeOf(from, owner) {
  * @param {Element} from
  * @param {string | null} owner
  * @param {string} name
+ * @returns {Element[]}
  */
 function findRefs(from, owner, name) {
   const scope = scopeOf(from, owner);
   // Resolved refs are kept per component root until the page's elements change: a click on a
-  // row of a 500-row grid then costs a lookup, not a query of every row. Mutations not yet
-  // delivered to the observer are taken now, so a handler never gets a stale list.
-  const pending = observer.takeRecords();
-  if (pending.length) observed(pending);
-  let cached = refCache.get(scope);
-  if (!cached) refCache.set(scope, (cached = new Map()));
-  // Still right while no element with this ref name joined the page and none it found left.
-  const changes = refChanges.get(name) ?? 0;
-  const hit = cached.get(name);
-  if (hit && hit.changes === changes && hit.found.every(inPage)) return hit.found.slice();
+  // row of a 500-row grid then costs a lookup, not a query of every row. During a patch, read
+  // the current tree directly: draining records would wire or abort unfinished markup.
+  /** @type {ReturnType<typeof refCache.get>} */
+  let cached;
+  let changes = 0;
+  if (patching) patching = 2;
+  else {
+    const pending = observer.takeRecords();
+    if (pending.length) observed(pending);
+    cached = refCache.get(scope);
+    if (!cached) refCache.set(scope, (cached = new Map()));
+    // Still right while no element with this ref name joined the page and none it found left.
+    changes = refChanges.get(name) ?? 0;
+    const hit = cached.get(name);
+    if (hit && hit.changes === changes && hit.found.every(inPage)) return hit.found.slice();
+  }
   const own = attrOf(scope, "data-scope");
   const qualified = `${own}/${name}`;
   /** @type {Element[]} */
@@ -352,20 +359,21 @@ function findRefs(from, owner, name) {
   };
   check(scope);
   for (const el of Array.from(queryAll(scope, `[data-ref="${name}"],[data-ref="${qualified}"]`))) check(el);
-  cached.set(name, { changes, found });
+  cached?.set(name, { changes, found });
   return found.slice();
 }
 
 /**
- * How often elements with a ref of this name (`rows`, for `rows` and `offer-list/rows`) joined
+ * The latest change for each ref name (`rows`, for `rows` and `offer-list/rows`) that joined
  * the page. Only those can add to what a ref resolves to; elements that leave are noticed when a
  * cached ref is next used. So 10,000 rows put in or taken out of a list leave the refs of the
  * list's component cached.
  * @type {Map<string, number>}
  */
 const refChanges = new Map();
+let refVersion = 0;
 /** Each component root's resolved refs. @type {WeakMap<Element, Map<string, { changes: number, found: Element[] }>>} */
-const refCache = new WeakMap();
+let refCache = new WeakMap();
 
 /** @param {Element} el @param {Set<string>} names */
 function refName(el, names) {
@@ -768,21 +776,13 @@ const FEW_NAMES = 8;
  * the page (removed and inserted in one task) keeps its life.
  */
 function sweep() {
-  // `isConnected` read here rather than through inPage: each loop's own read stays fast where
-  // one read shared with the dispatch, the scan and patches slowed this loop after them.
-  for (const [el, life] of lives) {
+  // Read isConnected here: sharing the read with dispatch, scan and patches slowed the sweep.
+  for (const group of [lives, connected, onPage]) for (const el of group.keys()) {
     const on = /** @type {unknown} */ (el.isConnected);
     if (on === true || (on !== false && inPage(el))) continue;
-    lives.delete(el);
-    life.abort();
-  }
-  for (const el of connected) {
-    const on = /** @type {unknown} */ (el.isConnected);
-    if (on === false || (on !== true && !inPage(el))) connected.delete(el);
-  }
-  for (const el of onPage) {
-    const on = /** @type {unknown} */ (el.isConnected);
-    if (on === false || (on !== true && !inPage(el))) onPage.delete(el);
+    const life = group === lives ? lives.get(el) : undefined;
+    group.delete(el);
+    life?.abort();
   }
 }
 
@@ -791,6 +791,9 @@ function sweep() {
  * are scanned with one query of the parent (see `observed`).
  */
 const MANY = 16;
+
+// 0: idle, 1: applying a patch, 2: a ref was read while applying it.
+let patching = 0;
 
 /**
  * Markup that joins the page (a navigation, a patch, a script's insert) is wired;
@@ -808,12 +811,12 @@ function observed(records) {
     const added = record.addedNodes;
     const parent = record.target;
     if (added.length > MANY && parent instanceof Element && added.length * 2 >= childrenOf(parent).length) wide.add(parent);
-    else for (const node of Array.from(added)) if (node instanceof Element && inPage(node)) scan(node, names);
+    else for (const node of added) if (node instanceof Element && inPage(node)) scan(node, names);
   }
   // Wiring is the same however often it runs, so a parent scanned whole may hold rows wired before.
   for (const parent of wide) if (inPage(parent)) scan(parent, names, true);
-  for (const name of names) refChanges.set(name, (refChanges.get(name) ?? 0) + 1);
-  if (removed && (lives.size || connected.size || onPage.size)) sweep();
+  for (const name of names) refChanges.set(name, ++refVersion);
+  if (removed) sweep();
   if (replacements?.size) for (const { removedNodes } of records) for (const node of removedNodes) replacements.delete(node);
 }
 
@@ -1089,42 +1092,56 @@ async function apply(html, signal, sent, took, own, asked, within) {
   let again;
   // Whether it removes a nav link, which can leave another of its nav current.
   let navs = false;
-  for (const el of Array.from(content.children)) {
-    // Read from the attribute, as `target.id` is a control named id when the target is a form.
-    const id = idOf(el) ?? "";
-    const target = id ? document.getElementById(id) : null;
-    if (hasAttr(el, "data-corten-read-again")) again = el;
-    else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-remove")) {
-      // Focus in it goes to the nearest element around it that can take focus.
-      const parent = target && parentElementOf(target);
-      const up = !!target && holds(target, document.activeElement) && parent;
-      navs ||= !!target && holdsNav(target);
-      if (parent) changedIn(parent, ["x", id, []]);
-      if (target) {
-        replacements?.set(target, null);
-        elementOwn.remove.call(target);
+  patching = 1;
+  try {
+    for (const el of Array.from(content.children)) {
+      // Read from the attribute, as `target.id` is a control named id when the target is a form.
+      const id = idOf(el) ?? "";
+      const target = id && document.getElementById(id);
+      if (hasAttr(el, "data-corten-read-again")) again = el;
+      else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-remove")) {
+        if (target) {
+          // Focus in it goes to the nearest element around it that can take focus.
+          const parent = parentElementOf(target);
+          const up = holds(target, document.activeElement) && parent;
+          navs ||= holdsNav(target);
+          if (parent) changedIn(parent, ["x", id, []]);
+          replacements?.set(target, null);
+          elementOwn.remove.call(target);
+          if (up) focusNear(up);
+        }
+      } else if (!target) console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
+      else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-append")) {
+        put.push(...Array.from(el.content.children));
+        serve(el.content);
+        changedIn(target, ["a", id, Array.from(childNodesOf(el.content))]);
+        elementOwn.append.call(target, el.content);
+      } else {
+        const parent = parentElementOf(target);
+        if (parent) changedIn(parent, ["r", id, [el]]);
+        replacements?.set(target, el);
+        replaceKeeping(target, el, sent, took, true, within);
+        put.push(el);
       }
-      if (up) focusNear(up);
     }
-    else if (!target) console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
-    else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-append")) {
-      put.push(...Array.from(el.content.children));
-      serve(el.content);
-      changedIn(target, ["a", id, Array.from(childNodesOf(el.content))]);
-      elementOwn.append.call(target, el.content);
-    } else {
-      const parent = parentElementOf(target);
-      if (parent) changedIn(parent, ["r", id, [el]]);
-      replacements?.set(target, el);
-      replaceKeeping(target, el, sent, took, true, within);
-      put.push(el);
+    // The server marked a nav link in the patch against the request that made it (a form's action),
+    // not this page: mark it as a navigation would. Only then: a patch without one (a ticker's)
+    // only looks through what it put.
+    if (navs || put.some(holdsNav)) markCurrent();
+    for (const el of put) setVars(el);
+  } finally {
+    // A ref read would normally already have swept. End those lives before the observer wires
+    // later replacements, but only now that the whole chain of replacement roots is available.
+    try {
+      if (patching === 2) {
+        // Later connects can read refs before the deferred observer counts their changes.
+        refCache = new WeakMap();
+        sweep();
+      }
+    } finally {
+      patching = 0;
     }
   }
-  // The server marked a nav link in the patch against the request that made it (a form's action),
-  // not this page: mark it as a navigation would. Only then: a patch without one (a ticker's)
-  // only looks through what it put.
-  if (navs || put.some(holdsNav)) markCurrent();
-  for (const el of put) setVars(el);
   if (again) {
     const beside = asked?.isConnected ? asked : partTagBeside(put);
     if (beside) beside.replaceWith(again);
@@ -1885,7 +1902,7 @@ function drawLayout(old, fresh, before, said, inside = false) {
   // kept element's `on:connect` does not run again.
   if (wiring() !== was) {
     scan(old, names);
-    for (const name of names) refChanges.set(name, (refChanges.get(name) ?? 0) + 1);
+    for (const name of names) refChanges.set(name, ++refVersion);
   }
   if (matchesOf(old, LIVE)) {
     const content = document.createDocumentFragment();

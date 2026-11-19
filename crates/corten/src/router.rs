@@ -1181,3 +1181,56 @@ impl<'de> SeqAccess<'de> for Values<'_> {
         Some(self.matched.ranges().len() - self.at)
     }
 }
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+mod tests {
+    use super::*;
+    use crate::{App, Corten, HtmlResult, Params, Req};
+
+    #[crate::routes]
+    mod pages {
+        #[route("/small/{id}", get = small_page)]
+        pub struct SmallPage<'a> {
+            pub id: &'a str,
+        }
+    }
+
+    async fn small_page(req: Req, Params(at): Params<pages::SmallPage<'_>>) -> HtmlResult {
+        req.page(crate::html! {
+            <html>
+                <head>
+                    <title>"Small page"</title>
+                    <Corten />
+                </head>
+                <body>
+                    <main><p>{at.id}</p></main>
+                </body>
+            </html>
+        })
+    }
+
+    #[test]
+    fn staged_page_future_sizes() {
+        // Heap payloads of the real stage and typed handler boxes, with no app middleware or
+        // layout reads. Keep headroom for debug/release, features and compiler layout changes.
+        // If a bound fails, run this test in both profiles and remeasure the staged catalog
+        // request before raising it: the fixture guards Corten's overhead, not every app's.
+        const STAGE_FUTURE_LIMIT: usize = 3584;
+        const HANDLER_FUTURE_LIMIT: usize = 1024;
+
+        let router = App::new(pages::router()).router();
+        let Inner::Routes(dispatch) = &router.inner else { panic!("expected a router with no outer layer") };
+        let matched = dispatch.paths.at("/small/one").unwrap();
+        let entry = &dispatch.routes[*matched.value];
+        let (route, _) = entry.pick(&Method::GET, dispatch);
+        let request = || http::Request::builder().uri("/small/one").body(Body::empty()).unwrap();
+        let stage = entry.stages.as_ref().unwrap().clone().run(request(), route);
+        let handler = route.call(request());
+
+        let stage_size = std::mem::size_of_val(stage.as_ref().get_ref());
+        let handler_size = std::mem::size_of_val(handler.as_ref().get_ref());
+        eprintln!("stage future: {stage_size} bytes; handler future: {handler_size} bytes");
+        assert!(stage_size < STAGE_FUTURE_LIMIT, "stage future: {stage_size} bytes (limit {STAGE_FUTURE_LIMIT})");
+        assert!(handler_size < HANDLER_FUTURE_LIMIT, "handler future: {handler_size} bytes (limit {HANDLER_FUTURE_LIMIT})");
+    }
+}

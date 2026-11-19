@@ -19,10 +19,23 @@ const account = ["account", "get", "--output", "json", "--context", context];
 const details = ["internal-refusal", "connect", "send", "request-error", "response-error", "response-aborted",
   "response-status", "body-limit", "invalid-json", "deadline", "cancelled"];
 const state = () => ({ consumes: 0, calls: [], getters: 0, destroyed: 0 });
+const workerActionTimeout = 2000;
+
+// Freeze the request budget across the pre-request checkpoint, then advance it
+// only after the unanswered request has been sent and its timer is armed.
+function expireOnSend(timers, timeout, observed) {
+  timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  return () => {
+    timers.tick(timeout - 1);
+    assert.equal(observed.destroyed, 0);
+    timers.tick(1);
+    assert.equal(observed.destroyed, 1);
+  };
+}
 
 // Also evaluated in a test-only worker entry, before its verified-import hook.
 // No Node error property, endpoint override or native network call is consulted.
-function fakeConnect(mode, observed, save = () => {}, cancel = () => {}, local, beforeProvisioning) {
+function fakeConnect(mode, observed, save = () => {}, stop = () => {}, local, beforeProvisioning) {
   let created;
   const raw = "SYNTHETIC_ACCOUNT_DIAGNOSTICS_CREDENTIAL";
   const hostile = () => Object.defineProperties({}, Object.fromEntries(["message", "code", "stack", "body", "endpoint", "providerDiagnostic", "controlUncertain"].map((key) =>
@@ -41,8 +54,7 @@ function fakeConnect(mode, observed, save = () => {}, cancel = () => {}, local, 
       if (fail && mode === "send") throw hostile();
       queueMicrotask(() => {
         if (fail && mode === "request-error") { req.emit("error", hostile()); return; }
-        if (fail && mode === "deadline") return;
-        if (fail && mode === "cancelled") { cancel(); return; }
+        if (fail && (mode === "deadline" || mode === "cancelled")) { stop(); return; }
         const res = new EventEmitter();
         res.statusCode = fail && mode === "http503" ? 503 : fail && mode === "response-status" ? "not-an-integer" : options.method === "POST" ? 202 : 200;
         res.destroy = () => { observed.destroyed++; save(); };
@@ -63,7 +75,7 @@ function fakeConnect(mode, observed, save = () => {}, cancel = () => {}, local, 
         else assert.fail("unexpected synthetic request");
         res.emit("data", Buffer.from(fail && ["invalid-json", "http503"].includes(mode) ? raw : JSON.stringify(value)));
         res.emit("end");
-        if (mode === "post-response-cancel") cancel();
+        if (mode === "post-response-cancel") stop();
       });
     };
     return req;
@@ -78,12 +90,14 @@ function checkFailure(error, diagnostic, uncertain = true) {
 }
 
 test("account request native rejection sites have closed details without reading errors or retrying", async (t) => {
-  for (const detail of details) await t.test(detail, async () => {
+  for (const detail of details) await t.test(detail, async (t) => {
     const observed = state(); let cancelled = false;
+    const timeout = detail === "internal-refusal" ? 1000000 : detail === "deadline" ? 30 : 1000;
+    const stop = detail === "deadline" ? expireOnSend(t.mock.timers, timeout, observed) : () => { cancelled = true; };
     const run = createProviderEngine({ repo: resolve("."), interrupted: () => cancelled,
       spawn() { observed.consumes++; return { status: 0, stdout: Buffer.from(credential) }; },
-      connect: fakeConnect(detail, observed, undefined, () => { cancelled = true; }) });
-    await assert.rejects(run(account, detail === "internal-refusal" ? 1000000 : detail === "deadline" ? 30 : 1000),
+      connect: fakeConnect(detail, observed, undefined, stop) });
+    await assert.rejects(run(account, timeout),
       (error) => checkFailure(error, { code: "account-request", detail }));
     assert.equal(observed.calls.length, detail === "internal-refusal" ? 0 : 1);
     assert.equal(observed.consumes, 1); assert.equal(observed.getters, 0);
@@ -139,14 +153,16 @@ function worker(t, mode, local, receive = (value) => value, createMode = null) {
 import { EventEmitter } from 'node:events';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { mock } from 'node:test';
 import { serveProviderWorker } from ${JSON.stringify(serve)};
 assert.equal(process.env.NODE_OPTIONS, '--max-old-space-size=256'); delete process.env.NODE_OPTIONS;
 assert.deepEqual(process.execArgv, []); process.stdin.resume();
 const observed = ${JSON.stringify(state())}, save = () => writeFileSync(${JSON.stringify(output)}, JSON.stringify(observed)); save();
 const fakeConnect = ${fakeConnect.toString()};
 const beforeProvisioning = ${beforeProvisioning.toString()};
+const stop = ${mode === "deadline" ? `(${expireOnSend.toString()})(mock.timers, ${workerActionTimeout}, observed)` : "undefined"};
 serveProviderWorker({ spawn() { observed.consumes++; save(); return {status:0, stdout:Buffer.from(${JSON.stringify(credential)})}; },
-connect: fakeConnect(${JSON.stringify(mode)}, observed, save, undefined, ${JSON.stringify(local)}, beforeProvisioning) });
+connect: fakeConnect(${JSON.stringify(mode)}, observed, save, stop, ${JSON.stringify(local)}, beforeProvisioning) });
 `);
   let child, launches = 0; const messages = [];
   const run = providerTransport({ repo: resolve("."), createMode, launch(path, args, options) {
@@ -178,7 +194,7 @@ test("private worker IPC and repeated cached settlement preserve account details
   for (const detail of ["connect", "send", "request-error", "response-error", "response-aborted", "response-status", "body-limit", "invalid-json", "deadline"]) await t.test(detail, async (t) => {
     const h = worker(t, detail);
     const check = (error) => { assert.equal(error.controlTreeUncertain, true); return checkFailure(error, { code: "account-request", detail }); };
-    await assert.rejects(h.run(account, detail === "deadline" ? 50 : 2000), check);
+    await assert.rejects(h.run(account, workerActionTimeout), check);
     await assert.rejects(h.run.close(), check); await assert.rejects(h.run.close(), check);
     // close() may win the unchanged worker's failed-send callback race and
     // exit 0; neither orderly exit clears the parent's sticky uncertainty.
