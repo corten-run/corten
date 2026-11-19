@@ -3,7 +3,8 @@
 //! - `corten new <dir>` writes a working app (page, form, handler script, test, Dockerfile).
 //! - `corten dev` builds and runs the app, rebuilds and restarts it when a file changes (a failed
 //!   build keeps the running server), and open pages reload by themselves.
-//! - `corten build` builds the release binary. `corten check` runs format, a check that every
+//! - `corten build` builds the release binary, with `--profile-from` laid out by a profile of
+//!   the app at work. `corten check` runs format, a check that every
 //!   styled component is listed, lint, a build of every target and tests, then a type check of
 //!   the app's scripts (with TypeScript's `tsc`, which it needs unless told
 //!   `--no-script-types`).
@@ -16,6 +17,7 @@ mod json;
 mod listed;
 mod new;
 mod pin;
+mod profile;
 mod scripts;
 mod ui;
 
@@ -32,7 +34,14 @@ Usage:
   corten dev [--port <port>]
                    Build and run the app in this directory; rebuild and restart on every
                    change, and reload open pages. Default port 3000.
-  corten build     Build the release binary.
+  corten build [--profile-from <command> [<argument> ..]]
+                   Build the release binary. With --profile-from, build it with a profile of
+                   the app at work: build an instrumented copy under target/corten-profile,
+                   start it on a free port, run <command> with that port in PORT to send it
+                   requests like the ones the app will serve, stop the copy, and build
+                   target/release with the profile it wrote. Needs the toolchain's
+                   llvm-profdata (rustup component add llvm-tools) and a Unix system. A
+                   failed step leaves target/release as it was.
   corten fmt [--check] [path ..]
                    cargo fmt, then lay out the markup inside html! (rustfmt leaves macro
                    bodies alone), so it fixes what corten check reports. With paths, only
@@ -117,10 +126,13 @@ fn main() -> ExitCode {
         }
         Some("new") => new::run(&args[1..]),
         Some("dev") => dev::run(&args[1..]),
-        Some("build") => cargo(&["build", "--release"]).map(|()| {
-            println!(
-                "\ncorten: built the release binary in target/release. It is the whole deploy: the static files are compiled into it (see Dockerfile)."
-            );
+        Some("build") => build_flags(&args[1..]).and_then(|profile_from| match profile_from {
+            Some(command) => profile::run(command),
+            None => cargo(&["build", "--release"]).map(|()| {
+                println!(
+                    "\ncorten: built the release binary in target/release. It is the whole deploy: the static files are compiled into it (see Dockerfile)."
+                );
+            }),
         }),
         Some("fmt") => fmt::run(&args[1..]),
         Some("ui") => ui::run(&args[1..]),
@@ -176,6 +188,8 @@ fn asks_help(command: &str, args: &[String]) -> bool {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => return true,
+            // Everything after it is the command it names, a `--help` of that command's included.
+            "--profile-from" if command == "build" => return false,
             option if takes_value.contains(&option) => {
                 args.next();
             }
@@ -183,6 +197,22 @@ fn asks_help(command: &str, args: &[String]) -> bool {
         }
     }
     false
+}
+
+/// `corten build`'s flags: the command after `--profile-from`, with its arguments, if any.
+/// Anything else is refused, so a misspelled flag is not an ordinary build that looks profiled.
+fn build_flags(args: &[String]) -> Result<Option<&[String]>, String> {
+    match args {
+        [] => Ok(None),
+        [flag, command @ ..] if flag == "--profile-from" => {
+            if command.is_empty() {
+                Err("--profile-from needs a command".into())
+            } else {
+                Ok(Some(command))
+            }
+        }
+        _ => Err(format!("corten build takes only --profile-from <command>, not {:?}", args.join(" "))),
+    }
 }
 
 /// `corten check`'s flags: whether `--no-script-types` skips the scripts' type check.
@@ -283,7 +313,7 @@ fn option<'a>(args: &'a [String], flag: &str) -> Result<Option<&'a str>, String>
 
 #[cfg(test)]
 mod tests {
-    use super::{asks_help, check_flags, lint_build_test, option};
+    use super::{asks_help, build_flags, check_flags, lint_build_test, option};
     use std::cell::RefCell;
 
     #[test]
@@ -299,6 +329,23 @@ mod tests {
         // An option names a value only for the command that has it, and a `--` it takes is a value.
         assert!(asks_help("ui", &args(&["add", "--all", "--port", "--help"])));
         assert!(asks_help("new", &args(&["shop", "--corten-path", "--", "--help"])));
+        // What follows `--profile-from` is the command it runs, with that command's own flags.
+        assert!(asks_help("build", &args(&["--help", "--profile-from", "./train.sh"])));
+        assert!(!asks_help("build", &args(&["--profile-from", "./train.sh", "--help"])));
+        assert!(!asks_help("build", &args(&["--profile-from", "--help"])));
+        assert!(asks_help("dev", &args(&["--profile-from", "--help"])));
+    }
+
+    #[test]
+    fn build_takes_only_the_command_a_profile_comes_from() {
+        let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        assert_eq!(build_flags(&[]), Ok(None));
+        let command = args(&["--profile-from", "sh", "train.sh", "--profile-from"]);
+        assert_eq!(build_flags(&command), Ok(Some(&command[1..])));
+        assert_eq!(build_flags(&args(&["--profile-from"])), Err("--profile-from needs a command".into()));
+        // A misspelled flag is refused, not built without a profile.
+        assert!(build_flags(&args(&["--profile-form", "sh"])).is_err());
+        assert!(build_flags(&args(&["--release"])).is_err());
     }
 
     #[test]
