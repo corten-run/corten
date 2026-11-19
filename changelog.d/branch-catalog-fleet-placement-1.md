@@ -1,0 +1,1 @@
+- Use the named `c16-generator-v1` layout for the grouped fleet's catalog-page benchmark only, with the existing correctness and replay gates and unchanged historical reservations.

@@ -1,4 +1,4 @@
-import { remoteFiles as contractFiles, validateState } from "./cloud-contract.mjs";
+import { remoteFiles as contractFiles, savedLoadLayout, validateState } from "./cloud-contract.mjs";
 import { quote } from "./cloud-transport.mjs";
 import { archiveLimit, expandedLimit } from "./cloud-local.mjs";
 import { custodyCommand, guardianSha256 } from "./cloud-control-runtime.mjs";
@@ -40,13 +40,14 @@ git checkout --detach ${state.commit}
 test "$(git rev-parse HEAD)" = ${state.commit}
 test -z "$(git status --porcelain --untracked-files=all)"`;
   const group = state.group === undefined ? "" : ` --group ${quote(state.group)}`;
-  const entry = `node bench/workloads/isolated/campaign-entry.mjs ${state.round} --commit ${state.commit} --state-dir /bench/campaign${state.group === undefined ? "" : ` --group ${state.group}`}`;
+  const loadLayout = savedLoadLayout(state);
+  const entry = `node bench/workloads/isolated/campaign-entry.mjs ${state.round} --commit ${state.commit} --state-dir /bench/campaign${state.group === undefined ? "" : ` --group ${state.group}`}${loadLayout ? ` --load-layout ${loadLayout}` : ""}`;
   if (!files["job.sh"].includes(original) || files["job.sh"].split(entry).length !== 2)
     throw new Error("fixed provisioning contract changed; review adapter");
   files["job.sh"] = files["job.sh"].replace("set -Eeuo pipefail", "set -Eeuo pipefail\numask 077")
     .replace(original, provenance)
     .replace(entry,
-      `bootstrap_stage=campaign-directory\nmkdir -m 700 -- '/bench/campaign'\nbootstrap_stage=source-cleanliness\ntest -z "$(git status --porcelain --untracked-files=all)"\nbootstrap_stage=bootstrap-marker\nnode --input-type=module -e ${quote(`import { writeFileSync } from "node:fs"; writeFileSync("/bench/bootstrap-ready.json", ${JSON.stringify(`${JSON.stringify(bootstrapMarker(state))}\n`)}, { flag: "wx", mode: 0o600 });`)}\nbootstrap_stage=native-entry\nnode 'bench/workloads/isolated/campaign-entry.mjs' ${round} --commit ${commit} --state-dir '/bench/campaign'${group}`);
+      `bootstrap_stage=campaign-directory\nmkdir -m 700 -- '/bench/campaign'\nbootstrap_stage=source-cleanliness\ntest -z "$(git status --porcelain --untracked-files=all)"\nbootstrap_stage=bootstrap-marker\nnode --input-type=module -e ${quote(`import { writeFileSync } from "node:fs"; writeFileSync("/bench/bootstrap-ready.json", ${JSON.stringify(`${JSON.stringify(bootstrapMarker(state))}\n`)}, { flag: "wx", mode: 0o600 });`)}\nbootstrap_stage=native-entry\nnode 'bench/workloads/isolated/campaign-entry.mjs' ${round} --commit ${commit} --state-dir '/bench/campaign'${group}${loadLayout ? ` --load-layout ${quote(loadLayout)}` : ""}`);
   files["pack.sh"] = `#!/bin/bash
 set -euo pipefail
 umask 077

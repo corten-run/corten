@@ -116,7 +116,10 @@ export async function inspectNative(binding, folder) {
       assert.equal(summary.round, round); assert.equal(summary.commit, commit);
       assert.deepEqual(summary.options, binding.execution.effectiveOptions);
       assert.deepEqual(summary.measurement?.cpus, binding.resources.expectedCpus);
-      if (group === "catalog-page") catalogSource(binding, summary, folder);
+      if (group === "catalog-page") {
+        assert.equal(summary.measurement?.loadLayout, binding.resources.requestedCpuEnv.CATALOG_LOAD_LAYOUT, "catalog load layout differs from campaign");
+        catalogSource(binding, summary, folder);
+      }
       result = missing(binding); result.blockers = ["native-replay-incomplete"];
       if (group === "localized-marketplace") {
         // This fixed native API returns its fully replayed summary, not a status

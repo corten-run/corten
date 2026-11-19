@@ -71,19 +71,23 @@ readiness; this repair still requires independent source review before merge.
 
 ## Dedicated Group Hosts
 
-A new dedicated fleet uses `benchmark-group-fleet/v2` and sfo3 for every
-group. Nonfleet all-group hosts still use sfo2. A saved
-`benchmark-group-fleet/v1` plan and its dedicated reservations retain sfo2 and
-their original roster. They are readable for inspection and independently
-authorized recovery, never for detach or remaining admission. Ordinary
+A new dedicated fleet uses `benchmark-group-fleet/v3`. Its default host is
+`c-8` in sfo3; only the `catalog-page` job reserves `c-16` in sfo2 with
+`c16-generator-v1`. That layout gives the catalog load generator CPUs 4-15;
+app, upstream and probe placement and budgets do not change. Nonfleet all-group
+hosts still use `c-8` in sfo2. Saved v1 (sfo2) and v2 (sfo3) fleets keep
+their original `c-8` placement, roster and receipts. The current controller
+can read them for inspection and independently authorized recovery, never for
+detach or remaining admission. Ordinary
 collection still needs the original measured checkout; the existing
 merged-controller recovery actions still have their exact eligibility and
 approval requirements. Do not rewrite a saved reservation or reuse its approval.
-A change of region is not a like-for-like comparison.
+Do not compare timings across placements.
 
 A fleet binds the complete current registry to one dedicated host per group. The
 hosts run in parallel; contenders and phases within a group retain their native
-ordering, CPU budgets, correctness checks and measurement settings. A group host
+ordering, correctness checks and measurement settings apart from the catalog
+load generator's placement and CPU budget. A group host
 builds and runs only its group's complete selection, not a filtered list of apps.
 Popular and performance views still share the same measurements.
 
@@ -91,9 +95,11 @@ Popular and performance views still share the same measurements.
 SSH key, host configuration and a unique ownership token for every registry group.
 The full roster and selection are hashed before launch. A host reservation retains
 that complete roster but has the distinct `benchmark-dedicated-group-host/v1`
-schema and exactly one group's selection. The fleet schema fixes placement;
-the provider checks the launch mode before accepting create and never accepts
-a region override. Legacy all-group reservations remain readable and cannot
+schema and exactly one group's selection. The fleet schema fixes placement
+and the catalog layout; the provider checks the launch mode before accepting
+create, and the collector checks the layout returned by native replay against
+the reservation. No operator size, region or layout override is accepted.
+Legacy all-group reservations remain readable and cannot
 acquire group-selection fields after reservation.
 
 The per-host production launch adds `--group GROUP --fleet ABSOLUTE_PLAN_JSON`.
@@ -825,7 +831,7 @@ qualification flag or a producer's deletion permission.
 
 Launch records create intent before its only create call. A lost response permits
 one list reconciliation, not another allocation. Exact numeric ID (once known),
-name, unique run tag, both shared tags, c-8 size, the pinned region and exactly one matching
+name, unique run tag, both shared tags, the reserved size and region and exactly one matching
 public IPv4 are required. Every SSH/SCP call rechecks that identity. Collection of
 a creating reservation may bind that exact unique host, but never provisions or
 starts it. Failed/unstarted/missing units require operator inspection, not deletion.

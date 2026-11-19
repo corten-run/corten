@@ -3,13 +3,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { nightly } from "../marketplace/droplet-contract.mjs";
-import { phases } from "../catalog/contract.mjs";
+import { cpuSettings, phases } from "../catalog/contract.mjs";
 import { groupDescriptor } from "../catalog/group.mjs";
 import { descriptor as jsonDescriptor } from "../json-api/contract.mjs";
 import { coverage } from "./evidence.mjs";
 import { definition, groupNames, registrySchema, retainedFamilies, selectedApps, validateInventory } from "./registry.mjs";
 import { deploymentPlan } from "./deployments.mjs";
 import { runnerFor } from "./run.mjs";
+import { catalogFleetPlacement } from "./cloud-contract.mjs";
 
 const nativeScope = {
   "mixed-production": "Native functional captures; complete production qualification and reviewed mixed-load measurement are still required.",
@@ -42,7 +43,9 @@ export function plan(name, evidence = []) {
         settings: "Standalone catalog measurements, host and cpuEnv; durable reservation is authoritative",
         status: "explicit-merged-commit-independent-state-root-native-gates-required",
       },
-      groupedFleet: { runner: "bench/workloads/fleet.mjs", hostContract: "bench/workloads/cloud-contract.mjs" },
+      groupedFleet: { runner: "bench/workloads/fleet.mjs", hostContract: "bench/workloads/cloud-contract.mjs",
+        host: catalogFleetPlacement.host, loadLayout: catalogFleetPlacement.loadLayout,
+        cpus: cpuSettings(catalogFleetPlacement.cpuEnv, catalogFleetPlacement.loadLayout) },
     } : name === "json-api" ? {
       runner: "bench/json-api/run.mjs", group: name, descriptor: jsonDescriptor(), phases,
       settings: "bench/json-api/contract.mjs parseArgs defaults; saved options, timingPlan and measurement.cpus are authoritative",

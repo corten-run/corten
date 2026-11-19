@@ -121,9 +121,12 @@ Requested overrides are always separate from recorded native defaults.
 
 ## Resources and validation
 
-The binding uses the provider placement for its campaign mode: sfo3 for a
-dedicated group fleet, sfo2 for the legacy nonfleet campaign. Both use c-8/Ubuntu; allocation and
-isolation remain unobserved. Timed HTTP roles retain native 1/2/4 CPU quotas and explicitly
+The binding uses the provider placement for its campaign mode: c-8 in sfo3 for
+the default dedicated group and c-8 in sfo2 for the legacy nonfleet campaign.
+The current fleet binds only catalog-page to c-16 in sfo2 with
+[`c16-generator-v1`](CAMPAIGN.md#parent-interface), which widens the load generator
+without changing the app, upstream or probes. Allocation and isolation remain
+unobserved by an offline binding. Other timed HTTP roles retain native 1/2/4 CPU quotas and explicitly
 record intended app/upstream/load pinning `1`/`2-3`/`4-7` using each native environment prefix.
 Those settings are expectations, not observed environment or native defaults. Mixed
 functional capture has separate 1/2/2 CPU app/upstream/capture budgets; only its explicit
