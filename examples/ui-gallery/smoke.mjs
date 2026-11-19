@@ -1552,6 +1552,9 @@ async function run(browser) {
     const source = header.querySelector("a");
     if (!source) throw new Error("missing sort link");
     const inner = document.createElement("table");
+    const sorted = document.createElement("th");
+    sorted.setAttribute("aria-sort", "ascending");
+    inner.createTHead().insertRow().append(sorted);
     const cell = inner.createTBody().insertRow().insertCell();
     const link = /** @type {HTMLAnchorElement} */ (source.cloneNode(true));
     link.textContent = "Nested";
@@ -1562,10 +1565,11 @@ async function run(browser) {
   });
   await sales.getByRole("link", { name: "Buyer" }).click();
   const nestedAfter = await sales.getByRole("link", { name: "Nested" }).getAttribute("href");
+  const nestedSort = await sales.locator("thead table th").getAttribute("aria-sort");
   check(
-    "a ref-valued link in a nested table is not read as the outer head's sorter",
-    (await sortedBy()).buyers === "Ada Lovelace|Alan Turing|Grace Hopper" && nestedAfter === nestedHref,
-    `${nestedHref} -> ${nestedAfter}`,
+    "a nested table's links and sort are its own, not the outer head's",
+    (await sortedBy()).buyers === "Ada Lovelace|Alan Turing|Grace Hopper" && nestedAfter === nestedHref && nestedSort === "ascending",
+    `${nestedHref} -> ${nestedAfter} ${nestedSort}`,
   );
   await page.goto(unsorted);
   // A handler still wired to an old or misconfigured kit must not partially sort in place.

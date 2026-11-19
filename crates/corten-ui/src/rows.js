@@ -158,7 +158,8 @@ function sortRows(event, link, head, cells) {
     for (const { row } of rows) moved.append(row);
     body.append(moved);
   }
-  for (const other of head.querySelectorAll("th[aria-sort]")) if (other !== header) other.removeAttribute("aria-sort");
+  // Only this head's own cells: a table nested in one keeps its sort.
+  for (const other of head.querySelectorAll(":scope > tr > th[aria-sort]")) if (other !== header) other.removeAttribute("aria-sort");
   const active = order === 1 ? "ascending" : "descending";
   header.setAttribute("aria-sort", active);
   const shown = order === 1 ? route.up : route.down;
