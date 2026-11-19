@@ -6,7 +6,7 @@ Corten speaks HTTP/1.1. HTTP/2 or HTTP/3 to browsers and a shared cache come fro
 in front of `corten::serve` ([design Limit 14](../design.md#limit-http1)), which usually ends TLS too (the app can,
 [`serve_wrapped`](app.md#your-own-listeners)). This page is what that proxy has to do
 for a Corten app, the nginx configuration it was checked with, the settings for two CDNs, the
-release profile an app builds with, what a profile-guided build gains, how its image builds
+release profile an app builds with, what a profile-guided build gained on one app, how its image builds
 beside other apps', and what to know when monitoring it.
 
 For live streams this is a requirement, not just a choice of where to end TLS: another server
@@ -273,7 +273,7 @@ not for speed.
 
 A release build can be given a profile of the app at work, which the compiler uses to lay out
 and inline the code its requests run. Corten adds nothing to it and needs nothing for it; the
-steps are the toolchain's.
+flags and tools are the toolchain's.
 
 ```sh
 rustup component add llvm-tools
@@ -291,10 +291,15 @@ a Corten app does on `SIGTERM` and Ctrl-C (Shutdown, in [The app](app.md#the-app
 was stopped with `SIGTERM`. `LLVM_PROFILE_FILE` puts the app's profile in a directory of its
 own, emptied first: the macros and build scripts that run during the first build are built the
 same way and write theirs to the directory the flag names (18 files here), and a profile left
-from an earlier release would be merged with this one. Each of the two builds compiles every
+from an earlier release would be merged with this one. The rustc book's own steps keep the flag
+from the macros and build scripts another way, by passing `--target` with the host's tuple to
+both builds, which puts the binary under `target/<tuple>/release`, not where the starter's
+Dockerfile copies it from; that way was not run here. Each of the two builds compiles every
 crate again, since the flags changed, and `RUSTFLAGS` in the environment replaces the
-`build.rustflags` of a `.cargo/config.toml`. The Dockerfile `corten new` writes does one release
-build; where the training run and the profile go in an image's build is not worked out here.
+`build.rustflags` and every `target.<..>.rustflags` of a `.cargo/config.toml`, so an app that
+sets a linker or a CPU there repeats those flags in both. The Dockerfile `corten new` writes
+does one release build; where the training run and the profile go in an image's build is not
+worked out here.
 
 Measured on the lean catalog app (`bench/catalog/corten`) at `7685c7f24` with rustc 1.99.1 in
 `rust:1-bookworm`, on a desktop under Docker with other work running. That app is not the
@@ -302,9 +307,9 @@ starter's: built with `--no-default-features` (no `compress`) and one codegen un
 `PROFILE=catalog-lean` (no deadline or timeouts), on glibc's allocator. Five builds that differ
 only in the profile served the same catalog page load and answered the same bytes: the app on
 one CPU, `wrk` with 64 connections on three others in the same container. Cycles are user and
-kernel together, a request, by `perf stat` on the app's CPU, over 12 rounds in which the builds
-took turns in the same order; instructions are one connection under callgrind (1,300 requests
-less 300).
+kernel together, a request, by `perf stat` on the app's process, over 12 rounds in which the
+builds took turns in the same order; instructions are one connection under callgrind (1,300
+requests less 300), one run a build.
 
 | Profile taken from | Cycles a request, median | Range | Instructions a request |
 |---|---|---|---|
@@ -323,10 +328,14 @@ lower in 7 (11,965 lower to 16,117 higher): these rounds do not tell either from
 app and this load a profile did not have to come from the load it was measured with, only from
 requests that reach the same route; a profile that barely reached it gained about half as much.
 
-Not measured: an app with the default features and the starter's release profile, another app
-or page, a profile taken from an earlier version of the app or with another rustc, a profile
-used on another kind of CPU than it was taken on, and the time the two builds and the training
-run add to a release.
+Not measured: an app as the starter builds and runs it (the default features, its release
+profile, jemalloc, a deadline and timeouts), another app or page, a profile taken from an
+earlier version of the app or with another rustc, a profile used on another kind of CPU than it
+was taken on, the size of the binary, and the time the two builds and the training run add to a
+release. Nor the time a reader waits: no latency was kept, and the pages a second the same
+rounds counted (64 connections against one CPU) say little, 17,567 at the median without a
+profile (11,578 to 18,678), 21,504, 21,228 and 22,610 with the first three and 17,727 with the
+JSON API's, whose cycles were 13% lower.
 
 ## Response compression
 
