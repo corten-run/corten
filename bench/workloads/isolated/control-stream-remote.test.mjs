@@ -74,14 +74,16 @@ test("a wedged first-fault reporter is killed at the original startup deadline",
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const f = await fixture(t, { beforeReady: true });
   const kill = t.mock.fn(); f.child.kill = kill;
-  const rejected = assert.rejects(f.pending, /control watchdog deadline expired/);
+  let settled = false;
+  const rejected = assert.rejects(f.pending, /control watchdog deadline expired/).then(() => { settled = true; });
   try {
     t.mock.timers.tick(2500); f.child.stdout.write("F");
     assert.ok(f.abort.signal.aborted);
     t.mock.timers.tick(2499); await new Promise(setImmediate);
-    assert.equal(kill.mock.callCount(), 0);
+    assert.equal(kill.mock.callCount(), 0); assert.equal(settled, false);
     t.mock.timers.tick(1); await new Promise(setImmediate);
     assert.deepEqual(kill.mock.calls.map((call) => call.arguments), [["SIGKILL"]]);
+    assert.equal(settled, true); // Startup rejects without waiting for child close.
   } finally { f.child.emit("close", 254, null); t.mock.timers.reset(); await rejected; }
 });
 
