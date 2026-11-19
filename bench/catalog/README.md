@@ -386,7 +386,8 @@ Portable test identities cannot qualify native evidence.
 On attributed API negatives, each worker AND the coordinator must have sampled
 peak CPU strictly below 80% of one core, and upstream container peak must be
 strictly below 160%. Aggregate headroom cannot excuse a busy/skewed worker.
-Generator peak remains strictly below 320%; failed warmup, closed-loop drops and
+On the default four-CPU layout generator peak must stay below 320% wherever
+headroom is required; failed warmup, closed-loop drops and
 the fixed-drop target-pressure rules are unchanged. Old v2/v3 evidence keeps the
 single-process interpretation and its original strict 80% gate, never v4 limits.
 
@@ -478,13 +479,21 @@ By default the app, load generator and API have CPU quotas of one, four and two 
 For a dedicated 16-vCPU catalog-page qualification, `CATALOG_LOAD_LAYOUT=c16-generator-v1`
 requires the explicit CPU sets `CATALOG_APP_CPUS=1`, `CATALOG_API_CPUS=2-3`, and
 `CATALOG_LOAD_CPUS=4-15`. Only the generator quota changes, from four CPUs to twelve.
+
+```sh
+CATALOG_LOAD_LAYOUT=c16-generator-v1 CATALOG_APP_CPUS=1 CATALOG_API_CPUS=2-3 CATALOG_LOAD_CPUS=4-15 \
+  node bench/catalog/run.mjs c4 --group catalog-page --build --passes 3
+```
+
 The runner records the layout and verifies the same strict peak limit (below 80% of
 the generator's quota) in preflight and in every timed phase in this layout, including
 successful responses. A phase without headroom is not comparison evidence. The browser
 checker and first-response probe retain their original four CPUs (4–7), and the
 observer keeps its original placement. Wide runs record the cold probe's budget
-and the running generator's effective CPU set and cgroup quota ancestry for
-replay. A requested Docker limit alone is not evidence of available CPUs.
+and sample the running generator's host PID, kernel cgroup membership, effective
+CPU set and quota ancestry throughout each phase. Replay rejects a missing window
+(more than two seconds) or a restricted sample. These are sampled limits, not
+continuous tracing. A requested Docker limit alone is not evidence of available CPUs.
 The load profile, request checks and app budget are unchanged.
 This opt-in does not select a larger host for the nightly fleet or qualify a mixed-layout
 comparison. A wider CPU set without the named layout still has the original four-CPU quota.

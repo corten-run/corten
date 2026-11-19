@@ -97,10 +97,12 @@ export function timedFixture(f, failure = { app: "fastapi", source: "api", pass:
       if (s.measurement.loadLayout === "c16-generator-v1") {
         const path = `/system.slice/docker-${load.id}.scope`, events = "populated 1\nfrozen 0\n";
         receipt.loadLimits = { binding: loadLimitsBinding(s, { app, source, target: "page", phase }, load.id, afterLoad.state.StartedAt),
-          observation: { startedAt: nativeStart + 10, finishedAt: nativeStart + 11, path,
+          pid: 42, observations: Array.from({ length: seconds + 1 }, (_, i) => ({
+            startedAt: nativeStart + i * 1000 + 10, finishedAt: nativeStart + i * 1000 + 11, path,
+            pid: 42, membershipBefore: `0::${path}\n`, membershipAfter: `0::${path}\n`,
             mount: "35 24 0:31 / /sys/fs/cgroup ro - cgroup2 cgroup rw",
             eventsBefore: events, eventsAfter: events, effectiveCpus: "4-15\n",
-            quotas: [{ path, cpuMax: "1200000 100000\n" }, { path: "/system.slice", cpuMax: "max 100000\n" }, { path: "/", cpuMax: null }] } };
+            quotas: [{ path, cpuMax: "1200000 100000\n" }, { path: "/system.slice", cpuMax: "max 100000\n" }, { path: "/", cpuMax: null }] })) };
       }
       const names = [appName, ...(source === "api" ? [upstreamName] : [])], sampled = [...names, loadName];
       const samples = Object.fromEntries(sampled.map((name) => [name, Array.from({ length: seconds + 1 }, (_, i) => ({ t: nativeStart + i * 1000,

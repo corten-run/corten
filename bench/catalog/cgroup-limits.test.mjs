@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { verifyLoadLimits } from "./cgroup.mjs";
 
-const id = "a".repeat(64), expected = { start: 1000, end: 5000, quota: 12, cpuset: "4-15" };
+const id = "a".repeat(64), expected = { start: 1000, end: 5000, quota: 12, cpuset: "4-15", pid: 42 };
 const path = `/tenant/docker/docker-${id}.scope`;
 const sample = () => ({
   startedAt: 1100, finishedAt: 1101, path,
+  pid: 42, membershipBefore: `0::${path}\n`, membershipAfter: `0::${path}\n`,
   mount: "35 24 0:31 / /sys/fs/cgroup ro - cgroup2 cgroup rw",
   eventsBefore: "populated 1\nfrozen 0\n", eventsAfter: "populated 1\nfrozen 0\n",
   effectiveCpus: "4-15\n",

@@ -7,7 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import { memoryMiB, summarizeSamples } from "./stats.mjs";
 import { leanApps, leanProfile } from "./contract.mjs";
 import { workerAware, workerPhaseSchema, workerCommand, verifyWorkers, workerHeadroom } from "./apparatus.mjs";
-import { verifyLoadLimits } from "./cgroup.mjs";
+import { observeLoadLimits, verifyLoadLimits } from "./cgroup.mjs";
 
 export const timedRawSchema = "catalog-saved-evidence/v3";
 export const phaseSchema = "catalog-timed-phase/v1";
@@ -139,7 +139,15 @@ export function verifyTimedPhase(summary, subject, { readJson, readText }, previ
     && end - start >= seconds * 1000 && end - start <= (seconds + 25) * 1000, "timed native duration incomplete");
   if (wide) {
     same(receipt.loadLimits?.binding, loadLimitsBinding(summary, subject, load.id, load.state.StartedAt), "load cgroup phase binding differs");
-    verifyLoadLimits(receipt.loadLimits.observation, load.id, { start, end, ...summary.measurement.cpus.load });
+    const { observations, pid } = receipt.loadLimits;
+    assert.ok(Array.isArray(observations) && observations.length >= 2 && observations.length <= (seconds + 25) * 4, "load cgroup sample count differs");
+    let last = start;
+    for (const sample of observations) {
+      verifyLoadLimits(sample, load.id, { start, end, pid, ...summary.measurement.cpus.load });
+      assert.ok(sample.startedAt >= last && sample.finishedAt - last <= 2000, "load cgroup sampling gap");
+      last = sample.finishedAt;
+    }
+    assert.ok(end - last <= 2000, "load cgroup sampling stopped early");
   }
   for (const key of ["ids", "before", "after"]) same(Object.keys(proof[key]).sort(), [...names].sort(), "timed CPU inventory differs");
   const deltas = readJson(`${phase}-cpu.json`), stats = readJson(`${phase}-stats.log.json`);
@@ -225,17 +233,29 @@ export function verifyTimedContinuity(observations) {
 }
 
 async function collectLoadLimits(docker, summary, subject, id) {
-  const deadline = performance.now() + 3000;
+  const deadline = performance.now() + (subject.seconds + 25) * 1000;
+  const observations = [];
+  let binding, pid;
   do {
     const state = JSON.parse(await docker(["inspect", "--format", "{{json .State}}", id], { timeout: 2000 }));
     if (state.Running && state.Status === "running") {
-      const output = await docker(["exec", `${summary.runId}-cpu`, "node", "/bench/catalog/cgroup.mjs", "--load-limits", id], { timeout: 5000 });
-      return { binding: loadLimitsBinding(summary, subject, id, state.StartedAt), observation: JSON.parse(output) };
+      binding ??= loadLimitsBinding(summary, subject, id, state.StartedAt);
+      pid ??= state.Pid;
+      assert.ok(state.Pid === pid && state.StartedAt === binding.startedAt, "live generator changed");
+      try { observations.push(observeLoadLimits(id, pid)); }
+      catch (e) {
+        // The process may exit between Docker inspect and reading procfs.
+        if (e.code !== "ENOENT" || (await docker(["inspect", "--format", "{{.State.Status}}", id], { timeout: 2000 })).trim() !== "exited") throw e;
+        break;
+      }
+      await sleep(500);
+      continue;
     }
-    assert.equal(state.Status, "created", "load container did not remain active for cgroup observation");
+    if (state.Status === "exited") break;
+    assert.ok(!binding && state.Status === "created", "unexpected load state during cgroup observation");
     await sleep(50);
   } while (performance.now() < deadline);
-  throw new Error("load container never became active for cgroup observation");
+  return { binding, pid, observations };
 }
 
 // Dependencies are the native runner's existing bounded commands, never saved code.

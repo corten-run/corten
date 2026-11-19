@@ -12,18 +12,19 @@ try {
   assert.deepEqual(Object.keys(input).sort(), ["commit", "folder", "round"]);
   assert.match(input.commit, /^[a-f0-9]{40}$/);
   // Grow the source budget only for the exact new replay dependencies.
-  const recoverySources = new Set([
+  const additionalSources = new Set([
+    "bench/catalog/cgroup.mjs",
     "bench/hardening/dependency-recovery-capture.mjs",
     "bench/hardening/dependency-recovery-contract.mjs",
     "bench/hardening/resource-sample.mjs",
   ]);
   let remaining = 211;
-  assert.ok(Array.isArray(sources) && sources.length > 0 && sources.length <= remaining + recoverySources.size);
+  assert.ok(Array.isArray(sources) && sources.length > 0 && sources.length <= remaining + additionalSources.size);
   const approved = new Map(); let total = 0;
   for (const row of sources) {
     assert.deepEqual(Object.keys(row).sort(), ["path", "sha256", "source"]);
     assert.ok(/^(?:(?:bench|scripts)\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.mjs|node_modules\/typescript\/lib\/typescript\.js|node_modules\/semver\/(?:[a-z-]+\/)*[a-z-]+\.js)$/.test(row.path));
-    if (!recoverySources.delete(row.path)) assert.ok(--remaining >= 0);
+    if (!additionalSources.delete(row.path)) assert.ok(--remaining >= 0);
     assert.equal(typeof row.source, "string");
     total += Buffer.byteLength(row.source); assert.ok(total <= 24 * 1024 * 1024);
     assert.equal(createHash("sha256").update(row.source).digest("hex"), row.sha256);

@@ -101,9 +101,12 @@ export function workerRound(failure = null, { historical = false, wideGenerator 
     boundary.schema = workerPhaseSchema;
     command(boundary.before.upstream); command(boundary.after.upstream);
     if (s.measurement.loadLayout === "c16-generator-v1") {
-      const { id } = boundary.after.load, { binding, observation } = boundary.loadLimits;
-      observation.path = observation.path.replace(binding.container, id);
-      observation.quotas[0].path = observation.path;
+      const { id } = boundary.after.load, { binding, observations } = boundary.loadLimits;
+      for (const observation of observations) {
+        observation.path = observation.path.replace(binding.container, id);
+        observation.membershipBefore = observation.membershipAfter = `0::${observation.path}\n`;
+        observation.quotas[0].path = observation.path;
+      }
       binding.container = id;
     }
     f.put(`${prefix}/${phase}-boundary.json`, boundary);

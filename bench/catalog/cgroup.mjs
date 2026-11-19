@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 const root = "/sys/fs/cgroup";
 const containerId = /^[a-f0-9]{64}$/;
 const isContainer = (name, id) => name === id || name === `docker-${id}.scope`;
-const maxDepth = 8, maxEntries = 16384, maxReadMs = 2000;
+const maxDepth = 8, maxReadMs = 2000;
 
 export function usageUsec(value) {
   const match = /^usage_usec (\d+)$/m.exec(value);
@@ -65,7 +65,7 @@ function cpuSet(value) {
   return cpus;
 }
 
-export function verifyLoadLimits(raw, id, { start, end, quota, cpuset }) {
+export function verifyLoadLimits(raw, id, { start, end, quota, cpuset, pid }) {
   assert.match(id, containerId, "invalid container ID");
   assert.ok(raw && Number.isSafeInteger(raw.startedAt) && Number.isSafeInteger(raw.finishedAt) && raw.startedAt >= start
     && raw.finishedAt < end && raw.finishedAt >= raw.startedAt && raw.finishedAt - raw.startedAt <= maxReadMs, "load cgroup observation outside active lifetime");
@@ -73,6 +73,8 @@ export function verifyLoadLimits(raw, id, { start, end, quota, cpuset }) {
   assert.ok(populated(raw.eventsBefore) && populated(raw.eventsAfter), "load cgroup not observed populated");
   assert.deepEqual(cpuSet(raw.effectiveCpus), cpuSet(cpuset), "load effective cpuset differs from configured CPUs");
   const paths = hierarchy(raw.path, id);
+  assert.ok(Number.isSafeInteger(pid) && pid > 0 && raw.pid === pid
+    && raw.membershipBefore === `0::${raw.path}\n` && raw.membershipAfter === raw.membershipBefore, "load PID cgroup membership differs");
   assert.ok(Array.isArray(raw.quotas) && raw.quotas.length === paths.length && raw.quotas.every((row, i) => row?.path === paths[i]),
     "load cgroup quota ancestry is missing or inconsistent");
   for (const [i, { path, cpuMax }] of raw.quotas.entries()) {
@@ -91,25 +93,29 @@ export function verifyLoadLimits(raw, id, { start, end, quota, cpuset }) {
   }
 }
 
-function observeLoadLimits(id) {
+// Read on the dedicated Docker host, in the same PID namespace as Docker State.Pid.
+export function observeLoadLimits(id, pid) {
+  assert.ok(Number.isSafeInteger(pid) && pid > 0, "missing live load PID");
+  const membership = () => readFileSync(`/proc/${pid}/cgroup`, "utf8");
+  const startedAt = Date.now(), membershipBefore = membership();
+  const path = /^0::(\/[^\n]+)\n$/.exec(membershipBefore)?.[1];
+  const paths = hierarchy(path, id);
   const mount = readFileSync("/proc/self/mountinfo", "utf8").split("\n").filter((line) => mountFields(line).target === root);
   assert.equal(mount.length, 1, "load cgroup mount evidence missing or ambiguous");
   fullMount(mount[0]);
-  const groups = [...containerGroups(id, root, maxDepth, maxEntries)];
-  assert.equal(groups.length, 1, `load cgroup missing or ambiguous for ${id}`);
   const read = (path, file) => readFileSync(join(root, path.slice(1), file), "utf8");
-  const path = "/" + relative(root, groups[0]).split(sep).join("/");
-  const startedAt = Date.now(), eventsBefore = read(path, "cgroup.events");
+  const eventsBefore = read(path, "cgroup.events");
   const effectiveCpus = read(path, "cpuset.cpus.effective");
-  const quotas = hierarchy(path, id).map((path) => {
+  const quotas = paths.map((path) => {
     try { return { path, cpuMax: read(path, "cpu.max") }; }
     catch (e) { if (path === "/" && e.code === "ENOENT") return { path, cpuMax: null }; throw e; }
   });
   const eventsAfter = read(path, "cgroup.events");
-  return { startedAt, finishedAt: Date.now(), mount: mount[0], path, eventsBefore, eventsAfter, effectiveCpus, quotas };
+  const membershipAfter = membership();
+  return { startedAt, finishedAt: Date.now(), mount: mount[0], path, pid, membershipBefore, membershipAfter, eventsBefore, eventsAfter, effectiveCpus, quotas };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
-  console.log(JSON.stringify(args[0] === "--load-limits" ? observeLoadLimits(args[1]) : Object.fromEntries(args.map((id) => [id, readCpu(id)]))));
+  console.log(JSON.stringify(Object.fromEntries(args.map((id) => [id, readCpu(id)]))));
 }
