@@ -274,7 +274,7 @@ def run(args, **kwargs):
         def target():
             local.pid = observer
             try:
-                scope["watch"](root, identifier)
+                scope["main"](["watch", token, identifier])
             except Exception as error:
                 errors.append(traceback.format_exc(limit=4))
             finally:
@@ -401,7 +401,9 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
         output = {"proof": current.get("proof"), "rejected": current.get("rejected", False),
                   "custody": {p.rsplit("/", 1)[-1]: value.hex() for p, value in data.items() if p.startswith("/bench/control/")}}
     elif mode in ("disconnect", "ancestor-survives", "ancestor-zombie"):
-        output = {"intentionalNegative": mode, "receiptAbsent": True, "observerErrors": errors}
+        scope["custody"](root)
+        failure = json.loads(data["/bench/control/watch-failure-" + identifier + ".json"])
+        output = {"intentionalNegative": mode, "receiptAbsent": True, "observerErrors": errors, "failure": failure}
     else:
         if mode == "unknown-survivor":
             rows[999] = row(999, 10, "/foreign.scope")

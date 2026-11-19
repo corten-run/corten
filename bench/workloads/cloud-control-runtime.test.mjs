@@ -35,6 +35,9 @@ test("actual guardian/watcher producer registers SSH and SFTP, includes the fina
 test("intentional disconnect and surviving SSH ancestor never produce a successful receipt", () => {
   for (const mode of ["disconnect", "ancestor-survives", "ancestor-zombie"]) {
     const result = loopback(mode); assert.equal(result.receiptAbsent, true); assert.ok(result.observerErrors.length > 0);
+    assert.deepEqual(Object.keys(result.failure), ["helperLine"]);
+    assert.ok(Number.isSafeInteger(result.failure.helperLine) && result.failure.helperLine > 0
+      && result.failure.helperLine <= guardianSource.split("\n").length);
   }
 });
 

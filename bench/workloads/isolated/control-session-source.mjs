@@ -139,7 +139,11 @@ def proc(pid):
             executable = {"device": str(exe.st_dev), "inode": str(exe.st_ino)}
         except FileNotFoundError:
             # Zombies still have a PID/start identity and must prevent drainage.
-            assert raw.rsplit(") ", 1)[1].split()[0] in ("Z", "X"), "userspace executable unresolved"
+            closing = (directory / "stat").read_text()
+            current = closing.rsplit(") ", 1)[1].split()
+            assert (closing.startswith(str(pid) + " (") and current[19] == fields[18]
+                    and current[0] in ("Z", "X")), "userspace executable unresolved"
+            raw = closing
     value = {"pid": pid, "startTicks": fields[18], "cgroup": cgroup, "stat": raw,
              "executable": executable, "commandSha256": sha((directory / "cmdline").read_bytes())}
     assert (directory / "stat").read_text().split(") ")[-1].split()[19] == value["startTicks"]
@@ -446,6 +450,7 @@ def inspect_epoch(root, epoch):
     receipts, watchers = [], []
     for invocation in ledger:
         identifier = invocation["id"]
+        assert not (root / ("watch-failure-" + identifier + ".json")).exists(), "control watcher failed"
         path = root / ("receipt-" + identifier + ".json")
         if not path.exists():
             start = load(root, "start-" + identifier + ".json")
@@ -605,7 +610,7 @@ def custody(root):
         destination.mkdir(mode=0o700)
     total = 0
     for path in sorted(root.iterdir()):
-        assert re.fullmatch(r"(?:helper\.py|mutex|binding\.json|window\.json|campaign-active\.json|stream-(?:registration|lease|state|invalid|terminal|sealed|drain|audit-json-api|audit-mixed-production)\.json|stream-observations\.jsonl|(?:request|start|launcher|registration|result|receipt|intrusion)-[a-f0-9]{32}\.json|(?:seal|admission|admission-blocked)-(?:bootstrap|audit-json-api|audit-mixed-production|collection)\.json)", path.name)
+        assert re.fullmatch(r"(?:helper\.py|mutex|binding\.json|window\.json|campaign-active\.json|stream-(?:registration|lease|state|invalid|terminal|sealed|drain|audit-json-api|audit-mixed-production)\.json|stream-observations\.jsonl|(?:request|start|launcher|registration|result|receipt|intrusion|watch-failure)-[a-f0-9]{32}\.json|(?:seal|admission|admission-blocked)-(?:bootstrap|audit-json-api|audit-mixed-production|collection)\.json)", path.name)
         data = read(path, 64 * 1024 * 1024 if path.name == 'stream-observations.jsonl' else LIMIT)
         total += len(data)
         assert total <= 64 * 1024 * 1024
@@ -647,7 +652,17 @@ def main(args):
         sys.stdout.buffer.write(encoded(proof))
     elif mode == "watch":
         assert re.fullmatch(r"[a-f0-9]{32}", args[2])
-        watch(root, args[2])
+        try:
+            watch(root, args[2])
+        except Exception as error:
+            # Only a line in this exact hashed helper, never exception text or process data.
+            frame, line = error.__traceback__, 0
+            while frame:
+                if frame.tb_frame.f_code.co_filename == watch.__code__.co_filename:
+                    line = frame.tb_lineno
+                frame = frame.tb_next
+            write(root / ("watch-failure-" + args[2] + ".json"), encoded({"helperLine": line}))
+            raise
     elif mode == "inspect":
         assert args[2] in ("bootstrap", "audit-json-api", "audit-mixed-production")
         admission = inspect_epoch(root, args[2])

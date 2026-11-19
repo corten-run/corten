@@ -405,6 +405,11 @@ and evidence gates. Neither retirement path can delete a running benchmark.
 
 The common-bootstrap marker precedes native entry. It is not native evidence or
 a reason to strand a terminal host whose entry failed before writing any data.
+If an SSH or SFTP watcher raises an exception, its archived
+`control/watch-failure-<id>.json` records only the line in the archive's
+`control/helper.py`. Match the ID to the sealed ledger to find the failed check.
+This is diagnostic evidence, never a terminal watcher receipt. A missing receipt
+still prevents admission, even when the associated command exited successfully.
 Setup retirement permits only that exact source-bound marker, preserving an
 already-recorded bootstrap observation. A foreign, malformed, symlinked or
 missing previously observed marker refuses, as does any native campaign data.
