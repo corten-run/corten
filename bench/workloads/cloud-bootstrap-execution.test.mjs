@@ -168,10 +168,17 @@ case "$*" in
     case "$MODE" in
       drain|busy) if test -f drained; then echo inactive; else echo active; fi ;;
       active-query-failed) echo inactive; exit 38 ;;
+      active-query-timeout) exit 124 ;;
+      invalid-state) echo secret-fixture ;;
+      failed) echo failed ;;
       *) echo inactive ;;
     esac ;;
   "show user@0.service --property=MainPID --value")
-    if test "$MODE" = nonzero-pid; then echo 42; else echo 0; fi
+    case "$MODE" in
+      nonzero-pid|busy) echo 42 ;;
+      invalid-pid) echo secret-fixture ;;
+      *) echo 0 ;;
+    esac
     if test "$MODE" = pid-query-failed; then exit 39; fi ;;
   *) exit 91 ;;
 esac
@@ -232,7 +239,8 @@ for (const [name, generate] of [["contract", remoteFiles], ["production", produc
     assert.equal(result.stdout, "NATIVE_ENTRY_REACHED\n");
     assert.equal(result.contents, policy);
     assert.deepEqual(result.calls, ["daemon-reload", "timeout 120", "show user@0.service --property=ActiveState --value",
-      "sleep 1", "show user@0.service --property=ActiveState --value", "show user@0.service --property=MainPID --value"]);
+      "show user@0.service --property=MainPID --value", "sleep 1", "show user@0.service --property=ActiveState --value",
+      "show user@0.service --property=MainPID --value"]);
   });
 }
 
@@ -240,19 +248,26 @@ test("root-manager preparation fails closed without overwriting policy or stoppi
   skip: process.platform !== "linux",
 }, (t) => {
   const script = productionFiles(supervised)["job.sh"];
-  for (const [options, status, contents, last] of [
+  assert.ok(script.includes("exec >>/bench/run.log 2>&1"));
+  for (const [options, status, contents, last, diagnostic] of [
     [{ marker: false }, 1, null, undefined],
     [{ prior: "existing policy\n" }, 1, "existing policy\n", undefined],
     [{ mode: "reload-failed" }, 37, policy, "daemon-reload"],
-    [{ mode: "busy" }, 124, policy, "sleep 1"],
-    [{ mode: "active-query-failed" }, 38, policy, "show user@0.service --property=ActiveState --value"],
-    [{ mode: "nonzero-pid" }, 1, policy, "show user@0.service --property=MainPID --value"],
-    [{ mode: "pid-query-failed" }, 39, policy, "show user@0.service --property=MainPID --value"],
+    [{ mode: "busy" }, 124, policy, "sleep 1", "ActiveState=active MainPID=42"],
+    [{ mode: "active-query-failed" }, 38, policy, "show user@0.service --property=ActiveState --value", "querying ActiveState"],
+    [{ mode: "active-query-timeout" }, 124, policy, "show user@0.service --property=ActiveState --value", "querying ActiveState"],
+    [{ mode: "invalid-state" }, 1, policy, "show user@0.service --property=ActiveState --value", "unexpected ActiveState"],
+    [{ mode: "failed" }, 1, policy, "show user@0.service --property=MainPID --value", "ActiveState=failed MainPID=0"],
+    [{ mode: "nonzero-pid" }, 1, policy, "show user@0.service --property=MainPID --value", "ActiveState=inactive MainPID=42"],
+    [{ mode: "pid-query-failed" }, 39, policy, "show user@0.service --property=MainPID --value", "ActiveState=inactive; querying MainPID"],
+    [{ mode: "invalid-pid" }, 1, policy, "show user@0.service --property=MainPID --value", "invalid MainPID"],
   ]) {
     const result = executeRootManager(t, script, options);
     assert.equal(result.status, status, JSON.stringify(options) + ": " + result.stderr);
     assert.equal(result.stdout, "");
     assert.equal(result.contents, contents);
     assert.equal(result.calls.at(-1), last);
+    if (diagnostic) assert.equal(result.stderr.trimEnd().split("\n").at(-1), "root-manager: " + diagnostic);
+    assert.doesNotMatch(result.stderr, /secret-fixture/);
   }
 });

@@ -400,15 +400,22 @@ systemctl daemon-reload
   const waitForIdleUserManager = marker ? `bootstrap_stage=root-manager-idle
 timeout 120 bash -ec '
   while :; do
+    echo "root-manager: querying ActiveState" >&2
     state=$(systemctl show user@0.service --property=ActiveState --value)
     case "$state" in
-      inactive) break ;;
-      active|activating|deactivating|reloading) sleep 1 ;;
-      *) exit 1 ;;
+      active|activating|deactivating|reloading|inactive|failed) ;;
+      *) echo "root-manager: unexpected ActiveState" >&2; exit 1 ;;
     esac
-  done
-  main_pid=$(systemctl show user@0.service --property=MainPID --value)
-  test "$main_pid" = 0'
+    echo "root-manager: ActiveState=$state; querying MainPID" >&2
+    main_pid=$(systemctl show user@0.service --property=MainPID --value)
+    [[ "$main_pid" =~ ^[0-9]{1,10}$ ]] || { echo "root-manager: invalid MainPID" >&2; exit 1; }
+    echo "root-manager: ActiveState=$state MainPID=$main_pid" >&2
+    case "$state" in
+      inactive) test "$main_pid" = 0; break ;;
+      failed) exit 1 ;;
+      *) sleep 1 ;;
+    esac
+  done'
 ` : "";
   const pack = `#!/bin/bash
 set -euo pipefail

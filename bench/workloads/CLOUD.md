@@ -1071,6 +1071,8 @@ During provisioning, a runtime systemd drop-in skips new starts of
 `user@0.service` while the host's control binding exists. It does not stop
 the current manager or change SSH or PAM. Before publishing the bootstrap
 marker, the job waits up to two minutes for the manager to exit naturally.
+The run log records which property it is querying and the observed state and
+main PID, so a busy manager can be distinguished from a stalled query.
 If it stays busy the group fails setup, without terminating anyone's work.
 The normal login inventory and registered-monitor checks still apply.
 
