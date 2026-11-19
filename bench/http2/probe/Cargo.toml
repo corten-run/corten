@@ -1,0 +1,23 @@
+[package]
+name = "http2-limit-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+bytes = "1"
+corten = { package = "corten-run", path = "../../../crates/corten", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+h2 = "=0.4.20"
+http = "1"
+http-body = "1"
+hyper = { version = "=1.12.0", features = ["http2", "server"] }
+hyper-util = { version = "=0.1.21", features = ["tokio"] }
+tokio = { version = "1", features = ["macros", "net", "rt", "time"] }
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring", "tls12"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

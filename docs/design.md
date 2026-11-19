@@ -1277,11 +1277,20 @@ rules something out.
        resumed after 500 ms once the client granted credit: the socket watch misses that wait.
        The partial-head probe, however, kept stream 1 open at `/quiet` while stream 3 waited
        for CONTINUATION. HTTP/1.1's header watch is BUSY while an answer is open too, so this
-       is not evidence of a weakened header guarantee. An idle h2 connection with no open
-       streams was not probed. Inspection finds a prototype bug there: on the first h2 request
-       `watch.take()` then `busy()` removes the response's path back to idle forever.
-       A stream-counting idle watch could preserve the connection-level contract; a header-block
-       timeout with an open sibling would be a stronger, separately chosen guarantee.
+       is not evidence of a weakened header guarantee. The historical probe did not cover an
+       idle h2 connection with no open streams. The historical prototype's first h2 request
+       calls `watch.take()` then `busy()`, removing the response's path back to idle.
+
+       **Idle disposition:** use protocol stream activity, not response-body lifetime.
+       Direct [h2's active-stream count](https://github.com/hyperium/h2/blob/v0.4.20/src/server.rs#L562-L565)
+       passed all eight [idle cases](../bench/http2/README.md#follow-up-results) in three runs:
+       the reused connection with an incomplete head closed in 108 to 110 ms with 100 ms set,
+       the watch returned to idle after overlap, reset and cancellation, and an open sibling
+       kept the watch busy. The Hyper service count passed those cases but went idle too early
+       with a final DATA tail still waiting for credit (closed in 106 to 119 ms); direct h2
+       stayed busy until the tail drained. Hyper does not expose the h2 count. This establishes
+       an idle-watch candidate independently of the send decision. It is not a wire-flush signal
+       or a header-block timer while a sibling remains open.
 
        A detector based only on polling and dropping Corten's `Answered` body cannot preserve
        the send bound. In [hyper 1.12.0's send loop](https://github.com/hyperium/hyper/blob/v1.12.0/src/proto/h2/mod.rs#L157-L186),
@@ -1293,13 +1302,21 @@ rules something out.
        a normal end or a buffered tail still waiting for credit. Clearing a timer on body
        drop misses the latter; leaving it armed without a completion signal can close the
        former. Socket writes cannot identify progress on one response rather than a sibling.
-       A stream count released on body drop alone also cannot prove the last answer is out of
-       h2's queue. These are source findings, not new timing or wire measurements.
 
-       Keep HTTP/1.1 in `serve` and HTTP/2 at the proxy. A parser-free detector that tracks
-       the `Body::Data` buffer beyond the body's lifetime is not ruled out, but it has not been
-       shown to distinguish flow-control progress, completion and cancellation. Do not add a second
-       frame parser or treat closing the whole connection as a substitute for that signal.
+       **Send disposition:** do not use body polls and drop alone. The tested `Answered`
+       detector closed the zero-window connection in 115 to 128 ms but missed both final-tail
+       cases: the old DATA still arrived after the client gave credit past 500 ms, with or
+       without a progressing sibling. A parser-free `Body::Data` tracker stayed with the
+       bytes after the body ended. In the pinned Hyper/h2 probe it closed all three stalls
+       in 110 to 124 ms, and distinguished quiet production, normal completion, resumed or
+       incremental credit, and reset. This is a measured candidate for flow-control waits,
+       not a general send guarantee: h2 can consume the buffer into its encoder before
+       TLS flush, so the socket write watch still matters.
+
+       Keep HTTP/1.1 in `serve` and HTTP/2 at the proxy. The passing idle and send candidates
+       ran in separate transports, not together on one opt-in path with the socket watch.
+       Do not add a second frame parser or treat closing the whole connection as a substitute
+       for detecting the stall.
        The auto builder's missing HTTP/1 `max_header_size` setter is also a prototype
        limitation, not a reason HTTP/2 cannot ship: Corten could detect the preface itself
        and retain its HTTP/1 builder. Decoded h2 head limits, concurrent-stream/reset bounds,
@@ -1674,7 +1691,11 @@ rules something out.
     reasoned (the open-sibling header probe matches HTTP/1.1's busy-watch contract, while
     `watch.take()` in the prototype loses the return to idle); reasoned (hyper
     1.12.0 can finish the body while h2 0.4.20 still has queued data, so body polls and drop
-    alone do not tell Corten that a stream made progress or completed); value (fast and proven
+    alone do not tell Corten that a stream made progress or completed); measured
+    ([follow-up raw TLS cases](../bench/http2/README.md#follow-up-results), three rounds:
+    h2's active count preserved the idle bound where Hyper's service count did not, and a
+    byte-consumption watch preserved the send bound on these cases where body polls and drop
+    alone did not; the passing candidates were tested separately); value (fast and proven
     fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
     which is why the dispatch suite comes first and an opt-in protocol must not silently
     weaken a security bound even though the no-proxy live app already fails).
@@ -1682,11 +1703,12 @@ rules something out.
     Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case
     (other than the deliberate `501` and empty-segment changes migration step 1 records), or
     counts more than axum's on any request measured in step 2 (that step then waits, and this
-    Choice says why); a `Response<Body>` grows past 128 bytes (step 4); for HTTP/2, hyper or h2
-    exposes a per-stream send-wait signal that covers queued data after the body ends, or a
-    parser-free design demonstrates the two connection bounds and controls specified for
-    [limits.mjs](../bench/http2/README.md#follow-up-acceptance), including final buffered data,
-    progress on a sibling, and reset and cancellation. An upstream header-block timeout
+    Choice says why); a `Response<Body>` grows past 128 bytes (step 4); for HTTP/2, an upstream
+    active-stream count exposed through Hyper reopens the idle design, and a per-stream send-wait
+    signal covering queued data after the body ends reopens the send design. A parser-free
+    opt-in path that combines both bounds with the socket watch and passes the
+    [acceptance cases](../bench/http2/README.md#follow-up-acceptance), including final buffered
+    data, sibling progress, reset and cancellation, reopens the proxy decision. An upstream header-block timeout
     ([hyperium/h2 #928 Proposal: enable an HTTP/2 header-block read timeout](https://github.com/hyperium/h2/issues/928))
     reopens the header half only. The historical open-sibling case is a control, not a demand
     for a stronger header guarantee. Shipping still needs shutdown, reset-flood and resource
@@ -1728,8 +1750,9 @@ rules something out.
     2026-11-13, matchit 0.9.2's matching and insertion source read and the dispatch suite's
     17 tests passed with empty parameters refused ([Choice 48](#choice-matchit)); 2026-11-14,
     the same dispatch suite passed in the merged workspace's full debug tests at `66cb2936e`;
-    2026-11-18, hyper 1.12.0's response send loop and h2 0.4.20's send queue read against
-    Corten's `Answered` at `e927c2463`, without a new wire run.
+    2026-11-18, hyper 1.12.0's send loop and h2 0.4.20's active count and send queue read
+    against Corten's `Answered` at `e927c2463`, then exercised in the
+    [standalone TLS probe](../bench/http2/README.md#follow-up-results).
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
