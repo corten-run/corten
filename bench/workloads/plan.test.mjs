@@ -24,6 +24,10 @@ test("planning discovers current official options, but never fabricates ready ev
       assert.equal(p.execution.cloud.hostContract, "bench/catalog/droplet-contract.mjs");
       assert.equal(p.execution.groupedFleet.runner, "bench/workloads/fleet.mjs");
       assert.equal(p.execution.groupedFleet.hostContract, "bench/workloads/cloud-contract.mjs");
+      assert.deepEqual(p.execution.groupedFleet.host, { size: "c-16", region: "sfo2", image: "ubuntu-24-04-x64" });
+      assert.equal(p.execution.groupedFleet.loadLayout, "c16-generator-v1");
+      assert.deepEqual(Object.fromEntries(Object.entries(p.execution.groupedFleet.cpus).map(([role, { quota, cpuset }]) => [role, [quota, cpuset]])),
+        { app: [1, "1"], api: [2, "2-3"], load: [12, "4-15"] });
       assert.doesNotMatch(p.execution.cloud.settings, /grouped host/);
       assert.equal(p.execution.cloud.group, name);
       assert.equal(p.execution.cloud.status, "explicit-merged-commit-independent-state-root-native-gates-required");

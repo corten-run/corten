@@ -8,7 +8,7 @@ import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
 import { controllerState, full, parseDropletArgs, providerFailure } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
-import { validateLaunchFleet } from "./cloud-contract.mjs";
+import { fleetCreateMode, validateLaunchFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { failedNativePolicy, failedNativeRoots, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
@@ -102,7 +102,7 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
 export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log } = {}) {
   const { options, approval, preview } = parseProductionArgs(args);
   const processRun = shellTransport({ repo, spawn, streamSpawn });
-  const createMode = options.detach ? options.group === undefined ? "legacy" : "dedicated" : null;
+  const createMode = options.detach ? options.group === undefined ? "legacy" : fleetCreateMode(options.group) : null;
   const providerRun = providerFactory({ repo, interrupted, createMode });
   let stage = "source-plan";
   const mark = (error, value) => {

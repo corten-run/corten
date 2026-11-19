@@ -65,6 +65,8 @@ serde_json = { version = "1", optional = true }
 # Names the field path in `Json`'s 422 when serde rejects the body. The fast reader uses that
 # same error path when it cannot read a body.
 serde_path_to_error = { version = "0.1", optional = true }
+# Schema identity must distinguish generic instances without requiring borrowed types to be 'static.
+typeid = { version = "1", optional = true }
 corten-feed = { workspace = true, optional = true }
 brotli = { version = "9", optional = true }
 flate2 = { version = "1", optional = true }
@@ -85,7 +87,7 @@ json = ["serde/derive", "dep:serde_json", "dep:serde_path_to_error"]
 # corten::types: TypeScript declarations for scripts and JSON Schema for agents, from the same
 # reading of the types that #[derive(ToJson)] and #[derive(FromJson)] write and read them by.
 # serde_json's `raw_value` (no dependency): a `Box<RawValue>` field is described as any JSON.
-types = ["json", "serde_json/raw_value"]
+types = ["json", "serde_json/raw_value", "dep:typeid"]
 # corten::compress: pages compressed per request (zstd, brotli, gzip), the runtime and assets
 # compressed once at the highest brotli and gzip levels.
 compress = ["dep:brotli", "dep:flate2", "dep:zstd"]

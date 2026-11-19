@@ -41,7 +41,7 @@ protocols, HTTP/1.1 only), `http` (the HTTP types apps name as `corten::http`), 
 (CSP nonces), `zmij` (float digits), `memchr` (searching a multipart body for its boundary),
 `form_urlencoded` (forms and query strings), `serde`, `tracing` and `corten-macros` (no
 dependencies). No web framework: [design Choice 25](docs/design.md#choice-axum-router).
-Optional: `serde`'s derive, `serde_json` and `serde_path_to_error` (`json`), `zstd`,
+Optional: `serde`'s derive, `serde_json` and `serde_path_to_error` (`json`), `typeid` (`types`), `zstd`,
 `brotli`, `flate2` (`compress`), `jiff` (`zones`), `corten-feed` (`feed`). Apps need no JavaScript dependencies; `package.json` here is tooling for
 the framework itself.
 

@@ -54,7 +54,8 @@
 //!   its `children` field. A missing or misspelled prop is a compile error.
 //! - Void elements (`<input>`, `<br>`, `<img>`, ...) need no closing tag; other elements close
 //!   with `</name>` or `/>`. `<>...</>` groups nodes. `<!DOCTYPE html>` is allowed.
-//! - Text inside `<script>` and `<style>` is written as is.
+//! - Literal text inside `<script>` and `<style>` is raw in HTML, escaped in foreign content,
+//!   and must not contain `<` or `&` when the context is unknown.
 //! - An element written inside one whose content a browser parsing HTML reads as text
 //!   (`<textarea>`, an HTML `<title>`, `<script>`, `<style>`), or one a browser takes out of an
 //!   `<svg>` (`<div>`, `<p>`) written straight into it, does not compile: see [`html!`].
@@ -329,8 +330,8 @@ use std::{
 /// the two elements, followed through control flow. What the markup does not show may write
 /// anything: an expression (`raw` among them), a component, with or without children
 /// (`<Corten />` too: the macro knows it only by its name, which a component of the app's may
-/// share), and a `<script>` or `<style>` whose literal text holds a `<`, which `html!` writes as
-/// is. What it writes may close the open elements, open others, or leave a browser reading a
+/// share), and a `<script>` or `<style>` whose literal text can end it early or keep it open.
+/// What it writes may close the open elements, open others, or leave a browser reading a
 /// script's text past any later literal end tag (`<!--<script>` does), so no nesting refusal acts
 /// after it in the same `html!`, whatever it shows: `<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
 /// compiles, as browsers keep it. Nor does a literal `<svg>` or `<math>` show its namespace where
@@ -342,6 +343,11 @@ use std::{
 /// assumes `html!` output, a component's included, is drawn where a browser reads tags: writing a
 /// component into script or style text a caller left open (after `raw("<script>")`) is not
 /// supported, since a script's text comes from a string, not markup. These do not compile:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><script type="text/plain">"a < b"</script><div>"Detail"</div></p> };
+/// ```
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
@@ -509,9 +515,28 @@ use std::{
 /// let _ = html! { <div><script type="text/x-template"><b>"Draft"</b></script></div> };
 /// ```
 ///
+/// An ordinary comparison in the literal does not end the script:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><script type="text/plain">"a < b"<b>"Draft"</b></script></div> };
+/// ```
+///
 /// ```compile_fail
 /// use corten::prelude::*;
 /// let _ = html! { <div><style><b>"Draft"</b></style></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><style>"/* a < b */"<b>"Draft"</b></style></div> };
+/// ```
+///
+/// A script that can consume its own closing tag still reads a nested start tag as text:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><script type="text/plain">"<!--<script>"<b>"Draft"</b></script></div> };
 /// ```
 ///
 /// ```compile_fail
@@ -548,7 +573,29 @@ use std::{
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
-/// let _ = html! { <svg><g><font color="red">"Total"</font></g></svg> };
+/// let _ = html! { <svg><g><font color="red"><style>"&lt;"</style></font></g></svg> };
+/// ```
+///
+/// A dynamic `color`, `face` or `size` (including a spread) may or may not take a `<font>`
+/// out of foreign content. A script or style literal with `<` or `&` needs a known context:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let color = Some("red");
+/// let _ = html! { <div><svg><font color={color}><style>"a < b && c"</style></font></svg></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let attrs = [("face", "serif")];
+/// let _ = html! { <div><svg><font {..attrs}></font><style>"&lt;"</style></svg></div> };
+/// ```
+///
+/// Escaped text in a foreign `<style>` cannot change how the tags after it are parsed:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><style>"<g>"</style><p>"Total"</p></svg> };
 /// ```
 ///
 /// ```compile_fail
@@ -576,8 +623,92 @@ use std::{
 ///
 /// Text and expressions in a `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
 /// `<noframes>` compile, written escaped (which a `<textarea>` and a `<title>` read back). In a
-/// `<script>` or a `<style>` text is written as is and an expression does not compile, so a data
-/// block (`<script type="text/x-template">`) gives its markup as a string literal. What an
+/// `<script>` or a `<style>` an expression does not compile, so a data block
+/// (`<script type="text/x-template">`) gives its markup as a string literal. Its text is written
+/// as is in HTML. In a known foreign context, `html!`
+/// escapes `<` and `&` in those literals so the browser reads the literal text, not tags or
+/// character references. If the context is unknown, a literal containing either character is
+/// refused. Use a component's CSS file or `#[component(js)]`, or move the literal to markup
+/// whose parsing context is known. For a fixed HTML-only data slot, pass the complete static
+/// tag as trusted `raw` markup without untrusted interpolation.
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <style>"a < b && c"</style> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[component]
+/// fn HtmlChildren(children: impl Render) -> impl Render {
+///     html! { <div>{children}</div> }
+/// }
+/// let _ = html! { <svg><HtmlChildren><style>"&lt;"</style></HtmlChildren></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let encoding = "text/html";
+/// let _ = html! { <div><math><annotation-xml encoding={encoding}><style>"&lt;"</style></annotation-xml></math></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let attrs = [("encoding", "application/mathml+xml")];
+/// let _ = html! { <div><math><annotation-xml {..attrs} encoding="text/html"><style>"&lt;"</style></annotation-xml></math></div> };
+/// ```
+///
+/// A direct stylesheet in a known HTML `<noscript>` can stay raw, but only if no opaque
+/// output precedes it there and its literal text cannot close either tag early:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <noscript><style>"a < b"</style></noscript> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noscript>{raw("<svg>")}<style>"a < b"</style></noscript></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noscript><style>"<""/NoScript>"</style></noscript></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noscript><style>"<""/StYlE>"</style></noscript></div> };
+/// ```
+///
+/// An earlier conditional can change how later markup parses. In a loop, even a literal at the
+/// start of the body needs the same context on every iteration:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let close = true;
+/// let _ = html! { <div><svg>if close { {raw("</svg>")} } <style>"&lt;"</style></svg></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let open = true;
+/// let _ = html! { <div>if open { <script>"</script><svg>"</script> } <style>"&lt;"</style></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! {
+///     <div><svg>
+///         for i in 0..2 {
+///             <style>"a < b && c"</style>
+///             {raw(if i == 0 { "</svg>" } else { "<svg>" })}
+///         }
+///     </svg></div>
+/// };
+/// ```
+///
+/// What an
 /// `<svg>` holds compiles too: its `<textarea>` and `<style>` are SVG's elements, whose
 /// children are elements, and its `<title>` holds HTML; so does a `<math>`'s, outside its text
 /// integration points, a `<title>` in a `<mglyph>` or `<malignmark>` there, and an
@@ -588,7 +719,7 @@ use std::{
 /// or close an `<svg>`, or the element read as text), in the integration points of an `<svg>` or
 /// a `<math>` written there (a `<math>` an `<svg>` holds is SVG's, and its `<mtext>` holds no
 /// HTML) and in an `<annotation-xml>` whose `encoding` an expression or a spread may write first,
-/// none of this is refused, but for an element taken out of foreign content written straight into
+/// no element is refused on this account, but for an element taken out of foreign content written straight into
 /// a literal `<svg>` or `<math>`, which is foreign wherever it lands; so a component that draws
 /// an SVG fragment without its `<svg>` compiles:
 ///
@@ -1594,8 +1725,8 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// ```
 ///
 /// Like every refusal of `html!`, these rest only on the markup between the two elements: what an
-/// expression, a component, or a `<script>` or `<style>` whose text holds a `<` writes may leave
-/// an element open, as `raw("<table>")` keeps the row after it in its table, so with such output
+/// expression, a component, or a script or style literal that can end its holder early writes
+/// may leave an element open, as `raw("<table>")` keeps the row after it in its table, so with such output
 /// before the lost element's start tag (in the first element, between the two, or in a later
 /// element that holds the lost one, before it) the shape compiles and the debug check reads what
 /// is sent:

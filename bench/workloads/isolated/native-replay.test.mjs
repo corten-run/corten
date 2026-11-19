@@ -10,6 +10,7 @@ import { contractSha256, groupNames, selectedApps } from "../registry.mjs";
 import { productionFixture } from "../../json-api/production-fixtures.mjs";
 import { descriptor as jsonDescriptor } from "../../json-api/contract.mjs";
 import { apparatusSources } from "../../catalog/apparatus.mjs";
+import { cpuSettings } from "../../catalog/contract.mjs";
 
 const seams = new Map();
 for (const group of groupNames.filter((g) => !["catalog-page", "json-api", "localized-marketplace"].includes(g)))
@@ -43,7 +44,7 @@ function fixture(t, group) {
   const folder = mkdtempSync(join(tmpdir(), "isolated-native-composition-"));
   t.after(() => { assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true }); });
   const binding = { request: { group, round: "w17", commit: "a".repeat(40) }, selection: { apps: selectedApps(group), contractSha256: contractSha256(group) },
-    execution: { effectiveOptions: {} }, resources: { expectedCpus: {} } };
+    execution: { effectiveOptions: {} }, resources: { expectedCpus: {}, requestedCpuEnv: {} } };
   const summary = { round: binding.request.round, commit: binding.request.commit, options: {}, measurement: { cpus: {} }, complete: true,
     apps: Object.fromEntries(binding.selection.apps.map((a) => [a, { qualification: { fixture: { eligible: true }, api: { eligible: true } }, runs: {} }])) };
   writeFileSync(join(folder, "summary.json"), JSON.stringify(summary)); writeFileSync(join(folder, "raw.log"), "synthetic\n");
@@ -68,6 +69,19 @@ test("catalog replay requires the campaign's selected contract, not a contract c
   delete binding.selection.contractSha256;
   assert.equal((await inspectNative(binding, folder)).status, "invalid");
   assert.equal(calls.length, 1, "missing contract must not fall back to archive-selected replay");
+});
+test("catalog replay requires both the bound layout name and actual CPU budget", async (t) => {
+  action = "normal";
+  const { binding, folder, summary } = fixture(t, "catalog-page");
+  const loadLayout = "c16-generator-v1", env = { CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-15" };
+  binding.resources = { expectedCpus: cpuSettings(env, loadLayout), requestedCpuEnv: { ...env, CATALOG_LOAD_LAYOUT: loadLayout } };
+  const replay = async (measurement) => {
+    writeFileSync(join(folder, "summary.json"), JSON.stringify({ ...summary, measurement }));
+    return (await inspectNative(binding, folder)).status;
+  };
+  assert.equal(await replay({ loadLayout, cpus: binding.resources.expectedCpus }), "verified");
+  assert.equal(await replay({ cpus: binding.resources.expectedCpus }), "invalid");
+  assert.equal(await replay({ loadLayout, cpus: cpuSettings({ ...env, CATALOG_LOAD_CPUS: "4-7" }) }), "invalid");
 });
 test("catalog worker source receipts must match the bound commit even after fully rehashing", async (t) => {
   const f = fixture(t, "catalog-page"), hash = (text) => createHash("sha256").update(text).digest("hex");

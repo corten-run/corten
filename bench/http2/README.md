@@ -149,32 +149,152 @@ partial evidence and track the connection-level design in a follow-up, not as co
 
 ## Follow-up Acceptance
 
-Reopen the protocol choice if hyper or h2 ships a header-block timeout or a per-stream
-send-wait hook, or if a stream-counting idle watch plus a body-stall detector passes both
-connection-bound cases below. An upstream header timer while another response is open would
-be a stronger guarantee than today's watch, not a prerequisite for matching HTTP/1.1.
+The two bounds have separate tests and dispositions in
+[Choice 25](../../docs/design.md#choice-axum-router). An upstream header-block timeout
+reopens the header half alone. Expiring a header block while another response is open is
+stronger than today's watch, not a prerequisite for matching HTTP/1.1. A send-wait hook
+must cover DATA still queued after the body ends, not just credit awaited before the handoff.
+An opt-in `serve` design must preserve both connection bounds together without a second parser.
 
-[limits.mjs](limits.mjs) is retained unchanged as the **historical observation client**.
-It currently exits successfully when the old send stall reproduces and the busy-header
-control remains open. That success is not acceptance of a fixed implementation. The follow-up
-must extend this client and change its expected results explicitly:
+[limits.mjs](limits.mjs) is the **isolated acceptance client**. It prints each case and its timing,
+and exits nonzero if any case in the selected suite fails. The tag's older client is only a
+historical observation: it succeeds when the zero-window stall reproduces.
 
 1. **Idle header bound:** finish a normal response (including END_STREAM), with no other stream
    open, then send HEADERS without END_HEADERS on the reused h2 connection. At
    `TIMEOUT_MS=100`, require connection closure by the 500 ms observation point and no response
-   to a late CONTINUATION. Also test connection open with no complete request and returning
-   to idle after the last of overlapping responses ends. Keep the existing `/quiet` sibling
-   case as a control: it need not time out under the HTTP/1.1-compatible contract.
+   to a late CONTINUATION. Also test an open connection with no complete first request,
+   return to idle after the last of overlapping answers, reset with a sibling and cancellation
+   before the handler answers. An idle watch alone must stay busy while a final DATA tail
+   awaits credit. Keep the `/quiet` sibling case open: its late CONTINUATION must still work.
 2. **Stalled send bound:** retain the zero INITIAL_WINDOW_SIZE request, but require closure by
    500 ms and no delivery of the old response after WINDOW_UPDATE. Connection-level closure
-   is sufficient; do not require a per-stream reset. Add controls for quiet producers, final
-   buffered chunks, normal credit recovery before the bound and a progressing sibling.
-   Neither a quiet body nor sibling traffic may mask a truly stalled response.
+   is sufficient; do not require a per-stream reset. Repeat with a final buffered tail and
+   with a sibling that is demonstrably sending DATA. A quiet producer, normal response,
+   credit recovery before the bound, continuous credit in small increments, and a canceled
+   tail must not trip the detector.
 
-These are the acceptance definitions, **not new measurements or claims that either design
-works**. Before shipping, also run the full three-engine TLS runtime smoke, reset flood,
-shutdown with open streams, decoded-head bounds and explicit h2 Upgrade refusal/H1 socket
-fallback. No server implementation is added here.
+Run the idle and send suites separately when evaluating a detector so that one timer cannot
+pass the other's cases. Qualify the combined path separately, with both watches and the
+socket write watch enabled and with controls that expect their joint behavior. For example,
+a final tail stalled past the send deadline must close the connection even though it
+keeps the idle watch busy; after the last normal response completes, the connection must
+return to idle and close at the idle deadline, not remain reusable after 500 ms of inactivity.
+Before shipping, also run the full three-engine TLS runtime smoke,
+reset flood and resource checks, shutdown with open streams, decoded-head bounds and explicit
+h2 Upgrade refusal/HTTP/1 WebSocket fallback. Shipping Corten is unchanged.
+
+### Running the Follow-up
+
+The [standalone probe](probe/Cargo.toml) uses the retained prototype's hyper, h2 and TLS
+versions and Corten's `Body` and `live`, not the shipping connection loop. It retains
+`/events?n=1` and `/quiet` and adds fixture answers for the new controls. The probe is a
+separate Cargo workspace; no feature or dependency is added to Corten.
+
+```sh
+cargo build --release --locked --manifest-path bench/http2/probe/Cargo.toml
+scratch=$(mktemp -d)
+openssl req -x509 -newkey rsa:2048 -nodes -keyout "$scratch/key.pem" -out "$scratch/cert.pem" -days 1 -subj /CN=localhost
+export TLS_CERT="$scratch/cert.pem" TLS_KEY="$scratch/key.pem" TIMEOUT_MS=100
+probe="${CARGO_TARGET_DIR:-bench/http2/probe/target}/release/http2-limit-probe"
+"$probe" h2-idle
+# With the probe listening, in another shell:
+node bench/http2/limits.mjs idle
+```
+
+Stop the probe between modes. Run `idle` for `service-idle` (count the service future
+and body) and `h2-idle` (direct h2 active count), and `send` for `off` (negative
+control), `body` (next body poll/drop) and `buffer` (observed byte consumption and
+buffer drop). The probe defaults to loopback port 18590; on another loopback port, set
+`BIND` for the probe and `HTTP2_PORT` for the client. Delete the scratch certificate and
+key when done.
+
+For overhead, use a fresh process for each 200 and 1,200 count, `TIMEOUT_MS=30000`,
+and the same Callgrind procedure as [Transport Counts](#transport-counts), below. Run
+`node bench/http2/load.mjs h2 <count> page` for `off` versus `service-idle` and
+`h2-off` versus `h2-idle`; use `events` for `off`, `body` and `buffer`. Each
+comparison is within one transport, not against shipping HTTP/1.1. The hyper `off`
+mode still uses the same body and buffer wrapper types but records no progress or timestamps.
+
+### Follow-up Results
+
+Rerun on 2026-11-19 UTC after resolving the [probe lockfile](probe/Cargo.lock) with
+Cargo 1.100: `bytes` 1.12.2 and `smallvec` 1.16.6 were younger than three days at the
+first measurement. The replacements are `bytes` 1.12.1 (published 2026-07-08 UTC)
+and `smallvec` 1.16.5 (published 2026-11-06 UTC). The crates.io index confirmed
+the checksum and publish time of all 77 registry entries, all at least three days old.
+
+Three rounds over loopback TLS used the Linux release probe (Rust 1.99.1) in Docker Desktop
+and the Node 24 client on the host. The probe checked elapsed time every 10 ms with both strict
+suites run at `TIMEOUT_MS=100`; the client required actual connection closure by 500 ms,
+not just GOAWAY or a reset. The ranges below are measured min to max across the three
+rounds. [Rerun observations](results/follow-up-wire-r2.jsonl) include the late-write attempt
+and whether an old answer appeared. All 120 pass/fail outcomes match the
+[earlier-lock observations](results/follow-up-wire.jsonl), retained unchanged.
+
+| Idle case | Hyper service count | Direct h2 count |
+|---|---|---|
+| No first request | Pass, closed 121.8-139.4 ms | Pass, closed 129.9-132.0 ms |
+| Partial first request | Pass, closed 118.1-127.0 ms | Pass, closed 114.7-119.2 ms |
+| Partial head after a complete answer | Pass, closed 110.1-112.9 ms | Pass, closed 110.5-113.2 ms |
+| Last of two overlapping answers | Pass, closed 107.7-112.3 ms after last end | Pass, closed 111.0-112.7 ms after last end |
+| Reset with sibling open, then reset sibling | Pass, closed 106.6-112.3 ms after last reset | Pass, closed 104.8-112.8 ms after last reset |
+| Cancel before the handler answers | Pass, closed 108.1-110.7 ms after reset | Pass, closed 106.7-113.7 ms after reset |
+| Partial head beside open `/quiet` | Pass, late answer at 511.9-516.8 ms | Pass, late answer at 508.8-517.6 ms |
+| Queued final answer stays busy | **Fail**, closed at 97.5-100.9 ms without credit | Pass, drained at 504.4-515.9 ms, closed 107.1-108.7 ms later |
+
+The first two ranges start at the client's connection open. The other closure times start
+at the relevant response end or reset, except the premature close for queued DATA, measured
+from receipt of its first byte. No late CONTINUATION revived an idle connection; the
+open-sibling case deliberately allowed it. Direct h2's `Connection::has_streams()` includes
+queued DATA in these runs; Hyper's service future and body guards do not. This is an
+independent idle-watch result, not a requirement for a new header-block timeout.
+
+| Send case | No detector | Body polls/drop | Buffer consumption/drop |
+|---|---|---|---|
+| Zero-window `/events?n=1` | **Fail**, late event 503.6-522.2 ms | Pass, closed 111.8-117.3 ms | Pass, closed 111.9-114.5 ms |
+| Final chunk buffered after first byte | **Fail**, late tail 507.8-523.6 ms | **Fail**, late tail 512.5-530.9 ms | Pass, closed 111.0-116.6 ms |
+| Same tail with progressing sibling | **Fail**, late tail 507.4-511.7 ms | **Fail**, late tail 510.5-512.1 ms | Pass, closed 111.8-112.5 ms; five sibling writes each time |
+| Quiet producer | Pass, still open 503.7-508.5 ms | Pass, still open 506.5-515.9 ms | Pass, still open 504.9-523.4 ms |
+| Normal response | Pass, reused at 514.0-523.3 ms | Pass, reused at 515.3-519.3 ms | Pass, reused at 508.8-533.4 ms |
+| Credit restored before the bound | Pass, completed 49.8-67.0 ms | Pass, completed 52.4-66.2 ms | Pass, completed 56.9-59.2 ms |
+| Incremental credit for one final chunk | Pass, completed 249.5-279.8 ms | Pass, completed 259.1-276.7 ms | Pass, completed 251.6-279.2 ms |
+| Reset discards a queued tail | Pass, reused at 513.8-516.5 ms | Pass, reused at 510.4-515.1 ms | Pass, reused at 504.5-511.0 ms |
+
+Stall times start at the request. In the passing stall cases the late WINDOW_UPDATE could
+not be written to the closed connection and no old DATA appeared. Early credit was sent
+45.4-64.6 ms from the request across the three modes. The body-only detector clears on
+another poll or drop, as it must to leave normal answers and quiet producers alone. That
+misses the two tails still in h2. The buffer detector follows DATA handed from Hyper to h2:
+consuming bytes renews its deadline, and exhaustion or drop removes it. With the pinned
+libraries, h2 only consumes a flow-controlled slice, so a remaining tail keeps its timer
+even if the body is gone. Consumption can mean copy into the HTTP/2 encoder, not TLS or
+socket progress; it does not replace Corten's socket write watch.
+
+The idle and send candidates passed in separate transport modes. No single opt-in path
+has demonstrated both bounds with the socket watch or the production qualification
+listed above.
+
+#### Follow-up Cost
+
+Measured server instructions with Callgrind 3.19.0, three alternating paired rounds on the
+revised lock ([rerun counts](results/follow-up-costs-r2.csv);
+[earlier-lock counts](results/follow-up-costs.csv)). The page has a 9-byte body; the event
+sample is a single response carrying the original 84-byte SSE event, repeated, followed by
+one fixed 22-byte end event. Subtracting the 200-count run from the 1,200-count run removes
+startup and one TLS handshake, and removes the fixed end event from the event comparison.
+
+| Transport and enabled watch | Unit | Detector off median [min, max] | Detector on median [min, max] |
+|---|---|---:|---:|
+| Hyper service count | instructions/page | 29,917 [29,903, 30,149] | 30,587 [30,561, 30,618] |
+| Direct h2 active count | instructions/page | 25,940 [25,937, 25,943] | 26,721 [26,719, 26,721] |
+| Hyper body polls/drop | instructions/event | 5,043 [5,043, 5,045] | 5,583 [5,582, 5,585] |
+| Hyper buffer consumption/drop | instructions/event | 5,043 [5,043, 5,045] | 5,696 [5,695, 5,696] |
+
+Compared with the earlier lock, all seven medians are lower by 4 to 285 instructions per
+unit (rounded). Each enabled median is still above its corresponding off median. The
+rerun does not isolate the cause of the shift. These are fixture costs, not an estimate of
+combined overhead, a network latency comparison, or a change to shipping Corten's request path.
 
 ## Reproduction
 
@@ -183,7 +303,8 @@ Node 22 or newer. The measurements used the `rust:1-bookworm` image, Rust 1.99.1
 Valgrind 3.19.0; the commands pin the compiler and print tool versions. A mutable image or
 package archive may now supply other tools: record that difference rather than treating new
 numbers as the saved run. The expanded commands below were not rerun for this documentation
-correction. The client scripts are byte-for-byte the tag's clients.
+correction. The load and tabs clients are the tag's clients; the historical limits client
+is run from the archived tag, not from the decision checkout.
 
 ### Sources and Container
 
@@ -273,13 +394,13 @@ node bench/http2/tabs.mjs webkit
 docker exec http2-measure sh -ec 'kill -TERM "$(cat /tmp/server.pid)"; while kill -0 "$(cat /tmp/server.pid)" 2>/dev/null; do sleep 0.1; done'
 docker exec http2-measure cargo build --release --locked --manifest-path work/http2/probe/Cargo.toml
 docker exec -d -e HOST=0.0.0.0 -e PORT=8080 -e TIMEOUT_MS=100 http2-measure sh -c 'echo $$ > /tmp/server.pid; exec /target/release/http2-probe'
-node bench/http2/limits.mjs
+node "$scratch/prototype/work/http2/limits.mjs"
 docker exec http2-measure sh -ec 'kill -TERM "$(cat /tmp/server.pid)"; while kill -0 "$(cat /tmp/server.pid)" 2>/dev/null; do sleep 0.1; done'
 ```
 
 Wait for the server to listen before invoking a client. The historical limits client expects
-the send stall and the busy-header control described above; see [Follow-up Acceptance](#follow-up-acceptance)
-for the different expectations needed to validate a fix.
+the send stall and the busy-header control described above; [Follow-up Acceptance](#follow-up-acceptance)
+tests the bounds instead.
 
 ### Transport Counts
 

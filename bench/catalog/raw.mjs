@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { aggregate, leanApps, leanProfile, phases, readLoad, verifyDocumentHeaderChecks } from "./contract.mjs";
+import { aggregate, leanApps, leanProfile, phases, probeCpu, readLoad, verifyDocumentHeaderChecks } from "./contract.mjs";
 import { inspectCatalog, completeChecks } from "./report.mjs";
 import { records } from "./fixtures.mjs";
 import { qualificationIdentity } from "./group.mjs";
@@ -120,8 +120,9 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
   }
   assert.match(checker.Id, /^[a-f0-9]{64}$/); assert.equal(checker.Image, summary.tools.checker.imageId);
   assert.equal(checker.Config.Labels?.["run.corten.catalog"], summary.runId);
-  assert.equal(checker.HostConfig.NanoCpus, budget.load.quota * 1e9);
-  assert.equal(checker.HostConfig.CpusetCpus, budget.load.cpuset ?? ""); assert.equal(checker.HostConfig.Memory, 2 ** 31);
+  const checkerCpu = probeCpu(summary.measurement);
+  assert.equal(checker.HostConfig.NanoCpus, checkerCpu.quota * 1e9);
+  assert.equal(checker.HostConfig.CpusetCpus, checkerCpu.cpuset ?? ""); assert.equal(checker.HostConfig.Memory, 2 ** 31);
   assert.ok([`container:${runtime.Id}`, `container:${summary.runId}-${app}`].includes(checker.HostConfig.NetworkMode));
   mounts(checker, [mount(checkout, "/repo"), mount(`${checkout}/bench/catalog/results/${summary.round}/${source}/${app}`, "/results", true)]);
   const headersChecked = summary.group ? !!summary.group.documentHeaders : leanApps.includes(app);
@@ -240,6 +241,21 @@ export function replayCatalog(summary, { readJson, readText }, commit, expectedC
           const probe = JSON.parse(readText(`${raw}/cold.log`).split("\n").findLast((line) => line.startsWith("{")));
           const { first200MsFromContainerStart, containerStartedAt, clock, measuredBeforeReadinessOrWarmup, ...observedCold } = cold;
           assert.deepEqual(observedCold, probe, "cold probe differs");
+          if (summary.measurement.loadLayout === "c16-generator-v1") {
+            const client = readJson(`${raw}/cold-probe.json`), appName = `${summary.runId}-${app}`;
+            assert.match(client.id, /^[a-f0-9]{64}$/);
+            assert.ok(!timedIds.has(client.id), "cold probe container reused"); timedIds.add(client.id);
+            assert.equal(client.runId, summary.runId); assert.equal(client.name, `/${appName}-probe`);
+            assert.equal(client.imageId, summary.tools.upstream.imageId);
+            assert.deepEqual(client.command, ["node", "/bench/catalog/cold.mjs", `http://${appName}:8080`,
+              "/catalog/record_1", String(summary.options.startupTimeout)]);
+            const clientCpu = probeCpu(summary.measurement);
+            assert.equal(client.quotaNanoCpus, clientCpu.quota * 1e9, "cold probe quota differs");
+            assert.equal(client.cpuset, clientCpu.cpuset, "cold probe affinity differs");
+            assert.equal(client.memoryBytes, 256 * 2 ** 20);
+            assert.ok(Date.parse(client.startedAt) <= Date.parse(containerStartedAt)
+              && Date.parse(client.finishedAt) >= Date.parse(cold.first200At), "cold probe lifetime differs");
+          }
           const instance = readJson(`${raw}/container.json`);
           assert.equal(instance.imageId, entry.imageId);
           assert.equal(instance.source, source);

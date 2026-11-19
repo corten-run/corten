@@ -84,14 +84,15 @@ Use `Types::add` for other types, such as feed rows or screen data the script re
 URL. A type already collected through a component or added by hand is declared only once.
 
 If two Rust types have the same name, the generator numbers later declarations (for example,
-`Payload2`), just as it does for types reached through `Types::add`. Handler types for the
-file are registered first; component events and explicit adds otherwise keep their builder
-order. Generated references can use the numbered names.
+`Payload2`). This also applies when Rust prints the same full path for two versions of a
+dependency: each gets its own definition and references. Handler types for the file are
+registered first; component events and explicit adds otherwise keep their builder order.
+Generated references can use the numbered names.
 TypeScript generation fails if a handler imports from that file under a different name from
 the declaration for its Rust type. Give handler argument types in the same file distinct Rust
-names. A renamed Rust alias does not create a declaration: use the underlying type's declared
-name, or define a newtype that derives `ToJson`. `Types::json_schema` includes all handler
-types in `$defs` without checking the names their scripts import.
+names, for example by wrapping one dependency version in a distinctly named newtype that derives
+`ToJson`. A renamed Rust alias does not create a declaration. `Types::json_schema` includes all
+handler types in `$defs` without checking the names their scripts import.
 
 ### Where the types come from
 
@@ -126,3 +127,36 @@ read schema: implement `FromJsonSchema` for it by hand (and, when it is the whol
 tool bounds on `FromJson`, add `impl corten::FromJson for T {}` beside its `Deserialize`). A
 declaration is named after the Rust type; a `#[serde(rename)]` on the type does not change its JSON,
 and does not change the name.
+
+### Naming a hand-written schema
+
+Use `Generator::define::<Self>` in a hand-written `ToJsonSchema` or `FromJsonSchema` to give it
+a definition of its own. `Types::add` and checked handler types need a named definition, not
+an inline schema. Pass `false` for a written schema or `true` for a read schema. The generator
+reserves the name before calling the closure, so a recursive field can call its schema method
+with the same generator and get a `$ref` back. Borrowed types do not need a `'static` bound.
+
+Use a name like `BillingInvoice`: a letter or underscore followed by ASCII letters, digits
+or underscores. Names that TypeScript refuses in both kinds of declaration or in a bare type
+reference, such as `string` and `infer`, are not allowed. The derives check these shared rules
+at compile time when schema generation is enabled. For a hand-written literal, use
+`const { Generator::definition_name("BillingInvoice") }`; a computed name passed to `define`
+is checked when generating the document. `as` works in JSON Schema, OpenAPI and TypeScript
+interfaces, but TypeScript generation rejects it as a type alias name.
+
+If you used the old hidden `Generator::define` helper, add `::<Self>` and remove the string
+identity argument. Keep the direction and closure, and check the definition name:
+
+```rust,ignore
+// Before, inside ToJsonSchema::json_schema:
+generator.define(false, core::any::type_name::<Self>(), "Node", |generator| {
+    describe_node(generator)
+})
+
+// After:
+generator.define::<Self>(false, const { Generator::definition_name("Node") }, |generator| {
+    describe_node(generator)
+})
+```
+
+An implementation that returns an inline schema where it is accepted needs no change.

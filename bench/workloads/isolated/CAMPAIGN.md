@@ -29,13 +29,17 @@ failed-only recovery and first-official-host qualification limits.
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign
 # On a dedicated host for exactly one complete registry group:
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page
+# The reviewed fleet reservation passes its named layout to the same entry:
+node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page --load-layout c16-generator-v1
 ```
 
 The argument order and root are fixed. No selection, recipe, command, validator, image,
 environment, output-path, retry or resume argument is accepted. The parent provisions a
 private, same-UID `/bench/campaign` outside a clean checkout, a Linux host with Node 24+,
-at least eight available CPUs, Docker and the actual native build/browser dependencies.
-The parent separately establishes c-8 identity, authorized operator launch, unit/cgroup
+at least eight available CPUs (16 for the named catalog layout), Docker and the
+actual native build/browser dependencies. Only the catalog group accepts the named
+layout. Without it the existing CPU binding is unchanged. The parent separately
+establishes the reserved host identity, authorized operator launch, unit/cgroup
 ownership and exclusive fresh-host use. This code does not authenticate a cloud size or
 prove host exclusivity from a receipt. The trusted parent launching this fixed CLI is the
 operator-authorization boundary, not the offline contract's executionAuthorized:false.
@@ -57,7 +61,10 @@ container user override is needed, and serialized workload input bytes are uncha
 
 The optional final `--group GROUP` is one exact current registry name, not an app/case
 filter. `bindGroupCampaign` returns `benchmark-isolated-group-campaign/v1`, with order
-exactly `[group]` and the same complete native binding that group has in `bindCampaign`.
+exactly `[group]` and the same complete native work that group has in `bindCampaign`.
+The named catalog layout binds the host and CPU environment for its load generator,
+without changing the native command, contenders or gates. Replay rebinds the plan
+and requires the native summary's layout and actual CPU settings to match it.
 All nine source procedures, the shared source digest, fixed recipes and round mapping
 remain identical to the all-group plan. Unknown groups, injected selections/options and
 edited plans are rejected by rebinding. A non-JSON group neither prepares JSON nor checks

@@ -15,7 +15,7 @@ import { groupDescriptor } from "../../catalog/group.mjs";
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-replay-"));
 const round = "r77", commit = "a".repeat(40), id = `${round}-0123456789abcdef`, sentinel = "SYNTHETIC_PRIVATE_SENTINEL";
 const plan = { round, commit, campaignSha256: "fixed-unit-plan", order: [...groupNames], bindings: groupNames.map((group) => ({
-  request: { group }, sources: { files: [audit.sourceFile] }, preparation: { fixtures: [{ executable: "node", argv: ["bench/catalog/fixtures.mjs"] }] },
+  request: { group }, resources: { requestedCpuEnv: null }, sources: { files: [audit.sourceFile] }, preparation: { fixtures: [{ executable: "node", argv: ["bench/catalog/fixtures.mjs"] }] },
   execution: { invocation: { executable: "node", argv: [`bench/${group}/run.mjs`, round] } },
   validation: { artifactRoot: `bench/${group}/results/${round}` },
 })) };

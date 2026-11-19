@@ -55,19 +55,22 @@ test("clean worker uses one immutable private credential across account/create/a
   });
 });
 
-test("worker create mode accepts only its pinned region and recovery cannot create", async (t) => {
-  for (const [createMode, region, allowed] of [["legacy", "sfo2", true], ["dedicated", "sfo3", true],
-    ["legacy", "sfo3", false], ["dedicated", "sfo2", false], ["dedicated", "nyc1", false], [null, "sfo3", false], ["sfo3", "sfo3", false]]) {
+test("worker create mode accepts only its pinned size and region; recovery cannot create", async (t) => {
+  for (const [createMode, region, allowed, size = "c-8"] of [["legacy", "sfo2", true], ["dedicated", "sfo3", true],
+    ["legacy", "sfo3", false], ["dedicated", "sfo2", false], ["dedicated", "nyc1", false], [null, "sfo3", false], ["sfo3", "sfo3", false],
+    ["c16-generator-v1", "sfo2", true, "c-16"], ["c16-generator-v1", "sfo2", false],
+    ["c16-generator-v1", "sfo3", false, "c-16"], ["dedicated", "sfo3", false, "c-16"]]) {
     const h = createMode === "sfo3"
       ? harness(t, "success", (message) => message.sources ? { ...message, createMode } : message)
       : harness(t, "success", undefined, undefined, undefined, createMode);
-    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", region,
+    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", size, "--region", region,
       "--image", "ubuntu-24-04-x64", "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef",
       "--wait", "--output", "json", ...account.slice(-2)];
     if (allowed) {
       assert.equal((await h.run(create)).status, 0);
       const listed = JSON.parse((await h.run(["compute", "droplet", "list", "--output", "json", ...account.slice(-2)])).stdout);
       assert.equal(listed[0].region.slug, region);
+      assert.equal(listed[0].size_slug, size);
     } else {
       await assert.rejects(h.run(create));
       assert.equal(h.state().consumes, 0);

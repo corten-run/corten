@@ -1277,18 +1277,46 @@ rules something out.
        resumed after 500 ms once the client granted credit: the socket watch misses that wait.
        The partial-head probe, however, kept stream 1 open at `/quiet` while stream 3 waited
        for CONTINUATION. HTTP/1.1's header watch is BUSY while an answer is open too, so this
-       is not evidence of a weakened header guarantee. An idle h2 connection with no open
-       streams was not probed. Inspection finds a prototype bug there: on the first h2 request
-       `watch.take()` then `busy()` removes the response's path back to idle forever.
-       A stream-counting idle watch could preserve the connection-level contract; a header-block
-       timeout with an open sibling would be a stronger, separately chosen guarantee.
+       is not evidence of a weakened header guarantee. The historical probe did not cover an
+       idle h2 connection with no open streams. The historical prototype's first h2 request
+       calls `watch.take()` then `busy()`, removing the response's path back to idle.
 
-       Hyper 1.12.0 has no per-stream send-wait hook. Its `PipeToSendStream` polls a body,
-       holds the returned chunk and waits in `poll_capacity` without polling the body again.
-       Corten's `Answered` wrapper can observe that handoff and lack of further polls; a
-       connection-level stall detector using it is untried, not ruled out. Closing the whole
-       connection is the same granularity as HTTP/1.1's timeout. False positives for quiet
-       producers, completed bodies and progressing sibling streams still need tests.
+       **Idle disposition:** use protocol stream activity, not response-body lifetime.
+       Direct [h2's active-stream count](https://github.com/hyperium/h2/blob/v0.4.20/src/server.rs#L562-L565)
+       passed all eight [idle cases](../bench/http2/README.md#follow-up-results) in three runs:
+       the reused connection with an incomplete head closed in 110.5 to 113.2 ms with 100 ms set,
+       the watch returned to idle after overlap, reset and cancellation, and an open sibling
+       kept the watch busy. The Hyper service count passed those cases but went idle too early
+       with a final DATA tail still waiting for credit (closed in 97.5 to 100.9 ms from its
+       first byte); direct h2 stayed busy until the tail drained. Hyper does not expose the h2
+       count. This establishes an idle-watch candidate independently of the send decision.
+       It is not a wire-flush signal or a header-block timer while a sibling remains open.
+
+       A detector based only on polling and dropping Corten's `Answered` body cannot preserve
+       the send bound. In [hyper 1.12.0's send loop](https://github.com/hyperium/hyper/blob/v1.12.0/src/proto/h2/mod.rs#L157-L186),
+       a body may be waiting to produce data or hyper may be waiting for room to send a chunk
+       it already took. Seeing the handoff can distinguish those two waits, but hyper hands
+       the whole chunk to h2 as soon as it has some capacity, and can finish the body at that
+       point. [h2 0.4.20's send queue](https://github.com/hyperium/h2/blob/v0.4.20/src/proto/streams/prioritize.rs#L749-L838)
+       can still hold the unsent part. The same body poll and drop can therefore mean either
+       a normal end or a buffered tail still waiting for credit. Clearing a timer on body
+       drop misses the latter; leaving it armed without a completion signal can close the
+       former. Socket writes cannot identify progress on one response rather than a sibling.
+
+       **Send disposition:** do not use body polls and drop alone. The tested `Answered`
+       detector closed the zero-window connection in 111.8 to 117.3 ms but missed both final-tail
+       cases: the old DATA still arrived after the client gave credit past 500 ms, with or
+       without a progressing sibling. A parser-free `Body::Data` tracker stayed with the
+       bytes after the body ended. In the pinned Hyper/h2 probe it closed all three stalls
+       in 111.0 to 116.6 ms, and distinguished quiet production, normal completion, resumed or
+       incremental credit, and reset. This is a measured candidate for flow-control waits,
+       not a general send guarantee: h2 can consume the buffer into its encoder before
+       TLS flush, so the socket write watch still matters.
+
+       Keep HTTP/1.1 in `serve` and HTTP/2 at the proxy. The passing idle and send candidates
+       ran in separate transports, not together on one opt-in path with the socket watch.
+       Do not add a second frame parser or treat closing the whole connection as a substitute
+       for detecting the stall.
        The auto builder's missing HTTP/1 `max_header_size` setter is also a prototype
        limitation, not a reason HTTP/2 cannot ship: Corten could detect the preface itself
        and retain its HTTP/1 builder. Decoded h2 head limits, concurrent-stream/reset bounds,
@@ -1298,9 +1326,9 @@ rules something out.
        This weighs two reliability failures, not reliability against convenience alone:
        the no-proxy live app already fails at the fourth tab, and an opt-in feature would
        leave the default unchanged. The reason to defer is that a feature must not silently
-       weaken a security bound. Keep the proxy requirement (option 2) while testing the
-       connection-level design (option 1). One stream per page (option 3) still exhausts the
-       cross-tab cap and adds a custom format where HTTP/2 is standard, against
+       weaken a security bound. Keep the proxy requirement (option 2) until the connection-level
+       design (option 1) can demonstrate both bounds. One stream per page (option 3) still
+       exhausts the cross-tab cap and adds a custom format where HTTP/2 is standard, against
        [Rule 10](#rule-standard-formats). HTTP/3 remains out: `quinn` and an unstable `h3`,
        TLS tied to QUIC, and no need for it merely to remove this connection cap.
     3. Vocabulary: one module, `corten::http`: the `http` crate's types (`StatusCode`,
@@ -1661,8 +1689,17 @@ rules something out.
     eight direct-TLS tabs live in Chromium and Firefox, and a zero-window send resumed after
     500 ms with 100 ms configured, as [HTTP/2 evidence](../bench/http2/README.md) records);
     reasoned (the open-sibling header probe matches HTTP/1.1's busy-watch contract, while
-    `watch.take()` in the prototype loses the return to idle; an `Answered` body-stall
-    detector could close the whole connection but has not been tried); value (fast and proven
+    `watch.take()` in the prototype loses the return to idle); reasoned (hyper
+    1.12.0 can finish the body while h2 0.4.20 still has queued data, so body polls and drop
+    alone do not tell Corten that a stream made progress or completed); measured
+    ([follow-up raw TLS cases](../bench/http2/README.md#follow-up-results), three rounds
+    on the publish-age-checked lockfile, repeating every earlier pass and failure:
+    h2's active count preserved the idle bound where Hyper's service count did not, and a
+    byte-consumption watch preserved the send bound on these cases where body polls and drop
+    alone did not; the passing candidates were tested separately, with
+    [Callgrind medians](../bench/http2/README.md#follow-up-cost) off to on of 25,940 to 26,721
+    instructions per page for the direct h2 count and 5,043 to 5,696 per event for buffer
+    tracking); value (fast and proven
     fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
     which is why the dispatch suite comes first and an opt-in protocol must not silently
     weaken a security bound even though the no-proxy live app already fails).
@@ -1670,14 +1707,19 @@ rules something out.
     Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case
     (other than the deliberate `501` and empty-segment changes migration step 1 records), or
     counts more than axum's on any request measured in step 2 (that step then waits, and this
-    Choice says why); a `Response<Body>` grows past 128 bytes (step 4); for HTTP/2, either
-    hyper or h2 ships a header-block timeout or per-stream send-wait hook (the open proposal is
-    [hyperium/h2 #928 Proposal: enable an HTTP/2 header-block read timeout](https://github.com/hyperium/h2/issues/928)),
-    or a stream-counting idle watch plus a body-stall detector passes the two connection-bound
-    cases specified for [limits.mjs](../bench/http2/README.md#follow-up-acceptance): an idle h2
-    connection with no open streams and a zero-window send. The historical open-sibling case
-    is a control, not a demand for a stronger header guarantee. Shipping still needs the
-    shutdown, reset-flood and full three-engine TLS checks omitted from the partial weighing.
+    Choice says why); a `Response<Body>` grows past 128 bytes (step 4); for HTTP/2, an upstream
+    active-stream count exposed through Hyper reopens the idle design, and a per-stream send-wait
+    signal covering queued data after the body ends reopens the send design. The
+    [isolated controls](../bench/http2/README.md#follow-up-acceptance) qualify each detector
+    with the other disabled. Reopen the proxy decision when a parser-free opt-in path
+    demonstrates both bounds with the socket watch, using separate combined-path controls
+    with expectations for both watches enabled, including final buffered data, sibling
+    progress, reset and cancellation. An upstream header-block timeout
+    ([hyperium/h2 #928 Proposal: enable an HTTP/2 header-block read timeout](https://github.com/hyperium/h2/issues/928))
+    reopens the header half only. The historical open-sibling case is a control, not a demand
+    for a stronger header guarantee. Shipping still needs shutdown, reset-flood and resource
+    checks, decoded head limits, explicit h2 Upgrade refusal and HTTP/1 WebSocket fallback,
+    and full three-engine TLS smoke.
     HTTP/3 also waits for a stable `h3` and a need beyond this cap. A new protocol stays below
     the vocabulary in 3 and leaves 4 to 7 as they are.
     The `501` itself (migration step 1) is reopened when a named client or tool is reported
@@ -1713,7 +1755,12 @@ rules something out.
     and the untried connection-level alternative distinguished from the measured send stall;
     2026-11-13, matchit 0.9.2's matching and insertion source read and the dispatch suite's
     17 tests passed with empty parameters refused ([Choice 48](#choice-matchit)); 2026-11-14,
-    the same dispatch suite passed in the merged workspace's full debug tests at `66cb2936e`.
+    the same dispatch suite passed in the merged workspace's full debug tests at `66cb2936e`;
+    2026-11-18, hyper 1.12.0's send loop and h2 0.4.20's active count and send queue read
+    against Corten's `Answered` at `e927c2463`, then exercised in the
+    [standalone TLS probe](../bench/http2/README.md#follow-up-results); 2026-11-19,
+    the same probe rerun with bytes 1.12.1 and smallvec 1.16.5 in its lockfile, three wire
+    and Callgrind rounds per mode.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -2727,6 +2774,21 @@ rules something out.
     script type comes from `ToJson`, so a row still derives both; their declaration is
     [#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044).
 
+    Schema definitions are cached by Rust type identity and direction, not by the printed path.
+    A [static in a generic impl](https://doc.rust-lang.org/reference/items/static-items.html#statics--generics)
+    belongs to the declaration, not the instance: `Wrapper` over two versions of a dependency's
+    type would share both the static and the printed name. A [function address](https://doc.rust-lang.org/std/ptr/fn.fn_addr_eq.html)
+    can be shared by distinct functions or differ for the same function across codegen units.
+    Only `types` enables [`typeid`](https://github.com/dtolnay/typeid/tree/1.0.3), a dependency-free
+    crate maintained by David Tolnay, with about 220 lines in its library source. Its `of` obtains
+    the compiler's `TypeId` with free lifetimes erased via an unsafe trait-object lifetime cast
+    on zero-sized `PhantomData`, without touching borrowed data. Corten uses the result only as a
+    schema cache key, never for downcasting or as proof of type equality. Owning the same unsafe
+    implementation here would leave Corten maintaining its compiler assumptions and compatibility
+    without a stronger guarantee. Definition names still come from the Rust name and the existing
+    numeric suffix rule. A handler importing the wrong declaration fails when declarations are
+    generated, not on a request.
+
     Not chosen: the attribute, a synonym; an attribute that derives both directions, which would
     save a type that is read and written one name in its `#[derive(..)]` list
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
@@ -2743,18 +2805,20 @@ rules something out.
     compare a tool answer's bytes with serde's for the item, and each std type's with serde's, and
     check which outputs are parsed); reasoned (serde_json writes well-formed JSON for a `Serialize`
     that follows serde's protocol, not checked for one that does not, where a debug build's parse is
-    the net; a type asked again in one question is known by its derive's static and its `type_name`,
-    which can coincide only for one generic type over two arguments of the same printed name, with
-    the same net; a derived `ToJson` writes a tool output's schema and its bytes, and a derived
-    `FromJson` a tool input's schema and what it reads); value (one declaration per direction,
-    Values 4, 5 and 6).
+    the net; the separate `ToJson::__well_formed` check recognizes a type asked again in one
+    question by its derive's static and its `type_name`, which can coincide for one generic type
+    over two arguments of the same printed name, with the same net; a derived `ToJson` writes a
+    tool output's schema and its bytes, and a derived `FromJson` a tool input's schema and what it
+    reads); platform (Rust 1.89's `TypeId::of` requires `'static`; `typeid` 1.0.3 returns the
+    compiler identity without that bound); value (one declaration per direction, Values 4, 5 and 6).
 
     Revisit when: an example app needs, because the derives refuse its type, a hand-written `ToJson`
     with a `ToJsonSchema` beside it or a `Deserialize` with the opt-in `impl FromJson for T {}`
     (none in `examples/` at the last check), or a JSON seam other than the feed is bounded on
     serde's `Serialize` or `Deserialize` again, or serde or serde_json changes how it writes or
     reads one of the std types Corten writes or reads itself (the `json` tests that compare them
-    fail).
+    fail). Drop `typeid` when the standard library can identify types with non-static lifetimes at
+    the supported Rust floor.
 
     Last checked: 2026-11-09, the derives and the agent endpoint's bounds, inputs and outputs, at
     `7965aeab`, the bounds' last change; 2026-11-10, no such impl in `examples/`, at `7197604f`;
@@ -2764,7 +2828,10 @@ rules something out.
     with `tool_cost` added and on `6d04bbe6`, which parses only an output that is or holds a
     hand-written `ToJson`, and the release parse's cost on `19fd761c`; 2026-11-10, which outputs are
     parsed, trees, cycles and twelve types that all hold each other included (the agent test of that
-    name), at `d4aca597`.
+    name), at `d4aca597`; 2026-11-18, Rust's static and function address rules, Rust 1.89's
+    [`TypeId::of`](https://doc.rust-lang.org/1.89.0/std/any/struct.TypeId.html#method.of), and the
+    [`typeid` 1.0.3 source](https://github.com/dtolnay/typeid/blob/1.0.3/src/lib.rs), with the
+    `same_printed_types_and_generic_instances_get_separate_definitions` regression at `6d7d2cd92`.
 
 39. <a id="choice-script-checks"></a>**Scripts are type-checked with `strict`, `noUncheckedIndexedAccess`,
     `noFallthroughCasesInSwitch`, `allowUnreachableCode: false` and
@@ -4659,8 +4726,8 @@ rules something out.
     is written (an element in an element whose content is text, a `<plaintext>`, and an element
     taken out of foreign content, and literal HTML nesting that closes or discards an open
     element), and the shapes of a patch's top level the runtime's parse of it loses wherever they
-    are written, where the markup shows how a browser parses it, and acts
-    nowhere else.** An element written in a
+    are written, where the markup shows how a browser parses it. Script and style literals
+    that need a known context are refused when the markup cannot prove one.** An element written in a
     `<textarea>`, an HTML `<title>`, a `<script>`, a `<style>`, an `<iframe>`, an `<xmp>`, a
     `<noembed>` or a `<noframes>` was written by `html!` as markup and read by the browser as
     text, a `<plaintext>` made the rest of the page text, its end tag included, and an element the
@@ -4670,11 +4737,25 @@ rules something out.
     found the text or the moved content only on the page. Now each is a compile error that says
     what to write instead: the element beside the holder, or text meant to show tags as a string;
     behavior in a `#[component(js)]`, styles in the component's CSS, or a data block's content as
-    a string literal, which a `<script>` or `<style>` writes as is; `<pre>` for preformatted
+    a string literal, which an HTML `<script>` or `<style>` writes as is; `<pre>` for preformatted
     text; HTML in a drawing inside a `<foreignObject>`, and in a formula inside an `<mtext>`
     (`compile_fail` examples of `html!`). Text
     and expressions in the elements read as text compile as before, written escaped; an expression
     in a `<script>` or a `<style>` was refused already.
+
+    A foreign `<script>` or `<style>` stays in the HTML tokenizer's data state. Where the markup
+    shows foreign content, `html!` escapes a literal's `<` and `&` at compile time so a browser
+    keeps the text instead of opening a tag or decoding a character reference. This uses the
+    standard's text encoding rather than rejecting valid source such as a spaced comparison or
+    `&&`. HTML (including HTML integration points) keeps the raw write. In an unknown context
+    a literal with either character is refused: encoding changes HTML raw text, while writing
+    raw text can change foreign content. An optional breakout attribute on a `<font>` can pop
+    the surrounding foreign elements, so its children and the markup after it are not known.
+    Each conditional arm starts in the same context; if an arm can change it, the markup after
+    the conditional is not known. A loop that may change context is checked for such literals
+    anywhere in its body, even before the change, since the next iteration starts where the
+    previous one left off. Ordinary comparisons and other harmless `<` in known HTML raw text
+    do not change that context. None of these checks add a render-time decision.
 
     The runtime parses a patch as a `<template>`'s content, where the first top-level element
     other than a head's (`<script>`, `<style>`, `<link>`, `<template>` ..) decides how the
@@ -4736,24 +4817,29 @@ rules something out.
     `<style>` is SVG's and holds elements;
     MathML in such a literal `<math>`, outside those points, and in an `<annotation-xml>` whose first
     `encoding` is another or that has none (where an `<svg>` is SVG's, as the standard's tree
-    construction dispatcher has it), where they are MathML's and hold elements, and only an
+    construction dispatcher has it), where they are MathML's and hold elements, and an
     element taken out of foreign content is refused. At the top of a component's markup, which its
     parent may write into an `<svg>`, among a component's children, which go where the component
     writes them, after an expression or a component (what it writes may open or close an `<svg>`
     or an element read as text), and in an `<annotation-xml>` where an expression or a spread
     comes before any written `encoding` (either may write the first one), it does not know, and
-    refuses nothing; nor in what an element read as text there holds, or a `<noscript>` anywhere,
+    makes no context-dependent structural refusal; nor in what an element read as text there
+    holds, or a `<noscript>` anywhere,
     which may be text (below). A literal `<svg>` or `<math>` written there is foreign wherever it lands, but
     its namespace is not shown (a `<math>` in an `<svg>` is SVG's, an `<svg>` straight in a
-    `<math>` MathML's), so an element taken out of foreign content is refused straight in it, and
+    `<math>` MathML's), so an element taken out of foreign content is refused straight in it,
+    literal text in a foreign `<script>` or `<style>` is escaped, and
     what any element that is an integration point of either namespace holds is not known.
     `html!` writes attributes in the order they are written, so the first `encoding` in the markup
-    is the one a browser keeps. That is
-    the rule the refusals keep: markup that compiled before and that a browser keeps as written,
-    drawn where it reads tags, still compiles, so a component that draws an SVG fragment without its `<svg>`
-    (`<rect><title>"Sales "<b>"42"</b></title></rect>`) compiles, and where `html!` cannot know
-    the context it misses a mistake rather than refuse correct markup. Its limit is the
-    component's edge ([Limit 30](#limit-markup-context)). The accessible-name check and the named
+    is the one a browser keeps. The structural checks miss a mistake rather than refuse an
+    element whose context they do not know, so a component that draws an SVG fragment without
+    its `<svg>` (`<rect><title>"Sales "<b>"42"</b></title></rect>`) compiles. The separate
+    literal encoding check can refuse a script or style literal that worked at its one actual
+    placement. A static data block in a fixed HTML-only slot can pass the complete tag via
+    trusted `raw` without untrusted input ([Views](guide/views.md)); otherwise put the literal
+    directly in markup that shows HTML. The proof is local to tag boundaries; it does not
+    emulate HTML tree construction or resolve arbitrary fragment insertion modes
+    ([Limit 30](#limit-markup-context)). The accessible-name check and the named
     link's `href` check keep their older rule, under which only an `<svg>`'s `<foreignObject>`
     holds HTML, so an `<a>` in an `<svg>`'s `<title>` or `<desc>` is not held to them, as before:
     moving them to the standard's integration points would refuse markup that compiled.
@@ -4769,16 +4855,17 @@ rules something out.
     since moved content can leave the component's scope.
 
     Every refusal rests only on facts the literal markup of the same `html!` proves, between
-    the two elements it relates; what the markup does not show makes a fact unknown, and an
-    unknown fact never refuses. Unseen are the caller's context at the top of the markup, a
+    the two elements it relates. An unknown fact does not cause an element to be refused, but it
+    can make a script or style literal impossible to encode correctly for all contexts. Unseen
+    are the caller's context at the top of the markup, a
     component's output (with or without children) and where it writes its children, an
     expression's output, `raw` among them (trusted text with no promise to be balanced, so it may
-    open or close any element), what a `<script>` or `<style>` whose literal text holds a `<`
-    writes (`html!` writes that text as is, so `</script>` in it ends the element where the text
-    says and the rest is markup, `<!--<script>` keeps a script open past its end tag, and in an
-    `<svg>` or `<math>` any `<` may start an element; a `<` split across adjacent literals is in
-    one of them), and the namespace of a literal `<svg>` or `<math>` written
-    where the markup does not show HTML. Every component is unseen, `<Corten />` included: the
+    open or close any element), and what an HTML `<script>` or `<style>` writes when its text
+    can end it early (a matching end tag) or keep a script open past its generated end tag
+    (`<!--<script>`). The macro checks those lexical transitions across adjacent literals; it
+    does not parse markup after an early close to recover the context. Also unseen is the
+    namespace of a literal `<svg>` or `<math>` written where the markup does not show HTML.
+    Every component is unseen, `<Corten />` included: the
     macro knows a component only by the name it is written with, which an app's own component may
     share, and proving the path names `corten::Corten` would refuse such a component, which is
     valid markup. Unseen output may also leave a browser reading text rather than tags: a
@@ -4786,9 +4873,11 @@ rules something out.
     `</script>` until a second one, a `<plaintext>` to the end of the page, a comment to its
     `-->`, a `<textarea>` to its end tag. So the tokenizer's state is a fact apart from the
     namespace and the open elements, and a later literal start tag proves none of them: once
-    the walk or the parser passes an unseen node, nothing after it in the same `html!` is
-    refused, in a `<template>`, an `<svg>` or a `<foreignObject>` it opens too (one body of a
-    block does not follow another, so a refusal in a body with nothing unseen before it stands).
+    the walk or the parser passes an unseen node, an element after it in the same `html!` is
+    not refused on that structural basis, in a `<template>`, an `<svg>` or a `<foreignObject>`
+    it opens too. Script and style literals that need a known context are still refused there.
+    One body of an `if` or `match` does not follow another, so a refusal in a body with nothing
+    unseen before it stands.
     One context is taken as known rather than proven, and it is a precondition, not an
     exception: `html!` output, a component's included, is drawn where a browser reads tags.
     Writing a component into script or style text its caller left open is not supported, since a
@@ -4796,15 +4885,18 @@ rules something out.
     `<p><div>"Detail"</div></p>`, written after `<script type="text/x-template">"<!--<script>"</script>`
     and before `{raw("</script>")}`, is refused for its `<div>`, though Chromium, Firefox and
     WebKit keep the whole as the script's text (the sixth review's counterexample). The promise
-    that no context-dependent refusal stops markup a browser keeps as written holds for output
-    placed where the browser reads tags; this is the shape it does not cover. Inside a literal
+    that no context-dependent structural refusal stops markup a browser keeps as written holds
+    for output placed where the browser reads tags; this is the shape it does not cover. Inside a literal
     element, where the markup does not show it is HTML's, what an element a browser parsing HTML
     reads as text holds (`<iframe>`, `<textarea>`, `<title>`, `<style>`, `<script>`, `<xmp>`,
     `<noembed>`, `<noframes>`, `<plaintext>`) is unseen, not tags: as HTML's it is text, as
     SVG's or MathML's elements, so `<iframe><p><div>"Detail"</div></p></iframe>` at the top of a
     component compiles (all three engines keep it as the iframe's text), and after a
     `<plaintext>` there nothing is refused. What a `<noscript>` holds is unseen everywhere: text
-    with scripting on, markup without it. In an `<svg>` or `<math>` the markup places (a
+    with scripting on, markup without it. This is a structural rule: for literal encoding, a
+    direct `<style>` in a known HTML `<noscript>` can keep its bytes in either scripting mode
+    when preceding content preserves the context and the text cannot close either element early.
+    In an `<svg>` or `<math>` the markup places (a
     literal `<svg>` under a `<div>`) they hold elements, which are read as before. Kind by kind:
     an element read as text needs its holder to be parsed as HTML (an element that is HTML's
     wherever it lands, or an integration point of an `<svg>` or `<math>` such an element holds,
@@ -4853,8 +4945,7 @@ rules something out.
     That gives up the shapes a browser would change anyway whose proof crosses an unseen node:
     `<p>{text}<div>` compiles though no text can keep the `<div>` in the `<p>`, and so does
     `<svg><foreignObject><textarea><b>` at the top of a component, which a browser changes in
-    either namespace, and so does whatever follows a script or style whose text holds a `<`
-    without closing it (`if (a < b)`), and anything in a document's body, which follows its
+    either namespace, and so does anything in a document's body, which follows its
     `<Corten />`, and a nested `<form>` anywhere, and `<iframe><p><div>` at the top of a
     component, which a browser changes only where its parent writes it into an `<svg>`, and
     `<noscript><p><div>`, which it changes only with scripting off; misses, rather than refusals
@@ -4913,8 +5004,9 @@ rules something out.
     the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there;
     the tokenizer's script data, RAWTEXT and data states, in which an appropriate end tag ends a
     `<script>` or `<style>` whatever the markup around it says, `<!--` and `<script` carry a
-    script past one, and in foreign content any `<` may start a tag, which is why `writes_tags`
-    takes any `<` in their text as unseen output;
+    script past one, and in foreign content `<` may start a tag and `&` a character reference;
+    the parser escapes both where the context is known to be foreign, and `writes_tags` treats
+    a remaining raw `<` in their text as unseen output;
     the tree construction dispatcher, which reads an `<svg>`'s or a `<math>`'s `<form>` as foreign
     content's whatever HTML element is around the drawing, so the third shape is not read into one;
     the browsers
@@ -4924,8 +5016,8 @@ rules something out.
     anchors of a `<math>` in an `<svg>` and of an `<svg>` in a `<math>`); reasoned (an `html!`
     sees its own markup and nothing around it, so what its top and a component's children land
     in is not known, nor what a component or an expression writes, since `raw` prints trusted
-    text as is with no promise that it is balanced, nor what a `<script>` or `<style>` writes,
-    whose text `Gen` writes as is, nor which component a path names (`<Corten />` may be an
+    text as is with no promise that it is balanced, nor what a `<script>` or `<style>` with a
+    raw `<` writes, nor which component a path names (`<Corten />` may be an
     app's); what any of those writes may leave the tokenizer in a script's, a comment's or a
     `<plaintext>`'s text, which no later literal start tag leaves; an element HTML reads as text
     holds text as HTML's and elements as SVG's or MathML's, so where the namespace is not shown
@@ -4933,9 +5025,10 @@ rules something out.
     where a browser reads tags, since script text is a string's, not markup's; `html!` writes an element's attributes in the order they are written, spreads in their
     place (`open_tag` in `crates/corten-macros/src/html.rs`), so the first `encoding` in the
     markup is the first the browser reads; the refusals add no code to what `html!`
-    writes, so a view that compiles renders as before); value (correct output above the rest, the
-    README's conflict order 1, which is why a refusal never stops markup a browser keeps as
-    written; a mistake the compiler can see is a compile error, its 3 and Values 4).
+    writes, apart from encoding literal bytes in the proven foreign context); value (correct
+    output above the rest, the README's conflict order 1: refuse literals whose encoding cannot
+    be chosen correctly across their possible contexts, not an element merely because its
+    context is unknown; a mistake the compiler can see is a compile error, its 3 and Values 4).
 
     Revisit when: the HTML standard changes the elements it reads as text, its integration points
     or the start tags it takes out of foreign content, when the lists in `html.rs` follow it; or the
@@ -4950,13 +5043,22 @@ rules something out.
     following the context across components ([Limit 30](#limit-markup-context)) would have to be
     weighed against its cost to every render; or `raw` is made to promise balanced markup, when an
     expression could be taken to leave the open elements as they were and the tokenizer reading
-    tags; or `html!` escapes a script's or a style's text (or refuses a `<` in it),
-    when such an element stops being unseen output; or an app needs components drawn inside
+    tags; or `html!` stops writing HTML script or style text that can end its holder early or
+    keep it open, when that text would stop being unseen output too; or an app needs components drawn inside
     script text (a client-side template filled from a component's markup), when the precondition
     that output is drawn where a browser reads tags goes too, and with it every refusal outside a
     patch's top level but the two of a single start tag.
 
-    Last checked: 2026-11-17, after a sixth review found refusals of kept markup in an element
+    Last checked: 2026-11-18, the HTML tokenizer's data state and foreign-content rules.
+    Chromium 159.0.8154.6, Firefox 159.0 and WebKit 27.2 all decoded the reference and opened
+    a child element in unescaped `<script>` and `<style>` literals in SVG and MathML, and
+    kept the escaped versions as literal text without a child element (`parsesAsHtmlMeans`).
+    On the same engines, this smoke also verified that a foreign `<font>` with no `color`
+    leaves two styles in SVG but with `color` moves both to HTML, and that closing SVG between
+    iterations changes a following style to HTML. The same smoke verifies that an ordinary
+    comparison stays text, does not affect a following stylesheet, and does not make a nested
+    tag into an element;
+    2026-11-17, after a sixth review found refusals of kept markup in an element
     HTML reads as text whose namespace the markup does not show, and a duplicate check that took
     `key` (written `data-key`) and `KEY` for one attribute, the outputs of the new passing cases
     (`<p><div>"Detail"</div></p>` in a top-level `<iframe>`, `<noscript>`, `<xmp>`, `<noembed>`,
@@ -7263,9 +7365,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     and only for the shapes lost whatever the patch began with and wherever the view lands, since a
     component's markup does not show which table part, if any, an element before it wrote, or
     whether its parent writes it in an `<svg>`), and where it does not they let
-    a mistake pass rather than stop correct markup. At the top
-    of a component's markup, which its parent may write into an `<svg>` or a `<math>`, none of
-    the refusals acts: an element a browser moves out of foreign content (`<b>`, `<div>`, `<p>`,
+    a mistake pass rather than stop correct structure. At the top
+    of a component's markup, which its parent may write into an `<svg>` or a `<math>`, those
+    structural refusals do not act: an element a browser moves out of foreign content (`<b>`, `<div>`, `<p>`,
     `<span>`, `<table>` and the rest of the standard's list, a `<font>` with `color`, `face` or
     `size`), an element in a `<title>`, `<textarea>`, `<script>`, `<style>`, `<iframe>`,
     `<xmp>`, `<noembed>` or `<noframes>`, and a `<plaintext>` are not refused there, nor among a
@@ -7276,22 +7378,27 @@ by design; where it is known, a limit says what would lift it or why it is so.
     component's children, which it may write into an `<svg>`'s `<desc>`, the same holds, unless
     they are in an `<svg>` the children write themselves under an element that shows HTML. A
     literal `<svg>` or `<math>` at the top of the markup or among a component's children does not
-    show its namespace either (a `<math>` an `<svg>` holds is SVG's), so only an element taken out
-    of foreign content is refused straight in it, and nothing in its integration points. What an
+    show its namespace either (a `<math>` an `<svg>` holds is SVG's), so an element taken out
+    of foreign content is refused straight in it, and nothing in its integration points. A
+    `<script>` or `<style>` literal is escaped only when its context is known to be foreign,
+    even when the exact foreign namespace is not known. A literal with `<` or `&` is refused
+    when the markup cannot distinguish HTML from foreign content on every expansion, even if
+    it would work in its one actual placement. This is a local check at tag boundaries, not
+    full HTML tree construction or a model of every fragment insertion mode. What an
     element HTML reads as text holds is not read there either (as HTML's it is text, as SVG's
     elements), so `<iframe><p><div>"Detail"</div></p></iframe>` at the top of a component compiles
     and nothing after such a `<plaintext>` is refused, nor is what a `<noscript>` holds, anywhere
     (text with scripting on). Nor does
     the markup show what an expression or any component writes, `<Corten />` included (`raw`
-    may open or close any element), nor what a `<script>` or `<style>` whose literal text holds
-    a `<` writes: `html!` writes that text as is, so `</script>` in it ends the element and what
-    follows is markup, and `<!--<script>` keeps it open past its end tag. What one writes may
+    may open or close any element), nor what a `<script>` or `<style>` whose literal text can
+    end it early or keep it open writes: `</script>` in it ends the element and what follows is
+    markup, and `<!--<script>` keeps it open past its end tag. What one writes may
     leave a browser reading a script's text, a comment or a `<plaintext>`, which a later
-    literal start tag does not end, so after one no refusal that depends on context acts in the
-    same `html!` (a duplicate attribute and a hand-written `data-key` still do), in a
+    literal start tag does not end, so after one no structural refusal that needs a known context
+    acts in the same `html!` (a duplicate attribute and a hand-written `data-key` still do), in a
     `<template>` or an `<svg>` written after it too; `<p>{text}<div>` compiles, though a browser
-    closes the paragraph, and so does `<p><script>"if (a < b) go();"</script><div>`, and so does
-    anything in a document's body, which follows `<Corten />`. A nested `<form>` is refused
+    closes the paragraph, as do nested tags in a document's body, which follows `<Corten />`.
+    An ordinary `<` in known HTML raw text does not stop structural checks. A nested `<form>` is refused
     nowhere: only a document's markup could show that no `<template>` holds it, and its body
     follows `<Corten />`. Every refusal assumes `html!` output, a component's included, is drawn
     where a browser reads tags; writing a component into script or style text a caller left open
