@@ -273,7 +273,9 @@ def stream_monitor(root, expected):
             state_path = root / 'stream-state.json'
             # The job's EXIT trap also runs if native entry failed before its
             # first progress publication. A healthy SSH lease is not a live job.
-            if state_hash is None and pathlib.Path('/bench/exit-code').exists():
+            # The first renewal proves the client received registration, which
+            # it needs to collect evidence after an early failure.
+            if renewal and state_hash is None and pathlib.Path('/bench/exit-code').exists():
                 assert state_path.exists(), 'benchmark job exited before first campaign state'
             if state_path.exists() and len(outgoing) < 32768:
                 state = stream_load(root, state_path.name)

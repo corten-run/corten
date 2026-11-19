@@ -95,6 +95,8 @@ def emit(frame):
         if mode == 'early-job-exit':
             data['/bench/exit-code'] = b'2\n'
             return
+        if mode == 'already-exited':
+            return
         put('campaign-active.json', {'owner': {'pid': 40}})
         put('stream-state.json', {'kind': 'progress', 'payload': {'state': 'active'}})
     elif kind == 'progress':
@@ -159,6 +161,8 @@ scope.update({'os': fake_os, 'pathlib': types.SimpleNamespace(Path=Path), 'priva
               'time': types.SimpleNamespace(monotonic_ns=lambda: clock)})
 sys.modules['select'] = types.SimpleNamespace(select=select)
 terminal, failed, drain, reason = False, False, None, None
+if mode == 'already-exited':
+    data['/bench/exit-code'] = b'2\n'
 try:
     assert scope['main'](['monitor', token, encoded({'binding': binding, 'id': identifier}).hex()]) == 0
     terminal = True
