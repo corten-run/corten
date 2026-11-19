@@ -346,6 +346,11 @@ use std::{
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
+/// let _ = html! { <p><script type="text/plain">"a < b"</script><div>"Detail"</div></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
 /// #[component]
 /// fn Summary() -> impl Render {
 ///     let detail = refs();

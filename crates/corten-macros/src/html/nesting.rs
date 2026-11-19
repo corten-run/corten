@@ -556,7 +556,6 @@ mod tests {
         assert!(holds_unseen(&[writes("style", "</style>")]));
         assert!(holds_unseen(&[el("div", vec![writes("script", "</script><svg>")])]));
         assert!(!holds_unseen(&[el("div", vec![writes("script", "a <b")])]));
-        assert!(check(&[el("p", vec![writes("script", "a <b"), detail()])]).is_err());
         assert!(!holds_unseen(&[writes("script", "track();")]));
         // Only a script's or a style's text is written as is; a <title>'s is escaped.
         assert!(!holds_unseen(&[writes("title", "</title>")]));
