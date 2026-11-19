@@ -166,14 +166,14 @@ html! {
 ```
 
 A table whose page has every row of it sorts in place: `corten_ui::rows::sort` is the handler a
-sort header's link calls (the kit's `SortHeader`, `on:sort={rows::sort(event, target)}`). It
+sort header's link calls (the kit's `SortHeader`, `on:sort={rows::sort(event, target, head)}`). It
 sorts each body of the link's table by the column of the clicked header, ascending and then
 descending on the next click, and sets `aria-sort` on that header (the kit draws the arrow from
 it) and removes it from the others. A cell sorts by its one `<time datetime>` or `<data value>`
 when it has one, else by its text, leaving out what is `hidden` or `aria-hidden` (a stacked
 table's `CellLabel`). To give cells an explicit value, put `ref={cell.with(value)}` on them
-and pass the ref to `rows::sortByNumber(event, target, cell)` for numbers (a price in cents)
-or `rows::sortByText(event, target, cell)` for strings (a date as `2026-10-30`). Cells without
+and pass the ref to `rows::sortByNumber(event, target, head, cell)` for numbers (a price in cents)
+or `rows::sortByText(event, target, head, cell)` for strings (a date as `2026-10-30`). Cells without
 that ref still sort by their contents. A column whose
 values are all decimal numbers (`-2`, `12.5`) sorts as numbers; any other by an `Intl.Collator`
 in the page's `lang`, with digits in numeric order (`Item 2` before `Item 10`). Equal values are
@@ -185,8 +185,20 @@ every click without the script, so the link is the page the server sorts (a rout
 `sold: Option<SoldBy>`), which draws `aria-sort` on its column, the default order's too. A
 `SortHeader` takes the page sorted by its column each way (`ascending`, `descending`) and links
 to the one a click gives: the other way when the table is sorted by it, else the way `first` says
-(`Sort::Descending` for a column read newest or largest first), which the script follows too; with a click handler it also writes both on the link, and after a sort
-the script makes the address the page sorted as shown, in place of its history entry, and each
+(`Sort::Descending` for a column read newest or largest first). For client sorting, declare the
+table's two `SortLinks` refs and pass them to each `SortHeader` as `links`. On its `<thead>`, put
+`ref={head}` and `on:ReadSortLinks={rows::read(event, up, down)}` with those same refs. Each header
+uses the ref for its first direction to carry the route not in its native `href`. A custom
+header can wrap the link inside its `<th>`; the cell still carries `aria-sort`. The sort and
+ordered controls ask the head for its current refs when they act, including after a patch replaces
+a header or a layout redraw keeps the anchor and changes its attributes. Without the route reader
+or the clicked link's route ref, the script leaves navigation to the link.
+
+When upgrading a copied kit, run `corten ui add --merge table` and update the call sites together:
+the old `rows::sort*` calls without `head` do not compile. Server-only headers and custom handlers
+that manage their own sort need only `links={None}`. The built-in handlers do not do local-only
+sorting without routes.
+After a sort the script makes the address the page sorted as shown, in place of its history entry, and each
 header's link the page its next click gives. So a reload and a page that reads itself again
 (`ReadAgain`, which reads the address as it is then) show the order on screen, and a click with a
 modifier key opens the order that click would give. Only the query keys the header links differ
@@ -214,14 +226,16 @@ the sort wrote; every other form whose route reads the order calls `send`: a GET
 part, and a form with an `action` in a table that has no such part (a row's own post form) too:
 
 ```rust,ignore
-<form method="post" action={&url::RefreshSupply { choice }}
+<form method="post" action={&url::RefreshSupply { choice, sold }}
     on:submit={ordered::send(event, target, [sorted(&SupplyId)])}>
 ```
 
 Where it posts then gets the order on screen as it is sent: its `action`, or the `formaction`
 of the button that sent it (one of its own or one outside it with `form=`), so the redirect
 draws it. Since it is read when the form is sent, a form a patch drew after the sort sends it
-too. A link (a "Previous page" whose route reads the order) calls `ordered::link(target,
+too. Without scripts, draw the current server order into the original POST action (the
+`RefreshSupply` route above) or into a GET form's fields when its route needs the order.
+A link (a "Previous page" whose route reads the order) calls `ordered::link(target,
 [sorted(&SupplyId)], signal)` on `on:connect`, and its `href` takes the order whenever it is about
 to be read: the pointer over it (so the page the runtime prefetches on a hover is the one the
 click opens), focus, a click, a middle click and its menu ("Copy link", "Open in new tab"). A
@@ -244,7 +258,9 @@ on; it reports the element in the console and does nothing.
 A form or link that carries the order of several sorted tables (one route's query set holding each
 table's keys) names each (`[sorted(&SupplyId), sorted(&ListingsId)]`), and each table's keys are
 taken from the address and the others' left; an id of an element around several sorted tables
-names them all. A GET form's address is its fields, so one that carries the page's query in hidden
+names them all. Both handlers find the current tables and ask each head for its sort links,
+so they do not need the header refs in their own component. A GET form's address is its fields,
+so one that carries the page's query in hidden
 inputs (`corten::form::keep_query`) and calls it sends those keys as the address has them instead
 (set in each list of its fields made while it is sent, the browser's and one another handler
 makes, so nothing is added to the page): replaced, added when the form had
@@ -256,7 +272,9 @@ is the page's address, which the sort keeps as the order on screen: whether the 
 in its default order (a route that leaves a sort it does not have out of the address) or
 sorted, the keys the header links differ in are put in, replaced or taken out, as for the page's
 own address. It is a module of its own (`ordered`, served with `corten_ui::COMPONENTS`), so a
-page that only sorts a table does not load it.
+page that only sorts a table does not load it. Apps that list only `ordered::COMPONENT` can
+still start; to carry an in-place sort they need the table head's route reader from
+`rows::COMPONENT` as shown below.
 
 Put `data-no-prefetch` on the `<thead>`, or a hover fetches
 the page the server sorts, which the click then does not use. A cell can also sort by the one
@@ -267,14 +285,17 @@ for the reader's language (`12,5`) needs a machine or [ref value](scripts.md).
 List `corten_ui::COMPONENTS` and it is served.
 
 ```rust,ignore
-let price = refs();
+use corten_ui::{ReadSortLinks, rows};
+
+let (head, up, down, price) = refs();
+let links = Some(SortLinks { ascending_first: up, descending_first: down });
 html! {
     <table>
-        <thead data-no-prefetch>
+        <thead data-no-prefetch ref={head} on:ReadSortLinks={rows::read(event, up, down)}>
             <tr>
                 <SortHeader label="Price" sort={by_price} ascending={&url::Sales { sold: Some(SoldBy::Price) }}
                     descending={&url::Sales { sold: Some(SoldBy::PriceDown) }} first={Sort::Ascending} class={TableNumeric {}}
-                    on:sort={rows::sortByNumber(event, target, price)} />
+                    links={links} on:sort={rows::sortByNumber(event, target, head, price)} />
             </tr>
         </thead>
         <tbody>
@@ -354,7 +375,7 @@ pub struct Sales { pub sold: Option<SoldBy>, pub page: Option<usize> }
 ..
 <SortHeader label="Price" sort={by_price} ascending={&url::Sales { sold: Some(SoldBy::Price), page: None }}
     descending={&url::Sales { sold: Some(SoldBy::PriceDown), page: None }} first={Sort::Ascending} class={TableNumeric {}}
-    on:sort={None::<Handler>} />
+    links={None} on:sort={None::<Handler>} />
 ..
 <Pagination .. link={|page| url::Sales { sold, page: Some(page).filter(|p| *p > 1) }} on:link={None::<Handler>} />
 ```

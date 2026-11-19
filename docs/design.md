@@ -3658,6 +3658,17 @@ rules something out.
     standard ([Rule 10](#rule-standard-formats)); a `data-` attribute written for CSS or for the
     runtime (`data-selected`, `data-reload`) is unchanged.
 
+    Reopened for [#1387 corten-ui's sort and combo box read data-* attributes by name instead of ref values](https://github.com/corten-run/corten/issues/1387):
+    a sort header appeared to need a record of two addresses and its first direction. It already
+    has one address in the native `href` and its active direction in `aria-sort`. One text ref
+    gives the other address; the ref it belongs to gives the first direction. The head's typed
+    event reads the current values only when a sort or ordered control asks, and takes `aria-sort`
+    from the live header even if both URLs stayed the same. The alternate route writes directly to
+    its ref value's output unless the URL needs JSON or HTML escaping. A draft that split
+    the record over the anchor, cell and arrow repeated the native route and resolved the table's
+    maps once per header on connect. The single value needs neither a record type nor any runtime
+    reader change, and still leaves the link useful without JavaScript.
+
     What it costs every user is the runtime's reader, the `=` kind in `on.js` and its case in
     `resolve`: 107 bytes raw (42,427 to 42,534), 21 with gzip (14,995 to 15,016) and 24 with brotli
     (13,528 to 13,552), downloaded once a release, since the runtime's URL is versioned and
@@ -3722,8 +3733,9 @@ rules something out.
     sort, `listing_sort.rs`, read by `listing_sort.js`; corten-site's wall, `surface.rs`, read by
     `wall.js`; its seam's marked names, `apart.rs`, read by `apart.js`; its header table,
     `steel.rs`, read by `answer.js`; and the watchlist's smoke page, `smoke.rs`, read by
-    `quoted.js`. Apps beyond these five places hand their scripts values on elements the scripts
-    reorder, filter or follow, so the reader helps every such app, not a few); value (that help, at
+    `quoted.js`. The corten-ui table's explicit cell values, its kit's alternate sort link and
+    ComboBox search terms are additional uses. Apps that hand their scripts values on elements
+    the scripts reorder, filter or follow get the same check without another reader); value (that help, at
     a cost every user pays of 21 bytes with gzip once a release, which Value 1 does not refuse; a
     mistake in a value a script reads fails when the crate compiles, and no name is text at a seam,
     Values 4; one way for a script to get what an element carries, its ref, Values 5; a value on a
@@ -3739,16 +3751,16 @@ rules something out.
     components would be weighed against its cost to every render, or a browser reads a key other
     than `getAttribute` gives it, when the check would compare what the runtime reads. The bet
     fails, and the 21 bytes reopen against checking `dataset` names some other way (a declaration of
-    each component's `data-` names generated as `corten::types` is), when on 2027-05-13 or later two
-    things hold. First, read in `crates/`, `examples/` and `skills/`, no markup gives a ref a value
-    (`ref={name.with(..)}`, on one line or split over several) beyond the five places named in
-    Stands on, and their tests and docs; a search for `.with(` lists the candidates, and each is
-    read, since a search alone misses markup split over lines. Second,
-    [#1387](https://github.com/corten-run/corten/issues/1387) has closed without moving corten-ui's
-    `data-sort` and the attributes beside it onto ref values. If that issue is still open on
-    2027-11-13, the first condition alone decides on that date.
+    each component's `data-` names generated as `corten::types` is), when on 2027-05-13 or later
+    a read in `crates/`, `examples/` and `skills/` finds no markup giving a ref a value
+    (`ref={name.with(..)}`, on one line or split over several) beyond the original five places
+    named in Stands on and their tests and docs. A search for `.with(` lists the candidates, and
+    each is read, since a search alone misses markup split over lines. The earlier check for the
+    sort and ComboBox migration is satisfied: they are now uses beyond those five.
 
-    Last checked: 2026-11-15, the release cost of the key check and of all it adds to the code
+    Last checked: 2026-11-18 for the sort-header encoding (one URL per anchor suffices, with no
+    value reader change; [#1665 Use typed refs for sort header routes](https://github.com/corten-run/corten/pull/1665)
+    gives the gallery measurements). On 2026-11-15, the release cost of the key check and of all it adds to the code
     `html!` and `#[component]` write (`scoped_into` around a scoped component's and a scoped
     document's render, the locals `html!` opens around a `<template>`'s, a `<noscript>`'s and a
     text holder's content, a document head's `<title>` among them, the key's calls beside a keyed

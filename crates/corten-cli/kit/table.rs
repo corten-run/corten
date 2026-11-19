@@ -29,6 +29,7 @@
 //!                     descending={&url::Orders { sort: Some(By::TotalDown) }}
 //!                     first={Sort::Ascending}
 //!                     class={TableNumeric {}}
+//!                     links={None}
 //!                     on:sort={None::<Handler>}
 //!                 />
 //!             </tr>
@@ -50,6 +51,7 @@
 //! ```
 use corten::Href;
 use corten::prelude::*;
+use corten::script::{NoRows, ts};
 
 /// How a table fits a box narrower than it. Each is a class in `table.css`, so one without a rule
 /// does not compile.
@@ -101,22 +103,31 @@ pub enum Sort {
     Descending,
 }
 
+/// The refs read by a table head's `corten_ui::rows::read` handler for in-place sorting.
+#[derive(Clone, Copy)]
+pub struct SortLinks {
+    pub ascending_first: Ref<el::HTMLAnchorElement, NoRows, ts::String>,
+    pub descending_first: Ref<el::HTMLAnchorElement, NoRows, ts::String>,
+}
+
 /// A column header the table can be sorted by: `ascending` and `descending` are the page sorted
 /// by it each way (typed routes), and its link is the one a click gives, the other way when the
 /// table is sorted by it now and else `first` (`Sort::Descending` for a column read newest or
 /// largest first), so it works without a script; and
-/// `aria-sort` on the column the table is sorted by now (`sort`, `None` for the others). With a
-/// click handler it writes both on the link (`data-ascending`, `data-descending`), so
-/// `corten_ui::rows::sort` puts the order it shows in the address and each header's link. The
+/// `aria-sort` on the column the table is sorted by now (`sort`, `None` for the others). For
+/// `corten_ui::rows::sort`, pass the table's `SortLinks` refs as `links` and put
+/// `on:ReadSortLinks={rows::read(event, up, down)}` on its referenced `<thead>` with those refs.
+/// The link carries the address not in its `href`, on the ref for its first direction.
+/// Otherwise pass `links={None}`. The
 /// direction is drawn, not written, so a screen reader reads the label and the column's sort
 /// state, not an arrow's name: the arrow is drawn from the header's `aria-sort`, so it follows
 /// the one state both the server and a script write. `class` is the header's look (`TableNumeric
 /// {}` over a number column, `()` for none). `on:sort` is the link's click handler:
 /// `None::<Handler>` for a table the server sorts, or, on a page that has every row and sorts them
 /// in place without a request (with `data-no-prefetch` on the `<thead>`, so a hover does not fetch
-/// the sorted page), `corten_ui::rows::sort(event, target)`, which sorts by the header's column,
+/// the sorted page), `corten_ui::rows::sort(event, target, head)`, which sorts by the header's column,
 /// each cell by its `<time datetime>`, `<data value>` or text. For explicit cell values use
-/// `corten_ui::rows::sortByNumber(event, target, cell)` or `sortByText(event, target, cell)`
+/// `corten_ui::rows::sortByNumber(event, target, head, cell)` or `sortByText(event, target, head, cell)`
 /// with `ref={cell.with(value)}` on the cells (docs/guide/ui.md). Or give the page's own typed call
 /// (`on:sort={js::sortBy(event, target, rows, By::Total)}`). Such a script takes the click as an
 /// `Event` (a prop's handler gets that type), leaves a click with a modifier key to the link, so it
@@ -132,33 +143,35 @@ pub fn SortHeader<'a, L: Render, C: ClassList>(
     descending: &'a dyn Href,
     first: Sort,
     class: C,
+    links: Option<SortLinks>,
     on_sort: Handler<'a>,
 ) -> impl Render {
-    let (aria, link) = match sort {
-        Some(Sort::Ascending) => (Some("ascending"), descending),
-        Some(Sort::Descending) => (Some("descending"), ascending),
-        None if first == Sort::Descending => (None, descending),
-        None => (None, ascending),
+    let (aria, link, other) = match sort {
+        Some(Sort::Ascending) => (Some("ascending"), descending, ascending),
+        Some(Sort::Descending) => (Some("descending"), ascending, descending),
+        None if first == Sort::Descending => (None, descending, ascending),
+        None => (None, ascending, descending),
     };
-    // Only a click handler reads them: a table the server sorts does without.
-    let (up, down) = if on_sort.present() {
-        (Some(ascending), Some(descending))
-    } else {
-        (None, None)
-    };
-    let starts = (on_sort.present() && first == Sort::Descending).then_some("descending");
     html! {
         <th scope="col" class={class} aria-sort={aria}>
-            <a
-                class={Sorter}
-                href={link}
-                data-ascending={up}
-                data-descending={down}
-                data-first={starts}
-                on:click={on_sort}
-            >
-                {label}<span class={Arrow} aria-hidden="true"></span>
-            </a>
+            if let Some(links) = links {
+                let alternate = match first {
+                    Sort::Ascending => links.ascending_first,
+                    Sort::Descending => links.descending_first,
+                };
+                <a
+                    ref={alternate.with(other)}
+                    class={Sorter}
+                    href={link}
+                    on:click={on_sort}
+                >
+                    {label}<span class={Arrow} aria-hidden="true"></span>
+                </a>
+            } else {
+                <a class={Sorter} href={link} on:click={on_sort}>
+                    {label}<span class={Arrow} aria-hidden="true"></span>
+                </a>
+            }
         </th>
     }
 }
