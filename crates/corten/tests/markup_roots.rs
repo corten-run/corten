@@ -458,8 +458,260 @@ fn a_document_refuses_no_nested_form_after_what_it_does_not_show() {
     }
 }
 
-/// A `<script>` or `<style>` writes its literal text as is, so `</script>` in it ends the element
-/// where the text says, and the text may open a template, as `raw` may.
+#[test]
+fn foreign_script_and_style_literals_are_escaped() {
+    let markup = html! {
+        <div>
+            <svg>
+                <style>"a <g></g> &lt; &&"</style>
+                <script type="text/plain">"a <g></g> &lt; &&"</script>
+            </svg>
+            <math>
+                <style>"a <g></g> &lt; &&"</style>
+                <script type="text/plain">"a <g></g> &lt; &&"</script>
+            </math>
+        </div>
+    };
+    assert_eq!(
+        markup.to_html(),
+        concat!(
+            r#"<div><svg><style>a &lt;g>&lt;/g> &amp;lt; &amp;&amp;</style><script type="text/plain">a &lt;g>&lt;/g> &amp;lt; &amp;&amp;</script></svg>"#,
+            r#"<math><style>a &lt;g>&lt;/g> &amp;lt; &amp;&amp;</style><script type="text/plain">a &lt;g>&lt;/g> &amp;lt; &amp;&amp;</script></math></div>"#,
+        )
+    );
+    // A top-level <svg> may be SVG's or MathML's. Its <style> is foreign either way.
+    assert_eq!(html! { <svg><style>"&lt;"</style></svg> }.to_html(), "<svg><style>&amp;lt;</style></svg>");
+}
+
+#[test]
+fn a_head_noscript_stylesheet_keeps_its_literal_bytes() {
+    #[component]
+    fn FallbackDocument() -> impl Document {
+        html! {
+            <!DOCTYPE html>
+            <html>
+                <head>
+                    <noscript>
+                        <meta name="theme-color" content="#fff">
+                        <style>"@media (width < 48rem) { .fallback { & p { display: none } } }"</style>
+                        <style>".fallback::after { content: 'R&D' }"</style>
+                    </noscript>
+                    <title>"Fallback"</title>
+                    <Corten />
+                </head>
+                <body><main>"Fallback"</main></body>
+            </html>
+        }
+    }
+
+    let html = FallbackDocument {}.to_html();
+    assert!(
+        html.contains(concat!(
+            r##"<head><noscript><meta name="theme-color" content="#fff">"##,
+            "<style>@media (width < 48rem) { .fallback { & p { display: none } } }</style>",
+            "<style>.fallback::after { content: 'R&D' }</style></noscript><title>Fallback</title>"
+        )),
+        "{html}"
+    );
+}
+
+#[test]
+fn a_body_noscript_stylesheet_keeps_its_literal_bytes_without_structural_checks() {
+    let html = html! {
+        <body>
+            <noscript>
+                <style>"@media (width < 48rem) { .fallback { & p { display: none } } }"</style>
+                <p><div>"Fallback"</div></p>
+            </noscript>
+        </body>
+    }
+    .to_html();
+    assert_eq!(
+        html,
+        concat!(
+            "<body><noscript><style>@media (width < 48rem) { .fallback { & p { display: none } } }",
+            "</style><p><div>Fallback</div></p></noscript></body>"
+        )
+    );
+}
+
+#[test]
+fn svg_and_mathml_integration_points_use_html_raw_text() {
+    assert_eq!(
+        html! { <div><svg><foreignObject><style>"a <g></g> &lt; &&"</style></foreignObject></svg></div> }.to_html(),
+        "<div><svg><foreignObject><style>a <g></g> &lt; &&</style></foreignObject></svg></div>"
+    );
+    assert_eq!(
+        html! { <div><math><mtext><script type="text/plain">"a <g></g> &lt; &&"</script></mtext></math></div> }.to_html(),
+        r#"<div><math><mtext><script type="text/plain">a <g></g> &lt; &&</script></mtext></math></div>"#
+    );
+    assert_eq!(
+        html! { <div><math><mi><mglyph><style>"a < b && c"</style></mglyph></mi></math></div> }.to_html(),
+        "<div><math><mi><mglyph><style>a &lt; b &amp;&amp; c</style></mglyph></mi></math></div>"
+    );
+}
+
+#[test]
+fn annotation_xml_style_uses_the_first_encoding() {
+    let attrs = [("encoding", "text/html")];
+    for (markup, opening, body) in [
+        (
+            html! { <div><math><annotation-xml encoding="text/html"><style>"a < b && c"</style></annotation-xml></math></div> }
+                .to_html(),
+            r#"<annotation-xml encoding="text/html">"#,
+            "a < b && c",
+        ),
+        (
+            html! {
+                <div>
+                    <math><annotation-xml encoding="Application/XHTML+XML"><style>"a < b && c"</style></annotation-xml></math>
+                </div>
+            }
+            .to_html(),
+            r#"<annotation-xml encoding="Application/XHTML+XML">"#,
+            "a < b && c",
+        ),
+        (
+            html! {
+                <div>
+                    <math><annotation-xml encoding="application/mathml+xml"><style>"a < b && c"</style></annotation-xml></math>
+                </div>
+            }
+            .to_html(),
+            r#"<annotation-xml encoding="application/mathml+xml">"#,
+            "a &lt; b &amp;&amp; c",
+        ),
+        (
+            html! { <div><math><annotation-xml><style>"a < b && c"</style></annotation-xml></math></div> }.to_html(),
+            "<annotation-xml>",
+            "a &lt; b &amp;&amp; c",
+        ),
+        (
+            html! { <div><math><annotation-xml encoding="x" {..attrs}><style>"a < b && c"</style></annotation-xml></math></div> }
+                .to_html(),
+            r#"<annotation-xml encoding="x" encoding="text/html">"#,
+            "a &lt; b &amp;&amp; c",
+        ),
+    ] {
+        assert_eq!(markup, format!("<div><math>{opening}<style>{body}</style></annotation-xml></math></div>"));
+    }
+}
+
+#[test]
+fn font_attributes_distinguish_foreign_html_and_possible_breakout() {
+    assert_eq!(
+        html! { <div><svg><font id="chart"><style>"a < b && c"</style></font></svg></div> }.to_html(),
+        r#"<div><svg><font id="chart"><style>a &lt; b &amp;&amp; c</style></font></svg></div>"#,
+    );
+    assert_eq!(
+        html! { <div><svg><foreignObject><font color="red"><style>"a < b && c"</style></font></foreignObject></svg></div> }
+            .to_html(),
+        r#"<div><svg><foreignObject><font color="red"><style>a < b && c</style></font></foreignObject></svg></div>"#,
+    );
+    for (color, attr) in [(Some("red"), r#" color="red""#), (None, "")] {
+        let markup = html! {
+            <div>
+                <svg>
+                    <font color={color}><style>"g { fill: red }"</style></font>
+                    <style>"g { fill: blue }"</style>
+                </svg>
+            </div>
+        };
+        assert_eq!(
+            markup.to_html(),
+            format!("<div><svg><font{attr}><style>g {{ fill: red }}</style></font><style>g {{ fill: blue }}</style></svg></div>")
+        );
+    }
+}
+
+#[test]
+fn stable_control_flow_preserves_foreign_context() {
+    let show = true;
+    let markup = html! {
+        <div>
+            <svg>
+                for _ in 0..2 {
+                    if show { <style>"a < b && c"</style> }
+                    match show {
+                        true => <style>"&lt;"</style>,
+                        false => { <style>"<g>"</style> }
+                    }
+                }
+                <style>"<path>"</style>
+            </svg>
+        </div>
+    };
+    let repeated = "<style>a &lt; b &amp;&amp; c</style><style>&amp;lt;</style>";
+    assert_eq!(markup.to_html(), format!("<div><svg>{repeated}{repeated}<style>&lt;path></style></svg></div>"));
+}
+
+#[test]
+fn stable_control_flow_preserves_html_raw_text() {
+    assert_eq!(
+        html! { <div>for _ in 0..2 { <script type="text/plain">"a < b"</script> }</div> }.to_html(),
+        r#"<div><script type="text/plain">a < b</script><script type="text/plain">a < b</script></div>"#,
+    );
+    for show in [false, true] {
+        let markup = html! {
+            <div>
+                if show { <script type="text/plain">"a < b"</script> }
+                <style>".card { & .title { color: red } }"</style>
+                <script type="text/plain">"b < c"</script>
+            </div>
+        };
+        let script = if show { r#"<script type="text/plain">a < b</script>"# } else { "" };
+        assert_eq!(
+            markup.to_html(),
+            format!(
+                r#"<div>{script}<style>.card {{ & .title {{ color: red }} }}</style><script type="text/plain">b < c</script></div>"#
+            ),
+        );
+    }
+}
+
+#[test]
+fn each_conditional_arm_starts_in_the_entry_context() {
+    let close = false;
+    let color = Some("red");
+    let branch = html! {
+        <div>
+            <svg>
+                if close { {raw("</svg>")} } else { <style>"&lt;"</style> }
+            </svg>
+        </div>
+    };
+    let arm = html! {
+        <div>
+            <svg>
+                match close {
+                    true => <font color={color}></font>,
+                    false => <style>"&lt;"</style>,
+                }
+            </svg>
+        </div>
+    };
+    for markup in [branch.to_html(), arm.to_html()] {
+        assert_eq!(markup, "<div><svg><style>&amp;lt;</style></svg></div>");
+    }
+}
+
+#[test]
+fn ambiguous_context_allows_text_without_either_delimiter() {
+    let encoding = "text/html";
+    assert_eq!(
+        html! { <div><math><annotation-xml encoding={encoding}><style>"g { fill: red }"</style></annotation-xml></math></div> }
+            .to_html(),
+        r#"<div><math><annotation-xml encoding="text/html"><style>g { fill: red }</style></annotation-xml></math></div>"#,
+    );
+    assert_eq!(
+        html! { <div><svg><Within open="</svg><div>" close="</div>"><style>"g { fill: red }"</style></Within></svg></div> }
+            .to_html(),
+        "<div><svg></svg><div><style>g { fill: red }</style></div></svg></div>",
+    );
+}
+
+/// After `<Corten />` the parsing context is unknown. Use `raw` for the trusted bytes that
+/// deliberately open a template here; the fragment cases below test literals in known HTML.
 #[component]
 fn ScriptTemplateForms() -> impl Document {
     html! {
@@ -470,7 +722,7 @@ fn ScriptTemplateForms() -> impl Document {
             </head>
             <body>
                 <main>
-                    <script>"</script><template><script>"</script>
+                    {raw("<script></script><template><script></script>")}
                     <form><form><input></form></form>
                     {raw("</template>")}
                 </main>
@@ -479,8 +731,8 @@ fn ScriptTemplateForms() -> impl Document {
     }
 }
 
-/// What a `<script>` or `<style>` whose text holds a `<` writes is not shown by the markup, as
-/// what `raw` writes is not: no refusal reaches across it, and browsers keep each of these as
+/// What a `<script>` or `<style>` whose text can end it early writes is not shown by the markup.
+/// As with `raw`, no context-dependent structural refusal reaches across it. Browsers keep these as
 /// written (`parsesAsHtmlMeans` in `scripts/smoke.mjs`).
 #[test]
 fn no_refusal_reaches_across_a_script_whose_text_may_write_tags() {
@@ -519,6 +771,11 @@ fn no_refusal_reaches_across_a_script_whose_text_may_write_tags() {
             }
             .to_html(),
             p,
+        ),
+        // An early end tag can also make what looks like a child an actual element.
+        (
+            html! { <div><script>"</scr" "ipt>"<b>"Detail"</b></script></div> }.to_html(),
+            "<div><script></script><b>Detail</b></script></div>",
         ),
         // An <svg> the text opens makes the <textarea> after it SVG's, which holds elements.
         (

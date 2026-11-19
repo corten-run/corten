@@ -494,6 +494,65 @@ async function parsesAsHtmlMeans(browser) {
         !!document.querySelector("svg > style > g") &&
         !!document.querySelector("svg > textarea > g"),
     ],
+    // The escaped variants are the serialized literals asserted in markup_roots.rs.
+    ...["svg", "math"].flatMap((root) =>
+      ["style", "script"].flatMap((tag) => {
+        const shape = (/** @type {string} */ text) =>
+          `<${root}><${tag}${tag === "script" ? ' type="text/plain"' : ""}>${text}</${tag}></${root}>`;
+        return /** @type {typeof shapes} */ ([
+          [
+            `unescaped <${tag}> text in <${root}> opens a child and decodes a reference`,
+            shape("a <g></g> &lt; &&"),
+            () => {
+              const element = document.body.firstElementChild?.firstElementChild;
+              return element?.textContent === "a  < &&" && element.firstElementChild?.localName === "g";
+            },
+          ],
+          [
+            `escaped <${tag}> text in <${root}> is kept literally`,
+            shape("a &lt;g>&lt;/g> &amp;lt; &amp;&amp;"),
+            () => {
+              const element = document.body.firstElementChild?.firstElementChild;
+              return element?.textContent === "a <g></g> &lt; &&" && element.children.length === 0;
+            },
+          ],
+        ]);
+      }),
+    ),
+    ...["", ' color="red"'].map((attr) => /** @type {typeof shapes[number]} */ ([
+      `a foreign <font>${attr || " without color"} ${attr ? "moves" : "keeps"} styles`,
+      `<div><svg><font${attr}><style>g { fill: red }</style></font><style>g { fill: blue }</style></svg></div>`,
+      ({ XHTML, markup }) => {
+        const styles = [...document.querySelectorAll("style")];
+        const expected = markup.includes(' color="red"') ? XHTML : "http://www.w3.org/2000/svg";
+        return styles.length === 2 && styles.every((style) => style.namespaceURI === expected) &&
+          styles[0].textContent === "g { fill: red }" && styles[1].textContent === "g { fill: blue }";
+      },
+    ])),
+    [
+      "an ordinary < in repeated HTML script data does not change how the following style parses",
+      `<div><script type="text/plain">a < b</script><script type="text/plain">a < b</script><style>.card { & .title { color: red } }</style></div>`,
+      ({ XHTML }) => {
+        const scripts = [...document.querySelectorAll("div > script")];
+        const style = document.querySelector("div > style");
+        return scripts.length === 2 && scripts.every((script) => script.namespaceURI === XHTML && script.textContent === "a < b") &&
+          style?.namespaceURI === XHTML && style.textContent === ".card { & .title { color: red } }";
+      },
+    ],
+    [
+      "a comparison does not make element markup in an HTML script into an element (refused by html!)",
+      `<div><script type="text/plain">a < b<b>Draft</b></script></div>`,
+      () => !document.querySelector("b") && document.querySelector("div > script")?.textContent === "a < b<b>Draft</b>",
+    ],
+    [
+      "closing SVG between loop iterations makes the second style HTML's",
+      `<div><svg><style>a &lt; b &amp;&amp; c</style></svg><style>a < b && c</style><svg></svg></div>`,
+      ({ XHTML }) => {
+        const [foreign, html] = [...document.querySelectorAll("style")];
+        return foreign?.namespaceURI === "http://www.w3.org/2000/svg" && html?.namespaceURI === XHTML &&
+          foreign.textContent === "a < b && c" && html.textContent === "a < b && c";
+      },
+    ],
     [
       "an element in a <title> in an <mi> is text (refused by html!)",
       `<p><math><mi><title><b>x</b></title></mi></math></p>`,

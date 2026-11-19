@@ -4653,8 +4653,8 @@ rules something out.
     is written (an element in an element whose content is text, a `<plaintext>`, and an element
     taken out of foreign content, and literal HTML nesting that closes or discards an open
     element), and the shapes of a patch's top level the runtime's parse of it loses wherever they
-    are written, where the markup shows how a browser parses it, and acts
-    nowhere else.** An element written in a
+    are written, where the markup shows how a browser parses it. Script and style literals
+    that need a known context are refused when the markup cannot prove one.** An element written in a
     `<textarea>`, an HTML `<title>`, a `<script>`, a `<style>`, an `<iframe>`, an `<xmp>`, a
     `<noembed>` or a `<noframes>` was written by `html!` as markup and read by the browser as
     text, a `<plaintext>` made the rest of the page text, its end tag included, and an element the
@@ -4664,11 +4664,25 @@ rules something out.
     found the text or the moved content only on the page. Now each is a compile error that says
     what to write instead: the element beside the holder, or text meant to show tags as a string;
     behavior in a `#[component(js)]`, styles in the component's CSS, or a data block's content as
-    a string literal, which a `<script>` or `<style>` writes as is; `<pre>` for preformatted
+    a string literal, which an HTML `<script>` or `<style>` writes as is; `<pre>` for preformatted
     text; HTML in a drawing inside a `<foreignObject>`, and in a formula inside an `<mtext>`
     (`compile_fail` examples of `html!`). Text
     and expressions in the elements read as text compile as before, written escaped; an expression
     in a `<script>` or a `<style>` was refused already.
+
+    A foreign `<script>` or `<style>` stays in the HTML tokenizer's data state. Where the markup
+    shows foreign content, `html!` escapes a literal's `<` and `&` at compile time so a browser
+    keeps the text instead of opening a tag or decoding a character reference. This uses the
+    standard's text encoding rather than rejecting valid source such as a spaced comparison or
+    `&&`. HTML (including HTML integration points) keeps the raw write. In an unknown context
+    a literal with either character is refused: encoding changes HTML raw text, while writing
+    raw text can change foreign content. An optional breakout attribute on a `<font>` can pop
+    the surrounding foreign elements, so its children and the markup after it are not known.
+    Each conditional arm starts in the same context; if an arm can change it, the markup after
+    the conditional is not known. A loop that may change context is checked for such literals
+    anywhere in its body, even before the change, since the next iteration starts where the
+    previous one left off. Ordinary comparisons and other harmless `<` in known HTML raw text
+    do not change that context. None of these checks add a render-time decision.
 
     The runtime parses a patch as a `<template>`'s content, where the first top-level element
     other than a head's (`<script>`, `<style>`, `<link>`, `<template>` ..) decides how the
@@ -4730,24 +4744,29 @@ rules something out.
     `<style>` is SVG's and holds elements;
     MathML in such a literal `<math>`, outside those points, and in an `<annotation-xml>` whose first
     `encoding` is another or that has none (where an `<svg>` is SVG's, as the standard's tree
-    construction dispatcher has it), where they are MathML's and hold elements, and only an
+    construction dispatcher has it), where they are MathML's and hold elements, and an
     element taken out of foreign content is refused. At the top of a component's markup, which its
     parent may write into an `<svg>`, among a component's children, which go where the component
     writes them, after an expression or a component (what it writes may open or close an `<svg>`
     or an element read as text), and in an `<annotation-xml>` where an expression or a spread
     comes before any written `encoding` (either may write the first one), it does not know, and
-    refuses nothing; nor in what an element read as text there holds, or a `<noscript>` anywhere,
+    makes no context-dependent structural refusal; nor in what an element read as text there
+    holds, or a `<noscript>` anywhere,
     which may be text (below). A literal `<svg>` or `<math>` written there is foreign wherever it lands, but
     its namespace is not shown (a `<math>` in an `<svg>` is SVG's, an `<svg>` straight in a
-    `<math>` MathML's), so an element taken out of foreign content is refused straight in it, and
+    `<math>` MathML's), so an element taken out of foreign content is refused straight in it,
+    literal text in a foreign `<script>` or `<style>` is escaped, and
     what any element that is an integration point of either namespace holds is not known.
     `html!` writes attributes in the order they are written, so the first `encoding` in the markup
-    is the one a browser keeps. That is
-    the rule the refusals keep: markup that compiled before and that a browser keeps as written,
-    drawn where it reads tags, still compiles, so a component that draws an SVG fragment without its `<svg>`
-    (`<rect><title>"Sales "<b>"42"</b></title></rect>`) compiles, and where `html!` cannot know
-    the context it misses a mistake rather than refuse correct markup. Its limit is the
-    component's edge ([Limit 30](#limit-markup-context)). The accessible-name check and the named
+    is the one a browser keeps. The structural checks miss a mistake rather than refuse an
+    element whose context they do not know, so a component that draws an SVG fragment without
+    its `<svg>` (`<rect><title>"Sales "<b>"42"</b></title></rect>`) compiles. The separate
+    literal encoding check can refuse a script or style literal that worked at its one actual
+    placement. A static data block in a fixed HTML-only slot can pass the complete tag via
+    trusted `raw` without untrusted input ([Views](guide/views.md)); otherwise put the literal
+    directly in markup that shows HTML. The proof is local to tag boundaries; it does not
+    emulate HTML tree construction or resolve arbitrary fragment insertion modes
+    ([Limit 30](#limit-markup-context)). The accessible-name check and the named
     link's `href` check keep their older rule, under which only an `<svg>`'s `<foreignObject>`
     holds HTML, so an `<a>` in an `<svg>`'s `<title>` or `<desc>` is not held to them, as before:
     moving them to the standard's integration points would refuse markup that compiled.
@@ -4763,16 +4782,17 @@ rules something out.
     since moved content can leave the component's scope.
 
     Every refusal rests only on facts the literal markup of the same `html!` proves, between
-    the two elements it relates; what the markup does not show makes a fact unknown, and an
-    unknown fact never refuses. Unseen are the caller's context at the top of the markup, a
+    the two elements it relates. An unknown fact does not cause an element to be refused, but it
+    can make a script or style literal impossible to encode correctly for all contexts. Unseen
+    are the caller's context at the top of the markup, a
     component's output (with or without children) and where it writes its children, an
     expression's output, `raw` among them (trusted text with no promise to be balanced, so it may
-    open or close any element), what a `<script>` or `<style>` whose literal text holds a `<`
-    writes (`html!` writes that text as is, so `</script>` in it ends the element where the text
-    says and the rest is markup, `<!--<script>` keeps a script open past its end tag, and in an
-    `<svg>` or `<math>` any `<` may start an element; a `<` split across adjacent literals is in
-    one of them), and the namespace of a literal `<svg>` or `<math>` written
-    where the markup does not show HTML. Every component is unseen, `<Corten />` included: the
+    open or close any element), and what an HTML `<script>` or `<style>` writes when its text
+    can end it early (a matching end tag) or keep a script open past its generated end tag
+    (`<!--<script>`). The macro checks those lexical transitions across adjacent literals; it
+    does not parse markup after an early close to recover the context. Also unseen is the
+    namespace of a literal `<svg>` or `<math>` written where the markup does not show HTML.
+    Every component is unseen, `<Corten />` included: the
     macro knows a component only by the name it is written with, which an app's own component may
     share, and proving the path names `corten::Corten` would refuse such a component, which is
     valid markup. Unseen output may also leave a browser reading text rather than tags: a
@@ -4780,9 +4800,11 @@ rules something out.
     `</script>` until a second one, a `<plaintext>` to the end of the page, a comment to its
     `-->`, a `<textarea>` to its end tag. So the tokenizer's state is a fact apart from the
     namespace and the open elements, and a later literal start tag proves none of them: once
-    the walk or the parser passes an unseen node, nothing after it in the same `html!` is
-    refused, in a `<template>`, an `<svg>` or a `<foreignObject>` it opens too (one body of a
-    block does not follow another, so a refusal in a body with nothing unseen before it stands).
+    the walk or the parser passes an unseen node, an element after it in the same `html!` is
+    not refused on that structural basis, in a `<template>`, an `<svg>` or a `<foreignObject>`
+    it opens too. Script and style literals that need a known context are still refused there.
+    One body of an `if` or `match` does not follow another, so a refusal in a body with nothing
+    unseen before it stands.
     One context is taken as known rather than proven, and it is a precondition, not an
     exception: `html!` output, a component's included, is drawn where a browser reads tags.
     Writing a component into script or style text its caller left open is not supported, since a
@@ -4790,15 +4812,18 @@ rules something out.
     `<p><div>"Detail"</div></p>`, written after `<script type="text/x-template">"<!--<script>"</script>`
     and before `{raw("</script>")}`, is refused for its `<div>`, though Chromium, Firefox and
     WebKit keep the whole as the script's text (the sixth review's counterexample). The promise
-    that no context-dependent refusal stops markup a browser keeps as written holds for output
-    placed where the browser reads tags; this is the shape it does not cover. Inside a literal
+    that no context-dependent structural refusal stops markup a browser keeps as written holds
+    for output placed where the browser reads tags; this is the shape it does not cover. Inside a literal
     element, where the markup does not show it is HTML's, what an element a browser parsing HTML
     reads as text holds (`<iframe>`, `<textarea>`, `<title>`, `<style>`, `<script>`, `<xmp>`,
     `<noembed>`, `<noframes>`, `<plaintext>`) is unseen, not tags: as HTML's it is text, as
     SVG's or MathML's elements, so `<iframe><p><div>"Detail"</div></p></iframe>` at the top of a
     component compiles (all three engines keep it as the iframe's text), and after a
     `<plaintext>` there nothing is refused. What a `<noscript>` holds is unseen everywhere: text
-    with scripting on, markup without it. In an `<svg>` or `<math>` the markup places (a
+    with scripting on, markup without it. This is a structural rule: for literal encoding, a
+    direct `<style>` in a known HTML `<noscript>` can keep its bytes in either scripting mode
+    when preceding content preserves the context and the text cannot close either element early.
+    In an `<svg>` or `<math>` the markup places (a
     literal `<svg>` under a `<div>`) they hold elements, which are read as before. Kind by kind:
     an element read as text needs its holder to be parsed as HTML (an element that is HTML's
     wherever it lands, or an integration point of an `<svg>` or `<math>` such an element holds,
@@ -4847,8 +4872,7 @@ rules something out.
     That gives up the shapes a browser would change anyway whose proof crosses an unseen node:
     `<p>{text}<div>` compiles though no text can keep the `<div>` in the `<p>`, and so does
     `<svg><foreignObject><textarea><b>` at the top of a component, which a browser changes in
-    either namespace, and so does whatever follows a script or style whose text holds a `<`
-    without closing it (`if (a < b)`), and anything in a document's body, which follows its
+    either namespace, and so does anything in a document's body, which follows its
     `<Corten />`, and a nested `<form>` anywhere, and `<iframe><p><div>` at the top of a
     component, which a browser changes only where its parent writes it into an `<svg>`, and
     `<noscript><p><div>`, which it changes only with scripting off; misses, rather than refusals
@@ -4907,8 +4931,9 @@ rules something out.
     the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there;
     the tokenizer's script data, RAWTEXT and data states, in which an appropriate end tag ends a
     `<script>` or `<style>` whatever the markup around it says, `<!--` and `<script` carry a
-    script past one, and in foreign content any `<` may start a tag, which is why `writes_tags`
-    takes any `<` in their text as unseen output;
+    script past one, and in foreign content `<` may start a tag and `&` a character reference;
+    the parser escapes both where the context is known to be foreign, and `writes_tags` treats
+    a remaining raw `<` in their text as unseen output;
     the tree construction dispatcher, which reads an `<svg>`'s or a `<math>`'s `<form>` as foreign
     content's whatever HTML element is around the drawing, so the third shape is not read into one;
     the browsers
@@ -4918,8 +4943,8 @@ rules something out.
     anchors of a `<math>` in an `<svg>` and of an `<svg>` in a `<math>`); reasoned (an `html!`
     sees its own markup and nothing around it, so what its top and a component's children land
     in is not known, nor what a component or an expression writes, since `raw` prints trusted
-    text as is with no promise that it is balanced, nor what a `<script>` or `<style>` writes,
-    whose text `Gen` writes as is, nor which component a path names (`<Corten />` may be an
+    text as is with no promise that it is balanced, nor what a `<script>` or `<style>` with a
+    raw `<` writes, nor which component a path names (`<Corten />` may be an
     app's); what any of those writes may leave the tokenizer in a script's, a comment's or a
     `<plaintext>`'s text, which no later literal start tag leaves; an element HTML reads as text
     holds text as HTML's and elements as SVG's or MathML's, so where the namespace is not shown
@@ -4927,9 +4952,10 @@ rules something out.
     where a browser reads tags, since script text is a string's, not markup's; `html!` writes an element's attributes in the order they are written, spreads in their
     place (`open_tag` in `crates/corten-macros/src/html.rs`), so the first `encoding` in the
     markup is the first the browser reads; the refusals add no code to what `html!`
-    writes, so a view that compiles renders as before); value (correct output above the rest, the
-    README's conflict order 1, which is why a refusal never stops markup a browser keeps as
-    written; a mistake the compiler can see is a compile error, its 3 and Values 4).
+    writes, apart from encoding literal bytes in the proven foreign context); value (correct
+    output above the rest, the README's conflict order 1: refuse literals whose encoding cannot
+    be chosen correctly across their possible contexts, not an element merely because its
+    context is unknown; a mistake the compiler can see is a compile error, its 3 and Values 4).
 
     Revisit when: the HTML standard changes the elements it reads as text, its integration points
     or the start tags it takes out of foreign content, when the lists in `html.rs` follow it; or the
@@ -4944,13 +4970,22 @@ rules something out.
     following the context across components ([Limit 30](#limit-markup-context)) would have to be
     weighed against its cost to every render; or `raw` is made to promise balanced markup, when an
     expression could be taken to leave the open elements as they were and the tokenizer reading
-    tags; or `html!` escapes a script's or a style's text (or refuses a `<` in it),
-    when such an element stops being unseen output; or an app needs components drawn inside
+    tags; or `html!` stops writing HTML script or style text that can end its holder early or
+    keep it open, when that text would stop being unseen output too; or an app needs components drawn inside
     script text (a client-side template filled from a component's markup), when the precondition
     that output is drawn where a browser reads tags goes too, and with it every refusal outside a
     patch's top level but the two of a single start tag.
 
-    Last checked: 2026-11-17, after a sixth review found refusals of kept markup in an element
+    Last checked: 2026-11-18, the HTML tokenizer's data state and foreign-content rules.
+    Chromium 159.0.8154.6, Firefox 159.0 and WebKit 27.2 all decoded the reference and opened
+    a child element in unescaped `<script>` and `<style>` literals in SVG and MathML, and
+    kept the escaped versions as literal text without a child element (`parsesAsHtmlMeans`).
+    On the same engines, this smoke also verified that a foreign `<font>` with no `color`
+    leaves two styles in SVG but with `color` moves both to HTML, and that closing SVG between
+    iterations changes a following style to HTML. The same smoke verifies that an ordinary
+    comparison stays text, does not affect a following stylesheet, and does not make a nested
+    tag into an element;
+    2026-11-17, after a sixth review found refusals of kept markup in an element
     HTML reads as text whose namespace the markup does not show, and a duplicate check that took
     `key` (written `data-key`) and `KEY` for one attribute, the outputs of the new passing cases
     (`<p><div>"Detail"</div></p>` in a top-level `<iframe>`, `<noscript>`, `<xmp>`, `<noembed>`,
@@ -7257,9 +7292,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     and only for the shapes lost whatever the patch began with and wherever the view lands, since a
     component's markup does not show which table part, if any, an element before it wrote, or
     whether its parent writes it in an `<svg>`), and where it does not they let
-    a mistake pass rather than stop correct markup. At the top
-    of a component's markup, which its parent may write into an `<svg>` or a `<math>`, none of
-    the refusals acts: an element a browser moves out of foreign content (`<b>`, `<div>`, `<p>`,
+    a mistake pass rather than stop correct structure. At the top
+    of a component's markup, which its parent may write into an `<svg>` or a `<math>`, those
+    structural refusals do not act: an element a browser moves out of foreign content (`<b>`, `<div>`, `<p>`,
     `<span>`, `<table>` and the rest of the standard's list, a `<font>` with `color`, `face` or
     `size`), an element in a `<title>`, `<textarea>`, `<script>`, `<style>`, `<iframe>`,
     `<xmp>`, `<noembed>` or `<noframes>`, and a `<plaintext>` are not refused there, nor among a
@@ -7270,22 +7305,27 @@ by design; where it is known, a limit says what would lift it or why it is so.
     component's children, which it may write into an `<svg>`'s `<desc>`, the same holds, unless
     they are in an `<svg>` the children write themselves under an element that shows HTML. A
     literal `<svg>` or `<math>` at the top of the markup or among a component's children does not
-    show its namespace either (a `<math>` an `<svg>` holds is SVG's), so only an element taken out
-    of foreign content is refused straight in it, and nothing in its integration points. What an
+    show its namespace either (a `<math>` an `<svg>` holds is SVG's), so an element taken out
+    of foreign content is refused straight in it, and nothing in its integration points. A
+    `<script>` or `<style>` literal is escaped only when its context is known to be foreign,
+    even when the exact foreign namespace is not known. A literal with `<` or `&` is refused
+    when the markup cannot distinguish HTML from foreign content on every expansion, even if
+    it would work in its one actual placement. This is a local check at tag boundaries, not
+    full HTML tree construction or a model of every fragment insertion mode. What an
     element HTML reads as text holds is not read there either (as HTML's it is text, as SVG's
     elements), so `<iframe><p><div>"Detail"</div></p></iframe>` at the top of a component compiles
     and nothing after such a `<plaintext>` is refused, nor is what a `<noscript>` holds, anywhere
     (text with scripting on). Nor does
     the markup show what an expression or any component writes, `<Corten />` included (`raw`
-    may open or close any element), nor what a `<script>` or `<style>` whose literal text holds
-    a `<` writes: `html!` writes that text as is, so `</script>` in it ends the element and what
-    follows is markup, and `<!--<script>` keeps it open past its end tag. What one writes may
+    may open or close any element), nor what a `<script>` or `<style>` whose literal text can
+    end it early or keep it open writes: `</script>` in it ends the element and what follows is
+    markup, and `<!--<script>` keeps it open past its end tag. What one writes may
     leave a browser reading a script's text, a comment or a `<plaintext>`, which a later
-    literal start tag does not end, so after one no refusal that depends on context acts in the
-    same `html!` (a duplicate attribute and a hand-written `data-key` still do), in a
+    literal start tag does not end, so after one no structural refusal that needs a known context
+    acts in the same `html!` (a duplicate attribute and a hand-written `data-key` still do), in a
     `<template>` or an `<svg>` written after it too; `<p>{text}<div>` compiles, though a browser
-    closes the paragraph, and so does `<p><script>"if (a < b) go();"</script><div>`, and so does
-    anything in a document's body, which follows `<Corten />`. A nested `<form>` is refused
+    closes the paragraph, as do nested tags in a document's body, which follows `<Corten />`.
+    An ordinary `<` in known HTML raw text does not stop structural checks. A nested `<form>` is refused
     nowhere: only a document's markup could show that no `<template>` holds it, and its body
     follows `<Corten />`. Every refusal assumes `html!` output, a component's included, is drawn
     where a browser reads tags; writing a component into script or style text a caller left open
