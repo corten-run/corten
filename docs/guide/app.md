@@ -969,6 +969,9 @@ before it (a route that says `unstaged` goes through none;
    ([design Limit 21](../design.md#limit-etag)), then compression. A middleware sees the `200` with the
    whole body, also when the client gets the `304`.
 
+Corten's stages hold the request once and hand it to the first middleware, or straight to the
+handler when there is none. The outer stages keep only what they need to finish the response.
+
 Access logging (`App::access_log`) is outside this order, and outside `App::layer`: it sees the
 finished response, including refusals that never reached a middleware and an error page or
 `304` that replaced what the middleware saw. An `unstaged` route is logged too when enabled.

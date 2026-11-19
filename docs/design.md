@@ -1170,7 +1170,7 @@ rules something out.
    Stands on: measured (memory after eight floods, three runs each, seven allocator settings; page
    faults a request, repeatable to 0.1 in every round; idle CPU, three rounds; instructions a
    request under callgrind, five runs each); measured, noisy (CPU time and throughput in three
-   rounds on a shared desktop, whose rounds moved by up to 2.4 times); platform (Debian 12's
+   rounds on a shared desktop, whose rounds moved by up to 2.4 times); platform (Debian 13's
    `libjemalloc2`, 5.3.0, has `background_thread` off and a 32 KiB `tcache_max` unless set, and
    takes these option names); bet (an app's image is Debian with that package); reasoned (an image
    package binds only the image, where a `#[global_allocator]` crate compiles C into every build).
@@ -1183,9 +1183,9 @@ rules something out.
 
    Last checked: 2026-11-06, the callgrind runs on `547b54ae`, recorded at `b179987a`; 2026-11-08,
    the floods, the page faults and the rounds, images of `81f1f8ef` (but for the tuned image in
-   `results/alloc-faults` and `alloc-idle`, a build whose commit was not recorded); 2026-11-09,
-   Debian's libjemalloc2 5.3.0 (package 5.3.0-1) in `debian:bookworm-slim`, its options printed by
-   `MALLOC_CONF=stats_print:true`.
+   `results/alloc-faults` and `alloc-idle`, a build whose commit was not recorded); 2026-11-19,
+   Debian's libjemalloc2 5.3.0 (package 5.3.0-3) in `debian:trixie-slim` on amd64, its defaults
+   printed by `MALLOC_CONF=stats_print:true`.
 
 24. <a id="choice-openapi"></a>**An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
    cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
@@ -1980,6 +1980,11 @@ rules something out.
     `corten::middleware`'s; the app's steps are resolved at compile time. The page tag stage
     can skip the hash for a `GET`, but not for an otherwise taggable `HEAD`: without its
     validator, a cache could freshen an older page of the same length ([Limit 21](#limit-etag)).
+    The stage future holds the request once. Each stage moves its handle to the next, and
+    dispatch consumes it to give the request to the first middleware or, when there is none,
+    the route. The compiler rejects a stage that reads it after hand-off. The late layout poller
+    lives in the existing late-write box, so it neither enlarges the ordinary future nor adds
+    a box to a late-eligible write.
     An area's or an API's own steps (`Area::middleware`, `Api::middleware`) run right after the
     app's, for the requests at its prefix; they are boxed, since which run depends on the route, and
     an app with none pays nothing for them. What an area or API sets (its deadline, body limit, policy and middleware,
@@ -2236,6 +2241,10 @@ rules something out.
     matchit 0.9.2 pin changes, whose matching and conflict rules must be read again;
     or a derived route, or an area's or API's, may put text before a parameter, which
     `parse_path` and `route_shaped` refuse today; any of which the count must then follow.
+    Also revisit if `router::tests::staged_page_future_sizes` exceeds either boxed-future
+    budget on x86-64 Linux. It measures the real stages and typed handler for a small page
+    without app middleware or layout reads. The bounds leave room for build profiles,
+    features and compiler layout changes; remeasure before raising one.
 
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
@@ -2274,7 +2283,14 @@ rules something out.
     differential and area-scope tests passed in the merged workspace's full debug tests at
     `66cb2936e`; 2026-11-14, matchit 0.8.6's and 0.9.2's insertion read for the order-dependent
     conflict a hand-written prefixed route can meet, and the differential and area-scope tests
-    passed again in the full debug tests of `0653768e1` and of the merge `4c6ac3e3d`.
+    passed again in the full debug tests of `0653768e1` and of the merge `4c6ac3e3d`;
+    2026-11-18, the staged catalog page's boxed future sizes in x86-64 Linux release builds
+    before (`7620ef9be`) and after (`ca900161d`) keeping the request in one slot; 2026-11-18,
+    rechecked after moving the poller into the existing late-write box (`8db1903dd`): in DHAT,
+    100 catalog GETs on one connection allocated one 2,144-byte stage and one 1,880-byte handler
+    future each, against 4,952 and 1,880 bytes at the baseline; 2026-11-19, rustc 1.99.1 rejected
+    reads after hand-off and after both dispatchers took the request, in the change that makes
+    the handle move-only ([#1674 Shrink the boxed future for staged requests](https://github.com/corten-run/corten/pull/1674#round-two)).
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
@@ -4552,16 +4568,25 @@ rules something out.
     handler change the tree while the runtime walks it. The widget instead asks the runtime
     which patch root took its modal away, during the existing connect signal's abort. It looks
     only inside recorded roots, follows a detached counterpart through any further recorded
-    replacements, and acts after the sweep, innermost first. A dialog needs the drawn-state
-    record made before connect, so a dialog a connect handler just created cannot receive the
-    old close. Duplicate ids are invalid; moving an already-drawn dialog into a replacement
+    replacements, and acts after the sweep, innermost first. A ref lookup during a patch reads
+    the current tree without using the ref cache or draining mutation records. Once all the
+    replacements are recorded, a patch that had such a lookup discards the warmed cache and
+    ends the removed elements' lives before wiring the rest of that patch. A later connect
+    then sees the new refs even before the observer has counted their changes. The observer
+    scans after the patch sets CSS variables and current nav links, then clears the recorded
+    roots as usual. If the successor is drawn open and has not connected at abort, the
+    dialog widget passes the opener on after it connects
+    ([#1629 A ref-taking focus handler between overlapping dialog replacements in one patch loses the dialog's close](https://github.com/corten-run/corten/issues/1629)).
+    A dialog needs the drawn-state record made before connect, so a dialog a connect handler
+    just created cannot receive the old close. Duplicate ids are invalid; moving an
+    already-drawn dialog into a replacement
     root to reuse the removed dialog's id is outside the widget's contract. An open redraw
     carries the opener forward. A native close takes precedence over a forwarded one; a vetoed
     open is not a native close. Focus goes to the recorded opener or its verified replacement
-    in the same removal sweep. Like native close, it does not follow an opener already lost,
-    including one replaced after a reentrant ref lookup has swept the dialog. A location guard
-    loses a live close while a navigation is pending, and a page marker or document-wide id
-    lookup can mistake unrelated same-page markup for the replacement. Neither navigation nor
+    in the same removal sweep. Like native close, it does not follow an opener already lost
+    to an earlier patch. A location guard loses a live close while a navigation is pending,
+    and a page marker or document-wide id lookup can mistake unrelated same-page markup for
+    the replacement. Neither navigation nor
     an arbitrary script removal is a patch. The pilot's workaround, replacing the closed
     dialog with an empty element before each submit, is the per-page script this removes.
 
@@ -4633,7 +4658,14 @@ rules something out.
     and WebKit 27.2 (Playwright 1.64.1). 2026-11-18, the gallery's vetoed-open, dialog-first
     overlap and script-created same-id cases failed on `e4a97b811` and passed with the widget
     fixes in the same three engines. The reverse overlap order passed on both. Core was
-    byte-identical to `e4a97b811`.
+    byte-identical to `e4a97b811`. 2026-11-18, with a focus handler that reads a ref, both
+    replacement orders lost the close and result on `e927c2463`. 2026-11-19, both orders pass with
+    direct ref reads during a patch, and those reads see current markup in Chromium 159, Firefox
+    159 and WebKit 27.2. In each engine, a later connect sees the old signal aborted and the
+    patch's CSS variables and current nav link applied, unlike on `ac87c5b03`. An overlapping
+    redraw that keeps the modal open still returns focus to the original opener on a later close.
+    In the same three engines, the warmed-ref smoke's later connect saw only the surviving ref on
+    `ed1ce4b21` and both the surviving and added refs after the cache reset.
 
 53. <a id="choice-page-actions"></a>**A page's several writes are named posts of its own route, chosen by a `do` parameter
     in the address each form posts to, not by the pressed button's name in the body or a route per
@@ -5808,9 +5840,12 @@ rules something out.
     first and last days), the nearest instant it has stands in, so `day.start(Utc)` is midnight
     UTC on every day the platform has. A time whose instant is past a zone's rules is refused
     (drawn as nothing, read as `None`, the field's message) rather than taken at UTC's offset,
-    which `Visitor::offset` gives there for a written date. A test reads every zone in the bundled tz database
-    around every change of offset from 1970 to 2040, compares each reading with jiff's
-    `compatible()`, which finds the candidates in the database itself, fails if any zone
+    which `Visitor::offset` gives there for a written date. `Visitor::known_offset` gives Jiff the
+    original timestamp: since 0.2.41, TZif transition lookup uses the second that contains the
+    instant, even for a fractional timestamp before 1970. The Toronto regression test checks
+    the offset a millisecond before the 1919 transition and at the transition. A test reads every
+    zone in the bundled tz database around every change of offset from 1970 to 2040, compares each
+    reading with jiff's `compatible()`, which finds the candidates in the database itself, fails if any zone
     changes its offset twice within two days, checks that a `min` and a `max` drawn around each
     change hold every value drawn between them, and checks that each zone is sent by a name a
     `FormZone` reads back. Another reads every zone from its first change (its local mean time,
@@ -5862,8 +5897,9 @@ rules something out.
     database name (`America/Chicago`, `UTC`) or an offset to the minute written `±HH:MM`
     (RFC 3339's `time-numoffset`), which a browser's reported zone is one of and a `FormZone` is
     sent as;
-    RFC 5545 section 3.3.5; jiff 0.2.38 and its bundled tz database, jiff-tzdb 0.1.9, whose
-    `compatible()` agrees with `at` in `every_change_in_every_zone_reads_as_temporal_compatible_reads_it`;
+    RFC 5545 section 3.3.5; Jiff 1 and its bundled IANA tz database (`jiff-tzdb` 1.0.0,
+    tzdb 2026f in the workspace lock), whose `compatible()` is checked against `at` in
+    `every_change_in_every_zone_reads_as_temporal_compatible_reads_it`;
     a browser reports its zone only from a script, so `req.zone()` is UTC before the first page's
     script runs and without one (`App::client_zone`)); reasoned (a zone whose offset changes at
     most once in any two days has, for a time on its clock, its candidates at the time minus the
@@ -5887,12 +5923,9 @@ rules something out.
     Chicago), resolved across the gap, 30,862, +3,074 (11%). Only a page that draws such a field
     and a post that reads one pay it: no other page or form calls these. Correctness comes before
     speed (README, Values), and the cost buys a time read in the zone it was typed in, with the
-    browser's own bounds and validation, no dependency and no client script. Not measured: the
-    change to `Visitor::known_offset`, through which every date `t.date_time` writes in the
-    visitor's zone goes; it now compares the instant's fraction of a second and, only before
-    1970, makes a second timestamp); value (a standard's answer
-    before one of Corten's, HTML that works on its own, a mistake the compiler can catch is a
-    compile error, one way to do each thing and a small surface: Values 2, 3, 4, 5 and 6).
+    browser's own bounds and validation, no dependency and no client script); value (a standard's
+    answer before one of Corten's, HTML that works on its own, a mistake the compiler can catch
+    is a compile error, one way to do each thing and a small surface: Values 2, 3, 4, 5 and 6).
 
     Revisit when: an app needs to ask a visitor which of two repeated times they meant, or to
     refuse a skipped one; an app needs a time of day alone; the tz database gives a zone two
@@ -5921,7 +5954,9 @@ rules something out.
     `GetStartOfDay` in its spec (read that day), Toronto's 1919-03-31 change in the bundled
     database, and `day.start` against Temporal's start of day around every change in every zone
     from its first, with `Visitor::known_offset` asking jiff at the second an instant is in,
-    passing on `591222898`; 2026-11-17, the measured costs above, counted on `939be002f`.
+    passing on `591222898`; 2026-11-17, the measured costs above, counted on `939be002f`;
+    2026-11-19, both all-zones comparisons and the `Timestamp::MAX` range test passing in CI
+    with Jiff 1.0.0 and jiff-tzdb 1.0.0 (tzdb 2026f) on `ecd649c69`.
 
 60. <a id="choice-connection-info"></a>**A connection's handshake value reaches requests through an opt-in typed extension.**
     `serve_wrapped_with` takes a step returning `(Io, T)`, where
@@ -6166,9 +6201,25 @@ rules something out.
     application write remains committed and the outbox body stays available for replay
     and inspection until ordinary pruning.
 
-    The relay pipelines a batch of up to 256 patches before waiting for acknowledgements, even
-    when every patch belongs to one feed. A broker's connection-wide `Maximum Payload Violation`
-    or disconnect identifies no publish; the relay retries all selected rows on an ordinary send
+    The relay pipelines a batch of up to 256 patches, even when every patch belongs to one
+    feed, draining ready acknowledgements while it sends. It uses one NATS reply subscription
+    while holding the relay lease, allocating a distinct range of reply slots to each patch or
+    marker batch. Replies do not have to arrive in order. Successful batches reuse the
+    subscription without another subscribe or flush; a batch with unresolved replies closes
+    the inbox before a retry can use a new one. Losing the lease or cancelling the relay also
+    closes the inbox. No unanswered publish leaves a registration in the client's multiplexer.
+    The longest slot suffix fits in the existing control-line reserve.
+    The client does not expose its subscription capacity. A tiny queue can drop replies
+    during a burst. If some patch replies arrive but others time out, the whole pipelined
+    selection is retried, adding broker work even when JetStream deduplicates by message ID
+    within its configured window. For the rest of that relay publisher's lifetime, patch
+    batches keep only one reply outstanding, which fits any positive queue capacity without
+    using more broker subscriptions. A serial pass uses the renewal interval to limit new
+    sends, bounds in-flight waits by the lease, and retires acknowledged rows before
+    continuing the pending rows on later passes. Marker batches can also retire replies
+    that arrived without waiting for an identically sized retry to succeed.
+    A broker's connection-wide `Maximum Payload Violation`
+    or disconnect identifies no publish; the relay retries all selected rows on a pipelined send
     or acknowledgement failure and does not force a reconnect. Later patches can overtake a
     failed one in JetStream; followers recover as described in the
     [relay stream-order limit](#limit-relay-stream-order).
@@ -6176,12 +6227,16 @@ rules something out.
     Not chosen: encoding arbitrary keys (a new wire mapping and migration of valid subjects),
     restricting keys to ASCII, or introducing a separate quarantine and repair path for rows
     no supported app can publish. Checking only new keys leaves the pre-upgrade relay failure
-    in place. Using `Subject::is_valid` would copy the key and accept whitespace outside the
-    framing bytes. Dropping a refused notification leaves a loaded feed stale if no later
-    patch arrives; retrying the same oversized body can keep the feed stale and block
-    the relay's ordinary pending scan. A per-feed hold adds an index to every append and
-    can make selecting work for unrelated feeds slow. A separate queue would not put a
-    patch back in its original stream position. Refreshing a shared client to confirm its
+    in place. Using async-nats 0.53's JetStream publish acknowledgements retains one reply
+    registration per unanswered publish, even after the acknowledgement future is
+    dropped. Subscribing per batch adds subscribe and unsubscribe commands even for a single
+    update; subscribing per reply slot can exceed the broker's connection subscription limit.
+    Using `Subject::is_valid` would copy the key
+    and accept whitespace outside the framing bytes. Dropping a refused notification leaves a
+    loaded feed stale if no later patch arrives; retrying the same oversized body can keep the
+    feed stale and block the relay's ordinary pending scan. A per-feed hold adds an index to
+    every append and can make selecting work for unrelated feeds slow. A separate queue would
+    not put a patch back in its original stream position. Refreshing a shared client to confirm its
     cached limit disrupts followers and other publishers, and a fresh connection's limit
     would still not be an acknowledgement. Discarding the queued publishes on connection loss
     is not an operation async-nats 0.53 exposes. Dropping a handle does not cancel the connection
@@ -6215,7 +6270,8 @@ rules something out.
     caches the limit from its handshake and later INFOs, and its
     [publish queue](https://docs.rs/crate/async-nats/0.53.0/source/src/lib.rs) survives reconnect;
     zero [maps to no reconnect limit](https://docs.rs/crate/async-nats/0.53.0/source/src/options.rs);
-    [client drain](https://docs.rs/crate/async-nats/0.53.0/source/src/client.rs) flushes pending work);
+    [client drain](https://docs.rs/crate/async-nats/0.53.0/source/src/client.rs) flushes pending work;
+    the connection handler drops messages when a subscription's queue is full);
     reasoned (retrying cannot repair a key that fails a pure check; the compact marker fits
     limits that refuse larger patches, provided they can carry the headers; the durable
     app state does not depend on the delta being sent, and followers can reload it even
@@ -6229,9 +6285,17 @@ rules something out.
     delta delivered or immediate recovery on old followers, the NATS client can abandon queued
     publishes on socket loss, deployments need raw stream ordering, or JetStream can guard a
     subject by a publisher-supplied predecessor ID without first waiting for the predecessor's
-    stream sequence.
+    stream sequence. If the client exposes subscription capacity, bound the number of
+    outstanding replies directly. Use the client's JetStream publish API again when a released version
+    reclaims unanswered publish registrations without a healthy-path regression
+    ([nats-io/nats.rs #1641 Prune abandoned requests from the multiplexer](https://github.com/nats-io/nats.rs/pull/1641)).
 
-    Last checked: 2026-11-18, async-nats 0.53.0's INFO and reconnect handling and the
+    Last checked: 2026-11-19, async-nats 0.53.0's reply map and subscription cleanup,
+    real JetStream retries with publish acknowledgements suppressed and then restored, a full
+    batch on a 64-reply subscription, recovery after a partial timeout with a three-subscription
+    broker limit and a 64-reply queue, and the relay throughput, follower latency and
+    missing-ack RSS tests;
+    2026-11-18, async-nats 0.53.0's INFO and reconnect handling and the
     `corten-cluster` integration tests on Postgres 16.13 and NATS 2.15.2 with 0.53.0,
     including both types of size refusals and follower recovery after a broker disconnect;
     2026-11-18, `corten-cluster` integration tests on Postgres 16.13 and
@@ -7474,8 +7538,14 @@ by design; where it is known, a limit says what would lift it or why it is so.
 34. <a id="limit-relay-stream-order"></a>JetStream stream order is not always Corten feed
     order. Postgres commits each feed's sequence under its row lock. The relay submits
     ordinary patches in outbox-ID order, which is feed-sequence order within a generation.
+    The relay drains acknowledgements while sending and correlates them to one batch attempt;
+    a late reply cannot retire rows in a retry even when the retried message IDs are the same.
+    A tiny client queue can drop replies on a pipelined attempt. Retrying the selection adds
+    broker work even when JetStream deduplicates it by message ID. After a partial patch reply
+    timeout the relay waits for each patch's reply before sending the next, rather than
+    repeatedly overflowing the queue or opening more subscriptions.
 
-    - **Connection failure.** An ordinary send or acknowledgement failure retires none of
+    - **Connection failure.** A pipelined patch send or acknowledgement failure retires none of
       the selected outbox IDs in that attempt, including rows already acknowledged. After
       a mid-batch disconnect the NATS client may send queued publishes on the replacement
       socket; JetStream can store later patches of a feed before it accepts the missing

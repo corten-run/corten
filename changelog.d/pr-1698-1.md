@@ -1,0 +1,1 @@
+- Stop the benchmark progress monitor when a job exits before publishing its first campaign state. An early exit produces no performance result.

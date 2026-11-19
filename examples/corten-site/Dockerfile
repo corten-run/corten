@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Build from the repository root: docker build -f examples/corten-site/Dockerfile -t corten-site .
-FROM rust:1-bookworm AS build
+FROM rust:1-trixie AS build
 WORKDIR /src
 COPY . .
 # The commit the site says it was built from. Without it the build asks git, which answers in a
@@ -20,7 +20,7 @@ RUN --mount=type=cache,id=corten-examples.registry,target=/usr/local/cargo/regis
     && cargo build --release --locked -p corten-site \
     && mkdir -p /out && cp target/release/corten-site /out/server
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 WORKDIR /app
 COPY --from=build /out/server /app/server
 ENV HOST=0.0.0.0 PORT=8080

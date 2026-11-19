@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Build from the repository root: docker build -f examples/deck-builder/Dockerfile -t corten-deck-builder .
-FROM rust:1-bookworm AS build
+FROM rust:1-trixie AS build
 WORKDIR /src
 COPY . .
 # The workspace's target directory is one cache for the examples (`id`; without one, every image
@@ -16,7 +16,7 @@ RUN --mount=type=cache,id=corten-examples.registry,target=/usr/local/cargo/regis
     && cargo build --release --locked -p deck-builder \
     && mkdir -p /out && cp target/release/deck-builder /out/server
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 WORKDIR /app
 COPY --from=build /out/server /app/server
 ENV HOST=0.0.0.0 PORT=8080
