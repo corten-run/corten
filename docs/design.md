@@ -2049,10 +2049,26 @@ rules something out.
     not see it; hooks at several stages (before routing, after the caller, around the error page), each a
     place an app's step could run and a reader of the app would have to check; what must see the
     raw request first is a tower layer around the whole app ([Limit 12](#limit-fixed-stages)).
-    Nor presets that keep some stages and drop others, each another order to
-    read and test, with no app yet needing one (`unstaged` is no stage at all, which
+    Nor presets or flags that keep some stages and drop others, each another path to
+    read and test. The lean catalog page met the old Revisit-when in letter: it needed the host
+    check and the document's headers, but not a tag or a cache rule that looks for a caller's
+    credentials. Nearly all the cost of the work it did not need was the tag. The tag is now
+    decided from the request
+    ([#1661 Skip unsolicited page ETags without a coding in lean builds](https://github.com/corten-run/corten/pull/1661),
+    [Limit 21](#limit-etag)): the measured request, a `GET` with `Accept-Encoding: identity` and no
+    `If-None-Match`, pays no hash, with nothing new for an app to declare. A qualifying coding or an `If-None-Match`
+    only lets an otherwise eligible `GET` receive a generated tag ([Limit 21](#limit-etag) says which codings
+    qualify in each build); the rule reads the request's headers, not whether the client keeps pages. The stages
+    hold the request once
+    ([#1674 Shrink the boxed future for staged requests](https://github.com/corten-run/corten/pull/1674)).
+    An HTML answer never goes without security headers: a staged page keeps its document
+    headers, and an unstaged one still gets its sandbox. About 3,500 cycles a request (3% on
+    this page) is no reason to take the document headers away. No flag has a measured case.
+    Where the declaration shows an answer cannot use a group, leave out that work case by case,
+    each in its own change with its own measured cost. `unstaged` is no stage at all, which
     listings-feed's sequence route uses; its lane chooses nothing, only the checks no route goes
-    without, the same for every unstaged route, [Choice 25](#choice-axum-router), step 2); nor the stages rewritten as combinators, measured
+    without, the same for every unstaged route ([Choice 25](#choice-axum-router), step 2).
+    Nor the stages rewritten as combinators, measured
     on variants that are not in the repository (Stands on): on axum's router about 200 to 360
     instructions fewer a request with glibc's allocator but about 200 to 263 more with jemalloc,
     which the images preload, and on Corten's own router more with both, 92 to 367 with jemalloc
@@ -2197,7 +2213,22 @@ rules something out.
     boxed future most of the rest); measured (callgrind, release, the same request path, on an
     uncommitted variant of main `c65c10ec` with the stages written as combinators on axum's
     router, which the repository does not hold: about 200 to 360 instructions a request fewer
-    than main with glibc's allocator, about 200 to 263 more with jemalloc); reasoned (one place for the app's steps is
+    than main with glibc's allocator, about 200 to 263 more with jemalloc); measured (the lean
+    catalog lane at `229b1e928`, one binary with switches to turn stages off, `perf stat` on the
+    server pinned to one CPU and `wrk` with 64 connections on three others, 500 record IDs
+    requested with `Accept-Encoding: identity`, 12 alternated rounds for the stage switches.
+    In cycles a request, user and kernel together: the tag cost 14,003 by the difference of the low quartiles and 16,561 by the difference of the
+    medians, within that one batch (cycle levels are not compared across batches, which drifted by up to 15%);
+    the cache rule cost nothing the rounds could see; all security headers together cost about
+    3,500; the host check, same-origin check, nonce slot, signal and credentials together cost
+    about 5,000. In a separate 14-round batch at the same commit, with the request-based tag
+    rule and the request held once, Corten sending every security header cost 3% more by the low
+    quartile and 9% more by the median of the per-round differences than axum + Maud sending
+    none, and 3% to 10% less than axum + Maud sending the same headers by one middleware.
+    [The stage decision and figures](https://github.com/corten-run/corten/issues/1651#issuecomment-6985183384)
+    and [the tables and method](https://github.com/corten-run/corten/issues/1644#issuecomment-6985178754)
+    give the rounds);
+    reasoned (one place for the app's steps is
     one order to read, a tuple resolved at compile time costs no box, and a route that needs none
     of it says so where it is declared); platform (a PDF sent with a sandbox shows in the viewers of
     Chrome, Edge and Firefox as one sent without it, probed as Last checked says; Safari's is not
@@ -2211,9 +2242,10 @@ rules something out.
     for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
-    layer around the app cannot serve it; or a route needs some stages and not others, which
-    `unstaged` cannot give (a write, a body, an API's allowed origins or a deadline on it among
-    them); or a
+    layer around the app cannot serve it; or a route needs some stages and not others, and a flag
+    for a group it can do without saves cycles a request under load beyond the spread of
+    alternated rounds, after taking out the work the request or the route's declaration already
+    shows the answer cannot use, without taking away a document's security headers; or a
     browser the runtime supports shows a PDF sent with a sandbox differently from one sent without
     it; or no
     app but listings-feed uses `unstaged` by the next minor release; or an unstaged route costs more
@@ -2291,6 +2323,9 @@ rules something out.
     future each, against 4,952 and 1,880 bytes at the baseline; 2026-11-19, rustc 1.99.1 rejected
     reads after hand-off and after both dispatchers took the request, in the change that makes
     the handle move-only ([#1674 Shrink the boxed future for staged requests](https://github.com/corten-run/corten/pull/1674#round-two)).
+    2026-11-18, the lean catalog stage switches and comparison with and without the same
+    headers at `229b1e928` (measured above); 2026-11-19, the merged request-based tag rule
+    (`7620ef9be`) and the single owned request (`aa0f0c7e1`) read against those experiments.
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
