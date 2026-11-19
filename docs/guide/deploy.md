@@ -141,20 +141,25 @@ server {
     ssl_certificate     /etc/nginx/certs/cert.pem;
     ssl_certificate_key /etc/nginx/certs/key.pem;
 
-    proxy_http_version 1.1;
-    proxy_set_header Host $http_host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;   # PROXIES=127.0.0.1
-    proxy_set_header Upgrade $http_upgrade;                        # WebSockets (Upgrade)
-    proxy_set_header Connection $connection_upgrade;
-
-    location / {
+    location /assets/ {
         client_max_body_size 8m;   # more than twice the app's body limit (2 MiB); see below
         proxy_pass http://app;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;   # PROXIES=127.0.0.1
+        proxy_set_header Upgrade $http_upgrade;                        # WebSockets (Upgrade)
+        proxy_set_header Connection $connection_upgrade;
+        proxy_cache app;       # keys on Vary; stores only answers sent public
     }
 
-    location /assets/ {
+    location / {
+        client_max_body_size 8m;
         proxy_pass http://app;
-        proxy_cache app;       # keys on Vary; stores only answers sent public
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
     }
 }
 ```
