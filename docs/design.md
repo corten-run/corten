@@ -1980,6 +1980,11 @@ rules something out.
     `corten::middleware`'s; the app's steps are resolved at compile time. The page tag stage
     can skip the hash for a `GET`, but not for an otherwise taggable `HEAD`: without its
     validator, a cache could freshen an older page of the same length ([Limit 21](#limit-etag)).
+    The stage future holds the request once. Each stage moves its handle to the next, and
+    dispatch consumes it to give the request to the first middleware or, when there is none,
+    the route. The compiler rejects a stage that reads it after hand-off. The late layout poller
+    lives in the existing late-write box, so it neither enlarges the ordinary future nor adds
+    a box to a late-eligible write.
     An area's or an API's own steps (`Area::middleware`, `Api::middleware`) run right after the
     app's, for the requests at its prefix; they are boxed, since which run depends on the route, and
     an app with none pays nothing for them. What an area or API sets (its deadline, body limit, policy and middleware,
@@ -2236,6 +2241,10 @@ rules something out.
     matchit 0.9.2 pin changes, whose matching and conflict rules must be read again;
     or a derived route, or an area's or API's, may put text before a parameter, which
     `parse_path` and `route_shaped` refuse today; any of which the count must then follow.
+    Also revisit if `router::tests::staged_page_future_sizes` exceeds either boxed-future
+    budget on x86-64 Linux. It measures the real stages and typed handler for a small page
+    without app middleware or layout reads. The bounds leave room for build profiles,
+    features and compiler layout changes; remeasure before raising one.
 
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
@@ -2274,7 +2283,14 @@ rules something out.
     differential and area-scope tests passed in the merged workspace's full debug tests at
     `66cb2936e`; 2026-11-14, matchit 0.8.6's and 0.9.2's insertion read for the order-dependent
     conflict a hand-written prefixed route can meet, and the differential and area-scope tests
-    passed again in the full debug tests of `0653768e1` and of the merge `4c6ac3e3d`.
+    passed again in the full debug tests of `0653768e1` and of the merge `4c6ac3e3d`;
+    2026-11-18, the staged catalog page's boxed future sizes in x86-64 Linux release builds
+    before (`7620ef9be`) and after (`ca900161d`) keeping the request in one slot; 2026-11-18,
+    rechecked after moving the poller into the existing late-write box (`8db1903dd`): in DHAT,
+    100 catalog GETs on one connection allocated one 2,144-byte stage and one 1,880-byte handler
+    future each, against 4,952 and 1,880 bytes at the baseline; 2026-11-19, rustc 1.99.1 rejected
+    reads after hand-off and after both dispatchers took the request, in the change that makes
+    the handle move-only ([#1674 Shrink the boxed future for staged requests](https://github.com/corten-run/corten/pull/1674#round-two)).
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
