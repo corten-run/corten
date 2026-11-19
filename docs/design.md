@@ -2056,9 +2056,9 @@ rules something out.
     decided from the request
     ([#1661 Skip unsolicited page ETags without a coding in lean builds](https://github.com/corten-run/corten/pull/1661),
     [Limit 21](#limit-etag)): the measured request, a `GET` with `Accept-Encoding: identity` and no
-    `If-None-Match`, pays no hash, while a browser that asks for a coding or names a tag still gets one,
-    with nothing new for an app to declare. The rule reads the request's headers, not whether the client
-    keeps pages: a client that asks for a coding pays the hash whether or not it keeps the page. The stages
+    `If-None-Match`, pays no hash, with nothing new for an app to declare. A qualifying coding or an `If-None-Match`
+    only lets an otherwise eligible `GET` receive a generated tag (Limit 21 says which codings
+    qualify in each build); the rule reads the request's headers, not whether the client keeps pages. The stages
     hold the request once
     ([#1674 Shrink the boxed future for staged requests](https://github.com/corten-run/corten/pull/1674)).
     An HTML answer never goes without security headers: a staged page keeps its document
