@@ -6,6 +6,27 @@ import { join } from "node:path";
 import { records } from "./fixtures.mjs";
 import { aggregate, articleHtml, cpuSettings, expectedArticle, filterPrefixes, parseArgs, readLoad, representativeIds, validateCatalog, validateRecord } from "./contract.mjs";
 import { memoryMiB, summarizeSamples } from "./stats.mjs";
+import { admission } from "./preflight.mjs";
+
+test("wider catalog generator needs the named layout, exact pins and the same fractional headroom", () => {
+  const pins = { CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-15" };
+  const layout = "c16-generator-v1";
+  const legacy = cpuSettings(pins), wide = cpuSettings(pins, layout);
+  assert.deepEqual(wide.app, legacy.app); assert.deepEqual(wide.api, legacy.api);
+  assert.equal(legacy.load.quota, 4, "wider affinity alone must not change historical quota");
+  assert.deepEqual(wide.load.args, ["--cpus", "12", "--cpuset-cpus", "4-15"]);
+  for (const key of Object.keys(pins)) assert.throws(() => cpuSettings({ ...pins, [key]: "0" }, layout), /requires/);
+  assert.throws(() => cpuSettings(pins, "unknown"), /unknown catalog generator/);
+  const admit = (cpus, loadLayout, peak) => admission({ runId: "example", measurement: { cpus, loadLayout } },
+    { metrics: { outcome: "passed" }, resources: { "example-k6": { cpuMaxPct: peak }, "example-upstream": { cpuMaxPct: 1 } },
+      workerPeaks: { coordinator: 1, first: 1, second: 1 } });
+  assert.throws(() => admit(legacy, undefined, 391.36), /no headroom/);
+  assert.throws(() => admit(wide, undefined, 391.36), /quota differs/);
+  assert.throws(() => admit(legacy, layout, 391.36), /quota differs/);
+  admit(legacy, undefined, 319.99); admit(wide, layout, 959.99);
+  assert.throws(() => admit(legacy, undefined, 320), /no headroom/);
+  assert.throws(() => admit(wide, layout, 960), /no headroom/);
+});
 import { readCpu, usageUsec } from "./cgroup.mjs";
 
 test("CLI stays in the independent catalog namespace and selects only distinct page apps", () => {

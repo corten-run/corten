@@ -8,8 +8,14 @@ export const targets = ["page", "json"];
 export const phases = ["fixed", "sat64", "sat256"];
 export const leanProfile = "catalog-lean";
 export const leanApps = Object.freeze(groupDescriptor("catalog-page").apps);
-export function cpuSettings(env) {
-  const quotas = { app: 1, load: 4, api: 2 };
+export function cpuSettings(env, loadLayout) {
+  if (loadLayout !== undefined) {
+    assert.equal(loadLayout, "c16-generator-v1", "unknown catalog generator layout");
+    for (const [role, pins] of [["APP", "1"], ["API", "2-3"], ["LOAD", "4-15"]]) {
+      assert.equal(env[`CATALOG_${role}_CPUS`], pins, `c16 generator layout requires ${role} on ${pins}`);
+    }
+  }
+  const quotas = { app: 1, load: loadLayout === undefined ? 4 : 12, api: 2 };
   const used = new Map();
   return Object.fromEntries(Object.entries(quotas).map(([role, quota]) => {
     const key = `CATALOG_${role.toUpperCase()}_CPUS`;

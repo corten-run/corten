@@ -474,7 +474,14 @@ the app's cgroup counter, memory and sampled utilization from `docker stats`; ra
 image IDs, fixture hash, commit and dirty status are retained. An API stand-in's utilization
 must also be inspected before attributing a throughput ceiling to an app.
 
-The app, load generator and API have CPU quotas of one, four and two cores respectively.
+By default the app, load generator and API have CPU quotas of one, four and two cores respectively.
+For a dedicated 16-vCPU catalog-page qualification, `CATALOG_LOAD_LAYOUT=c16-generator-v1`
+requires the explicit CPU sets `CATALOG_APP_CPUS=1`, `CATALOG_API_CPUS=2-3`, and
+`CATALOG_LOAD_CPUS=4-15`. Only the generator quota changes, from four CPUs to twelve.
+The runner records the layout and verifies the same strict peak limit (below 80% of
+the generator's quota). Keep the load profile, request checks and app budget unchanged.
+This opt-in does not select a larger host for the nightly fleet or qualify a mixed-layout
+comparison. A wider CPU set without the named layout still has the original four-CPU quota.
 By default they are not pinned. For dedicated-host measurements set
 `CATALOG_APP_CPUS`, `CATALOG_LOAD_CPUS` and `CATALOG_API_CPUS` to disjoint Docker CPU sets
 (for example `0`, `1-4` and `5-6` on an eight-core host). Placement is recorded in the summary;
