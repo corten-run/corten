@@ -31,8 +31,9 @@ for (const mode of ["early-job-exit", "already-exited", "exit-after-renewals"])
 for (const mode of ["lost-lease", "new-child", "namespace", "affinity", "unknown-login", "replayed-renewal", "unknown-input", "native-delivery"])
   test("actual guardian intentional negative: " + mode, () => {
     const result = kernel(mode); assert.equal(result.failed, true); assert.equal(result.invalid, true); assert.equal(result.terminal, false); assert.equal(result.drain, null);
-    assert.equal(result.fault.reason, "control monitor");
-    if (mode === "unknown-login") assert.match(guardianSource.split("\n")[result.fault.helperLine - 1], /foreign SSH\/login participant/);
+    const fault = /^CORTEN_MONITOR_FAULT ([a-f0-9]{32}) ([1-9][0-9]{0,4})\n$/.exec(result.diagnostic);
+    assert.ok(fault); assert.equal(fault[1], result.registration.id);
+    if (mode === "unknown-login") assert.match(guardianSource.split("\n")[Number(fault[2]) - 1], /foreign SSH\/login participant/);
   });
 for (const mode of ["drain-survivor", "drain-unknown"])
   test("actual guardian refuses disappearance proof: " + mode, () => { const result = kernel(mode); assert.equal(result.terminal, true); assert.equal(result.drain, null); });

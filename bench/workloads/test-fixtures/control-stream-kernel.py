@@ -23,7 +23,7 @@ data = {root + '/helper.py': source.encode(), root + '/binding.json': json.dumps
         folder + '/json-audit-subject.json': json.dumps({'subjectSha256': subject, 'commit': binding['commit'], 'sourcesManifest': {'snapshot': {'entries': entries}}}).encode(),
         folder + '/audit-sources/blobs/' + blob_hash: blob}
 rows, descriptors, incoming, output, pinned = {}, {}, bytearray(), [], []
-data['/bench/run.log'] = b''
+diagnostic = bytearray()
 clock, next_fd = 1000000, 2
 session = '/user.slice/user-0.slice/session-7.scope'
 
@@ -125,8 +125,6 @@ def emit(frame):
 def opened(path, flags, *args):
     global next_fd
     name = str(path)
-    if name == '/bench/run.log' and name not in data:
-        raise FileNotFoundError()
     if flags & 64:
         if name in data: raise FileExistsError()
         data[name] = b''
@@ -142,6 +140,7 @@ def raw_read(fd, length):
 def raw_write(fd, value):
     if fd == 1:
         for line in bytes(value).splitlines(): emit(json.loads(line))
+    elif fd == 2: diagnostic.extend(value)
     else: data[descriptors[fd]['path']] += bytes(value)
     return len(value)
 def replace(old, new): data[str(new)] = data.pop(str(old))
@@ -162,7 +161,7 @@ class Scan:
     def __exit__(self, *args): return False
 fake_os = types.SimpleNamespace(getuid=lambda: 0, getpid=lambda: 21, uname=lambda: types.SimpleNamespace(nodename=host['hostname']), environ={'SSH_CONNECTION': '192.0.2.20 40000 192.0.2.10 22'},
     readlink=readlink, sched_setaffinity=pin, scandir=Scan, open=opened, fstat=fstat, read=raw_read, write=raw_write, replace=replace, fsync=lambda fd: None,
-    close=lambda fd: None, set_blocking=lambda fd, value: None, O_RDONLY=0, O_WRONLY=1, O_CREAT=64, O_EXCL=128, O_NOFOLLOW=256, O_DIRECTORY=512, O_NONBLOCK=1024, O_APPEND=2048)
+    close=lambda fd: None, set_blocking=lambda fd, value: None, O_RDONLY=0, O_WRONLY=1, O_CREAT=64, O_EXCL=128, O_NOFOLLOW=256, O_DIRECTORY=512, O_NONBLOCK=1024)
 scope.update({'os': fake_os, 'pathlib': types.SimpleNamespace(Path=Path), 'private': lambda p: None, 'read': read, 'write': write,
               'time': types.SimpleNamespace(monotonic_ns=lambda: clock)})
 sys.modules['select'] = types.SimpleNamespace(select=select)
@@ -184,7 +183,6 @@ if terminal:
 print(json.dumps({'binding': binding, 'registration': next((v['payload'] for v in output if v['kind'] == 'registered'), None),
     'frames': [v['kind'] for v in output], 'pinned': pinned, 'terminal': terminal, 'failed': failed, 'reason': reason, 'drain': drain,
     'renewal': json.loads(data[root + '/stream-lease.json'])['renewal'] if root + '/stream-lease.json' in data else None,
-    'invalid': root + '/stream-invalid.json' in data, 'fault': next((json.loads(line[len(b'control fault: '):])
-        for line in data['/bench/run.log'].splitlines() if line.startswith(b'control fault: ')), None),
+    'invalid': root + '/stream-invalid.json' in data, 'diagnostic': diagnostic.decode(),
     'auditPublished': folder + '/json-audit-delivery-pending.json' in data,
     'seal': json.loads(data[root + '/stream-sealed.json']) if root + '/stream-sealed.json' in data else None}))

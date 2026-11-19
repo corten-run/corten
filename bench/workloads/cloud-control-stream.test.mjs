@@ -86,8 +86,11 @@ test("late close is actual local evidence even after the foreground lost the lea
   await assert.rejects(monitor.done, (error) => error.controlTreeUncertain === true);
   const path = join(f.local, "monitor-local-closed.json");
   assert.equal(existsSync(path), false);
+  f.child.stderr.write("do not retain raw ssh diagnostics\nCORTEN_MONITOR_");
+  f.child.stderr.write("FAULT " + registration.id + " 251\n");
   f.close(255);
   const record = JSON.parse(readFileSync(path));
+  assert.equal(record.helperLine, 251); assert.ok(!JSON.stringify(record).includes("do not retain"));
   assert.equal(record.code, 255); assert.equal(record.signal, null);
   assert.equal(record.remoteDrained, false); assert.equal(record.recoverAfterMs - record.closedAtMs, 30000);
   assert.equal(localStreamStatus(f.local).kind, "invalid");

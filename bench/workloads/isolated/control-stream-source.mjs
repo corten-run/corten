@@ -77,18 +77,7 @@ def helper_line(error):
     return line
 
 
-def stream_fault_files(root, record):
-    # The SSH monitor's stderr is not the job log. Never create or follow a log path.
-    try:
-        fd = os.open('/bench/run.log', os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK)
-        try:
-            info = os.fstat(fd)
-            if stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid():
-                os.write(fd, b'control fault: ' + record)
-        finally:
-            os.close(fd)
-    except OSError:
-        pass
+def stream_revoke(root):
     # Existence revokes. Custody may copy it immediately, so never populate it.
     fd = os.open(root / 'stream-invalid.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
@@ -103,11 +92,28 @@ def stream_fault_files(root, record):
 
 
 def stream_failure(root, registration, reason, error):
+    pinned = reason == 'pinned watchdog'
+    if pinned:
+        # Only one ready byte preceded this notification on the campaign pipe.
+        try:
+            os.write(1, b'F')
+        except OSError:
+            pass
     try:
-        stream_fault_files(root, encoded({'id': registration['id'], 'host': registration['host'],
-              'monoNs': str(time.monotonic_ns()), 'reason': reason, 'helperLine': helper_line(error)}))
+        stream_revoke(root)
     except OSError:
-        pass  # Collision or failed diagnostics cannot replace the original failure.
+        pass  # The peer may already have created the marker.
+    line = helper_line(error)
+    try:
+        if pinned:
+            os.write(2, b'control fault: ' + encoded({'id': registration['id'], 'host': registration['host'],
+                     'monoNs': str(time.monotonic_ns()), 'reason': reason, 'helperLine': line}))
+        else:
+            # The SSH peer may already have packaged run.log. Its local close receipt
+            # can keep this bounded location without copying arbitrary SSH stderr.
+            os.write(2, ('CORTEN_MONITOR_FAULT %s %d\n' % (registration['id'], line)).encode('ascii'))
+    except OSError:
+        pass
 
 
 def stream_watchdog(root, expected_hash):

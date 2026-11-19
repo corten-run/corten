@@ -413,16 +413,17 @@ If an SSH or SFTP watcher raises an exception, its archived
 `control/helper.py`. Match the ID to the sealed ledger to find the failed check.
 This is diagnostic evidence, never a terminal watcher receipt. A missing receipt
 still prevents admission, even when the associated command exited successfully.
-During timing, look for `control fault:` lines in the archived `run.log`.
-Each reporter records its observation before attempting to create
-`control/stream-invalid.json`. That historical path is now an empty, immutable
-revocation marker, not a diagnostic to parse. Log order is not proof of causality,
-and a storage failure can prevent a diagnostic. For a pinned watchdog or monitor exception,
-`helperLine` points into that run's archived `control/helper.py`. The campaign
-names its failed lease or watchdog check instead. If an outer operation such as
-seal validation throws, the log may record disposal; consult the campaign
-error for that operation. Neither form contains process arguments or qualifies
-an interrupted run.
+During timing, the pinned watchdog signals the campaign directly on failure;
+the campaign aborts before optional logging. Look for `control fault:` in the
+archived `run.log`. A watchdog's `helperLine` points into the archived
+`control/helper.py`; a campaign-side lease failure names the failed check.
+For an SSH monitor failure, check `helperLine` in the local
+`monitor-local-closed.json`: it can arrive after the archive is sealed.
+Only the bounded line number is retained, not raw SSH stderr. A broken
+connection or failed storage can lose a diagnostic. Log order is not proof
+of causality, and a disposal report can follow an earlier campaign error.
+The historical `control/stream-invalid.json` path is an empty, immutable
+revocation marker. None of these records proves a clean drain or qualifies a run.
 An intermediate process sample may catch a member just before it exits. When the
 scope switches from populated to empty during the inventory read, its sample
 retains both raw event observations and the member's identity. The watcher

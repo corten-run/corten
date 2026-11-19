@@ -1,7 +1,7 @@
 // Campaign-owned lease consumer, independent of the SSH guardian. No reconnect.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, renameSync, write } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { digest, durable, readRegular, syncDirectory } from "./evidence.mjs";
@@ -25,7 +25,7 @@ function leaseJSON(path) {
 async function startWatchdog(launch, binding, registration, invalidate) {
   const child = launch("/usr/bin/taskset", ["--cpu-list", "0", "/usr/bin/python3", "-I", "-c", guardianSource,
     "stream-watchdog", binding.token, streamHash(registration)], { cwd: "/bench", shell: false, windowsHide: true,
-    stdio: ["pipe", "pipe", "ignore"], env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" } });
+    stdio: ["pipe", "pipe", "inherit"], env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" } });
   const ready = Promise.withResolvers(), closed = Promise.withResolvers();
   let admitted = false, stopping = false, ended = false;
   const fault = (reason) => {
@@ -33,6 +33,7 @@ async function startWatchdog(launch, binding, registration, invalidate) {
   };
   child.on("error", () => fault("watchdog process")); child.stdin.on("error", () => fault("watchdog input"));
   child.stdout.on("data", (bytes) => {
+    if (bytes.equals(Buffer.from("F")) || bytes.equals(Buffer.from("RF"))) { fault("pinned watchdog reported a fault"); return; }
     if (admitted || !bytes.equals(Buffer.from("R"))) { fault("watchdog readiness"); return; }
     admitted = true; ready.resolve();
   });
@@ -72,15 +73,18 @@ export async function superviseControlStream(binding, admission, abort, runtime 
   const invalidate = (reason) => {
     if (revoked) return;
     revoked = true;
+    abort.abort();
     try {
-      const record = JSON.stringify({ id: registration.id, host: registration.host, monoNs: String(now()), reason });
       // Job stderr is captured. The historical marker path is an existence gate;
       // never change its contents after custody can see it.
-      try { writeSync(runtime.faultFd ?? 2, "control fault: " + record + "\n"); } catch { /* still revoke */ }
       durable(join(root, "stream-invalid.json"), "");
     } catch {
       // Another reporter won, or storage failed. Never skip abort or child settlement.
-    } finally { abort.abort(); }
+    }
+    try {
+      const record = JSON.stringify({ id: registration.id, host: registration.host, monoNs: String(now()), reason });
+      write(runtime.faultFd ?? 2, "control fault: " + record + "\n", () => {});
+    } catch { /* diagnostics do not decide revocation */ }
   };
   const check = () => {
     let stage = "campaign revocation";
