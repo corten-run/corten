@@ -10,6 +10,7 @@ import { accountId, archive, commit, context, harness, syntheticInspection, user
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker } from "./cloud-remote.mjs";
+import { savedLoadLayout } from "./cloud-contract.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
@@ -112,7 +113,8 @@ test("captured production composition ignores arbitrary hints, binds POST identi
     assert.equal(fs.existsSync(path.join(p.h.base, group, "groups-r21/operation.lock")), false);
     const post = events.find((row) => row.group === group && row.method === "POST");
     assert.equal(post.body.name, job.name); assert.deepEqual(post.body.ssh_keys, [42]);
-    assert.equal(post.body.size, saved.host.size); assert.equal(post.body.region, "sfo3"); assert.equal(saved.host.region, post.body.region); assert.equal(post.body.image, saved.host.image);
+    assert.equal(post.body.size, "c-16"); assert.equal(post.body.region, "sfo2");
+    assert.deepEqual(saved.host, { size: post.body.size, region: post.body.region, image: post.body.image });
     assert.deepEqual(events.filter((row) => row.group === group && (row.method === "POST" || row.path?.startsWith("/v2/actions/")))
       .map((row) => [row.method, row.path]), [["POST", "/v2/droplets"], ["GET", `/v2/actions/${1101 + i}`]]);
     assert.ok(!JSON.stringify(p.output).includes("SYNTHETIC_FLEET_CREDENTIAL"));
@@ -128,6 +130,8 @@ test("captured production composition ignores arbitrary hints, binds POST identi
     const script = uploads.find((row) => row.to.endsWith("/job.sh")).content;
     assert.ok(script.includes(`--group '${group}'`)); assert.ok(script.includes(`--commit '${commit}'`));
     assert.ok(script.includes("--state-dir '/bench/campaign'"));
+    assert.ok(script.includes("--load-layout 'c16-generator-v1'"));
+    assert.ok(script.includes('test "$(nproc)" -ge 16'));
     assert.ok(script.indexOf("/bench/bootstrap-ready.json") < script.indexOf("node 'bench/workloads/isolated/campaign-entry.mjs'"));
     const starts = events.filter((row) => row.group === group && row.boundary === "ssh" && row.options.input.includes(`systemctl start ${saved.unit}`));
     assert.equal(starts.length, 1);
@@ -162,7 +166,7 @@ test("second exact approval dispatches all remaining captured production workers
   assert.equal(terminal.campaign, campaign); assert.equal(terminal.id, state.control.monitor.id);
   report.supervisedTerminal = { registrationSha256: state.control.monitor.registrationSha256, sealSha256: terminal.sealSha256 };
   Object.assign(report, { schema: "benchmark-isolated-group-campaign-inspection/v1", campaign,
-    selection: state.selection, groups: report.groups.filter((row) => row.group === group) });
+    selection: state.selection, groups: report.groups.filter((row) => row.group === group), loadLayout: savedLoadLayout(state) });
   fs.mkdirSync(path.join(folder, campaign), { recursive: true });
   fs.writeFileSync(path.join(folder, ".host-attempt.json"), JSON.stringify({ id: campaign, commit, campaignSha256: report.campaignSha256 }));
   report.reservationSha256 = fileHash(path.join(folder, ".host-attempt.json"));
@@ -192,6 +196,8 @@ test("second exact approval dispatches all remaining captured production workers
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "pending"));
   const events = p.events(), posts = events.filter((row) => row.method === "POST");
   assert.deepEqual(posts.map((row) => row.group), groupNames);
+  assert.deepEqual(posts.map(({ body }) => [body.size, body.region]),
+    [["c-16", "sfo2"], ...groupNames.slice(1).map(() => ["c-8", "sfo3"])]);
   const ids = new Set(), ips = new Set();
   for (const group of groupNames) {
     const saved = p.saved(group); ids.add(saved.id); ips.add(saved.ip);

@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { campaignRounds } from "./campaign-contract.mjs";
+import { catalogFleetPlacement } from "../cloud-contract.mjs";
 import { groupNames } from "../registry.mjs";
 import { digest, durable, physical, readRegular } from "./evidence.mjs";
 import { superviseControlStream } from "./control-stream-remote.mjs";
@@ -11,15 +12,20 @@ import { superviseControlStream } from "./control-stream-remote.mjs";
 export const auditWaitMs = 24 * 60 * 60 * 1000;
 export function parseCampaignArgs(args) {
   assert.ok(Array.isArray(args) && args.every((v) => typeof v === "string"));
-  assert.ok([5, 7].includes(args.length), "usage: campaign-entry.mjs rN --commit SHA --state-dir /bench/campaign [--group GROUP]");
-  const [round, commitFlag, commit, stateFlag, stateRoot, groupFlag, group] = args;
+  assert.ok([5, 7, 9].includes(args.length), "usage: campaign-entry.mjs rN --commit SHA --state-dir /bench/campaign [--group GROUP [--load-layout c16-generator-v1]]");
+  const [round, commitFlag, commit, stateFlag, stateRoot, groupFlag, group, layoutFlag, loadLayout] = args;
   campaignRounds(round);
   assert.equal(commitFlag, "--commit"); assert.match(commit, /^[a-f0-9]{40}$/);
   assert.equal(stateFlag, "--state-dir"); assert.equal(stateRoot, "/bench/campaign", "one fixed host reservation root required");
-  if (args.length === 7) {
+  if (args.length >= 7) {
     assert.equal(groupFlag, "--group"); assert.ok(groupNames.includes(group), "unknown registry group");
   }
-  return Object.freeze({ round, commit, stateRoot, ...(args.length === 7 ? { group } : {}) });
+  if (args.length === 9) {
+    assert.equal(layoutFlag, "--load-layout"); assert.equal(group, "catalog-page");
+    assert.equal(loadLayout, catalogFleetPlacement.loadLayout);
+  }
+  return Object.freeze({ round, commit, stateRoot, ...(group === undefined ? {} : { group }),
+    ...(loadLayout === undefined ? {} : { loadLayout }) });
 }
 
 // The parent/operator controls delivery to this same-UID private inbox. JSON fields
@@ -62,7 +68,7 @@ export async function runCampaignEntry(args) {
     }
     controlOperation(control, "activate");
     const request = { round: input.round, commit: input.commit };
-    const plan = input.group === undefined ? bindCampaign(request) : bindGroupCampaign({ ...request, group: input.group });
+    const plan = input.group === undefined ? bindCampaign(request) : bindGroupCampaign({ ...request, group: input.group }, input.loadLayout);
     handle = await campaign.begin(plan, { stateRoot: input.stateRoot, signal: abort.signal, control: { binding: control, admission, stream } });
     let status = campaign.status(handle), deadline = null;
     while (status.state === "active" || status.state === "blocked-review-needed") {

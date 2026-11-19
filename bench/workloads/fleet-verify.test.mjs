@@ -23,6 +23,7 @@ function fixture(t) {
     const report = syntheticInspection("verified");
     Object.assign(report, { schema: "benchmark-isolated-group-campaign-inspection/v1", campaign: `r21-${fleet.jobs[i].token}`,
       selection: { ...fleet.selection, groups: fleet.selection.groups.filter((g) => g.group === group) }, groups: report.groups.filter((g) => g.group === group) });
+    if (group === "catalog-page") report.loadLayout = "c16-generator-v1";
     const folder = join(evidence, "campaign"), planPath = join(folder, report.campaign, "plan.json"), reservationPath = join(folder, ".host-attempt.json");
     mkdirSync(join(folder, report.campaign), { recursive: true });
     writeFileSync(reservationPath, JSON.stringify({ schema: "benchmark-isolated-campaign-reservation/v1", id: report.campaign, commit, campaignSha256: report.campaignSha256 }));
@@ -61,7 +62,8 @@ test("all current groups replay individually; hardware/hash references and faile
   assert.deepEqual(result.groups.map((g) => g.group), groupNames); assert.equal(p.calls.length, groupNames.length);
   assert.deepEqual(result.groups[0].appOutcomes[0], app); assert.deepEqual(result.groups[1].appOutcomes[0], unsupported);
   for (const row of result.groups) {
-    assert.deepEqual(row.host, p.fleet.host); assert.equal(row.id, p.jobs.get(row.group).state.id);
+    assert.deepEqual(row.host, p.fleet.jobs.find((job) => job.group === row.group).host ?? p.fleet.host);
+    assert.equal(row.id, p.jobs.get(row.group).state.id);
     assert.equal(row.hardwareEvidence.sha256, digest(readFileSync(join(p.jobs.get(row.group).evidence, "host.txt"))));
     assert.equal(row.stateSha256, digest(readFileSync(p.jobs.get(row.group).path)));
     assert.equal(row.recordedTimes.reservationCreatedAt, p.jobs.get(row.group).state.createdAt);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
-import { roundName, selection, terminalUnit, validateState } from "./cloud-contract.mjs";
+import { roundName, savedLoadLayout, selection, terminalUnit, validateState } from "./cloud-contract.mjs";
 
 const providerCodes = ["provider-command", "provider-credential", "provider-output",
   "account-request", "account-http", "get-request", "get-http", "get-response", "list-request", "list-http", "list-response",
@@ -213,6 +213,8 @@ export function campaignOutcome(report, s, exitCode) {
   assert.equal(report.scope, "intrinsic-evidence");
   assert.equal(report.round, s.round); assert.equal(report.commit, s.commit);
   assert.deepEqual(report.selection, s.selection, "complete current native selection required");
+  const loadLayout = savedLoadLayout(s);
+  assert.equal(report.loadLayout, loadLayout, "replayed catalog load layout differs from reservation");
   full(report.campaign, new RegExp(`${s.round}-[a-f0-9]{16}`), "native campaign identity");
   assert.deepEqual(report.uncollectedNativeRoots, [], "native evidence remains on host");
   assert.equal(report.collectionIntegrity, "manifest-verified", "unsealed native evidence");
@@ -229,6 +231,7 @@ export function campaignOutcome(report, s, exitCode) {
     const fields = ["schema", "scope", "status", "round", "commit", "campaign", "campaignSha256", "sourceSha256", "selection", "groups", "blockers",
       "collectionIntegrity", "commandLifecycle", "uncollectedNativeRoots", "archiveTreeSha256", "reservationSha256"];
     if (s.control?.monitor?.phase === "closed") fields.push("supervisedTerminal");
+    if (loadLayout) fields.push("loadLayout");
     assert.deepEqual(Object.keys(report).sort(), fields.sort(), "verified inspection schema differs");
     assert.deepEqual(report.blockers, []);
     assert.deepEqual(report.groups.map((r) => r.group), s.selection.groups.map((r) => r.group), "complete ordered native groups required");
