@@ -1635,6 +1635,7 @@ impl Req {
         let Some(at) = HEAD_AT.take() else {
             return Err(Error::new("corten: the document's <head> has no <Corten />"));
         };
+        #[cfg(debug_assertions)]
         if self.shared.dev && !swap {
             unruled_vars(&out, &vars)?;
         }
@@ -4210,6 +4211,7 @@ impl<D: Document> Render for Parted<D> {
 /// rule for, which markup placed with `raw` gives (its render's values were not noted), so a size
 /// from data would paint at its initial value until a patch. Read tag by tag, so text inside another
 /// attribute's value (a handler argument in `data-on`) is not taken for one.
+#[cfg(debug_assertions)]
 #[cold]
 #[inline(never)]
 fn unruled_vars(page: &str, rules: &str) -> Result<()> {
@@ -4218,9 +4220,13 @@ fn unruled_vars(page: &str, rules: &str) -> Result<()> {
     let mut scripting = true;
     loop {
         let mut fallback = false;
-        for event in Markup::new(page, false, scripting) {
-            let Event::Start { tag, foreign, .. } = event else { continue };
+        for event in Markup::new(page, true, scripting) {
+            let Event::Start { tag, foreign, live, .. } = event else { continue };
             fallback |= scripting && !foreign && tag.name == "noscript";
+            // Only the scripting-on pass checks templates that scripts can copy.
+            if !scripting && !live {
+                continue;
+            }
             let Some(value) = tag.attr("data-vars") else { continue };
             if !rules.contains(&format!("[data-vars=\"{value}\"]")) {
                 return Err(Error::new(format!(
@@ -4260,6 +4266,7 @@ mod carried_tests {
 
     /// `corten dev` reads a page's `data-vars` attributes, not text that looks like one inside
     /// another attribute's value: a handler argument in `data-on` keeps its JSON's quotes.
+    #[cfg(debug_assertions)]
     #[test]
     fn a_data_vars_lookalike_inside_data_on_is_not_a_value() {
         let rules = r#"[data-vars="--m__fill:42.5%"]{--m__fill:42.5%!important}"#;
@@ -4275,6 +4282,7 @@ mod carried_tests {
         assert!(error.contains(r#"data-vars="--m__fill:7%" and no rule"#), "{error}");
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn noscript_fallback_vars_need_rules() {
         let fallback = r#"<noscript><div data-vars="--m:7%">Fallback</div></noscript>"#;
@@ -4285,6 +4293,13 @@ mod carried_tests {
         let scripted = r#"<noscript><!--</noscript><div data-vars="--m:8%">Scripted</div>--></noscript>"#;
         let error = unruled_vars(scripted, "").expect_err("the scripting-on div has no rule").to_string();
         assert!(error.contains(r#"data-vars="--m:8%" and no rule"#), "{error}");
+        let inert = r#"<template><noscript><span data-vars="--m:7%">Offline</span></noscript></template>"#;
+        assert!(unruled_vars(inert, "").is_ok());
+        let copy = r#"<template><span data-vars="--m:7%">Copy</span></template>"#;
+        assert!(unruled_vars(copy, "").is_err());
+        let shadow =
+            r#"<div><template shadowrootmode=open><noscript><span data-vars="--m:7%">Offline</span></noscript></template></div>"#;
+        assert!(unruled_vars(shadow, "").is_err());
     }
 
     /// The failed answer's `Vary` names are added to the error page's, each name once whatever its

@@ -884,9 +884,12 @@ from data writes `{..e.control(name).hint()}` with no branch; a corten-ui widget
 `aria-describedby`, is an error, since a screen reader would never read the hint; so is a page
 that draws such a hint and no element `id` (a radio group without an id). A lone `<` in
 `raw(..)` can be text; script and stylesheet source and inert templates do not supply hint
-text. This check reads written markup, not the browser's tree or computed visibility:
-for example, `<li id=qty-hint><li>Outside` can count the second item's text as part of
-the hint ([Limit 33](../design.md#limit-developer-markup-scan)). A patch that redraws the
+text. The scan respects browser scope when closing list items, definition items and
+paragraphs, so the second item's text in `<li id=qty-hint><li>Outside` is not part of the
+hint. An `<input>` that closes a `<select>` lets a following block close the hint paragraph.
+A nested form start the browser ignores does not close a hint paragraph. The scan does not
+follow all of the browser's tree building or computed visibility
+([Limit 33](../design.md#limit-developer-markup-scan)). A patch that redraws the
 hint alone, its control staying on the page, is not checked. A tag that writes `id`, `name` or the
 ARIA attributes beside `e.control(..)` does not compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes
 what `e.aria(..)` does. `e.control` is for a field's one control: radios or checkboxes that share
