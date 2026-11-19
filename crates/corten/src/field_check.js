@@ -9,3 +9,13 @@ export function input(weight) {
 export function inputs(weights) {
   for (const weight of weights) weight.value = "1";
 }
+
+/** @param {HTMLSelectElement} weight */
+export function select(weight) {
+  weight.value = "air";
+}
+
+/** @param {string} text */
+export function caption(text) {
+  return text.length;
+}

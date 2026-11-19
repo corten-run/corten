@@ -3759,74 +3759,124 @@ pub mod __private {
         /// The kind written after `~`: one input (`i`), select (`s`) or textarea (`t`), or
         /// every input of the name (`*`).
         const KIND: char;
+        type Single<K>: Default;
     }
     impl ControlParam for el::HTMLInputElement {
         const KIND: char = 'i';
+        type Single<K> = SingleControl<K, Self>;
     }
     impl ControlParam for el::HTMLSelectElement {
         const KIND: char = 's';
+        type Single<K> = SingleControl<K, Self>;
     }
     impl ControlParam for el::HTMLTextAreaElement {
         const KIND: char = 't';
+        type Single<K> = SingleControl<K, Self>;
     }
     impl ControlParam for ts::Array<el::HTMLInputElement> {
         const KIND: char = '*';
+        type Single<K> = ArrayParam<K>;
     }
 
     /// A type-only pairing of a call's argument and the control drawn in the same markup.
-    pub struct FieldCheck<B, I, K, O = ()>(PhantomData<(B, I, K, O)>);
+    pub struct FieldCheck<B, I, K, N, O = ()>(PhantomData<(B, I, K, N, O)>);
 
-    impl<B, I, K> FieldCheck<B, I, K> {
-        pub fn new(_: &B) -> Self {
+    impl<B, I, K, N> FieldCheck<B, I, K, N> {
+        pub fn new(_: &B, _: PhantomData<fn() -> N>) -> Self {
             Self(PhantomData)
         }
 
-        pub fn in_form<Id>(self, _: PhantomData<fn() -> Id>) -> FieldCheck<B, I, K, ExplicitForm<Id>> {
+        pub fn in_form<Id>(self, _: PhantomData<fn() -> Id>) -> FieldCheck<B, I, K, N, ExplicitForm<Id>> {
             FieldCheck(PhantomData)
         }
     }
 
-    /// Infer the type at the `id=` attribute, without holding or re-evaluating its value.
-    pub fn form_id_type<Id>(_: PhantomData<fn() -> Id>, _: &Id) {}
+    /// Infer the type of an ID or field set without holding or evaluating its value.
+    pub fn field_proof_type<T>(_: PhantomData<fn() -> T>, _: &T) {}
 
     /// A braced `form=` links controls only when it really writes an ID, not, for example,
     /// an optional value the renderer can omit.
     pub struct ExplicitForm<Id>(PhantomData<Id>);
     pub trait KnownForm {}
     impl KnownForm for () {}
-    impl<Id: crate::view::Id> KnownForm for ExplicitForm<Id> {}
+    impl<Id: crate::view::Id + crate::view::__private::Keyless> KnownForm for ExplicitForm<Id> {}
 
-    impl<A, I, K, O: KnownForm, T, Pl, P: ControlParam> FieldCheck<Call<A>, I, K, O>
+    impl<A, I, K, N: crate::form::__private::RootNames, O: KnownForm, T, P: ControlParam> FieldCheck<Call<A>, I, K, N, O>
     where
-        A: ArgumentAt<I, Argument = Typed<crate::form::FieldName<T, Pl>, P>>,
+        A: ArgumentAt<I, Argument = Typed<crate::form::FieldName<T>, P>>,
     {
-        pub fn check(&self)
-        where
-            K: FitsControl<P>,
-        {
+        pub fn single(&self) -> P::Single<K> {
+            Default::default()
+        }
+        pub fn group(&self) -> DrawnGroup<P> {
+            DrawnGroup(PhantomData)
         }
     }
 
     /// Same name in the markup does not make a non-field argument a field, or a Rust bind a
     /// generated handler call. The inherent method above takes precedence only for typed fields.
     pub trait UncheckedField {
-        fn check(&self);
+        fn single(&self) -> UncheckedControl;
+        fn group(&self) -> UncheckedControl;
     }
-    impl<B, I, K, O> UncheckedField for FieldCheck<B, I, K, O> {
-        fn check(&self) {}
+    impl<B, I, K, N, O> UncheckedField for FieldCheck<B, I, K, N, O> {
+        fn single(&self) -> UncheckedControl {
+            UncheckedControl
+        }
+        fn group(&self) -> UncheckedControl {
+            UncheckedControl
+        }
+    }
+    pub struct UncheckedControl;
+    impl UncheckedControl {
+        pub fn check(&self) {}
     }
 
-    #[diagnostic::on_unimplemented(
-        message = "this form field is drawn as {Self}, which does not match the handler's JSDoc type {P}",
-        label = "the control drawn for this field does not fit the handler",
-        note = "type the handler parameter as the control drawn in this form: HTMLInputElement, HTMLSelectElement, HTMLTextAreaElement or HTMLInputElement[]"
-    )]
-    pub trait FitsControl<P: ControlParam> {}
+    // Keep array kinds out of Rust's type interpolation: the diagnostic names the JSDoc
+    // parameter and drawn kind as they appear in the script, not the Rust marker for an array.
+    macro_rules! check_control {
+        ($witness:ident<$($ty:ident),+>, $check:ident $(<$arg:ident>)?, $checked:ident, $message:literal) => {
+            pub struct $witness<$($ty),+>(PhantomData<($($ty,)+)>);
+            impl<$($ty),+> Default for $witness<$($ty),+> {
+                fn default() -> Self {
+                    Self(PhantomData)
+                }
+            }
+            impl<$($ty),+> $witness<$($ty),+> {
+                pub fn check(&self)
+                where
+                    $checked: $check $(<$arg>)?,
+                {}
+            }
+            #[diagnostic::on_unimplemented(
+                message = $message,
+                label = "the control drawn for this field does not fit the handler",
+                note = "change the handler's JSDoc parameter type or change the control drawn in the markup"
+            )]
+            pub trait $check $(<$arg>)? {}
+        };
+    }
 
+    check_control!(
+        SingleControl<K, P>, FitsControl<P>, K,
+        "this form field is drawn as {Self}, which does not match the handler's JSDoc type {P}"
+    );
+    check_control!(
+        ArrayParam<K>,
+        FitsArray,
+        K,
+        "this form field is drawn as {Self}, which does not match the handler's JSDoc type HTMLInputElement[]"
+    );
+    check_control!(
+        DrawnGroup<P>,
+        TakesGroup,
+        P,
+        "this form field is drawn as HTMLInputElement[], which does not match the handler's JSDoc type {Self}"
+    );
     impl FitsControl<el::HTMLInputElement> for el::HTMLInputElement {}
     // The runtime accepts a group with one or no inputs as well as one with several.
-    impl FitsControl<ts::Array<el::HTMLInputElement>> for el::HTMLInputElement {}
-    impl FitsControl<ts::Array<el::HTMLInputElement>> for ts::Array<el::HTMLInputElement> {}
+    impl FitsArray for el::HTMLInputElement {}
+    impl TakesGroup for ts::Array<el::HTMLInputElement> {}
     impl FitsControl<el::HTMLSelectElement> for el::HTMLSelectElement {}
     impl FitsControl<el::HTMLTextAreaElement> for el::HTMLTextAreaElement {}
 

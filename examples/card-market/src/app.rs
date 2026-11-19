@@ -1002,6 +1002,85 @@ mod tests {
         }
     }
 
+    corten::script::script!(mod fields = "field_cost.js");
+
+    #[corten::routes]
+    mod field_cost_url {
+        #[route("/fields", get = cost_fields)]
+        pub struct CostFields;
+    }
+
+    async fn cost_fields(req: Req) -> HtmlResult {
+        #[derive(Fields)]
+        #[allow(dead_code)]
+        struct CostForm {
+            weight: String,
+            quantity: String,
+        }
+        #[derive(Id)]
+        struct CostEditorId;
+
+        let body = html! {
+            let f = CostForm::FIELDS;
+            <div>
+                <form id={CostEditorId}>
+                    <input name={f.weight}>
+                    <input name={f.quantity}>
+                    <button type="button" on:click={fields::input(f.weight)}>"Implicit"</button>
+                </form>
+                <button type="button" form={CostEditorId} on:click={fields::input(f.quantity)}>"Explicit"</button>
+            </div>
+        };
+        req.page(html! {
+            <!DOCTYPE html>
+            <html lang="en">
+                <head>
+                    <title>"Field render cost"</title>
+                    <Corten />
+                </head>
+                <body><main>{body}</main></body>
+            </html>
+        })
+    }
+
+    /// For Callgrind: run this release test with `RENDER_REQUESTS=200` and `=1200`, and divide
+    /// the instruction difference by 1,000. Set `RENDER_PATH=fields` for a render with one
+    /// implicit and one explicit field association, or `RENDER_PATH=item` for the item page.
+    #[tokio::test]
+    #[ignore]
+    async fn field_render_cost() {
+        use corten::http::Body;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+
+        let (router, path, marker) = match std::env::var("RENDER_PATH").unwrap().as_str() {
+            "item" => (super::app(fixture()).router(), "/items/item_9", "Show all 7 offers"),
+            "fields" => (
+                super::App::new(field_cost_url::router()).components(&[fields::COMPONENT]).router(),
+                field_cost_url::CostFields::PATH,
+                r#"~i"quantity""#,
+            ),
+            _ => panic!("RENDER_PATH must be fields or item"),
+        };
+        let requests: usize = std::env::var("RENDER_REQUESTS").unwrap().parse().unwrap();
+        let mut bytes = 0;
+        for i in 0..requests {
+            let req = Request::get(path).header("accept-encoding", "identity").body(Body::empty()).unwrap();
+            let response = router.clone().oneshot(req).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            if i == 0 {
+                let text = std::str::from_utf8(&body).unwrap();
+                assert!(text.contains(marker), "{text}");
+                if path == "/fields" {
+                    assert!(text.contains(r#"~i"weight""#), "{text}");
+                }
+            }
+            bytes += std::hint::black_box(body.len());
+        }
+        println!("{path}: {} bytes per request", bytes / requests);
+    }
+
     /// What reading the item API's responses costs, for callgrind: each of the 500 benchmark
     /// responses read once by `read_all`, with `FromJson` or (`READ_WITH=serde`) serde_json. Build
     /// with `cargo test --release -p card-market --no-run`, then run the binary it names:

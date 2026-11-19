@@ -134,29 +134,42 @@ fn a_form_field_mismatch_names_its_drawn_kind_and_parameter_type() {
             #[derive(Id)]
             struct ShipId;
             fn main() {{
-                let f = Ship::FIELDS;
                 let _ = html! {{
+                    let f = Ship::FIELDS;
                     <button form={{ShipId}} on:click={{{handler}}}>"Fill"</button>
                     <form id={{ShipId}}>{controls}</form>
                 }};
             }}"#
         )
     };
-    for (controls, handler, kind) in [
-        ("<select name={f.weight}></select>", "js::input(f.weight)", "HTMLSelectElement"),
-        ("<textarea name={f.weight}></textarea>", "js::input(f.weight)", "HTMLTextAreaElement"),
-        (r#"<input type="radio" name={f.weight}><input type="radio" name={f.weight}>"#, "js::input(f.weight)", "Array<"),
+    let checkboxes = r#"<input type="checkbox" name={f.weight}><input type="checkbox" name={f.weight}>"#;
+    for (controls, handler, drawn, parameter) in [
+        ("<select name={f.weight}></select>", "js::input(f.weight)", "HTMLSelectElement", "HTMLInputElement"),
+        ("<textarea name={f.weight}></textarea>", "js::input(f.weight)", "HTMLTextAreaElement", "HTMLInputElement"),
+        ("<input name={f.weight}>", "js::select(f.weight)", "HTMLInputElement", "HTMLSelectElement"),
+        (checkboxes, "js::input(f.weight)", "HTMLInputElement[]", "HTMLInputElement"),
+        ("<select name={f.weight}></select>", "js::inputs(f.weight)", "HTMLSelectElement", "HTMLInputElement[]"),
     ] {
         let (ok, stderr) = build_main(dir, &app(controls, handler));
-        assert!(!ok, "the field drawn as {kind} compiled as an input");
+        assert!(!ok, "the field drawn as {drawn} compiled as {parameter}");
         let headline = stderr.lines().find(|line| line.starts_with("error[E0277]")).unwrap_or("");
-        assert!(headline.contains("does not match the handler's JSDoc type") && headline.contains(kind), "{stderr}");
-        assert!(headline.contains("HTMLInputElement"), "{stderr}");
+        assert!(
+            headline.ends_with(&format!("drawn as {drawn}, which does not match the handler's JSDoc type {parameter}")),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("change the handler's JSDoc parameter type or change the control drawn in the markup"),
+            "{stderr}"
+        );
     }
     for (controls, handler) in [
         (r#"<input type={"checkbox"} name={f.weight}><input type="checkbox" name={f.weight}>"#, "js::input(f.weight)"),
         ("<select name={f.weight}></select>", "js::input({ let w = f.weight; w })"),
+        ("<input name={f.weight}>", "js::input(f.weight)"),
         (r#"<input type="checkbox" name={f.weight}>"#, "js::inputs(f.weight)"),
+        (checkboxes, "js::inputs(f.weight)"),
+        (r#"<input type="radio" name={f.weight}><input type="radio" name={f.weight}>"#, "js::inputs(f.weight)"),
+        (r#"<input type="checkbox" name={f.weight}><input type="radio" name={f.weight}>"#, "js::input(f.weight)"),
     ] {
         let (ok, stderr) = build_main(dir, &app(controls, handler));
         assert!(ok, "{stderr}");

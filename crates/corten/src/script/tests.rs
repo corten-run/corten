@@ -107,8 +107,8 @@ fn a_field_check_keeps_the_existing_binding() {
     #[derive(Id)]
     struct ShipmentId;
 
-    let f = Shipment::FIELDS;
     let built = html! {
+        let f = Shipment::FIELDS;
         <div>
             <table>
                 <tbody>
@@ -131,6 +131,98 @@ fn a_field_check_keeps_the_existing_binding() {
     }
     .to_html();
     assert!(built.contains(r#"data-on='click:shared.fill(~i"weight",~s"format",~t"note",~*"size")'"#), "{built}");
+}
+
+#[test]
+fn a_field_check_leaves_unproven_values_and_form_owners_to_the_browser() {
+    script::script!(mod fields = "field_check.js");
+
+    #[derive(Id)]
+    struct EditorId(u32);
+    #[derive(Id)]
+    struct Outer;
+
+    let f = Shipment::FIELDS;
+    let mut name = f.format;
+    let reassigned_name = html! {
+        <form>
+            <select name={name}></select>
+            { { name = f.weight; "" } }
+            <input name={f.weight}>
+            <button on:click={fields::input(name)}>"Fill"</button>
+        </form>
+    };
+    assert!(reassigned_name.to_html().contains(r#"~i"weight""#));
+
+    let mut id = EditorId(1);
+    let reassigned_id = html! {
+        <div>
+            <form id={id}><select name={f.weight}></select></form>
+            <form id={EditorId(2)}><input name={f.weight}></form>
+            { { id = EditorId(2); "" } }
+            <button form={id} on:click={fields::input(f.weight)}>"Fill"</button>
+        </div>
+    };
+    assert!(reassigned_id.to_html().contains(r#"form="editor-2""#));
+
+    let mut name = f.weight;
+    let repeated = html! {
+        <form>
+            <input type="checkbox" name={name}>
+            { { name = f.format; "" } }
+            <input type="radio" name={name}>
+            <button on:click={fields::input(name)}>"Fill"</button>
+        </form>
+    };
+    assert!(repeated.to_html().contains(r#"~i"format""#));
+
+    let weight = f.weight;
+    let nested = html! {
+        let f = Shipment::FIELDS;
+        <div>
+            <form id={Outer}>
+                if true { <div><form></form></div> }
+                <select name={f.weight}></select>
+            </form>
+            <input form={Outer} name={weight}>
+            <button form={Outer} on:click={fields::input(f.weight)}>"Fill"</button>
+        </div>
+    };
+    assert!(nested.to_html().contains(r#"~i"weight""#));
+
+    let field_reassignment = html! {
+        let mut f = Shipment::FIELDS;
+        <form>
+            <select name={f.format}></select>
+            <input name={f.weight}>
+            <span title={{ f.format = f.weight; "" }}></span>
+            <button on:click={fields::input(f.format)}>"Fill"</button>
+        </form>
+    };
+    assert!(field_reassignment.to_html().contains(r#"~i"weight""#));
+
+    let name = "caption";
+    let caption = html! {
+        <form>
+            <input name={name}>
+            <button on:click={fields::caption(name)}>"Caption"</button>
+        </form>
+    };
+    assert!(caption.to_html().contains(r#"click:field_check.caption("caption")"#));
+
+    struct Caption {
+        name: &'static str,
+        title: String,
+    }
+    let caption = Caption { name, title: String::from("Title") };
+    drop(caption.title);
+    let caption = html! {
+        <form>
+            <input name={caption.name}>
+            <button on:click={fields::caption(caption.name)}>"Caption"</button>
+        </form>
+    };
+    assert!(caption.to_html().contains(r#"click:field_check.caption("caption")"#));
 }
 
 /// A `string[]` parameter takes a slice, an array or a `Vec` of strings, with no feature.

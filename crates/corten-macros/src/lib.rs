@@ -435,6 +435,9 @@ fn fields(input: TokenStream) -> Result<String, String> {
             out += "    #[doc(hidden)]\n    pub __k: ::core::marker::PhantomData<(&'k (), __At)>,\n";
         }
         out += "}\n";
+        if suffix.is_empty() {
+            out += &format!("impl ::corten::form::__private::RootNames for {ty} {{}}\n");
+        }
     }
     let build = |suffix: &str, at: &str| {
         let mut fields = String::new();

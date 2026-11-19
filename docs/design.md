@@ -5369,8 +5369,8 @@ rules something out.
     gives the one control of the name with the kind's tag, or every input of it for a group (`[]`
     for none); a control a patch replaced is the new one, as a ref's is. Anything else runs nothing
     and throws what the call takes and what the form has instead, in the words `corten dev` uses.
-    Where a call and a matching control are drawn in one `html!`, the compiler also checks the
-    control's kind without changing the binding it writes. For the cases it cannot see
+    Where the markup proves a call and a control name the same field of the same form, the
+    compiler also checks the control's kind without changing the binding it writes. For the cases it cannot see
     ([Limit 32](#limit-field-kind)), `corten dev` reports a mismatch when a page or a later draw puts the call
     on the page. Behavior is still a function the markup calls, and the field is an argument as a
     ref is: no second way to attach behavior, and nothing to learn but the parameter's type.
@@ -7348,20 +7348,25 @@ by design; where it is known, a limit says what would lift it or why it is so.
     meets either navigates to the URL, and the browser follows the redirect or the sign-in
     ([Choice 55](#choice-screen-read)).
 
-32. <a id="limit-field-kind"></a>When a direct handler argument such as `f.weight` matches the
-    tokens of `name={f.weight}` on a control drawn in the same `html!` and the same form,
-    the compiler checks the control's kind against the parameter's JSDoc. The form is the one
-    around the element or the one an explicit `form={Id}` names; the kind comes from the tag
-    and an input's literal `type=`. Two or more visible radios or checkboxes of the same name
-    require `HTMLInputElement[]`; one visible input can be taken alone or in an array
-    (the runtime accepts either). The check does not cross a branch, a `let` that may shadow
-    the expression, or a component's boundary, or infer ownership for displaced table content,
-    templates, foreign content, a spread or a `form=` expression it cannot prove writes an ID.
-    A computed `type=`,
-    a field passed inside a JSDoc group, or a different expression (including a variable bound
-    to the same field) leaves the control check to the runtime. A field's name carries what it
-    reads (`FieldName<Condition>`), not what another component draws, and the call may name a
-    field no control on the page has ([Choice 57](#choice-field-arguments)).
+32. <a id="limit-field-kind"></a>The compile-time check matches a direct handler argument
+    `f.weight` to `name={f.weight}` in one `html!` and one known form. The macro recognizes
+    `let f = Shipment::FIELDS;` at the start of the markup, and Rust verifies that it is a
+    derived root field set and that the argument is a field. Other uses of the base, including
+    assignments, mutable borrows and shadowing in a Rust pattern, leave the name unproved.
+    A bare name variable, a field set bound outside the markup, a computed field or a field
+    passed inside a JSDoc group likewise falls back.
+    The form is the one around the element, or the one named by an unambiguous literal
+    `form="..."` or matching `form={Id}` and `id={Id}` with a unit ID. Keyed or computed IDs,
+    duplicate or uncertain IDs and spreads that can supply an attribute leave explicit
+    ownership unproved. The macro does not cross branch or binding boundaries to pair up
+    controls, infer owners inside templates or foreign content, or rely on ownership in an
+    expansion with nested forms, displaced table content or opaque rendered markup.
+    The kind comes from the tag and an input's literal `type=`; an input with no type is a text
+    input. Two or more matching radios, or two or more matching checkboxes, require
+    `HTMLInputElement[]`; one input can be taken alone or in an array. Computed types, loops
+    and mixed controls leave the check to the runtime.
+    A field's name carries what it reads (`FieldName<Condition>`), not what another component
+    draws, and the call may name a field no control on the page has ([Choice 57](#choice-field-arguments)).
     A call that takes a single control (`i`, `s`,
     `t`) whose form has no control of the name, more than one, or one of another kind, or that
     takes a group (`*`) whose form has a control of the name that is not an input, runs nothing

@@ -368,8 +368,8 @@ name (`SubmitKey::field`, corten-ui's `Picker`, `Number` and `RequiredWhen`) can
 field's; `name={..}` and `Errors` take a name of any type, and `.untyped()` drops the type for a
 list of names of several fields (`[f.email.untyped(), f.price.untyped()]`). Validation stays in the app; `Errors` carries the first message per field.
 A handler is given a field's control by the same name, `on:change={js::fill(f.weight)}`, with no ref
-in the component that draws it. When the call and a control with `name={f.weight}` are in the
-same form and the same `html!`, the compiler can check that the handler takes its control kind
+in the component that draws it. When one `html!` proves that the call and its control name the
+same field in the same form, the compiler checks that the handler takes its control kind
 ([Scripts](scripts.md#form-fields)).
 Any name works, including ones the DOM gives a form's own properties (`action`, `method`, `id`): the runtime
 posts a `data-patch` form to its own `action` and `method` whatever its controls are named. An app's own
