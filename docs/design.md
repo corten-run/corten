@@ -5471,7 +5471,14 @@ rules something out.
     new words, on `1b6fc2f11`; 2026-11-16, the field module's sizes as built and as the watchlist
     serves it, the smoke's field checks in the same three engines (a form-associated custom
     element's `form=` among them, which the field module of `037bb827b` fails in each), and
-    `corten dev`'s reports, on `98e7ca184`.
+    `corten dev`'s reports, on `98e7ca184`; 2026-11-18, compile-fail probes for a mismatched
+    control, the default text input and a checkbox group, and compile-pass probes for
+    reassigned field names and IDs and nested form recovery, on `51935e3e9`. Comparing that
+    revision with `eb6e077b4` also left the Rust expansion of matching ordinary string
+    arguments and unmatched field calls unchanged. Six alternating native release item page
+    `render_cost` runs on `4192475fd` and `eb6e077b4` measured median `<main>` render times of
+    15.3 and 17.3 us, with overlapping ranges (14.1-22.1 and 14.7-20.5 us). The item page has
+    no matched field call.
 
 58. <a id="choice-plain-request-patch"></a>**Building a patch directly requires a checked
     Action; a debug check still catches overrides and raw responses to a browser's plain
@@ -7356,11 +7363,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
     A bare name variable, a field set bound outside the markup, a computed field or a field
     passed inside a JSDoc group likewise falls back.
     The form is the one around the element, or the one named by an unambiguous literal
-    `form="..."` or matching `form={Id}` and `id={Id}` with a unit ID. Keyed or computed IDs,
+    `form="..."` or matching bare reads in `form={Id}` and `id={Id}` when Rust proves a
+    keyless `Id` and the identifier has no other use in the markup. Keyed or computed IDs,
     duplicate or uncertain IDs and spreads that can supply an attribute leave explicit
     ownership unproved. The macro does not cross branch or binding boundaries to pair up
     controls, infer owners inside templates or foreign content, or rely on ownership in an
-    expansion with nested forms, displaced table content or opaque rendered markup.
+    expansion with nested forms (even in a branch or foreign-content integration point),
+    displaced table content or opaque rendered markup.
     The kind comes from the tag and an input's literal `type=`; an input with no type is a text
     input. Two or more matching radios, or two or more matching checkboxes, require
     `HTMLInputElement[]`; one input can be taken alone or in an array. Computed types, loops

@@ -170,7 +170,7 @@ fn a_field_check_leaves_unproven_values_and_form_owners_to_the_browser() {
         <form>
             <input type="checkbox" name={name}>
             { { name = f.format; "" } }
-            <input type="radio" name={name}>
+            <input type="checkbox" name={name}>
             <button on:click={fields::input(name)}>"Fill"</button>
         </form>
     };
@@ -189,6 +189,19 @@ fn a_field_check_leaves_unproven_values_and_form_owners_to_the_browser() {
         </div>
     };
     assert!(nested.to_html().contains(r#"~i"weight""#));
+
+    let foreign = html! {
+        let f = Shipment::FIELDS;
+        <div>
+            <form id={Outer}>
+                <svg><foreignObject><form></form></foreignObject></svg>
+                <select name={f.weight}></select>
+            </form>
+            <input form={Outer} name={weight}>
+            <button form={Outer} on:click={fields::input(f.weight)}>"Fill"</button>
+        </div>
+    };
+    assert!(foreign.to_html().contains(r#"~i"weight""#));
 
     let field_reassignment = html! {
         let mut f = Shipment::FIELDS;

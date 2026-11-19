@@ -162,9 +162,17 @@ impl<'a> Scan<'a> {
                     if super::writes_tags(name, children) {
                         return false;
                     }
-                    if !["template", "svg", "math"].iter().any(|tag| name.eq_ignore_ascii_case(tag))
-                        && !super::may_read_as_text(super::Parsing::Unknown, name)
+                    if name.eq_ignore_ascii_case("template") {
+                        continue;
+                    }
+                    if ["svg", "math"].iter().any(|tag| name.eq_ignore_ascii_case(tag))
+                        || super::may_read_as_text(super::Parsing::Unknown, name)
                     {
+                        // An integration point or a noscript subtree can still draw an HTML form.
+                        if may_draw_form(children) {
+                            return false;
+                        }
+                    } else {
                         let in_cell = ["td", "th", "caption"].iter().any(|tag| name.eq_ignore_ascii_case(tag));
                         if !self.walk(children, scope, inner, (in_table && !in_cell) || name.eq_ignore_ascii_case("table")) {
                             return false;
@@ -284,6 +292,15 @@ impl<'a> Scan<'a> {
         }
         proofs
     }
+}
+
+fn may_draw_form(nodes: &[Node]) -> bool {
+    nodes.iter().any(|node| match node {
+        Node::Element { name, children, .. } => name.eq_ignore_ascii_case("form") || may_draw_form(children),
+        Node::Block { bodies, .. } => bodies.iter().any(|body| may_draw_form(body)),
+        Node::Component { .. } | Node::Expr(_) => true,
+        Node::Let(_) | Node::Markup(_) | Node::Text(_) => false,
+    })
 }
 
 fn listed(tag: &str) -> bool {
