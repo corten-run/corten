@@ -4552,16 +4552,25 @@ rules something out.
     handler change the tree while the runtime walks it. The widget instead asks the runtime
     which patch root took its modal away, during the existing connect signal's abort. It looks
     only inside recorded roots, follows a detached counterpart through any further recorded
-    replacements, and acts after the sweep, innermost first. A dialog needs the drawn-state
-    record made before connect, so a dialog a connect handler just created cannot receive the
-    old close. Duplicate ids are invalid; moving an already-drawn dialog into a replacement
+    replacements, and acts after the sweep, innermost first. A ref lookup during a patch reads
+    the current tree without using the ref cache or draining mutation records. Once all the
+    replacements are recorded, a patch that had such a lookup discards the warmed cache and
+    ends the removed elements' lives before wiring the rest of that patch. A later connect
+    then sees the new refs even before the observer has counted their changes. The observer
+    scans after the patch sets CSS variables and current nav links, then clears the recorded
+    roots as usual. If the successor is drawn open and has not connected at abort, the
+    dialog widget passes the opener on after it connects
+    ([#1629 A ref-taking focus handler between overlapping dialog replacements in one patch loses the dialog's close](https://github.com/corten-run/corten/issues/1629)).
+    A dialog needs the drawn-state record made before connect, so a dialog a connect handler
+    just created cannot receive the old close. Duplicate ids are invalid; moving an
+    already-drawn dialog into a replacement
     root to reuse the removed dialog's id is outside the widget's contract. An open redraw
     carries the opener forward. A native close takes precedence over a forwarded one; a vetoed
     open is not a native close. Focus goes to the recorded opener or its verified replacement
-    in the same removal sweep. Like native close, it does not follow an opener already lost,
-    including one replaced after a reentrant ref lookup has swept the dialog. A location guard
-    loses a live close while a navigation is pending, and a page marker or document-wide id
-    lookup can mistake unrelated same-page markup for the replacement. Neither navigation nor
+    in the same removal sweep. Like native close, it does not follow an opener already lost
+    to an earlier patch. A location guard loses a live close while a navigation is pending,
+    and a page marker or document-wide id lookup can mistake unrelated same-page markup for
+    the replacement. Neither navigation nor
     an arbitrary script removal is a patch. The pilot's workaround, replacing the closed
     dialog with an empty element before each submit, is the per-page script this removes.
 
@@ -4633,7 +4642,14 @@ rules something out.
     and WebKit 27.2 (Playwright 1.64.1). 2026-11-18, the gallery's vetoed-open, dialog-first
     overlap and script-created same-id cases failed on `e4a97b811` and passed with the widget
     fixes in the same three engines. The reverse overlap order passed on both. Core was
-    byte-identical to `e4a97b811`.
+    byte-identical to `e4a97b811`. 2026-11-18, with a focus handler that reads a ref, both
+    replacement orders lost the close and result on `e927c2463`. 2026-11-19, both orders pass with
+    direct ref reads during a patch, and those reads see current markup in Chromium 159, Firefox
+    159 and WebKit 27.2. In each engine, a later connect sees the old signal aborted and the
+    patch's CSS variables and current nav link applied, unlike on `ac87c5b03`. An overlapping
+    redraw that keeps the modal open still returns focus to the original opener on a later close.
+    In the same three engines, the warmed-ref smoke's later connect saw only the surviving ref on
+    `ed1ce4b21` and both the surviving and added refs after the cache reset.
 
 53. <a id="choice-page-actions"></a>**A page's several writes are named posts of its own route, chosen by a `do` parameter
     in the address each form posts to, not by the pressed button's name in the body or a route per

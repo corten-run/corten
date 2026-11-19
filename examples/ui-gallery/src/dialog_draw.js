@@ -17,6 +17,12 @@ export function nativeClose(dialog) {
   dialog.close("new");
 }
 
+/** @param {HTMLFormElement} form */
+export function focused(form) {
+  const output = form.closest("main")?.querySelector("output");
+  if (output) output.dataset.focusRef = `${output.dataset.focusRef ?? ""}${form.dataset.stage};`;
+}
+
 /** @param {HTMLElement} target @param {string} id */
 export function insertDialog(target, id) {
   const dialog = document.createElement("dialog");
