@@ -5748,8 +5748,9 @@ rules something out.
     database name (`America/Chicago`, `UTC`) or an offset to the minute written `±HH:MM`
     (RFC 3339's `time-numoffset`), which a browser's reported zone is one of and a `FormZone` is
     sent as;
-    RFC 5545 section 3.3.5; jiff 0.2.38 and its bundled tz database, jiff-tzdb 0.1.9, whose
-    `compatible()` agrees with `at` in `every_change_in_every_zone_reads_as_temporal_compatible_reads_it`;
+    RFC 5545 section 3.3.5; Jiff 1 and its bundled IANA tz database (`jiff-tzdb` 1.0.0,
+    tzdb 2026f in the workspace lock), whose `compatible()` is checked against `at` in
+    `every_change_in_every_zone_reads_as_temporal_compatible_reads_it`;
     a browser reports its zone only from a script, so `req.zone()` is UTC before the first page's
     script runs and without one (`App::client_zone`)); reasoned (a zone whose offset changes at
     most once in any two days has, for a time on its clock, its candidates at the time minus the

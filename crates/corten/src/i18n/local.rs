@@ -617,7 +617,7 @@ mod tests {
     fn a_tz_database_zone_draws_and_reads_only_where_its_rules_reach() {
         use crate::form::{DrawZone, FormZone};
         use crate::i18n::Visitor;
-        let (max, hour) = (SystemTime::from(jiff::Timestamp::MAX), Duration::from_secs(3600));
+        let (max, hour) = (SystemTime::try_from(jiff::Timestamp::MAX).unwrap(), Duration::from_secs(3600));
         let (fixed, named) = (Offset::hours(-6), Visitor::named("Etc/GMT+6"));
         let draw = DrawZone::from(named.clone());
         let posted = FormZone::read("Etc/GMT+6").expect("Etc/GMT+6 is sent and read back");
@@ -751,7 +751,7 @@ mod tests {
                 let (first, last) = ((at + before.min(after)).div_euclid(DAY) - 1, (at + before.max(after)).div_euclid(DAY) + 1);
                 for d in first..=last {
                     let Some(day) = Day::from_days(d) else { continue };
-                    let midnight = ms(d * DAY).to_zoned(TimeZone::UTC).datetime();
+                    let midnight = ms(d * DAY).to_zoned_datetime(TimeZone::UTC).datetime();
                     let ambiguous = tz.to_ambiguous_timestamp(midnight);
                     let theirs = match ambiguous.offset() {
                         AmbiguousOffset::Gap { before, after } => {
@@ -817,7 +817,7 @@ mod tests {
                 let edges = [at + before, at + after].into_iter().flat_map(|e| [e - 1, e, e + 1]);
                 for local in edges.chain([at + (before + after) / 2]) {
                     let clock = LocalDateTime::clock(instant(local).unwrap(), Utc).unwrap();
-                    let civil = Timestamp::from_millisecond(local).unwrap().to_zoned(TimeZone::UTC).datetime();
+                    let civil = Timestamp::from_millisecond(local).unwrap().to_zoned_datetime(TimeZone::UTC).datetime();
                     let theirs = tz.to_ambiguous_timestamp(civil).compatible().unwrap().as_millisecond();
                     let ours = clock.read_in(&zone).and_then(unix_millis);
                     assert_eq!(ours, Some(theirs), "{clock} in {name}");
