@@ -135,7 +135,7 @@ fn a_field_check_keeps_the_existing_binding() {
 
 #[test]
 fn a_field_check_leaves_unproven_values_and_form_owners_to_the_browser() {
-    script::script!(mod fields = "field_check.js");
+    script::script!(mod fields = "../field_check.js");
 
     #[derive(Id)]
     struct EditorId(u32);

@@ -509,8 +509,8 @@ fn handler(
         }
         let names = proofs.names(base);
         let mut check = q(
-            &format!("::corten::script::__private::FieldCheck::<_, __A0, ::corten::script::{marker}, _>::new(&__A1, &__A2)"),
-            &[pos, bind.clone(), names.clone()],
+            &format!("::corten::script::__private::FieldCheck::<_, __A0, ::corten::script::{marker}, _>::new(&__A1, __A2)"),
+            &[pos, bind.clone(), names],
         );
         if let Some(id) = form_id.filter(|_| needs_id) {
             check.extend(q(".in_form(__A0)", std::slice::from_ref(id)));
@@ -535,7 +535,7 @@ fn handler(
                 __A2
             }
         }",
-        &[expr.clone(), checks, bind],
+        &[unparen(expr.clone()), checks, bind],
     );
     Some((checked, used_id))
 }
