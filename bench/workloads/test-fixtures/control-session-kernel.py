@@ -51,13 +51,15 @@ boot = {"hostname": "synthetic-host", "bootId": "01234567-89ab-cdef-0123-456789a
 if mode == "process-exit-during-read":
     # Script the kernel reads, not the production process parser.
     from unittest.mock import patch as mock
-    def row(state, ticks):
+    def row(state, ticks, flags=0):
         fields = ["0"] * 49
         fields[18] = str(ticks)
+        fields[5] = str(flags)
         return "123 (worker) " + state + " " + " ".join(fields) + "\n"
     cases = {}
-    for name, final, ticks in [("zombie", "Z", 50), ("live", "S", 50), ("reused", "Z", 51)]:
-        stats = iter([row("R", 50), row(final, ticks), row(final, ticks)])
+    for name, final, ticks, flags in [("zombie", "Z", 50, 0), ("exiting", "R", 50, 4),
+                                      ("live", "S", 50, 0), ("reused", "Z", 51, 4)]:
+        stats = iter([row("R", 50), row(final, ticks, flags), row(final, ticks, flags)])
         def read_text(path):
             return next(stats) if path.name == "stat" else "0::/system.slice/test.scope\n"
         with mock.object(pathlib.Path, "read_text", read_text), mock.object(pathlib.Path, "read_bytes", return_value=b""), \
@@ -136,7 +138,7 @@ class Path:
     def read_text(self):
         assert self.name == "cgroup.events"
         cg = self.value[len("/sys/fs/cgroup"):-len("/cgroup.events")]
-        populated = any(p["cgroup"] == "0::" + cg + "\n" for p in rows.values())
+        populated = any(p["cgroup"] == "0::" + cg + "\n" and ") Z " not in p["stat"] for p in rows.values())
         return "populated " + str(int(populated)) + "\nfrozen 0\n"
 
     def read_bytes(self):
@@ -319,6 +321,15 @@ scope.update({"root_for": lambda t: root if t == token else None, "private": lam
 scope["time"] = types.SimpleNamespace(monotonic_ns=time.perf_counter_ns, sleep=lambda seconds: time.sleep(min(seconds, 0.005)))
 invocations = []
 commands = {}
+zombie_seen = threading.Event()
+if mode == "reaped-zombie":
+    original_scope_read = scope["scope_read"]
+    def recorded_scope(path, snapshot):
+        observed = original_scope_read(path, snapshot)
+        if observed["members"] and all(") Z " in snapshot[pid]["stat"] for pid in observed["members"]):
+            zombie_seen.set()
+        return observed
+    scope["scope_read"] = recorded_scope
 command = lambda args: b"\0".join(arg.encode() for arg in args) + b"\0"
 frames = io.StringIO()
 binding = {"round": "r21", "commit": commit, "token": token, "helperSha256": hashlib.sha256(source.encode()).hexdigest()}
@@ -376,6 +387,11 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
             pass
         except AssertionError as error:
             raise RuntimeError("synthetic watcher errors: " + str(errors)) from error
+        if mode == "reaped-zombie":
+            zombie_seen.clear()
+            guardian = rows[current["guardian"]]
+            rows[current["guardian"]] = {**guardian, "executable": None, "stat": guardian["stat"].replace(") S ", ") Z ")}
+            assert zombie_seen.wait(1), "fixture watcher never observed the zombie"
         rows.pop(current["guardian"], None)
         if mode == "listener-title":
             rows[10]["commandSha256"] = hashlib.sha256(("listener-status-" + identifier).encode()).hexdigest()
@@ -426,6 +442,13 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
         assert any(p.startswith("/bench/control/registration-") for p in data), "early registration custody missing"
         assert data["/bench/control/helper.py"] == source.encode()
         output = {"binding": binding, "admission": admission, "frames": frames.getvalue(), "custodyFiles": len([p for p in data if p.startswith("/bench/control/")])}
+        if mode == "retained-watch-failure":
+            write(root / ("watch-failure-" + invocations[0]["id"] + ".json"), b'{"helperLine":10}')
+            try:
+                scope["inspect_epoch"](root, "bootstrap")
+                raise RuntimeError("watch failure accepted alongside a receipt")
+            except AssertionError as error:
+                output["failureBlocked"] = str(error) == "control watcher failed"
         if mode == "window":
             node = 30
             rows[node] = row(node, 1, "/system.slice/corten-bench-groups-r21-" + token + ".service/supervisor")

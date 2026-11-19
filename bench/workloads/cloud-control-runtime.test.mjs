@@ -13,7 +13,7 @@ function loopback(mode) {
   return JSON.parse(result.stdout);
 }
 test("observer keeps a process that becomes a zombie during sampling, never a live unknown or a reused PID", () => {
-  assert.deepEqual(loopback("process-exit-during-read"), { zombie: [123, "50", null, "Z"], live: "rejected", reused: "rejected" });
+  assert.deepEqual(loopback("process-exit-during-read"), { zombie: [123, "50", null, "Z"], exiting: [123, "50", null, "R"], live: "rejected", reused: "rejected" });
 });
 test("actual guardian/watcher producer registers SSH and SFTP, includes the final seal, joins the watcher and preserves custody", () => {
   const result = loopback("normal"), admission = result.admission;
@@ -38,7 +38,20 @@ test("intentional disconnect and surviving SSH ancestor never produce a successf
     assert.deepEqual(Object.keys(result.failure), ["helperLine"]);
     assert.ok(Number.isSafeInteger(result.failure.helperLine) && result.failure.helperLine > 0
       && result.failure.helperLine <= guardianSource.split("\n").length);
+    if (mode === "ancestor-zombie") assert.match(guardianSource.split("\n")[result.failure.helperLine - 1], /deadline/);
   }
+});
+test("a recorded watcher failure refuses a sealed epoch even alongside a receipt", () => {
+  assert.equal(loopback("retained-watch-failure").failureBlocked, true);
+});
+test("native receipts retain a zombie until reaped even when the scope has no live member", () => {
+  const { binding, admission } = loopback("reaped-zombie");
+  verifyControlAdmission(binding, "bootstrap", admission);
+  const receipt = admission.receipts[0], sample = receipt.samples.find((s) => s.scope.members.length && s.scope.events.startsWith("populated 0\n"));
+  assert.ok(sample);
+  const row = sample.processes.find((p) => sample.scope.members.includes(p.pid));
+  row.stat = row.stat.replace(") Z ", ") S ");
+  assert.throws(() => verifyControlAdmission(binding, "bootstrap", admission), /populated\/membership/);
 });
 
 test("watcher registration waits for its source-owned systemd launcher to exit before sampling the SSH scope", () => {

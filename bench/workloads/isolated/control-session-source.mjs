@@ -138,11 +138,11 @@ def proc(pid):
             exe = (directory / "exe").stat()
             executable = {"device": str(exe.st_dev), "inode": str(exe.st_ino)}
         except FileNotFoundError:
-            # Zombies still have a PID/start identity and must prevent drainage.
+            # PF_EXITING (stat field 9) may precede Z/X. Keep this identity until reaped.
             closing = (directory / "stat").read_text()
             current = closing.rsplit(") ", 1)[1].split()
             assert (closing.startswith(str(pid) + " (") and current[19] == fields[18]
-                    and current[0] in ("Z", "X")), "userspace executable unresolved"
+                    and (current[0] in ("Z", "X") or int(current[6]) & 0x4)), "userspace executable unresolved"
             raw = closing
     value = {"pid": pid, "startTicks": fields[18], "cgroup": cgroup, "stat": raw,
              "executable": executable, "commandSha256": sha((directory / "cmdline").read_bytes())}
