@@ -180,5 +180,6 @@ if terminal:
 print(json.dumps({'binding': binding, 'registration': next((v['payload'] for v in output if v['kind'] == 'registered'), None),
     'frames': [v['kind'] for v in output], 'pinned': pinned, 'terminal': terminal, 'failed': failed, 'reason': reason, 'drain': drain,
     'renewal': json.loads(data[root + '/stream-lease.json'])['renewal'] if root + '/stream-lease.json' in data else None,
-    'invalid': root + '/stream-invalid.json' in data, 'auditPublished': folder + '/json-audit-delivery-pending.json' in data,
+    'invalid': root + '/stream-invalid.json' in data, 'fault': json.loads(data.get(root + '/stream-invalid.json', b'null')),
+    'auditPublished': folder + '/json-audit-delivery-pending.json' in data,
     'seal': json.loads(data[root + '/stream-sealed.json']) if root + '/stream-sealed.json' in data else None}))

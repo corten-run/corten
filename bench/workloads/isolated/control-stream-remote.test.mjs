@@ -6,6 +6,8 @@ import test from "node:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { guardianSource } from "../cloud-control-runtime.mjs";
 import { binding, registration } from "../test-fixtures/control-stream-fixture.mjs";
 import { streamHash, verifyStreamDrain } from "./control-stream.mjs";
@@ -63,6 +65,15 @@ pathlib.Path('/proc/self/comm').write_bytes(('catalog-worker' + chr(233)).encode
 assert pathlib.Path('/proc/self/comm').read_bytes().rstrip(b'\\n') == b'catalog-worker\\xc3'
 row = ns['proc'](os.getpid())
 assert row['pid'] == os.getpid() and int(row['startTicks']) > 0 and ns['parent'](row) == os.getppid()
+# Exercise the real thread stat/status readers without changing the runner's CPU mask.
+import re
+read_task = ns['task_text']
+def on_control_cpu(path):
+    value = read_task(path)
+    return re.sub(r'^Cpus_allowed_list:[^\\n]+', 'Cpus_allowed_list: 0', value, flags=re.M) if path.name == 'status' else value
+ns['task_text'] = on_control_cpu
+member = ns['stream_member'](os.getpid())
+assert member['threads'] == [{'pid': row['pid'], 'startTicks': row['startTicks'], 'cpus': '0'}]
 `;
     const result = spawnSync("python3", ["-I", "-c", program], { input: guardianSource, encoding: "utf8", timeout: 5000 });
     assert.ifError(result.error); assert.equal(result.status, 0, result.stderr);
@@ -126,10 +137,49 @@ test("expired or stale guardian lease irrevocably cancels native independently o
   assert.equal(f.get("stream-invalid.json").remoteDrained, undefined);
 });
 
-test("child exit preserves the pinned watchdog's first failure", async (t) => {
+test("a pinned watchdog winning at publication preserves its first failure", async (t) => {
   const f = await fixture(t), first = { id: registration.id, host: registration.host, monoNs: "2000000", reason: "pinned watchdog", helperLine: 23 };
-  f.put("stream-invalid.json", first); f.child.emit("close", 254, null);
+  const link = fs.linkSync;
+  const raced = t.mock.method(fs, "linkSync", (stage, destination) => {
+    assert.equal(JSON.parse(readFileSync(stage)).reason, "watchdog exit");
+    assert.equal(existsSync(destination), false);
+    f.put("stream-invalid.json", first);
+    return link(stage, destination);
+  });
+  syncBuiltinESMExports();
+  try { f.child.emit("close", 254, null); }
+  finally { raced.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(raced.mock.callCount(), 1); assert.ok(!existsSync(join(f.root, "stream-invalid.pending")));
   assert.ok(f.abort.signal.aborted); assert.deepEqual(f.get("stream-invalid.json"), first);
+});
+
+test("failed helper fsync leaves neither partial evidence nor a scratch file in custody", () => {
+  const program = `import pathlib, sys, tempfile
+from unittest.mock import patch
+ns = {'__name__':'fixture'}
+exec(compile(sys.stdin.read(), '<guardian>', 'exec'), ns)
+with tempfile.TemporaryDirectory() as tmp:
+    root = pathlib.Path(tmp)
+    with patch('os.fsync', side_effect=OSError('test fsync')):
+        try: ns['write'](root / 'stream-invalid.json', b'{}')
+        except OSError as e: assert str(e) == 'test fsync'
+        else: raise AssertionError('fsync failure ignored')
+    assert not list(root.iterdir())
+`;
+  const result = spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "-c", program],
+    { input: guardianSource, encoding: "utf8", timeout: 5000 });
+  assert.ifError(result.error); assert.equal(result.status, 0, result.stderr);
+});
+
+test("campaign record sync failure still cancels and leaves the other reporters a free slot", async (t) => {
+  const f = await fixture(t);
+  f.tick(16000000000n);
+  const failed = t.mock.method(fs, "fsyncSync", () => { throw new Error("test fsync"); });
+  syncBuiltinESMExports();
+  try { assert.throws(() => f.supervisor.check(), /test fsync/); }
+  finally { failed.mock.restore(); syncBuiltinESMExports(); }
+  assert.ok(f.abort.signal.aborted);
+  for (const name of ["stream-invalid.pending", "stream-invalid.json"]) assert.ok(!existsSync(join(f.root, name)));
 });
 
 test("local EOF and expired drain deadline cannot replace an actual terminal apparatus probe", async (t) => {

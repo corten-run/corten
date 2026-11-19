@@ -47,13 +47,13 @@ def write(path, data, limit=LIMIT):
     stage = path.parent / (".stage-" + secrets.token_hex(16))
     fd = os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
-        with os.fdopen(fd, "wb", closefd=False) as out:
-            out.write(data)
-            out.flush()
-            os.fsync(fd)
-    finally:
-        os.close(fd)
-    try:
+        try:
+            with os.fdopen(fd, "wb", closefd=False) as out:
+                out.write(data)
+                out.flush()
+                os.fsync(fd)
+        finally:
+            os.close(fd)
         os.link(stage, path, follow_symlinks=False)
     finally:
         stage.unlink()
