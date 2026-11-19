@@ -16,7 +16,7 @@ remain pending; the mixed-inbox/inspection bridge does not waive those gates.
 
 The controller is `droplet.mjs`, separate from catalog, marketplace, the dispatcher,
 registry, parity and runners. It imports the existing read-only `cloud-contract.mjs`
-for the complete nine-group selection, pinned Ubuntu placement (c-16 for catalog, c-8 otherwise), fixed remote files,
+for the complete nine-group selection, [pinned host placement](#dedicated-group-hosts), fixed remote files,
 systemd unit and archive namespace. There are no adapter, provider, workload,
 deployment, environment or numeric-settings CLI overrides. Popular/performance
 views share evidence; they do not launch a second campaign.

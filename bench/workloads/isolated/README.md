@@ -73,7 +73,7 @@ uses a private clone, never replacement refs in the shared repository/worktree.
 
 The binding freezes the measured SHA, all source hashes, official registry definition and
 selection hash, exact contenders/cases, retained families, native arguments, effective
-options, intended host (c-16 for the dedicated catalog group, c-8 otherwise), resource expectations and strict validation state.
+options, [host placement for the selected mode](#resources-and-validation), resource expectations and strict validation state.
 `validateBinding` rereads the actual current committed source and reconstructs everything.
 Changing fields and computing a new caller-side hash cannot bypass that comparison.
 Legacy client-heavy/live CLI snapshots additionally pin their default-defining source
