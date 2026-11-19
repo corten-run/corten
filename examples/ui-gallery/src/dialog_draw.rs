@@ -26,6 +26,7 @@ pub enum Case {
     OverlapAreaFirst,
     FocusDialogFirst,
     FocusAreaFirst,
+    FocusReopen,
     ScriptDialog,
 }
 
@@ -63,14 +64,14 @@ pub(super) async fn draw(req: Req, Params(route): Params<DialogDraw>) -> HtmlRes
             })
             .await
         }
-        Case::OverlapDialogFirst | Case::OverlapAreaFirst | Case::FocusDialogFirst | Case::FocusAreaFirst => {
+        Case::OverlapDialogFirst | Case::OverlapAreaFirst | Case::FocusDialogFirst | Case::FocusAreaFirst | Case::FocusReopen => {
             let direct = html! {
                 <dialog id={DrawOuter} data-direct on:close={dialog_draw::closed(event, target, false)}></dialog>
             };
-            let area = area(route.case, false, "updated");
+            let area = area(route.case, route.case == Case::FocusReopen, "updated");
             req.patch_or(
                 html! {
-                    if matches!(route.case, Case::OverlapDialogFirst | Case::FocusDialogFirst) {
+                    if matches!(route.case, Case::OverlapDialogFirst | Case::FocusDialogFirst | Case::FocusReopen) {
                         {direct} {area}
                     } else {
                         {area} {direct}
@@ -130,7 +131,7 @@ fn DrawAreaPatch(case: Case, open: bool, stage: &str) -> impl Patch {
     let close = refs();
     let outer = refs();
     let form = refs();
-    let focus = matches!(case, Case::FocusDialogFirst | Case::FocusAreaFirst);
+    let focus = matches!(case, Case::FocusDialogFirst | Case::FocusAreaFirst | Case::FocusReopen);
     let next = DialogDraw { case: Case::Post };
     let nested = matches!(case, Case::Nested | Case::DropInner | Case::Mutate);
     let inner = nested && (open || case != Case::DropInner);
@@ -164,7 +165,7 @@ fn DrawAreaPatch(case: Case, open: bool, stage: &str) -> impl Patch {
                     if case == Case::Live {
                         <a href={next} data-no-prefetch>"Next page"</a>
                     }
-                    if case == Case::Reopen && stage == "updated" {
+                    if matches!(case, Case::Reopen | Case::FocusReopen) && open && stage == "updated" {
                         <form method="get" action={route} data-patch><button>"Close redrawn dialog"</button></form>
                     }
                     if case == Case::NativeConnect && stage == "updated" {

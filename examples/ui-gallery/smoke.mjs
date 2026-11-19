@@ -2460,6 +2460,21 @@ async function run(browser) {
       !after.open && after.focus === "draw-opener" && after.direct === areaFirst
         && after.events === (script ? "" : "draw-outer:patch:target:old;") && after.value === (script ? "" : "old"), JSON.stringify(after));
     }
+    await draws.goto(`${base}/dialog-draw/focus-reopen`);
+    await draws.locator("#draw-opener").press("Enter");
+    await draws.locator('#draw-area[data-stage="opened"] #draw-outer:modal').waitFor();
+    await draws.locator("output").evaluate((el) => { delete el.dataset.focusRef; });
+    await draws.getByRole("button", { name: "Change dialog" }).click();
+    await draws.locator('#draw-area[data-stage="updated"] #draw-outer:modal').waitFor();
+    const during = await draws.locator("output").evaluate((el) => el.dataset.focusRef);
+    await draws.getByRole("button", { name: "Close redrawn dialog" }).click();
+    const reopened = await draws.locator("#draw-outer:not([open])").evaluate((el) => ({
+      events: el.closest("main")?.querySelector("output")?.value,
+      focus: document.activeElement?.id,
+    }));
+    check("an overlapping redraw open with a ref lookup keeps the original opener for a later close",
+      during?.startsWith("opened;") && reopened.events === outer && reopened.focus === "draw-opener",
+      JSON.stringify({ during, ...reopened }));
     await draws.close();
   }
   const rename = page.locator("#rename");

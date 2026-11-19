@@ -1095,6 +1095,40 @@ async function run(browser) {
     check("abort sees the patch's replacement or removal, not a script's removal, and drawn open survives script edits",
       roots.replaced === "smoke-patch-root" && roots.expired && roots.drawn && roots.removed === "removed" && roots.script === "none",
       JSON.stringify(roots));
+    await scoped.route("**/patch-order.js", (route) => route.fulfill({ contentType: "text/javascript", body: `
+      export const seen = { heard: 0 };
+      let old;
+      export function watch(signal) {
+        old = signal;
+        document.addEventListener("smoke-patch-connect", () => { seen.heard += 1; }, { signal });
+      }
+      export function focus(refs) { seen.ref = refs.at(-1)?.textContent; }
+      export function connect(el) {
+        seen.aborted = old.aborted;
+        seen.vars = getComputedStyle(el).getPropertyValue("--smoke-state").trim();
+        seen.current = el.querySelector("a").getAttribute("aria-current");
+        document.dispatchEvent(new Event("smoke-patch-connect"));
+      }
+    ` }));
+    const order = await scoped.evaluate(async () => {
+      const { patch } = await import("corten");
+      const __html = /** @type {any} */ (window).__html;
+      const main = document.querySelector("main");
+      main?.insertAdjacentHTML("beforeend", __html('<section id="smoke-order"></section>'));
+      const first = '<div id="smoke-first" tabindex="0" data-on="focus:patch-order.focus(*part)';
+      await patch(__html(`<section id="smoke-order" data-scope="smoke-order"><span data-ref="part">kept</span>${first} connect:patch-order.watch($s)"></div><div id="smoke-later"></div></section>`));
+      // Warm the cache with a ref that stays attached, then add a ref in the replacement.
+      document.getElementById("smoke-first")?.focus();
+      await patch(__html(`${first}"><span data-ref="part">new</span></div><nav id="smoke-later" data-vars="--smoke-state:ready" data-on="connect:patch-order.connect($t)"><a data-nav href="/smoke/scoped">Here</a></nav>`));
+      const scripts = document.querySelector('meta[name="corten-scripts"]')?.getAttribute("content");
+      const { seen } = await import(new URL(`${scripts}patch-order.js`, location.href).href);
+      return seen;
+    });
+    check("a ref-taking focus handler sees the first replacement before the patch ends", order.ref === "new", JSON.stringify(order));
+    check("a removed component is aborted before a later patch connect dispatches an event",
+      order.aborted && order.heard === 0, JSON.stringify(order));
+    check("a later patch connect sees the applied CSS variables and current nav link",
+      order.vars === "ready" && order.current === "page", JSON.stringify(order));
     await scoped.close();
   }
   // Without the Navigation API every navigation is a full page load, the documented fallback: the

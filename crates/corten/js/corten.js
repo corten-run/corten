@@ -328,20 +328,27 @@ function scopeOf(from, owner) {
  * @param {Element} from
  * @param {string | null} owner
  * @param {string} name
+ * @returns {Element[]}
  */
 function findRefs(from, owner, name) {
   const scope = scopeOf(from, owner);
   // Resolved refs are kept per component root until the page's elements change: a click on a
-  // row of a 500-row grid then costs a lookup, not a query of every row. Mutations not yet
-  // delivered to the observer are taken now, so a handler never gets a stale list.
-  const pending = observer.takeRecords();
-  if (pending.length) observed(pending);
-  let cached = refCache.get(scope);
-  if (!cached) refCache.set(scope, (cached = new Map()));
-  // Still right while no element with this ref name joined the page and none it found left.
-  const changes = refChanges.get(name) ?? 0;
-  const hit = cached.get(name);
-  if (hit && hit.changes === changes && hit.found.every(inPage)) return hit.found.slice();
+  // row of a 500-row grid then costs a lookup, not a query of every row. During a patch, read
+  // the current tree directly: draining records would wire or abort unfinished markup.
+  /** @type {ReturnType<typeof refCache.get>} */
+  let cached;
+  let changes = 0;
+  if (patching) patchRef = true;
+  else {
+    const pending = observer.takeRecords();
+    if (pending.length) observed(pending);
+    cached = refCache.get(scope);
+    if (!cached) refCache.set(scope, (cached = new Map()));
+    // Still right while no element with this ref name joined the page and none it found left.
+    changes = refChanges.get(name) ?? 0;
+    const hit = cached.get(name);
+    if (hit && hit.changes === changes && hit.found.every(inPage)) return hit.found.slice();
+  }
   const own = attrOf(scope, "data-scope");
   const qualified = `${own}/${name}`;
   /** @type {Element[]} */
@@ -352,7 +359,7 @@ function findRefs(from, owner, name) {
   };
   check(scope);
   for (const el of Array.from(queryAll(scope, `[data-ref="${name}"],[data-ref="${qualified}"]`))) check(el);
-  cached.set(name, { changes, found });
+  cached?.set(name, { changes, found });
   return found.slice();
 }
 
@@ -784,9 +791,8 @@ function sweep() {
  */
 const MANY = 16;
 
-// A synchronous ref lookup can drain removals before a patch has recorded every replacement.
-let holdSweep = false;
-let removed = false;
+let patching = false;
+let patchRef = false;
 
 /**
  * Markup that joins the page (a navigation, a patch, a script's insert) is wired;
@@ -794,34 +800,23 @@ let removed = false;
  * @param {MutationRecord[]} records
  */
 function observed(records) {
-  const held = holdSweep;
-  holdSweep = true;
-  try {
-    /** The names of the refs of the elements that joined. @type {Set<string>} */
-    const names = new Set();
-    /** Parents that got many children at once: scanned whole, with one query each. @type {Set<Element>} */
-    const wide = new Set();
-    for (const record of records) {
-      if (record.removedNodes.length) removed = true;
-      const added = record.addedNodes;
-      const parent = record.target;
-      if (added.length > MANY && parent instanceof Element && added.length * 2 >= childrenOf(parent).length) wide.add(parent);
-      else for (const node of added) if (node instanceof Element && inPage(node)) scan(node, names);
-    }
-    // Wiring is the same however often it runs, so a parent scanned whole may hold rows wired before.
-    for (const parent of wide) if (inPage(parent)) scan(parent, names, true);
-    for (const name of names) refChanges.set(name, (refChanges.get(name) ?? 0) + 1);
-    // A connect or abort handler can drain more records; finish after the outer scan or patch.
-    if (!held && removed) {
-      do {
-        removed = false;
-        sweep();
-      } while (removed);
-      replacements?.clear();
-    }
-  } finally {
-    holdSweep = held;
+  let removed = false;
+  /** The names of the refs of the elements that joined. @type {Set<string>} */
+  const names = new Set();
+  /** Parents that got many children at once: scanned whole, with one query each. @type {Set<Element>} */
+  const wide = new Set();
+  for (const record of records) {
+    if (record.removedNodes.length) removed = true;
+    const added = record.addedNodes;
+    const parent = record.target;
+    if (added.length > MANY && parent instanceof Element && added.length * 2 >= childrenOf(parent).length) wide.add(parent);
+    else for (const node of added) if (node instanceof Element && inPage(node)) scan(node, names);
   }
+  // Wiring is the same however often it runs, so a parent scanned whole may hold rows wired before.
+  for (const parent of wide) if (inPage(parent)) scan(parent, names, true);
+  for (const name of names) refChanges.set(name, (refChanges.get(name) ?? 0) + 1);
+  if (removed) sweep();
+  if (replacements?.size) for (const { removedNodes } of records) for (const node of removedNodes) replacements.delete(node);
 }
 
 const observer = new MutationObserver(observed);
@@ -1096,7 +1091,7 @@ async function apply(html, signal, sent, took, own, asked, within) {
   let again;
   // Whether it removes a nav link, which can leave another of its nav current.
   let navs = false;
-  holdSweep = true;
+  patching = true;
   try {
     for (const el of Array.from(content.children)) {
       // Read from the attribute, as `target.id` is a control named id when the target is a form.
@@ -1128,15 +1123,20 @@ async function apply(html, signal, sent, took, own, asked, within) {
         put.push(el);
       }
     }
+    // The server marked a nav link in the patch against the request that made it (a form's action),
+    // not this page: mark it as a navigation would. Only then: a patch without one (a ticker's)
+    // only looks through what it put.
+    if (navs || put.some(holdsNav)) markCurrent();
+    for (const el of put) setVars(el);
   } finally {
-    holdSweep = false;
-    if (removed) observed(observer.takeRecords());
+    // A ref read would normally already have swept. End those lives before the observer wires
+    // later replacements, but only now that the whole chain of replacement roots is available.
+    try {
+      if (patchRef) sweep();
+    } finally {
+      patchRef = patching = false;
+    }
   }
-  // The server marked a nav link in the patch against the request that made it (a form's action),
-  // not this page: mark it as a navigation would. Only then: a patch without one (a ticker's)
-  // only looks through what it put.
-  if (navs || put.some(holdsNav)) markCurrent();
-  for (const el of put) setVars(el);
   if (again) {
     const beside = asked?.isConnected ? asked : partTagBeside(put);
     if (beside) beside.replaceWith(again);

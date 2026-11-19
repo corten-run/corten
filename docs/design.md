@@ -4552,9 +4552,12 @@ rules something out.
     handler change the tree while the runtime walks it. The widget instead asks the runtime
     which patch root took its modal away, during the existing connect signal's abort. It looks
     only inside recorded roots, follows a detached counterpart through any further recorded
-    replacements, and acts after the sweep, innermost first. A ref lookup still scans and
-    invalidates its cache synchronously; it cannot sweep removals or clear the roots before
-    the patch has recorded all its replacements
+    replacements, and acts after the sweep, innermost first. A ref lookup during a patch reads
+    the current tree without using the ref cache or draining mutation records. Once all the
+    replacements are recorded, the patch ends the removed elements' lives before wiring the
+    rest of that patch. The observer scans after the patch sets CSS variables and current nav
+    links, then clears the recorded roots as usual. If the successor is drawn open and has not
+    connected at abort, the dialog widget passes the opener on after it connects
     ([#1629 A ref-taking focus handler between overlapping dialog replacements in one patch loses the dialog's close](https://github.com/corten-run/corten/issues/1629)).
     A dialog needs the drawn-state record made before connect, so a dialog a connect handler
     just created cannot receive the old close. Duplicate ids are invalid; moving an
@@ -4638,8 +4641,11 @@ rules something out.
     overlap and script-created same-id cases failed on `e4a97b811` and passed with the widget
     fixes in the same three engines. The reverse overlap order passed on both. Core was
     byte-identical to `e4a97b811`. 2026-11-18, with a focus handler that reads a ref, both
-    replacement orders lost the close and result on `e927c2463`. Both pass with the deferred
-    removal sweep, and the ref lookup sees the current markup in Chromium, Firefox and WebKit.
+    replacement orders lost the close and result on `e927c2463`. 2026-11-19, both orders pass with
+    direct ref reads during a patch, and those reads see current markup in Chromium 159, Firefox
+    159 and WebKit 27.2. In each engine, a later connect sees the old signal aborted and the
+    patch's CSS variables and current nav link applied, unlike on `ac87c5b03`. An overlapping
+    redraw that keeps the modal open still returns focus to the original opener on a later close.
 
 53. <a id="choice-page-actions"></a>**A page's several writes are named posts of its own route, chosen by a `do` parameter
     in the address each form posts to, not by the pressed button's name in the body or a route per
