@@ -2230,7 +2230,10 @@ rules something out.
     conflict a hand-written prefixed route can meet, and the differential and area-scope tests
     passed again in the full debug tests of `0653768e1` and of the merge `4c6ac3e3d`;
     2026-11-18, the staged catalog page's boxed future sizes in x86-64 Linux release builds
-    before (`7620ef9be`) and after (`ca900161d`) keeping the request in one slot.
+    before (`7620ef9be`) and after (`ca900161d`) keeping the request in one slot; 2026-11-18,
+    rechecked after moving the poller into the existing late-write box (`8db1903dd`): in DHAT,
+    100 catalog GETs on one connection allocated one 2,144-byte stage and one 1,880-byte handler
+    future each, against 4,952 and 1,880 bytes at the baseline.
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
