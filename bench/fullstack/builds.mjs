@@ -89,7 +89,7 @@ const node = (/** @type {string} */ file, /** @type {Record<string, string>=} */
  */
 export const recipes = {
   corten: {
-    tools: "rust:1-bookworm",
+    tools: "rust:1-trixie",
     context: ".",
     dockerfile: "examples/card-market/Dockerfile",
     workdir: "/src",
