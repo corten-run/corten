@@ -219,9 +219,13 @@ a server ignores `Upgrade` in an HTTP/1.0 request (RFC 9110, 7.8).
 written out: this configuration with a certificate, limits on what one address may ask for
 and hold, with what each was measured to do, a limit on the live streams one reader and all
 readers may hold and, for a machine with 512 MB, the streams asked for as zstd or not
-compressed at all, and the app as a systemd service on one small machine. During a ship, nginx
-has a ready backup instance on a second loopback port while the primary restarts. The workflow
-counts unanswered requests and puts the release before back when the new one does not answer.
+compressed at all, and the app as a systemd service on one small machine. During an ordinary
+ship, nginx can use a temporary backup on a second loopback port while the primary restarts;
+both units run the candidate as the primary comes up. Short proxy timeouts bound failover for
+pages without shortening the live stream idle timeout. `/health/ready` checks for a ready
+listener, not a verified release. The workflow checks the page, JSON and stream separately, and
+puts the previous release back on failure even if the backup cannot start. An interrupted ship
+can leave `current` pointing at an unchecked candidate, and a reboot does not start the backup.
 A replacement machine serves before the address moves to it.
 
 ## Caching

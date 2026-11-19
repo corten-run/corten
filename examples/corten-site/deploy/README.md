@@ -323,22 +323,34 @@ A push to `main` that touches the site, the crates or the lockfile runs the work
 the site's tests, builds the release with the commit's name in it and copies it to a directory
 of its own, `/opt/corten-site/releases/<commit>-<run>-<attempt>`, where the machine checks it
 against the build's SHA-256. With a release already in place, `release.sh serve` starts the
-candidate on loopback port 3001 and waits for its readiness check. If it does not answer, the
-primary is left alone. Otherwise it points `/opt/corten-site/current` at the candidate and
-restarts the primary on port 3000. nginx prefers the primary and uses its usual upstream
-failover to reach the backup. It is not configured to retry writes already sent to the primary.
-Once the primary answers its own readiness check, the backup stops.
+candidate on loopback port 3001 and waits for `/health/ready`. If the backup does not answer,
+an answering primary is left alone; a down primary can still be restarted. The script points
+`/opt/corten-site/current` at the candidate and restarts the primary on port 3000. Both units
+then run the candidate. Once the primary answers readiness, the script waits three seconds
+for nginx's failure window to expire, then checks readiness again before stopping the backup.
+Readiness checks a listener, not that the release serves the page, JSON or live stream correctly.
+nginx prefers the primary but can try the backup on an upstream error or timeout before it
+sends a response. On loopback it waits up to 250 ms to connect and, for pages and assets, one
+second between upstream reads; a failed primary is briefly skipped across nginx workers.
+Streams keep the usual 60-second idle timeout rather than the page timeout. nginx does not
+retry sent non-idempotent writes.
 nginx does not reload during a ship, and neither service needs a listener passed to it. The
-extra process runs only for the change; on first deploy there is nothing to bridge.
+extra process runs only for the change; on first deploy there is nothing to bridge. The backup
+is not enabled at boot, so a reboot loses it, even if it was left answering by a failed ship.
 
 The workflow asks for the page, which names its commit, for the same as JSON, and for a reading
 from the live stream. If the machine does not take the release, or the site does not answer all
-three as this commit within 20 tries, it puts back the release before through the same `serve`
-command, says whether it answers as its own commit, and fails. A backup left answering after a
-failed or interrupted restart stays up until a primary is ready, including during put-back.
-The newest three releases are kept, as are the ones named by `current` and `bridge`. The workflow
-also asks for the page about once a second while the ship step runs and reports how many requests
-did not answer as the site. That count does not decide the deploy's result.
+three as this commit within 20 tries, it uses `release.sh restore` to put back the release before,
+says whether it answers as its own commit, and fails. An answering backup left by a failed or
+interrupted restart stays up until a primary is ready. A failed backup does not block put-back.
+The host locks each release mutation, and waits for queued systemd jobs before it checks or
+changes the units. The workflow checks the expected `current` under that lock so that an
+overlapping ship or a late put-back does not displace a different release. The newest three
+installed releases are kept, as are the ones named by `current` and `bridge`; an upload has
+the ship job's 45 minutes before pruning can remove its unfinished directory.
+The workflow also asks for the page while the ship step runs. It waits one second after each
+completed probe and reports completed probes, misses and interrupted probes separately. Those
+counts do not decide the deploy's result.
 
 Machines provisioned before the backup was added need the updated nginx config, unit and sudo
 rules from provisioning before they can ship this way. The Site machine workflow provisions a
@@ -350,10 +362,11 @@ Three cases can leave a release served that was not checked. The first deploy ha
 before it to go back to. A put-back that does not succeed in three tries can leave the new
 release served; the run says where `current` points, if the machine answers, and fails. A run
 cancelled by hand, or ended by the job's 45 minutes, can stop before the checks or the put-back
-are done: run the workflow again. The release put back is the primary release from before the
-run, checked or not, so look at the site before trusting a later put-back. A machine that stops
-answering is given up on within 20 seconds and counts as a failure, so the put-back runs over a
-new connection.
+are done: `current` can point at the old release or an unchecked candidate, and the backup
+can be the one answering. Run the workflow again. The release put back is the primary release
+from before the run, checked or not, so look at the site before trusting a later put-back. A
+machine that stops answering is given up on within 20 seconds and counts as a failure, so the
+put-back runs over a new connection.
 
 A stream still ends with its process, including one opened on the backup. The browser asks
 again after a few seconds and gets the readings from whichever process answers; its counts start

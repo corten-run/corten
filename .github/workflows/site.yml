@@ -86,6 +86,7 @@ jobs:
             (
               trap 'exit 0' TERM
               while :; do
+                echo started
                 if got=$(curl -fsS --max-time 2 "$site/" 2>/dev/null) && grep -q 'built from' <<< "$got"; then echo answered; else echo lost; fi
                 sleep 1
               done
@@ -94,7 +95,10 @@ jobs:
             counted() {
               kill "$asking" 2>/dev/null || true
               wait "$asking" 2>/dev/null || true
-              echo "While the ship ran, $site/ was asked $(wc -l < "$asked") times, a second apart, and did not answer as the site $(grep -c lost "$asked" || true) of them."
+              started=$(grep -cx started "$asked" || true)
+              answered=$(grep -cx answered "$asked" || true)
+              lost=$(grep -cx lost "$asked" || true)
+              echo "While the ship ran, $site/ had $((answered + lost)) completed probes ($lost did not answer as the site) and $((started - answered - lost)) interrupted. The observer waits one second after each completed probe."
               rm -f "$asked" || true
             }
             trap counted EXIT
@@ -116,7 +120,7 @@ jobs:
           page() { got=$(curl -fsS --max-time 5 "$site/") && printf '%s' "$got" | grep -q "built from $1"; }
           json() { got=$(curl -fsS --max-time 5 -H 'accept: application/json' "$site/") && printf '%s' "$got" | grep -q "\"heat\":\"$1\""; }
           stream() { curl -sS -N --max-time 5 "$site/live/works" 2>/dev/null | grep -q '^event: patch'; }
-          if machine serve "$release"; then
+          if machine serve "$release" "$before"; then
             for _ in $(seq 1 20); do
               if page "$commit" && json "$commit" && stream; then
                 echo "$site/ is serving $commit"
@@ -135,7 +139,7 @@ jobs:
           fi
           # The machine may be out of reach for a moment, which is what failed the deploy: the
           # put-back is tried three times.
-          put_back() { for _ in 1 2 3; do machine serve "$before" && return 0; sleep 5; done; return 1; }
+          put_back() { for _ in 1 2 3; do machine restore "$before" "$release" && return 0; sleep 5; done; return 1; }
           # A release's directory starts with its commit, which its page names: the put-back is
           # checked as that release, not as any answer. It is read with this commit's words for
           # it, so a change to how the page names its commit fails this check once.
