@@ -187,8 +187,13 @@ def scope_read(scope, rows):
     assert all(p not in (".", "..") for p in scope.split("/"))
     path = pathlib.Path("/sys/fs/cgroup" + scope)
     assert path.resolve() == path
-    exists = path.exists()
-    return {"path": scope, "exists": exists, "events": (path / "cgroup.events").read_text() if exists else None,
+    try:
+        events = (path / "cgroup.events").read_text() if path.exists() else None
+    except FileNotFoundError:
+        if path.exists():
+            raise
+        events = None
+    return {"path": scope, "exists": events is not None, "events": events,
             "members": sorted(p["pid"] for p in rows.values() if member(p, scope))}
 
 
@@ -281,6 +286,7 @@ def watch(root, identifier):
     samples = []
     rows_count = 0
     while time.monotonic_ns() < deadline:
+        before = scope_read(scope, {})["events"] if samples else None
         rows = inventory()
         selected = {pid: p for pid, p in rows.items() if key(p) in known}
         changed = True
@@ -293,6 +299,11 @@ def watch(root, identifier):
                     changed = True
         assert len(known) <= 8192
         scoped = scope_read(scope, rows)
+        # A short-lived member may exit after /proc was read. Preserve both
+        # actual cgroup reads and every observed PID; this is never a final sample.
+        if (scoped["members"] and before and before.startswith("populated 1\n")
+                and (not scoped["exists"] or scoped["events"].startswith("populated 0\n"))):
+            scoped["eventsBeforeInventory"] = before
         assert all(pid in selected for pid in scoped["members"]), "unowned scope participant"
         for p in (listener, observer):
             actual = rows[p["pid"]]

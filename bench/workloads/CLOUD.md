@@ -410,6 +410,10 @@ If an SSH or SFTP watcher raises an exception, its archived
 `control/helper.py`. Match the ID to the sealed ledger to find the failed check.
 This is diagnostic evidence, never a terminal watcher receipt. A missing receipt
 still prevents admission, even when the associated command exited successfully.
+An intermediate process sample may catch a member just before it exits. When the
+scope switches from populated to empty during the inventory read, its sample
+retains both raw event observations and the member's identity. The watcher
+still needs a later sample with no remaining session member to prove drainage.
 Setup retirement permits only that exact source-bound marker, preserving an
 already-recorded bootstrap observation. A foreign, malformed, symlinked or
 missing previously observed marker refuses, as does any native campaign data.

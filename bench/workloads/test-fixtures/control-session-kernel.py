@@ -330,6 +330,17 @@ if mode == "reaped-zombie":
             zombie_seen.set()
         return observed
     scope["scope_read"] = recorded_scope
+if mode == "exit-between-reads":
+    before_exit, after_exit = threading.Event(), threading.Event()
+    original_scope_read = scope["scope_read"]
+    def captured_scope(path, snapshot):
+        pid = current["guardian"]
+        if before_exit.is_set() and pid in snapshot:
+            rows.pop(pid, None)
+            before_exit.clear()
+            after_exit.set()
+        return original_scope_read(path, snapshot)
+    scope["scope_read"] = captured_scope
 command = lambda args: b"\0".join(arg.encode() for arg in args) + b"\0"
 frames = io.StringIO()
 binding = {"round": "r21", "commit": commit, "token": token, "helperSha256": hashlib.sha256(source.encode()).hexdigest()}
@@ -392,6 +403,10 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
             guardian = rows[current["guardian"]]
             rows[current["guardian"]] = {**guardian, "executable": None, "stat": guardian["stat"].replace(") S ", ") Z ")}
             assert zombie_seen.wait(1), "fixture watcher never observed the zombie"
+        if mode == "exit-between-reads":
+            after_exit.clear()
+            before_exit.set()
+            assert after_exit.wait(1), "fixture did not place exit between reads"
         rows.pop(current["guardian"], None)
         if mode == "listener-title":
             rows[10]["commandSha256"] = hashlib.sha256(("listener-status-" + identifier).encode()).hexdigest()

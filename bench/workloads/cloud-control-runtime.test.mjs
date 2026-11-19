@@ -44,12 +44,28 @@ test("intentional disconnect and surviving SSH ancestor never produce a successf
 test("a recorded watcher failure refuses a sealed epoch even alongside a receipt", () => {
   assert.equal(loopback("retained-watch-failure").failureBlocked, true);
 });
+test("scope exit between the process and cgroup reads retains both observations and requires later drainage", () => {
+  const { binding, admission } = loopback("exit-between-reads");
+  verifyControlAdmission(binding, "bootstrap", admission);
+  const receipt = admission.receipts[0], sample = receipt.samples.find((s) => Object.hasOwn(s.scope, "eventsBeforeInventory"));
+  assert.match(sample.scope.eventsBeforeInventory, /^populated 1\n/);
+  assert.match(sample.scope.events, /^populated 0\n/);
+  assert.ok(sample.scope.members.length);
+  for (const mutate of [
+    (r) => { r.samples.splice(r.samples.findIndex((s) => s.scope.eventsBeforeInventory) + 1); },
+    (r) => { r.samples.find((s) => s.scope.eventsBeforeInventory).scope.eventsBeforeInventory = "populated 0\n"; },
+  ]) {
+    const changed = structuredClone(admission); mutate(changed.receipts[0]);
+    assert.throws(() => verifyControlAdmission(binding, "bootstrap", changed));
+  }
+});
 test("native receipts retain a zombie until reaped even when the scope has no live member", () => {
   const { binding, admission } = loopback("reaped-zombie");
   verifyControlAdmission(binding, "bootstrap", admission);
   const receipt = admission.receipts[0], sample = receipt.samples.find((s) => s.scope.members.length && s.scope.events.startsWith("populated 0\n"));
   assert.ok(sample);
   const row = sample.processes.find((p) => sample.scope.members.includes(p.pid));
+  delete sample.scope.eventsBeforeInventory;
   row.stat = row.stat.replace(") Z ", ") S ");
   assert.throws(() => verifyControlAdmission(binding, "bootstrap", admission), /populated\/membership/);
 });
