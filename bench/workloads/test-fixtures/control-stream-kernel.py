@@ -92,6 +92,9 @@ def emit(frame):
     kind = frame['kind']
     if kind == 'registered':
         assert not data.get(root + '/seal-bootstrap.json') and not data.get(root + '/campaign-active.json')
+        if mode == 'early-job-exit':
+            data['/bench/exit-code'] = b'2\n'
+            return
         put('campaign-active.json', {'owner': {'pid': 40}})
         put('stream-state.json', {'kind': 'progress', 'payload': {'state': 'active'}})
     elif kind == 'progress':
@@ -155,12 +158,13 @@ fake_os = types.SimpleNamespace(getuid=lambda: 0, getpid=lambda: 21, uname=lambd
 scope.update({'os': fake_os, 'pathlib': types.SimpleNamespace(Path=Path), 'private': lambda p: None, 'read': read, 'write': write,
               'time': types.SimpleNamespace(monotonic_ns=lambda: clock)})
 sys.modules['select'] = types.SimpleNamespace(select=select)
-terminal, failed, drain = False, False, None
+terminal, failed, drain, reason = False, False, None, None
 try:
     assert scope['main'](['monitor', token, encoded({'binding': binding, 'id': identifier}).hex()]) == 0
     terminal = True
-except AssertionError:
+except AssertionError as error:
     failed = True
+    reason = str(error)
 if terminal:
     rows.pop(21)
     if mode != 'drain-survivor': rows.pop(20)
@@ -168,6 +172,6 @@ if terminal:
     try: drain = scope['stream_drain'](Path(root))
     except AssertionError: failed = True
 print(json.dumps({'binding': binding, 'registration': next((v['payload'] for v in output if v['kind'] == 'registered'), None),
-    'frames': [v['kind'] for v in output], 'pinned': pinned, 'terminal': terminal, 'failed': failed, 'drain': drain,
+    'frames': [v['kind'] for v in output], 'pinned': pinned, 'terminal': terminal, 'failed': failed, 'reason': reason, 'drain': drain,
     'invalid': root + '/stream-invalid.json' in data, 'auditPublished': folder + '/json-audit-delivery-pending.json' in data,
     'seal': json.loads(data[root + '/stream-sealed.json']) if root + '/stream-sealed.json' in data else None}))

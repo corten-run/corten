@@ -18,6 +18,12 @@ test("actual fixed guardian registers and pins exact socket ancestry, streams au
   assert.equal(verifyStreamDrain(result.binding, registration, result.drain).remoteDrained, true);
   assert.ok(result.frames.includes("progress") && result.frames.includes("audit-end") && result.frames.includes("delivery-sealed") && result.frames.at(-1) === "terminal");
 });
+test("an exited job without native progress invalidates a responsive monitor without accepting results", () => {
+  const result = kernel("early-job-exit");
+  assert.equal(result.reason, "benchmark job exited before first campaign state");
+  assert.equal(result.invalid, true); assert.equal(result.terminal, false);
+  assert.equal(result.drain, null); assert.equal(result.auditPublished, false);
+});
 for (const mode of ["lost-lease", "new-child", "namespace", "affinity", "unknown-login", "replayed-renewal", "unknown-input", "native-delivery"])
   test("actual guardian intentional negative: " + mode, () => {
     const result = kernel(mode); assert.equal(result.failed, true); assert.equal(result.invalid, true); assert.equal(result.terminal, false); assert.equal(result.drain, null);

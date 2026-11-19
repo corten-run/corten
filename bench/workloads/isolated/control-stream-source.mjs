@@ -271,6 +271,10 @@ def stream_monitor(root, expected):
             stream_replace(root / 'stream-lease.json', {'id': expected['id'], 'host': registration['host'],
                 'expiresMonoNs': str(lease_until), 'renewal': renewal, 'observedMonoNs': str(sampled)})
             state_path = root / 'stream-state.json'
+            # The job's EXIT trap also runs if native entry failed before its
+            # first progress publication. A healthy SSH lease is not a live job.
+            if state_hash is None and pathlib.Path('/bench/exit-code').exists():
+                assert state_path.exists(), 'benchmark job exited before first campaign state'
             if state_path.exists() and len(outgoing) < 32768:
                 state = stream_load(root, state_path.name)
                 current = sha(encoded(state))
