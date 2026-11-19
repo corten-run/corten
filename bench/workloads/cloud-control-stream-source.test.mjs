@@ -21,7 +21,7 @@ test("actual fixed guardian registers and pins exact socket ancestry, streams au
 for (const mode of ["early-job-exit", "already-exited"])
   test("an exited job without progress preserves registration but is never a result: " + mode, () => {
     const result = kernel(mode);
-    assert.ok(result.registration); assert.ok(result.frames.includes("challenge"));
+    assert.ok(result.registration); assert.equal(result.renewal, 1);
     assert.equal(result.reason, "benchmark job exited before first campaign state");
     assert.equal(result.invalid, true); assert.equal(result.terminal, false);
     assert.equal(result.drain, null); assert.equal(result.auditPublished, false);
