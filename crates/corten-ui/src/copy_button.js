@@ -40,11 +40,8 @@ export async function copy(button, id, said, copied, signal) {
   // Taken before the write: keep() reads the running handler, which an await leaves.
   const s = shown();
   const from = document.getElementById(id);
-  const text = from instanceof HTMLInputElement || from instanceof HTMLTextAreaElement
-    ? from.value
-    : from instanceof HTMLFormElement
-      ? /** @type {string | null} */ (Reflect.get(Node.prototype, "textContent", from))
-      : from?.textContent;
+  const read = from instanceof HTMLInputElement || from instanceof HTMLTextAreaElement ? from.value : from?.textContent;
+  const text = from && read != null && typeof read !== "string" ? Reflect.get(Node.prototype, "textContent", from) : read;
   if (!text) return;
   try {
     await navigator.clipboard.writeText(text);

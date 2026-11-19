@@ -28,7 +28,8 @@ export function connect(set, control, values, signal) {
   // On the document: a control outside the form's element (`form=`) does not bubble to it.
   document.addEventListener("change", changed, { signal });
   document.addEventListener("input", changed, { signal });
-  EventTarget.prototype.addEventListener.call(form, "reset", () => setTimeout(apply), { signal });
+  const add = form.addEventListener;
+  (typeof add === "function" ? add : EventTarget.prototype.addEventListener).call(form, "reset", () => setTimeout(apply), { signal });
 }
 
 /**

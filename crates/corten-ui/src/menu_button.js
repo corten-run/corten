@@ -104,7 +104,8 @@ export function step(event, menu) {
 export function used(event, trigger, menu) {
   const { target: clicked } = event;
   if (!(clicked instanceof Element)) return;
-  const item = clicked instanceof HTMLFormElement ? Element.prototype.closest.call(clicked, ITEM) : clicked.closest(ITEM);
+  const closest = clicked.closest;
+  const item = (typeof closest === "function" ? closest : Element.prototype.closest).call(clicked, ITEM);
   if (!item || !menu.contains(item)) return;
   const target = item.getAttribute("commandfor");
   const dialog = target && document.getElementById(target);

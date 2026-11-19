@@ -29,25 +29,20 @@ function afterRemoval(order, finish) {
 }
 
 /** @param {Element} el */
-const idOf = (el) => el instanceof HTMLFormElement ? Element.prototype.getAttribute.call(el, "id") : el.getAttribute("id");
-
-/** @param {Element} el */
-const localName = (el) => el instanceof HTMLFormElement ? "form" : el.localName;
+const localName = (el) => Reflect.get(Element.prototype, "localName", el);
 
 /** @param {HTMLElement} el @param {FocusOptions} [options] */
 function focusElement(el, options) {
-  if (el instanceof HTMLFormElement) HTMLElement.prototype.focus.call(el, options);
-  else el.focus(options);
+  const focus = el.focus;
+  (typeof focus === "function" ? focus : HTMLElement.prototype.focus).call(el, options);
 }
 
 /** @param {Element | null} el @param {Element | null | undefined} root */
 function counterpart(el, root) {
-  if (!el || !root) return null;
-  const id = idOf(el);
-  if (!id) return null;
-  if (idOf(root) === id) return root;
-  const selector = `#${CSS.escape(id)}`;
-  return root instanceof HTMLFormElement ? Element.prototype.querySelector.call(root, selector) : root.querySelector(selector);
+  const id = el && Element.prototype.getAttribute.call(el, "id");
+  if (!id || !root) return null;
+  return Element.prototype.getAttribute.call(root, "id") === id
+    ? root : Element.prototype.querySelector.call(root, `#${CSS.escape(id)}`);
 }
 
 /** @param {HTMLDialogElement} dialog @param {Element | null} root */

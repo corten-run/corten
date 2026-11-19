@@ -10,7 +10,10 @@
 export function connect(group, missing, signal) {
   check(group, missing);
   const form = group.form;
-  if (form) EventTarget.prototype.addEventListener.call(form, "reset", () => setTimeout(() => check(group, missing)), { signal });
+  if (form) {
+    const add = form.addEventListener;
+    (typeof add === "function" ? add : EventTarget.prototype.addEventListener).call(form, "reset", () => setTimeout(() => check(group, missing)), { signal });
+  }
 }
 
 /**

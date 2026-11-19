@@ -1986,8 +1986,7 @@ async function run(browser) {
   // The two saves cut on purpose: Chromium logs each as a resource that failed to load.
   errors.splice(errorsBefore, errors.length - errorsBefore, ...errors.slice(errorsBefore).filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
 
-  // dialog::modal: initial focus uses the custom field's focus method, but can also
-  // focus a form whose own focus member is shadowed by a named control.
+  // dialog::modal: use callable focus overrides, even on forms, and handle named controls.
   {
     const invalid = await browser.newPage();
     invalid.on("pageerror", (e) => errors.push(e.message));
@@ -2000,16 +1999,22 @@ async function run(browser) {
           }
           /** @param {FocusOptions} [options] */
           focus(options) { this.shadowRoot?.querySelector("input")?.focus(options); }
+          connectedCallback() {
+            const form = this.closest("#invalid-form");
+            if (form) form.focus = () => this.focus();
+          }
         });
       });
-      for (const field of [true, false]) {
+      for (const [name, field, id, inner] of [
+        ["a modal calls the invalid custom field's focus method", '<form$3><smoke-field id="invalid-field" aria-invalid="true"></smoke-field>', "invalid-field", "input"],
+        ["a modal focuses an invalid form whose focus is shadowed", '<form$3 id="invalid-form" tabindex="-1" aria-invalid="true"><input type="hidden" name="focus">', "invalid-form"],
+        ["a modal calls an invalid form's own focus method", '<form$3 id="invalid-form" aria-invalid="true"><smoke-field id="form-field"></smoke-field>', "form-field", "input"],
+      ]) {
         const url = `${base}/`;
         await invalid.route(url, async (route) => {
           const response = await route.fetch();
           const body = (await response.text()).replace(/(<dialog\b[^>]*\bid="rename"[^>]*)(>.*?)<form(\b[^>]*)>/s,
-            field
-              ? '$1 open$2<form$3><button type="button" id="before-invalid">Before field</button><smoke-field id="invalid-field" aria-invalid="true"></smoke-field>'
-              : '$1 open$2<button type="button" id="before-invalid">Before form</button><form$3 id="invalid-form" tabindex="-1" aria-invalid="true"><input type="hidden" name="focus">');
+            '$1 open$2<button type="button" id="before-invalid">Before invalid</button>' + field);
           await route.fulfill({ response, body });
         }, { times: 1 });
         await invalid.goto(url);
@@ -2018,8 +2023,7 @@ async function run(browser) {
           outer: document.activeElement?.id,
           inner: document.activeElement?.shadowRoot?.activeElement?.localName,
         }));
-        check(field ? "a modal calls the invalid custom field's focus method" : "a modal focuses an invalid form whose focus is shadowed",
-          field ? focus.outer === "invalid-field" && focus.inner === "input" : focus.outer === "invalid-form", JSON.stringify(focus));
+        check(name, focus.outer === id && focus.inner === inner, JSON.stringify(focus));
       }
     } finally {
       await invalid.context().close();
@@ -2030,6 +2034,23 @@ async function run(browser) {
   {
     const draws = await browser.newPage();
     draws.on("pageerror", (e) => errors.push(e.message));
+    await draws.addInitScript(() => {
+      customElements.define("smoke-patch-root", class extends HTMLElement {
+        querySelector() { return null; }
+      });
+      class CustomOpener extends HTMLFormElement {
+        focus(options) {
+          this.dataset.preventScroll = String(options?.preventScroll);
+          this.querySelector("button").focus(options);
+        }
+      }
+      customElements.define("smoke-form-focus", class extends HTMLElement {
+        connectedCallback() {
+          // Exercise a form's prototype override even without customized built-in support.
+          Object.setPrototypeOf(this.parentElement, CustomOpener.prototype);
+        }
+      });
+    });
     const outer = "draw-outer:patch:target;";
     const inner = "draw-inner:patch:target;";
     for (const [mode, want, focus] of [
@@ -2041,13 +2062,16 @@ async function run(browser) {
       ["mutate", inner, "draw-opener"],
       ["remove", "", "draw-opener"],
       ["shadow-opener", outer, "draw-opener"],
+      ["custom-opener", outer, "draw-opener-button"],
+      ["native-lookup", outer, "draw-opener"],
       ["reopen", "", "change"],
       ["replace-opener", outer, "draw-opener"],
       ["link", outer, "draw-opener"],
       ["native", "draw-outer:native:target;", "draw-opener"],
       ["strip-open", "", ""],
     ]) {
-      const url = `${base}/dialog-draw/${mode === "shadow-opener" ? "replace-opener" : ["native", "strip-open"].includes(mode) ? "post" : mode}`;
+      const formOpener = ["shadow-opener", "custom-opener"].includes(mode);
+      const url = `${base}/dialog-draw/${formOpener || mode === "native-lookup" ? "replace-opener" : ["native", "strip-open"].includes(mode) ? "post" : mode}`;
       const incoming = mode === "live" ? `${base}/dialog-draw-live` : url;
       const held = mode === "live" || mode === "read";
       let release = () => {};
@@ -2058,18 +2082,31 @@ async function run(browser) {
         await route.continue();
       };
       if (held) await draws.route(incoming, delay);
-      const shadowOpener = (target) => target.pathname === new URL(url).pathname;
+      const samePath = (target) => target.pathname === new URL(url).pathname;
       const asForm = async (route) => {
         const response = await route.fetch();
         const body = (await response.text()).replace(
           /<button id="draw-opener"([^>]*)>([^<]*)<\/button>/,
-          '<form id="draw-opener" tabindex="-1"><input type="hidden" name="localName"><input type="hidden" name="focus"><button$1>$2</button></form>',
+          mode === "shadow-opener"
+            ? '<form id="draw-opener" tabindex="-1"><input type="hidden" name="localName"><input type="hidden" name="focus"><button$1>$2</button></form>'
+            : '<form id="draw-opener" tabindex="-1"><smoke-form-focus></smoke-form-focus><button id="draw-opener-button"$1>$2</button></form>',
         );
         await route.fulfill({ response, body });
       };
-      if (mode === "shadow-opener") await draws.route(shadowOpener, asForm);
+      if (formOpener) await draws.route(samePath, asForm);
+      const asCustomRoots = async (route) => {
+        const response = await route.fetch();
+        let body = (await response.text()).replace(/<button id="draw-opener"[^>]*>[^<]*<\/button>/,
+          '<smoke-patch-root id="smoke-opener-root">$&</smoke-patch-root>');
+        if (new URL(route.request().url()).searchParams.get("do") === "draw") {
+          body = body.replace(/<div([^>]*\bid="draw-area"[^>]*>[\s\S]*?<\/dialog>)<\/div>/,
+            "<smoke-patch-root$1</smoke-patch-root>");
+        }
+        await route.fulfill({ response, body });
+      };
+      if (mode === "native-lookup") await draws.route(samePath, asCustomRoots);
       await draws.goto(url);
-      if (mode === "shadow-opener") {
+      if (formOpener) {
         await draws.locator("#draw-opener").evaluate((form) => {
           HTMLElement.prototype.focus.call(form);
           form.querySelector("button").click();
@@ -2095,16 +2132,21 @@ async function run(browser) {
         outer: !!document.querySelector("#draw-outer"),
         focus: document.activeElement?.id || (document.activeElement?.closest("dialog:modal") ? "change" : ""),
         opener: document.activeElement?.textContent,
+        preventScroll: document.querySelector("#draw-opener")?.getAttribute("data-prevent-scroll"),
+        customRoot: document.querySelector("#draw-area")?.localName === "smoke-patch-root",
       }));
       check(
         `A server-drawn modal's ${mode} redraw closes, reopens or removes it as drawn`,
         after.events === want && after.modal === (mode === "reopen" ? "draw-outer" : undefined)
           && after.outer === !["remove", "mutate"].includes(mode) && (mode === "strip-open" || after.focus === focus)
-          && (!["replace-opener", "shadow-opener"].includes(mode) || after.opener === "Replacement opener"),
+          && (!(formOpener || ["replace-opener", "native-lookup"].includes(mode)) || after.opener === "Replacement opener")
+          && (mode !== "custom-opener" || after.preventScroll === "true")
+          && (mode !== "native-lookup" || after.customRoot),
         JSON.stringify(after),
       );
       if (held) await draws.unroute(incoming, delay);
-      if (mode === "shadow-opener") await draws.unroute(shadowOpener, asForm);
+      if (formOpener) await draws.unroute(samePath, asForm);
+      if (mode === "native-lookup") await draws.unroute(samePath, asCustomRoots);
       if (mode === "reopen") {
         await draws.getByRole("button", { name: "Close redrawn dialog" }).click();
         await draws.locator("#draw-outer:not([open])").waitFor({ state: "attached" });
@@ -2725,12 +2767,31 @@ async function run(browser) {
     form.append(field);
     sku.removeAttribute("id");
     sku.parentElement.after(form);
-    Object.defineProperty(navigator.clipboard, "writeText", { value: async (text) => { window.copiedFormText = text; } });
+    Object.defineProperty(navigator.clipboard, "writeText", { value: async (text) => { window.copiedFormText = String(text); } });
   });
   await copyButton.click();
   await copies.filter({ hasText: "2" }).waitFor({ timeout: 5000 }).catch(() => {});
   check("CopyButton: a form with a control named textContent still copies the form's text",
     await copies.textContent() === "2" && await clip.evaluate(() => window.copiedFormText) === "form SKU");
+  const adopted = await clip.evaluate(() => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const from = frame.contentDocument;
+    const form = from.createElement("form");
+    form.id = "sku";
+    form.textContent = "adopted SKU";
+    const field = from.createElement("input");
+    field.type = "hidden";
+    field.name = "textContent";
+    form.append(field);
+    document.getElementById("sku").replaceWith(document.adoptNode(form));
+    return form.ownerDocument === document && form.textContent === field;
+  });
+  await copyButton.click();
+  await copies.filter({ hasText: "3" }).waitFor({ timeout: 5000 }).catch(() => {});
+  const adoptedText = await clip.evaluate(() => window.copiedFormText);
+  check("CopyButton: an adopted form with a control named textContent still copies the form's text",
+    adopted && await copies.textContent() === "3" && adoptedText === "adopted SKU", JSON.stringify({ adopted, adoptedText }));
   await clip.context().close();
   // Removal cancels even a write that has not answered yet. Returning the same button starts
   // a new lifetime; the previous click must not publish into it or start a new label timer.

@@ -81,7 +81,8 @@ function closed(event) {
  */
 function controlOf(target) {
   if (!(target instanceof Element)) return null;
-  const control = target instanceof HTMLFormElement ? Element.prototype.closest.call(target, CONTROL) : target.closest(CONTROL);
+  const closest = target.closest;
+  const control = (typeof closest === "function" ? closest : Element.prototype.closest).call(target, CONTROL);
   if (!(control instanceof HTMLElement)) return null;
   const tip = document.getElementById(control.getAttribute("interestfor") ?? "");
   return tip && tips.has(tip) ? { tip, control } : null;
