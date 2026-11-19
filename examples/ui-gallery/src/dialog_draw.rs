@@ -24,6 +24,8 @@ pub enum Case {
     NativeConnect,
     OverlapDialogFirst,
     OverlapAreaFirst,
+    FocusDialogFirst,
+    FocusAreaFirst,
     ScriptDialog,
 }
 
@@ -61,14 +63,14 @@ pub(super) async fn draw(req: Req, Params(route): Params<DialogDraw>) -> HtmlRes
             })
             .await
         }
-        Case::OverlapDialogFirst | Case::OverlapAreaFirst => {
+        Case::OverlapDialogFirst | Case::OverlapAreaFirst | Case::FocusDialogFirst | Case::FocusAreaFirst => {
             let direct = html! {
                 <dialog id={DrawOuter} data-direct on:close={dialog_draw::closed(event, target, false)}></dialog>
             };
             let area = area(route.case, false, "updated");
             req.patch_or(
                 html! {
-                    if route.case == Case::OverlapDialogFirst {
+                    if matches!(route.case, Case::OverlapDialogFirst | Case::FocusDialogFirst) {
                         {direct} {area}
                     } else {
                         {area} {direct}
@@ -127,12 +129,14 @@ fn DrawAreaPatch(case: Case, open: bool, stage: &str) -> impl Patch {
     let route = DialogDraw { case };
     let close = refs();
     let outer = refs();
+    let form = refs();
+    let focus = matches!(case, Case::FocusDialogFirst | Case::FocusAreaFirst);
     let next = DialogDraw { case: Case::Post };
     let nested = matches!(case, Case::Nested | Case::DropInner | Case::Mutate);
     let inner = nested && (open || case != Case::DropInner);
     html! {
-        <div id={DrawArea} data-stage={stage}>
-            <form id={DrawOpenForm} method="post" action={route.open()} data-patch></form>
+        <div id={DrawArea} data-stage={stage} on:focus={focus.then(|| dialog_draw::focused(form))}>
+            <form id={DrawOpenForm} ref={form} data-stage={stage} method="post" action={route.open()} data-patch></form>
             if case == Case::Link {
                 <dialog
                     id={DrawOuter}

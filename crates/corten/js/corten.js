@@ -768,21 +768,13 @@ const FEW_NAMES = 8;
  * the page (removed and inserted in one task) keeps its life.
  */
 function sweep() {
-  // `isConnected` read here rather than through inPage: each loop's own read stays fast where
-  // one read shared with the dispatch, the scan and patches slowed this loop after them.
-  for (const [el, life] of lives) {
+  // Read isConnected here: sharing the read with dispatch, scan and patches slowed the sweep.
+  for (const group of [lives, connected, onPage]) for (const el of group.keys()) {
     const on = /** @type {unknown} */ (el.isConnected);
     if (on === true || (on !== false && inPage(el))) continue;
-    lives.delete(el);
-    life.abort();
-  }
-  for (const el of connected) {
-    const on = /** @type {unknown} */ (el.isConnected);
-    if (on === false || (on !== true && !inPage(el))) connected.delete(el);
-  }
-  for (const el of onPage) {
-    const on = /** @type {unknown} */ (el.isConnected);
-    if (on === false || (on !== true && !inPage(el))) onPage.delete(el);
+    const life = group === lives ? lives.get(el) : undefined;
+    group.delete(el);
+    life?.abort();
   }
 }
 
@@ -792,29 +784,44 @@ function sweep() {
  */
 const MANY = 16;
 
+// A synchronous ref lookup can drain removals before a patch has recorded every replacement.
+let holdSweep = false;
+let removed = false;
+
 /**
  * Markup that joins the page (a navigation, a patch, a script's insert) is wired;
  * markup that leaves it ends.
  * @param {MutationRecord[]} records
  */
 function observed(records) {
-  let removed = false;
-  /** The names of the refs of the elements that joined. @type {Set<string>} */
-  const names = new Set();
-  /** Parents that got many children at once: scanned whole, with one query each. @type {Set<Element>} */
-  const wide = new Set();
-  for (const record of records) {
-    if (record.removedNodes.length) removed = true;
-    const added = record.addedNodes;
-    const parent = record.target;
-    if (added.length > MANY && parent instanceof Element && added.length * 2 >= childrenOf(parent).length) wide.add(parent);
-    else for (const node of Array.from(added)) if (node instanceof Element && inPage(node)) scan(node, names);
+  const held = holdSweep;
+  holdSweep = true;
+  try {
+    /** The names of the refs of the elements that joined. @type {Set<string>} */
+    const names = new Set();
+    /** Parents that got many children at once: scanned whole, with one query each. @type {Set<Element>} */
+    const wide = new Set();
+    for (const record of records) {
+      if (record.removedNodes.length) removed = true;
+      const added = record.addedNodes;
+      const parent = record.target;
+      if (added.length > MANY && parent instanceof Element && added.length * 2 >= childrenOf(parent).length) wide.add(parent);
+      else for (const node of added) if (node instanceof Element && inPage(node)) scan(node, names);
+    }
+    // Wiring is the same however often it runs, so a parent scanned whole may hold rows wired before.
+    for (const parent of wide) if (inPage(parent)) scan(parent, names, true);
+    for (const name of names) refChanges.set(name, (refChanges.get(name) ?? 0) + 1);
+    // A connect or abort handler can drain more records; finish after the outer scan or patch.
+    if (!held && removed) {
+      do {
+        removed = false;
+        sweep();
+      } while (removed);
+      replacements?.clear();
+    }
+  } finally {
+    holdSweep = held;
   }
-  // Wiring is the same however often it runs, so a parent scanned whole may hold rows wired before.
-  for (const parent of wide) if (inPage(parent)) scan(parent, names, true);
-  for (const name of names) refChanges.set(name, (refChanges.get(name) ?? 0) + 1);
-  if (removed && (lives.size || connected.size || onPage.size)) sweep();
-  if (replacements?.size) for (const { removedNodes } of records) for (const node of removedNodes) replacements.delete(node);
 }
 
 const observer = new MutationObserver(observed);
@@ -1089,36 +1096,41 @@ async function apply(html, signal, sent, took, own, asked, within) {
   let again;
   // Whether it removes a nav link, which can leave another of its nav current.
   let navs = false;
-  for (const el of Array.from(content.children)) {
-    // Read from the attribute, as `target.id` is a control named id when the target is a form.
-    const id = idOf(el) ?? "";
-    const target = id ? document.getElementById(id) : null;
-    if (hasAttr(el, "data-corten-read-again")) again = el;
-    else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-remove")) {
-      // Focus in it goes to the nearest element around it that can take focus.
-      const parent = target && parentElementOf(target);
-      const up = !!target && holds(target, document.activeElement) && parent;
-      navs ||= !!target && holdsNav(target);
-      if (parent) changedIn(parent, ["x", id, []]);
-      if (target) {
-        replacements?.set(target, null);
-        elementOwn.remove.call(target);
+  holdSweep = true;
+  try {
+    for (const el of Array.from(content.children)) {
+      // Read from the attribute, as `target.id` is a control named id when the target is a form.
+      const id = idOf(el) ?? "";
+      const target = id && document.getElementById(id);
+      if (hasAttr(el, "data-corten-read-again")) again = el;
+      else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-remove")) {
+        if (target) {
+          // Focus in it goes to the nearest element around it that can take focus.
+          const parent = parentElementOf(target);
+          const up = holds(target, document.activeElement) && parent;
+          navs ||= holdsNav(target);
+          if (parent) changedIn(parent, ["x", id, []]);
+          replacements?.set(target, null);
+          elementOwn.remove.call(target);
+          if (up) focusNear(up);
+        }
+      } else if (!target) console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
+      else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-append")) {
+        put.push(...Array.from(el.content.children));
+        serve(el.content);
+        changedIn(target, ["a", id, Array.from(childNodesOf(el.content))]);
+        elementOwn.append.call(target, el.content);
+      } else {
+        const parent = parentElementOf(target);
+        if (parent) changedIn(parent, ["r", id, [el]]);
+        replacements?.set(target, el);
+        replaceKeeping(target, el, sent, took, true, within);
+        put.push(el);
       }
-      if (up) focusNear(up);
     }
-    else if (!target) console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
-    else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-append")) {
-      put.push(...Array.from(el.content.children));
-      serve(el.content);
-      changedIn(target, ["a", id, Array.from(childNodesOf(el.content))]);
-      elementOwn.append.call(target, el.content);
-    } else {
-      const parent = parentElementOf(target);
-      if (parent) changedIn(parent, ["r", id, [el]]);
-      replacements?.set(target, el);
-      replaceKeeping(target, el, sent, took, true, within);
-      put.push(el);
-    }
+  } finally {
+    holdSweep = false;
+    if (removed) observed(observer.takeRecords());
   }
   // The server marked a nav link in the patch against the request that made it (a form's action),
   // not this page: mark it as a navigation would. Only then: a patch without one (a ticker's)

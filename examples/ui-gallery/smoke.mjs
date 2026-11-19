@@ -2437,10 +2437,11 @@ async function run(browser) {
       else check(`${mode} delivers exactly one native close and keeps its returnValue`,
         after.events === "draw-outer:native:target:new;" && after.value === "new", JSON.stringify(after));
     }
-    for (const mode of ["overlap-dialog-first", "overlap-area-first", "script-dialog"]) {
+    for (const mode of ["overlap-dialog-first", "overlap-area-first", "focus-dialog-first", "focus-area-first", "script-dialog"]) {
       await draws.goto(`${base}/dialog-draw/${mode}`);
       await draws.locator("#draw-opener").press("Enter");
       await draws.locator("#draw-outer:modal").evaluate((el) => { /** @type {HTMLDialogElement} */ (el).returnValue = "old"; });
+      await draws.locator("output").evaluate((el) => { delete el.dataset.focusRef; });
       await draws.getByRole("button", { name: "Change dialog" }).click();
       const after = await draws.locator('#draw-area[data-stage="updated"] #draw-outer').evaluate((el) => ({
         events: document.querySelector("output")?.value,
@@ -2448,11 +2449,15 @@ async function run(browser) {
         open: el.hasAttribute("open"),
         direct: el.hasAttribute("data-direct"),
         focus: document.activeElement?.id,
+        focusRef: document.querySelector("output")?.dataset.focusRef,
       }));
       const script = mode === "script-dialog";
+      const areaFirst = mode.endsWith("area-first");
+      const focusRef = mode.startsWith("focus-") ? (areaFirst ? "updated;" : "opened;updated;") : undefined;
+      if (focusRef) check(`${mode} runs the focus handler with the current ref`, after.focusRef === focusRef, JSON.stringify(after));
       check(script ? "a script-created same-id dialog inside the patch root receives no close or result"
         : `${mode} delivers one close and the old result to the surviving dialog`,
-      !after.open && after.focus === "draw-opener" && after.direct === (mode === "overlap-area-first")
+      !after.open && after.focus === "draw-opener" && after.direct === areaFirst
         && after.events === (script ? "" : "draw-outer:patch:target:old;") && after.value === (script ? "" : "old"), JSON.stringify(after));
     }
     await draws.close();
