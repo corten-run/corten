@@ -7384,8 +7384,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     ordinary patches in outbox-ID order, which is feed-sequence order within a generation.
     The relay drains acknowledgements while sending and correlates them to one batch attempt;
     a late reply cannot retire rows in a retry even when the retried message IDs are the same.
-    After a partial reply timeout the relay isolates each slot in its own subscription on
-    subsequent attempts, rather than repeatedly overflowing a shared reply queue.
+    After a partial patch reply timeout the relay waits for each patch's reply before
+    sending the next, rather than repeatedly overflowing the queue or opening more subscriptions.
 
     - **Connection failure.** An ordinary send or acknowledgement failure retires none of
       the selected outbox IDs in that attempt, including rows already acknowledged. After

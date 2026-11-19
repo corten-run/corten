@@ -29,9 +29,9 @@ use async_nats::{
         publish::PublishAck,
         response::Response,
     },
-    Client, HeaderMap, Message, StatusCode, Subscriber,
+    Client, HeaderMap, HeaderName, Message, StatusCode, Subscriber,
 };
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use sqlx::{postgres::PgListener, PgConnection, PgPool};
 
 use crate::{store, valid_key, Error, Options, RELOAD_HEADER};
@@ -233,6 +233,8 @@ struct Replies<'a> {
     inbox: &'a mut Option<ReplyInbox>,
     first_slot: u64,
     buffered: VecDeque<Message>,
+    stats: Arc<async_nats::Statistics>,
+    received_before_batch: u64,
 }
 
 impl<'a> Replies<'a> {
@@ -242,7 +244,9 @@ impl<'a> Replies<'a> {
             inbox.next_slot += BATCH as u64;
             first
         });
-        Self { publisher, inbox, first_slot, buffered: VecDeque::new() }
+        let stats = publisher.client.statistics();
+        let received_before_batch = stats.in_messages.load(Ordering::Relaxed);
+        Self { publisher, inbox, first_slot, buffered: VecDeque::new(), stats, received_before_batch }
     }
 
     async fn send(
@@ -278,6 +282,14 @@ impl<'a> Replies<'a> {
         if !pipelined {
             return send.await;
         }
+        // Until the client has seen any new message there cannot be a ready reply to
+        // this batch. Still listen while a send is blocked, including the first stall.
+        // Unrelated traffic only selects the eager drain below; it never counts as an ack.
+        if self.stats.in_messages.load(Ordering::Relaxed) == self.received_before_batch {
+            if let Some(result) = send.as_mut().now_or_never() {
+                return result;
+            }
+        }
         loop {
             tokio::select! {
                 biased;
@@ -293,7 +305,7 @@ impl<'a> Replies<'a> {
         &mut self,
         awaiting: &mut [Option<T>],
         deadline: tokio::time::Instant,
-    ) -> Result<(T, Result<PublishAck, PublishError>), Error> {
+    ) -> Result<(T, Result<bool, PublishError>), Error> {
         let inbox = self.inbox.as_mut().expect("an awaiting publish has a reply subscription");
         tokio::time::timeout_at(deadline, async {
             while let Some(reply) = match self.buffered.pop_front() {
@@ -333,10 +345,11 @@ async fn enqueue(
     reply: String,
 ) -> Result<(), PublishError> {
     let mut headers = HeaderMap::new();
-    headers.insert("Nats-Msg-Id", format!("{}:{}:{}", row.feed, row.generation, row.seq).as_str());
-    headers.insert("Feed-Generation", row.generation.as_str());
+    headers.insert(async_nats::header::NATS_MESSAGE_ID, format!("{}:{}:{}", row.feed, row.generation, row.seq));
+    const GENERATION: HeaderName = HeaderName::from_static("Feed-Generation");
+    headers.insert(GENERATION, row.generation.as_str());
     let body = if reload {
-        headers.insert(RELOAD_HEADER, row.seq.to_string().as_str());
+        headers.insert(RELOAD_HEADER, row.seq.to_string());
         Default::default()
     } else {
         row.body.clone().into()
@@ -351,12 +364,37 @@ async fn enqueue(
     })
 }
 
-fn acknowledgement(reply: Message) -> Result<PublishAck, PublishError> {
+/// The only ack field used by the relay is whether a reload marker was a duplicate.
+fn acknowledgement(reply: Message) -> Result<bool, PublishError> {
     if reply.status == Some(StatusCode::NO_RESPONDERS) {
         return Err(PublishError::new(PublishErrorKind::StreamNotFound));
     }
-    match serde_json::from_slice(&reply.payload).map_err(|error| PublishError::with_source(PublishErrorKind::Other, error))? {
-        Response::Ok(ack) => Ok(ack),
+    decode_ack(&reply.payload)
+}
+
+fn decode_ack(payload: &[u8]) -> Result<bool, PublishError> {
+    // The client's untagged Response tries the error variant first, buffering the
+    // entire object and constructing a missing-field error even for ordinary success.
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PlainAck<'a> {
+        #[serde(rename = "stream")]
+        _stream: &'a str,
+        #[serde(rename = "seq")]
+        _sequence: u64,
+        #[serde(default)]
+        duplicate: bool,
+    }
+    if payload.first() == Some(&b'{') {
+        if let Ok(ack) = serde_json::from_slice::<PlainAck>(payload) {
+            return Ok(ack.duplicate);
+        }
+    }
+    // This also preserves error precedence for an object containing both variants.
+    match serde_json::from_slice::<Response<PublishAck>>(payload)
+        .map_err(|error| PublishError::with_source(PublishErrorKind::Other, error))?
+    {
+        Response::Ok(ack) => Ok(ack.duplicate),
         Response::Err { error } => Err(PublishError::with_source(PublishErrorKind::Other, error)),
     }
 }
@@ -446,9 +484,9 @@ async fn finish_refusals(
     for _ in 0..markers.iter().flatten().count() {
         // Unlike sends, an already-ready acknowledgement is useful even at the deadline.
         match replies.recv(&mut markers, deadline).await {
-            Ok(((row, refusal), Ok(ack))) => {
+            Ok(((row, refusal), Ok(duplicate))) => {
                 sent.push(row.id);
-                completed.push((row, refusal, ack.duplicate));
+                completed.push((row, refusal, duplicate));
             }
             Ok(((row, _), Err(error))) if stream_size_refusal(&error) => stream_failed_markers.push((row, error)),
             Ok(((row, _), Err(error))) => marker_publish_failed(options, row, error),
@@ -514,6 +552,29 @@ async fn finish_refusals(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_and_extended_publish_replies_preserve_the_client_ack_contract() {
+        for payload in [
+            br#"{"stream":"S","seq":1}"#.as_slice(),
+            br#"{"duplicate":true,"seq":4,"stream":"S"}"#,
+            br#"{"domain":"D","stream":"S","seq":1,"duplicate":true}"#,
+            br#"{"stream":"S\u0031","seq":1}"#,
+            br#"{"stream":"S","seq":1,"error":{"code":400,"err_code":10054,"description":"too large"}}"#,
+            br#"{"seq":7}"#,
+            br#"{"stream":"S","seq":-1}"#,
+            br#"{"stream":"S","seq":4,"duplicate":0}"#,
+            br#"["S",1,true]"#,
+            br#"["S",1,"D",true]"#,
+        ] {
+            let expected = match serde_json::from_slice::<Response<PublishAck>>(payload) {
+                Ok(Response::Ok(ack)) => Ok(ack.duplicate),
+                Ok(Response::Err { error }) => Err(error.error_code() == jetstream::ErrorCode::STREAM_MESSAGE_EXCEEDS_MAXIMUM),
+                Err(_) => Err(false),
+            };
+            assert_eq!(decode_ack(payload).map_err(|error| stream_size_refusal(&error)), expected);
+        }
+    }
 
     #[test]
     fn a_reused_inbox_distinguishes_batches_by_slot() {

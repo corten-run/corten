@@ -1281,6 +1281,15 @@ async fn a_retried_batch_stops_receiving_replies_for_abandoned_attempts() {
 
 #[tokio::test]
 async fn a_full_batch_retires_with_a_small_reply_queue() {
+    full_batch_with_reply_capacity(64).await;
+}
+
+#[tokio::test]
+async fn a_full_batch_retires_with_a_one_reply_queue() {
+    full_batch_with_reply_capacity(1).await;
+}
+
+async fn full_batch_with_reply_capacity(capacity: usize) {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
     let schema = key("small_reply_queue_");
     let pool = schema_pool(&db, &schema).await;
@@ -1288,7 +1297,7 @@ async fn a_full_batch_retires_with_a_small_reply_queue() {
     config.no_ack = false;
     js.update_stream(config.clone()).await.unwrap();
 
-    let publisher = async_nats::ConnectOptions::new().subscription_capacity(64).connect(&nats).await.unwrap();
+    let publisher = async_nats::ConnectOptions::new().subscription_capacity(capacity).connect(&nats).await.unwrap();
     let stats = publisher.statistics();
     let mut sender = relay::Publisher::new(jetstream::new(publisher)).with_timeout(Duration::from_secs(1));
     let gate = Arc::new(Semaphore::new(0));
@@ -1298,7 +1307,7 @@ async fn a_full_batch_retires_with_a_small_reply_queue() {
     let options = Arc::new(Options { stream: config.name.clone(), subject_prefix: schema.clone(), ..Options::default() });
     let relay = tokio::spawn(relay::run(pool.clone(), sender, options, Arc::default()));
 
-    // Let twice the queue capacity reach the client before the remaining sends can proceed.
+    // Let more replies than the queue can hold reach the client before sends can proceed.
     eventually("the first 128 publish replies reached the client", || stats.in_messages.load(Ordering::Relaxed) == 128).await;
     gate.add_permits(1);
     wait_pending(&pool, 0).await;
