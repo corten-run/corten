@@ -136,8 +136,15 @@ an inline schema. Pass `false` for a written schema or `true` for a read schema.
 reserves the name before calling the closure, so a recursive field can call its schema method
 with the same generator and get a `$ref` back. Borrowed types do not need a `'static` bound.
 
+Use a name like `BillingInvoice`: a letter or underscore followed by ASCII letters, digits
+or underscores, and not a reserved TypeScript type name such as `string`. The same name
+must work in a JSON Schema reference, an OpenAPI component key and a TypeScript declaration.
+The derives check the Rust name at compile time when schema generation is enabled. For a
+hand-written literal, use `const { Generator::definition_name("BillingInvoice") }`; a
+computed name passed to `define` is checked when generating the document.
+
 If you used the old hidden `Generator::define` helper, add `::<Self>` and remove the string
-identity argument. Keep the direction, definition name and closure:
+identity argument. Keep the direction and closure, and check the definition name:
 
 ```rust,ignore
 // Before, inside ToJsonSchema::json_schema:
@@ -146,7 +153,7 @@ generator.define(false, core::any::type_name::<Self>(), "Node", |generator| {
 })
 
 // After:
-generator.define::<Self>(false, "Node", |generator| {
+generator.define::<Self>(false, const { Generator::definition_name("Node") }, |generator| {
     describe_node(generator)
 })
 ```

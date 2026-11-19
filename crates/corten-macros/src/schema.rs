@@ -9,7 +9,7 @@
 //! for its schema through `__private::Probe`, which records one with none on the generator, and
 //! describing the type then panics naming it (`Generator::missing`).
 
-use proc_macro::{Group, Ident, TokenStream, TokenTree};
+use proc_macro::{Group, Ident, Literal, TokenStream, TokenTree};
 
 use crate::tokens::{is_ident, is_punct, literal, q, string_value};
 
@@ -329,11 +329,14 @@ pub(crate) fn expand(
     item.extend([TokenTree::Ident(name.clone())]);
     item.extend(type_generics.clone());
     item.extend(where_clause.clone());
+    let mut schema_name = Literal::string(name.to_string().trim_start_matches("r#"));
+    schema_name.set_span(name.span());
     item.extend([TokenTree::Group(Group::new(
         proc_macro::Delimiter::Brace,
         q(
             "fn json_schema(__g: &mut ::corten::json::schema::Generator) -> ::corten::json::schema::__private::JsonValue {
-                __g.define::<Self>(__A3, __A0, |__g| <Self as __A1>::__inline(__g))
+                const __NAME: &::core::primitive::str = ::corten::json::schema::Generator::definition_name(__A0);
+                __g.define::<Self>(__A3, __NAME, |__g| <Self as __A1>::__inline(__g))
             }
             #[allow(unused_mut, unused_variables, clippy::all)]
             fn __inline(__g: &mut ::corten::json::schema::Generator) -> ::corten::json::schema::__private::JsonValue {
@@ -346,7 +349,7 @@ pub(crate) fn expand(
                 __A2
             }",
             &[
-                literal(name.to_string().trim_start_matches("r#")),
+                TokenTree::Literal(schema_name).into(),
                 side.trait_path(),
                 inline,
                 q(if side == Side::Read { "true" } else { "false" }, &[]),

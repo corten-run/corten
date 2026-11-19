@@ -98,10 +98,37 @@ impl Generator {
         Self::default()
     }
 
+    /// Checks a literal name for [`Generator::define`] in a const context and returns it unchanged.
+    ///
+    /// ```compile_fail,E0080
+    /// use corten::json::schema::Generator;
+    /// const INVOICE: &str = Generator::definition_name("billing~Invoice");
+    /// ```
+    ///
+    /// The JSON derives check the Rust name the same way:
+    ///
+    /// ```compile_fail,E0080
+    /// #[derive(corten::ToJson)]
+    /// struct r#const { amount: u32 }
+    /// ```
+    pub const fn definition_name(name: &str) -> &str {
+        assert!(valid_definition_name(name), "use a non-reserved ASCII TypeScript name without '$' for the schema definition");
+        name
+    }
+
     /// A `$ref` to `T` as it is read (`read`) or written, made by `make` under `name` the
     /// first time. A type described on both sides in one document has two definitions
     /// (`Name` and `Name2`). Call `define::<Self>` in a hand-written schema implementation.
     /// The name is reserved before `make` runs, so a recursive field can refer back to it.
+    ///
+    /// A name is shared by JSON Schema, OpenAPI and TypeScript. It must match
+    /// `[A-Za-z_][A-Za-z0-9_]*` and not be a word reserved in TypeScript type declarations
+    /// or references (such as `class` or `string`). Use [`Generator::definition_name`] in a
+    /// const block to check a literal at compile time, as the JSON derives do.
+    ///
+    /// # Panics
+    ///
+    /// Panics with the offending name if it is invalid, before making the definition.
     ///
     /// ```
     /// use corten::json::schema::{Generator, ToJsonSchema};
@@ -115,7 +142,7 @@ impl Generator {
     ///
     /// impl ToJsonSchema for Node<'_> {
     ///     fn json_schema(generator: &mut Generator) -> Value {
-    ///         generator.define::<Self>(false, "Node", |generator| json!({
+    ///         generator.define::<Self>(false, const { Generator::definition_name("Node") }, |generator| json!({
     ///             "type": "object",
     ///             "properties": {
     ///                 "label": <&str>::json_schema(generator),
@@ -132,6 +159,10 @@ impl Generator {
     /// assert_eq!(defs["Node"]["properties"]["children"]["items"]["$ref"], "#/$defs/Node");
     /// ```
     pub fn define<T: ?Sized>(&mut self, read: bool, name: &str, make: impl FnOnce(&mut Generator) -> Value) -> Value {
+        assert!(
+            valid_definition_name(name),
+            "invalid schema definition name {name:?}: use a non-reserved ASCII TypeScript name without '$'"
+        );
         let id = (read, typeid::of::<T>());
         if let Some(name) = self.by_id.get(&id) {
             return reference(name);
@@ -240,6 +271,75 @@ impl Generator {
         }
         root
     }
+}
+
+const fn valid_definition_name(name: &str) -> bool {
+    let [first, rest @ ..] = name.as_bytes() else { return false };
+    if !first.is_ascii_alphabetic() && *first != b'_' {
+        return false;
+    }
+    let mut i = 0;
+    while i < rest.len() {
+        if !rest[i].is_ascii_alphanumeric() && rest[i] != b'_' {
+            return false;
+        }
+        i += 1;
+    }
+    !matches!(
+        name.as_bytes(),
+        b"any"
+            | b"as"
+            | b"bigint"
+            | b"boolean"
+            | b"break"
+            | b"case"
+            | b"catch"
+            | b"class"
+            | b"const"
+            | b"continue"
+            | b"debugger"
+            | b"default"
+            | b"delete"
+            | b"do"
+            | b"else"
+            | b"enum"
+            | b"export"
+            | b"extends"
+            | b"false"
+            | b"finally"
+            | b"for"
+            | b"function"
+            | b"if"
+            | b"import"
+            | b"in"
+            | b"infer"
+            | b"instanceof"
+            | b"intrinsic"
+            | b"keyof"
+            | b"never"
+            | b"new"
+            | b"null"
+            | b"number"
+            | b"object"
+            | b"readonly"
+            | b"return"
+            | b"string"
+            | b"super"
+            | b"switch"
+            | b"symbol"
+            | b"this"
+            | b"throw"
+            | b"true"
+            | b"try"
+            | b"typeof"
+            | b"undefined"
+            | b"unique"
+            | b"unknown"
+            | b"var"
+            | b"void"
+            | b"while"
+            | b"with"
+    )
 }
 
 /// Every `$ref` to `from` in `schema` made a `$ref` to the document's root.
@@ -638,12 +738,12 @@ both! {
     impl for std::num::NonZeroI128 => |g| nonzero(<i128 as ToJsonSchema>::json_schema(g), true);
     impl for std::num::NonZeroIsize => |g| nonzero(<isize as ToJsonSchema>::json_schema(g), true);
     // Written and read alike, so one definition serves both sides.
-    impl for std::time::Duration => |g| g.define::<std::time::Duration>(false, "Duration", |g| {
+    impl for std::time::Duration => |g| g.define::<std::time::Duration>(false, const { Generator::definition_name("Duration") }, |g| {
         let secs = <u64 as ToJsonSchema>::json_schema(g);
         let nanos = <u32 as ToJsonSchema>::json_schema(g);
         __private::object(vec![("nanos", nanos), ("secs", secs)], vec!["secs", "nanos"], false)
     });
-    impl for std::time::SystemTime => |g| g.define::<std::time::SystemTime>(false, "SystemTime", |g| {
+    impl for std::time::SystemTime => |g| g.define::<std::time::SystemTime>(false, const { Generator::definition_name("SystemTime") }, |g| {
         let secs = <u64 as ToJsonSchema>::json_schema(g);
         let nanos = <u32 as ToJsonSchema>::json_schema(g);
         __private::object(vec![("nanos_since_epoch", nanos), ("secs_since_epoch", secs)], vec!["secs_since_epoch", "nanos_since_epoch"], false)
@@ -801,6 +901,20 @@ mod tests {
         let mut g = Generator::new();
         let root = T::json_schema(&mut g);
         (root, Value::Object(g.definitions().into_iter().collect()))
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid schema definition name \"billing/Invoice\"")]
+    fn a_name_that_breaks_the_pointer_is_rejected() {
+        struct Invoice;
+        let name = ["billing", "Invoice"].join("/");
+        Generator::new().define::<Invoice>(false, &name, |_| json!({ "type": "object" }));
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid schema definition name \"string\"")]
+    fn a_name_reserved_in_typescript_is_rejected() {
+        Generator::new().define::<String>(false, "string", |_| json!({ "type": "string" }));
     }
 
     #[derive(Serialize, ToJson, FromJson)]
