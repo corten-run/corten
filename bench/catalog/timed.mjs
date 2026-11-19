@@ -232,7 +232,7 @@ export function verifyTimedContinuity(observations) {
   }
 }
 
-async function collectLoadLimits(docker, summary, subject, id) {
+export async function collectLoadLimits(docker, summary, subject, id, readLimits = observeLoadLimits) {
   const deadline = performance.now() + (subject.seconds + 25) * 1000;
   const observations = [];
   let binding, pid;
@@ -242,7 +242,7 @@ async function collectLoadLimits(docker, summary, subject, id) {
       binding ??= loadLimitsBinding(summary, subject, id, state.StartedAt);
       pid ??= state.Pid;
       assert.ok(state.Pid === pid && state.StartedAt === binding.startedAt, "live generator changed");
-      try { observations.push(observeLoadLimits(id, pid)); }
+      try { observations.push(readLimits(id, pid)); }
       catch (e) {
         // Procfs/cgroupfs can disappear before Docker publishes its exit. The
         // final inspect after start -a establishes exit; replay checks that
