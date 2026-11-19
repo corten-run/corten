@@ -482,7 +482,10 @@ The runner records the layout and verifies the same strict peak limit (below 80%
 the generator's quota) in preflight and in every timed phase in this layout, including
 successful responses. A phase without headroom is not comparison evidence. The browser
 checker and first-response probe retain their original four CPUs (4–7), and the
-observer keeps its original placement. The load profile, request checks and app budget are unchanged.
+observer keeps its original placement. Wide runs record the cold probe's budget
+and the running generator's effective CPU set and cgroup quota ancestry for
+replay. A requested Docker limit alone is not evidence of available CPUs.
+The load profile, request checks and app budget are unchanged.
 This opt-in does not select a larger host for the nightly fleet or qualify a mixed-layout
 comparison. A wider CPU set without the named layout still has the original four-CPU quota.
 By default they are not pinned. For dedicated-host measurements set

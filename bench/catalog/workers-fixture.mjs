@@ -100,6 +100,12 @@ export function workerRound(failure = null, { historical = false, wideGenerator 
     const boundary = f.reader.readJson(`${prefix}/${subject.phase}-boundary.json`), { phase } = subject;
     boundary.schema = workerPhaseSchema;
     command(boundary.before.upstream); command(boundary.after.upstream);
+    if (s.measurement.loadLayout === "c16-generator-v1") {
+      const { id } = boundary.after.load, { binding, observation } = boundary.loadLimits;
+      observation.path = observation.path.replace(binding.container, id);
+      observation.quotas[0].path = observation.path;
+      binding.container = id;
+    }
     f.put(`${prefix}/${phase}-boundary.json`, boundary);
     const start = Date.parse(boundary.after.load.state.StartedAt), end = Date.parse(boundary.after.load.state.FinishedAt);
     const epoch = start - initial + epochOffset, before = control(epoch), after = control(epoch);

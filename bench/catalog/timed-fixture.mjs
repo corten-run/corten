@@ -1,6 +1,6 @@
 // Synthetic offline observations only. These are not native qualification evidence.
 import { createHash } from "node:crypto";
-import { phaseEnvironment, phaseSchema, readTimedLoad, timedRawSchema, verifyTimedPhase } from "./timed.mjs";
+import { loadLimitsBinding, phaseEnvironment, phaseSchema, readTimedLoad, timedRawSchema, verifyTimedPhase } from "./timed.mjs";
 import { aggregate, phases } from "./contract.mjs";
 import { summarizeSamples } from "./stats.mjs";
 import { timingPlan } from "./group.mjs";
@@ -94,6 +94,14 @@ export function timedFixture(f, failure = { app: "fastapi", source: "api", pass:
       Object.assign(afterLoad.state, { Status: "exited", Running: false, ExitCode: basic.outcome === "failed" ? 99 : 0, StartedAt: stamp(nativeStart), FinishedAt: stamp(nativeEnd) });
       const receipt = { schema: phaseSchema, exit: { code: afterLoad.state.ExitCode, signal: null, expired: false, interrupted: false }, errors: [],
         before: { runtime, upstream, load }, after: { runtime, upstream, load: afterLoad }, observedAt: finishedAt + 10 };
+      if (s.measurement.loadLayout === "c16-generator-v1") {
+        const path = `/system.slice/docker-${load.id}.scope`, events = "populated 1\nfrozen 0\n";
+        receipt.loadLimits = { binding: loadLimitsBinding(s, { app, source, target: "page", phase }, load.id, afterLoad.state.StartedAt),
+          observation: { startedAt: nativeStart + 10, finishedAt: nativeStart + 11, path,
+            mount: "35 24 0:31 / /sys/fs/cgroup ro - cgroup2 cgroup rw",
+            eventsBefore: events, eventsAfter: events, effectiveCpus: "4-15\n",
+            quotas: [{ path, cpuMax: "1200000 100000\n" }, { path: "/system.slice", cpuMax: "max 100000\n" }, { path: "/", cpuMax: null }] } };
+      }
       const names = [appName, ...(source === "api" ? [upstreamName] : [])], sampled = [...names, loadName];
       const samples = Object.fromEntries(sampled.map((name) => [name, Array.from({ length: seconds + 1 }, (_, i) => ({ t: nativeStart + i * 1000,
         cpu: name === appName ? 99 : name === loadName ? (s.measurement.loadLayout ? 391.36 : 50) : 4, mem: 8 }))]));
