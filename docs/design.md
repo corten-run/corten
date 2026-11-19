@@ -6185,9 +6185,25 @@ rules something out.
     application write remains committed and the outbox body stays available for replay
     and inspection until ordinary pruning.
 
-    The relay pipelines a batch of up to 256 patches before waiting for acknowledgements, even
-    when every patch belongs to one feed. A broker's connection-wide `Maximum Payload Violation`
-    or disconnect identifies no publish; the relay retries all selected rows on an ordinary send
+    The relay pipelines a batch of up to 256 patches, even when every patch belongs to one
+    feed, draining ready acknowledgements while it sends. It uses one NATS reply subscription
+    while holding the relay lease, allocating a distinct range of reply slots to each patch or
+    marker batch. Replies do not have to arrive in order. Successful batches reuse the
+    subscription without another subscribe or flush; a batch with unresolved replies closes
+    the inbox before a retry can use a new one. Losing the lease or cancelling the relay also
+    closes the inbox. No unanswered publish leaves a registration in the client's multiplexer.
+    The longest slot suffix fits in the existing control-line reserve.
+    The client does not expose its subscription capacity. A tiny queue can drop replies
+    during a burst. If some patch replies arrive but others time out, the whole pipelined
+    selection is retried, adding broker work even when JetStream deduplicates by message ID
+    within its configured window. For the rest of that relay publisher's lifetime, patch
+    batches keep only one reply outstanding, which fits any positive queue capacity without
+    using more broker subscriptions. A serial pass uses the renewal interval to limit new
+    sends, bounds in-flight waits by the lease, and retires acknowledged rows before
+    continuing the pending rows on later passes. Marker batches can also retire replies
+    that arrived without waiting for an identically sized retry to succeed.
+    A broker's connection-wide `Maximum Payload Violation`
+    or disconnect identifies no publish; the relay retries all selected rows on a pipelined send
     or acknowledgement failure and does not force a reconnect. Later patches can overtake a
     failed one in JetStream; followers recover as described in the
     [relay stream-order limit](#limit-relay-stream-order).
@@ -6195,12 +6211,16 @@ rules something out.
     Not chosen: encoding arbitrary keys (a new wire mapping and migration of valid subjects),
     restricting keys to ASCII, or introducing a separate quarantine and repair path for rows
     no supported app can publish. Checking only new keys leaves the pre-upgrade relay failure
-    in place. Using `Subject::is_valid` would copy the key and accept whitespace outside the
-    framing bytes. Dropping a refused notification leaves a loaded feed stale if no later
-    patch arrives; retrying the same oversized body can keep the feed stale and block
-    the relay's ordinary pending scan. A per-feed hold adds an index to every append and
-    can make selecting work for unrelated feeds slow. A separate queue would not put a
-    patch back in its original stream position. Refreshing a shared client to confirm its
+    in place. Using async-nats 0.53's JetStream publish acknowledgements retains one reply
+    registration per unanswered publish, even after the acknowledgement future is
+    dropped. Subscribing per batch adds subscribe and unsubscribe commands even for a single
+    update; subscribing per reply slot can exceed the broker's connection subscription limit.
+    Using `Subject::is_valid` would copy the key
+    and accept whitespace outside the framing bytes. Dropping a refused notification leaves a
+    loaded feed stale if no later patch arrives; retrying the same oversized body can keep the
+    feed stale and block the relay's ordinary pending scan. A per-feed hold adds an index to
+    every append and can make selecting work for unrelated feeds slow. A separate queue would
+    not put a patch back in its original stream position. Refreshing a shared client to confirm its
     cached limit disrupts followers and other publishers, and a fresh connection's limit
     would still not be an acknowledgement. Discarding the queued publishes on connection loss
     is not an operation async-nats 0.53 exposes. Dropping a handle does not cancel the connection
@@ -6234,7 +6254,8 @@ rules something out.
     caches the limit from its handshake and later INFOs, and its
     [publish queue](https://docs.rs/crate/async-nats/0.53.0/source/src/lib.rs) survives reconnect;
     zero [maps to no reconnect limit](https://docs.rs/crate/async-nats/0.53.0/source/src/options.rs);
-    [client drain](https://docs.rs/crate/async-nats/0.53.0/source/src/client.rs) flushes pending work);
+    [client drain](https://docs.rs/crate/async-nats/0.53.0/source/src/client.rs) flushes pending work;
+    the connection handler drops messages when a subscription's queue is full);
     reasoned (retrying cannot repair a key that fails a pure check; the compact marker fits
     limits that refuse larger patches, provided they can carry the headers; the durable
     app state does not depend on the delta being sent, and followers can reload it even
@@ -6248,9 +6269,17 @@ rules something out.
     delta delivered or immediate recovery on old followers, the NATS client can abandon queued
     publishes on socket loss, deployments need raw stream ordering, or JetStream can guard a
     subject by a publisher-supplied predecessor ID without first waiting for the predecessor's
-    stream sequence.
+    stream sequence. If the client exposes subscription capacity, bound the number of
+    outstanding replies directly. Use the client's JetStream publish API again when a released version
+    reclaims unanswered publish registrations without a healthy-path regression
+    ([nats-io/nats.rs #1641 Prune abandoned requests from the multiplexer](https://github.com/nats-io/nats.rs/pull/1641)).
 
-    Last checked: 2026-11-18, async-nats 0.53.0's INFO and reconnect handling and the
+    Last checked: 2026-11-19, async-nats 0.53.0's reply map and subscription cleanup,
+    real JetStream retries with publish acknowledgements suppressed and then restored, a full
+    batch on a 64-reply subscription, recovery after a partial timeout with a three-subscription
+    broker limit and a 64-reply queue, and the relay throughput, follower latency and
+    missing-ack RSS tests;
+    2026-11-18, async-nats 0.53.0's INFO and reconnect handling and the
     `corten-cluster` integration tests on Postgres 16.13 and NATS 2.15.2 with 0.53.0,
     including both types of size refusals and follower recovery after a broker disconnect;
     2026-11-18, `corten-cluster` integration tests on Postgres 16.13 and
@@ -7493,8 +7522,14 @@ by design; where it is known, a limit says what would lift it or why it is so.
 34. <a id="limit-relay-stream-order"></a>JetStream stream order is not always Corten feed
     order. Postgres commits each feed's sequence under its row lock. The relay submits
     ordinary patches in outbox-ID order, which is feed-sequence order within a generation.
+    The relay drains acknowledgements while sending and correlates them to one batch attempt;
+    a late reply cannot retire rows in a retry even when the retried message IDs are the same.
+    A tiny client queue can drop replies on a pipelined attempt. Retrying the selection adds
+    broker work even when JetStream deduplicates it by message ID. After a partial patch reply
+    timeout the relay waits for each patch's reply before sending the next, rather than
+    repeatedly overflowing the queue or opening more subscriptions.
 
-    - **Connection failure.** An ordinary send or acknowledgement failure retires none of
+    - **Connection failure.** A pipelined patch send or acknowledgement failure retires none of
       the selected outbox IDs in that attempt, including rows already acknowledged. After
       a mid-batch disconnect the NATS client may send queued publishes on the replacement
       socket; JetStream can store later patches of a feed before it accepts the missing

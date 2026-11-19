@@ -61,7 +61,8 @@ pub const MAX_FEED_KEY_BYTES: usize = 1024;
 /// The longest [`Options::subject_prefix`], in bytes.
 const MAX_PREFIX_BYTES: usize = 255;
 
-/// Reserve for `HPUB`, separators, two decimal lengths (up to 20 digits each) and CRLF.
+/// Reserve for `HPUB`, separators, two decimal lengths (up to 20 digits each), CRLF and
+/// a reply slot suffix of up to four bytes (`.255`).
 const PUBLISH_FRAMING_BYTES: usize = 64;
 const MAX_PUBLISH_SUBJECT_BYTES: usize = MAX_PREFIX_BYTES + 1 + MAX_FEED_KEY_BYTES;
 
@@ -193,8 +194,7 @@ impl<S: Source> Cluster<S> {
             )
             .into());
         }
-        // JetStream uses this shape for publish acknowledgements; measure the generated inbox
-        // so the configured prefix, separator and client-generated token are all counted.
+        // Measure the base inbox the client generates; the framing reserve covers the relay's reply slot.
         let inbox_bytes = nats.new_inbox().len();
         let max_inbox = options.max_control_line.saturating_sub(MAX_PUBLISH_SUBJECT_BYTES + PUBLISH_FRAMING_BYTES);
         if inbox_bytes > max_inbox {
@@ -215,7 +215,7 @@ impl<S: Source> Cluster<S> {
             tokio::spawn(hub::unload_idle(hub.clone(), after));
         }
         let relay_active = Arc::new(AtomicBool::new(false));
-        tokio::spawn(relay::run(pool, js, options, relay_active.clone()));
+        tokio::spawn(relay::run(pool, relay::Publisher::new(js), options, relay_active.clone()));
         Ok(Cluster { hub, relay_active })
     }
 

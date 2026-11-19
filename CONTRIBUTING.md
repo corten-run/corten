@@ -310,6 +310,10 @@ cargo test --locked -p corten-cluster a_cluster_client_with_a_root_ca_requires_t
 This checks that the client refuses plaintext with a CA configured and delivers a committed
 feed patch over TLS. It does not test TLS discovery or failover.
 
+Set `CORTEN_TEST_NATS_CAPPED_URL` to a separate JetStream broker configured with
+`max_subscriptions: 3` to also check that the relay retires a partially acknowledged batch
+after reconnecting with a 64-entry subscription queue.
+
 The failover benchmark is `node examples/listings-feed/bench/run.mjs`; see its header.
 
 ## Pull requests
