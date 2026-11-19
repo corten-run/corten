@@ -113,10 +113,10 @@ upstream's headers, so one without the header is buffered unless its `location` 
 
 ## nginx
 
-Checked with nginx 1.27 in front of `examples/watchlist`: the browser smoke test
+Checked on 2026-11-19 with nginx 1.27.5 in front of `examples/watchlist`: the browser smoke test
 (`scripts/smoke.mjs`) passes through it over HTTP/1.1, and HTTPS negotiates `h2` and streams events
-a second apart. On 2026-11-19, nginx 1.27.5 in front of `examples/card-market` passed a private
-page's tag to the app on reload and returned its `304`; a versioned stylesheet was a cache
+a second apart. In front of `examples/card-market`, nginx passed a private page's tag to the app
+on reload and returned its `304`; a versioned stylesheet was a cache
 `MISS` on its first request and a `HIT` on the next ([Caching](#caching)).
 
 ```nginx
@@ -165,8 +165,8 @@ server {
 ```
 
 Leave `proxy_cache` off `location /` so conditional requests for private pages reach the app.
-Opt in only for a prefix whose cacheable responses the app marks public, such as Corten's
-versioned files under `/assets/`.
+Opt in only on prefixes reserved for public content, such as Corten's versioned files under
+`/assets/`.
 
 nginx's limit decides who answers a body that is too large. The app reads a body past its limit
 by as much again (at most 64 MiB more; an `Upload` reads 64 MiB past its own limit) and answers
