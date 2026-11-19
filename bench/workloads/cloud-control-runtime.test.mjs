@@ -88,6 +88,46 @@ test("watcher registration waits for its source-owned systemd launcher to exit b
 test("terminal scope is insufficient while watcher remains active or another SSH survivor exists", () => {
   for (const mode of ["watcher-alive", "unknown-survivor", "unknown-user-manager"]) assert.equal(loopback(mode).admission, null);
 });
+test("fresh supervised bootstrap stops only the stock root manager and still requires ordinary admission", () => {
+  for (const [mode, stops] of [["prepare-no-manager", []], ["prepare-manager", ["user@0.service"]]]) {
+    const result = loopback(mode);
+    assert.deepEqual(result.stops, stops);
+    assert.equal(result.blocked, null);
+    assert.deepEqual(result.intent?.members.map((p) => p.pid) ?? [], stops.length ? [50, 51] : []);
+    verifyControlAdmission(result.binding, "bootstrap", result.admission);
+    assert.equal(result.admission.apparatus.socket.sessionPid, 40);
+  }
+});
+test("root manager preparation refuses foreign work and preserves the first blocked inventory", () => {
+  for (const [mode, reason] of Object.entries({
+    "prepare-extra-process": "unknown-root-manager-process",
+    "prepare-foreign-owner": "unknown-root-manager-process",
+    "prepare-extra-session": "foreign-login-or-control",
+    "prepare-foreign-unit": "foreign-login-or-control",
+    "prepare-stop-propagation": "unknown-root-manager-unit",
+  })) {
+    const result = loopback(mode);
+    assert.deepEqual(result.stops, [], mode);
+    assert.equal(result.intent, null, mode);
+    assert.equal(result.blocked?.reason, reason, mode);
+    assert.ok(result.blocked.processes.some((p) => p.pid === 50), mode);
+  }
+});
+test("active, unsettled, and already blocked inspection paths cannot dispatch root manager preparation", () => {
+  for (const mode of ["prepare-active", "prepare-watch-failure", "prepare-inspect-only"]) {
+    const result = loopback(mode);
+    assert.deepEqual(result.stops, [], mode);
+    assert.equal(result.intent, null, mode);
+    if (mode === "prepare-inspect-only") assert.ok(result.blocked?.processes.some((p) => p.pid === 50));
+  }
+});
+test("a changed monitor socket after the single stop cannot admit or erase pre-stop evidence", () => {
+  const result = loopback("prepare-monitor-changed");
+  assert.deepEqual(result.stops, ["user@0.service"]);
+  assert.equal(result.admission, null);
+  assert.equal(result.blocked.reason, "root-manager-stop-unconfirmed");
+  assert.deepEqual(result.blocked.processes, result.intent.processes);
+});
 test("source-bound native window refuses control and cannot close over the retained intrusion", () => {
   assert.equal(loopback("window").intrusionBlocked, true);
 });

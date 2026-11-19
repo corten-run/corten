@@ -142,6 +142,11 @@ class Path:
         return self.value in data or self.value in folders
 
     def read_text(self):
+        if mode.startswith("prepare-"):
+            if self.value == "/sys/fs/cgroup" + scope["ROOT_CGROUP"] + "/init.scope/cgroup.procs":
+                return "\n".join(str(p) for p in rows if scope["member"](rows[p], scope["ROOT_CGROUP"] + "/init.scope"))
+            if self.name == "status":
+                return "Uid:\t1000\t1000\t1000\t1000\n" if mode == "prepare-foreign-owner" else "Uid:\t0\t0\t0\t0\n"
         assert self.name == "cgroup.events"
         cg = self.value[len("/sys/fs/cgroup"):-len("/cgroup.events")]
         if cg in remove_on_read:
@@ -318,6 +323,126 @@ tcp = [(["0:", "00000000:0016", "00000000:0000", "0A", "0", "0", "0", "0", "0", 
         "0: 00000000:0016 00000000:0000 0A 0 0 0 0 0 500"),
        (["1:", "0A0200C0:0016", "140200C0:9C40", "01", "0", "0", "0", "0", "0", "501"],
         "1: 0A0200C0:0016 140200C0:9C40 01 0 0 0 0 0 501")]
+
+
+def prepare_fixture():
+    # Use the actual seal, receipts, watcher terminal checks and monitor sampling.
+    # Only the proc and logind/systemd responses are simulated.
+    cg = scope["ROOT_CGROUP"]
+    supervisor = "/system.slice/corten-bench-groups-r21-" + token + ".service/supervisor"
+    session = "/user.slice/user-0.slice/session-25.scope"
+    for pid, ppid, cgroup in ((30, 1, supervisor), (31, 30, supervisor), (32, 31, supervisor),
+                             (40, 10, session), (41, 40, session)):
+        rows[pid] = row(pid, ppid, cgroup)
+    rows[30]["commandSha256"] = scope["sha"](b"/bin/bash\0/bench/job.sh\0")
+    listener, chain, socket = scope["ancestry"](41, "192.0.2.20 40000 192.0.2.10 22")
+
+    def stream_member(pid):
+        p = proc(pid)
+        return {**scope["identity"](p), "parentPid": scope["parent"](p), "cpus": "0",
+                "namespaces": {k: "1" for k in ("cgroup", "ipc", "mnt", "net", "pid", "user", "uts")},
+                "threads": [{"pid": pid, "startTicks": p["startTicks"], "cpus": "0"}]}
+
+    listener = stream_member(listener["pid"])
+    listener.pop("commandSha256")
+    now = scope["time"].monotonic_ns()
+    registration = {"schema": "benchmark-control-apparatus/v1", "binding": binding, "id": "f" * 32, "host": boot,
+                    "listener": listener, "socket": socket, "members": [stream_member(p["pid"]) for p in chain],
+                    "createdMonoNs": str(now), "deadlineMonoNs": str(now + 172800000000000)}
+    write(root / "stream-registration.json", scope["encoded"](registration))
+    write(Path("/bench/bootstrap-ready.json"), scope["encoded"]({"schema": "benchmark-common-bootstrap/v2", **binding,
+          "group": "catalog-page", "controlHelperSha256": binding["helperSha256"], "monitorId": registration["id"]}))
+    if mode != "prepare-no-manager":
+        rows[50] = row(50, 1, cg + "/init.scope")
+        rows[50]["stat"] = rows[50]["stat"].replace("(no-name-authority)", "(systemd)")
+        rows[50]["commandSha256"] = scope["sha"](b"/usr/lib/systemd/systemd\0--user\0")
+        rows[51] = row(51, 50, cg + "/init.scope")
+        rows[51]["stat"] = rows[51]["stat"].replace("(no-name-authority)", "((sd-pam))")
+    if mode == "prepare-extra-process":
+        rows[52] = row(52, 50, cg + "/foreign.service")
+    if mode == "prepare-foreign-unit":
+        rows[52] = row(52, 1, "/system.slice/corten-bench-foreign.service")
+    if mode == "prepare-active":
+        write(root / "campaign-active.json", scope["encoded"]({"owner": scope["identity"](rows[30])}))
+    if mode == "prepare-watch-failure":
+        write(root / ("watch-failure-" + invocations[0]["id"] + ".json"), b'{"helperLine":10}')
+
+    stops = []
+
+    def probe(argv, **kwargs):
+        if argv == ["/usr/bin/loginctl", "--no-legend", "--no-pager", "list-sessions"]:
+            value = "25 0 root - 40 user - no -\n"
+            if mode == "prepare-extra-session":
+                value += "26 0 root - 56 user - no -\n"
+            return types.SimpleNamespace(stdout=value.encode())
+        if argv[:3] == ["/usr/bin/loginctl", "show-session", "25"]:
+            values = {"Scope": "session-25.scope", "Leader": "40", "Service": "sshd", "Remote": "yes", "State": "active"}
+        elif argv[:3] == ["/usr/bin/systemctl", "show", "user@0.service"]:
+            values = {"Id": "user@0.service", "LoadState": "loaded", "ActiveState": "active" if 50 in rows else "inactive",
+                      "SubState": "running" if 50 in rows else "dead", "MainPID": "50" if 50 in rows else "0",
+                      "ControlGroup": cg, "FragmentPath": "/usr/lib/systemd/system/user@.service",
+                      "DropInPaths": "/usr/lib/systemd/system/user@0.service.d/10-login-barrier.conf /usr/lib/systemd/system/user@.service.d/timeout.conf",
+                      "User": "0", "PAMName": "systemd-user", "Restart": "no", "ExecStop": "", "ExecStopPost": "",
+                      "InvocationID": "b" * 32, **dict.fromkeys(scope["STOP_EDGES"], "")}
+            if mode == "prepare-stop-propagation":
+                values["PropagatesStopTo"] = "ssh.service"
+        elif argv[:2] == ["/usr/bin/dpkg-query", "-S"]:
+            return types.SimpleNamespace(stdout=("systemd: " + argv[2] + "\n").encode())
+        elif argv == ["/usr/bin/systemctl", "stop", "--job-mode=fail", "user@0.service"]:
+            assert not stops and kwargs["timeout"] == 10 and kwargs["check"]
+            stops.append(argv[-1])
+            rows.pop(50)
+            rows.pop(51)
+            if mode == "prepare-monitor-changed":
+                fields, raw = tcp[1]
+                fields[9] = "502"
+                tcp[1] = (fields, raw.replace("501", "502"))
+            return types.SimpleNamespace(returncode=0)
+        else:
+            return run(argv, **kwargs)
+        assert set(argv[4:]) == {"--property=" + key for key in values} and argv[3] == "--all"
+        return types.SimpleNamespace(stdout="".join(k + "=" + v + "\n" for k, v in values.items()).encode())
+
+    fake_os = types.SimpleNamespace(getuid=lambda: 0, getpid=lambda: 32, getppid=lambda: 31, fsencode=lambda s: s.encode(),
+                     readlink=lambda p: scope["SYSTEMD"] if str(p) == "/proc/50/exe" else "/usr/lib/systemd/systemd-executor")
+    lease = {"id": registration["id"], "host": boot, "renewal": 1, "expiresMonoNs": str(now + 15_000_000_000)}
+    def current_sockets(pid):
+        fds = sockets(pid)
+        return {"502"} if mode == "prepare-monitor-changed" and stops and "501" in fds else fds
+
+    with patch.dict(scope, {"stream_member": stream_member, "stream_load": lambda *_: lease, "os": fake_os, "sockets": current_sockets}), \
+            patch.object(scope["subprocess"], "run", probe):
+        if mode == "prepare-inspect-only":
+            try:
+                scope["inspect_epoch"](root, "bootstrap")
+            except AssertionError:
+                pass
+        positive = mode in ("prepare-no-manager", "prepare-manager")
+        operation = lambda: scope["main"](["prepare-bootstrap", token])
+        try:
+            assert operation() == 0
+        except AssertionError:
+            if positive:
+                raise
+        else:
+            assert positive, "unsafe preparation accepted"
+        admission = scope["inspect_epoch"](root, "bootstrap") if positive else None
+        blocked_path = str(root / "admission-blocked-bootstrap.json")
+        original = data.get(blocked_path)
+        if original or stops:
+            try:
+                operation()
+            except AssertionError:
+                pass
+            else:
+                raise RuntimeError("prepared or refused attempt repeated")
+            assert data.get(blocked_path) == original
+        scope["custody"](root)
+        attempt = data.get("/bench/control/bootstrap-root-manager.json")
+        return {"binding": binding, "admission": admission, "stops": stops, "intent": json.loads(attempt) if attempt else None,
+                "blocked": json.loads(original) if original else None}
+
+
 @contextlib.contextmanager
 def mutex(root):
     data.setdefault(str(root / "mutex"), b"")
@@ -445,7 +570,9 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
             break
     if interactive:
         sys.exit(0)
-    if mode.startswith("setup-"):
+    if mode.startswith("prepare-"):
+        output = prepare_fixture()
+    elif mode.startswith("setup-"):
         output = {"proof": current.get("proof"), "rejected": current.get("rejected", False),
                   "custody": {p.rsplit("/", 1)[-1]: value.hex() for p, value in data.items() if p.startswith("/bench/control/")}}
     elif mode in ("disconnect", "ancestor-survives", "ancestor-zombie"):

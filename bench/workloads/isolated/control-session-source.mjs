@@ -442,7 +442,7 @@ def watcher_terminal(root, identifier, receipt):
     return {"unit": unit, "properties": properties, "observer": observer, "cgroupEvents": events, "identityAbsent": True}
 
 
-def inspect_epoch(root, epoch):
+def settled_epoch(root, epoch):
     assert not (root / ("admission-blocked-" + epoch + ".json")).exists(), "first blocked control inventory retained"
     seal_path = root / ("seal-" + epoch + ".json")
     if not seal_path.exists():
@@ -475,25 +475,200 @@ def inspect_epoch(root, epoch):
             return None
         receipts.append(receipt)
         watchers.append(terminal)
-    rows = inventory()
-    apparatus = stream_apparatus(root)
-    blocked = False
+    return seal, ledger, receipts, watchers
+
+
+def login_offenders(rows, receipts, apparatus):
+    offenders = {p["pid"] for p in rows.values() if p["pid"] not in apparatus
+                 and (p["cgroup"].startswith("0::/user.slice/") or re.search(r"/session-[^/]+\.scope(?:/|\n)", p["cgroup"]))}
     for receipt in receipts:
         listener = receipt["listener"]
-        blocked |= any(key(p) != key(listener) and (p["cgroup"] == listener["cgroup"]
+        offenders.update(p["pid"] for p in rows.values() if p["pid"] not in apparatus
+                         and key(p) != key(listener) and (p["cgroup"] == listener["cgroup"]
                        or p["cgroup"].startswith(listener["cgroup"].rstrip("\n") + "/") or parent(p) == listener["pid"])
-                       for p in rows.values() if p['pid'] not in apparatus)
-    blocked |= any(p["cgroup"].startswith("0::/user.slice/") or re.search(r"/session-[^/\n]+\.scope(?:/|\n)", p["cgroup"])
-                   for p in rows.values() if p['pid'] not in apparatus)
-    if blocked:
+    return offenders
+
+
+def blocked_inventory(rows):
+    return {"host": host(), "monoNs": str(time.monotonic_ns()), "processes": sorted(rows.values(), key=lambda p: p["pid"])}
+
+
+def inspect_epoch(root, epoch):
+    settled = settled_epoch(root, epoch)
+    if settled is None:
+        return None
+    seal, ledger, receipts, watchers = settled
+    rows = inventory()
+    apparatus = stream_apparatus(root)
+    if login_offenders(rows, receipts, apparatus):
         target = root / ("admission-blocked-" + epoch + ".json")
         if not target.exists():
-            write(target, encoded({"host": host(), "monoNs": str(time.monotonic_ns()), "processes": sorted(rows.values(), key=lambda p: p["pid"])}))
+            write(target, encoded(blocked_inventory(rows)))
         raise AssertionError("unregistered SSH/login userspace remains")
     assert not list(root.glob("intrusion-*.json")), "control intrusion retained"
     return {"schema": "benchmark-control-admission/v1", "seal": seal, "invocations": ledger, "receipts": receipts, "watchers": watchers,
             "host": host(), "closedMonoNs": str(time.monotonic_ns()), "qualification": "pending-first-host-native-proof",
             **({'apparatus': load(root, 'stream-registration.json'), 'apparatusSample': stream_sample(load(root, 'stream-registration.json'))} if apparatus else {})}
+
+
+ROOT_MANAGER = "user@0.service"
+ROOT_CGROUP = "/user.slice/user-0.slice/" + ROOT_MANAGER
+SYSTEMD = "/usr/lib/systemd/systemd"
+STOP_EDGES = ("RequiredBy", "BoundBy", "ConsistsOf", "PropagatesStopTo")
+
+
+def bootstrap_probe(argv):
+    result = subprocess.run(argv, check=True, capture_output=True, timeout=5)
+    assert len(result.stdout) < 16384
+    return result.stdout.decode("ascii")
+
+
+def bootstrap_properties(argv, names):
+    values = dict(line.split("=", 1) for line in bootstrap_probe(argv + ["--all"] + ["--property=" + name for name in names]).splitlines())
+    assert values.keys() == set(names)
+    return values
+
+
+def bootstrap_monitor(root, registration, receipts):
+    assert stream_apparatus(root)
+    lease = stream_load(root, "stream-lease.json")
+    assert lease["id"] == registration["id"] and lease["host"] == registration["host"] and lease["renewal"] >= 1
+    fields = ("pid", "startTicks", "cgroup", "executable")
+    original = registration["socket"]
+    listener, chain, socket = ancestry(registration["members"][-1]["pid"], original["connection"])
+    assert [identity(p) for p in chain] == [identity(p) for p in registration["members"]]
+    assert all(listener[k] == registration["listener"][k] == r["listener"][k] for k in fields for r in receipts)
+    assert socket["sessionPid"] == original["sessionPid"] and all(
+        socket[k].split()[1:4] == original[k].split()[1:4] and socket[k].split()[9] == original[k].split()[9]
+        for k in ("session", "listener"))
+    scopes = {p["cgroup"] for p in registration["members"] if p["cgroup"].startswith("0::/user.slice/")}
+    assert len(scopes) == 1
+    scope = re.fullmatch(r"0::/user.slice/user-0.slice/(session-([0-9]+)\.scope)\n", next(iter(scopes)))
+    assert scope
+    sessions = bootstrap_probe(["/usr/bin/loginctl", "--no-legend", "--no-pager", "list-sessions"]).splitlines()
+    assert len(sessions) == 1 and sessions[0].split()[:3] == [scope[2], "0", "root"]
+    session = bootstrap_properties(["/usr/bin/loginctl", "show-session", scope[2]], ("Scope", "Leader", "Service", "Remote", "State"))
+    assert session["Scope"] == scope[1] and session["Leader"] in {str(p["pid"]) for p in chain}
+    assert session["Service"] == "sshd" and session["Remote"] == "yes" and session["State"] in ("active", "online")
+
+
+def root_manager_properties():
+    return bootstrap_properties(["/usr/bin/systemctl", "show", ROOT_MANAGER],
+        ("Id", "LoadState", "ActiveState", "SubState", "MainPID", "ControlGroup", "FragmentPath", "DropInPaths",
+         "User", "PAMName", "Restart", "ExecStop", "ExecStopPost", "InvocationID") + STOP_EDGES)
+
+
+def stock_root_manager(unit):
+    assert (unit["Id"], unit["LoadState"], unit["ActiveState"], unit["SubState"], unit["ControlGroup"]) == (
+        ROOT_MANAGER, "loaded", "active", "running", ROOT_CGROUP)
+    assert unit["User"] in ("0", "root") and unit["PAMName"] == "systemd-user" and unit["Restart"] == "no"
+    assert not any(unit[k] for k in STOP_EDGES + ("ExecStop", "ExecStopPost"))
+    assert re.fullmatch(r"[1-9]\d*", unit["MainPID"]) and re.fullmatch(r"[a-f0-9]{32}", unit["InvocationID"])
+    assert unit["FragmentPath"] == "/usr/lib/systemd/system/user@.service"
+    for name in [unit["FragmentPath"], *unit["DropInPaths"].split()]:
+        assert re.fullmatch(r"/usr/lib/systemd/system/(?:user@(?:0)?\.service\.d/[A-Za-z0-9_.-]+\.conf|user@\.service)", name)
+        try:
+            owner = bootstrap_probe(["/usr/bin/dpkg-query", "-S", name])
+        except subprocess.CalledProcessError:
+            owner = bootstrap_probe(["/usr/bin/dpkg-query", "-S", name.removeprefix("/usr")])
+        assert re.fullmatch(r"systemd(?::[a-z0-9]+)?: (?:/usr)?" + re.escape(name.removeprefix("/usr")) + r"\n", owner)
+
+
+def root_manager_members(unit, rows, offenders):
+    # Only the exact MainPID and its optional stock PAM child in init.scope.
+    main = int(unit["MainPID"])
+    assert main in offenders and len(offenders) <= 2
+    assert offenders == {p["pid"] for p in rows.values() if member(p, ROOT_CGROUP)}
+    assert all(p["pid"] in offenders or parent(p) not in offenders for p in rows.values())
+    for pid in offenders:
+        row = rows[pid]
+        directory = pathlib.Path("/proc") / str(pid)
+        assert row["cgroup"] == "0::" + ROOT_CGROUP + "/init.scope\n"
+        assert re.search(r"^Uid:\s+0\s+0\s+0\s+0$", (directory / "status").read_text(), re.M)
+        comm, state = row["stat"].rsplit(") ", 1)
+        assert state[0] not in "ZX"
+        if pid == main:
+            assert comm == str(pid) + " (systemd" and parent(row) == 1
+            assert row["commandSha256"] == sha(os.fsencode(SYSTEMD) + b"\0--user\0")
+            executables = {SYSTEMD}
+        else:
+            assert comm == str(pid) + " ((sd-pam)" and parent(row) == main
+            executables = {SYSTEMD, "/usr/lib/systemd/systemd-executor"}
+        assert os.readlink(directory / "exe") in executables and identity(proc(pid)) == identity(row)
+    cgroup_pids = (pathlib.Path("/sys/fs/cgroup" + ROOT_CGROUP) / "init.scope" / "cgroup.procs").read_text()
+    assert {int(pid) for pid in cgroup_pids.split()} == offenders
+    return [identity(rows[pid]) for pid in sorted(offenders)]
+
+
+def prepare_bootstrap(root):
+    binding = load(root, "binding.json")
+    marker = json.loads(read(pathlib.Path("/bench/bootstrap-ready.json"), 1024))
+    assert os.getuid() == 0 and marker["schema"] == "benchmark-common-bootstrap/v2" and marker["group"] != "all"
+    assert all(marker[k] == binding[k] for k in ("round", "commit", "token"))
+    assert marker["controlHelperSha256"] == binding["helperSha256"]
+    scope = "/system.slice/corten-bench-groups-" + binding["round"] + "-" + binding["token"] + ".service/supervisor"
+    supervisor = proc(parent(proc(os.getppid())))
+    assert parent(supervisor) == 1 and supervisor["commandSha256"] == sha(b"/bin/bash\0/bench/job.sh\0")
+    assert all(p["cgroup"] == "0::" + scope + "\n" for p in (supervisor, proc(os.getppid()), proc(os.getpid())))
+    attempt = root / "bootstrap-root-manager.json"
+    target = root / "admission-blocked-bootstrap.json"
+    with mutex(root):
+        assert alive(supervisor) and not any((root / name).exists() for name in
+            ("campaign-active.json", "window.json", "admission-bootstrap.json", attempt.name)), "preparation is fresh-bootstrap only"
+        settled = settled_epoch(root, "bootstrap")
+        if settled is None or stream_load(root, "stream-lease.json")["renewal"] < 1:
+            return False
+        registration = load(root, "stream-registration.json")
+        seal, ledger, receipts, _ = settled
+        first = blocked_inventory(inventory())
+        reason = "bootstrap-authority"
+        try:
+            assert seal["schema"] == "benchmark-control-epoch/v1" and seal["binding"] == binding and seal["epoch"] == "bootstrap"
+            assert {r["channel"] for r in ledger} == {"ssh", "sftp"} and not list(root.glob("intrusion-*.json"))
+            requests = [load(root, "request-" + r["id"] + ".json") for r in ledger]
+            assert len(list(root.glob("request-*.json"))) == len(requests)
+            for sequence, (request, receipt) in enumerate(zip(requests, receipts, strict=True)):
+                invocation = request_valid(request)
+                assert request["sequence"] == sequence and request["helperSha256"] == binding["helperSha256"]
+                assert all(invocation[k] == binding[k] for k in ("round", "commit", "token")) and invocation["purpose"] == "bootstrap"
+                assert receipt["schema"] == "benchmark-control-session/v2" and receipt["host"] == first["host"]
+            assert all("seal" not in request for request in requests[:-1]) and requests[-1]["seal"] == seal["ledger"]
+            assert ledger[-1]["channel"] == "ssh" and ledger[-1]["requestSha256"] == sha(b"set -euo pipefail\n:\n")
+            assert receipts[-1]["result"]["code"] == 0
+            assert registration["binding"] == binding and registration["id"] == marker["monitorId"]
+            pids = {p["pid"] for p in registration["members"]}
+            rows = {p["pid"]: p for p in first["processes"]}
+            offenders = login_offenders(rows, receipts, pids)
+            if not offenders:
+                return True  # Ordinary admission still proves the live monitor and baseline.
+            reason = "foreign-login-or-control"
+            assert not any(p["cgroup"].startswith("0::/system.slice/corten-bench-") and not member(p, scope)
+                           for p in rows.values())
+            reason = "unknown-root-manager-unit"
+            unit = root_manager_properties()
+            stock_root_manager(unit)
+            reason = "unknown-root-manager-process"
+            members = root_manager_members(unit, rows, offenders)
+            reason = "foreign-login-or-control"
+            bootstrap_monitor(root, registration, receipts)
+            reason = "unknown-root-manager-process"
+            assert root_manager_properties() == unit
+            rows = inventory()
+            assert root_manager_members(unit, rows, login_offenders(rows, receipts, pids)) == members
+            reason = "root-manager-stop-unconfirmed"
+            write(attempt, encoded(first | {"unit": unit, "members": members}))
+            subprocess.run(["/usr/bin/systemctl", "stop", "--job-mode=fail", ROOT_MANAGER],
+                           check=True, timeout=10, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            stopped = root_manager_properties()
+            assert stopped["Id"] == ROOT_MANAGER and stopped["ActiveState"] == "inactive" and stopped["MainPID"] == "0"
+            bootstrap_monitor(root, registration, receipts)
+            rows = inventory()
+            assert not login_offenders(rows, receipts, pids)
+            assert not any(p["pid"] in rows and key(rows[p["pid"]]) == key(p) for p in members)
+        except Exception:
+            write(target, encoded(first | {"reason": reason}))
+            raise
+        return True
 
 
 def setup_query(root, expected):
@@ -622,7 +797,7 @@ def custody(root):
         destination.mkdir(mode=0o700)
     total = 0
     for path in sorted(root.iterdir()):
-        assert re.fullmatch(r"(?:helper\.py|mutex|binding\.json|window\.json|campaign-active\.json|stream-(?:registration|lease|state|invalid|terminal|sealed|drain|audit-json-api|audit-mixed-production)\.json|stream-observations\.jsonl|(?:request|start|launcher|registration|result|receipt|intrusion|watch-failure)-[a-f0-9]{32}\.json|(?:seal|admission|admission-blocked)-(?:bootstrap|audit-json-api|audit-mixed-production|collection)\.json)", path.name)
+        assert re.fullmatch(r"(?:helper\.py|mutex|binding\.json|bootstrap-root-manager\.json|window\.json|campaign-active\.json|stream-(?:registration|lease|state|invalid|terminal|sealed|drain|audit-json-api|audit-mixed-production)\.json|stream-observations\.jsonl|(?:request|start|launcher|registration|result|receipt|intrusion|watch-failure)-[a-f0-9]{32}\.json|(?:seal|admission|admission-blocked)-(?:bootstrap|audit-json-api|audit-mixed-production|collection)\.json)", path.name)
         data = read(path, 64 * 1024 * 1024 if path.name == 'stream-observations.jsonl' else LIMIT)
         total += len(data)
         assert total <= 64 * 1024 * 1024
@@ -662,6 +837,10 @@ def main(args):
         if proof is None:
             return 3
         sys.stdout.buffer.write(encoded(proof))
+    elif mode == "prepare-bootstrap":
+        assert len(args) == 2
+        while not prepare_bootstrap(root):  # The owning job bounds the seal wait.
+            time.sleep(0.25)
     elif mode == "watch":
         assert re.fullmatch(r"[a-f0-9]{32}", args[2])
         try:

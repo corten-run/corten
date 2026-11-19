@@ -1,0 +1,1 @@
+- Prepare dedicated benchmark hosts for timing by stopping the idle root user manager without disconnecting the progress monitor. Unexpected login processes still block the run.

@@ -40,6 +40,11 @@ git checkout --detach ${state.commit}
 test "$(git rev-parse HEAD)" = ${state.commit}
 test -z "$(git status --porcelain --untracked-files=all)"`;
   const group = state.group === undefined ? "" : ` --group ${quote(state.group)}`;
+  // The owned job is already detached from the SSH and user-manager cgroups.
+  const preparation = state.group !== undefined && state.control?.monitor ? `bootstrap_stage=root-manager-preparation
+printf '%s  %s\\n' '${guardianSha256}' '/run/corten-bench-control-${state.token}/helper.py' | /usr/bin/sha256sum --check --status
+/usr/bin/timeout --foreground --kill-after=5 2700 /usr/bin/python3 -I '/run/corten-bench-control-${state.token}/helper.py' prepare-bootstrap '${state.token}'
+` : "";
   const loadLayout = savedLoadLayout(state);
   const entry = `node bench/workloads/isolated/campaign-entry.mjs ${state.round} --commit ${state.commit} --state-dir /bench/campaign${state.group === undefined ? "" : ` --group ${state.group}`}${loadLayout ? ` --load-layout ${loadLayout}` : ""}`;
   if (!files["job.sh"].includes(original) || files["job.sh"].split(entry).length !== 2)
@@ -47,7 +52,7 @@ test -z "$(git status --porcelain --untracked-files=all)"`;
   files["job.sh"] = files["job.sh"].replace("set -Eeuo pipefail", "set -Eeuo pipefail\numask 077")
     .replace(original, provenance)
     .replace(entry,
-      `bootstrap_stage=campaign-directory\nmkdir -m 700 -- '/bench/campaign'\nbootstrap_stage=source-cleanliness\ntest -z "$(git status --porcelain --untracked-files=all)"\nbootstrap_stage=bootstrap-marker\nnode --input-type=module -e ${quote(`import { writeFileSync } from "node:fs"; writeFileSync("/bench/bootstrap-ready.json", ${JSON.stringify(`${JSON.stringify(bootstrapMarker(state))}\n`)}, { flag: "wx", mode: 0o600 });`)}\nbootstrap_stage=native-entry\nnode 'bench/workloads/isolated/campaign-entry.mjs' ${round} --commit ${commit} --state-dir '/bench/campaign'${group}${loadLayout ? ` --load-layout ${quote(loadLayout)}` : ""}`);
+      `bootstrap_stage=campaign-directory\nmkdir -m 700 -- '/bench/campaign'\nbootstrap_stage=source-cleanliness\ntest -z "$(git status --porcelain --untracked-files=all)"\nbootstrap_stage=bootstrap-marker\nnode --input-type=module -e ${quote(`import { writeFileSync } from "node:fs"; writeFileSync("/bench/bootstrap-ready.json", ${JSON.stringify(`${JSON.stringify(bootstrapMarker(state))}\n`)}, { flag: "wx", mode: 0o600 });`)}\n${preparation}bootstrap_stage=native-entry\nnode 'bench/workloads/isolated/campaign-entry.mjs' ${round} --commit ${commit} --state-dir '/bench/campaign'${group}${loadLayout ? ` --load-layout ${quote(loadLayout)}` : ""}`);
   files["pack.sh"] = `#!/bin/bash
 set -euo pipefail
 umask 077
