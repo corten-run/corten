@@ -1384,10 +1384,15 @@ rules something out.
     and a `304` only its `200`'s); and an answer whose handler set `Transfer-Encoding` over a
     body of known size, which hyper refused to send with the router's length beside it (the
     client got no answer), is sent chunked, and its `HEAD` says no length (RFC 9112 6.2). Each
-    was seen on the wire at `0aef5330c`, with the test Stands on names run against it. An answer that never reached a server (`App::test()`'s, or one taken
-    from `corten::Router` by a test or by an app's own loop that serves the router) says its
-    length in its body, not in a header, unless its handler set one; an `App::layer` never saw
-    the header, which was set outside it.
+    was seen on the wire at `0aef5330c`, with the test Stands on names run against it. A `101`
+    a handler answers itself differs the same way as a `204`, by hyper's source and not seen on
+    the wire, since hyper hands the connection on after one. On a connection the server is
+    closing, hyper's source has the length's line follow `connection: close`, where it came
+    before it. An
+    answer Corten's server did not send (`App::test()`'s, or one taken from `corten::Router` by
+    a test or by an app's own loop that serves the router) says its length in its body, not in
+    a header, unless it answers a `HEAD` or its handler set one; an `App::layer` never saw the
+    header, which was set outside it.
 
     The steps, in order, each landing only when the one before it has:
     1. The dispatch suite (`crates/corten/tests/dispatch.rs`): raw HTTP/1.1 to `serve_on` and the
@@ -1605,19 +1610,25 @@ rules something out.
     `Allow`; 15.6.2: `501`, which requires no `Allow`; and 9.1 again, a method's name is
     case-sensitive; migration step 1); platform (hyper 1.12.0's HTTP/1 encoder writes
     `Content-Length` from the body's exact size for an answer without the header, to an
-    HTTP/1.0 client too, and leaves it off a `1xx`, a `204` and a `304`, as RFC 9110 8.6
-    requires, and off an answer with `Transfer-Encoding`: read in its `proto/h1/role.rs`, and
-    held on the wire by the dispatch suite's `HEAD` case and
-    `tests::the_server_writes_an_answer_s_length_from_its_body`); measured (callgrind, release,
-    glibc's allocator, the lean catalog page of `bench/catalog` over one kept-alive connection,
-    a run of 1,300 requests less one of 300, three runs of each build: 44,134 instructions a
-    request with the router setting `Content-Length`, 44,121 to 44,143, and 43,331 with the
-    length left to the server, 43,289 to 43,333, with 22 calls to `malloc` a request against
-    20; and `perf stat` on the same two builds under `wrk` with 64 connections, ten rounds with
-    the builds taking turns: 116,559 cycles a request at the median against 110,507, but the
-    difference within a round was a median of 1,689 fewer, its quartiles 8,949 fewer and 1,157
-    more, lower in 6 rounds of 10, so the cycles do not tell the builds apart and the count
-    does); platform, an accepted cost (migration step 1, the docs as
+    HTTP/1.0 client too, and leaves it off a `1xx` and a `204`, as RFC 9110 8.6 requires, off a
+    `304`, which 8.6 allows only its `200`'s, and, for an HTTP/1.1 client, off an answer with
+    `Transfer-Encoding` (an HTTP/1.0 client, which reads no chunks, is sent the length and no
+    `Transfer-Encoding`): read in its `proto/h1/role.rs`, and held on the wire by the dispatch
+    suite's `HEAD` case and `tests::the_server_writes_an_answer_s_length_from_its_body`);
+    measured (callgrind, release, glibc's allocator, in a Linux container on Docker Desktop,
+    the lean catalog page of `bench/catalog` over one kept-alive connection, a run of 1,300
+    requests less one of 300, three runs of each build with the builds taking turns: 44,134
+    instructions a request with the router setting `Content-Length`, 44,121 to 44,143, and
+    43,331 with the length left to the server, 43,289 to 43,333, with 22 calls to `malloc` a
+    request with the router setting it against 20 without; and `perf stat` on the same two
+    builds in the same container under `wrk` with 64 connections, the server on one CPU and
+    the load on three others, ten rounds with the builds taking turns: 116,559 cycles a request
+    at the median with the router setting it and 110,507 without, but the difference within a
+    round was a median of 1,689 fewer, its quartiles 8,949 fewer and 1,157 more, lower in 6
+    rounds of 10, so the cycles do not tell the builds apart and the count does; no script in
+    the repository drives either run); bet (no app serves `corten::Router` by a server that
+    leaves the length of a body of known size unsaid; nothing here has counted what serves
+    Corten apps, and hyper's HTTP/1 server is the one Corten's own loop uses); platform, an accepted cost (migration step 1, the docs as
     read on 2026-11-13: a CloudWatch alarm on CloudFront's `5xxErrorRate` counts every `501`,
     since the metric has no dimension but `DistributionId` and `Region`
     ([Types of metrics for CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/programming-cloudwatch-metrics.html)),

@@ -627,7 +627,10 @@ What it sends is what the app's own pages send, typed the same way:
    ([`ClientIp`](#the-clients-address)), and `Client::call(method, &route).body(type, bytes)` a body that
    is not a form (JSON, a multipart upload).
 
-The answer is read to its end: `status()`, `headers()`, `text()`, `bytes()`. A live stream has no
+The answer is read to its end: `status()`, `headers()`, `text()`, `bytes()`. No server sent it, so
+its headers are the app's alone: it has no `Content-Length`, which the server writes from the body
+(only a `HEAD`'s has one, from the router, or an answer whose handler set it), and its length is
+`bytes().len()`. A live stream has no
 end, so a test of one sends its request through `app().router()` and reads the stream as it comes
 (with `tower = { version = "0.5", features = ["util"] }` for `ServiceExt` and `http-body-util` as
 dev-dependencies: the one test that needs them).
@@ -788,10 +791,8 @@ listener of the app's own sets what it chooses, and one that wants Nagle's algor
 server never passes through Corten's accept, so `TCP_NODELAY` is that server's to set. An answer's
 `Content-Length` is that server's to write too, as it is Corten's: the router sets the header only
 on a `HEAD`, whose body it drops, and any other answer says its length in its body's `size_hint`,
-which hyper writes as `Content-Length` (a `Media::stream_sized` says it in the header itself). So
-an answer that never reached a server carries no `Content-Length` unless its handler set one: a
-test with `App::test()` reads `answer.bytes().len()`, and one that sends a request through
-`app.router()` the body's `size_hint`.
+which hyper writes as `Content-Length` (a `Media::stream_sized` says it in the header itself). A
+test that sends a request through `app.router()` reads the length there too.
 
 HTTPS is a step on each connection before HTTP, which `corten::serve_wrapped` takes: the TLS
 handshake. TLS stays the app's choice of library, and so does its configuration. With

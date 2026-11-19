@@ -1270,7 +1270,9 @@ impl<M: Middleware> App<M> {
     /// [layers](App::layer) included. For serving it another way, and for a test that sends what
     /// [`App::test`]'s client does not (a live stream it reads as it comes); it starts none of the
     /// app's [tasks](App::task). A connection loop of the app's own gives each request the client's
-    /// address as a [`crate::PeerAddr`] in its extensions, which [`crate::ClientIp`] starts from.
+    /// address as a [`crate::PeerAddr`] in its extensions, which [`crate::ClientIp`] starts from,
+    /// and writes each answer's `Content-Length` from its body's `size_hint`, as hyper's HTTP/1
+    /// server does: the router sets the header only on a `HEAD`, whose body it drops.
     pub fn router(mut self) -> Router {
         let dev = self.dev.unwrap_or_else(|| std::env::var_os("CORTEN_DEV").is_some());
         let bounds = self.drain().each;

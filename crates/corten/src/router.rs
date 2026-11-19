@@ -604,7 +604,9 @@ pub(crate) trait Stages: Send + Sync + 'static {
 /// The finished app: its routes, Corten's own, the stages around them and the app's
 /// [layers](crate::App::layer), as [`crate::App::router`] makes it. A tower `Service`, cloned
 /// cheaply, for a test that sends what [`crate::App::test`]'s client does not or a server of the
-/// app's own; [`crate::serve`] serves it itself.
+/// app's own; [`crate::serve`] serves it itself. Its answer says its length in its body's
+/// `size_hint`, which the server writes as `Content-Length`; only a `HEAD`'s, whose body is
+/// dropped, carries the header from here.
 #[derive(Clone)]
 pub struct Router {
     inner: Inner,

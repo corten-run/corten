@@ -18178,6 +18178,31 @@ async fn an_app_layer_is_made_once_outside_the_router() {
     assert!(!matched.load(Ordering::Relaxed), "a layer runs before the route is matched");
 }
 
+/// A `HEAD` is given no length where its `GET` has none. A `101` is among them, which a test over
+/// a socket cannot ask for: hyper hands the connection on after one.
+#[tokio::test]
+async fn a_head_says_no_length_where_its_get_has_none() {
+    let routes = Table::new()
+        .route("/", get(|| async { "hi" }))
+        .route("/switch", get(|| async { (StatusCode::SWITCHING_PROTOCOLS, "to") }))
+        .route("/done", get(|| async { (StatusCode::NO_CONTENT, "said") }))
+        .route("/same", get(|| async { StatusCode::NOT_MODIFIED }))
+        .route("/chunked", get(|| async { ([(header::TRANSFER_ENCODING, "chunked")], "in chunks") }));
+    let router = App::new(Routes::from(routes)).router();
+    let (_, headers, body) = call_with(router.clone(), "HEAD", "/", None, None).await;
+    assert_eq!((&headers["content-length"], body.as_str()), (&http::HeaderValue::from_static("2"), ""));
+    for (path, status) in [
+        ("/switch", StatusCode::SWITCHING_PROTOCOLS),
+        ("/done", StatusCode::NO_CONTENT),
+        ("/same", StatusCode::NOT_MODIFIED),
+        ("/chunked", StatusCode::OK),
+    ] {
+        let (answered, headers, body) = call_with(router.clone(), "HEAD", path, None, None).await;
+        assert_eq!(answered, status, "{path}");
+        assert!(!headers.contains_key("content-length") && body.is_empty(), "{path}: {headers:?}");
+    }
+}
+
 /// The server writes an answer's length from the body it is handed
 /// (docs/design.md#choice-axum-router): the body an app layer left, `content-length: 0` for an
 /// empty one, and none for a `204`, even one given a body. A `HEAD` carries the length its `GET`
