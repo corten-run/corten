@@ -27,19 +27,25 @@ async function startWatchdog(launch, binding, registration, invalidate) {
     "stream-watchdog", binding.token, streamHash(registration)], { cwd: "/bench", shell: false, windowsHide: true,
     stdio: ["pipe", "pipe", "inherit"], env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" } });
   const ready = Promise.withResolvers(), closed = Promise.withResolvers();
-  let admitted = false, stopping = false, ended = false;
+  let admitted = false, reported = false, stopping = false, ended = false;
   const fault = (reason) => {
     invalidate(reason); ready.reject(new Error("pinned control watchdog failed"));
   };
   child.on("error", () => fault("watchdog process")); child.stdin.on("error", () => fault("watchdog input"));
   child.stdout.on("data", (bytes) => {
-    if (bytes.equals(Buffer.from("F")) || bytes.equals(Buffer.from("RF"))) { fault("pinned watchdog reported a fault"); return; }
+    if (reported) return; // Never admit after a fault.
+    if (bytes.equals(Buffer.from("F")) || bytes.equals(Buffer.from("RF"))) {
+      reported = true; invalidate("pinned watchdog reported a fault");
+      // Before readiness, let close reject the promise after the helper reports its
+      // line. A wedged helper is still killed by the original startup deadline.
+      return;
+    }
     if (admitted || !bytes.equals(Buffer.from("R"))) { fault("watchdog readiness"); return; }
     admitted = true; ready.resolve();
   });
   child.once("close", (code, signal) => {
     ended = true;
-    const clean = admitted && stopping && code === 0 && signal === null;
+    const clean = admitted && !reported && stopping && code === 0 && signal === null;
     if (!clean) fault("watchdog exit");
     closed.resolve(clean);
   });

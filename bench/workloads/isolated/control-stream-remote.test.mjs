@@ -14,7 +14,7 @@ import { streamHash, verifyStreamDrain } from "./control-stream.mjs";
 import { superviseControlStream } from "./control-stream-remote.mjs";
 import { digest } from "./evidence.mjs";
 
-async function fixture(t, { survivor = false, autoExit = true } = {}) {
+async function fixture(t, { survivor = false, autoExit = true, beforeReady = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "corten-control-lease-")), abort = new AbortController();
   let at = 2000000n, probes = 0, supervisor;
   const put = (name, value) => writeFileSync(join(root, name), typeof value === "string" ? value : JSON.stringify(value), { mode: 0o600 });
@@ -37,7 +37,7 @@ async function fixture(t, { survivor = false, autoExit = true } = {}) {
     assert.fail("no fault diagnostic");
   };
   const runtime = { root, faultFd, now: () => at, launch(...args) {
-      launches.push(args); setImmediate(() => child.stdout.write("R")); return child;
+      launches.push(args); if (!beforeReady) setImmediate(() => child.stdout.write("R")); return child;
     }, sample: () => { samples++; return { host: registration.host, members: structuredClone(registration.members), listener: structuredClone(registration.listener), monoNs: String(at) }; },
     sleep: async () => {
       at += 100000000n; lease();
@@ -46,11 +46,29 @@ async function fixture(t, { survivor = false, autoExit = true } = {}) {
         put("stream-observations.jsonl", bytes); put("stream-sealed.json", { monoNs: String(at), lease: get("stream-lease.json"), observationsSha256: digest(bytes) });
       }
     }, probe: () => (++probes < 2 || survivor ? { status: 3 } : { status: 0, stdout: JSON.stringify(drain()) }) };
-  supervisor = await superviseControlStream(binding, { apparatus: registration }, abort, runtime);
-  t.after(async () => { try { await supervisor.dispose(); if (abort.signal.aborted) await lastFault(); }
+  const pending = superviseControlStream(binding, { apparatus: registration }, abort, runtime);
+  t.after(async () => { try { await supervisor?.dispose(); if (abort.signal.aborted) await lastFault(); }
     finally { fs.closeSync(faultFd); assert.ok(resolve(root).startsWith(resolve(tmpdir()) + (process.platform === "win32" ? "\\" : "/"))); rmSync(root, { recursive: true }); } });
+  if (beforeReady) return { child, abort, pending, launches };
+  supervisor = await pending;
   return { root, abort, supervisor, put, get, lastFault, lease, drain, runtime, launches, child, samples: () => samples, tick: (ns) => { at += ns; }, probes: () => probes };
 }
+
+test("a first-scan watchdog fault aborts now but can report to the job log before exit", async (t) => {
+  const f = await fixture(t, { beforeReady: true });
+  assert.equal(f.launches[0][2].stdio[2], "inherit");
+  const kill = t.mock.fn(); f.child.kill = kill;
+  let settled = false;
+  const rejected = assert.rejects(f.pending, /pinned control watchdog failed/).then(() => { settled = true; });
+  try {
+    f.child.stdout.write("F");
+    assert.ok(f.abort.signal.aborted);
+    f.child.stdout.write("R"); // A subsequent ready byte cannot reopen admission.
+    await new Promise(setImmediate);
+    assert.equal(kill.mock.callCount(), 0); assert.equal(settled, false);
+  } finally { f.child.emit("close", 254, null); await rejected; }
+  assert.equal(kill.mock.callCount(), 0);
+});
 
 test("only the independent watchdog is launched on CPU0; native-window ticks never scan in the campaign parent", async (t) => {
   const f = await fixture(t);
