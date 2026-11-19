@@ -127,13 +127,30 @@ impl Mode {
     /// `page`), in one lookup: a redirect to a place or another site is then named in
     /// `corten-location`, as `fetch` cannot follow one, and the answer is not shared (#1034).
     pub(crate) fn asked(headers: &HeaderMap) -> (Mode, bool) {
-        match headers.get(MODE_HEADER).map(HeaderValue::as_bytes) {
-            Some(b"nav") => (Mode::Navigation, true),
-            Some(b"action") => (Mode::Action, true),
-            Some(b"page") => (Mode::Document, true),
-            _ if accepts_json(headers) => (Mode::Data, false),
-            _ => (Mode::Document, false),
-        }
+        Self::read(headers, false).0
+    }
+
+    fn read(headers: &HeaderMap, check_html: bool) -> ((Mode, bool), bool) {
+        let runtime = match headers.get(MODE_HEADER).map(HeaderValue::as_bytes) {
+            Some(b"nav") => Some(Mode::Navigation),
+            Some(b"action") => Some(Mode::Action),
+            Some(b"page") => Some(Mode::Document),
+            _ => None,
+        };
+        let accept = if runtime.is_none() || (check_html && runtime == Some(Mode::Document)) {
+            headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()).unwrap_or("")
+        } else {
+            ""
+        };
+        // Browsers never put JSON first for a navigation.
+        let mode = runtime.unwrap_or_else(|| {
+            if crate::api::media_type(accept.split(',').next().unwrap_or("")) == crate::api::JSON {
+                Mode::Data
+            } else {
+                Mode::Document
+            }
+        });
+        ((mode, runtime.is_some()), check_html && mode == Mode::Document && accept.contains("text/html"))
     }
 }
 
@@ -222,13 +239,6 @@ fn slow_prefetch(uri: &Uri, took: std::time::Duration, answered: bool) {
 #[cfg(debug_assertions)]
 pub(crate) fn is_prefetch(headers: &HeaderMap) -> bool {
     headers.get("purpose").is_some_and(|v| v.as_bytes() == b"prefetch")
-}
-
-/// True when the first media type in `Accept` is `application/json`. Browsers never send that
-/// for a navigation, so a document request cannot turn into data by accident.
-fn accepts_json(headers: &HeaderMap) -> bool {
-    let accept = headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()).unwrap_or("");
-    accept.split(',').next().is_some_and(|first| crate::api::media_type(first) == crate::api::JSON)
 }
 
 fn is_current(path: &str, href: &str, section: bool) -> bool {
@@ -808,15 +818,32 @@ pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) 
 
 /// The request's credentials, `Cookie` and `Authorization`: read once, for the cache rules and for
 /// the error page's caller. Values already in the request, shared, not copied.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(crate) struct Credentials {
-    cookie: Option<HeaderValue>,
-    authorization: Option<HeaderValue>,
+    pub cookie: Option<HeaderValue>,
+    pub authorization: Option<HeaderValue>,
 }
 
-impl Credentials {
-    pub(crate) fn of(headers: &HeaderMap) -> Self {
-        Credentials { cookie: headers.get(header::COOKIE).cloned(), authorization: headers.get(header::AUTHORIZATION).cloned() }
+/// What the stages know about the page before dispatch. A handler or its extractors see the
+/// actual, possibly changed request, not this snapshot.
+pub(crate) struct RequestPage {
+    pub mode: (Mode, bool),
+    pub accepts_html: bool,
+    pub credentials: Credentials,
+    #[cfg(debug_assertions)]
+    pub form_check: Option<crate::security::FormCheck>,
+}
+
+impl RequestPage {
+    pub(crate) fn read(headers: &HeaderMap, is_page: bool) -> Self {
+        let (mode, accepts_html) = Mode::read(headers, is_page);
+        RequestPage {
+            mode,
+            accepts_html,
+            credentials: Credentials::default(),
+            #[cfg(debug_assertions)]
+            form_check: None,
+        }
     }
 }
 
@@ -840,7 +867,14 @@ pub(crate) struct Asked {
 impl Asked {
     /// What the error page's request needs, and no more: the error page's own `Req` reads the
     /// notice and the rest, so a request that answers without one builds no `Req` here.
-    pub(crate) fn new(req: &Request, shared: &Shared, credentials: Credentials, (mode, fetched): (Mode, bool)) -> Self {
+    pub(crate) fn new(
+        req: &Request,
+        shared: &Shared,
+        page: &mut RequestPage,
+        nonce: Option<&NonceSlot>,
+        signal: &crate::Signal,
+    ) -> Self {
+        let (mode, fetched) = page.mode;
         let head = req.method() == http::Method::HEAD;
         let here =
             if shared.layout_reads.is_empty() { None } else { req.extensions().get::<crate::layout::StartHere>().cloned() };
@@ -849,9 +883,9 @@ impl Asked {
             mode,
             fetched,
             accept_language: req.headers().get(header::ACCEPT_LANGUAGE).cloned(),
-            nonce: req.extensions().get::<NonceSlot>().cloned(),
-            signal: req.extensions().get::<crate::Signal>().cloned().unwrap_or_default(),
-            credentials,
+            nonce: nonce.cloned(),
+            signal: signal.clone(),
+            credentials: std::mem::take(&mut page.credentials),
             head,
             here,
         }
@@ -1384,6 +1418,7 @@ impl Req {
         method: &http::Method,
         notice: bool,
     ) -> Self {
+        // Middleware and earlier extractors may have changed either header since the stages.
         let (mode, fetched) = Mode::asked(headers);
         let signal = extensions.get::<crate::Signal>();
         let write = !matches!(*method, http::Method::GET | http::Method::HEAD);
@@ -3340,16 +3375,17 @@ pub(crate) struct AsIs;
 /// has no route for it. A [`Mode::Data`] request, every request on an `api` route and every
 /// failure of a JSON route ([`crate::JsonResult`]) gets the failure as JSON instead
 /// ([`crate::api`]). A request a [`crate::Caller`] sent to sign in is redirected there.
-pub(crate) fn render_errors<'s, 'n, 'g, 'm, 'r, S: crate::app::Steps>(
+pub(crate) fn render_errors<'s, 'n, 'g, 'm, 'r, 'p, S: crate::app::Steps>(
     shared: &'s Arc<Shared>,
     mut pending: Inbound<'r>,
     next: Next<'n, S>,
     deadline: Option<std::time::Duration>,
     signal: &'g crate::Signal,
     api: Option<&'m crate::api::Mount>,
-    (mode, fetched): (Mode, bool),
-) -> impl Future<Output = Response> + Send + use<'s, 'n, 'g, 'm, 'r, S> {
+    page: &'p mut RequestPage,
+) -> impl Future<Output = Response> + Send + use<'s, 'n, 'g, 'm, 'r, 'p, S> {
     let req = pending.get();
+    let (mode, _) = page.mode;
     let mut late = false;
     if next.has_middleware() {
         // Middleware may change what is asked for or make the page itself, even on a patch-only
@@ -3367,7 +3403,7 @@ pub(crate) fn render_errors<'s, 'n, 'g, 'm, 'r, S: crate::app::Steps>(
         late = !shared.layout_reads.is_empty();
         signal.mark_whole(late);
     }
-    errors_rendered(shared, pending, next, deadline, signal, api, (mode, fetched), late)
+    errors_rendered(shared, pending, next, deadline, signal, api, page, late)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3378,9 +3414,10 @@ async fn errors_rendered<S: crate::app::Steps>(
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
     api: Option<&crate::api::Mount>,
-    (mode, fetched): (Mode, bool),
+    page: &mut RequestPage,
     late: bool,
 ) -> Response {
+    let (mode, _) = page.mode;
     let json = api.is_some() || mode == Mode::Data;
     if late && !json {
         // Keep the late poller's state in this box, not in a second box or the ordinary future.
@@ -3388,7 +3425,7 @@ async fn errors_rendered<S: crate::app::Steps>(
         let answer: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
             crate::layout::LateWrite::stage(pending.get(), deadline);
             let dispatch = |pending| within_late(pending, next, deadline, signal);
-            page_or_error(shared, pending, dispatch, deadline, signal, (mode, fetched)).await
+            page_or_error(shared, pending, dispatch, deadline, signal, page).await
         });
         return answer.await;
     }
@@ -3398,7 +3435,7 @@ async fn errors_rendered<S: crate::app::Steps>(
         return crate::api::json_failure(run(pending, dispatch, deadline, signal).await, shared.dev, shape).await;
     }
     if shared.layout_reads.is_empty() || mode.swaps() {
-        return page_or_error(shared, pending, dispatch, deadline, signal, (mode, fetched)).await;
+        return page_or_error(shared, pending, dispatch, deadline, signal, page).await;
     }
     // A whole document: a page route starts the layout's reads as it is called, and they are
     // polled with the handler on this task, then drawn into whichever page answers: the
@@ -3410,7 +3447,7 @@ async fn errors_rendered<S: crate::app::Steps>(
     let here = crate::layout::StartHere::new(shared.clone(), until);
     pending.get().extensions_mut().insert(here.clone());
     let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
-        let res = here.beside(page_or_error(shared, pending, dispatch, deadline, signal, (mode, fetched))).await;
+        let res = here.beside(page_or_error(shared, pending, dispatch, deadline, signal, page)).await;
         here.fill(res).await
     });
     filled.await
@@ -3436,22 +3473,21 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     dispatch: impl FnOnce(Inbound<'r>) -> F,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
-    (mode, fetched): (Mode, bool),
+    page: &mut RequestPage,
 ) -> Response {
     use http_body::Body as HttpBody;
     let req = pending.get();
     let offline = req.method() == http::Method::GET && shared.offline.as_deref() == Some(req.uri().path());
     // A browser: the runtime (whose whole-page fetch asks for `*/*`), or a document request that
     // asks for HTML (a health probe or a webhook sender does not).
-    let browser = fetched || (mode == Mode::Document && accepts_html(req.headers()));
-    // Taken now, while the request (its nonce, its credentials) is here; it allocates nothing.
-    let asked = Asked::new(req, shared, Credentials::of(req.headers()), (mode, fetched));
+    let browser = page.mode.1 || page.accepts_html;
+    let asked = Asked::new(req, shared, page, req.extensions().get::<NonceSlot>(), signal);
     #[cfg(debug_assertions)]
-    let check = req.extensions_mut().remove::<crate::security::FormCheck>();
+    let check = page.form_check.take();
     // A browser's plain request (a link, a reload, a form without JavaScript), which shows what
     // answers it as the whole document at the address it asked; its method, for what it is told.
     #[cfg(debug_assertions)]
-    let plain = (browser && !fetched && mode == Mode::Document && top_level(req.headers())).then(|| req.method().clone());
+    let plain = (page.accepts_html && !page.mode.1 && top_level(req.headers())).then(|| req.method().clone());
     let res = run(pending, dispatch, deadline, signal).await;
     #[cfg(debug_assertions)]
     let res = refresh_header_is_an_error(res, shared.dev);
@@ -3494,7 +3530,7 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
                 let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
                 return carried(kept, error_page(shared, asked, failure).await);
             }
-            return carried(kept, redirect(mode, asked.fetched, to));
+            return carried(kept, redirect(asked.mode, asked.fetched, to));
         };
         tracing::error!("corten: {message}");
         let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
@@ -3755,10 +3791,6 @@ async fn within_deadline<S: crate::app::Steps>(
 /// [`within`] waited its limit, and what the future's last poll waited for of the request body
 /// ([`crate::extract::Arriving`]).
 struct Late(Waited);
-
-fn accepts_html(headers: &HeaderMap) -> bool {
-    headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("text/html"))
-}
 
 /// `fut`'s output, or [`Late`] once it has waited `limit`. The timer starts the first time `fut`
 /// is not ready, so a handler that answers at once (a page rendered from memory) never registers

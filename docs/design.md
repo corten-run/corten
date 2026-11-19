@@ -1985,6 +1985,14 @@ rules something out.
     the route. The compiler rejects a stage that reads it after hand-off. The late layout poller
     lives in the existing late-write box, so it neither enlarges the ordinary future nor adds
     a box to a late-eligible write.
+    The stages read the incoming request's mode, credentials, validators, and the host and
+    origin headers they need before dispatch. The error page and cache rule share those reads.
+    `Req` negotiates from the headers where it is taken: middleware and earlier extractors can
+    change them ([Choice 21](#choice-own-extractors)). Keeping those two views separate is what
+    lets a handler see an edit without letting it change the outer cache or same-origin decision.
+    `MatchedPath` and `Signal` remain independently available in the request's extensions;
+    the nonce slot is independent of either. The debug-only form redirect check is held by the
+    stages, not put in the request's extensions.
     An area's or an API's own steps (`Area::middleware`, `Api::middleware`) run right after the
     app's, for the requests at its prefix; they are boxed, since which run depends on the route, and
     an app with none pays nothing for them. What an area or API sets (its deadline, body limit, policy and middleware,
@@ -2208,7 +2216,11 @@ rules something out.
     production is yet); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
-    for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
+    for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1);
+    measured (callgrind, x86-64 Linux release, `catalog-lean` identity GETs: sharing the staged
+    header reads reduced named request-map lookups from 17 to 14, kept three response-map
+    lookups and three request extension inserts, and changed 43,273.3 to 42,835.4 instructions
+    per request).
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
     layer around the app cannot serve it; or a route needs some stages and not others, which
@@ -2290,7 +2302,9 @@ rules something out.
     100 catalog GETs on one connection allocated one 2,144-byte stage and one 1,880-byte handler
     future each, against 4,952 and 1,880 bytes at the baseline; 2026-11-19, rustc 1.99.1 rejected
     reads after hand-off and after both dispatchers took the request, in the change that makes
-    the handle move-only ([#1674 Shrink the boxed future for staged requests](https://github.com/corten-run/corten/pull/1674#round-two)).
+    the handle move-only ([#1674 Shrink the boxed future for staged requests](https://github.com/corten-run/corten/pull/1674#round-two));
+    2026-11-19, the header lookup and extension counts before (`aa0f0c7e1`) and after sharing
+    the reads, from 1,300 less 300 catalog GETs on one connection per run.
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports

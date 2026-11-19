@@ -196,15 +196,34 @@ pub(crate) struct Seen {
     pub dev: bool,
 }
 
-/// True when the request carries credentials: `Authorization`, or a cookie other than the time
-/// zone the runtime keeps for [`crate::App::client_zone`], which says nothing about who is asking.
-pub(crate) fn credentials(headers: &HeaderMap) -> bool {
-    // One lookup for a request with a session cookie, as `contains_key` was; `get_all` cost about
-    // 190 instructions more (callgrind).
-    match headers.get(header::COOKIE) {
-        None => headers.contains_key(header::AUTHORIZATION),
-        Some(cookie) if !zone_only(cookie) => true,
-        Some(_) => headers.get_all(header::COOKIE).iter().nth(1).is_some() || headers.contains_key(header::AUTHORIZATION),
+/// The staged request's credentials. Keep the cookie iterator so inspecting more than one line
+/// (for the zone-only exception or the visitor's zone) needs no second lookup.
+pub(crate) struct Credentials<'a> {
+    cookies: header::GetAll<'a, HeaderValue>,
+    authorization: Option<&'a HeaderValue>,
+}
+
+impl<'a> Credentials<'a> {
+    pub(crate) fn read(headers: &'a HeaderMap) -> Self {
+        Self { cookies: headers.get_all(header::COOKIE), authorization: headers.get(header::AUTHORIZATION) }
+    }
+
+    pub(crate) fn cookies(&self) -> header::ValueIter<'a, HeaderValue> {
+        self.cookies.iter()
+    }
+
+    pub(crate) fn has_cookie(&self) -> bool {
+        self.cookies().next().is_some()
+    }
+
+    /// The zone cookie by itself says nothing about who is asking.
+    pub(crate) fn personal(&self) -> bool {
+        let mut cookies = self.cookies();
+        self.authorization.is_some() || cookies.next().is_some_and(|cookie| !zone_only(cookie) || cookies.next().is_some())
+    }
+
+    pub(crate) fn for_error_page(&self) -> crate::page::Credentials {
+        crate::page::Credentials { cookie: self.cookies().next().cloned(), authorization: self.authorization.cloned() }
     }
 }
 
@@ -212,6 +231,17 @@ pub(crate) fn credentials(headers: &HeaderMap) -> bool {
 fn zone_only(cookie: &HeaderValue) -> bool {
     let cookie = cookie.as_bytes();
     cookie.starts_with(b"corten-zone=") && !cookie.contains(&b';')
+}
+
+/// Capture the client's validators before middleware. A GET with no named tag or accepted coding
+/// skips the hash; a HEAD still gets a validator (RFC 9111 section 4.3.5).
+pub(crate) fn request_tags(method: &http::Method, headers: &HeaderMap, accepts_coding: bool) -> Option<Vec<HeaderValue>> {
+    if !matches!(*method, http::Method::GET | http::Method::HEAD) {
+        return None;
+    }
+    let tags = headers.get_all(header::IF_NONE_MATCH);
+    let lines = tags.iter();
+    (*method == http::Method::HEAD || accepts_coding || tags.iter().next().is_some()).then(|| lines.cloned().collect())
 }
 
 /// Corten's removal of a redirect's notice, on the page it was for (either cookie it rides in): that
