@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 # Build from the repository root: docker build -f examples/auction-room/Dockerfile -t corten-auction-room .
-FROM rust:1-bookworm AS build
+FROM rust:1-trixie AS build
 WORKDIR /src
 COPY . .
 # zstd (corten's `compress`) is linked to this build image's libzstd instead of compiled from its
 # C sources, the slowest crate in a clean build, so the server needs libzstd.so.1 where it runs:
-# debian:bookworm-slim below has it. For a runtime image without it (distroless, scratch), remove
+# debian:trixie-slim below has it. For a runtime image without it (distroless, scratch), remove
 # this line.
 ENV ZSTD_SYS_USE_PKG_CONFIG=1
 # The workspace's target directory is one cache for the examples (`id`; without one, every image
@@ -21,7 +21,7 @@ RUN --mount=type=cache,id=corten-examples.registry,target=/usr/local/cargo/regis
     && cargo build --release --locked -p auction-room \
     && mkdir -p /out && cp target/release/auction-room /out/server
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 WORKDIR /app
 COPY --from=build /out/server /app/server
 # The database is a file in /app/data, which the server's user owns: mount a volume there to keep
