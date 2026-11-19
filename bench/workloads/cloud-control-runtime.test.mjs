@@ -12,6 +12,9 @@ function loopback(mode) {
   assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout);
 }
+test("observer keeps a process that becomes a zombie during sampling, never a live unknown or a reused PID", () => {
+  assert.deepEqual(loopback("process-exit-during-read"), { zombie: [123, "50", null, "Z"], live: "rejected", reused: "rejected" });
+});
 test("actual guardian/watcher producer registers SSH and SFTP, includes the final seal, joins the watcher and preserves custody", () => {
   const result = loopback("normal"), admission = result.admission;
   for (const receipt of admission.receipts) for (let i = 1; i < receipt.samples.length; i++)

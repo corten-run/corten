@@ -48,6 +48,28 @@ token = argument["token"] if interactive else "0123456789abcdef"
 commit = "a" * 40
 boot = {"hostname": "synthetic-host", "bootId": "01234567-89ab-cdef-0123-456789abcdef"}
 
+if mode == "process-exit-during-read":
+    # Script the kernel reads, not the production process parser.
+    from unittest.mock import patch as mock
+    def row(state, ticks):
+        fields = ["0"] * 49
+        fields[18] = str(ticks)
+        return "123 (worker) " + state + " " + " ".join(fields) + "\n"
+    cases = {}
+    for name, final, ticks in [("zombie", "Z", 50), ("live", "S", 50), ("reused", "Z", 51)]:
+        stats = iter([row("R", 50), row(final, ticks), row(final, ticks)])
+        def read_text(path):
+            return next(stats) if path.name == "stat" else "0::/system.slice/test.scope\n"
+        with mock.object(pathlib.Path, "read_text", read_text), mock.object(pathlib.Path, "read_bytes", return_value=b""), \
+                mock.object(pathlib.Path, "stat", side_effect=FileNotFoundError()):
+            try:
+                p = scope["proc"](123)
+                cases[name] = [p["pid"], p["startTicks"], p["executable"], p["stat"].split(") ")[1][0]]
+            except AssertionError:
+                cases[name] = "rejected"
+    print(json.dumps(cases))
+    sys.exit(0)
+
 # Exercise the real storage reader against a tiny fake fd. Read access-time
 # changes are ordinary; inode/ownership/mode/content changes must still reject.
 storage = {"st_dev": 1, "st_ino": 2, "st_mode": 0o100600, "st_nlink": 1, "st_uid": 0,
