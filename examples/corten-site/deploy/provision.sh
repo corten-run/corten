@@ -81,7 +81,9 @@ runuser -u deploy -- install -d /opt/corten-site/releases
 
 # The deploy restarts the service and starts and stops its temporary backup, and nothing else.
 cat > /etc/sudoers.d/corten-site <<'EOF'
-deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart corten-site.service, /usr/bin/systemctl restart corten-site-bridge.service, /usr/bin/systemctl stop corten-site-bridge.service
+deploy ALL=(root) NOPASSWD: /usr/bin/timeout --kill-after=2s 30s /usr/bin/systemctl restart corten-site.service, \
+    /usr/bin/timeout --kill-after=2s 30s /usr/bin/systemctl restart corten-site-bridge.service, \
+    /usr/bin/timeout --kill-after=2s 30s /usr/bin/systemctl stop corten-site-bridge.service
 EOF
 chmod 440 /etc/sudoers.d/corten-site
 visudo -cf /etc/sudoers.d/corten-site

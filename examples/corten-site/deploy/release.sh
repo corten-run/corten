@@ -29,8 +29,8 @@ point() {
     ln -s "$release" "$stage/link" && mv -T "$stage/link" "$root/$1"
 }
 
-bounded() {
-    timeout --kill-after=2s 30s "$@" && return 0
+checked() {
+    "$@" && return 0
     status=$?
     case "$status" in
         124|137) echo "timed out waiting for $*" >&2 ;;
@@ -41,7 +41,8 @@ bounded() {
 
 # Keep the lock on the bounded client's stdin too: it can outlive this shell, and sudo
 # closes extra descriptors. A systemd job can still outlive the client; settle checks that.
-unit() { bounded sudo -n /usr/bin/systemctl "$@" <&9; }
+# Run timeout inside sudo so it can also kill the privileged client.
+unit() { checked sudo -n /usr/bin/timeout --kill-after=2s 30s /usr/bin/systemctl "$@" <&9; }
 
 start_bridge() {
     if ! ready 3001; then
@@ -62,7 +63,7 @@ settle() {
     for service in corten-site.service corten-site-bridge.service; do
         tries=0
         while :; do
-            job=$(bounded systemctl show --property=Job --value "$service") || return 1
+            job=$(checked timeout --kill-after=2s 30s systemctl show --property=Job --value "$service") || return 1
             case "$job" in ''|0) break ;; esac
             tries=$((tries + 1))
             if [ "$tries" = 150 ]; then

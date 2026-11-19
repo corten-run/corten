@@ -45,8 +45,13 @@ EOF
 cat > "$state/sudo" <<'EOF'
 #!/bin/sh
 set -eu
-[ "$1 $2" = "-n /usr/bin/systemctl" ]
-case "$3 $4" in
+[ "$1 $2 $3 $4 $5" = '-n /usr/bin/timeout --kill-after=2s 30s /usr/bin/systemctl' ]
+exec timeout "$3" "$4" "$state/change-unit" "$6" "$7"
+EOF
+cat > "$state/change-unit" <<'EOF'
+#!/bin/sh
+set -eu
+case "$1 $2" in
     'restart corten-site-bridge.service')
         echo start-backup >> "$state/steps"
         [ ! -e /opt/corten-site/bridge-ready ]
@@ -104,7 +109,7 @@ cat > "$state/sleep" <<'EOF'
 #!/bin/sh
 exit 0
 EOF
-chmod +x "$state/flock" "$state/timeout" "$state/systemctl" "$state/sudo" "$state/curl" "$state/sleep"
+chmod +x "$state/flock" "$state/timeout" "$state/systemctl" "$state/sudo" "$state/change-unit" "$state/curl" "$state/sleep"
 
 a=$root/releases/a b=$root/releases/b
 mkdir -p "$a" "$b"
