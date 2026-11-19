@@ -785,7 +785,13 @@ delayed acknowledgement, about 40 ms on Linux
 ([design Choice 41](../design.md#choice-tcp-nodelay)). A whole answer is one write either way. A
 listener of the app's own sets what it chooses, and one that wants Nagle's algorithm calls
 `set_nodelay(false)` on what it accepts. A `Router` served as a tower `Service` by another library's
-server never passes through Corten's accept, so `TCP_NODELAY` is that server's to set.
+server never passes through Corten's accept, so `TCP_NODELAY` is that server's to set. An answer's
+`Content-Length` is that server's to write too, as it is Corten's: the router sets the header only
+on a `HEAD`, whose body it drops, and any other answer says its length in its body's `size_hint`,
+which hyper writes as `Content-Length` (a `Media::stream_sized` says it in the header itself). So
+an answer that never reached a server carries no `Content-Length` unless its handler set one: a
+test with `App::test()` reads `answer.bytes().len()`, and one that sends a request through
+`app.router()` the body's `size_hint`.
 
 HTTPS is a step on each connection before HTTP, which `corten::serve_wrapped` takes: the TLS
 handshake. TLS stays the app's choice of library, and so does its configuration. With

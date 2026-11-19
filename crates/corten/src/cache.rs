@@ -403,8 +403,9 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
     Response::from_parts(parts, Body::from(bytes))
 }
 
-/// A `304`'s empty body, of no stated size: the router writes `Content-Length` for a body that states one,
-/// and a `304`'s may only be the `200`'s (RFC 9110 8.6), which compression has not decided.
+/// A `304`'s empty body, of no stated size: a `304`'s `Content-Length` may only be the `200`'s
+/// (RFC 9110 8.6), which compression has not decided, so nothing after this reads a length of
+/// zero from the body and says it.
 struct Unsized;
 
 impl http_body::Body for Unsized {

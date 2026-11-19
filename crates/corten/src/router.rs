@@ -9,8 +9,9 @@
 //! is decoded, and a segment of text is chosen over a parameter; `HEAD` is the route's `GET`
 //! without the body; a method the route has no handler for is a `405` whose `Allow` names those
 //! it has, and one no route in the app has a handler for is a `501` (RFC 9110 9.1; axum's router
-//! answered it `405`); an answer whose length is known says it (`Content-Length`); and a `2xx` to
-//! `CONNECT` has no body. A request's handler is boxed once, and so are the stages around it.
+//! answered it `405`); a `HEAD` says the length its `GET` has (`Content-Length`, which the server
+//! writes for any other answer from its body's size); and a `2xx` to `CONNECT` has no body. A
+//! request's handler is boxed once, and so are the stages around it.
 //!
 //! [matchit]: https://docs.rs/matchit
 
@@ -607,8 +608,8 @@ pub(crate) trait Stages: Send + Sync + 'static {
 #[derive(Clone)]
 pub struct Router {
     inner: Inner,
-    /// Whether this is the router a server calls, outside every layer: it alone sets an answer's
-    /// length and empties a `HEAD`'s body, after the layers have had the answer, as axum's did.
+    /// Whether this is the router a server calls, outside every layer: it alone empties a `HEAD`'s
+    /// body and says its length, after the layers have had the answer, as axum's did.
     edge: bool,
 }
 
@@ -819,8 +820,16 @@ impl Dispatch {
 }
 
 /// What the router does to every answer on its way out, as HTTP has it: a `405`'s `Allow`; and,
-/// outside every layer, the length when the body's is known, no body for `HEAD`, nor for a `2xx`
-/// to `CONNECT`.
+/// outside every layer, no body for a `HEAD`, which keeps the length its `GET` would say when
+/// the body's is known, nor for a `2xx` to `CONNECT`.
+///
+/// The length of any other answer is left to the server, which writes it from the body's exact
+/// size into the head it sends (hyper 1.12's HTTP/1 encoder, `content-length: 0` included where
+/// a status may have one). Setting the header here as well made the value in two allocations
+/// and put it in the map for the encoder to find again, 803 instructions a request on the lean
+/// catalog page (docs/design.md#choice-axum-router). So an answer taken from the router without
+/// Corten's server, by a test or an app's own loop, says its length in its body's `size_hint`,
+/// not in a header, unless its handler set the header itself.
 struct Fix {
     method: Asked,
     allow: Option<HeaderValue>,
@@ -830,16 +839,16 @@ struct Fix {
 enum Asked {
     Head,
     Connect,
+    /// Any other method, and every method inside a layer, which may still change the body: only
+    /// the route's `Allow`.
     Other,
-    /// Inside a layer: only the route's `Allow`, since the layer may still change the body.
-    Inside,
 }
 
 impl Fix {
     #[inline]
     fn of(method: &Method, edge: bool) -> Fix {
         let method = match *method {
-            _ if !edge => Asked::Inside,
+            _ if !edge => Asked::Other,
             Method::HEAD => Asked::Head,
             Method::CONNECT => Asked::Connect,
             _ => Asked::Other,
@@ -867,15 +876,20 @@ impl Fix {
                 res.headers_mut().insert(header::ALLOW, allow);
             }
         }
-        if self.method == Asked::Inside {
-            return res;
-        }
-        if !res.headers().contains_key(header::CONTENT_LENGTH) {
-            if let Some(length) = res.body().size_hint().exact() {
-                res.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(length));
-            }
-        }
         if self.method == Asked::Head {
+            // The server cannot know the length of a body that is gone. An answer whose `GET` the
+            // server gives no length gets none here either: RFC 9110 8.6 allows none in a `1xx`
+            // or a `204`, and a `304`'s only as its `200`'s, which this body's is not; and one
+            // that says `Transfer-Encoding` is sent in chunks, with no length (RFC 9112 6.2).
+            let status = res.status();
+            let unsaid = status.is_informational()
+                || matches!(status, StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED)
+                || res.headers().contains_key(header::TRANSFER_ENCODING);
+            if !unsaid && !res.headers().contains_key(header::CONTENT_LENGTH) {
+                if let Some(length) = res.body().size_hint().exact() {
+                    res.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(length));
+                }
+            }
             *res.body_mut() = Body::empty();
         }
         res

@@ -1204,9 +1204,10 @@ impl<M: Middleware> App<M> {
     /// A tower layer around the whole app, outside the router and every stage of
     /// [`crate::middleware`], for what must see the raw request first: a cap on body size, a limit
     /// per address, a trace span. It sees the request before its route is matched (so with no
-    /// [`crate::middleware::MatchedPath`]), and the route's answer with its body: the router sets
-    /// the answer's `Content-Length` and empties a `HEAD`'s body after every layer, so a layer may
-    /// change the body. It is made once, around the whole app, so what it keeps (a concurrency
+    /// [`crate::middleware::MatchedPath`]), and the route's answer with its body: the router
+    /// empties a `HEAD`'s body after every layer, keeping its length, and the server writes any
+    /// other answer's `Content-Length` from the body it is handed, so a layer may change the
+    /// body. It is made once, around the whole app, so what it keeps (a concurrency
     /// limit's count) is the app's, not a route's. Layers added later go outside earlier ones. A step inside Corten's order
     /// (after its checks, with the error page around it) is a [`Middleware`] ([`App::middleware`]). In an app
     /// whose areas or APIs set deadlines of their own, a request a layer holds or answers itself,

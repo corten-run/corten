@@ -1368,7 +1368,26 @@ rules something out.
     a request's route does not have; it stays only at the edges: `App::layer` takes a tower
     layer ([Limit 12](#limit-fixed-stages)), `corten::Router` is a `Service` (its `poll_ready`
     always ready) so an app's own loop or tower's tools can serve it, and the connection loop
-    calls it so. No stage, route or handler is one.
+    calls it so. No stage, route or handler is one. At that edge the router gives a `HEAD` the
+    length its `GET`'s body has, where its `GET` says one (none for a `1xx`, a `204` or a
+    `304`, nor for an answer that says `Transfer-Encoding`: hyper gives their `GET` none), and
+    drops the body, and leaves every other answer's
+    `Content-Length` to the server: hyper's HTTP/1 encoder writes it from the body's exact size
+    into the head it sends, `content-length: 0` for an empty body where the status may have one,
+    so a header the router set as well was made in two allocations and inserted only for the
+    encoder to find again: 803 instructions and two allocations of the lean catalog page's
+    44,134 and 22 a request (Stands on has the runs, and that the cycles a request under load
+    did not tell the two builds apart). Three answers differ on the wire from when the router
+    set it, each as HTTP asks: a `204` or a `304` given a body with bytes said that body's
+    length, which hyper wrote from the header without looking at the status, and says none now;
+    a `HEAD` said `Content-Length: 0` for a `204` or a `304` (RFC 9110 8.6 allows a `204` none,
+    and a `304` only its `200`'s); and an answer whose handler set `Transfer-Encoding` over a
+    body of known size, which hyper refused to send with the router's length beside it (the
+    client got no answer), is sent chunked, and its `HEAD` says no length (RFC 9112 6.2). Each
+    was seen on the wire at `0aef5330c`, with the test Stands on names run against it. An answer that never reached a server (`App::test()`'s, or one taken
+    from `corten::Router` by a test or by an app's own loop that serves the router) says its
+    length in its body, not in a header, unless its handler set one; an `App::layer` never saw
+    the header, which was set outside it.
 
     The steps, in order, each landing only when the one before it has:
     1. The dispatch suite (`crates/corten/tests/dispatch.rs`): raw HTTP/1.1 to `serve_on` and the
@@ -1584,7 +1603,21 @@ rules something out.
     not recognize or implement, and every server implements `GET` and `HEAD`; 15.5.6: `405` is
     for a method the server knows that the target resource does not support, and MUST carry
     `Allow`; 15.6.2: `501`, which requires no `Allow`; and 9.1 again, a method's name is
-    case-sensitive; migration step 1); platform, an accepted cost (migration step 1, the docs as
+    case-sensitive; migration step 1); platform (hyper 1.12.0's HTTP/1 encoder writes
+    `Content-Length` from the body's exact size for an answer without the header, to an
+    HTTP/1.0 client too, and leaves it off a `1xx`, a `204` and a `304`, as RFC 9110 8.6
+    requires, and off an answer with `Transfer-Encoding`: read in its `proto/h1/role.rs`, and
+    held on the wire by the dispatch suite's `HEAD` case and
+    `tests::the_server_writes_an_answer_s_length_from_its_body`); measured (callgrind, release,
+    glibc's allocator, the lean catalog page of `bench/catalog` over one kept-alive connection,
+    a run of 1,300 requests less one of 300, three runs of each build: 44,134 instructions a
+    request with the router setting `Content-Length`, 44,121 to 44,143, and 43,331 with the
+    length left to the server, 43,289 to 43,333, with 22 calls to `malloc` a request against
+    20; and `perf stat` on the same two builds under `wrk` with 64 connections, ten rounds with
+    the builds taking turns: 116,559 cycles a request at the median against 110,507, but the
+    difference within a round was a median of 1,689 fewer, its quartiles 8,949 fewer and 1,157
+    more, lower in 6 rounds of 10, so the cycles do not tell the builds apart and the count
+    does); platform, an accepted cost (migration step 1, the docs as
     read on 2026-11-13: a CloudWatch alarm on CloudFront's `5xxErrorRate` counts every `501`,
     since the metric has no dimension but `DistributionId` and `Region`
     ([Types of metrics for CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/programming-cloudwatch-metrics.html)),
@@ -1707,7 +1740,13 @@ rules something out.
     Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case
     (other than the deliberate `501` and empty-segment changes migration step 1 records), or
     counts more than axum's on any request measured in step 2 (that step then waits, and this
-    Choice says why); a `Response<Body>` grows past 128 bytes (step 4); for HTTP/2, an upstream
+    Choice says why); a `Response<Body>` grows past 128 bytes (step 4); Corten's own
+    server sends an answer by anything but hyper's HTTP/1 encoder (hyper's HTTP/2 server sets
+    `Content-Length` only for a body with bytes to send), or that encoder stops writing the
+    length from the body's size, which `tests::the_server_writes_an_answer_s_length_from_its_body`
+    fails on: the router then sets it again, or that sender is shown not to need it (a `Router`
+    an app serves by another library's server is that server's to write a length for,
+    [the app guide](guide/app.md)); for HTTP/2, an upstream
     active-stream count exposed through Hyper reopens the idle design, and a per-stream send-wait
     signal covering queued data after the body ends reopens the send design. The
     [isolated controls](../bench/http2/README.md#follow-up-acceptance) qualify each detector
@@ -1760,7 +1799,10 @@ rules something out.
     against Corten's `Answered` at `e927c2463`, then exercised in the
     [standalone TLS probe](../bench/http2/README.md#follow-up-results); 2026-11-19,
     the same probe rerun with bytes 1.12.1 and smallvec 1.16.5 in its lockfile, three wire
-    and Callgrind rounds per mode.
+    and Callgrind rounds per mode; 2026-11-19, hyper 1.12.0's HTTP/1 encoder read for the
+    `Content-Length` it writes, each answer the socket test asks for seen on the wire before
+    and after, and the lean catalog page counted under callgrind and under `perf stat` with
+    rustc 1.99.1, on `0aef5330c` and on it with the router leaving the length to the server.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
