@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, syntheticInspection } from "./cloud-fixtures.mjs";
 import { fleetMain, fleetWorkerPaths, parseFleetArgs, productionChild, watchSupervisedHost } from "./fleet.mjs";
-import { fleetPlan, reservation, tags } from "./cloud-contract.mjs";
+import { fleetPlan, reservation, savedLoadLayout, tags } from "./cloud-contract.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
@@ -80,7 +80,7 @@ function fixture(t, flags = {}) {
     const evidence = join(local, "evidence-Synthetic"), folder = join(evidence, "campaign"), campaign = `r21-${state.token}`;
     const report = syntheticInspection("verified");
     Object.assign(report, { schema: "benchmark-isolated-group-campaign-inspection/v1", campaign,
-      selection: state.selection, groups: report.groups.filter((g) => g.group === group) });
+      selection: state.selection, groups: report.groups.filter((g) => g.group === group), loadLayout: savedLoadLayout(state) });
     mkdirSync(join(folder, campaign), { recursive: true });
     writeFileSync(join(folder, ".host-attempt.json"), JSON.stringify({ id: campaign, commit, campaignSha256: report.campaignSha256 }));
     report.reservationSha256 = fileHash(join(folder, ".host-attempt.json"));
@@ -114,6 +114,23 @@ test("prepare reserves cryptorandom complete fleet once, using only local Git", 
   const bytes = readFileSync(join(p.h.base, "fleet-r21.json"));
   await assert.rejects(fleetMain(p.prepare(), p.deps));
   assert.deepEqual(readFileSync(join(p.h.base, "fleet-r21.json")), bytes);
+});
+
+test("historical roster is inspectable but never opens either fleet launch stage", async (t) => {
+  const p = fixture(t);
+  const { fleet } = JSON.parse(readFileSync(new URL("./test-fixtures/grouped-sfo2-reservation.json", import.meta.url)));
+  const { fleetSha256, ...body } = fleet;
+  // Match the fake checkout so the launch refusal cannot come from ancestry.
+  body.commit = commit;
+  const bytes = JSON.stringify({ ...body, fleetSha256: digest(JSON.stringify(body)) });
+  const path = join(p.h.base, "fleet-r21.json");
+  writeFileSync(path, bytes);
+  assert.equal(p.manifest().host.region, "sfo2");
+  for (const mode of ["--detach", "--admit-remaining"])
+    await assert.rejects(p.approve(mode), /historical fleet cannot authorize launch/);
+  assert.deepEqual(p.children, []);
+  assert.deepEqual(readdirSync(p.h.base), ["fleet-r21.json"]);
+  assert.equal(readFileSync(path, "utf8"), bytes);
 });
 
 test("detach launches only the first whole group, even after its bootstrap settles", async (t) => {

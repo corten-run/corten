@@ -6,9 +6,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { remoteFiles } from "../cloud-remote.mjs";
-import { fleetPlan, reservation } from "../cloud-contract.mjs";
-import { groupNames } from "../registry.mjs";
 import { mixedCancelProgram, mixedWait } from "../cloud-cancellation.mjs";
+import { mixedState } from "./mixed-cancel-state.mjs";
 
 assert.equal(process.platform, "linux"); assert.equal(process.getuid(), 0);
 assert.equal(sha256Original(), "6761ceed230fa12b6f45e4fe7a8fd7a4ef709b6db0d8028c1100e5e44f9ecdbf", "original measured campaign blob changed");
@@ -32,11 +31,7 @@ writeFileSync("/bench/repo/sentinel.txt", "synthetic source bytes\n", { mode: 0o
 git(["init", "--quiet"]); git(["add", "sentinel.txt"]);
 git(["-c", "user.name=synthetic", "-c", "user.email=synthetic@example.invalid", "commit", "--quiet", "-m", "synthetic"]);
 const commit = git(["rev-parse", "HEAD"]), tree = git(["rev-parse", "HEAD^{tree}"]);
-const provider = { accountId: mixedWait.accountId, context: mixedWait.context };
-const tokens = Object.fromEntries(groupNames.map((g, i) => [g, g === mixedWait.group ? mixedWait.token : String(i + 1).padStart(16, "0")]));
-const fleet = fleetPlan({ round: "r21", commit: mixedWait.commit, token: "f".repeat(16), tokens, provider, sshKey: "42" });
-const state = { ...reservation({ round: "r21", commit: mixedWait.commit, token: mixedWait.token, group: mixedWait.group, fleet }),
-  status: "running", id: mixedWait.id, ip: mixedWait.ip, provider, fullGroupQualified: false };
+const state = mixedState();
 const controls = remoteFiles(state);
 const entry = controls["job.sh"].trimEnd().split("\n").at(-1).replace(mixedWait.commit, commit);
 assert.ok(entry.startsWith("node 'bench/workloads/isolated/campaign-entry.mjs' 'r21' --commit "));

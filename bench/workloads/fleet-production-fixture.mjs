@@ -79,9 +79,9 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
   };
   return { repo: config.repo, spawn, streamSpawn,
     sleep: async () => { if (config.mode !== "ssh-late" || readiness !== 1) throw new Error("unexpected synthetic sleep"); },
-    providerFactory: ({ interrupted }) => {
+    providerFactory: ({ interrupted, createMode }) => {
       record({ boundary: "provider-factory" });
-      return providerTransport({ repo: config.repo, interrupted, launch(binary, argv, options) {
+      return providerTransport({ repo: config.repo, interrupted, createMode, launch(binary, argv, options) {
         if (binary !== fs.realpathSync(process.execPath) || argv[0] !== "--input-type=module" || argv[1] !== "-"
           || argv[2] !== path.join(config.repo, "bench/workloads/cloud-provider-worker.mjs")) throw new Error("fixed provider launch required");
         const child = fork(path.join(config.repo, "bench/workloads/fleet-provider-test-worker.mjs"),

@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 # Build from the repository root: docker build -f examples/card-market/Dockerfile -t corten-card-market .
-FROM rust:1-bookworm AS build
+FROM rust:1-trixie AS build
 WORKDIR /src
 COPY . .
 # zstd (corten's `compress`) is linked to this build image's libzstd instead of compiled from its
 # C sources, the slowest crate in a clean build, so the server needs libzstd.so.1 where it runs:
-# debian:bookworm-slim below has it. For a runtime image without it (distroless, scratch), remove
+# debian:trixie-slim below has it. For a runtime image without it (distroless, scratch), remove
 # this line.
 ENV ZSTD_SYS_USE_PKG_CONFIG=1
 # `--build-arg CARD_MARKET_SMOKE=1` builds the browser test's own routes in (src/smoke.rs, through
@@ -23,7 +23,7 @@ RUN --mount=type=cache,id=corten-examples.registry,target=/usr/local/cargo/regis
     find . -name target -prune -o -type f -exec touch {} + \
     && cargo build --release -p card-market && mkdir -p /out && cp target/release/card-market /out/server
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 # jemalloc, preloaded, with its background thread and a 64 KiB thread cache, gives back memory a
 # burst took (eight floods of unfinished heads: 406 to 455 MiB left on glibc's allocator, 13 to 16
 # MiB here) and keeps brotli's buffers between responses (docs/design.md#choice-jemalloc-image).

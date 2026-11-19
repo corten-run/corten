@@ -6,6 +6,19 @@ use crate::{
 
 script::script!(mod shared = "shared.js");
 
+#[test]
+fn a_href_ref_value_uses_the_same_wire_as_text() {
+    for url in ["/?order=up", "/?order=up&page=2"] {
+        let route = crate::Local::parse(url).unwrap();
+        let route: &dyn crate::Href = &route;
+        let mut written = " data-ref-value='".to_owned();
+        let mut expected = written.clone();
+        script::RefValue::write_value(&route, &mut written);
+        script::RefValue::write_value(url, &mut expected);
+        assert_eq!(written, expected);
+    }
+}
+
 crate::i18n::messages! { struct Msg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
 use crate::i18n::Messages as _;
 

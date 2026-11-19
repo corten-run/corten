@@ -158,6 +158,7 @@ impl Types {
     }
 
     /// All collected declarations as one file: one `export` per type, in name order.
+    /// Panics if a definition named `as` would be emitted as a type alias rather than an interface.
     pub fn typescript(&self) -> String {
         self.typescript_for(None)
     }
@@ -179,6 +180,7 @@ impl Types {
             if is_interface {
                 let _ = writeln!(block, "export interface {name} {}", object(&schema, ""));
             } else {
+                assert!(name != "as", "invalid TypeScript alias name {name:?}: use another schema definition name");
                 let _ = writeln!(block, "export type {name} = {};", ts(&schema, ""));
             }
             blocks.insert(name, block);
@@ -471,6 +473,44 @@ mod tests {
     const APP_DECLARATIONS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests/types/app.d.ts");
     const LIBRARY_DECLARATIONS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests/library/types/app.d.ts");
 
+    #[derive(ToJson)]
+    #[allow(non_camel_case_types)]
+    struct r#as {
+        amount: u32,
+    }
+
+    #[test]
+    fn a_contextual_name_works_as_an_interface_and_in_references() {
+        #[derive(ToJson)]
+        #[serde(untagged)]
+        #[allow(dead_code)]
+        enum AsReference {
+            Named(r#as),
+            Number(u32),
+        }
+
+        let types = Types::new().add::<AsReference>();
+        let schema = types.json_schema();
+        assert_eq!(schema["$defs"]["AsReference"]["anyOf"][0]["$ref"], "#/$defs/as");
+        assert_eq!(schema["$defs"]["as"]["properties"]["amount"]["type"], "integer");
+        types.sync(concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests/types/contextual-name.d.ts"));
+    }
+
+    #[test]
+    fn a_contextual_alias_name_is_checked_after_numbering() {
+        mod alias {
+            #[derive(crate::ToJson)]
+            #[allow(non_camel_case_types)]
+            pub(super) struct r#as(u32);
+        }
+
+        let types = Types::new().add::<alias::r#as>();
+        assert_eq!(types.json_schema()["$defs"]["as"]["type"], "integer");
+        assert_type_error(|| types.typescript(), "invalid TypeScript alias name \"as\"");
+        let ts = Types::new().add::<r#as>().add::<alias::r#as>().typescript();
+        assert!(ts.contains("export type as2 = number;"), "{ts}");
+    }
+
     /// A card on the watchlist.
     #[derive(ToJson)]
     #[allow(dead_code)]
@@ -702,6 +742,80 @@ mod tests {
         let schema = combined.json_schema();
         assert!(schema["$defs"]["Change"]["oneOf"].is_array(), "{schema}");
         assert_eq!(schema["$defs"]["Change2"]["properties"]["applied"]["type"], "boolean", "{schema}");
+    }
+
+    struct PayloadVersion {
+        name: &'static str,
+        describe: TsType,
+        describe_wrapper: TsType,
+        add: fn(Types) -> Types,
+    }
+
+    fn same_printed_payloads() -> [PayloadVersion; 2] {
+        #[derive(ToJson)]
+        struct Wrapper<'a, T: ToJsonSchema + crate::json::ToJson> {
+            value: T,
+            label: &'a str,
+            children: Vec<Self>,
+        }
+
+        // A block does not appear in type_name, just as a dependency version does not.
+        macro_rules! payload {
+            ($field:ident: $ty:ty) => {{
+                #[derive(ToJson)]
+                struct Payload {
+                    $field: $ty,
+                }
+                PayloadVersion {
+                    name: std::any::type_name::<Payload>(),
+                    describe: Payload::json_schema,
+                    describe_wrapper: Wrapper::<'_, Payload>::json_schema,
+                    add: Types::add::<Payload>,
+                }
+            }};
+        }
+        let first = payload!(old: String);
+        let second = payload!(new: bool);
+        assert_eq!(first.name, second.name);
+        [first, second]
+    }
+
+    #[test]
+    fn same_printed_types_and_generic_instances_get_separate_definitions() {
+        let [first, second] = same_printed_payloads();
+        let mut generator = Generator::new();
+        assert_eq!((first.describe_wrapper)(&mut generator)["$ref"], "#/$defs/Wrapper");
+        assert_eq!((second.describe_wrapper)(&mut generator)["$ref"], "#/$defs/Wrapper2");
+        assert_eq!((first.describe)(&mut generator)["$ref"], "#/$defs/Payload");
+        assert_eq!((second.describe)(&mut generator)["$ref"], "#/$defs/Payload2");
+        let defs = generator.definitions();
+        assert_eq!(defs["Wrapper"]["properties"]["value"]["$ref"], "#/$defs/Payload");
+        assert_eq!(defs["Wrapper2"]["properties"]["value"]["$ref"], "#/$defs/Payload2");
+        assert_eq!(defs["Wrapper2"]["properties"]["children"]["items"]["$ref"], "#/$defs/Wrapper2");
+        assert_eq!(defs["Payload"]["properties"]["old"]["type"], "string");
+        assert_eq!(defs["Payload2"]["properties"]["new"]["type"], "boolean");
+    }
+
+    #[test]
+    fn an_added_type_does_not_share_a_declaration_with_a_same_printed_handler_type() {
+        let [first, second] = same_printed_payloads();
+        let eager = (second.add)((first.add)(Types::new())).json_schema();
+        assert_eq!(eager["$defs"]["Payload"]["properties"]["old"]["type"], "string");
+        assert_eq!(eager["$defs"]["Payload2"]["properties"]["new"]["type"], "boolean");
+
+        let mut types = (first.add)(Types::new());
+        types.handlers.push(("new.js", ("Payload", None, second.describe)));
+
+        // The handler claims its name first when generating its declarations.
+        let declarations = types.typescript();
+        assert!(declarations.contains("export interface Payload {\n  new: boolean;"), "{declarations}");
+        assert!(declarations.contains("export interface Payload2 {\n  old: string;"), "{declarations}");
+        let schema = types.json_schema();
+        assert_eq!(schema["$defs"]["Payload"]["properties"]["new"]["type"], "boolean");
+        assert_eq!(schema["$defs"]["Payload2"]["properties"]["old"]["type"], "string");
+
+        types.handlers.push(("old.js", ("Payload", None, first.describe)));
+        assert_type_error(|| types.typescript(), "old.js: handler argument Payload resolves to `Payload2` instead of `Payload`");
     }
 
     #[test]

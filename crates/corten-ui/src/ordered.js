@@ -1,8 +1,9 @@
 // @ts-check
 // corten_ui::ordered. A form or link outside a sorted table's part whose route reads the table's
 // order (a "Refresh" beside the table whose answer redirects back to the page) sends the order
-// `rows::sort` put on screen: called from its own markup with the tables' ids. Its own module, so
-// a page that only sorts a table does not load it.
+// `rows::sort` put on screen: called from its own markup with the tables' ids. A page that only
+// sorts a table does not load this module.
+import { ReadSortLinks } from "corten/events";
 /** @import { ElementId } from "corten" */
 
 /**
@@ -79,15 +80,13 @@ function tableLinks(tables) {
     if (!found) return [];
     const all = found instanceof HTMLTableElement ? [found] : Array.from(found.querySelectorAll("table"));
     return all.flatMap((table) => {
-      const sorters = table.tHead ? Array.from(table.tHead.querySelectorAll(SORTERS)) : [];
-      const queries = sorters.flatMap((a) => [a.dataset.ascending, a.dataset.descending]).map((to) => new URL(to ?? "", location.href).searchParams);
-      return queries.length ? [queries] : [];
+      if (!table.tHead) return [];
+      const event = new ReadSortLinks({ urls: [] });
+      table.tHead.dispatchEvent(event);
+      return event.urls.length ? [event.urls.map((to) => new URL(to, location.href).searchParams)] : [];
     });
   });
 }
-
-/** A table's sort header links that name the page sorted each way, as the kit's `SortHeader` writes them. */
-const SORTERS = /** @type {"a"} */ (":scope > tr > th > a[data-ascending][data-descending]");
 
 /**
  * The keys `links` differ in, which carry a table's order.

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { selectedApps, contractSha256 } from "../workloads/registry.mjs";
 
-export const schema = "native-hardening-run/v1";
-export const phases = ["slow-headers", "slow-bodies", "slow-readers", "idle-connections", "connection-pressure", "oversized-requests"];
+import { recoveryProfile } from "./dependency-recovery-contract.mjs";
+
+export const schema = "native-hardening-run/v2";
+export const phases = ["slow-headers", "slow-bodies", "slow-readers", "idle-connections", "dependency-recovery", "oversized-requests"];
 export const cases = ["direct", "deployed-edge"];
 export const sources = ["fixture", "api"];
 export const apps = selectedApps("hardening");
@@ -17,6 +19,7 @@ export function budgets(profile = "bounded") {
   const count = profile === "bounded" ? 12 : 1200;
   return {
     profile,
+    dependencyRecovery: recoveryProfile,
     attack: { scheduledAtMs: scheduled(beforeEnd + 100, beforeEnd + 1100, 1000 / count),
       everyMs: 250, pipelined: 512, bodyBytes: 4 * 1024 * 1024, headerBytes: 128 * 1024, headerCount: 200,
       connectTimeoutMs: 2000, releaseAtMs: attackEnd, maxConnections: count, maxWireBytes: count * (5 * 1024 * 1024) },
@@ -74,10 +77,14 @@ const nativeEvidence = (cell, assessment) => assessment?.schema === "native-hard
   && ["observed", "missing", "inconclusive"].includes(assessment.liveness)
   && assessment.sourceControl === (cell.source === "api" ? "passed" : "not-applicable");
 
+const recoveryObserved = (c) => c.phase !== "dependency-recovery" ||
+  (c.dependencyRecovery?.version === recoveryProfile.version && c.dependencyRecovery.source === c.source &&
+   ["baseline-unavailable", ...(c.source === "api" ? ["recovered", "unrecovered"] : ["fixture-control", "fixture-degraded"])].includes(c.dependencyRecovery.status));
+
 export function groupReady(cells) {
   const expected = matrix();
   assert.deepEqual(cells.map((c) => c.key), expected.map((c) => c.key), "selected group matrix was dropped or reordered");
-  return cells.every((c) => c.status === "observed" && c.parity === "passed" && c.apparatusValid === true
+  return cells.every((c) => c.status === "observed" && c.parity === "passed" && c.apparatusValid === true && recoveryObserved(c)
     && nativeEvidence(c, c.nativeAssessment) && (c.mode === "direct" || nativeEvidence(c, c.edgeAssessment)));
 }
 
@@ -86,7 +93,7 @@ export function nativeGroup(cells) {
   return apps.map((app) => {
     const selected = cells.filter((c) => c.app === app), assessed = selected.filter((c) => c.nativeAssessment);
     const assessments = selected.flatMap((c) => [c.nativeAssessment, ...(c.mode === "deployed-edge" ? [c.edgeAssessment] : [])]).filter(Boolean);
-    const qualified = selected.every((c) => c.status === "observed" && c.parity === "passed" && c.apparatusValid === true
+    const qualified = selected.every((c) => c.status === "observed" && c.parity === "passed" && c.apparatusValid === true && recoveryObserved(c)
       && nativeEvidence(c, c.nativeAssessment) && c.nativeAssessment.productionQualified === true
       && (c.mode === "direct" || nativeEvidence(c, c.edgeAssessment) && c.edgeAssessment.productionQualified === true));
     return { app, representative: "existing-native-marketplace-production-matched", alternatives: [],
@@ -94,6 +101,8 @@ export function nativeGroup(cells) {
       productionQualification: !assessed.length ? "not-established" : assessments.some((a) => a.productionQualified === false)
         ? "gaps-observed" : qualified ? "qualified" : "partial",
       missingProductionFeatures: [...new Set(assessments.flatMap((a) => a.missingProductionFeatures))].sort(),
-      numericComparisonQualified: selected.every((c) => c.targetOutcome?.numericComparisonQualified === true) };
+      numericComparisonQualified: qualified && selected.every((c) => c.phase === "dependency-recovery"
+        ? c.dependencyTerminalHealthy === true && c.dependencyRecovery.status === (c.source === "api" ? "recovered" : "fixture-control")
+        : c.targetOutcome?.numericComparisonQualified === true) };
   });
 }

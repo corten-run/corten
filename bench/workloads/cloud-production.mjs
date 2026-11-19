@@ -8,7 +8,7 @@ import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
 import { controllerState, full, parseDropletArgs, providerFailure } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
-import { validateFleet } from "./cloud-contract.mjs";
+import { fleetCreateMode, validateLaunchFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { failedNativePolicy, failedNativeRoots, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
@@ -53,7 +53,7 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
     if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
   let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery;
   if (options.group !== undefined) {
-    const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = validateFleet(JSON.parse(bytes));
+    const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = validateLaunchFleet(JSON.parse(bytes));
     assert.equal(fleet.round, options.round); assert.equal(fleet.commit, head); assert.equal(fleet.sshKey, options.sshKey);
     assert.deepEqual(fleet.provider, { accountId: options.accountId, context: options.context });
     fleetSha256 = digest(bytes);
@@ -102,7 +102,8 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
 export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log } = {}) {
   const { options, approval, preview } = parseProductionArgs(args);
   const processRun = shellTransport({ repo, spawn, streamSpawn });
-  const providerRun = providerFactory({ repo, interrupted });
+  const createMode = options.detach ? options.group === undefined ? "legacy" : fleetCreateMode(options.group) : null;
+  const providerRun = providerFactory({ repo, interrupted, createMode });
   let stage = "source-plan";
   const mark = (error, value) => {
     // Keep the original internal failure and uncertainty flags. Only this closed
@@ -179,7 +180,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   };
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
-    mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked,
+    mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked, approvedFleetSha256: plan.subject.fleetSha256,
     ...(options.unusedBootstrapKnownHosts === undefined ? {} : { unusedBootstrapApproval: {
       reservationSha256: plan.subject.reservationSha256, knownHostsSha256: plan.subject.recovery.knownHostsSha256,
     } }), ...(options.retireFailedNative || options.cancelMixedWait ? {

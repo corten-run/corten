@@ -1,0 +1,1 @@
+- Benchmark observers retain a process that exits while its executable is being read. A failed observer now records its helper source line for diagnosis without qualifying the run.

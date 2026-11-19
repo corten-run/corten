@@ -28,7 +28,8 @@ export function connect(set, control, values, signal) {
   // On the document: a control outside the form's element (`form=`) does not bubble to it.
   document.addEventListener("change", changed, { signal });
   document.addEventListener("input", changed, { signal });
-  form.addEventListener("reset", () => setTimeout(apply), { signal });
+  const add = form.addEventListener;
+  (typeof add === "function" ? add : EventTarget.prototype.addEventListener).call(form, "reset", () => setTimeout(apply), { signal });
 }
 
 /**
@@ -37,7 +38,8 @@ export function connect(set, control, values, signal) {
  * @param {HTMLFormElement} form @param {string} name @returns {string[]}
  */
 function chosen(form, name) {
-  const item = form.elements.namedItem(name);
+  const elements = /** @type {HTMLFormControlsCollection} */ (Reflect.get(HTMLFormElement.prototype, "elements", form));
+  const item = elements.namedItem(name);
   if (item instanceof HTMLSelectElement) return Array.from(item.selectedOptions, (option) => option.value);
   if (item instanceof RadioNodeList) {
     return Array.from(item)

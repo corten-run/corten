@@ -114,9 +114,11 @@ upstream's headers, so one without the header is buffered unless its `location` 
 
 ## nginx
 
-Checked with nginx 1.27 in front of `examples/watchlist`: the browser smoke test
+Checked on 2026-11-19 with nginx 1.27.5 in front of `examples/watchlist`: the browser smoke test
 (`scripts/smoke.mjs`) passes through it over HTTP/1.1, and HTTPS negotiates `h2` and streams events
-a second apart. `proxy_cache` was checked in front of `examples/card-market` ([Caching](#caching)).
+a second apart. In front of `examples/card-market`, nginx passed a private page's tag to the app
+on reload and returned its `304`; a versioned stylesheet was a cache
+`MISS` on its first request and a `HIT` on the next ([Caching](#caching)).
 
 ```nginx
 map $http_upgrade $connection_upgrade {
@@ -140,7 +142,7 @@ server {
     ssl_certificate     /etc/nginx/certs/cert.pem;
     ssl_certificate_key /etc/nginx/certs/key.pem;
 
-    location / {
+    location /assets/ {
         client_max_body_size 8m;   # more than twice the app's body limit (2 MiB); see below
         proxy_pass http://app;
         proxy_http_version 1.1;
@@ -148,11 +150,32 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;   # PROXIES=127.0.0.1
         proxy_set_header Upgrade $http_upgrade;                        # WebSockets (Upgrade)
         proxy_set_header Connection $connection_upgrade;
-        proxy_cache app;       # keys on Vary; stores only answers sent public; a page it
-                               # does not store gets no 304 here (Response compression)
+        proxy_cache app;       # keys on Vary; stores only answers sent public
+    }
+
+    location / {
+        client_max_body_size 8m;
+        proxy_pass http://app;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
     }
 }
 ```
+
+Leave `proxy_cache` off `location /` so conditional requests for private pages reach the app:
+where a location caches, nginx does not pass `If-None-Match`, `Range` or `If-Range` to the app
+([proxy_set_header](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)),
+so a private page answers a reload with its whole body and a download cannot resume. Opt in only on
+prefixes reserved for public content, such as the app's versioned files under `/assets/`.
+
+The cost is that other public answers outside `/assets/` are not stored by nginx: Corten's runtime
+and part modules under `/corten/`, the favicon, the PWA manifest, and an app's `Public` pages and
+files (such as a `robots.txt`). Each still carries its `Cache-Control`, so a browser keeps it as
+before. A prefix that serves only public answers can get a `location` of its own with
+`proxy_cache app;`, as `/assets/` has.
 
 nginx's limit decides who answers a body that is too large. The app reads a body past its limit
 by as much again (at most 64 MiB more; an `Upload` reads 64 MiB past its own limit) and answers
@@ -170,8 +193,8 @@ neither refuses it at the forms' limit nor holds all of it before the app sees a
 `client_max_body_size` is the route's `max` and the 64 MiB the app reads past (or `0`), so the
 app's own 413 (the API's shape, or the handler's) is what the browser reads for a body up to
 that size (a limit of only `max` would have nginx refuse first); past it, the browser reads
-nginx's page. A prefix that also serves downloads the app sends `Public` keeps
-`proxy_cache app;` here too:
+nginx's page. It leaves `proxy_cache` off like `location /`, so a private download's `Range`
+reaches the app; give a prefix `proxy_cache app;` only when everything under it is public:
 
 ```nginx
     location /files/ {
@@ -232,9 +255,11 @@ locale in its URL) must, or CloudFront sends none and every visitor gets the def
 page says its locale in `Content-Language`.
 
 The Cloudflare and CloudFront rows are from their documentation, not run here. Check a deploy
-the way it was measured: request a public page as a document, then the same URL with
-`corten: nav` and with `Accept: application/json`. The second must carry `corten-page` and the
-third must be JSON.
+the way it was measured, on a location that caches: request a public page as a document twice and
+confirm the second came from the cache (nginx's `$upstream_cache_status` is `HIT`, Cloudflare's
+`cf-cache-status: HIT`, CloudFront's `x-cache: Hit from cloudfront`); without a hit the rest
+proves nothing. Then request the same URL with `corten: nav` and with `Accept: application/json`.
+The first must carry `corten-page` and the second must be JSON.
 
 ## The release profile
 
@@ -302,20 +327,18 @@ compresses for the app may be set to: HAProxy's `compression offload` takes it o
 that accepts a coding HAProxy is set to use, as a browser's does.
 
 The tag is half of it: for a page the proxy does not answer from a store of its own, the `304`
-needs the browser's `If-None-Match` to reach the app too. nginx takes it off, with the other
-conditional headers, in a `location` that has `proxy_cache`
-([`proxy_set_header`](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)).
-It answers a tag itself for a page it stored; a page it does not store (a private one, which a
-page is unless its handler says `Public`) is sent whole on every reload. The
-[configuration above](#nginx) has `proxy_cache` on `/`, so every private page behind it is; where
-those reloads matter more than one `location` for everything, put `proxy_cache` on the prefixes
-whose pages are `Public` and leave it off the rest, where nginx passes the header on. Passing it
-on by hand beside `proxy_cache` (`proxy_set_header If-None-Match $http_if_none_match`) is not the
-way: nginx then stored a public page's `304` and gave it to the next reader, who held no page,
-and with `proxy_no_cache` on the header to stop that, a request that names a tag never refreshes
-the stored copy. Checked with nginx 1.27.5 and HAProxy 3.0.31 in front of a server that answered
-as a private and a public page do and printed what reached it, not in front of a Corten app. What
-Cloudflare and CloudFront do with the two headers was not checked.
+needs the browser's `If-None-Match` to reach the app too. nginx takes it off in a `location`
+that has `proxy_cache`, which is why the [configuration above](#nginx) leaves `proxy_cache` off
+`/`. In such a `location` nginx answers a tag itself for a page it stored; a page it does not
+store (a private one, which a page is unless its handler says `Public`) is sent whole on every
+reload. Passing the header on by hand beside `proxy_cache`
+(`proxy_set_header If-None-Match $http_if_none_match`) is not the way to have both: nginx then
+stored a public page's `304` and gave it to the next reader, who held no page, and with
+`proxy_no_cache` on the header to stop that, a request that names a tag never refreshes the
+stored copy. This paragraph's two cautions and HAProxy's `compression offload` were checked with
+nginx 1.27.5 and HAProxy 3.0.31 in front of a server that answered as a private and a public
+page do and printed what reached it, not in front of a Corten app. What Cloudflare and
+CloudFront do with the two headers was not checked.
 
 To check both, pick a page that carries an `ETag` when asked straight from the app with the
 `Accept-Encoding` below (one whose layout takes `req.nonce()`, that draws a `SubmitKey::field`,
@@ -329,16 +352,17 @@ curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' https://
 curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' -H 'If-None-Match: W/"<the tag>"' https://shop.example/account
 ```
 
-The first must show the `ETag`, and the second `304`: behind the [configuration above](#nginx) as
-it is written it shows `200` and the page again, the reload described above, until `/account` is
-in a `location` without `proxy_cache`. A page nginx stores does not test the second header, since
-nginx answers its `304` from the store; it still needs the first, without which the copy it
-stores has no tag to match.
+The first must show the `ETag`, and the second `304`. Behind the [configuration above](#nginx)
+both do for a page under `/`; with `/account` in a `location` that has `proxy_cache`, the second
+shows `200` and the page again, the reload described above. A page nginx stores does not test
+the second header, since nginx answers its `304` from the store; it still needs the first,
+without which the copy it stores has no tag to match.
 
 ## Building the image
 
-The Dockerfile builds with `cargo build --release --locked`, as `corten check` holds its Cargo
-steps to the lock. `corten new` writes `Cargo.lock` with the app; run `cargo build` or
+The Dockerfile uses Debian 13 (trixie) in both stages: `rust:1-trixie` builds the app and
+`debian:trixie-slim` runs it. It builds with `cargo build --release --locked`, as `corten check`
+holds its Cargo steps to the lock. `corten new` writes `Cargo.lock` with the app; run `cargo build` or
 `corten dev` after a dependency change and commit `Cargo.lock` before checking or building the
 image. A missing or stale lock fails rather than resolving crate versions the check did not
 test. For a workspace app, include the workspace-root manifest and lockfile in the Docker build

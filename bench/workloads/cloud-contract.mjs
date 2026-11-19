@@ -2,11 +2,27 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
-import { host } from "../catalog/droplet-contract.mjs";
+import { cpuEnv as catalogCpuEnv, host as catalogHost } from "../catalog/droplet-contract.mjs";
 import { contractSha256, groupNames, registrySchema, selectedApps } from "./registry.mjs";
 
-export { host };
+const legacyHost = Object.freeze({ ...catalogHost, region: "sfo2" });
+export const host = Object.freeze({ ...catalogHost, region: "sfo3" });
+export const catalogFleetPlacement = Object.freeze({
+  host: Object.freeze({ ...legacyHost, size: "c-16" }),
+  loadLayout: "c16-generator-v1",
+  cpuEnv: Object.freeze({ ...catalogCpuEnv, CATALOG_LOAD_CPUS: "4-15" }),
+});
+const historicalFleetSchema = "benchmark-group-fleet/v1", uniformFleetSchema = "benchmark-group-fleet/v2",
+  launchFleetSchema = "benchmark-group-fleet/v3";
+export const fleetCreateMode = (group) => group === "catalog-page" ? catalogFleetPlacement.loadLayout : "dedicated";
+export function providerCreateHost(mode) {
+  if (mode === "legacy") return legacyHost;
+  if (mode === "dedicated") return host;
+  if (mode === catalogFleetPlacement.loadLayout) return catalogFleetPlacement.host;
+  assert.equal(mode, null, "unknown provider create mode");
+}
 export const tags = Object.freeze(["corten-bench", "corten-bench-groups"]);
+const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const full = (value, pattern, name) => {
   assert.equal(typeof value, "string", `${name} must be a string`);
   const match = pattern.exec(value);
@@ -27,34 +43,60 @@ const exact = (value, fields) => {
   assert.ok(value && Object.getPrototypeOf(value) === Object.prototype, "plain object required");
   assert.deepEqual(Object.keys(value).sort(), [...fields].sort(), "unexpected or missing fields");
 };
-export function fleetPlan(input, createdAt = new Date().toISOString()) {
+// Exact ordered rosters written by the pre-placement controllers. These pins
+// decode saved state only; the controller's separate recovery policies
+// still decide which measured sources and host attempts may be acted on.
+const historicalSelections = new Set([
+  "d9c74b1fee3f6d5c71cee7405b24db73da1ffbef8f0d00c66924ebf7b475a251", // Retained r21 fleets.
+  "57bf46a0e3e03d8a48bdcca952b522c148d91a7892c74e6bfbe2e860b927e19a", // 19defc76, immediately before placement.
+]);
+const historicalSelection = (selected) => selected && historicalSelections.has(digest(selected));
+function buildFleet(input, createdAt, schema, placement, selected) {
   exact(input, ["round", "commit", "token", "tokens", "provider", "sshKey"]);
   const { round, commit, token, tokens, provider, sshKey } = input;
   roundName(round); assert.ok(Number(round.slice(1)) >= 17, "official campaigns start at r17");
   full(commit, /[a-f0-9]{40}/, "measured commit"); full(token, /[a-f0-9]{16}/, "fleet token");
-  exact(tokens, groupNames); exact(provider, ["accountId", "context"]);
+  const names = selected.groups.map(({ group }) => group);
+  exact(tokens, names); exact(provider, ["accountId", "context"]);
   full(provider.accountId, /(?:user|team):[A-Za-z0-9][A-Za-z0-9-]{0,127}/, "scoped stable account UUID required");
   full(provider.context, /[A-Za-z0-9][A-Za-z0-9_.-]{0,127}/, "explicit saved doctl context required");
   full(sshKey, /[1-9]\d*/, "SSH key ID required"); date(createdAt);
-  const jobs = groupNames.map((group) => {
+  const jobs = names.map((group) => {
     const ownership = full(tokens[group], /[a-f0-9]{16}/, "ownership token");
+    const wide = schema === launchFleetSchema && fleetCreateMode(group) === catalogFleetPlacement.loadLayout;
     return { group, token: ownership, name: `corten-bench-groups-${round}-${ownership}`,
-      tag: `corten-bench-groups-run-${ownership}` };
+      tag: `corten-bench-groups-run-${ownership}`, ...(wide ? {
+        host: { ...catalogFleetPlacement.host }, loadLayout: catalogFleetPlacement.loadLayout,
+      } : {}) };
   });
   assert.equal(new Set([token, ...jobs.map((row) => row.token)]).size, jobs.length + 1, "unique fleet/host tokens required");
-  const body = { schema: "benchmark-group-fleet/v1", round, commit, token, createdAt,
-    provider: { ...provider }, sshKey, host: { ...host }, selection: selection(), jobs };
-  return { ...body, fleetSha256: createHash("sha256").update(JSON.stringify(body)).digest("hex") };
+  const body = { schema, round, commit, token, createdAt,
+    provider: { ...provider }, sshKey, host: { ...placement }, selection: selected, jobs };
+  return { ...body, fleetSha256: digest(body) };
+}
+export function fleetPlan(input, createdAt = new Date().toISOString()) {
+  return buildFleet(input, createdAt, launchFleetSchema, host, selection());
 }
 export function validateFleet(plan) {
   assert.ok(plan && Array.isArray(plan.jobs), "complete fleet plan required");
-  const expected = fleetPlan({ round: plan.round, commit: plan.commit, token: plan.token,
-    tokens: Object.fromEntries(plan.jobs.map((row) => [row.group, row.token])), provider: plan.provider, sshKey: plan.sshKey }, plan.createdAt);
+  assert.ok([historicalFleetSchema, uniformFleetSchema, launchFleetSchema].includes(plan.schema), "unknown fleet schema");
+  const historical = plan.schema === historicalFleetSchema;
+  if (historical) assert.ok(historicalSelection(plan.selection), "historical fleet selection differs");
+  const expected = buildFleet({ round: plan.round, commit: plan.commit, token: plan.token,
+    tokens: Object.fromEntries(plan.jobs.map((row) => [row.group, row.token])), provider: plan.provider, sshKey: plan.sshKey },
+    plan.createdAt, plan.schema, historical ? legacyHost : host, historical ? plan.selection : selection());
   assert.deepEqual(plan, expected, "fleet differs from complete fixed registry and owned hosts");
   return plan;
 }
+export function validateLaunchFleet(plan) {
+  assert.equal(plan?.schema, launchFleetSchema, "historical fleet cannot authorize launch");
+  return validateFleet(plan);
+}
+// Only derive placement from a validated fleet, never from free-form launch options.
+const jobHost = (fleet, job) => job.host ?? fleet.host;
+export const savedLoadLayout = (s) => s.fleet?.jobs.find((job) => job.group === s.group)?.loadLayout;
 export function assertFleetCensus(droplets, plan) {
-  validateFleet(plan); assert.ok(Array.isArray(droplets));
+  validateLaunchFleet(plan); assert.ok(Array.isArray(droplets));
   const names = new Set(), ids = new Set();
   for (const d of droplets) {
     if (!d.name?.startsWith("corten-bench-groups-") && !d.tags?.includes(tags[0])) continue;
@@ -64,7 +106,8 @@ export function assertFleetCensus(droplets, plan) {
     assert.ok(!names.has(d.name) && !ids.has(String(d.id)), "duplicate fleet host identity");
     names.add(d.name); ids.add(String(d.id));
     for (const tag of [...tags, job.tag]) assert.ok(d.tags?.includes(tag), "fleet ownership tag differs");
-    assert.equal(d.size_slug ?? d.size?.slug, host.size); assert.equal(d.region?.slug, host.region);
+    const placement = jobHost(plan, job);
+    assert.equal(d.size_slug ?? d.size?.slug, placement.size); assert.equal(d.region?.slug, placement.region);
   }
   return true;
 }
@@ -75,14 +118,20 @@ export function reservation(input, createdAt = new Date().toISOString()) {
   full(commit, /[a-f0-9]{40}/, "measured commit");
   full(token, /[a-f0-9]{16}/, "ownership token");
   const name = `corten-bench-groups-${round}-${token}`;
+  let placement = legacyHost;
   if (group !== undefined) {
-    validateFleet(fleet); assert.equal(fleet.round, round); assert.equal(fleet.commit, commit);
-    assert.equal(fleet.jobs.find((row) => row.group === group)?.token, token, "host not reserved in fleet");
+    validateLaunchFleet(fleet); assert.equal(fleet.round, round); assert.equal(fleet.commit, commit);
+    const job = fleet.jobs.find((row) => row.group === group);
+    assert.equal(job?.token, token, "host not reserved in fleet");
+    placement = jobHost(fleet, job);
   }
   return validateState({ schema: group === undefined ? "benchmark-group-host/v1" : "benchmark-dedicated-group-host/v1", round, commit, token, name,
-    tag: `corten-bench-groups-run-${token}`, unit: `${name}.service`, host: { ...host },
-    selection: group === undefined ? selection() : { schema: registrySchema, groups: selection().groups.filter((row) => row.group === group) },
+    tag: `corten-bench-groups-run-${token}`, unit: `${name}.service`, host: { ...placement },
+    selection: fleet === undefined ? selection() : structuredClone(groupSelection(fleet, group)),
     ...(group === undefined ? {} : { group, fleet: structuredClone(fleet) }), createdAt, status: "reserved" }, round);
+}
+function groupSelection(fleet, group) {
+  return { schema: fleet.selection.schema, groups: fleet.selection.groups.filter((row) => row.group === group) };
 }
 export function validateState(s, round) {
   assert.ok(s && typeof s === "object" && !Array.isArray(s), "host state required");
@@ -94,15 +143,17 @@ export function validateState(s, round) {
   assert.equal(s.name, `corten-bench-groups-${round}-${s.token}`);
   assert.equal(s.tag, `corten-bench-groups-run-${s.token}`);
   assert.equal(s.unit, `${s.name}.service`);
-  assert.deepEqual(s.host, host);
   if (dedicated) {
     validateFleet(s.fleet); assert.equal(s.fleet.round, round); assert.equal(s.fleet.commit, s.commit);
-    assert.ok(groupNames.includes(s.group));
-    assert.equal(s.fleet.jobs.find((row) => row.group === s.group)?.token, s.token, "host not reserved in fleet");
-    assert.deepEqual(s.selection, { schema: registrySchema, groups: selection().groups.filter((row) => row.group === s.group) }, "complete native group required");
+    const job = s.fleet.jobs.find((row) => row.group === s.group);
+    assert.equal(job?.token, s.token, "host not reserved in fleet");
+    assert.deepEqual(s.host, jobHost(s.fleet, job));
+    assert.deepEqual(s.selection, groupSelection(s.fleet, s.group), "complete native group required");
   } else {
+    assert.deepEqual(s.host, legacyHost);
     assert.ok(!Object.hasOwn(s, "group") && !Object.hasOwn(s, "fleet"), "legacy host cannot select a group");
-    assert.deepEqual(s.selection, selection(), "complete current registry selection differs");
+    if (!historicalSelection(s.selection))
+      assert.deepEqual(s.selection, selection(), "complete current registry selection differs");
   }
   date(s.createdAt);
   assert.ok(["reserved", "creating", "preparing", "starting", "running", "collected", "retired"].includes(s.status));
@@ -331,6 +382,41 @@ while IFS= read -r member; do test "$member" = "$$"; done < "$parent/supervisor/
 // Fixed source-bound entry point. No caller-provided command or adapter filtering.
 export function remoteFiles(s) {
   validateState(s, s.round);
+  const loadLayout = savedLoadLayout(s);
+  // Dedicated group runners are system services. Their root SSH sessions need
+  // logind scopes, not a user service manager. Leave any existing session alone.
+  const marker = s.group && s.control?.monitor ? `/run/corten-bench-control-${s.token}/binding.json` : null;
+  const loginPolicy = marker ? `bootstrap_stage=root-manager-policy
+test -f '${marker}'
+test ! -L '${marker}'
+dropin=/run/systemd/system/user@0.service.d/90-corten-benchmark.conf
+test ! -L /run/systemd/system/user@0.service.d
+mkdir -p -- /run/systemd/system/user@0.service.d
+test ! -e "$dropin"
+test ! -L "$dropin"
+( set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${marker}' > "$dropin" )
+systemctl daemon-reload
+` : "";
+  const waitForIdleUserManager = marker ? `bootstrap_stage=root-manager-idle
+timeout 120 bash -ec '
+  while :; do
+    echo "root-manager: querying ActiveState" >&2
+    state=$(systemctl show user@0.service --property=ActiveState --value)
+    case "$state" in
+      active|activating|deactivating|reloading|inactive|failed) ;;
+      *) echo "root-manager: unexpected ActiveState" >&2; exit 1 ;;
+    esac
+    echo "root-manager: ActiveState=$state; querying MainPID" >&2
+    main_pid=$(systemctl show user@0.service --property=MainPID --value)
+    [[ "$main_pid" =~ ^[0-9]{1,10}$ ]] || { echo "root-manager: invalid MainPID" >&2; exit 1; }
+    echo "root-manager: ActiveState=$state MainPID=$main_pid" >&2
+    case "$state" in
+      inactive) test "$main_pid" = 0; break ;;
+      failed) exit 1 ;;
+      *) sleep 1 ;;
+    esac
+  done'
+` : "";
   const pack = `#!/bin/bash
 set -euo pipefail
 cd /bench
@@ -352,7 +438,7 @@ trap 'bootstrap_error "$LINENO"' ERR
 ${supervisorBootstrap(s.unit)}
 bootstrap_stage=cloud-init
 timeout 900 cloud-init status --wait
-# Fresh disposable hosts only: prevent timer and D-Bus firmware activation before baseline.
+${loginPolicy}# Fresh disposable hosts only: prevent timer and D-Bus firmware activation before baseline.
 bootstrap_stage=firmware-mask
 systemctl mask --runtime --now fwupd.service fwupd-refresh.service fwupd-refresh.timer
 bootstrap_stage=package-services
@@ -393,7 +479,7 @@ git checkout --detach ${s.commit}
 test "$(git rev-parse HEAD)" = ${s.commit}
 test -z "$(git status --porcelain --untracked-files=all)"
 bootstrap_stage=host-capacity
-test "$(nproc)" -ge 8
+test "$(nproc)" -ge ${loadLayout ? 16 : 8}
 bootstrap_stage=root-dependencies
 timeout 900 npm ci --no-audit --no-fund
 bootstrap_stage=browser-dependencies
@@ -436,8 +522,8 @@ done
 # The entry derives all nine groups and their native settings from this measured source.
 # Popular/performance views reuse the same evidence; no second workload execution.
 unset BENCH_APPS BENCH_TIER BENCH_EDGE PROFILE
-bootstrap_stage=native-entry
-node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign${s.group === undefined ? "" : ` --group ${s.group}`}
+${waitForIdleUserManager}bootstrap_stage=native-entry
+node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign${s.group === undefined ? "" : ` --group ${s.group}`}${loadLayout ? ` --load-layout ${loadLayout}` : ""}
 `;
   return { "job.sh": job, "pack.sh": pack, [s.unit]: `[Unit]
 Description=Official grouped benchmark ${s.round}, pinned ${s.commit}

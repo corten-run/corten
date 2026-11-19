@@ -30,7 +30,6 @@ replace("def lstat(self): return file_stat(self.value, self.is_dir())", `def lst
 // Ready descriptors do not incur a full select timeout, as in the independent repro.
 replace("clock += 100000000", "clock += 500000 if writers or incoming else 50000000");
 replace("if mode != 'lost-lease': send('renew', frame['payload'])", "if mode != 'lost-lease' and not (mode == 'scan-lost-lease' and stats >= 64): send('renew', frame['payload'])");
-replace("except AssertionError:\n    failed = True", "except AssertionError as error:\n    print(str(error), file=sys.stderr)\n    failed = True");
 replace("print(json.dumps({'binding': binding,", `observations = [json.loads(line) for line in data[root+'/stream-observations.jsonl'].splitlines()]
 times = [int(row['monoNs']) for row in observations]
 summary = {'metadataOperations':stats, 'files':sum(v['kind']=='audit-file-end' for v in output),
@@ -45,7 +44,9 @@ function kernel(count, metadataNs, mode = "normal") {
     { cwd: resolve("."), input: JSON.stringify({ source: guardianSource, mode, count, metadataNs }),
       encoding: "utf8", timeout: 12000, maxBuffer: 512 * 1024, windowsHide: true });
   assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
-  return { value: JSON.parse(result.stdout), error: result.stderr.trim() };
+  assert.equal(result.stderr.trim(), "");
+  const value = JSON.parse(result.stdout);
+  return { value, error: value.reason ?? "" };
 }
 
 for (const [count, metadataNs] of [[1, 250000], [4183, 0], [4183, 250000]])

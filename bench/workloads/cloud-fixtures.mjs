@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { controller } from "./droplet.mjs";
-import { host, reservation, selection, tags } from "./cloud-contract.mjs";
+import { reservation, selection, tags } from "./cloud-contract.mjs";
 import { digest } from "./cloud-local.mjs";
 import { descriptor } from "../json-api/contract.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
@@ -53,7 +53,7 @@ export function harness(t, flags = {}) {
   const hostId = flags.hostId ?? "123";
   let s = { ...reservation({ round: "r21", commit, token: flags.token ?? "0123456789abcdef" }), createIntentAt: new Date().toISOString(),
     status: "running", id: hostId, ip: "192.0.2.10", provider: { accountId, context }, fullGroupQualified: false };
-  const d = () => ({ id: Number(hostId), name: s.name, tags: [...tags, s.tag], size_slug: host.size, region: { slug: host.region },
+  const d = () => ({ id: Number(hostId), name: s.name, tags: [...tags, s.tag], size_slug: s.host.size, region: { slug: s.host.region },
     networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } });
   const calls = []; let droplets = [], creates = 0, deletes = 0, units = 0, downloads = 0, inspections = 0;
   let bytes = archive([...metadata(), { name: "campaign/" }, { name: "campaign/fake.json", body: "{}" }]);
@@ -161,7 +161,7 @@ export function harness(t, flags = {}) {
     seed() { mkdirSync(local); writeFileSync(statePath, JSON.stringify(s)); droplets = [d()]; },
     saved() { return JSON.parse(readFileSync(statePath)); },
     change(fn) { const value = this.saved(); fn(value); writeFileSync(statePath, JSON.stringify(value)); },
-    hosts(value) { droplets = value ?? [d()]; }, setArchive(value) { bytes = value; },
+    host: d, hosts(value) { droplets = value ?? [d()]; }, setArchive(value) { bytes = value; },
     task(deps = {}, options = {}) {
       return controller({ round: "r21", stateDir: base, collect: true, ...options }, { run, repo, sleep: async () => {}, interrupted: () => flags.cancelled,
         inspect: async (input) => { inspections++; assert.deepEqual(input, { folder: join(local, this.saved().evidence, "campaign"), round: "r21", commit }); return report(); }, ...deps });

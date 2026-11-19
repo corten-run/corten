@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { schema, registryDigest, groupReady, nativeGroup } from "./plan.mjs";
+import { schema, registryDigest, groupReady, nativeGroup, matrix } from "./plan.mjs";
 import { assemble, verifyArtifacts, verifyParity, digest, targetOutcome, savedFiles, savedProofVersion, verifyRunInputs, verifyOwnedReceipts } from "./evidence.mjs";
+import { assembleRecovery } from "./dependency-recovery-capture.mjs";
 import { assessNative, assessTimedSource } from "./native.mjs";
 import { terminalHealthPaths, verifyOwnedCleanup, verifyResourceCleanup } from "./lifecycle.mjs";
 import { validateQualification, qualificationSettings } from "../marketplace/feature-contract.mjs";
@@ -77,26 +78,43 @@ export function verify(folder) {
   assert.equal(summary.lifecycleVersion, 4, "historical capture predates endpoint/time-bound terminal health receipts and exit-race handling; do not backfill or qualify it");
   assert.equal(digest(readFileSync(join(folder, "fixtures/marketplace.json"))), summary.fixtureSha256, "native fixture bytes changed");
   groupReady(summary.cells); // Validate the complete, canonical matrix before following artifact paths.
+  assert.deepEqual(summary.cells.map(({ key, app, source, mode, phase }) => ({ key, app, source, mode, phase })),
+    matrix().map(({ status, ...cell }) => cell), "native cell identity differs from its canonical matrix key");
   if (summary.savedProofVersion === savedProofVersion && summary.cells.every((c) => c.status === "observed")) {
     assert.deepEqual(summary.ownedNetworks, [`${summary.runId}-net`]);
     assert.deepEqual([...summary.ownedImages].sort(), [...new Set(summary.cells.map((c) => `${summary.runId}-${c.app}`))].sort());
   }
   if (summary.nativeControlsVersion === 1) assert.deepEqual(summary.nativeGroup, nativeGroup(summary.cells));
   let observed = 0;
+  const dependencyRecovery = [];
   for (const cell of summary.cells) {
+    const recovery = cell.phase === "dependency-recovery";
+    if (recovery) for (const field of ["targetOutcome", "defense", "recovery", "sourceObservation"]) {
+      assert.ok(!Object.hasOwn(cell, field), "legacy outcome in dependency recovery cell");
+    }
     if (cell.status !== "observed") continue;
+    if (recovery) {
+      assert.equal(summary.savedProofVersion, savedProofVersion, "dependency recovery requires saved execution proof");
+      assert.equal(summary.nativeControlsVersion, 1, "dependency recovery requires native controls");
+      assert.equal(summary.deploymentQualificationVersion, 1, "dependency recovery requires deployment qualification");
+    }
     const out = join(folder, cell.key), manifest = read(join(out, "manifest.json")); verifyArtifacts(out, manifest);
     const settings = read(join(out, "settings.json")), deployment = read(join(out, "deployment.json"));
     const qualification = validateQualification(read(join(out, "qualification.json"))); assert.deepEqual(qualification.missing, cell.nativeMissingFeatures);
-    assert.deepEqual(settings.terminalHealthPaths, terminalHealthPaths(qualification,
-      cell.mode === "deployed-edge" ? validateQualification(read(join(out, "edge-qualification.json"))) : undefined));
+    const edgeQualification = cell.mode === "deployed-edge" ? validateQualification(read(join(out, "edge-qualification.json"))) : undefined;
+    assert.deepEqual(settings.terminalHealthPaths, terminalHealthPaths(qualification, edgeQualification));
+    if (recovery) {
+      assert.equal(qualification.source, cell.source);
+      if (edgeQualification) assert.equal(edgeQualification.source, cell.source);
+      assert.deepEqual(deployment.totalBudget, summary.budget.resources);
+    }
     if (summary.deploymentQualificationVersion === 1) verifyParity(read(join(out, "native-parity.json")), cell.source);
     if (summary.nativeControlsVersion === 1) {
       assert.deepEqual(cell.nativeAssessment, assessNative(read(join(out, "native-controls.json")), qualification));
       assert.notEqual(cell.nativeAssessment.sourceControl, "target-functional-failure");
       assert.ok(!cell.nativeAssessment.targetFunctionalFailures?.length);
       if (cell.mode === "deployed-edge") {
-        const effective = summary.deploymentQualificationVersion === 1 ? validateQualification(read(join(out, "edge-qualification.json"))) : qualification;
+        const effective = summary.deploymentQualificationVersion === 1 ? edgeQualification : qualification;
         if (summary.deploymentQualificationVersion === 1) assert.deepEqual(effective.missing, cell.edgeMissingFeatures);
         assert.deepEqual(cell.edgeAssessment, assessNative(read(join(out, "edge-native-controls.json")), effective, summary.deploymentQualificationVersion === 1 ? "deployed-edge" : "direct"));
         assert.notEqual(cell.edgeAssessment.sourceControl, "target-functional-failure");
@@ -122,17 +140,27 @@ export function verify(folder) {
         assert.equal(labels["run.corten.marketplace.commit"], summary.commit); assert.equal(labels["run.corten.marketplace.dirty"], "false");
         assert.equal(labels["run.corten.marketplace.profile"], qualification.profile);
         assert.equal(origin.source, `${summary.commit}:sha256:${labels["run.corten.hardening.source"]}`);
+        if (recovery) assert.match(labels["run.corten.hardening.source"], /^[a-f0-9]{64}$/);
         const env = Object.fromEntries(before.info.Config.Env.map((value) => { const index = value.indexOf("="); return [value.slice(0, index), value.slice(index + 1)]; }));
         assert.equal(env.PROFILE, qualificationSettings.nativeProfile); assert.equal(env.MAX_CONNECTIONS, String(qualificationSettings.maxConnections));
         assert.equal(env.MARKETPLACE_SOURCE, cell.source);
       }
+      if (recovery && p.role === "upstream") assert.equal(origin.source, `${summary.commit}:bench/hardening/dependency-recovery-upstream.mjs`);
+      if (recovery && p.role === "proxy") assert.equal(origin.source, `${summary.commit}:bench/fullstack/edge.mjs:nginxConf`);
     }
     const raw = readFileSync(join(out, "raw.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
-    const capture = assemble({ settings, raw,
+    const capture = (recovery ? assembleRecovery : assemble)({ settings, raw,
       parity: read(join(out, "parity.json")), source: cell.source, cleanup: read(join(out, "cleanup.json")), provenance: deployment.provenance, lifecycle });
     assert.deepEqual(capture, read(join(out, "capture.json")), "saved capture differs from raw observations");
     assert.equal(cell.apparatusValid, true); assert.equal(cell.parity, "passed");
-    assert.equal(cell.defense, capture.defense.protection); assert.equal(cell.recovery, capture.recovery.disposition); observed++;
+    observed++;
+    if (recovery) {
+      assert.deepEqual(cell.dependencyRecovery, capture.assessment);
+      assert.equal(cell.dependencyTerminalHealthy, capture.terminal.healthy, "saved dependency terminal health differs from replay");
+      dependencyRecovery.push({ key: cell.key, assessment: capture.assessment, terminalHealthy: capture.terminal.healthy });
+      continue;
+    }
+    assert.equal(cell.defense, capture.defense.protection); assert.equal(cell.recovery, capture.recovery.disposition);
     if (summary.nativeControlsVersion === 1) {
       if (cell.source === "api") { assert.equal(settings.nativeSource, "api"); assert.deepEqual(cell.sourceObservation, assessTimedSource(raw)); }
       assert.deepEqual(cell.targetOutcome, targetOutcome(capture, cell.edgeAssessment ?? cell.nativeAssessment, cell.sourceObservation));
@@ -142,6 +170,6 @@ export function verify(folder) {
   assert.equal(summary.groupReady, ready);
   const proof = verifySavedProof(folder, summary, tree);
   assert.deepEqual(savedFiles(folder), tree, "saved native bytes changed during replay");
-  return { schema, observed, groupReady: ready, notRun: summary.cells.filter((c) => c.status === "not-run").length, proof };
+  return { schema, observed, groupReady: ready, notRun: summary.cells.filter((c) => c.status === "not-run").length, proof, dependencyRecovery };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) console.log(JSON.stringify(verify(resolve(process.argv[2]))));

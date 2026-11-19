@@ -1,0 +1,1 @@
+- Replace connection pressure in the hardening benchmark with a fixed-rate marketplace read test that measures recovery after a temporary upstream slowdown. Fixture-backed apps serve as controls.

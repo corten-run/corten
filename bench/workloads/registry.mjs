@@ -45,7 +45,7 @@ export const groups = freeze({
     ["equal-initial-state", "disconnect", "gap-detection", "replay-or-resnapshot", "no-duplicate-effects", "final-keyed-state", "bounded-slow-client", "cleanup"],
     [{ key: "recovery", target: "live" }]),
   hardening: group("Resilience and hardening", ["aspnet", "spring", "nextjs", "django", "express"], ["gin", "drogon", "topcoat"],
-    ["equal-legitimate-traffic", "declared-deployment-budget", "slow-headers-bodies-readers", "connection-flood", "oversized-requests", "useful-service", "recovery"],
+    ["equal-legitimate-traffic", "declared-deployment-budget", "slow-headers-bodies-readers", "dependency-recovery", "oversized-requests", "useful-service", "recovery"],
     [{ key: "direct", target: "hardening" }, { key: "deployed-edge", target: "hardening" }]),
 });
 

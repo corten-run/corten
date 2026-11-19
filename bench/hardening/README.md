@@ -3,7 +3,7 @@
 `run.mjs` is a local, opt-in driver for the registry's complete hardening group:
 Corten, ASP.NET Core, Spring Boot, Next.js Pages Router, Django, Express, Gin,
 Drogon and Topcoat. Both fixture/API sources, direct/deployed-edge deployments
-and all six attack phases stay in its 216-cell ledger. No cloud controller,
+and every scenario stay in its ledger. No cloud controller,
 operational benchmark network, production deployment or automation is used.
 
 ```sh
@@ -18,7 +18,17 @@ node bench/hardening/verify-exit.mjs
 
 The dispatcher interface is `export async function run(args)`, where `args` is
 the CLI string array including the mandatory local development round `wN`.
-The returned and persisted summary schema is `native-hardening-run/v1`.
+The returned and persisted summary schema is `native-hardening-run/v2`. The
+connection-pressure scenario from v1 is retired, not renamed. Its results
+cannot be used for the dependency recovery test.
+
+In the recovery scenario each deployment serves the same ordinary marketplace
+JSON read every 400 ms. After four seconds the private upstream adds 150 ms to
+record reads for eight seconds, then resumes normal service for the final eight
+seconds. Each response has a 600 ms deadline and must match the complete record.
+The API-source result reports how soon five consecutive good responses return
+to baseline latency. The fixture-source result is a control: it must not read
+the upstream and cannot demonstrate recovery from a dependency delay.
 `--out` optionally selects a fresh subdirectory under `bench/hardening/results`.
 `--node-modules` can name an existing dependency installation (the pinned
 Playwright version is checked). Stable regular installed files, including esbuild's

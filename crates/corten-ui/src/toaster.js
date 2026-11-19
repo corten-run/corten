@@ -112,8 +112,9 @@ export function connect(root, status, close, failed, seconds, signal) {
   document.addEventListener(
     "submit",
     (event) => {
-      const submit = /** @type {SubmitEvent} */ (event);
-      const method = submit.submitter?.getAttribute("formmethod") ?? /** @type {HTMLFormElement} */ (event.target).getAttribute("method");
+      if (!(event.target instanceof HTMLFormElement)) return;
+      const { submitter } = /** @type {SubmitEvent} */ (event);
+      const method = (submitter && attribute(submitter, "formmethod")) ?? attribute(event.target, "method");
       if (method?.trim().toLowerCase() !== "dialog") over();
     },
     { capture: true, signal },
@@ -132,6 +133,12 @@ export function connect(root, status, close, failed, seconds, signal) {
   );
   // The page came with a message: an answer without the runtime, or a first load.
   show();
+}
+
+/** @param {Element} el @param {string} name */
+function attribute(el, name) {
+  const read = el.getAttribute;
+  return (typeof read === "function" ? read : Element.prototype.getAttribute).call(el, name);
 }
 
 /** Hides the message and the button. @param {HTMLDivElement} status @param {HTMLButtonElement} close */

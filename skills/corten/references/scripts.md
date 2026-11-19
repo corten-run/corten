@@ -401,11 +401,16 @@ anchor positioning. A `<dialog>` the server can draw `open` (a form it refuses) 
 opens and a link closes (`?selected=..`) gets `dialog::modalClosedBy(target, close, signal)` with
 the link as the `close` ref, so a close request (Escape) goes to its address. A table whose page
 has all its rows sorts in place, also when other routes read its order (no round trip; the UI guide
-has the measurement), with `on:sort={corten_ui::rows::sort(event, target)}` on each kit
-`SortHeader` and `data-no-prefetch` on the `<thead>`. When a cell's text is not its order, put a
+has the measurement), with `on:sort={corten_ui::rows::sort(event, target, head)}` on each kit
+`SortHeader`. Declare `let (head, up, down) = refs();` in the table's component. Each header
+takes `links={Some(SortLinks { ascending_first: up, descending_first: down })}`. Put
+`data-no-prefetch ref={head} on:ReadSortLinks={rows::read(event, up, down)}` on the `<thead>`
+and import `corten_ui::ReadSortLinks`. This reads the current typed routes for sorting and for
+`ordered` handlers elsewhere. A server-sorted header takes `links={None}` and
+`on:sort={None::<Handler>}`. When a cell's text is not its order, put a
 `<time datetime>` or `<data value>` in it, or write `ref={cell.with(value)}` on the cell and
-give that ref to `rows::sortByNumber(event, target, cell)` for numbers or
-`rows::sortByText(event, target, cell)` for text. The header's `ascending` and `descending` link
+give that ref to `rows::sortByNumber(event, target, head, cell)` for numbers or
+`rows::sortByText(event, target, head, cell)` for text. The header's `ascending` and `descending` link
 to the pages the server sorts each way, and `first` is the direction of the first click
 (`Sort::Descending` for a column read newest first; the script puts
 the order shown in the address, so a reload and a `ReadAgain` keep it, and in the next read of a

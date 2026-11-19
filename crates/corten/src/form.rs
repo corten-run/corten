@@ -2153,13 +2153,26 @@ pub(crate) fn collect_hints<T>(render: impl FnOnce() -> T) -> (T, Vec<String>) {
 /// argument in `data-on`, whose JSON keeps its quotes) is not taken for an attribute.
 #[cfg(debug_assertions)]
 pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> Option<&'a str> {
-    use crate::html::{text_shows, Event, Markup, Tag};
-
     if hints.is_empty() {
         return None;
     }
+    let tags = hint_tags(html, hints, page);
+    let by_id = |id: &str| tags.iter().find(|(tag, _)| tag.attr("id") == Some(id));
+    hints.iter().map(String::as_str).find(|hint| {
+        let Some((_, true)) = by_id(hint) else { return false };
+        let described = &hint[..hint.len() - "-hint".len()];
+        let Some((tag, _)) = by_id(described) else { return page };
+        !tag.attr("aria-describedby").is_some_and(|names| names.split_ascii_whitespace().any(|id| id == *hint))
+    })
+}
+
+/// Live tags with ids, and whether a tracked hint contains nonblank text.
+#[cfg(debug_assertions)]
+pub(crate) fn hint_tags<'a>(html: &'a str, hints: &[String], page: bool) -> Vec<(crate::html::Tag<'a>, bool)> {
+    use crate::html::{text_shows, Event, Markup};
+
     let mut scan = Markup::new(html, page, true);
-    let mut tags: Vec<(Tag<'_>, bool)> = Vec::new();
+    let mut tags = Vec::new();
     let mut active: Vec<(usize, usize)> = Vec::new();
     while let Some(event) = scan.next() {
         let depth = scan.depth();
@@ -2191,13 +2204,7 @@ pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> O
             _ => {}
         }
     }
-    let by_id = |id: &str| tags.iter().find(|(tag, _)| tag.attr("id") == Some(id));
-    hints.iter().map(String::as_str).find(|hint| {
-        let Some((_, true)) = by_id(hint) else { return false };
-        let described = &hint[..hint.len() - "-hint".len()];
-        let Some((tag, _)) = by_id(described) else { return page };
-        !tag.attr("aria-describedby").is_some_and(|names| names.split_ascii_whitespace().any(|id| id == *hint))
-    })
+    tags
 }
 
 /// The first submit key with no value ([`SubmitKey::template_field`]) in `html` that is not inside

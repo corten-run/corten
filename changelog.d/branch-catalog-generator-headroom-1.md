@@ -1,0 +1,1 @@
+- The catalog-page runner can qualify a dedicated 16-vCPU placement with twelve CPUs for the load generator. The app keeps one CPU, the upstream keeps two, and the default fleet is unchanged.

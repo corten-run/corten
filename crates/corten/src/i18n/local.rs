@@ -617,7 +617,7 @@ mod tests {
     fn a_tz_database_zone_draws_and_reads_only_where_its_rules_reach() {
         use crate::form::{DrawZone, FormZone};
         use crate::i18n::Visitor;
-        let (max, hour) = (SystemTime::from(jiff::Timestamp::MAX), Duration::from_secs(3600));
+        let (max, hour) = (SystemTime::try_from(jiff::Timestamp::MAX).unwrap(), Duration::from_secs(3600));
         let (fixed, named) = (Offset::hours(-6), Visitor::named("Etc/GMT+6"));
         let draw = DrawZone::from(named.clone());
         let posted = FormZone::read("Etc/GMT+6").expect("Etc/GMT+6 is sent and read back");
@@ -716,8 +716,7 @@ mod tests {
         // began at the change, half an hour before `00:00` read as a typed time (01:00, 05:00Z).
         let toronto = Visitor::named("America/Toronto");
         assert_eq!(Day::new(1919, 3, 31).unwrap().start(&toronto), Some(ts("1919-03-31T04:30:00Z")));
-        // A millisecond before that change is still before it, though jiff looks an instant before
-        // 1970 up by its second toward zero, the change's own.
+        // A millisecond before this pre-1970 change still has the old offset.
         let change = ts("1919-03-31T04:30:00Z");
         assert_eq!(toronto.known_offset(change - Duration::from_millis(1)), Some(-5 * 3600));
         assert_eq!(toronto.known_offset(change), Some(-4 * 3600));
@@ -751,7 +750,7 @@ mod tests {
                 let (first, last) = ((at + before.min(after)).div_euclid(DAY) - 1, (at + before.max(after)).div_euclid(DAY) + 1);
                 for d in first..=last {
                     let Some(day) = Day::from_days(d) else { continue };
-                    let midnight = ms(d * DAY).to_zoned(TimeZone::UTC).datetime();
+                    let midnight = ms(d * DAY).to_zoned_datetime(TimeZone::UTC).datetime();
                     let ambiguous = tz.to_ambiguous_timestamp(midnight);
                     let theirs = match ambiguous.offset() {
                         AmbiguousOffset::Gap { before, after } => {
@@ -817,7 +816,7 @@ mod tests {
                 let edges = [at + before, at + after].into_iter().flat_map(|e| [e - 1, e, e + 1]);
                 for local in edges.chain([at + (before + after) / 2]) {
                     let clock = LocalDateTime::clock(instant(local).unwrap(), Utc).unwrap();
-                    let civil = Timestamp::from_millisecond(local).unwrap().to_zoned(TimeZone::UTC).datetime();
+                    let civil = Timestamp::from_millisecond(local).unwrap().to_zoned_datetime(TimeZone::UTC).datetime();
                     let theirs = tz.to_ambiguous_timestamp(civil).compatible().unwrap().as_millisecond();
                     let ours = clock.read_in(&zone).and_then(unix_millis);
                     assert_eq!(ours, Some(theirs), "{clock} in {name}");

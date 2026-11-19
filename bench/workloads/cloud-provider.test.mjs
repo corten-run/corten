@@ -16,7 +16,7 @@ import { tags } from "./cloud-contract.mjs";
 const credential = "SYNTHETIC_ONLY_CREDENTIAL_A";
 const account = ["account", "get", "--output", "json", "--context", context];
 const list = ["compute", "droplet", "list", "--output", "json", "--context", context];
-const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
   "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", "--context", context];
 const empty = { status: 200, value: { droplets: [], meta: { total: 0 }, links: {} } };
 const spawn = () => ({ status: 0, stdout: Buffer.from(`${credential}\n`), stderr: Buffer.alloc(0) });
@@ -29,6 +29,17 @@ const publishedCreate = () => ({ status: 202, value: { droplet: { id: 3164444, s
   links: { actions: [{ id: 7515, rel: "create", href: "https://api.digitalocean.com/v2/actions/7515" }] } } });
 const createAction = (status = "completed", resource_id = 3164444) => ({ status: 200, value: {
   action: { id: 7515, type: "create", resource_type: "droplet", resource_id, status } } });
+
+test("provider engine refuses cross-mode or unbound create before consuming credentials", async () => {
+  const legacy = create.with(7, "sfo2");
+  for (const [createMode, args] of [["legacy", create], ["dedicated", legacy], [null, create]]) {
+    let consumes = 0, requests = 0;
+    const run = providerTransport({ repo: resolve("."), createMode,
+      spawn() { consumes++; return spawn(); }, request() { requests++; return empty; } });
+    await assert.rejects(run(args, 60000, true), /placement differs from authorized mode/);
+    assert.equal(consumes, 0); assert.equal(requests, 0);
+  }
+});
 
 test("create-link diagnostics isolate each refused predicate without reflecting provider values", async (t) => {
   const cases = [

@@ -6,11 +6,13 @@ import { dirname, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { verify } from "../../../hardening/verify.mjs";
 import { budgets, matrix, parseArgs, registryDigest } from "../../../hardening/plan.mjs";
+import { recoveryProfile } from "../../../hardening/dependency-recovery-contract.mjs";
 import { selectedApps } from "../../registry.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const same = (a, b) => assert.ok(isDeepStrictEqual(a, b));
 const missing = (code) => Object.assign(new Error(code), { code: "ENOENT" });
+const recoveryPhase = "dependency-recovery";
 
 // The native verifier follows manifests. Check the entire physical tree first,
 // including unreferenced files, and seal it again after synchronous replay.
@@ -44,7 +46,7 @@ function saved(folder) {
     walk(); return files;
   };
   const seal = scan();
-  return { root, read(path) {
+  return { root, hasBytes: (path) => (seal.get(path)?.size ?? 0) > 0, read(path) {
     assert.ok(path.split("/").every((p) => p && p !== "." && p !== "..") && !/[\\:]/.test(path));
     if (!seal.has(path)) throw missing("native-artifact-missing");
     const body = readFileSync(join(root, path)); same(hash(body), seal.get(path).hash);
@@ -80,16 +82,58 @@ function sourceHash(binding, app) {
   return hash(JSON.stringify(files.map((f) => [f.path, f.sha256])));
 }
 
+// The native verifier supplies assessments recomputed from the saved sample
+// ledger. The summary and the sealed per-cell capture must agree with replay.
+function recoveryDispositions(fs, cells, replayed, sourcesVerified, block) {
+  const observed = cells.filter((c) => c.phase === recoveryPhase && c.status === "observed");
+  const dispositions = new Map(), missingProof = () => block("hardening-dependency-recovery-proof-missing");
+  if (replayed === undefined) {
+    if (observed.length) missingProof();
+    return dispositions;
+  }
+  assert.ok(Array.isArray(replayed));
+  const byKey = new Map(replayed.map((row) => [row.key, row]));
+  same(byKey.size, replayed.length);
+  same([...byKey.keys()], observed.filter((c) => byKey.has(c.key)).map((c) => c.key));
+  for (const cell of observed) {
+    let capture;
+    try { capture = fs.read(`${cell.key}/capture.json`); }
+    catch (error) { if (error?.code !== "ENOENT") throw error; }
+    const { assessment, terminalHealthy } = byKey.get(cell.key) ?? {};
+    if (assessment == null || capture?.assessment == null || cell.dependencyRecovery == null
+      || terminalHealthy == null || capture.terminal?.healthy == null
+      || !fs.hasBytes(`${cell.key}/raw.jsonl`)) {
+      missingProof(); continue;
+    }
+    same([capture.schema, capture.phase, capture.case], ["native-dependency-recovery-capture/v1", recoveryPhase, cell.mode]);
+    same(capture.assessment, assessment); same(cell.dependencyRecovery, assessment);
+    same([assessment.version, assessment.source], [recoveryProfile.version, cell.source]);
+    assert.equal(typeof terminalHealthy, "boolean"); same(capture.terminal.healthy, terminalHealthy);
+    const [passed, failed] = cell.source === "api" ? ["recovered", "unrecovered"] : ["fixture-control", "fixture-degraded"];
+    if (assessment.status === passed) dispositions.set(cell.key, terminalHealthy ? "passed" : "failed");
+    else if (assessment.status === failed || assessment.status === "baseline-unavailable" && sourcesVerified)
+      dispositions.set(cell.key, "failed");
+    else {
+      assert.ok(["incomplete", "baseline-unavailable"].includes(assessment.status));
+      missingProof();
+    }
+  }
+  return dispositions;
+}
+
 export async function inspectSaved(binding, folder) {
   const result = { status: "blocked", attemptComplete: false, cleanupComplete: false, resources: "blocked",
-    outcomes: selectedApps("hardening").map((app) => ({ app, outcome: "not-run" })), blockers: [] };
+    outcomes: selectedApps("hardening").map((app) => ({ app, outcome: "not-run" })), comparisonEligibleApps: [], blockers: [] };
   const block = (code) => { if (!result.blockers.includes(code)) result.blockers.push(code); };
   let fs, phase = "binding", failed = false;
   try {
     const options = bindingOptions(binding); phase = "tree"; fs = saved(folder);
     phase = "summary";
     const summary = fs.read("summary.json");
-    same(summary.schema, "native-hardening-run/v1"); same(summary.registryDigest, registryDigest);
+    if (summary.schema === "native-hardening-run/v1") {
+      block("hardening-dependency-recovery-v2-required"); return result;
+    }
+    same(summary.schema, "native-hardening-run/v2"); same(summary.registryDigest, registryDigest);
     same(summary.commit, binding.request.commit); same(summary.options, options); same(summary.budget, binding.execution.settings);
     // Old, otherwise consistent captures are incomplete proof, not a current run.
     if (summary.semanticReceiptsVersion !== 2 || summary.lifecycleVersion !== 4
@@ -97,6 +141,10 @@ export async function inspectSaved(binding, folder) {
       block("hardening-current-semantic-lifecycle-receipts-required"); return result;
     }
     const expected = matrix();
+    const recoveryCount = expected.filter((c) => c.phase === recoveryPhase).length;
+    if (!recoveryCount) {
+      block("hardening-dependency-recovery-matrix-unavailable"); return result;
+    }
     same(summary.cells.map(({ key, app, source, mode, phase }) => ({ key, app, source, mode, phase })),
       expected.map(({ key, app, source, mode, phase }) => ({ key, app, source, mode, phase })));
     assert.ok(Array.isArray(summary.failures) && Array.isArray(summary.cleanupFailures));
@@ -114,7 +162,6 @@ export async function inspectSaved(binding, folder) {
     same(native.observed, summary.cells.filter((c) => c.status === "observed").length);
     same(native.notRun, summary.cells.filter((c) => c.status === "not-run").length);
     same(native.groupReady, summary.groupReady);
-    result.attemptComplete = summary.complete && native.observed === expected.length;
     const proof = native.proof;
     let clean = summary.cleanupFailures.length === 0 && Number.isFinite(Date.parse(summary.finishedAt)) && proof?.cleanupComplete === true;
     let resources = native.observed === expected.length && proof?.resources === "verified" && proof?.sources === "verified";
@@ -129,6 +176,8 @@ export async function inspectSaved(binding, folder) {
       } else block("hardening-native-build-tool-input-closure-incomplete");
       if (proof.blockers.length) block("hardening-native-saved-execution-proof-incomplete");
     } else block("hardening-native-saved-execution-proof-incomplete");
+    const recovery = recoveryDispositions(fs, summary.cells, native.dependencyRecovery, proof?.sources === "verified", block);
+    result.attemptComplete = summary.complete && native.observed === expected.length && recovery.size === recoveryCount;
     phase = "resources";
     for (const c of summary.cells) {
       if (c.status !== "observed") { clean = false; resources = false; continue; }
@@ -171,14 +220,18 @@ export async function inspectSaved(binding, folder) {
     if (!clean) block("hardening-terminal-cleanup-proof-incomplete");
     result.outcomes = result.outcomes.map(({ app }) => {
       const cells = summary.cells.filter((c) => c.app === app);
-      const failure = cells.some((c) => c.failureKind === "target-functional-failure" || c.targetOutcome?.classification === "target-capacity-failure");
+      const dependency = cells.filter((c) => c.phase === recoveryPhase);
+      const failure = cells.some((c) => c.failureKind === "target-functional-failure"
+        || (c.phase !== recoveryPhase && c.targetOutcome?.classification === "target-capacity-failure"))
+        || dependency.some((c) => recovery.get(c.key) === "failed");
       failed ||= failure;
-      return { app, outcome: failure ? "failed" : cells.some((c) => c.status !== "observed") ? "not-run"
+      return { app, outcome: failure ? "failed" : cells.some((c) => c.status !== "observed") || dependency.some((c) => !recovery.has(c.key)) ? "not-run"
         : cells.some((c) => c.nativeAssessment?.productionQualified === false || c.edgeAssessment?.productionQualified === false) ? "unsupported" : "passed" };
     });
     if (!native.groupReady) block("hardening-native-group-not-ready");
     if (summary.failures.length) block("hardening-native-failures-retained");
-    result.status = failed && result.attemptComplete && resources && clean && summary.failures.length === 0 ? "failed" : result.blockers.length ? "blocked" : "verified";
+    result.status = failed && result.attemptComplete && resources && clean && !proof?.blockers.length && summary.failures.length === 0
+      ? "failed" : result.blockers.length ? "blocked" : "verified";
   } catch (error) {
     const absent = error?.code === "ENOENT";
     result.status = absent ? "blocked" : "invalid";

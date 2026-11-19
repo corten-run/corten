@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1
-FROM rust:1-bookworm AS build
+FROM rust:1-trixie AS build
 WORKDIR /src
 COPY . .
 # zstd (corten's `compress`) is linked to this build image's libzstd instead of compiled from its
 # C sources, the slowest crate in a clean build, so the server needs libzstd.so.1 where it runs:
-# debian:bookworm-slim below has it. For a runtime image without it (distroless, scratch), remove
+# debian:trixie-slim below has it. For a runtime image without it (distroless, scratch), remove
 # this line.
 ENV ZSTD_SYS_USE_PKG_CONFIG=1
 # The target directory is a cache of this app's own (`id`; without one, every image built on this
@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/var/cache/cargo \
     find . -name target -prune -o -type f -exec touch {} + \
     && CARGO_HOME=/var/cache/cargo cargo build --release --locked && cp target/release/{{name}} /server
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 # jemalloc, preloaded, gives back memory a burst of connections took: eight floods of unfinished
 # request heads left 406 to 455 MiB with glibc's allocator and 13 to 16 MiB with these settings
 # (three runs each). Its background thread returns memory while the app is idle; a 64 KiB thread

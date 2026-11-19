@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { bindExecution } from "./contract.mjs";
 import { groupNames } from "../registry.mjs";
+import { catalogFleetPlacement } from "../cloud-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { parseArgs } from "../../json-api/contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
@@ -30,18 +31,19 @@ export function campaignRounds(round) {
 }
 export function bindCampaign(input) {
   exact(input, ["round", "commit"]);
-  return bindNativeCampaign(input, groupNames, campaignSchema);
+  return bindNativeCampaign(input, groupNames, campaignSchema, "legacy");
 }
-export function bindGroupCampaign(input) {
+export function bindGroupCampaign(input, mode = "dedicated") {
   exact(input, ["round", "commit", "group"]);
   const { group, ...request } = input;
   assert.ok(groupNames.includes(group), "unknown registry group");
-  return bindNativeCampaign(request, [group], groupCampaignSchema);
+  assert.ok(mode === "dedicated" || mode === catalogFleetPlacement.loadLayout && group === "catalog-page", "unknown group placement");
+  return bindNativeCampaign(request, [group], groupCampaignSchema, mode);
 }
-function bindNativeCampaign(input, order, schema) {
+function bindNativeCampaign(input, order, schema, mode) {
   const rounds = campaignRounds(input.round);
   const bindings = order.map((group) => bindExecution({ group, round: rounds[group], commit: input.commit,
-    recipe: productionRecipes[group], review: null }));
+    recipe: productionRecipes[group], review: null }, mode));
   const first = bindings[0];
   assert.ok(bindings.every((b) => b.sources.sha256 === first.sources.sha256), "source changed while binding campaign");
   const procedures = ["bench/catalog/README.md", "bench/json-api/README.md", "bench/marketplace/nightly.md",
@@ -55,7 +57,8 @@ function bindNativeCampaign(input, order, schema) {
 export function validateCampaign(plan) {
   assert.ok([campaignSchema, groupCampaignSchema].includes(plan?.schema), "campaign differs from fixed native bindings");
   const request = { round: plan?.round, commit: plan?.commit };
-  const expected = plan?.schema === groupCampaignSchema ? bindGroupCampaign({ ...request, group: plan.order?.[0] }) : bindCampaign(request);
+  const expected = plan?.schema === groupCampaignSchema
+    ? bindGroupCampaign({ ...request, group: plan.order?.[0] }, plan.bindings?.[0]?.campaignMode) : bindCampaign(request);
   // A full plan includes every group's source manifest. Keep exact comparison
   // without constructing a potentially enormous assertion diff on rejection.
   assert.ok(isDeepStrictEqual(plan, expected), "campaign differs from fixed native bindings");

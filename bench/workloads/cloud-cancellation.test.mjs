@@ -5,20 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { controllerState, parseDropletArgs } from "./cloud-options.mjs";
 import { controller } from "./droplet.mjs";
-import { fleetPlan, reservation } from "./cloud-contract.mjs";
 import { digest, treeHash } from "./cloud-local.mjs";
-import { groupNames } from "./registry.mjs";
 import { failedNativeRoots, mixedIntentRoot } from "./cloud-retirement.mjs";
 import { mixedCancelProgram, mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { controllerPaths, productionPlan } from "./cloud-production.mjs";
+import { mixedState } from "./test-fixtures/mixed-cancel-state.mjs";
 
-export function mixedState() {
-  const tokens = Object.fromEntries(groupNames.map((g, i) => [g, g === mixedWait.group ? mixedWait.token : (i + 1).toString(16).padStart(16, "0")]));
-  const provider = { accountId: mixedWait.accountId, context: mixedWait.context };
-  const fleet = fleetPlan({ round: "r21", commit: mixedWait.commit, token: "f".repeat(16), tokens, provider, sshKey: "42" });
-  return { ...reservation({ round: "r21", commit: mixedWait.commit, token: mixedWait.token, group: mixedWait.group, fleet }),
-    status: "running", id: mixedWait.id, ip: mixedWait.ip, provider, createIntentAt: new Date().toISOString(), fullGroupQualified: false };
-}
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "mixed-cancel-test-")), repo = join(root, "repo"), base = join(root, "state"), local = join(base, "groups-r21");
   mkdirSync(repo); mkdirSync(base); mkdirSync(local);
@@ -46,6 +38,8 @@ test("mixed wait cancellation is an exclusive, explicit action, not audit approv
 
 test("only the exact old mixed host, account, subject and wait are admitted", () => {
   const s = mixedState(); assert.equal(ownedMixedWait(controllerState(s, "r21")), mixedWait);
+  assert.equal(s.fleet.schema, "benchmark-group-fleet/v1");
+  assert.equal(s.host.region, "sfo2");
   for (const [key, value] of [["commit", "b".repeat(40)], ["id", "124"], ["token", "1".repeat(16)], ["ip", "192.0.2.1"],
     ["round", "r22"], ["group", "json-api"], ["auditIntent", {}], ["auditIntents", []]])
     assert.throws(() => ownedMixedWait({ ...s, [key]: value }));

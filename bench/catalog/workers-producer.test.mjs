@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { workerRound, indexRound, legacyRound } from "./workers-fixture.mjs";
-import { collectTimedPhase } from "./timed.mjs";
+import { collectLoadLimits, collectTimedPhase, verifyTimedPhase } from "./timed.mjs";
 import { replayCatalog } from "./raw.mjs";
 import { validateSaved } from "./verify.mjs";
 
@@ -16,6 +16,29 @@ function remove(path) { assert.equal(dirname(path), here); rmSync(path, { recurs
 const info = (p) => ({ Id: p.id, Name: p.name, Image: p.image, RestartCount: p.restarts, Path: p.path, Args: p.args,
   State: p.state, HostConfig: p.budget, Config: { Entrypoint: p.entrypoint, Cmd: p.command, Env: p.env, Labels: { "run.corten.catalog": p.owner } },
   NetworkSettings: { Networks: Object.fromEntries(p.networks.map((n) => [n, {}])) }, Mounts: p.mounts });
+
+test("wide producer reconciles the last missing kernel read with the final native exit", async () => {
+  const f = workerRound(null, { wideGenerator: true }), prefix = "api/fastapi/p1-page", phase = "sat256";
+  const readJson = (key) => f.reader.readJson(`${prefix}/${key}`);
+  const subject = { app: "fastapi", source: "api", target: "page", phase, seconds: f.summary.options.duration, instance: readJson("container.json") };
+  const key = `${phase}-boundary.json`, boundary = readJson(key), load = boundary.after.load;
+  const { pid, observations } = boundary.loadLimits;
+  for (const code of ["ENOENT", "ESRCH"]) {
+    let reads = 0;
+    const inspect = async (args) => {
+      assert.deepEqual(args, ["inspect", "--format", "{{json .State}}", load.id]);
+      return JSON.stringify({ Running: true, Status: "running", Pid: pid, StartedAt: load.state.StartedAt });
+    };
+    boundary.loadLimits = await collectLoadLimits(inspect, f.summary, subject, load.id, (id, livePid) => {
+      assert.equal(id, load.id); assert.equal(livePid, pid);
+      if (++reads === observations.length) throw Object.assign(new Error("load process finished"), { code });
+      return observations[reads - 1];
+    });
+    assert.equal(reads, observations.length);
+    assert.equal(verifyTimedPhase(f.summary, subject, { readJson: (name) => name === key ? boundary : readJson(name),
+      readText: (name) => f.reader.readText(`${prefix}/${name}`) }).metrics.outcome, "passed");
+  }
+});
 
 test("worker-aware producer retains native exit99, exact worker raw observations and secondary cleanup errors", async () => {
   const f = workerRound(failure), prefix = "api/fastapi/p1-page", phase = "sat256";

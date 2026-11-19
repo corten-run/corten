@@ -12,6 +12,9 @@ function loopback(mode) {
   assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout);
 }
+test("observer keeps a process that becomes a zombie during sampling, never a live unknown or a reused PID", () => {
+  assert.deepEqual(loopback("process-exit-during-read"), { zombie: [123, "50", null, "Z"], exiting: [123, "50", null, "R"], live: "rejected", reused: "rejected" });
+});
 test("actual guardian/watcher producer registers SSH and SFTP, includes the final seal, joins the watcher and preserves custody", () => {
   const result = loopback("normal"), admission = result.admission;
   for (const receipt of admission.receipts) for (let i = 1; i < receipt.samples.length; i++)
@@ -32,7 +35,50 @@ test("actual guardian/watcher producer registers SSH and SFTP, includes the fina
 test("intentional disconnect and surviving SSH ancestor never produce a successful receipt", () => {
   for (const mode of ["disconnect", "ancestor-survives", "ancestor-zombie"]) {
     const result = loopback(mode); assert.equal(result.receiptAbsent, true); assert.ok(result.observerErrors.length > 0);
+    assert.deepEqual(Object.keys(result.failure), ["helperLine"]);
+    assert.ok(Number.isSafeInteger(result.failure.helperLine) && result.failure.helperLine > 0
+      && result.failure.helperLine <= guardianSource.split("\n").length);
+    if (mode === "ancestor-zombie") assert.match(guardianSource.split("\n")[result.failure.helperLine - 1], /deadline/);
   }
+});
+test("a recorded watcher failure refuses a sealed epoch even alongside a receipt", () => {
+  assert.equal(loopback("retained-watch-failure").failureBlocked, true);
+});
+test("scope exit between the process and cgroup reads retains both observations and requires later drainage", () => {
+  const { binding, admission } = loopback("exit-between-reads");
+  verifyControlAdmission(binding, "bootstrap", admission);
+  const receipt = admission.receipts[0], sample = receipt.samples.find((s) => Object.hasOwn(s.scope, "eventsBeforeInventory"));
+  assert.match(sample.scope.eventsBeforeInventory, /^populated 1\n/);
+  assert.match(sample.scope.events, /^populated 0\n/);
+  assert.ok(sample.scope.members.length);
+  for (const mutate of [
+    (r) => { r.samples.splice(r.samples.findIndex((s) => s.scope.eventsBeforeInventory) + 1); },
+    (r) => { r.samples.find((s) => s.scope.eventsBeforeInventory).scope.eventsBeforeInventory = "populated 0\n"; },
+  ]) {
+    const changed = structuredClone(admission); mutate(changed.receipts[0]);
+    assert.throws(() => verifyControlAdmission(binding, "bootstrap", changed));
+  }
+});
+test("native receipts retain a zombie until reaped even when the scope has no live member", () => {
+  const { binding, admission } = loopback("reaped-zombie");
+  verifyControlAdmission(binding, "bootstrap", admission);
+  const receipt = admission.receipts[0], sample = receipt.samples.find((s) => s.scope.members.length && s.scope.events.startsWith("populated 0\n"));
+  assert.ok(sample);
+  const row = sample.processes.find((p) => sample.scope.members.includes(p.pid));
+  delete sample.scope.eventsBeforeInventory;
+  row.stat = row.stat.replace(") Z ", ") S ");
+  assert.throws(() => verifyControlAdmission(binding, "bootstrap", admission), /populated\/membership/);
+});
+test("an empty scope removed mid-read is not final proof while an owned zombie is still visible", () => {
+  const { binding, admission } = loopback("removed-zombie-scope");
+  verifyControlAdmission(binding, "bootstrap", admission);
+  const receipt = admission.receipts[0];
+  const missing = receipt.samples.find((s) => !s.scope.exists && s.scope.members.length);
+  assert.equal(missing.scope.events, null);
+  assert.match(missing.scope.eventsBeforeInventory, /^populated 0\n/);
+  const p = missing.processes.find((row) => missing.scope.members.includes(row.pid));
+  p.stat = p.stat.replace(") Z ", ") S ");
+  assert.throws(() => verifyControlAdmission(binding, "bootstrap", admission), /intermediate scope exit/);
 });
 
 test("watcher registration waits for its source-owned systemd launcher to exit before sampling the SSH scope", () => {

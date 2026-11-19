@@ -139,12 +139,12 @@ a feed's envelope (a snapshot's `epoch`, `seq` and `rows`; a patch's `seq` and e
 and `id`) when it arrives and trusts its rows as the server's `Row`
 ([design Choice 40](design.md#choice-script-boundaries)).
 
-Not checked: the kit's `SortHeader` still shares its link's `data-ascending`, `data-descending`
-and `data-first` with `rows.js`, and the two addresses with `ordered.js`. A ref on the link
-takes one primitive value, not three; `ordered::send` and `ordered::link` find the headers by
-table id, so they cannot take refs scoped to individual headers. The attributes also let the
-copied kit table compile without `corten-ui` for tables that only sort on the server. Other
-unchecked cases: that the keys of the elements a `Map<string, El>` parameter takes differ (two equal keys are
+The table kit's client sort uses a single typed ref per link beside native `href` and
+`aria-sort`. The head reads the refs at the time a sort or ordered control needs them. The
+compiler checks the ref types, not that the clicked link is among those refs; if it is not,
+the link still navigates.
+
+Not checked: that the keys of the elements a `Map<string, El>` parameter takes differ (two equal keys are
 one entry of the map; a key on each element is checked when the crate compiles, and debug builds stop
 on equal keys in one render of a component), that a ref inside an `if` is present when a handler
 runs (the call throws when it is not; the type says it is always there), the value a call passes to a

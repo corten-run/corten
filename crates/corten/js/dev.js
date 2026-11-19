@@ -100,6 +100,35 @@ const SCOPE_REF = /:scope(?![-\w])|&/gi;
 // Only descendant and child combinators, with no references inside functions or attributes.
 const SCOPE_MEMBER = /^(?:[-\w.#*\s>]|\[[-\w]+\]|:(?:is|not|where)\(\s*(?:[.#]?[-\w]+|\[[-\w]+\])\s*\)|:scope(?![-\w])|&)+$/i;
 
+/** Leave matching to the browser, but omit members that need a nesting or scope context.
+ * @param {string} selector */
+function unscoped(selector) {
+  if (!/[:,&\\]/.test(selector)) return selector;
+  const members = [];
+  let start = 0;
+  let attribute = false;
+  let depth = 0;
+  let reference = false;
+  // CSSOM supplies a parsed selector. Strings and escapes shield punctuation; only a comma
+  // outside attributes and functions splits the list. Do not try to decode escaped pseudo names.
+  for (const { 0: token, index } of selector.matchAll(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\\.|:(?:[-\w\u0080-\uffff]|\\.)+|[()[\],&]/gs)) {
+    if (token === "[") attribute = true;
+    else if (token === "]") attribute = false;
+    else if (attribute) continue;
+    else if (token === "(") depth++;
+    else if (token === ")") depth--;
+    else if (token === "," && !depth) {
+      if (!reference) members.push(selector.slice(start, index));
+      start = index + 1;
+      reference = false;
+    } else if (token === "&" || token.toLowerCase() === ":scope" || token.startsWith(":") && token.includes("\\")) {
+      reference = true;
+    }
+  }
+  if (!reference) members.push(selector.slice(start));
+  return members.join(",") || null;
+}
+
 /** @param {string} selector @param {string | null} parent @param {boolean} [styleParent] */
 function composed(selector, parent, styleParent = false) {
   if (selector.length > MAX_SELECTOR || /[^\x09-\x0d\x20-\x7e]/.test(selector)) return null;
@@ -136,8 +165,43 @@ const resolved = (selector, parent) => {
 
 /** @typedef {{ selector: string, written: string }} Selector */
 /** @typedef {Selector & { display: string, condition: string | null, important: boolean, scope?: Selector }} Display */
+/** @param {CSSRule} rule */
+const isBreakpoint = (rule) => rule instanceof CSSMediaRule || (globalThis.CSSContainerRule && rule instanceof CSSContainerRule);
+/** @param {CSSRule} rule */
+const breakpoint = (rule) => isBreakpoint(rule)
+  ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim()
+  : null;
+
+/** @param {CSSRuleList} rules @returns {boolean} */
+function hasBreakpoint(rules) {
+  try {
+    for (const rule of rules) {
+      if (isBreakpoint(rule)) return true;
+      const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
+      if (inner?.length && hasBreakpoint(inner)) return true;
+    }
+  } catch {}
+  return false;
+}
+
+/** @param {boolean} adopted */
+function* sheetRules(adopted) {
+  for (const sheet of adopted ? document.adoptedStyleSheets ?? [] : document.styleSheets) {
+    try {
+      if (adopted) {
+        const media = sheet.media.mediaText;
+        if (sheet.disabled || media && !matchMedia(media).matches) continue;
+      }
+      const rules = sheet.cssRules;
+      if (adopted && Array.prototype.some.call(rules, (/** @type {CSSRule} */ rule) => rule.type === CSSRule.NAMESPACE_RULE)) continue;
+      yield rules;
+    } catch {}
+  }
+}
+
 // Read display rules again on each check, since a dev server's stylesheets can change.
-function displays() {
+/** @param {boolean} [adopted] */
+function displays(adopted = false) {
   /** @type {Display[]} */
   const found = [];
   /**
@@ -154,7 +218,12 @@ function displays() {
       // A nested rule's own selector, or a nested block of declarations, which has its parent's.
       const styled = rule instanceof CSSStyleRule;
       const asWritten = styled ? rule.selectorText : written;
-      const own = styled ? resolved(asWritten ?? "", selector) : selector;
+      let own = selector;
+      if (styled && asWritten) {
+        if (!adopted || scope) own = resolved(asWritten, selector);
+        else if (selector) own = composed(asWritten, selector, true);
+        else own = unscoped(asWritten);
+      }
       let scoped = scope;
       // undefined: unscoped; null: legacy only, including descendants.
       if (scope !== null) {
@@ -174,21 +243,30 @@ function displays() {
           scoped = null;
         }
       }
+      // Adopted rules have no legacy fallback: do not guess at an unresolved scope or selector.
+      if (adopted && (scoped === null || styled && !own && !scoped)) continue;
       const scopeDisplay = scoped && (styled || globalThis.CSSNestedDeclarations && rule instanceof CSSNestedDeclarations) ? scoped : null;
-      if (style?.display && (scopeDisplay || own && asWritten)) {
-        found.push({ selector: own ?? "", written: asWritten ?? "", display: style.display, condition,
-          important: style.getPropertyPriority("display") === "important", scope: scopeDisplay || undefined });
+      const display = (!adopted || condition) && style?.display;
+      if (display && (!adopted || display !== "none") && (scopeDisplay || own && asWritten)) {
+        found.push({ selector: own ?? "", written: asWritten ?? "", display, condition,
+          important: !adopted && style.getPropertyPriority("display") === "important", scope: scopeDisplay || undefined });
       }
       const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
       if (!inner) continue;
       // @media and @container mark breakpoints, whether currently active or not.
-      const query = rule instanceof CSSMediaRule || (globalThis.CSSContainerRule && rule instanceof CSSContainerRule);
-      walk(inner, condition ?? (query ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null), own, asWritten, scoped);
+      if (adopted && !styled && !isBreakpoint(rule) &&
+          !(globalThis.CSSScopeRule && rule instanceof CSSScopeRule) &&
+          !(globalThis.CSSLayerBlockRule && rule instanceof CSSLayerBlockRule) &&
+          !(rule instanceof CSSSupportsRule)) continue;
+      walk(inner, condition ?? breakpoint(rule), own, asWritten, scoped);
     }
   };
-  for (const sheet of document.styleSheets) {
+  // Adopted sheets only add warnings. Without a breakpoint there is nothing to resolve:
+  // check the rule tree without reading selectors or declarations.
+  for (const rules of sheetRules(adopted)) {
+    if (adopted && !hasBreakpoint(rules)) continue;
     try {
-      walk(sheet.cssRules, null, null, null);
+      walk(rules, null, null, null);
     } catch {}
   }
   return found;
@@ -221,25 +299,36 @@ function scopedMatches(el, rules) {
 /** Warn about a closed dialog or popover kept hidden despite a breakpoint display. @param {Element} root */
 function inPlace(root) {
   // One the app hides with `hidden` is meant to be hidden, whatever its rules say.
-  const closed = within(root, CLOSED).filter((el) => !reported.has(el) && !own.hasAttribute.call(el, "hidden"));
+  const closed = within(root, CLOSED).filter((el) => {
+    if (reported.has(el) || own.hasAttribute.call(el, "hidden")) return false;
+    try {
+      return getComputedStyle(el).display === "none";
+    } catch {
+      return false;
+    }
+  });
   if (!closed.length) return;
   const rules = displays();
+  const linkedBreakpoint = rules.some((r) => r.condition && r.display !== "none");
+  const adopted = displays(true);
+  if (!linkedBreakpoint && !adopted.length) return;
   const scoped = rules.some((r) => r.scope);
   for (const el of closed) {
-    if (getComputedStyle(el).display !== "none") continue;
-    const applies = scoped ? scopedMatches(el, rules) : rules.filter((r) => matching(el, r.selector));
+    const linked = scoped ? scopedMatches(el, rules) : rules.filter((r) => matching(el, r.selector));
     // Hidden by components.css's rule (`dialog:where(..)`, `[popover]:where(..)`), not only the
     // browser's own, which an app's rule outranks.
-    if (!applies.some((r) => r.important && r.display === "none" && /^(dialog|\[popover\]):where\(/.test(r.written))) continue;
+    if (!linked.some((r) => r.important && r.display === "none" && /^(dialog|\[popover\]):where\(/.test(r.written))) continue;
     // In .card, a breakpoint .rail display can go unwarned if `@scope (.card) { & > * { display:grid !important } }` matches but loses.
     // A .card scope's .rail:not(.gone,.pending) display can warn outside .card and .other despite a .other scope's .rail !important.
-    const drawn = applies.find((r) => r.condition && r.display !== "none");
-    if (!drawn || applies.some((r) => r.important && r.display !== "none")) continue;
+    if (linked.some((r) => r.important && r.display !== "none")) continue;
+    const linkedDrawn = linked.find((r) => r.condition && r.display !== "none");
+    const drawn = linkedDrawn ?? adopted.find((r) => matching(el, r.scope?.selector ?? r.selector));
+    if (!drawn) continue;
     reported.add(el);
     const dialog = el instanceof HTMLDialogElement && !own.hasAttribute.call(el, "popover");
     const kind = dialog ? "dialog" : "popover";
     const message = `corten: ${labelOf(el)} is a closed ${kind} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed.`;
-    if ("composed" in drawn) {
+    if ("composed" in drawn || !linkedDrawn) {
       console.warn(message, el);
       continue;
     }

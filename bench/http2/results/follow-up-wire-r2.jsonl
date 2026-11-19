@@ -1,0 +1,120 @@
+{"mode":"off","round":1,"check":"zero stream window","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":503.6,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":534.5}
+{"mode":"off","round":1,"check":"final chunk with buffered tail","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":515.8,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":527.3}
+{"mode":"off","round":1,"check":"stalled tail beside progressing sibling","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":511.7,"siblingWrites":23,"lastSiblingMs":492.6,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":538.7}
+{"mode":"off","round":1,"check":"quiet producer","configuredTimeoutMs":100,"survivedMs":503.7,"siblingPageMs":506.1,"pass":true,"elapsedMs":536.3}
+{"mode":"off","round":1,"check":"normal response","configuredTimeoutMs":100,"reusedMs":514,"pass":true,"elapsedMs":528}
+{"mode":"off","round":1,"check":"credit recovers before the bound","configuredTimeoutMs":100,"creditMs":64.6,"completedMs":67,"pass":true,"elapsedMs":281.7}
+{"mode":"off","round":1,"check":"incremental credit for one final chunk","configuredTimeoutMs":100,"completedMs":279.8,"pass":true,"elapsedMs":293.2}
+{"mode":"off","round":1,"check":"reset discards a queued tail","configuredTimeoutMs":100,"reusedMs":516.3,"pass":true,"elapsedMs":529.4}
+{"mode":"off","round":2,"check":"zero stream window","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":522.2,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":598.4}
+{"mode":"off","round":2,"check":"final chunk with buffered tail","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":523.6,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":568.1}
+{"mode":"off","round":2,"check":"stalled tail beside progressing sibling","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":508.7,"siblingWrites":23,"lastSiblingMs":490.5,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":525.8}
+{"mode":"off","round":2,"check":"quiet producer","configuredTimeoutMs":100,"survivedMs":503.8,"siblingPageMs":505.8,"pass":true,"elapsedMs":519.6}
+{"mode":"off","round":2,"check":"normal response","configuredTimeoutMs":100,"reusedMs":523.3,"pass":true,"elapsedMs":551.7}
+{"mode":"off","round":2,"check":"credit recovers before the bound","configuredTimeoutMs":100,"creditMs":51,"completedMs":52.8,"pass":true,"elapsedMs":293}
+{"mode":"off","round":2,"check":"incremental credit for one final chunk","configuredTimeoutMs":100,"completedMs":263.7,"pass":true,"elapsedMs":290.5}
+{"mode":"off","round":2,"check":"reset discards a queued tail","configuredTimeoutMs":100,"reusedMs":516.5,"pass":true,"elapsedMs":545.4}
+{"mode":"off","round":3,"check":"zero stream window","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":518.6,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":549.8}
+{"mode":"off","round":3,"check":"final chunk with buffered tail","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":507.8,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":523.1}
+{"mode":"off","round":3,"check":"stalled tail beside progressing sibling","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":507.4,"siblingWrites":23,"lastSiblingMs":489.9,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":517.8}
+{"mode":"off","round":3,"check":"quiet producer","configuredTimeoutMs":100,"survivedMs":508.5,"siblingPageMs":510.6,"pass":true,"elapsedMs":550.9}
+{"mode":"off","round":3,"check":"normal response","configuredTimeoutMs":100,"reusedMs":523.1,"pass":true,"elapsedMs":551.3}
+{"mode":"off","round":3,"check":"credit recovers before the bound","configuredTimeoutMs":100,"creditMs":47.9,"completedMs":49.8,"pass":true,"elapsedMs":280.2}
+{"mode":"off","round":3,"check":"incremental credit for one final chunk","configuredTimeoutMs":100,"completedMs":249.5,"pass":true,"elapsedMs":291.3}
+{"mode":"off","round":3,"check":"reset discards a queued tail","configuredTimeoutMs":100,"reusedMs":513.8,"pass":true,"elapsedMs":529.3}
+{"mode":"body","round":1,"check":"zero stream window","configuredTimeoutMs":100,"closedMs":114.2,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":528.6}
+{"mode":"body","round":1,"check":"final chunk with buffered tail","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":530.9,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":543.7}
+{"mode":"body","round":1,"check":"stalled tail beside progressing sibling","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":511.2,"siblingWrites":23,"lastSiblingMs":490.5,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":519.6}
+{"mode":"body","round":1,"check":"quiet producer","configuredTimeoutMs":100,"survivedMs":506.5,"siblingPageMs":508.3,"pass":true,"elapsedMs":542.7}
+{"mode":"body","round":1,"check":"normal response","configuredTimeoutMs":100,"reusedMs":515.3,"pass":true,"elapsedMs":541.4}
+{"mode":"body","round":1,"check":"credit recovers before the bound","configuredTimeoutMs":100,"creditMs":64,"completedMs":66.2,"pass":true,"elapsedMs":300.5}
+{"mode":"body","round":1,"check":"incremental credit for one final chunk","configuredTimeoutMs":100,"completedMs":259.1,"pass":true,"elapsedMs":290.5}
+{"mode":"body","round":1,"check":"reset discards a queued tail","configuredTimeoutMs":100,"reusedMs":512,"pass":true,"elapsedMs":540.9}
+{"mode":"body","round":2,"check":"zero stream window","configuredTimeoutMs":100,"closedMs":111.8,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":535.6}
+{"mode":"body","round":2,"check":"final chunk with buffered tail","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":512.5,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":526.7}
+{"mode":"body","round":2,"check":"stalled tail beside progressing sibling","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":510.5,"siblingWrites":23,"lastSiblingMs":490.4,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":523.7}
+{"mode":"body","round":2,"check":"quiet producer","configuredTimeoutMs":100,"survivedMs":508.2,"siblingPageMs":513.1,"pass":true,"elapsedMs":541.2}
+{"mode":"body","round":2,"check":"normal response","configuredTimeoutMs":100,"reusedMs":519.3,"pass":true,"elapsedMs":548.7}
+{"mode":"body","round":2,"check":"credit recovers before the bound","configuredTimeoutMs":100,"creditMs":50.2,"completedMs":52.4,"pass":true,"elapsedMs":281.7}
+{"mode":"body","round":2,"check":"incremental credit for one final chunk","configuredTimeoutMs":100,"completedMs":264.1,"pass":true,"elapsedMs":277}
+{"mode":"body","round":2,"check":"reset discards a queued tail","configuredTimeoutMs":100,"reusedMs":510.4,"pass":true,"elapsedMs":551.8}
+{"mode":"body","round":3,"check":"zero stream window","configuredTimeoutMs":100,"closedMs":117.3,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":552.8}
+{"mode":"body","round":3,"check":"final chunk with buffered tail","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":512.6,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":538.7}
+{"mode":"body","round":3,"check":"stalled tail beside progressing sibling","configuredTimeoutMs":100,"closedMs":null,"lateWritten":true,"lateResponse":true,"lateResponseMs":512.1,"siblingWrites":23,"lastSiblingMs":491.1,"pass":false,"error":"connection did not close by 500 ms","caseClosedMs":null,"elapsedMs":525.6}
+{"mode":"body","round":3,"check":"quiet producer","configuredTimeoutMs":100,"survivedMs":515.9,"siblingPageMs":521.4,"pass":true,"elapsedMs":535.1}
+{"mode":"body","round":3,"check":"normal response","configuredTimeoutMs":100,"reusedMs":518.8,"pass":true,"elapsedMs":551.4}
+{"mode":"body","round":3,"check":"credit recovers before the bound","configuredTimeoutMs":100,"creditMs":61.4,"completedMs":64.1,"pass":true,"elapsedMs":308.5}
+{"mode":"body","round":3,"check":"incremental credit for one final chunk","configuredTimeoutMs":100,"completedMs":276.7,"pass":true,"elapsedMs":310.8}
+{"mode":"body","round":3,"check":"reset discards a queued tail","configuredTimeoutMs":100,"reusedMs":515.1,"pass":true,"elapsedMs":542.8}
+{"mode":"buffer","round":1,"check":"zero stream window","configuredTimeoutMs":100,"closedMs":113.2,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":538.6}
+{"mode":"buffer","round":1,"check":"final chunk with buffered tail","configuredTimeoutMs":100,"closedMs":112.3,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":526.9}
+{"mode":"buffer","round":1,"check":"stalled tail beside progressing sibling","configuredTimeoutMs":100,"closedMs":112.5,"lateWritten":false,"lateResponse":false,"siblingWrites":5,"lastSiblingMs":108,"pass":true,"elapsedMs":521.8}
+{"mode":"buffer","round":1,"check":"quiet producer","configuredTimeoutMs":100,"survivedMs":504.9,"siblingPageMs":508.8,"pass":true,"elapsedMs":551.4}
+{"mode":"buffer","round":1,"check":"normal response","configuredTimeoutMs":100,"reusedMs":515.4,"pass":true,"elapsedMs":551}
+{"mode":"buffer","round":1,"check":"credit recovers before the bound","configuredTimeoutMs":100,"creditMs":48.7,"completedMs":57.6,"pass":true,"elapsedMs":280.5}
+{"mode":"buffer","round":1,"check":"incremental credit for one final chunk","configuredTimeoutMs":100,"completedMs":251.6,"pass":true,"elapsedMs":278.7}
+{"mode":"buffer","round":1,"check":"reset discards a queued tail","configuredTimeoutMs":100,"reusedMs":511,"pass":true,"elapsedMs":538}
+{"mode":"buffer","round":2,"check":"zero stream window","configuredTimeoutMs":100,"closedMs":111.9,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":559}
+{"mode":"buffer","round":2,"check":"final chunk with buffered tail","configuredTimeoutMs":100,"closedMs":111,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":524}
+{"mode":"buffer","round":2,"check":"stalled tail beside progressing sibling","configuredTimeoutMs":100,"closedMs":111.8,"lateWritten":false,"lateResponse":false,"siblingWrites":5,"lastSiblingMs":109.1,"pass":true,"elapsedMs":541.2}
+{"mode":"buffer","round":2,"check":"quiet producer","configuredTimeoutMs":100,"survivedMs":523.4,"siblingPageMs":529.9,"pass":true,"elapsedMs":559.8}
+{"mode":"buffer","round":2,"check":"normal response","configuredTimeoutMs":100,"reusedMs":533.4,"pass":true,"elapsedMs":575.8}
+{"mode":"buffer","round":2,"check":"credit recovers before the bound","configuredTimeoutMs":100,"creditMs":56.3,"completedMs":59.2,"pass":true,"elapsedMs":295.6}
+{"mode":"buffer","round":2,"check":"incremental credit for one final chunk","configuredTimeoutMs":100,"completedMs":275.1,"pass":true,"elapsedMs":316.9}
+{"mode":"buffer","round":2,"check":"reset discards a queued tail","configuredTimeoutMs":100,"reusedMs":506.2,"pass":true,"elapsedMs":526.7}
+{"mode":"buffer","round":3,"check":"zero stream window","configuredTimeoutMs":100,"closedMs":114.5,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":555.1}
+{"mode":"buffer","round":3,"check":"final chunk with buffered tail","configuredTimeoutMs":100,"closedMs":116.6,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":538}
+{"mode":"buffer","round":3,"check":"stalled tail beside progressing sibling","configuredTimeoutMs":100,"closedMs":111.9,"lateWritten":false,"lateResponse":false,"siblingWrites":5,"lastSiblingMs":109.8,"pass":true,"elapsedMs":525.3}
+{"mode":"buffer","round":3,"check":"quiet producer","configuredTimeoutMs":100,"survivedMs":512,"siblingPageMs":514.5,"pass":true,"elapsedMs":541.9}
+{"mode":"buffer","round":3,"check":"normal response","configuredTimeoutMs":100,"reusedMs":508.8,"pass":true,"elapsedMs":527.8}
+{"mode":"buffer","round":3,"check":"credit recovers before the bound","configuredTimeoutMs":100,"creditMs":45.4,"completedMs":56.9,"pass":true,"elapsedMs":292.9}
+{"mode":"buffer","round":3,"check":"incremental credit for one final chunk","configuredTimeoutMs":100,"completedMs":279.2,"pass":true,"elapsedMs":297.2}
+{"mode":"buffer","round":3,"check":"reset discards a queued tail","configuredTimeoutMs":100,"reusedMs":504.5,"pass":true,"elapsedMs":523.1}
+{"mode":"service-idle","round":1,"check":"no first request","configuredTimeoutMs":100,"closedMs":139.4,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":502.7}
+{"mode":"service-idle","round":1,"check":"incomplete first request","configuredTimeoutMs":100,"closedMs":127,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":509.9}
+{"mode":"service-idle","round":1,"check":"idle partial head after END_STREAM","configuredTimeoutMs":100,"closedMs":110.6,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":521.1}
+{"mode":"service-idle","round":1,"check":"idle after last overlapping answer","configuredTimeoutMs":100,"betweenEndsMs":220.5,"closedMs":107.7,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":896.8}
+{"mode":"service-idle","round":1,"check":"reset with open sibling, then idle","configuredTimeoutMs":100,"siblingOpenMs":500,"closedMs":106.6,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":1037.5}
+{"mode":"service-idle","round":1,"check":"cancel pending handler, then idle","configuredTimeoutMs":100,"closedMs":109.4,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":724.2}
+{"mode":"service-idle","round":1,"check":"partial head beside open sibling","configuredTimeoutMs":100,"siblingOpenMs":509.5,"latePageMs":511.9,"pass":true,"elapsedMs":530.4}
+{"mode":"service-idle","round":1,"check":"queued final answer keeps connection busy","configuredTimeoutMs":100,"closedMs":97.5,"pass":false,"error":"queued tail must keep the idle-only connection busy","caseClosedMs":125.9,"elapsedMs":541.3}
+{"mode":"service-idle","round":2,"check":"no first request","configuredTimeoutMs":100,"closedMs":121.8,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":506.7}
+{"mode":"service-idle","round":2,"check":"incomplete first request","configuredTimeoutMs":100,"closedMs":118.1,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":511.6}
+{"mode":"service-idle","round":2,"check":"idle partial head after END_STREAM","configuredTimeoutMs":100,"closedMs":112.9,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":526.2}
+{"mode":"service-idle","round":2,"check":"idle after last overlapping answer","configuredTimeoutMs":100,"betweenEndsMs":220.3,"closedMs":112.3,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":897.1}
+{"mode":"service-idle","round":2,"check":"reset with open sibling, then idle","configuredTimeoutMs":100,"siblingOpenMs":500,"closedMs":109.5,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":1057.9}
+{"mode":"service-idle","round":2,"check":"cancel pending handler, then idle","configuredTimeoutMs":100,"closedMs":108.1,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":727.4}
+{"mode":"service-idle","round":2,"check":"partial head beside open sibling","configuredTimeoutMs":100,"siblingOpenMs":510.1,"latePageMs":512.2,"pass":true,"elapsedMs":528.8}
+{"mode":"service-idle","round":2,"check":"queued final answer keeps connection busy","configuredTimeoutMs":100,"closedMs":99.2,"pass":false,"error":"queued tail must keep the idle-only connection busy","caseClosedMs":125.9,"elapsedMs":533.9}
+{"mode":"service-idle","round":3,"check":"no first request","configuredTimeoutMs":100,"closedMs":133,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":506.7}
+{"mode":"service-idle","round":3,"check":"incomplete first request","configuredTimeoutMs":100,"closedMs":120.3,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":511.6}
+{"mode":"service-idle","round":3,"check":"idle partial head after END_STREAM","configuredTimeoutMs":100,"closedMs":110.1,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":528.1}
+{"mode":"service-idle","round":3,"check":"idle after last overlapping answer","configuredTimeoutMs":100,"betweenEndsMs":219.4,"closedMs":109,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":895.1}
+{"mode":"service-idle","round":3,"check":"reset with open sibling, then idle","configuredTimeoutMs":100,"siblingOpenMs":500,"closedMs":112.3,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":1050.7}
+{"mode":"service-idle","round":3,"check":"cancel pending handler, then idle","configuredTimeoutMs":100,"closedMs":110.7,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":721.4}
+{"mode":"service-idle","round":3,"check":"partial head beside open sibling","configuredTimeoutMs":100,"siblingOpenMs":513.2,"latePageMs":516.8,"pass":true,"elapsedMs":530}
+{"mode":"service-idle","round":3,"check":"queued final answer keeps connection busy","configuredTimeoutMs":100,"closedMs":100.9,"pass":false,"error":"queued tail must keep the idle-only connection busy","caseClosedMs":127.4,"elapsedMs":538.3}
+{"mode":"h2-idle","round":1,"check":"no first request","configuredTimeoutMs":100,"closedMs":132,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":505.6}
+{"mode":"h2-idle","round":1,"check":"incomplete first request","configuredTimeoutMs":100,"closedMs":119.2,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":510.5}
+{"mode":"h2-idle","round":1,"check":"idle partial head after END_STREAM","configuredTimeoutMs":100,"closedMs":113.2,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":527.3}
+{"mode":"h2-idle","round":1,"check":"idle after last overlapping answer","configuredTimeoutMs":100,"betweenEndsMs":221.3,"closedMs":111,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":899}
+{"mode":"h2-idle","round":1,"check":"reset with open sibling, then idle","configuredTimeoutMs":100,"siblingOpenMs":500,"closedMs":112.8,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":1051.5}
+{"mode":"h2-idle","round":1,"check":"cancel pending handler, then idle","configuredTimeoutMs":100,"closedMs":106.7,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":717.4}
+{"mode":"h2-idle","round":1,"check":"partial head beside open sibling","configuredTimeoutMs":100,"siblingOpenMs":515.5,"latePageMs":517.6,"pass":true,"elapsedMs":530.6}
+{"mode":"h2-idle","round":1,"check":"queued final answer keeps connection busy","configuredTimeoutMs":100,"completedMs":504.4,"lateWritten":false,"lateResponse":false,"idleAfterDrainMs":107.1,"pass":true,"elapsedMs":1031.9}
+{"mode":"h2-idle","round":2,"check":"no first request","configuredTimeoutMs":100,"closedMs":131.2,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":502.5}
+{"mode":"h2-idle","round":2,"check":"incomplete first request","configuredTimeoutMs":100,"closedMs":114.7,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":510.2}
+{"mode":"h2-idle","round":2,"check":"idle partial head after END_STREAM","configuredTimeoutMs":100,"closedMs":112.5,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":528.5}
+{"mode":"h2-idle","round":2,"check":"idle after last overlapping answer","configuredTimeoutMs":100,"betweenEndsMs":219.5,"closedMs":112.7,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":903.2}
+{"mode":"h2-idle","round":2,"check":"reset with open sibling, then idle","configuredTimeoutMs":100,"siblingOpenMs":500,"closedMs":108.9,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":1046.5}
+{"mode":"h2-idle","round":2,"check":"cancel pending handler, then idle","configuredTimeoutMs":100,"closedMs":112.2,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":718.2}
+{"mode":"h2-idle","round":2,"check":"partial head beside open sibling","configuredTimeoutMs":100,"siblingOpenMs":506.9,"latePageMs":508.8,"pass":true,"elapsedMs":537.3}
+{"mode":"h2-idle","round":2,"check":"queued final answer keeps connection busy","configuredTimeoutMs":100,"completedMs":515.9,"lateWritten":false,"lateResponse":false,"idleAfterDrainMs":108.7,"pass":true,"elapsedMs":1051.4}
+{"mode":"h2-idle","round":3,"check":"no first request","configuredTimeoutMs":100,"closedMs":129.9,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":513.9}
+{"mode":"h2-idle","round":3,"check":"incomplete first request","configuredTimeoutMs":100,"closedMs":115.2,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":506.6}
+{"mode":"h2-idle","round":3,"check":"idle partial head after END_STREAM","configuredTimeoutMs":100,"closedMs":110.5,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":523.6}
+{"mode":"h2-idle","round":3,"check":"idle after last overlapping answer","configuredTimeoutMs":100,"betweenEndsMs":220.6,"closedMs":111.9,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":905.9}
+{"mode":"h2-idle","round":3,"check":"reset with open sibling, then idle","configuredTimeoutMs":100,"siblingOpenMs":500,"closedMs":104.8,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":1045.7}
+{"mode":"h2-idle","round":3,"check":"cancel pending handler, then idle","configuredTimeoutMs":100,"closedMs":113.7,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":725.8}
+{"mode":"h2-idle","round":3,"check":"partial head beside open sibling","configuredTimeoutMs":100,"siblingOpenMs":512.8,"latePageMs":514.8,"pass":true,"elapsedMs":545.9}
+{"mode":"h2-idle","round":3,"check":"queued final answer keeps connection busy","configuredTimeoutMs":100,"completedMs":515.2,"lateWritten":false,"lateResponse":false,"idleAfterDrainMs":107.3,"pass":true,"elapsedMs":1036.3}

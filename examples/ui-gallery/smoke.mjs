@@ -908,6 +908,67 @@ async function run(browser) {
     beforeReset.condition === "nm" && beforeReset.marked.join() === "Near Mint" && afterReset.condition === "" && afterReset.marked.length === 0,
     JSON.stringify({ beforeReset, afterReset }),
   );
+  {
+    const shadow = await browser.newPage();
+    try {
+      // Put the controls in the server-drawn form before its widgets connect.
+      await shadow.route(`${base}/`, async (route) => {
+        const response = await route.fetch();
+        const body = (await response.text()).replace(
+          /<form\b(?=[^>]*\bmethod="post")(?=[^>]*\baction="\/")[^>]*>/,
+          '$&<input type="hidden" name="addEventListener"><input type="hidden" name="elements">',
+        );
+        await route.fulfill({ response, body });
+      });
+      const errors = [];
+      shadow.on("pageerror", (error) => errors.push(error.message));
+      await shadow.goto(`${base}/`);
+      const combo = shadow.locator('[data-scope=ui-combo-box] [role="combobox"]');
+      const connected = await combo.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
+      if (connected) {
+        await combo.fill("Near Mint");
+        await combo.press("Enter");
+      }
+      const states = await shadow.evaluate(async () => {
+        const form = document.querySelector('form[method="post"][action="/"]');
+        const named = ["addEventListener", "elements"].every((name) => form[name] instanceof HTMLInputElement);
+        const floor = form.querySelector("#floor");
+        const offer = form.querySelector('input[name="pricing"]:not([checked])');
+        const us = form.querySelector('input[type="checkbox"][checked]');
+        const qty = form.querySelector("#qty");
+        const fewer = qty.closest("[data-scope=ui-number-field]").querySelector("button");
+        const select = form.querySelector("[data-scope=ui-combo-box] select");
+        const marked = () => select.parentElement.querySelector('[role="option"][aria-selected="true"]')?.textContent ?? "";
+        const conditional = () => [floor.matches(":disabled"), floor.required];
+        const initial = conditional();
+        offer.click();
+        us.click();
+        qty.value = "2";
+        qty.dispatchEvent(new Event("input", { bubbles: true }));
+        const state = () => ({
+          floor: conditional(), ship: [us.checked, us.validationMessage], qty: [qty.value, fewer.disabled],
+          combo: [select.value, marked()],
+        });
+        const before = state();
+        HTMLFormElement.prototype.reset.call(form);
+        await new Promise((resolve) => setTimeout(resolve));
+        return { initial, before, after: state(), named };
+      });
+      const { initial, before, after } = states;
+      const detail = JSON.stringify({ ...states, errors });
+      check("RequiredWhen: controls named elements and addEventListener do not break connect, change or reset",
+        initial.join() === "true,false" && before.floor.join() === "false,true" && after.floor.join() === "true,false", detail);
+      check("CheckboxGroup: a control named addEventListener does not break reset",
+        before.ship.join() === "false,Choose where you ship." && after.ship.join() === "true,", detail);
+      check("NumberField: a control named addEventListener does not break reset",
+        before.qty.join() === "2,false" && after.qty.join() === "1,true", detail);
+      check("ComboBox: a control named addEventListener does not break connect or reset",
+        connected && before.combo.join() === "nm,Near Mint" && after.combo.join() === ",", detail);
+      check("the form's named controls shadow its members without widget exceptions", states.named && errors.length === 0, detail);
+    } finally {
+      await shadow.context().close();
+    }
+  }
 
   // TabGroup
   const tab = (name) => page.getByRole("tab", { name });
@@ -972,6 +1033,112 @@ async function run(browser) {
     new URL(page.url()).searchParams.get("sold") === "day" && new URL(unsorted).pathname === new URL(page.url()).pathname && sortLinks === "day_down,buyer,price",
     `${page.url()} ${sortLinks}`,
   );
+  // A write redraws a layout part containing a live region in place. Its retained anchors
+  // get new sort routes without another connect, even if a sort already rewrote their hrefs.
+  {
+    const redraw = await page.context().newPage();
+    let version = 0;
+    await redraw.route((url) => url.pathname === "/" || url.pathname === "/sort-redraw", async (route) => {
+      const request = route.request();
+      const fresh = request.method() === "POST";
+      if (fresh) version++;
+      const res = await route.fetch({
+        url: fresh ? `${base}/?sold=${version === 1 ? "buyer" : "buyer_down"}` : request.url(),
+        method: "GET",
+        headers: { "accept-encoding": "identity", ...(fresh ? { corten: "page" } : {}) },
+      });
+      const headers = res.headers();
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      let body = await res.text();
+      const at = body.search(/<table[^>]*>\s*<caption>This month/);
+      const end = body.indexOf("</table>", at) + "</table>".length;
+      let table = body.slice(at, end);
+      if (fresh) table = table.replaceAll("sold=", "order=");
+      // Invert what the two route tokens mean, without changing either URL or the first ref.
+      if (fresh && version === 3) table = table.replace('aria-sort="descending"', 'aria-sort="ascending"');
+      const ordered = /click:([\w.]+)\.sort\(/.exec(table)?.[1]?.replace(/rows$/, "ordered");
+      const id = /<table\b[^>]*\bid="([^"]+)"/.exec(table)?.[1];
+      if (!ordered || !id) throw new Error("missing sales table handlers or id");
+      const ids = `[&quot;${id}&quot;]`;
+      const layout =
+        `<div id="sort-layout"><p role="status">Sort layout ${fresh ? version : 0}</p>${table}` +
+        `<form id="order-send" method="post" action="/keep-order" data-on="submit:${ordered}.send($e,$t,${ids})"><button>Send order</button></form>` +
+        `<a id="order-link" href="/keep-order" data-no-prefetch data-on="connect:${ordered}.link($t,${ids},$s)">Open order</a></div>`;
+      body = `${body.slice(0, at)}${body.slice(end)}`.replace(
+        /<main\b[^>]*>/,
+        (main) => `${layout}${main}<form method="post" action="/sort-redraw" data-patch><button>Redraw layout</button></form>`,
+      );
+      await route.fulfill({ status: res.status(), headers, body });
+    });
+    await redraw.goto(`${base}/`);
+    const layout = redraw.locator("#sort-layout");
+    // Rewrite the links but put the rows back in their drawn order before the layout redraw.
+    const sold = layout.getByRole("link", { name: "Sold" });
+    await sold.click();
+    await sold.click();
+    const rewritten = (await sold.getAttribute("href")) === `${base}/?sold=day_down`;
+    const buyer = layout.getByRole("link", { name: "Buyer" });
+    const retained = await buyer.elementHandle();
+    const draw = async (n) => {
+      await redraw.getByRole("button", { name: "Redraw layout" }).click();
+      await layout.getByText(`Sort layout ${n}`, { exact: true }).waitFor();
+    };
+    await draw(1);
+    const same = await buyer.evaluate((link, old) => link === old, retained);
+    const newHref = await buyer.getAttribute("href");
+    await redraw.evaluate(() => history.replaceState(history.state, "", "/?sold=filter&order=buyer"));
+    const sent = await layout.locator("#order-send").evaluate((form) => {
+      form.addEventListener("submit", (event) => event.preventDefault(), { once: true });
+      form.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+      return form.getAttribute("action");
+    });
+    const orderedLink = layout.locator("#order-link");
+    await orderedLink.focus();
+    const opened = await orderedLink.getAttribute("href");
+    check(
+      "a retained sort header supplies redrawn routes to ordered forms and links",
+      rewritten && same && newHref === "/?order=buyer_down" && sent === "/keep-order?order=buyer" && opened === sent,
+      JSON.stringify({ rewritten, same, newHref, sent, opened }),
+    );
+    await buyer.click();
+    const after = new URL(redraw.url()).searchParams;
+    const buyers = (await layout.locator("tbody td:nth-child(2)").allTextContents()).join("|");
+    const next = new URL((await buyer.getAttribute("href")) ?? "", redraw.url());
+    check(
+      "a retained sort header uses its redrawn routes for the next in-place sort",
+      same && after.get("order") === "buyer_down" && after.get("sold") === "filter" && next.searchParams.get("order") === "buyer" && buyers === "Grace Hopper|Alan Turing|Ada Lovelace",
+      `${redraw.url()} ${next.href} ${buyers}`,
+    );
+
+    await draw(2);
+    const readBuyer = () => buyer.evaluate((link) => ({
+      href: link.getAttribute("href"),
+      alternate: link.getAttribute("data-ref-value"),
+      first: link.getAttribute("data-ref"),
+      sort: link.parentElement?.getAttribute("aria-sort"),
+    }));
+    const beforeFlip = await readBuyer();
+    // The ordered link reads and caches the current pair without rewriting the sort header.
+    await orderedLink.focus();
+    await draw(3);
+    const afterFlip = await readBuyer();
+    const kept = await buyer.evaluate((link, old) => link === old, retained);
+    await buyer.click();
+    const sorted = new URL(redraw.url()).searchParams;
+    const nextAfterFlip = new URL((await buyer.getAttribute("href")) ?? "", redraw.url());
+    check(
+      "a retained sort header reinterprets unchanged routes when only aria-sort flips",
+      kept && beforeFlip.sort === "descending" && afterFlip.sort === "ascending" &&
+        beforeFlip.href === "/?order=buyer" && afterFlip.href === beforeFlip.href &&
+        beforeFlip.alternate === '"/?order=buyer_down"' && afterFlip.alternate === beforeFlip.alternate &&
+        beforeFlip.first !== null && afterFlip.first === beforeFlip.first &&
+        (await readBuyer()).sort === "descending" && sorted.get("order") === "buyer" &&
+        nextAfterFlip.searchParams.get("order") === "buyer_down",
+      JSON.stringify({ kept, beforeFlip, afterFlip, sorted: redraw.url(), next: nextAfterFlip.href }),
+    );
+    await redraw.close();
+  }
   // A part of the page that reads itself again from its own route (ReadAgain::from, here put
   // around the table on its way from the server) reads the order a sort in place gave: its read's
   // address takes the sort's key and keeps its own. A part that does not hold the table is left.
@@ -1130,7 +1297,7 @@ async function run(browser) {
         delete headers["content-length"];
         let body = await res.text();
         // The rows module as the page's own sort links name it in `data-on`.
-        const rows = /data-on='click:([^']+?)\.sort\(/.exec(body)?.[1];
+        const rows = /(?:data-on='| )click:([\w.]+)\.sort\(/.exec(body)?.[1];
         if (!rows) throw new Error("no rows::sort call on the page");
         const ordered = rows.replace(/rows$/, "ordered");
         const list = (/** @type {string[]} */ ids) => `[${ids.map((id) => `&quot;${id}&quot;`).join(",")}]`;
@@ -1398,10 +1565,19 @@ async function run(browser) {
   });
   check("tied rows sort in the order the page drew them, not the last click's", tied === "Grace Hopper|Alan Turing|Ada Lovelace", tied);
   await page.goto(unsorted);
-  // A column read newest first (SortHeader's `first: Sort::Descending`, `data-first` on its link)
-  // sorts descending on its first click, puts that order in the address, and links to ascending.
-  // Buyer, which the page does not draw sorted, so the click is a first one, not a reversal.
-  await sales.getByRole("link", { name: "Buyer" }).evaluate((a) => a.setAttribute("data-first", "descending"));
+  // Replace just Buyer's unsorted header, as a patch can. Its new link must supply its own
+  // values, including a first click that goes descending, not use those of the removed link.
+  await sales.getByRole("columnheader", { name: "Buyer" }).evaluate((header) => {
+    const replacement = /** @type {HTMLTableCellElement} */ (header.cloneNode(true));
+    const link = replacement.querySelector("a");
+    const ref = link?.getAttribute("data-ref");
+    if (!link || !ref) throw new Error("missing sort link or ref");
+    const first = link.getAttribute("href");
+    link.setAttribute("data-ref", ref.replace(/up$/, "down"));
+    link.setAttribute("href", JSON.parse(link.getAttribute("data-ref-value") ?? "null"));
+    link.setAttribute("data-ref-value", JSON.stringify(first));
+    header.replaceWith(replacement);
+  });
   await sales.getByRole("link", { name: "Buyer" }).click();
   const newest = await sortedBy();
   const newestNext = new URL(/** @type {string} */ (await sales.getByRole("link", { name: "Buyer" }).getAttribute("href")), page.url());
@@ -1410,6 +1586,61 @@ async function run(browser) {
     newest.buyers === "Grace Hopper|Alan Turing|Ada Lovelace" && newest.sort === ",descending,,," && new URL(page.url()).searchParams.get("sold") === "buyer_down" && newestNext.searchParams.get("sold") === "buyer",
     `${JSON.stringify(newest)} ${page.url()} ${newestNext}`,
   );
+  await page.goto(`${base}/?sold=price`);
+  const wrappedSortStopped = await sales.getByRole("link", { name: "Price" }).evaluate((link) => {
+    const span = document.createElement("span");
+    link.before(span);
+    span.append(link);
+    // Observe whether the sort handled the click without letting a regression navigate away.
+    let stopped = false;
+    window.addEventListener("click", (event) => {
+      stopped = event.defaultPrevented;
+      event.preventDefault();
+    }, { once: true });
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    return stopped;
+  });
+  const wrappedOrder = await sortedBy();
+  check(
+    "a wrapped sort link reverses the header's order in place and updates the address",
+    wrappedSortStopped && wrappedOrder.buyers === "Ada Lovelace|Grace Hopper|Alan Turing" && wrappedOrder.sort === ",,,,descending" && new URL(page.url()).searchParams.get("sold") === "price_down",
+    `${wrappedSortStopped} ${JSON.stringify(wrappedOrder)} ${page.url()}`,
+  );
+  await page.goto(unsorted);
+  // A ref-valued link in a table nested in a header cell is that table's, not a sorter of this
+  // head: sorting the outer table leaves its address alone.
+  const nestedHref = await sales.getByRole("columnheader", { name: "Price" }).evaluate((header) => {
+    const source = header.querySelector("a");
+    if (!source) throw new Error("missing sort link");
+    const inner = document.createElement("table");
+    const sorted = document.createElement("th");
+    sorted.setAttribute("aria-sort", "ascending");
+    inner.createTHead().insertRow().append(sorted);
+    const cell = inner.createTBody().insertRow().insertCell();
+    const link = /** @type {HTMLAnchorElement} */ (source.cloneNode(true));
+    link.textContent = "Nested";
+    link.setAttribute("href", "?inner=kept");
+    cell.append(link);
+    header.append(inner);
+    return link.getAttribute("href");
+  });
+  await sales.getByRole("link", { name: "Buyer" }).click();
+  const nestedAfter = await sales.getByRole("link", { name: "Nested" }).getAttribute("href");
+  const nestedSort = await sales.locator("thead table th").getAttribute("aria-sort");
+  check(
+    "a nested table's links and sort are its own, not the outer head's",
+    (await sortedBy()).buyers === "Ada Lovelace|Alan Turing|Grace Hopper" && nestedAfter === nestedHref && nestedSort === "ascending",
+    `${nestedHref} -> ${nestedAfter} ${nestedSort}`,
+  );
+  await page.goto(unsorted);
+  // A handler still wired to an old or misconfigured kit must not partially sort in place.
+  await sales.locator("thead").evaluate((head) => head.removeAttribute("data-on"));
+  const nativeSort = page.waitForRequest((request) => new URL(request.url()).searchParams.get("sold") === "buyer");
+  await sales.getByRole("link", { name: "Buyer" }).click();
+  await nativeSort;
+  await page.waitForURL((url) => url.searchParams.get("sold") === "buyer");
+  await sales.locator('th[aria-sort="ascending"]').getByRole("link", { name: "Buyer" }).waitFor();
+  check("a sort without its route reader follows the server link", (await sortedBy()).buyers === "Ada Lovelace|Alan Turing|Grace Hopper", page.url());
   await page.goto(unsorted);
   // Numbers as numbers (-10 before -2, where text would put -2 first) and an empty value last; a
   // click with a modifier key is the link's.
@@ -1688,6 +1919,23 @@ async function run(browser) {
   await page.keyboard.press("Escape");
   await expanded("false");
   await trigger.click();
+  await expanded("true");
+  const menuErrors = errors.length;
+  await page.getByRole("menuitem", { name: "Archive" }).evaluate((button) => {
+    const form = button.closest("form");
+    const field = document.createElement("input");
+    field.type = "hidden";
+    field.name = "closest";
+    form.append(field);
+    // A click on the form itself (not on its button) should leave the menu open.
+    form.click();
+    field.remove();
+  });
+  check("MenuButton: clicking a form with a control named closest leaves the menu open without throwing",
+    (await trigger.getAttribute("aria-expanded")) === "true" && errors.length === menuErrors, errors.slice(menuErrors).join(" | "));
+  await page.keyboard.press("Escape");
+  await expanded("false");
+  await trigger.click();
   await page.getByRole("menuitem", { name: "Archive" }).click();
   await page.waitForFunction(() => document.querySelector("#menu-result")?.textContent === "Archived.");
   check("a form item posts and patches", true);
@@ -1792,14 +2040,23 @@ async function run(browser) {
   await page.mouse.move(0, 0);
   await page.waitForTimeout(2600);
   check("the failed text stays past the toaster's seconds", await toast.isVisible());
-  // The next submit takes it away, and a second failure is said again, as a new message.
-  await page.evaluate(() => ((/** @type {any} */ (document.querySelector("#ui-toast"))).__first = 1));
-  const gone = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector("#ui-toast")).hidden)), { once: true })));
-  await save.click();
+  // The next submit takes it away even if a control shadows the form's getAttribute.
+  const gone = await save.evaluate((button) => {
+    const field = document.createElement("input");
+    field.type = "hidden";
+    field.name = "getAttribute";
+    button.closest("form").append(field);
+    const first = document.querySelector("#ui-toast");
+    first.__first = 1;
+    button.click();
+    const hidden = first.hidden;
+    field.remove();
+    return hidden;
+  });
   const again = await page
-    .waitForFunction(() => { const m = /** @type {any} */ (document.querySelector("#ui-toast")); return !m.hidden && m.__first !== 1 && m.textContent.startsWith("That did not go through"); }, null, { timeout: 5000 })
+    .waitForFunction(() => { const m = document.querySelector("#ui-toast"); return !m.hidden && m.__first !== 1 && m.textContent.startsWith("That did not go through"); }, null, { timeout: 5000 })
     .then(() => true, () => false);
-  check("the next submit takes the failed text away, and a second failure says it again", (await gone) === true && again);
+  check("Toaster: the next submit takes the failed text away with a control named getAttribute, then another failure says it again", gone && again);
   // The page changing its own address (a tab's replaceState, a link to a place on it) keeps it.
   await page.evaluate(() => {
     history.replaceState(history.state, "", `${location.pathname}${location.search}`);
@@ -1899,10 +2156,71 @@ async function run(browser) {
   // The two saves cut on purpose: Chromium logs each as a resource that failed to load.
   errors.splice(errorsBefore, errors.length - errorsBefore, ...errors.slice(errorsBefore).filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
 
+  // dialog::modal: use callable focus overrides, even on forms, and handle named controls.
+  {
+    const invalid = await browser.newPage();
+    invalid.on("pageerror", (e) => errors.push(e.message));
+    try {
+      await invalid.addInitScript(() => {
+        customElements.define("smoke-field", class extends HTMLElement {
+          constructor() {
+            super();
+            this.attachShadow({ mode: "open" }).append(document.createElement("input"));
+          }
+          /** @param {FocusOptions} [options] */
+          focus(options) { this.shadowRoot?.querySelector("input")?.focus(options); }
+          connectedCallback() {
+            const form = this.closest("#invalid-form");
+            if (form) form.focus = () => this.focus();
+          }
+        });
+      });
+      for (const [name, field, id, inner] of [
+        ["a modal calls the invalid custom field's focus method", '<form$3><smoke-field id="invalid-field" aria-invalid="true"></smoke-field>', "invalid-field", "input"],
+        ["a modal focuses an invalid form whose focus is shadowed", '<form$3 id="invalid-form" tabindex="-1" aria-invalid="true"><input type="hidden" name="focus">', "invalid-form"],
+        ["a modal calls an invalid form's own focus method", '<form$3 id="invalid-form" aria-invalid="true"><smoke-field id="form-field"></smoke-field>', "form-field", "input"],
+      ]) {
+        const url = `${base}/`;
+        await invalid.route(url, async (route) => {
+          const response = await route.fetch();
+          const body = (await response.text()).replace(/(<dialog\b[^>]*\bid="rename"[^>]*)(>.*?)<form(\b[^>]*)>/s,
+            '$1 open$2<button type="button" id="before-invalid">Before invalid</button>' + field);
+          await route.fulfill({ response, body });
+        }, { times: 1 });
+        await invalid.goto(url);
+        await invalid.locator("#rename:modal").waitFor();
+        const focus = await invalid.evaluate(() => ({
+          outer: document.activeElement?.id,
+          inner: document.activeElement?.shadowRoot?.activeElement?.localName,
+        }));
+        check(name, focus.outer === id && focus.inner === inner, JSON.stringify(focus));
+      }
+    } finally {
+      await invalid.context().close();
+    }
+  }
+
   // dialog::modal: a dialog the server draws open is modal.
   {
     const draws = await browser.newPage();
     draws.on("pageerror", (e) => errors.push(e.message));
+    await draws.addInitScript(() => {
+      customElements.define("smoke-patch-root", class extends HTMLElement {
+        querySelector() { return null; }
+      });
+      class CustomOpener extends HTMLFormElement {
+        focus(options) {
+          this.dataset.preventScroll = String(options?.preventScroll);
+          this.querySelector("button").focus(options);
+        }
+      }
+      customElements.define("smoke-form-focus", class extends HTMLElement {
+        connectedCallback() {
+          // Exercise a form's prototype override even without customized built-in support.
+          Object.setPrototypeOf(this.parentElement, CustomOpener.prototype);
+        }
+      });
+    });
     const outer = "draw-outer:patch:target;";
     const inner = "draw-inner:patch:target;";
     for (const [mode, want, focus] of [
@@ -1913,13 +2231,17 @@ async function run(browser) {
       ["drop-inner", outer, "draw-opener"],
       ["mutate", inner, "draw-opener"],
       ["remove", "", "draw-opener"],
+      ["shadow-opener", outer, "draw-opener"],
+      ["custom-opener", outer, "draw-opener-button"],
+      ["native-lookup", outer, "draw-opener"],
       ["reopen", "", "change"],
       ["replace-opener", outer, "draw-opener"],
       ["link", outer, "draw-opener"],
       ["native", "draw-outer:native:target;", "draw-opener"],
       ["strip-open", "", ""],
     ]) {
-      const url = `${base}/dialog-draw/${mode === "native" || mode === "strip-open" ? "post" : mode}`;
+      const formOpener = ["shadow-opener", "custom-opener"].includes(mode);
+      const url = `${base}/dialog-draw/${formOpener || mode === "native-lookup" ? "replace-opener" : ["native", "strip-open"].includes(mode) ? "post" : mode}`;
       const incoming = mode === "live" ? `${base}/dialog-draw-live` : url;
       const held = mode === "live" || mode === "read";
       let release = () => {};
@@ -1930,8 +2252,36 @@ async function run(browser) {
         await route.continue();
       };
       if (held) await draws.route(incoming, delay);
+      const samePath = (target) => target.pathname === new URL(url).pathname;
+      const asForm = async (route) => {
+        const response = await route.fetch();
+        const body = (await response.text()).replace(
+          /<button id="draw-opener"([^>]*)>([^<]*)<\/button>/,
+          mode === "shadow-opener"
+            ? '<form id="draw-opener" tabindex="-1"><input type="hidden" name="localName"><input type="hidden" name="focus"><button$1>$2</button></form>'
+            : '<form id="draw-opener" tabindex="-1"><smoke-form-focus></smoke-form-focus><button id="draw-opener-button"$1>$2</button></form>',
+        );
+        await route.fulfill({ response, body });
+      };
+      if (formOpener) await draws.route(samePath, asForm);
+      const asCustomRoots = async (route) => {
+        const response = await route.fetch();
+        let body = (await response.text()).replace(/<button id="draw-opener"[^>]*>[^<]*<\/button>/,
+          '<smoke-patch-root id="smoke-opener-root">$&</smoke-patch-root>');
+        if (new URL(route.request().url()).searchParams.get("do") === "draw") {
+          body = body.replace(/<div([^>]*\bid="draw-area"[^>]*>[\s\S]*?<\/dialog>)<\/div>/,
+            "<smoke-patch-root$1</smoke-patch-root>");
+        }
+        await route.fulfill({ response, body });
+      };
+      if (mode === "native-lookup") await draws.route(samePath, asCustomRoots);
       await draws.goto(url);
-      await draws.locator("#draw-opener").press("Enter");
+      if (formOpener) {
+        await draws.locator("#draw-opener").evaluate((form) => {
+          HTMLElement.prototype.focus.call(form);
+          form.querySelector("button").click();
+        });
+      } else await draws.locator("#draw-opener").press("Enter");
       await draws.waitForFunction((count) => document.querySelectorAll("dialog:modal").length === count,
         ["nested", "drop-inner", "mutate"].includes(mode) ? 2 : 1);
       if (held) release();
@@ -1952,15 +2302,21 @@ async function run(browser) {
         outer: !!document.querySelector("#draw-outer"),
         focus: document.activeElement?.id || (document.activeElement?.closest("dialog:modal") ? "change" : ""),
         opener: document.activeElement?.textContent,
+        preventScroll: document.querySelector("#draw-opener")?.getAttribute("data-prevent-scroll"),
+        customRoot: document.querySelector("#draw-area")?.localName === "smoke-patch-root",
       }));
       check(
         `A server-drawn modal's ${mode} redraw closes, reopens or removes it as drawn`,
         after.events === want && after.modal === (mode === "reopen" ? "draw-outer" : undefined)
           && after.outer === !["remove", "mutate"].includes(mode) && (mode === "strip-open" || after.focus === focus)
-          && (mode !== "replace-opener" || after.opener === "Replacement opener"),
+          && (!(formOpener || ["replace-opener", "native-lookup"].includes(mode)) || after.opener === "Replacement opener")
+          && (mode !== "custom-opener" || after.preventScroll === "true")
+          && (mode !== "native-lookup" || after.customRoot),
         JSON.stringify(after),
       );
       if (held) await draws.unroute(incoming, delay);
+      if (formOpener) await draws.unroute(samePath, asForm);
+      if (mode === "native-lookup") await draws.unroute(samePath, asCustomRoots);
       if (mode === "reopen") {
         await draws.getByRole("button", { name: "Close redrawn dialog" }).click();
         await draws.locator("#draw-outer:not([open])").waitFor({ state: "attached" });
@@ -2081,10 +2437,11 @@ async function run(browser) {
       else check(`${mode} delivers exactly one native close and keeps its returnValue`,
         after.events === "draw-outer:native:target:new;" && after.value === "new", JSON.stringify(after));
     }
-    for (const mode of ["overlap-dialog-first", "overlap-area-first", "script-dialog"]) {
+    for (const mode of ["overlap-dialog-first", "overlap-area-first", "focus-dialog-first", "focus-area-first", "script-dialog"]) {
       await draws.goto(`${base}/dialog-draw/${mode}`);
       await draws.locator("#draw-opener").press("Enter");
       await draws.locator("#draw-outer:modal").evaluate((el) => { /** @type {HTMLDialogElement} */ (el).returnValue = "old"; });
+      await draws.locator("output").evaluate((el) => { delete el.dataset.focusRef; });
       await draws.getByRole("button", { name: "Change dialog" }).click();
       const after = await draws.locator('#draw-area[data-stage="updated"] #draw-outer').evaluate((el) => ({
         events: document.querySelector("output")?.value,
@@ -2092,13 +2449,32 @@ async function run(browser) {
         open: el.hasAttribute("open"),
         direct: el.hasAttribute("data-direct"),
         focus: document.activeElement?.id,
+        focusRef: document.querySelector("output")?.dataset.focusRef,
       }));
       const script = mode === "script-dialog";
+      const areaFirst = mode.endsWith("area-first");
+      const focusRef = mode.startsWith("focus-") ? (areaFirst ? "updated;" : "opened;updated;") : undefined;
+      if (focusRef) check(`${mode} runs the focus handler with the current ref`, after.focusRef === focusRef, JSON.stringify(after));
       check(script ? "a script-created same-id dialog inside the patch root receives no close or result"
         : `${mode} delivers one close and the old result to the surviving dialog`,
-      !after.open && after.focus === "draw-opener" && after.direct === (mode === "overlap-area-first")
+      !after.open && after.focus === "draw-opener" && after.direct === areaFirst
         && after.events === (script ? "" : "draw-outer:patch:target:old;") && after.value === (script ? "" : "old"), JSON.stringify(after));
     }
+    await draws.goto(`${base}/dialog-draw/focus-reopen`);
+    await draws.locator("#draw-opener").press("Enter");
+    await draws.locator('#draw-area[data-stage="opened"] #draw-outer:modal').waitFor();
+    await draws.locator("output").evaluate((el) => { delete el.dataset.focusRef; });
+    await draws.getByRole("button", { name: "Change dialog" }).click();
+    await draws.locator('#draw-area[data-stage="updated"] #draw-outer:modal').waitFor();
+    const during = await draws.locator("output").evaluate((el) => el.dataset.focusRef);
+    await draws.getByRole("button", { name: "Close redrawn dialog" }).click();
+    const reopened = await draws.locator("#draw-outer:not([open])").evaluate((el) => ({
+      events: el.closest("main")?.querySelector("output")?.value,
+      focus: document.activeElement?.id,
+    }));
+    check("an overlapping redraw open with a ref lookup keeps the original opener for a later close",
+      during?.startsWith("opened;") && reopened.events === outer && reopened.focus === "draw-opener",
+      JSON.stringify({ during, ...reopened }));
     await draws.close();
   }
   const rename = page.locator("#rename");
@@ -2570,6 +2946,42 @@ async function run(browser) {
   }
   await clip.waitForFunction(() => document.querySelector('[data-scope=ui-copy-button] [aria-live]')?.textContent === "Copy", null, { timeout: 5000 }).catch(() => {});
   check("then its label again", (await said.textContent()) === "Copy", await said.textContent());
+  await clip.evaluate(() => {
+    const sku = document.querySelector("#sku");
+    const form = document.createElement("form");
+    form.id = sku.id;
+    form.textContent = "form SKU";
+    const field = document.createElement("input");
+    field.type = "hidden";
+    field.name = "textContent";
+    form.append(field);
+    sku.removeAttribute("id");
+    sku.parentElement.after(form);
+    Object.defineProperty(navigator.clipboard, "writeText", { value: async (text) => { window.copiedFormText = String(text); } });
+  });
+  await copyButton.click();
+  await copies.filter({ hasText: "2" }).waitFor({ timeout: 5000 }).catch(() => {});
+  check("CopyButton: a form with a control named textContent still copies the form's text",
+    await copies.textContent() === "2" && await clip.evaluate(() => window.copiedFormText) === "form SKU");
+  const adopted = await clip.evaluate(() => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const from = frame.contentDocument;
+    const form = from.createElement("form");
+    form.id = "sku";
+    form.textContent = "adopted SKU";
+    const field = from.createElement("input");
+    field.type = "hidden";
+    field.name = "textContent";
+    form.append(field);
+    document.getElementById("sku").replaceWith(document.adoptNode(form));
+    return form.ownerDocument === document && form.textContent === field;
+  });
+  await copyButton.click();
+  await copies.filter({ hasText: "3" }).waitFor({ timeout: 5000 }).catch(() => {});
+  const adoptedText = await clip.evaluate(() => window.copiedFormText);
+  check("CopyButton: an adopted form with a control named textContent still copies the form's text",
+    adopted && await copies.textContent() === "3" && adoptedText === "adopted SKU", JSON.stringify({ adopted, adoptedText }));
   await clip.context().close();
   // Removal cancels even a write that has not answered yet. Returning the same button starts
   // a new lifetime; the previous click must not publish into it or start a new label timer.
@@ -2670,6 +3082,23 @@ async function run(browser) {
     await tips.goto(`${base}/`);
     await tips.waitForFunction(() => document.querySelector("[data-scope=ui-combo-box] input")?.checkVisibility(), null, { timeout: 5000 }).catch(() => {});
     const native = await tips.evaluate(() => "interestForElement" in HTMLButtonElement.prototype);
+    if (!native) {
+      const hoverErrors = await tips.locator('form[method="post"][action="/"]').evaluate((form) => {
+        const field = document.createElement("input");
+        field.type = "hidden";
+        field.name = "closest";
+        form.append(field);
+        const errors = [];
+        const failed = (event) => errors.push(event.message);
+        window.addEventListener("error", failed);
+        form.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+        window.removeEventListener("error", failed);
+        field.remove();
+        return errors;
+      });
+      check("Tooltip: a pointer over a form with a control named closest does not throw",
+        hoverErrors.length === 0, hoverErrors.join(" | "));
+    }
     const orders = tips.getByRole("link", { name: "Open the orders", exact: true });
     const lastSale = tips.getByRole("link", { name: "Last sale", exact: true });
     const described = await lastSale.evaluate((a) => document.getElementById(a.getAttribute("aria-describedby") ?? "")?.textContent);
@@ -5497,6 +5926,26 @@ async function run(browser) {
   check("no script: the SKU is on the page and the copy button is not", (await plain.locator("code", { hasText: "ASH-DRAKE-NM" }).isVisible()) && (await plain.locator("[data-scope=ui-copy-button]").isHidden()));
   const plainPrint = plain.locator("button", { hasText: "Print label" });
   check("no script: the print button is on the page, hidden", (await plainPrint.count()) === 1 && (await plainPrint.isHidden()));
+  const plainSales = plain.getByRole("table", { name: "This month's last sales, sorted among themselves" });
+  for (const [order, aria, buyers] of [
+    ["price", "ascending", "Alan Turing|Grace Hopper|Ada Lovelace"],
+    ["price_down", "descending", "Ada Lovelace|Grace Hopper|Alan Turing"],
+  ]) {
+    await Promise.all([plain.waitForURL((url) => url.searchParams.get("sold") === order), plainSales.getByRole("link", { name: "Price" }).click()]);
+    const rows = (await plainSales.locator("tbody td:nth-child(2)").allTextContents()).join("|");
+    const sort = await plainSales.getByRole("columnheader", { name: "Price" }).getAttribute("aria-sort");
+    check(`no script: Price follows the server's ${aria} sort link`, rows === buyers && sort === aria, `${plain.url()} ${rows} ${sort}`);
+  }
+  await Promise.all([
+    plain.waitForURL((url) => url.searchParams.get("sales") === "earlier"),
+    plain.getByRole("navigation", { name: "Sales pages" }).getByRole("link", { name: "Earlier sales" }).click(),
+  ]);
+  const earlierSales = plain.getByRole("table", { name: "This month's earlier sales, sorted among themselves" });
+  check(
+    "no script: the sorted table's pager preserves the server's order",
+    new URL(plain.url()).searchParams.get("sold") === "price_down" && (await earlierSales.getByRole("columnheader", { name: "Price" }).getAttribute("aria-sort")) === "descending",
+    plain.url(),
+  );
   await plain.goto(`${base}/orders`);
   await plain.getByRole("button", { name: "Share the shop" }).click();
   check("no script: the popover opens", await plain.locator("#share").isVisible());

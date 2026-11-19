@@ -46,18 +46,19 @@ compiles, but `+` and `~` from the class's own element lead beside it, so `.list
 not. A [matches-any function](https://www.w3.org/TR/selectors-4/#matches-pseudo) (`:is()` or
 `:where()`) counts when every matchable selector in it does. The check ignores some invalid arms,
 such as an empty arm, a pseudo-element arm, or one with a leading, trailing or doubled
-combinator. It does not remove those arms from the emitted list. Malformed strings,
-unquoted `url()` tokens and mismatched block delimiters in selectors are compile errors, even
-in a forgiving arm: the compiler does not guess where an arm ends. Remove the arm or correct
-the token. A comment directly between two parts of a selector or an `@scope` prelude cannot
-be kept or removed safely by the scoper. Write the intended selector without it: for a
+combinator. It does not remove those arms from the emitted list. A pseudo-element in such an
+arm can also be recognized when a comment separates its two colons; a direct pseudo-element
+still cannot be an `@scope` root or limit. Malformed strings, malformed unquoted `url()` and
+mismatched block delimiters are compile errors anywhere in a sheet. An unquoted `url()` token
+is valid in a value, including paths such as `url(a/*b)`, but is still refused in selector
+proofs, even in a forgiving arm.
+A comment directly between two parts of a selector or an `@scope` prelude is conservatively
+refused (apart from the two colons above). Write the intended selector without it: for a
 compound selector, write `.list.selected`, not `.list/**/.selected`.
 The scoper also refuses a custom property value with a `{ ... }` block at its outer level
 rather than treating it as a nested rule. Removing the braces would turn the block's
 declarations into real ones, so put such a declaration in the app's `static/style.css`. A block
 inside a function or square brackets (`--x: f({ .. })`) is kept as written.
-Both restrictions can be lifted by
-[#1602 Component stylesheets need one CSS Syntax tokenizer shared by the macro and the startup scanner](https://github.com/corten-run/corten/issues/1602).
 Component class names use ASCII without escapes; a nonbreaking space is part of a
 CSS name, not a separator, including in at-rule names, `@scope` roots and limits, and next to
 `to`. A non-ASCII at-rule name does not compile; the diagnostic escapes the name so an
@@ -152,8 +153,8 @@ selectors use unescaped ASCII type, class, ID or presence-attribute selectors, `
 and child combinators, and `:is()`, `:not()` or `:where()` around one simple type, class, ID or
 presence-attribute selector, such as `dialog:not([open])`.
 
-If any root, limit, nesting parent or rule selector cannot be composed or read, the check
-handles the whole rule as before: it treats `@scope` as a grouping rule, keeps ordinary style
+In linked sheets, if any root, limit, nesting parent or rule selector cannot be composed or
+read, the check handles the whole rule as before: it treats `@scope` as a grouping rule, keeps ordinary style
 nesting and does not use any of the scope bounds. This includes implicit roots, scopes with a
 `to` limit, scopes nested in style rules, sheets with `@namespace`, a top-level root referring to
 itself, unsupported selectors, selectors over 1,024 characters before or after composition,
@@ -168,8 +169,18 @@ The check does not evaluate the cascade. Three known limits for closed rails wit
 - `@scope (.card) { .rail:not(.gone,.pending) { display: flex } }` and `@scope (.other) { .rail { display: grid !important } }` at the same breakpoint can warn for a rail outside both roots: the `:not()` list uses the old flat match, but the override does not.
 - `@scope (.card) { :scope > .rail { display: flex } }` and `@scope (.other) { @supports (display: future-layout) { .rail { display: grid !important } } }` can suppress the warning for a rail in `.card`: the override's rejected `@supports` (or `@starting-style`) falls back to the old flat match, which ignores `.other`.
 
-This affects only the diagnostic, not which styles the browser applies. Adopted stylesheets are not inspected
-([#1606 corten dev's closed-dialog check skips adopted stylesheets, so a dialog one draws from a breakpoint is not warned of](https://github.com/corten-run/corten/issues/1606)).
+The check also reads the document's adopted stylesheets without changing them or applying
+diagnostic styles to the page. It matches ordinary selectors and the supported explicit scopes
+described above. In an unscoped, unnested selector list it skips members that refer to `:scope`
+or `&`, or whose pseudo-class names contain escapes; other members still match normally.
+An unsupported nested selector, an implicit scope root or a `to` limit is not inspected rather
+than matched without its bounds. It also skips disabled, namespaced or media-inactive adopted
+sheets, rules in unsupported `@supports` or `@starting-style` blocks, and shadow-root styles.
+Within an eligible sheet it still checks media and container breakpoints even when inactive.
+Adopted rules only add warnings; they do not override the linked-sheet check. A dialog that the
+browser already shows does not warn. The check does not inspect which adopted declaration wins
+at another width, so a skipped `to`-limited override can leave a warning for a dialog that
+actually appears at that breakpoint.
 When only areas have stylesheets, each area's file starts with these rules. An app with no
 component stylesheet has neither file, so if its `static/style.css` gives a hidden element, a
 popover or a dialog a `display` (styling corten-ui's parts there, say), it adds them itself:
@@ -197,7 +208,7 @@ Component CSS supports the block at-rules below. Their names are ASCII case-inse
 | `@keyframes`, `@font-face`, `@counter-style`, `@font-palette-values`, `@font-feature-values` | Bodies copied without selector checks or class prefixes. Names stay global, including font families and feature-value names; qualify a private name with the component's name yourself. |
 | `@page` | A global name starting with the component's name and `-`, written by the author, with the body copied without selector scoping ([printing](#printing)). An unnamed page or an unqualified name does not compile. |
 
-Raw bodies still lose comments and extra whitespace, and references to registered custom
+Raw bodies still compact trivia, and references to registered custom
 properties are renamed there too. Nested block at-rules inside them are copied raw (font
 feature `@styleset`, page margin `@top-left`, and others), not independently selector-checked. The statement parser
 recognizes lowercase `@layer base, widgets;` (copied) and `@charset "utf-8";` (discarded,
@@ -211,6 +222,19 @@ and `@document` are refused outside raw bodies; use the global stylesheet for th
 names must match whole names: `@supports_other` and `@layer_other` are not supported.
 An `@scope` without a root is refused because its implicit root is outside the component.
 Escaped at-rule and class names are not supported.
+
+The compiler and startup check share [CSS Syntax Level 3
+tokenization](https://www.w3.org/TR/css-syntax-3/#tokenization). The compiler compacts comments
+without turning a token separator into a space: `@supports selector(./**/a)` keeps its
+condition, and `@page receipt-slip:/**/first` keeps its pseudo-page. It does not rewrite a URL
+payload, even when its function name uses escapes or uppercase letters. At startup, a literal
+`var(--name)` read in a declaration or a container size condition must name a property
+available to that sheet. This includes declarations directly in `@scope` and in `@page`
+margin rules without a prelude. Inside a group directly under `@scope`, put declarations in a
+style rule so Chromium doesn't discard them. Strings, URLs and other query preludes aren't
+searched. A `var()` with a fallback is optional, including when the name is brace-wrapped
+(`var({--name}, var(--fallback))`).
+The check is structural, not a validation of property values or of whether a selector matches.
 
 A popup can define a fallback beside its default position, including a corten-ui `MenuButton`
 or `ComboBox` styled by this component:
@@ -318,10 +342,14 @@ with, which allows neither, so the runtime sets those values through the CSSOM
 way, not its own: a script that fills rows draws their sizes itself. The block has the values
 written while the page renders: markup rendered ahead (a body that is also a live stream's
 fragment) goes in a `corten::Rendered` (`req.rendered(view)`), which keeps them and places them with its markup
-(`{body}`, a reference to it); text placed with `raw()` carries none, and under `corten dev` a page with a
-`data-vars` value its block has no rule for is an error, including markup in a `<noscript>`
-fallback. A property registered with another syntax
-(`<color>`, to animate it) is scoped the same way and has no constant.
+(`{body}`, a reference to it); text placed with `raw()` carries none. With debug assertions
+and development mode enabled, as in `corten dev`, a full page with a `data-vars` value its
+block has no rule for returns a server error. This
+includes markup in templates that scripts can copy and live `<noscript>` fallback, but
+not fallback inside an inert template. A normal release build does not return that error,
+even with `CORTEN_DEV=1`; development mode still serves the browser diagnostics. A property
+registered with another syntax (`<color>`, to animate it) is scoped the same way and has
+no constant.
 
 The block costs a page that uses it the hash of its text: measured with callgrind (release
 build, in process), four meters with three distinct values took a page from 21,911 instructions a

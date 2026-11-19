@@ -1,0 +1,66 @@
+{
+  "schema": "benchmark-dedicated-group-host/v1",
+  "round": "r21",
+  "commit": "9f3d35884c67d90524f978d173fabeb3a17bc970",
+  "token": "0000000000000001",
+  "name": "corten-bench-groups-r21-0000000000000001",
+  "tag": "corten-bench-groups-run-0000000000000001",
+  "unit": "corten-bench-groups-r21-0000000000000001.service",
+  "host": {
+    "size": "c-8",
+    "region": "sfo2",
+    "image": "ubuntu-24-04-x64"
+  },
+  "selection": {
+    "schema": "benchmark-groups/v1",
+    "groups": [
+      {"group":"catalog-page","contractSha256":"c267655acacf8083ce51cbd92d80cbfafbe5fe8f5f56141d4ef1d12a48ac89ee","apps":["corten","aspnet","express","fastapi","axum-maud","drogon","gin"]}
+    ]
+  },
+  "group": "catalog-page",
+  "fleet": {
+    "schema": "benchmark-group-fleet/v1",
+    "round": "r21",
+    "commit": "9f3d35884c67d90524f978d173fabeb3a17bc970",
+    "token": "ffffffffffffffff",
+    "createdAt": "2026-11-16T12:00:00.000Z",
+    "provider": {
+      "accountId": "user:synthetic-account-0001",
+      "context": "synthetic-fleet-context"
+    },
+    "sshKey": "42",
+    "host": {
+      "size": "c-8",
+      "region": "sfo2",
+      "image": "ubuntu-24-04-x64"
+    },
+    "selection": {
+      "schema": "benchmark-groups/v1",
+      "groups": [
+        {"group":"catalog-page","contractSha256":"c267655acacf8083ce51cbd92d80cbfafbe5fe8f5f56141d4ef1d12a48ac89ee","apps":["corten","aspnet","express","fastapi","axum-maud","drogon","gin"]},
+        {"group":"json-api","contractSha256":"b0015ffc90e28f85823f1e7a392e8ed5a97f2f2a6e56cf6c9287934589325fb9","apps":["corten","aspnet","fastapi","express","spring","axum-maud","drogon","gin","aspnet-aot"]},
+        {"group":"localized-marketplace","contractSha256":"ab61f28221d8abe1225f13816c438b90f79bd0d50a379eae7b1b5fb9275366b7","apps":["corten","nextjs","aspnet","django","topcoat","leptos","gin","drogon"]},
+        {"group":"mixed-production","contractSha256":"65b1b953d9524aa7e72aaa4e04b8e5d2ce350930f46de874395a24ccbeea2676","apps":["corten","aspnet","spring","django","express","fastapi","topcoat","gin","drogon"]},
+        {"group":"fullstack-browser","contractSha256":"d4c219c71546b7c8cfdeb8b0e9b4c44cacc30cd42837dcfa5580db9d125f62d4","apps":["corten","nextjs","nuxt","react-router","rails","laravel","sveltekit","astro","tanstack-start","leptos"]},
+        {"group":"client-heavy","contractSha256":"29842bba6ec897e5a86a42cc7f8f777ac69f64b89f41d7c6f6774f9c067486d1","apps":["corten","react","vue","solid","svelte","remix"]},
+        {"group":"live-delivery","contractSha256":"ca5d6010d1a3ea088849d5ac40ec9aa8d41791c4e316f47a86233ce829b33328","apps":["corten","aspnet","express","phoenix","rails","gin","drogon","leptos"]},
+        {"group":"recoverable-live","contractSha256":"b6d91c14ed20babdc0e56719826a6d01bb993de6b16224f5f9b0e2544f3e9eff","apps":["corten","phoenix","rails","laravel","aspnet","leptos","topcoat"]},
+        {"group":"hardening","contractSha256":"8108f22eaa5d2445d9bd0700faebbc5638f8ddc23c54ea9929ba3532f5e00f0a","apps":["corten","aspnet","spring","nextjs","django","express","gin","drogon","topcoat"]}
+      ]
+    },
+    "jobs": [
+      {"group":"catalog-page","token":"0000000000000001","name":"corten-bench-groups-r21-0000000000000001","tag":"corten-bench-groups-run-0000000000000001"},
+      {"group":"json-api","token":"0000000000000002","name":"corten-bench-groups-r21-0000000000000002","tag":"corten-bench-groups-run-0000000000000002"},
+      {"group":"localized-marketplace","token":"0000000000000003","name":"corten-bench-groups-r21-0000000000000003","tag":"corten-bench-groups-run-0000000000000003"},
+      {"group":"mixed-production","token":"0000000000000004","name":"corten-bench-groups-r21-0000000000000004","tag":"corten-bench-groups-run-0000000000000004"},
+      {"group":"fullstack-browser","token":"0000000000000005","name":"corten-bench-groups-r21-0000000000000005","tag":"corten-bench-groups-run-0000000000000005"},
+      {"group":"client-heavy","token":"0000000000000006","name":"corten-bench-groups-r21-0000000000000006","tag":"corten-bench-groups-run-0000000000000006"},
+      {"group":"live-delivery","token":"0000000000000007","name":"corten-bench-groups-r21-0000000000000007","tag":"corten-bench-groups-run-0000000000000007"},
+      {"group":"recoverable-live","token":"0000000000000008","name":"corten-bench-groups-r21-0000000000000008","tag":"corten-bench-groups-run-0000000000000008"},
+      {"group":"hardening","token":"0000000000000009","name":"corten-bench-groups-r21-0000000000000009","tag":"corten-bench-groups-run-0000000000000009"}
+    ],
+    "fleetSha256": "affb052fbe12468d77395038fe990da1281a61d4aff1b72b788fdd022941b4a9"
+  },
+  "createdAt": "2026-11-16T12:00:00.000Z",
+  "status": "reserved"
+}

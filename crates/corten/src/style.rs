@@ -411,6 +411,15 @@
 //! fn MalformedSelectorCr() -> impl ClassList { List }
 //! ```
 //!
+//! Mismatched delimiters are also refused in declaration values. The unclosed `f(` in
+//! `crossed_declaration_blocks.css` would make the browser consume later components' rules.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn CrossedDeclarationBlocks() -> impl ClassList { List }
+//! ```
+//!
 //! A line break can end a hex escape without becoming a descendant combinator. In
 //! `escaped_sibling.css` a carriage return ends the escape in `.list:empty + p`, which
 //! would style a sibling outside the component:
@@ -732,7 +741,16 @@
 //! }
 //! ```
 //!
-//! and another component cannot set a component's property:
+//! An escaped percent sign is a dimension unit, not a percentage token
+//! (`escaped_percent.css` gives `--fill` an `initial-value: 10\%`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn EscapedPercent() -> impl ClassList { Meter }
+//! ```
+//!
+//! Another component cannot set a component's property:
 //!
 //! ```compile_fail,E0425
 //! use corten::prelude::*;
@@ -759,6 +777,14 @@
 //! fn PinnedMeter(used: f64) -> impl Render {
 //!     html! { <div class={Meter} style={FILL.pct(used)}></div> }
 //! }
+//! ```
+//!
+//! The same rule applies to declarations that follow a nested rule:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NestedPinnedMeter() -> impl ClassList { Meter }
 //! ```
 //!
 //! One `style={..}` per element (a browser keeps the first of two attributes); a tuple sets several:
@@ -1167,104 +1193,10 @@ pub(crate) fn collect<T>(render: impl FnOnce() -> T) -> (T, Vec<&'static crate::
     (value, list.unwrap_or_default())
 }
 
-/// Used by the code `html!` and `#[component]` generate. Not a public API.
-/// The custom properties `css` declares (`--gap: 4px` in a block, `@property --gap`) and those
-/// it reads with `var(--gap)` and no fallback, comments and strings skipped. A `var()` with a
-/// fallback is skipped whole: the fallback is what it is for.
-pub(crate) fn custom_properties(css: &str) -> (Vec<&str>, Vec<&str>) {
-    let b = css.as_bytes();
-    let (mut declared, mut needed) = (Vec::new(), Vec::new());
-    let ident = |c: u8| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_') || c >= 0x80;
-    let name_end = |mut i: usize| {
-        while i < b.len() && (ident(b[i]) || b[i] == b'\\') {
-            i += if b[i] == b'\\' { 2 } else { 1 };
-        }
-        i.min(b.len())
-    };
-    let space = |mut i: usize| {
-        while b.get(i).is_some_and(u8::is_ascii_whitespace) {
-            i += 1;
-        }
-        i
-    };
-    let string_end = |mut i: usize, quote: u8| {
-        i += 1;
-        while i < b.len() && b[i] != quote {
-            i += if b[i] == b'\\' { 2 } else { 1 };
-        }
-        (i + 1).min(b.len())
-    };
-    let mut i = 0;
-    // The last byte that is not whitespace or in a comment: a declaration follows `{` or `;`.
-    let mut last = b'{';
-    while i < b.len() {
-        let c = b[i];
-        if c == b'/' && b.get(i + 1) == Some(&b'*') {
-            i = css[i + 2..].find("*/").map_or(b.len(), |end| i + 2 + end + 2);
-            continue;
-        }
-        if c.is_ascii_whitespace() {
-            i += 1;
-            continue;
-        }
-        if c == b'"' || c == b'\'' {
-            i = string_end(i, c);
-            last = c;
-            continue;
-        }
-        if c == b'-' && b.get(i + 1) == Some(&b'-') && matches!(last, b'{' | b';') {
-            let end = name_end(i + 2);
-            if end > i + 2 && b.get(space(end)) == Some(&b':') {
-                declared.push(&css[i..end]);
-            }
-            (i, last) = (end, b'-');
-            continue;
-        }
-        if c == b'@' && css.get(i..i + 9).is_some_and(|at| at.eq_ignore_ascii_case("@property")) {
-            let start = space(i + "@property".len());
-            if css[start..].starts_with("--") {
-                let end = name_end(start + 2);
-                declared.push(&css[start..end]);
-                (i, last) = (end, b'-');
-                continue;
-            }
-        }
-        if (c | 0x20) == b'v' && css.get(i..i + 4).is_some_and(|s| s.eq_ignore_ascii_case("var(")) && (i == 0 || !ident(b[i - 1]))
-        {
-            let start = space(i + 4);
-            if css[start..].starts_with("--") {
-                let end = name_end(start + 2);
-                match b.get(space(end)) {
-                    Some(b')') => needed.push(&css[start..end]),
-                    Some(b',') => {
-                        // To the `)` that closes this `var(`.
-                        let (mut j, mut depth) = (space(end) + 1, 1);
-                        while j < b.len() && depth > 0 {
-                            match b[j] {
-                                b'(' => depth += 1,
-                                b')' => depth -= 1,
-                                q @ (b'"' | b'\'') => {
-                                    j = string_end(j, q);
-                                    continue;
-                                }
-                                _ => {}
-                            }
-                            j += 1;
-                        }
-                        (i, last) = (j, b')');
-                        continue;
-                    }
-                    _ => {}
-                }
-                (i, last) = (end, b'-');
-                continue;
-            }
-        }
-        last = c;
-        i += 1;
-    }
-    (declared, needed)
-}
+mod scan;
+#[cfg(test)]
+use scan::custom_properties;
+pub(crate) use scan::{stylesheet_text, Scanner};
 
 #[doc(hidden)]
 pub mod __private {
@@ -1325,9 +1257,8 @@ mod tests {
 
     #[test]
     fn an_escaped_var_still_checks_required_reads_and_skips_fallbacks() {
-        assert_eq!(custom_properties(r".a{color:\var(--missing)}"), (vec![], vec!["--missing"]));
+        assert_eq!(custom_properties(r".a{color:\var(--missing)}").1, ["--missing"]);
         assert_eq!(custom_properties(r".a{color:\var(--opt,var(--fallback))}"), (vec![], vec![]));
-        assert_eq!(custom_properties(r".a{--v:url(x\/*@property/**/--fake);color:var(--fake)}"), (vec!["--v"], vec!["--fake"]));
     }
 
     #[component(css)]
@@ -1341,7 +1272,42 @@ mod tests {
         assert_eq!(html, r#"<p class="position-comments__popup"></p>"#);
         let style = PositionComments.style.unwrap();
         assert!(style.media.is_empty());
-        assert_eq!(custom_properties(style.css), (vec![], vec!["--missing"]));
+        assert_eq!(custom_properties(style.css).1, ["--missing"]);
+    }
+
+    #[component(css)]
+    fn UrlScan() -> impl ClassList {
+        A
+    }
+
+    #[test]
+    fn a_compiled_url_cannot_hide_a_missing_custom_property_at_startup() {
+        let mut class = String::new();
+        UrlScan {}.write_classes(&mut class);
+        assert_eq!(class, "url-scan__a ");
+        let err = crate::assets::Assets::build(None, &[UrlScan], "/assets").err().expect("missing property");
+        assert!(err.to_string().contains("reads var(--fake), which no stylesheet declares"), "{err}");
+    }
+
+    #[component(css)]
+    fn ScopeScan() -> impl ClassList {
+        (A, B)
+    }
+
+    #[component(css)]
+    fn ScopeMissing() -> impl ClassList {
+        A
+    }
+
+    #[test]
+    fn scoped_declarations_supply_and_read_custom_properties_at_startup() {
+        let mut classes = String::new();
+        ScopeScan {}.write_classes(&mut classes);
+        ScopeMissing {}.write_classes(&mut classes);
+        assert_eq!(classes, "scope-scan__a scope-scan__b scope-missing__a ");
+        crate::assets::Assets::build(None, &[ScopeScan], "/assets").unwrap();
+        let error = crate::assets::Assets::build(None, &[ScopeMissing], "/assets").err().expect("missing scoped property");
+        assert!(error.to_string().contains("reads var(--scope-missing), which no stylesheet declares"), "{error}");
     }
 
     #[test]

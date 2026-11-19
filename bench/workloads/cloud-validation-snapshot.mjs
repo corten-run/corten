@@ -10,6 +10,7 @@ import { Worker } from "node:worker_threads";
 
 export const validationPaths = Object.freeze([
   "bench/catalog/apparatus.mjs",
+  "bench/catalog/cgroup.mjs",
   "bench/catalog/check.mjs",
   "bench/catalog/contract.mjs",
   "bench/catalog/droplet-contract.mjs",
@@ -58,12 +59,15 @@ export const validationPaths = Object.freeze([
   "bench/fullstack/mixed.mjs",
   "bench/fullstack/passes.mjs",
   "bench/hardening/clock.mjs",
+  "bench/hardening/dependency-recovery-capture.mjs",
+  "bench/hardening/dependency-recovery-contract.mjs",
   "bench/hardening/evidence.mjs",
   "bench/hardening/lifecycle.mjs",
   "bench/hardening/native.mjs",
   "bench/hardening/plan.mjs",
   "bench/hardening/probe.mjs",
   "bench/hardening/receipts.mjs",
+  "bench/hardening/resource-sample.mjs",
   "bench/hardening/verify.mjs",
   "bench/json-api/artifacts.mjs",
   "bench/json-api/contract.mjs",

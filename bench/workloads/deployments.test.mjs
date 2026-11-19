@@ -83,7 +83,7 @@ test("all nine group contracts are pinned independently of historical catalog re
     "client-heavy": "29842bba6ec897e5a86a42cc7f8f777ac69f64b89f41d7c6f6774f9c067486d1",
     "live-delivery": "ca5d6010d1a3ea088849d5ac40ec9aa8d41791c4e316f47a86233ce829b33328",
     "recoverable-live": "b6d91c14ed20babdc0e56719826a6d01bb993de6b16224f5f9b0e2544f3e9eff",
-    hardening: "8108f22eaa5d2445d9bd0700faebbc5638f8ddc23c54ea9929ba3532f5e00f0a",
+    hardening: "651c5f73eda0cc5030fc80e85d6ead2b0021ed36161830a08dc8410e387bd33c",
   };
   assert.equal(groupNames.length, 9);
   for (const group of groupNames) {
