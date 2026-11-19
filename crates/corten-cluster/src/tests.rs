@@ -16,7 +16,6 @@ use async_nats::jetstream::{
         pull::{Ordered, OrderedConfig},
         DeliverPolicy,
     },
-    context::{ContextBuilder, PublishErrorKind},
 };
 use futures_util::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -24,7 +23,7 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
-    sync::oneshot,
+    sync::{oneshot, Semaphore},
 };
 
 use corten::feed::Change;
@@ -843,6 +842,8 @@ async fn an_unacknowledged_marker_does_not_block_other_retirements() {
     let js = jetstream::new(observer);
     let stream = schema.to_uppercase();
     let delayed_subject = format!("{schema}.delayed");
+    let mut attempts = js.client().subscribe(delayed_subject.clone()).await.unwrap();
+    js.client().flush().await.unwrap();
     let mut config = jetstream::stream::Config {
         name: format!("{stream}_DELAYED"),
         subjects: vec![delayed_subject.clone()],
@@ -867,15 +868,18 @@ async fn an_unacknowledged_marker_does_not_block_other_retirements() {
     assert_eq!(publisher.max_payload(), LOW_PAYLOAD);
     let options =
         Options { stream: stream.clone(), subject_prefix: schema.clone(), lease: Duration::from_secs(4), ..Options::default() };
-    let relay = tokio::spawn(relay::run(pool.clone(), jetstream::new(publisher), Arc::new(options), Arc::default()));
+    let sender = relay::Publisher::new(jetstream::new(publisher.clone()));
+    let relay = tokio::spawn(relay::run(pool.clone(), sender, Arc::new(options), Arc::default()));
 
     let mut messages = stream_messages(&delayed_stream).await;
     expect_reload(&mut messages, &delayed_subject, delayed).await;
+    let old_reply = tokio::time::timeout(Duration::from_secs(10), attempts.next()).await.unwrap().unwrap().reply.unwrap();
     let pending = wait_pending(&pool, 1).await;
     assert_eq!(pending[0].id, delayed.id);
     let warning = "WARN corten::feed message=reload marker publish failed; outbox row remains pending";
     let fields = format!("id={} feed=\"delayed\" error=deadline has elapsed", delayed.id);
     assert!(logs.0.lock().unwrap().iter().any(|line| line.starts_with(warning) && line.contains(&fields)));
+    assert_abandoned_reply_closed(&js.client(), &publisher, old_reply).await;
 
     // Let a retry's duplicate ack through. No second marker is stored and no row is retired twice.
     config.no_ack = false;
@@ -1075,13 +1079,11 @@ async fn a_broker_disconnect_can_reorder_a_feed_but_the_follower_recovers() {
     });
     let publisher = async_nats::ConnectOptions::new().ignore_discovered_servers().connect(addr).await.unwrap();
     assert_eq!(publisher.max_payload(), advertised);
-    let relay_js = ContextBuilder::new().max_ack_inflight(4).backpressure_on_inflight(true).build(publisher.clone());
-    // Each probe has no matching stream. Its reply can arrive immediately, but the
-    // probe holds one publish permit until its ack future is awaited.
-    let probe = format!("permit.{schema}");
-    let before_refusal = relay_js.publish(probe.clone(), Default::default()).await.unwrap();
-    let before_reconnect = relay_js.publish(probe, Default::default()).await.unwrap();
-    let mut relay = Box::pin(relay::run(pool.clone(), relay_js, options.clone(), Arc::default()));
+    let before_refusal = Arc::new(Semaphore::new(0));
+    let before_reconnect = Arc::new(Semaphore::new(0));
+    let mut sender = relay::Publisher::new(jetstream::new(publisher.clone()));
+    sender.pause_before = vec![(rows[2].id, before_refusal.clone()), (rows[3].id, before_reconnect.clone())];
+    let mut relay = Box::pin(relay::run(pool.clone(), sender, options.clone(), Arc::default()));
     {
         // Stop polling the relay when the failed attempt enters standby.
         let failed = poll_fn(|cx| {
@@ -1097,18 +1099,17 @@ async fn a_broker_disconnect_can_reorder_a_feed_but_the_follower_recovers() {
         tokio::select! {
             result = &mut failed => panic!("relay stopped before reconnect: {result:?}"),
             () = async {
-                // Two probe replies and two patch acknowledgements. Only then let patch
-                // 2 reach the old socket, so this attempt has an acknowledged prefix.
-                eventually("the two probes and the acknowledged patch prefix", || {
-                    publisher.statistics().in_messages.load(Ordering::Relaxed) == 4
+                // Only let patch 2 reach the old socket after the prefix is acknowledged.
+                eventually("the acknowledged patch prefix", || {
+                    publisher.statistics().in_messages.load(Ordering::Relaxed) == 2
                 }).await;
-                assert_eq!(before_refusal.await.unwrap_err().kind(), PublishErrorKind::StreamNotFound);
+                before_refusal.add_permits(1);
                 replacement.await.expect("the client started reconnecting");
-                assert_eq!(before_reconnect.await.unwrap_err().kind(), PublishErrorKind::StreamNotFound);
             } => {}
         }
-        // Poll the relay once with the final permit free but the new handshake held.
+        // Poll the relay once with patch 3 unblocked but the new handshake held.
         // It queues patch 3 and begins waiting for this batch's acknowledgements.
+        before_reconnect.add_permits(1);
         assert!(tokio::task::unconstrained(failed.as_mut()).now_or_never().is_none());
         resume.send(()).unwrap();
         failed.await.expect("the interrupted attempt failed");
@@ -1181,6 +1182,130 @@ async fn a_broker_disconnect_can_reorder_a_feed_but_the_follower_recovers() {
     delete_test_stream_and_schema(&db, &js, &options.stream, &schema).await;
 }
 
+async fn unacknowledged_batch(pool: &PgPool, nats: &str, schema: &str) -> (jetstream::Context, jetstream::stream::Config) {
+    migrate(pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO corten_outbox (feed, generation, seq, body)
+         SELECT 'feed', 'test', n, '{}' FROM generate_series(1, 256) n ORDER BY n",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let js = jetstream::new(async_nats::connect(nats).await.unwrap());
+    let config = jetstream::stream::Config {
+        name: schema.to_uppercase(),
+        subjects: vec![format!("{schema}.>")],
+        no_ack: true,
+        duplicate_window: Duration::from_secs(300),
+        ..Default::default()
+    };
+    js.create_stream(config.clone()).await.unwrap();
+    (js, config)
+}
+
+async fn assert_abandoned_reply_closed(
+    observer: &async_nats::Client,
+    publisher: &async_nats::Client,
+    old_reply: async_nats::Subject,
+) {
+    let barrier = publisher.new_inbox();
+    let mut barrier_replies = publisher.subscribe(barrier.clone()).await.unwrap();
+    // A message sent on the subscribing connection proves the broker processed the SUB.
+    publisher.publish(barrier.clone(), Default::default()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), barrier_replies.next()).await.unwrap().unwrap();
+    let received = publisher.statistics().in_messages.load(Ordering::Relaxed);
+    // Both publishes come from the same socket. If the old subscription is still open,
+    // its delivery is counted before the barrier reply arrives.
+    observer.publish(old_reply, Default::default()).await.unwrap();
+    observer.publish(barrier, Default::default()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), barrier_replies.next()).await.unwrap().unwrap();
+    assert_eq!(
+        publisher.statistics().in_messages.load(Ordering::Relaxed),
+        received + 1,
+        "the abandoned reply subscription is still open"
+    );
+}
+
+#[tokio::test]
+async fn a_retried_batch_stops_receiving_replies_for_abandoned_attempts() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let schema = key("abandoned_replies_");
+    let pool = schema_pool(&db, &schema).await;
+    let (js, mut config) = unacknowledged_batch(&pool, &nats, &schema).await;
+    let observer = js.client();
+    let mut attempts = observer.subscribe(format!("{schema}.feed")).await.unwrap();
+    observer.flush().await.unwrap();
+    let publisher = async_nats::ConnectOptions::new().subscription_capacity(256).connect(&nats).await.unwrap();
+    let options = Arc::new(Options { stream: config.name.clone(), subject_prefix: schema.clone(), ..Options::default() });
+    let sender = relay::Publisher::new(jetstream::new(publisher.clone())).with_timeout(Duration::from_millis(100));
+    let relay = tokio::spawn(relay::run(pool.clone(), sender, options, Arc::default()));
+    let old_reply = tokio::time::timeout(Duration::from_secs(10), async {
+        let reply = attempts.next().await.unwrap().reply.unwrap();
+        for _ in 0..255 {
+            attempts.next().await.unwrap();
+        }
+        assert_ne!(attempts.next().await.unwrap().reply.as_ref(), Some(&reply));
+        reply
+    })
+    .await
+    .expect("the relay sent a batch and retried");
+    assert_eq!(store::pending(&pool, 257).await.unwrap().len(), 256);
+    assert_abandoned_reply_closed(&observer, &publisher, old_reply).await;
+
+    config.no_ack = false;
+    js.update_stream(config.clone()).await.unwrap();
+    wait_pending(&pool, 0).await;
+    assert_eq!(
+        js.get_stream(&config.name).await.unwrap().cached_info().state.messages,
+        256,
+        "only one copy of each stored patch"
+    );
+    assert_eq!(publisher.statistics().connects.load(Ordering::Relaxed), 1);
+    relay.abort();
+    assert!(relay.await.unwrap_err().is_cancelled());
+    delete_test_stream_and_schema(&db, &js, &config.name, &schema).await;
+}
+
+/// Run in release mode with the cluster test URLs to sample relay-process RSS, not broker RSS.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore]
+async fn relay_missing_ack_rss() {
+    let (db, nats) = urls().expect("set the cluster integration URLs");
+    let schema = key("ack_rss_");
+    let pool = schema_pool(&db, &schema).await;
+    let (js, config) = unacknowledged_batch(&pool, &nats, &schema).await;
+    let publisher = async_nats::connect(&nats).await.unwrap();
+    let stats = publisher.statistics();
+    let options = Arc::new(Options {
+        stream: config.name.clone(),
+        subject_prefix: schema.clone(),
+        lease: Duration::from_millis(100),
+        ..Options::default()
+    });
+    let sender = relay::Publisher::new(jetstream::new(publisher)).with_timeout(Duration::from_millis(5));
+    let relay = tokio::spawn(relay::run(pool.clone(), sender, options, Arc::default()));
+    for batches in [10, 250, 500, 1000] {
+        tokio::time::timeout(Duration::from_secs(100), async {
+            while stats.out_messages.load(Ordering::Relaxed) < batches * 256 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("retry target reached");
+        let rss = std::fs::read_to_string("/proc/self/status").unwrap();
+        let rss = rss.lines().find(|line| line.starts_with("VmRSS:")).unwrap();
+        println!("{batches} batches ({} publishes): {rss}", stats.out_messages.load(Ordering::Relaxed));
+    }
+    assert_eq!(stats.in_messages.load(Ordering::Relaxed), 0);
+    assert_eq!(stats.connects.load(Ordering::Relaxed), 1);
+    assert_eq!(store::pending(&pool, 257).await.unwrap().len(), 256);
+    assert_eq!(js.get_stream(&config.name).await.unwrap().cached_info().state.messages, 256);
+    relay.abort();
+    assert!(relay.await.unwrap_err().is_cancelled());
+    delete_test_stream_and_schema(&db, &js, &config.name, &schema).await;
+}
+
 /// Healthy relay throughput, with startup but not setup timed. Alternate release binaries on
 /// the same Postgres and NATS, ignoring the first sample per binary. Each sample starts with a
 /// fresh schema and stream. Run alone: `cargo test --release -p corten-cluster -- --ignored
@@ -1213,7 +1338,7 @@ async fn relay_throughput() {
             .await
             .unwrap();
         let started = Instant::now();
-        let relay = tokio::spawn(relay::run(pool.clone(), js.clone(), options.clone(), Arc::default()));
+        let relay = tokio::spawn(relay::run(pool.clone(), relay::Publisher::new(js.clone()), options.clone(), Arc::default()));
         tokio::time::timeout(Duration::from_secs(60), async {
             while !store::pending(&pool, 1).await.unwrap().is_empty() {
                 tokio::time::sleep(Duration::from_millis(5)).await;

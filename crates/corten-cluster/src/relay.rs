@@ -24,25 +24,29 @@ use std::{
 use async_nats::{
     jetstream::{
         self,
-        context::{PublishAckFuture, PublishError, PublishErrorKind},
+        context::{PublishError, PublishErrorKind},
+        publish::PublishAck,
+        response::Response,
     },
-    HeaderMap,
+    Client, HeaderMap, StatusCode, Subscriber,
 };
+use futures_util::StreamExt;
 use sqlx::{postgres::PgListener, PgConnection, PgPool};
 
 use crate::{store, valid_key, Error, Options, RELOAD_HEADER};
 
 /// Outbox rows published per round trip.
 const BATCH: i64 = 256;
+const PUBLISH_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn subject(options: &Options, feed: &str) -> String {
     format!("{}.{feed}", options.subject_prefix)
 }
 
 /// Runs forever: wait for the lease, publish while holding it, then start over.
-pub(crate) async fn run(pool: PgPool, js: jetstream::Context, options: Arc<Options>, active: Arc<AtomicBool>) {
+pub(crate) async fn run(pool: PgPool, publisher: Publisher, options: Arc<Options>, active: Arc<AtomicBool>) {
     loop {
-        if let Err(e) = lead(&pool, &js, &options, &active).await {
+        if let Err(e) = lead(&pool, &publisher, &options, &active).await {
             let error: &(dyn std::error::Error + 'static) = &*e;
             tracing::warn!(target: "corten::feed", instance = %options.instance, error, "relay standing by");
         }
@@ -82,7 +86,7 @@ impl Held {
     }
 }
 
-async fn lead(pool: &PgPool, js: &jetstream::Context, options: &Options, active: &AtomicBool) -> Result<(), Error> {
+async fn lead(pool: &PgPool, publisher: &Publisher, options: &Options, active: &AtomicBool) -> Result<(), Error> {
     // A dedicated connection outside the pool: the lease names its backend pid.
     let mut conn = pool.acquire().await?.detach();
     while !store::lease(&mut conn, &options.instance, options.lease).await? {
@@ -91,17 +95,17 @@ async fn lead(pool: &PgPool, js: &jetstream::Context, options: &Options, active:
     let mut held = Held { conn, renewed: Instant::now(), stale: options.lease * 3 / 4 };
     active.store(true, Ordering::Relaxed);
     tracing::info!(target: "corten::feed", instance = %options.instance, "relay active");
-    let result = publish(pool, js, options, &mut held).await;
+    let result = publish(pool, publisher, options, &mut held).await;
     active.store(false, Ordering::Relaxed);
     let _ = store::release(&mut held.conn).await;
     result
 }
 
-async fn publish(pool: &PgPool, js: &jetstream::Context, options: &Options, held: &mut Held) -> Result<(), Error> {
+async fn publish(pool: &PgPool, publisher: &Publisher, options: &Options, held: &mut Held) -> Result<(), Error> {
     let mut wake = PgListener::connect_with(pool).await?;
     wake.listen("corten_outbox").await?;
     loop {
-        drain(pool, js, options, held).await?;
+        drain(pool, publisher, options, held).await?;
         tokio::select! {
             n = wake.recv() => { n?; }
             // Renew on time even when idle; also a safety net for a lost notification.
@@ -114,7 +118,7 @@ async fn publish(pool: &PgPool, js: &jetstream::Context, options: &Options, held
 }
 
 /// Publishes pending rows oldest first, pipelining up to `BATCH` acknowledgements.
-async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: &mut Held) -> Result<(), Error> {
+async fn drain(pool: &PgPool, publisher: &Publisher, options: &Options, held: &mut Held) -> Result<(), Error> {
     loop {
         if held.renewed.elapsed() >= options.lease / 4 {
             held.renew(options).await?;
@@ -124,7 +128,8 @@ async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: 
             return Ok(());
         }
         held.check()?;
-        let mut acks = Vec::with_capacity(rows.len());
+        let mut replies = Replies::new(publisher);
+        let mut awaiting = Vec::with_capacity(rows.len());
         let mut sent = Vec::with_capacity(rows.len());
         let mut refused = Vec::new();
         for row in &rows {
@@ -132,25 +137,28 @@ async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: 
                 refused.push((row, Refusal::InvalidKey));
                 continue;
             }
-            match send(js, options, row, false).await {
-                Ok(ack) => acks.push((row, ack)),
+            match replies.send(options, row, false, awaiting.len()).await {
+                Ok(()) => awaiting.push(Some(row)),
                 Err(error) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
                     refused.push((row, Refusal::Cached(error)));
                 }
                 Err(error) => return Err(error.into()),
             }
         }
-        for (row, ack) in acks {
-            match ack.await {
+        let deadline = tokio::time::Instant::now() + publisher.timeout;
+        for _ in 0..awaiting.len() {
+            let (row, ack) = replies.recv(&mut awaiting, deadline).await?;
+            match ack {
                 Ok(_) => sent.push(row.id),
                 Err(error) if stream_size_refusal(&error) => refused.push((row, Refusal::Stream)),
                 Err(error) => return Err(error.into()),
             }
         }
+        drop(replies);
         if refused.is_empty() {
             store::mark_published(pool, &sent).await?;
         } else {
-            finish_refusals(pool, js, options, held, &mut sent, refused).await?;
+            finish_refusals(pool, publisher, options, held, &mut sent, refused).await?;
         }
         if (rows.len() as i64) < BATCH || sent.is_empty() {
             // A full batch with nothing retired would only select the same rows again.
@@ -159,22 +167,116 @@ async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: 
     }
 }
 
-async fn send(
-    js: &jetstream::Context,
-    options: &Options,
-    row: &store::Pending,
-    reload: bool,
-) -> Result<PublishAckFuture, PublishError> {
-    let mut headers = HeaderMap::new();
-    headers.insert("Nats-Msg-Id", format!("{}:{}:{}", row.feed, row.generation, row.seq).as_str());
-    headers.insert("Feed-Generation", row.generation.as_str());
-    let body = if reload {
-        headers.insert(RELOAD_HEADER, row.seq.to_string().as_str());
-        Default::default()
-    } else {
-        row.body.clone().into()
-    };
-    js.publish_with_headers(subject(options, &row.feed), headers, body).await
+pub(crate) struct Publisher {
+    js: jetstream::Context,
+    client: Client,
+    timeout: Duration,
+    #[cfg(test)]
+    pub(crate) pause_before: Vec<(i64, Arc<tokio::sync::Semaphore>)>,
+}
+
+impl Publisher {
+    pub(crate) fn new(js: jetstream::Context) -> Self {
+        Self {
+            client: js.client(),
+            js,
+            timeout: PUBLISH_TIMEOUT,
+            #[cfg(test)]
+            pause_before: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+}
+
+// async-nats 0.53 keeps unanswered publish requests in the connection's reply map. Use a
+// fresh inbox per batch and let Subscriber::drop unsubscribe on every exit, including
+// cancellation. A reply's slot identifies the publish even if replies arrive out of order.
+struct Replies<'a> {
+    publisher: &'a Publisher,
+    inbox: String,
+    subscription: Option<Subscriber>,
+}
+
+impl<'a> Replies<'a> {
+    fn new(publisher: &'a Publisher) -> Self {
+        Self { publisher, inbox: publisher.client.new_inbox(), subscription: None }
+    }
+
+    async fn send(&mut self, options: &Options, row: &store::Pending, reload: bool, slot: usize) -> Result<(), PublishError> {
+        #[cfg(test)]
+        let _permit = match self.publisher.pause_before.iter().find(|(id, _)| *id == row.id) {
+            Some((_, gate)) => gate.acquire().await.ok(),
+            None => None,
+        };
+        tokio::time::timeout(self.publisher.timeout, self.enqueue(options, row, reload, slot))
+            .await
+            .map_err(|error| PublishError::with_source(PublishErrorKind::TimedOut, error))?
+    }
+
+    async fn enqueue(&mut self, options: &Options, row: &store::Pending, reload: bool, slot: usize) -> Result<(), PublishError> {
+        let mut headers = HeaderMap::new();
+        headers.insert("Nats-Msg-Id", format!("{}:{}:{}", row.feed, row.generation, row.seq).as_str());
+        headers.insert("Feed-Generation", row.generation.as_str());
+        let body = if reload {
+            headers.insert(RELOAD_HEADER, row.seq.to_string().as_str());
+            Default::default()
+        } else {
+            row.body.clone().into()
+        };
+        let client = &self.publisher.client;
+        if self.subscription.is_none() {
+            self.subscription = Some(
+                client
+                    .subscribe(format!("{}.*", self.inbox))
+                    .await
+                    .map_err(|error| PublishError::with_source(PublishErrorKind::Other, error))?,
+            );
+        }
+        client
+            .publish_with_reply_and_headers(subject(options, &row.feed), format!("{}.{slot}", self.inbox), headers, body)
+            .await
+            .map_err(|error| {
+                let kind = if error.kind() == async_nats::client::PublishErrorKind::MaxPayloadExceeded {
+                    PublishErrorKind::MaxPayloadExceeded
+                } else {
+                    PublishErrorKind::Other
+                };
+                PublishError::with_source(kind, error)
+            })
+    }
+
+    async fn recv<T>(
+        &mut self,
+        awaiting: &mut [Option<T>],
+        deadline: tokio::time::Instant,
+    ) -> Result<(T, Result<PublishAck, PublishError>), Error> {
+        let subscription = self.subscription.as_mut().expect("published through this subscription");
+        tokio::time::timeout_at(deadline, async {
+            while let Some(reply) = subscription.next().await {
+                let slot = reply.subject.as_str().rsplit_once('.').and_then(|(_, slot)| slot.parse::<usize>().ok());
+                if let Some(row) = slot.and_then(|slot| awaiting.get_mut(slot)).and_then(Option::take) {
+                    return Ok((row, acknowledgement(reply)));
+                }
+            }
+            Err(PublishError::new(PublishErrorKind::BrokenPipe).into())
+        })
+        .await?
+    }
+}
+
+fn acknowledgement(reply: async_nats::Message) -> Result<PublishAck, PublishError> {
+    if reply.status == Some(StatusCode::NO_RESPONDERS) {
+        return Err(PublishError::new(PublishErrorKind::StreamNotFound));
+    }
+    match serde_json::from_slice(&reply.payload).map_err(|error| PublishError::with_source(PublishErrorKind::Other, error))? {
+        Response::Ok(ack) => Ok(ack),
+        Response::Err { error } => Err(PublishError::with_source(PublishErrorKind::Other, error)),
+    }
 }
 
 fn stream_size_refusal(error: &PublishError) -> bool {
@@ -222,7 +324,7 @@ async fn poll_send_before<T>(deadline: tokio::time::Instant, send: impl Future<O
 
 async fn finish_refusals(
     pool: &PgPool,
-    js: &jetstream::Context,
+    publisher: &Publisher,
     options: &Options,
     held: &mut Held,
     sent: &mut Vec<i64>,
@@ -235,6 +337,7 @@ async fn finish_refusals(
     // Pipeline the markers too, but bound the whole attempt to leave time to retire
     // acknowledgements before the lease gets stale, even if a marker gets no reply.
     let deadline = (held.renewed + options.lease / 2).into();
+    let mut replies = Replies::new(publisher);
     let mut markers = Vec::new();
     let mut completed = Vec::new();
     for (row, refusal) in refused {
@@ -244,8 +347,8 @@ async fn finish_refusals(
             continue;
         }
         held.check()?;
-        match poll_send_before(deadline, send(js, options, row, true)).await {
-            Some(Ok(ack)) => markers.push((row, refusal, ack)),
+        match poll_send_before(deadline, replies.send(options, row, true, markers.len())).await {
+            Some(Ok(())) => markers.push(Some((row, refusal))),
             Some(Err(error)) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
                 marker_size_refused(options, row, None, &error);
             }
@@ -254,23 +357,29 @@ async fn finish_refusals(
         }
     }
     let mut stream_failed_markers = Vec::new();
-    for (row, refusal, ack) in markers {
+    for _ in 0..markers.len() {
         // Unlike sends, an already-ready acknowledgement is useful even at the deadline.
-        match tokio::time::timeout_at(deadline, ack).await {
-            Ok(Ok(ack)) => {
+        match replies.recv(&mut markers, deadline).await {
+            Ok(((row, refusal), Ok(ack))) => {
                 sent.push(row.id);
                 completed.push((row, refusal, ack.duplicate));
             }
-            Ok(Err(error)) if stream_size_refusal(&error) => stream_failed_markers.push((row, error)),
-            Ok(Err(error)) => marker_publish_failed(options, row, error),
-            Err(error) => marker_publish_failed(options, row, error),
+            Ok(((row, _), Err(error))) if stream_size_refusal(&error) => stream_failed_markers.push((row, error)),
+            Ok(((row, _), Err(error))) => marker_publish_failed(options, row, error),
+            Err(error) => {
+                for (row, _) in markers.into_iter().flatten() {
+                    marker_publish_failed(options, row, &error);
+                }
+                break;
+            }
         }
     }
+    drop(replies);
     // 10054 does not carry the limit. Look it up once for diagnostics only.
     let stream_limit =
         if !stream_failed_markers.is_empty() || completed.iter().any(|(_, refusal, _)| matches!(refusal, Refusal::Stream)) {
             let budget = (options.lease / 8).min(held.stale.saturating_sub(held.renewed.elapsed()));
-            tokio::time::timeout(budget, js.get_stream(&options.stream))
+            tokio::time::timeout(budget, publisher.js.get_stream(&options.stream))
                 .await
                 .ok()
                 .and_then(Result::ok)

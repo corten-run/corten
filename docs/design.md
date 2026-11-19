@@ -6065,7 +6065,13 @@ rules something out.
     and inspection until ordinary pruning.
 
     The relay pipelines a batch of up to 256 patches before waiting for acknowledgements, even
-    when every patch belongs to one feed. A broker's connection-wide `Maximum Payload Violation`
+    when every patch belongs to one feed. It uses a fresh NATS inbox subscription for each
+    patch batch and another for its marker batch. The reply subject names the slot within
+    that batch, so replies do not have to arrive in order. Dropping the subscription on
+    success, failure, or cancellation closes all its slots and keeps late replies out of
+    retries. The longest slot suffix fits in the existing control-line reserve. A client
+    overriding subscription capacity must leave room for 256 replies on one subscription.
+    A broker's connection-wide `Maximum Payload Violation`
     or disconnect identifies no publish; the relay retries all selected rows on an ordinary send
     or acknowledgement failure and does not force a reconnect. Later patches can overtake a
     failed one in JetStream; followers recover as described in the
@@ -6074,7 +6080,10 @@ rules something out.
     Not chosen: encoding arbitrary keys (a new wire mapping and migration of valid subjects),
     restricting keys to ASCII, or introducing a separate quarantine and repair path for rows
     no supported app can publish. Checking only new keys leaves the pre-upgrade relay failure
-    in place. Using `Subject::is_valid` would copy the key and accept whitespace outside the
+    in place. Using async-nats 0.53's JetStream publish acknowledgements retains one reply
+    registration per unanswered publish, even after the acknowledgement future is
+    dropped. Subscribing per publish instead of per batch sends a subscribe and unsubscribe
+    for each row. Using `Subject::is_valid` would copy the key and accept whitespace outside the
     framing bytes. Dropping a refused notification leaves a loaded feed stale if no later
     patch arrives; retrying the same oversized body can keep the feed stale and block
     the relay's ordinary pending scan. A per-feed hold adds an index to every append and
@@ -6127,9 +6136,14 @@ rules something out.
     delta delivered or immediate recovery on old followers, the NATS client can abandon queued
     publishes on socket loss, deployments need raw stream ordering, or JetStream can guard a
     subject by a publisher-supplied predecessor ID without first waiting for the predecessor's
-    stream sequence.
+    stream sequence. Use the client's JetStream publish API again when a released version
+    reclaims unanswered publish registrations without a healthy-path regression
+    ([nats-io/nats.rs #1641 Prune abandoned requests from the multiplexer](https://github.com/nats-io/nats.rs/pull/1641)).
 
-    Last checked: 2026-11-18, async-nats 0.53.0's INFO and reconnect handling and the
+    Last checked: 2026-11-18, async-nats 0.53.0's reply map and subscription cleanup,
+    real JetStream retries with publish acknowledgements suppressed and then restored,
+    and the relay throughput and missing-ack RSS tests;
+    2026-11-18, async-nats 0.53.0's INFO and reconnect handling and the
     `corten-cluster` integration tests on Postgres 16.13 and NATS 2.15.2 with 0.53.0,
     including both types of size refusals and follower recovery after a broker disconnect;
     2026-11-18, `corten-cluster` integration tests on Postgres 16.13 and
@@ -7358,6 +7372,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
 34. <a id="limit-relay-stream-order"></a>JetStream stream order is not always Corten feed
     order. Postgres commits each feed's sequence under its row lock. The relay submits
     ordinary patches in outbox-ID order, which is feed-sequence order within a generation.
+    Acknowledgements correlate to one batch attempt; a late reply cannot retire rows in a
+    retry even when the retried message IDs are the same.
 
     - **Connection failure.** An ordinary send or acknowledgement failure retires none of
       the selected outbox IDs in that attempt, including rows already acknowledged. After
