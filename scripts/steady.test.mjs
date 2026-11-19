@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { steady } from "./steady.mjs";
+import { gateInitialLoad, steady } from "./steady.mjs";
 
 /** A console message as Playwright gives one. */
 const message = (/** @type {string} */ type, /** @type {string} */ text) => ({ type: () => type, text: () => text });
@@ -63,4 +63,55 @@ test("a page steady opens tells no console listener of a resource ERR_NETWORK_CH
   popup.emit("console", message("error", ABORTED));
   popup.emit("console", message("error", "real"));
   assert.deepEqual(popped, ["real"]);
+});
+
+test("the WebKit gate releases only the initial HTTP navigation and keeps its options and result", async () => {
+  const url = "http://localhost:18482/orders";
+  /** @type {Parameters<import("@playwright/test").Page["goto"]>[1]} */
+  const options = { timeout: 30_000, waitUntil: "load" };
+  const response = {};
+  /** @type {unknown[]} */
+  const calls = [];
+  /** @type {((route: Pick<import("@playwright/test").Route, "fallback">) => Promise<void>) | undefined} */
+  let release;
+  const page = gateInitialLoad(/** @type {any} */ ({
+    url: () => "about:blank",
+    isClosed: () => false,
+    async route(/** @type {(url: URL) => boolean} */ match, /** @type {NonNullable<typeof release>} */ handler, /** @type {unknown} */ limits) {
+      assert.equal(match(new URL(url)), true);
+      assert.equal(match(new URL(`${url}/other`)), false);
+      assert.deepEqual(limits, { times: 1 });
+      calls.push("route");
+      release = handler;
+    },
+    async unroute(/** @type {unknown} */ _match, /** @type {typeof release} */ handler) {
+      assert.equal(handler, release);
+      calls.push("unroute");
+      release = undefined;
+    },
+    async goto(/** @type {string} */ to, /** @type {unknown} */ opts) {
+      calls.push(to);
+      assert.equal(opts, options);
+      await release?.({ fallback: async () => { calls.push("fallback"); } });
+      return response;
+    },
+  }));
+  assert.equal(await page.goto("about:blank", options), response);
+  assert.equal(await page.goto(`${url}#meter`, options), response);
+  assert.equal(await page.goto(url, options), response);
+  assert.deepEqual(calls, ["about:blank", "route", `${url}#meter`, "fallback", "unroute", url]);
+});
+
+test("the WebKit gate cleans up after a navigation that times out without retrying it", async () => {
+  const failure = new Error("Timeout 30000ms exceeded");
+  const calls = [];
+  const page = gateInitialLoad(/** @type {any} */ ({
+    url: () => "about:blank",
+    isClosed: () => false,
+    async route() { calls.push("route"); },
+    async goto() { calls.push("goto"); throw failure; },
+    async unroute() { calls.push("unroute"); },
+  }));
+  await assert.rejects(page.goto("http://localhost:18482/orders"), (error) => error === failure);
+  assert.deepEqual(calls, ["route", "goto", "unroute"]);
 });

@@ -295,7 +295,7 @@ async function again() {
 }
 
 for (engine of names) {
-  const browser = steady(await engines[engine].launch({ headless: true }));
+  const browser = steady(await engines[engine].launch({ headless: true }), { gateInitialWebKitLoad: true });
   track(browser);
   trusting(browser);
   try {

@@ -238,6 +238,15 @@ told of the error Chromium logs for it (the exact text
 `Failed to load resource: net::ERR_NETWORK_CHANGED`); a check that needed the resource still fails
 on its own, and what the runtime logs for a loss it recovers from is still seen.
 
+The watchlist and ui-gallery smokes gate the initial HTTP navigation in each fresh Linux WebKit
+context. A fast `Cross-Origin-Opener-Policy: same-origin` response can otherwise start a process
+swap before WebKit handles the original process's provisional-load start, then that late start
+cancels the swap ([WebKit bug 325840](https://bugs.webkit.org/show_bug.cgi?id=325840)). The one-shot
+request route lets the start reach the UI process before the request goes to the server. It
+keeps existing fixture routes and the real response. Playwright bypasses the HTTP cache while
+the route is installed. The gate neither retries the navigation nor extends its timeout. Remove
+it when Playwright's pinned WebKit includes the upstream fix.
+
 In Playwright 1.64.1, Firefox sometimes acknowledged a click tens of seconds late on a heavily
 loaded Windows machine, with no Corten on the page: a static form reproduces it, with or without
 form validation
