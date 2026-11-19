@@ -38,6 +38,12 @@ holding the text the form sent, so a refused entry is shown back as typed, read 
 `t.parse_money(&input.price, USD)` in the page's locale into `Minor` units ([Views](views.md)).
 ui-gallery's listing has both.
 
+Controls can be named `addEventListener`, `elements`, `getAttribute` or other DOM members without
+breaking the widgets. Their scripts use callable methods exposed by forms and fall back to the
+platform when a control shadows a method. They do not recover a custom method that the browser's
+named lookup itself hides. Lookups for a patch replacement use the platform's DOM directly.
+See also [app scripts that read forms](requests-and-forms.md#request-modes).
+
 `MenuButton`'s items are its children, each the element the page would write with
 `role="menuitem"`, so a menu holds whatever a row's actions need:
 
@@ -92,6 +98,7 @@ shows, but it is not modal, so focus and Tab leave it for the page behind, which
 and there is no backdrop. `corten_ui::dialog::modal` makes such a dialog modal when it joins the
 page (a load, a navigation or a patch) and focuses the first field marked invalid in it; one drawn
 closed stays closed. It takes the dialog itself, so on any other element it does not compile.
+An invalid custom field or form can supply its own `focus()` to reach its internal control.
 List `corten_ui::COMPONENTS` and it is served.
 
 If a patch replaces a still-open modal made by `dialog::modal` or `dialog::modalClosedBy` with

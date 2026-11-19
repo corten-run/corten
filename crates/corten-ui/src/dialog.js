@@ -28,6 +28,15 @@ function afterRemoval(order, finish) {
   removed.push({ order, finish });
 }
 
+/** @param {Element} el */
+const localName = (el) => Reflect.get(Element.prototype, "localName", el);
+
+/** @param {HTMLElement} el @param {FocusOptions} [options] */
+function focusElement(el, options) {
+  const focus = el.focus;
+  (typeof focus === "function" ? focus : HTMLElement.prototype.focus).call(el, options);
+}
+
 /** @param {Element | null} el @param {Element | null | undefined} root */
 function counterpart(el, root) {
   const id = el && Element.prototype.getAttribute.call(el, "id");
@@ -92,7 +101,7 @@ export function modal(dialog, options) {
       const to = replacement(dialog, root);
       const opener = modalLife.opener;
       const back = opener && doc.contains(opener) ? opener : counterpart(opener, patchRoot(opener));
-      const focus = back instanceof HTMLElement && back.localName === opener?.localName ? back : null;
+      const focus = opener && back instanceof HTMLElement && localName(back) === localName(opener) ? back : null;
       if (to?.open) {
         const carried = modals.get(to);
         if (carried) carried.opener = focus;
@@ -106,7 +115,7 @@ export function modal(dialog, options) {
       afterRemoval(order, () => {
         try {
           if (dialog.isConnected || to?.open || native) return;
-          if (focus && doc.contains(focus)) focus.focus({ preventScroll: true });
+          if (focus && doc.contains(focus)) focusElement(focus, { preventScroll: true });
           if (to?.isConnected && !to.open && !native) {
             to.returnValue = dialog.returnValue;
             to.dispatchEvent(new Event("close"));
@@ -118,7 +127,7 @@ export function modal(dialog, options) {
     }, { once: true });
   }
   const invalid = dialog.querySelector('[aria-invalid="true"]');
-  if (invalid instanceof HTMLElement) invalid.focus();
+  if (invalid instanceof HTMLElement) focusElement(invalid);
 }
 
 /**

@@ -9,7 +9,11 @@
  */
 export function connect(group, missing, signal) {
   check(group, missing);
-  group.form?.addEventListener("reset", () => setTimeout(() => check(group, missing)), { signal });
+  const form = group.form;
+  if (form) {
+    const add = form.addEventListener;
+    (typeof add === "function" ? add : EventTarget.prototype.addEventListener).call(form, "reset", () => setTimeout(() => check(group, missing)), { signal });
+  }
 }
 
 /**
