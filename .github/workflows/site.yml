@@ -109,7 +109,7 @@ jobs:
           ssh="ssh $options deploy@$SITE_HOST"
           # deploy/release.sh runs on the machine, sent with each deploy.
           machine() { $ssh sh -s -- "$@" < examples/corten-site/deploy/release.sh; }
-          before=$($ssh 'readlink /opt/corten-site/current 2>/dev/null || true')
+          before=$($ssh 'readlink /opt/corten-site/current 2>/dev/null || echo none')
           # Nothing on the machine has changed until `serve`: a failure up to there leaves the
           # site as it was.
           $ssh "mkdir -p $release"
@@ -133,7 +133,7 @@ jobs:
           else
             echo "the machine did not take $release"
           fi
-          if [ -z "$before" ]; then
+          if [ "$before" = none ]; then
             echo "there is no release before this one to put back"
             exit 1
           fi

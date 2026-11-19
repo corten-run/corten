@@ -2,7 +2,7 @@
 # Runs on the machine as `deploy`. The workflow sends it over SSH on every deploy
 # (.github/workflows/site.yml), so the machine always runs the copy of the commit it is given:
 #   sh -s install <release directory> <sha256>   put an uploaded binary in place, if it is whole
-#   sh -s serve <release directory> [<expected>] restart with a backup if the primary is ready
+#   sh -s serve <release directory> <expected>   restart with a backup; expected is 'none' on first ship
 #   sh -s restore <release directory> <failed>   put back a failed release even without a backup
 #   sh -s prune                                  remove all but the newest three releases, never the one served,
 #                                                and what a deploy that stopped at its upload left
@@ -29,23 +29,32 @@ point() {
     ln -s "$release" "$stage/link" && mv -T "$stage/link" "$root/$1"
 }
 
-# Keep the lock on systemctl's stdin too: sudo closes extra descriptors, and the client
-# can outlive this shell. If the client also dies, systemd can still have its job queued.
-unit() { sudo -n /usr/bin/systemctl "$@" <&9; }
-
-stop_bridge() {
-    if [ -L "$root/bridge" ]; then
-        unit stop corten-site-bridge.service && rm -f "$root/bridge"
-    fi
+bounded() {
+    timeout --kill-after=2s 30s "$@" && return 0
+    status=$?
+    case "$status" in
+        124|137) echo "timed out waiting for $*" >&2 ;;
+        *) echo "$* failed (status $status)" >&2 ;;
+    esac
+    return "$status"
 }
 
-retire_bridge() {
+# Keep the lock on the bounded client's stdin too: it can outlive this shell, and sudo
+# closes extra descriptors. A systemd job can still outlive the client; settle checks that.
+unit() { bounded sudo -n /usr/bin/systemctl "$@" <&9; }
+
+start_bridge() {
+    if ! ready 3001; then
+        rm -f "$root/bridge-ready" && point bridge &&
+            unit restart corten-site-bridge.service && wait_ready 3001 || return
+    fi
+    touch "$root/bridge-ready"
+}
+
+stop_bridge() {
+    rm -f "$root/bridge-ready" || return 1
     if [ -L "$root/bridge" ]; then
-        # nginx can still skip the primary after readiness. Allow for an in-flight page's
-        # one-second timeout and the one-second fail_timeout, rounded to whole seconds.
-        sleep 3
-        wait_ready 3000
-        stop_bridge
+        unit stop corten-site-bridge.service && rm -f "$root/bridge"
     fi
 }
 
@@ -53,7 +62,7 @@ settle() {
     for service in corten-site.service corten-site-bridge.service; do
         tries=0
         while :; do
-            job=$(systemctl show --property=Job --value "$service") || return 1
+            job=$(bounded systemctl show --property=Job --value "$service") || return 1
             case "$job" in ''|0) break ;; esac
             tries=$((tries + 1))
             if [ "$tries" = 150 ]; then
@@ -68,7 +77,7 @@ settle() {
 case ${1:-} in
 install|serve|restore|prune)
     exec 9<> "$root/.release.lock"
-    flock 9
+    flock -w 60 9 || { echo "could not acquire the release lock within 60 seconds" >&2; exit 1; }
     ;;
 esac
 
@@ -91,15 +100,14 @@ install)
     ;;
 serve|restore)
     release=${2:?a release directory}
-    if [ "$1" = restore ]; then : "${3:?the failed release directory}"; fi
+    expected=${3:?an expected current release (none for a first deploy)}
     [ -x "$release/corten-site" ] || { echo "no binary in $release" >&2; exit 1; }
     settle
-    current=$(readlink "$root/current" || true)
-    if [ "$1" = restore ] && [ "$current" = "$release" ]; then
-        # A failure before switching the link needs no put-back if it is still answering.
-        if ready 3000; then retire_bridge; exit 0; fi
-    elif [ "$#" -ge 3 ] && [ "$current" != "$3" ]; then
-        echo "current changed to ${current:-no release}; not switching to $release" >&2
+    current=$(readlink "$root/current" || echo none)
+    # A put-back may already have moved the link on a previous try. It still needs to
+    # restart: neither the link nor readiness says which binary is answering.
+    if [ "$current" != "$expected" ] && { [ "$1" != restore ] || [ "$current" != "$release" ]; }; then
+        echo "current changed to $current; not switching to $release" >&2
         exit 1
     fi
     stage=$(mktemp -d "$root/.release.XXXXXX")
@@ -107,20 +115,21 @@ serve|restore)
     trap 'exit 1' HUP INT TERM
     # There is nothing to bridge on a first deploy. Keep an answering backup from a prior
     # failed or interrupted restart until the primary is ready, including during put-back.
-    if [ -n "$current" ] && ! ready 3001; then
-        point bridge
-        if ! unit restart corten-site-bridge.service || ! wait_ready 3001; then
-            stop_bridge || true
+    if [ "$current" != none ]; then
+        start_bridge || {
+            case "$?" in 124|137) exit 1 ;; esac
+            settle
+            stop_bridge || case "$?" in 124|137) exit 1 ;; esac
             if [ "$1" = serve ] && ready 3000; then exit 1; fi
-            echo "restoring the primary without a ready backup" >&2
-        fi
+            echo "restarting the primary without a ready backup" >&2
+        }
     fi
     # The newest release is the one served last, whatever commit it holds.
     touch "$release"
     point current
     unit restart corten-site.service
     wait_ready 3000
-    retire_bridge
+    stop_bridge
     ;;
 prune)
     served=$(readlink "$root/current")
@@ -142,7 +151,7 @@ prune)
     done
     ;;
 *)
-    echo "usage: install <release directory> <sha256> | serve <release directory> [<expected>] | restore <release directory> <failed> | prune" >&2
+    echo "usage: install <release directory> <sha256> | serve <release directory> <expected or none> | restore <release directory> <failed> | prune" >&2
     exit 2
     ;;
 esac
