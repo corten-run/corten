@@ -1,7 +1,7 @@
 # Ships examples/corten-site to the machine that serves it (examples/corten-site/deploy/README.md):
-# tests the site, builds the release binary, copies it over SSH, points `current` at it and
-# restarts the service, then asks the site for its page, its commit and its live stream. A site
-# that does not answer as this commit is put back on the release before. Does nothing until the
+# tests the site, builds the release binary, copies it over SSH, serves it and asks the site
+# for its page, its commit and its live stream. A site that does not answer as this commit is
+# put back on the release before. Does nothing until the
 # repository variable SITE_HOST names a machine.
 name: Site
 
@@ -20,6 +20,7 @@ on:
       - "!examples/corten-site/deploy/provision.sh"
       - "!examples/corten-site/deploy/nginx.conf"
       - "!examples/corten-site/deploy/corten-site.service"
+      - "!examples/corten-site/deploy/release.test.sh"
       - "!examples/corten-site/deploy/README.md"
       - crates/**
       - Cargo.toml
@@ -80,6 +81,24 @@ jobs:
           # release being served, and there is always the one before to go back to.
           release="/opt/corten-site/releases/${GITHUB_SHA::12}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           site="https://$SITE_DOMAIN"
+          # The Site machine apply counts the same page. This is an observation, not a gate.
+          if asked=$(mktemp "$RUNNER_TEMP/site-asked.XXXXXX"); then
+            (
+              trap 'exit 0' TERM
+              while :; do
+                if got=$(curl -fsS --max-time 2 "$site/" 2>/dev/null) && grep -q 'built from' <<< "$got"; then echo answered; else echo lost; fi
+                sleep 1
+              done
+            ) > "$asked" &
+            asking=$!
+            counted() {
+              kill "$asking" 2>/dev/null || true
+              wait "$asking" 2>/dev/null || true
+              echo "While the ship ran, $site/ was asked $(wc -l < "$asked") times, a second apart, and did not answer as the site $(grep -c lost "$asked" || true) of them."
+              rm -f "$asked" || true
+            }
+            trap counted EXIT
+          fi
           # A machine that stops answering is given up on within 20 seconds, so the step goes on
           # to put the release before back over a new connection.
           options="-i $HOME/.ssh/site -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3"
@@ -98,7 +117,7 @@ jobs:
           json() { got=$(curl -fsS --max-time 5 -H 'accept: application/json' "$site/") && printf '%s' "$got" | grep -q "\"heat\":\"$1\""; }
           stream() { curl -sS -N --max-time 5 "$site/live/works" 2>/dev/null | grep -q '^event: patch'; }
           if machine serve "$release"; then
-            for try in $(seq 1 20); do
+            for _ in $(seq 1 20); do
               if page "$commit" && json "$commit" && stream; then
                 echo "$site/ is serving $commit"
                 machine prune || echo "the older releases were not removed; the next deploy tries again"
@@ -116,14 +135,14 @@ jobs:
           fi
           # The machine may be out of reach for a moment, which is what failed the deploy: the
           # put-back is tried three times.
-          put_back() { for try in 1 2 3; do machine serve "$before" && return 0; sleep 5; done; return 1; }
+          put_back() { for _ in 1 2 3; do machine serve "$before" && return 0; sleep 5; done; return 1; }
           # A release's directory starts with its commit, which its page names: the put-back is
           # checked as that release, not as any answer. It is read with this commit's words for
           # it, so a change to how the page names its commit fails this check once.
           was="${before%/}"
           was="${was##*/}"
           if put_back; then
-            for try in $(seq 1 20); do
+            for _ in $(seq 1 20); do
               if page "${was::7}"; then
                 echo "put back on $before, which answers as itself"
                 # A deploy that failed is a release too, and the disk is small.
@@ -135,7 +154,7 @@ jobs:
             echo "put back on $before, which does not answer as itself"
           else
             echo "$before could not be put back in three tries"
-            # The link moves before the restart, so it may not be what the service runs.
+            # If the restart failed, the backup can still be answering instead of current.
             echo "current points at $($ssh 'readlink /opt/corten-site/current' 2>/dev/null || echo 'a release not known: the machine did not answer')"
             if page "$commit"; then echo "the site answers as $commit, which was not checked in full"; fi
           fi

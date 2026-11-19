@@ -63,7 +63,7 @@ until apt-get update; do
 done
 # sudo and sshd are on a cloud image already; the deploy's one sudo rule and the firewall's
 # OpenSSH profile need them wherever this runs.
-apt-get install -y --no-install-recommends nginx certbot openssl ufw sudo openssh-server
+apt-get install -y --no-install-recommends nginx certbot curl openssl ufw sudo openssh-server
 
 # Each deploy's release lands in a directory of its own under /opt/corten-site/releases, and
 # `current` points at the one served.
@@ -79,9 +79,9 @@ sed 's/^/restrict /' "$key" |
 install -d -o deploy -g deploy /opt/corten-site
 runuser -u deploy -- install -d /opt/corten-site/releases
 
-# The deploy restarts the service and nothing else.
+# The deploy restarts the service and starts and stops its temporary backup, and nothing else.
 cat > /etc/sudoers.d/corten-site <<'EOF'
-deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart corten-site.service
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart corten-site.service, /usr/bin/systemctl restart corten-site-bridge.service, /usr/bin/systemctl stop corten-site-bridge.service
 EOF
 chmod 440 /etc/sudoers.d/corten-site
 visudo -cf /etc/sudoers.d/corten-site
@@ -96,6 +96,12 @@ HTTPS=1
 CORTEN_SITE_MACHINE=$machine
 EOF
 install -m 644 "$here/corten-site.service" /etc/systemd/system/corten-site.service
+# Same sandbox as the main instance, with a separate release link and port. The backup is
+# not enabled at boot: the primary always comes back from `current`.
+printf 'PORT=3001\n' > /etc/corten-site-bridge.env
+sed -e '/^ExecStart=/s@/current/@/bridge/@' \
+    -e '/^EnvironmentFile=/a EnvironmentFile=/etc/corten-site-bridge.env' \
+    "$here/corten-site.service" > /etc/systemd/system/corten-site-bridge.service
 systemctl daemon-reload
 systemctl enable corten-site.service
 
