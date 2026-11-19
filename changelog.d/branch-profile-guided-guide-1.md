@@ -1,0 +1,1 @@
+- The deploy guide gains a section on a profile-guided release build: the toolchain's three steps, and what one gained on the lean catalog page (about a quarter fewer cycles a request) from a profile of other routes and requests than the measured load, so the training run need not match production's.
