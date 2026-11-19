@@ -115,7 +115,9 @@ upstream's headers, so one without the header is buffered unless its `location` 
 
 Checked with nginx 1.27 in front of `examples/watchlist`: the browser smoke test
 (`scripts/smoke.mjs`) passes through it over HTTP/1.1, and HTTPS negotiates `h2` and streams events
-a second apart. `proxy_cache` was checked in front of `examples/card-market` ([Caching](#caching)).
+a second apart. On 2026-11-19, nginx 1.27.5 in front of `examples/card-market` passed a private
+page's tag to the app on reload and returned its `304`; a versioned stylesheet was a cache
+`MISS` on its first request and a `HIT` on the next ([Caching](#caching)).
 
 ```nginx
 map $http_upgrade $connection_upgrade {
@@ -139,18 +141,27 @@ server {
     ssl_certificate     /etc/nginx/certs/cert.pem;
     ssl_certificate_key /etc/nginx/certs/key.pem;
 
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;   # PROXIES=127.0.0.1
+    proxy_set_header Upgrade $http_upgrade;                        # WebSockets (Upgrade)
+    proxy_set_header Connection $connection_upgrade;
+
     location / {
         client_max_body_size 8m;   # more than twice the app's body limit (2 MiB); see below
         proxy_pass http://app;
-        proxy_http_version 1.1;
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;   # PROXIES=127.0.0.1
-        proxy_set_header Upgrade $http_upgrade;                        # WebSockets (Upgrade)
-        proxy_set_header Connection $connection_upgrade;
+    }
+
+    location /assets/ {
+        proxy_pass http://app;
         proxy_cache app;       # keys on Vary; stores only answers sent public
     }
 }
 ```
+
+Leave `proxy_cache` off `location /` so conditional requests for private pages reach the app.
+Opt in only for a prefix whose cacheable responses the app marks public, such as Corten's
+versioned files under `/assets/`.
 
 nginx's limit decides who answers a body that is too large. The app reads a body past its limit
 by as much again (at most 64 MiB more; an `Upload` reads 64 MiB past its own limit) and answers
