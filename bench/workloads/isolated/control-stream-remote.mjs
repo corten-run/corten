@@ -28,18 +28,18 @@ async function startWatchdog(launch, binding, registration, invalidate) {
     stdio: ["pipe", "pipe", "ignore"], env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" } });
   const ready = Promise.withResolvers(), closed = Promise.withResolvers();
   let admitted = false, stopping = false, ended = false;
-  const fault = () => {
-    invalidate(); ready.reject(new Error("pinned control watchdog failed"));
+  const fault = (reason) => {
+    invalidate(reason); ready.reject(new Error("pinned control watchdog failed"));
   };
-  child.on("error", fault); child.stdin.on("error", fault);
+  child.on("error", () => fault("watchdog process")); child.stdin.on("error", () => fault("watchdog input"));
   child.stdout.on("data", (bytes) => {
-    if (admitted || !bytes.equals(Buffer.from("R"))) { fault(); return; }
+    if (admitted || !bytes.equals(Buffer.from("R"))) { fault("watchdog readiness"); return; }
     admitted = true; ready.resolve();
   });
   child.once("close", (code, signal) => {
     ended = true;
     const clean = admitted && stopping && code === 0 && signal === null;
-    if (!clean) fault();
+    if (!clean) fault("watchdog exit");
     closed.resolve(clean);
   });
   const bounded = async (promise) => {
@@ -49,7 +49,7 @@ async function startWatchdog(launch, binding, registration, invalidate) {
         timer = setTimeout(() => reject(new Error("control watchdog deadline expired")), 5000);
       })]);
     } catch (error) {
-      invalidate(); if (!ended) child.kill("SIGKILL"); throw error;
+      invalidate("watchdog deadline"); if (!ended) child.kill("SIGKILL"); throw error;
     } finally { clearTimeout(timer); }
   };
   await bounded(ready.promise);
@@ -69,24 +69,33 @@ export async function superviseControlStream(binding, admission, abort, runtime 
   const read = (name) => name === "stream-lease.json" ? leaseJSON(join(root, name)) : JSON.parse(readRegular(join(root, name)));
   assert.equal(streamHash(read("stream-registration.json")), streamHash(registration));
   let revoked = false, ended = false, sealed = false, draining = false, windowStart, renewal = 0;
-  const invalidate = () => {
+  const invalidate = (reason) => {
     if (revoked) return;
     revoked = true;
     try {
-      if (!existsSync(join(root, "stream-invalid.json"))) durable(join(root, "stream-invalid.json"), JSON.stringify({ id: registration.id,
-        host: registration.host, monoNs: String(now()), reason: "independent campaign lease watchdog failed" }));
+      durable(join(root, "stream-invalid.json"), JSON.stringify({ id: registration.id,
+        host: registration.host, monoNs: String(now()), reason }));
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
     } finally { abort.abort(); }
   };
   const check = () => {
+    let stage = "campaign revocation";
     try {
       assert.ok(!revoked && !existsSync(join(root, "stream-invalid.json")), "control lease revoked");
+      stage = "campaign lease read";
       const lease = read("stream-lease.json"), at = now();
+      stage = "campaign lease identity";
       assert.equal(lease.id, registration.id); assert.deepEqual(lease.host, registration.host);
+      stage = "campaign lease renewal";
       assert.ok(Number.isSafeInteger(lease.renewal) && lease.renewal >= renewal); renewal = lease.renewal;
+      stage = "campaign lease expiry";
       assert.ok(at < BigInt(lease.expiresMonoNs) && BigInt(lease.expiresMonoNs) - at <= BigInt(streamLimits.leaseMs) * 1000000n);
+      stage = "campaign observation age";
       assert.ok(at >= BigInt(lease.observedMonoNs) && at - BigInt(lease.observedMonoNs) <= BigInt(streamLimits.sampleGapMs) * 1000000n);
+      stage = "campaign apparatus";
       const observed = sample(registration); verifyApparatus(binding, registration, observed); return observed;
-    } catch (error) { invalidate(); throw error; }
+    } catch (error) { invalidate(stage); throw error; }
   };
   const publish = (kind, payload) => {
     check();
@@ -96,7 +105,7 @@ export async function superviseControlStream(binding, admission, abort, runtime 
   check();
   let stopWatchdog;
   try { stopWatchdog = await startWatchdog(runtime.launch ?? spawn, binding, registration, invalidate); }
-  catch (error) { invalidate(); throw error; }
+  catch (error) { invalidate("watchdog startup"); throw error; }
   return {
     registration, check,
     open(cpus) { assert.ok(!sealed && !draining && !windowStart); const observed = check(); apparatusProof(binding, registration, observed, cpus); windowStart = observed.monoNs; return observed; },
@@ -143,8 +152,8 @@ export async function superviseControlStream(binding, admission, abort, runtime 
           await sleep(100);
         }
         assert.fail("apparatus disappearance deadline expired");
-      } catch (error) { invalidate(); throw error; }
+      } catch (error) { invalidate("campaign drain"); throw error; }
     },
-    async dispose() { if (!ended && !revoked) invalidate(); await stopWatchdog(); },
+    async dispose() { if (!ended && !revoked) invalidate("campaign disposed before drain"); await stopWatchdog(); },
   };
 }

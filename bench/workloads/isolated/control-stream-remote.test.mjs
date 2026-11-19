@@ -51,32 +51,53 @@ test("only the independent watchdog is launched on CPU0; native-window ticks nev
   assert.equal(f.samples(), samples);
   f.child.emit("close", 1, null);
   assert.equal(f.abort.signal.aborted, true); assert.throws(() => f.supervisor.close(), /revoked/);
+  assert.equal(f.get("stream-invalid.json").reason, "watchdog exit");
 });
+
+test("a normal process name truncated mid-character by Linux still has a readable identity",
+  { skip: process.platform !== "linux" || !existsSync("/sys/fs/cgroup/cgroup.controllers") }, () => {
+    const program = `import os, pathlib, sys
+ns = {'__name__':'fixture'}
+exec(compile(sys.stdin.read(), '<guardian>', 'exec'), ns)
+pathlib.Path('/proc/self/comm').write_bytes(('catalog-worker' + chr(233)).encode('utf-8'))
+assert pathlib.Path('/proc/self/comm').read_bytes().rstrip(b'\\n') == b'catalog-worker\\xc3'
+row = ns['proc'](os.getpid())
+assert row['pid'] == os.getpid() and int(row['startTicks']) > 0 and ns['parent'](row) == os.getppid()
+`;
+    const result = spawnSync("python3", ["-I", "-c", program], { input: guardianSource, encoding: "utf8", timeout: 5000 });
+    assert.ifError(result.error); assert.equal(result.status, 0, result.stderr);
+  });
 
 test("fixed watchdog rechecks its own affinity before every scan and rejects stale samples or an orphaned pipe", () => {
   // Execute the shipped loop with a synthetic clock, kernel and pipe; no host operations.
-  const program = `import sys, types
+  const program = `import json, sys, types
 ns = {'__name__':'fixture'}
-exec(sys.stdin.read(), ns)
+source = sys.stdin.read()
+exec(compile(source, '<guardian>', 'exec'), ns)
 r = {'id':'stream','host':{},'createdMonoNs':'0','deadlineMonoNs':str(10**12)}
 class Root:
     def __truediv__(self, name): return self
     def exists(self): return False
 for mode in ('normal','wrong-at-start','drift','stale','eof','late-stop'):
-    scans, ready = [], []
+    scans, ready, faults = [], [], []
     clock = [1000000000]
     def poll(*args):
         clock[0] += 3000000000 if mode == 'late-stop' else 250000000
         return ([0] if len(scans) == 2 or mode == 'late-stop' else [], [], [])
     sys.modules['select'] = types.SimpleNamespace(select=poll)
-    ns.update(os=types.SimpleNamespace(sched_getaffinity=lambda tid: {1} if mode == 'wrong-at-start' or mode == 'drift' and scans else {0},
+    ns.update(write=lambda path, data: faults.append(json.loads(data)), os=types.SimpleNamespace(sched_getaffinity=lambda tid: {1} if mode == 'wrong-at-start' or mode == 'drift' and scans else {0},
         write=lambda fd, b: ready.append(b) or len(b), read=lambda *args: b'' if mode == 'eof' else b'S'),
         load=lambda *args: r, stream_sample=lambda *args: scans.append(True), time=types.SimpleNamespace(monotonic_ns=lambda: clock[0]),
         stream_load=lambda *args: {'id':'stream','host':{},'renewal':1,'expiresMonoNs':str(clock[0]+15000000000),
                                    'observedMonoNs':str(clock[0] - (2000000001 if mode == 'stale' else 0))})
     try: ns['stream_watchdog'](Root(),ns['sha'](ns['encoded'](r)[:-1]))
-    except AssertionError: assert mode != 'normal'
-    else: assert mode == 'normal' and len(scans) == 2 and ready == [b'R']
+    except AssertionError:
+        line = {'wrong-at-start':'sched_getaffinity', 'drift':'sched_getaffinity', 'stale':'observedMonoNs',
+                'eof':'os.read(0, 2)', 'late-stop':'monotonic_ns() - previous'}[mode]
+        assert len(faults) == 1 and faults[0]['reason'] == 'pinned watchdog'
+        assert set(faults[0]) == {'id','host','monoNs','reason','helperLine'}
+        assert line in source.splitlines()[faults[0]['helperLine'] - 1]
+    else: assert mode == 'normal' and len(scans) == 2 and ready == [b'R'] and not faults
     if mode == 'wrong-at-start': assert scans == [] and not ready
     if mode == 'drift': assert len(scans) == 1
 `;
@@ -101,7 +122,14 @@ test("expired or stale guardian lease irrevocably cancels native independently o
   const f = await fixture(t); f.tick(16000000000n); assert.throws(() => f.supervisor.check());
   assert.equal(f.abort.signal.aborted, true); assert.ok(existsSync(join(f.root, "stream-invalid.json")));
   f.lease(); assert.throws(() => f.supervisor.check(), /revoked/);
+  assert.equal(f.get("stream-invalid.json").reason, "campaign lease expiry");
   assert.equal(f.get("stream-invalid.json").remoteDrained, undefined);
+});
+
+test("child exit preserves the pinned watchdog's first failure", async (t) => {
+  const f = await fixture(t), first = { id: registration.id, host: registration.host, monoNs: "2000000", reason: "pinned watchdog", helperLine: 23 };
+  f.put("stream-invalid.json", first); f.child.emit("close", 254, null);
+  assert.ok(f.abort.signal.aborted); assert.deepEqual(f.get("stream-invalid.json"), first);
 });
 
 test("local EOF and expired drain deadline cannot replace an actual terminal apparatus probe", async (t) => {

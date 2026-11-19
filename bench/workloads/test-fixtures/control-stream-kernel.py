@@ -61,7 +61,7 @@ class Path:
         if self.name == 'fd': return [Path(self.value + '/3')] if int(parts[2]) in (10, 20) else []
         names = {p[len(self.value) + 1:].split('/')[0] for p in data if p.startswith(self.value + '/')}
         return [Path(self.value + '/' + p) for p in sorted(names)]
-    def read_text(self):
+    def read_text(self, **kwargs):
         if self.value == '/proc/sys/kernel/hostname': return host['hostname'] + '\n'
         if self.value == '/proc/sys/kernel/random/boot_id': return host['bootId'] + '\n'
         if self.value == '/proc/net/tcp': return 'header\n0: 00000000:0016 00000000:0000 0A 0 0 0 0 0 500\n1: 0A0200C0:0016 140200C0:9C40 01 0 0 0 0 0 501\n'

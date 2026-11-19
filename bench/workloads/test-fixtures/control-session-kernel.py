@@ -61,7 +61,7 @@ if mode == "process-exit-during-read":
     for name, final, ticks, flags in [("zombie", "Z", 50, 0), ("exiting", "R", 50, 4),
                                       ("live", "S", 50, 0), ("reused", "Z", 51, 4)]:
         stats = iter([row("R", 50), row(final, ticks, flags), row(final, ticks, flags)])
-        def read_text(path):
+        def read_text(path, **kwargs):
             return next(stats) if path.name == "stat" else "0::/system.slice/test.scope\n"
         with mock.object(pathlib.Path, "read_text", read_text), mock.object(pathlib.Path, "read_bytes", return_value=b""), \
                 mock.object(pathlib.Path, "stat", side_effect=FileNotFoundError()):
@@ -141,7 +141,7 @@ class Path:
             return cg.endswith(".scope") or any(p["cgroup"] == "0::" + cg + "\n" for p in rows.values())
         return self.value in data or self.value in folders
 
-    def read_text(self):
+    def read_text(self, **kwargs):
         assert self.name == "cgroup.events"
         cg = self.value[len("/sys/fs/cgroup"):-len("/cgroup.events")]
         if cg in remove_on_read:
