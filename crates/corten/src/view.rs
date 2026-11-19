@@ -658,6 +658,29 @@ use std::{
 /// let _ = html! { <div><math><annotation-xml {..attrs} encoding="text/html"><style>"&lt;"</style></annotation-xml></math></div> };
 /// ```
 ///
+/// A direct stylesheet in a known HTML `<noscript>` can stay raw, but only if no opaque
+/// output precedes it there and its literal text cannot close either tag early:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <noscript><style>"a < b"</style></noscript> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noscript>{raw("<svg>")}<style>"a < b"</style></noscript></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noscript><style>"<""/NoScript>"</style></noscript></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noscript><style>"<""/StYlE>"</style></noscript></div> };
+/// ```
+///
 /// An earlier conditional can change how later markup parses. In a loop, even a literal at the
 /// start of the body needs the same context on every iteration:
 ///

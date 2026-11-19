@@ -98,7 +98,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
     // `borrowing`); any other owns it, since it may be returned.
     let capture = if inside { "" } else { "move " };
     let (scope, input) = scope_marker(input);
-    match Cursor::new(input).nodes(None).and_then(|mut nodes| {
+    match Cursor::new(input).nodes(None, false).and_then(|mut nodes| {
         if let Some(scope) = &scope {
             mark_scope(&mut nodes, scope)?;
         }
@@ -434,7 +434,7 @@ pub fn view_of(body: &Group, class: &str, params: &[(String, Vec<TokenTree>)], s
             )
         }
     };
-    let nodes = Cursor::of(&markup).nodes(None)?;
+    let nodes = Cursor::of(&markup).nodes(None, false)?;
     let mut roots = nodes.iter().filter(|n| !matches!(n, Node::Let(_)));
     let root = match (roots.next(), roots.next()) {
         (Some(root @ Node::Element { .. }), None) => root,
@@ -1372,7 +1372,7 @@ impl Cursor {
     }
 
     /// Nodes until the end, or until `</` when inside the element named `closing`.
-    fn nodes(&mut self, closing: Option<&str>) -> Result<Vec<Node>, Error> {
+    fn nodes(&mut self, closing: Option<&str>, mut html_noscript: bool) -> Result<Vec<Node>, Error> {
         let raw_holder = closing.filter(|name| self.text_only.as_deref() == Some(*name) && RAW_TEXT.contains(name));
         let mut nodes = Vec::new();
         while !self.at_end() {
@@ -1401,7 +1401,32 @@ impl Cursor {
                     self.unseen();
                 }
             }
-            nodes.push(self.node()?);
+            let span = self.span();
+            let node = self.node(html_noscript)?;
+            if html_noscript {
+                // With scripting on the stylesheet is part of noscript's raw text; with it
+                // off the style is itself raw text. Keep the proof only across a static
+                // prefix that preserves both contexts, including head's metadata tags.
+                html_noscript = match &node {
+                    Node::Element { name, children, .. } if name == "style" => {
+                        let stable = children.iter().all(|node| matches!(node, Node::Text(_) | Node::Let(_)))
+                            && !writes_tags(name, children)
+                            && raw_text_boundary("noscript", children) == RawTextBoundary::Unchanged;
+                        if !stable && has_raw_delimiters(children, true) {
+                            return err(
+                                span,
+                                ambiguous_raw_text("a fallback stylesheet must be literal and leave both tag boundaries intact"),
+                            );
+                        }
+                        stable
+                    }
+                    Node::Element { name, .. } => matches!(name.as_str(), "link" | "meta"),
+                    Node::Text(text) => text.bytes().all(|byte| byte.is_ascii_whitespace()),
+                    Node::Let(_) => true,
+                    _ => false,
+                };
+            }
+            nodes.push(node);
         }
         if let Some(name) = raw_holder.filter(|_| self.text_only.is_some()) {
             if writes_tags(name, &nodes) {
@@ -1411,10 +1436,10 @@ impl Cursor {
         Ok(nodes)
     }
 
-    fn node(&mut self) -> Result<Node, Error> {
+    fn node(&mut self, html_noscript: bool) -> Result<Node, Error> {
         let span = self.span();
         match self.peek().cloned() {
-            Some(TokenTree::Punct(p)) if p.as_char() == '<' => self.tag(),
+            Some(TokenTree::Punct(p)) if p.as_char() == '<' => self.tag(html_noscript),
             Some(TokenTree::Literal(lit)) => {
                 self.next();
                 match string_value(&lit).or_else(|| literal_text(&lit)) {
@@ -1510,7 +1535,7 @@ impl Cursor {
         Ok((name, stream(tokens), span))
     }
 
-    fn tag(&mut self) -> Result<Node, Error> {
+    fn tag(&mut self, html_noscript: bool) -> Result<Node, Error> {
         let open = self.span();
         self.next();
         if is_punct(self.peek(), '!') {
@@ -1528,7 +1553,7 @@ impl Cursor {
         }
         if is_punct(self.peek(), '>') {
             self.next();
-            let children = self.nodes(Some(""))?;
+            let children = self.nodes(Some(""), false)?;
             self.closing("", open)?;
             return Ok(Node::Block { head: vec![TokenStream::new()], bodies: vec![children], arms: false });
         }
@@ -1788,8 +1813,9 @@ impl Cursor {
         } else {
             let outer = self.aria_svg;
             self.aria_svg = within_aria_svg(outer, &name);
+            let known_noscript = self.opaque == 0 && as_html(self.parsing) && name.eq_ignore_ascii_case("noscript");
             // What a `<noscript>` holds, or an element read as text where the markup does not show
-            // it is HTML's, may be text: none of it shows how anything is parsed.
+            // it is HTML's, may be text: no context-dependent structural checks reach inside.
             let hidden = !component && may_read_as_text(self.parsing, &name);
             if hidden {
                 self.opaque += 1;
@@ -1799,10 +1825,11 @@ impl Cursor {
             let outer_text = std::mem::replace(&mut self.text_only, holder);
             let inner = if shown { parsing_within(self.parsing, &name, &attrs) } else { Parsing::Unknown };
             let outer_parsing = std::mem::replace(&mut self.parsing, inner);
-            let raw = (!component && RAW_TEXT.contains(&name.as_str())).then_some(inner);
+            let encoding = if html_noscript && name == "style" { Parsing::Html } else { inner };
+            let raw = (!component && RAW_TEXT.contains(&name.as_str())).then_some(encoding);
             let outer_raw = std::mem::replace(&mut self.raw_text, raw);
             let seen = self.opaque;
-            let children = self.nodes(Some(&name));
+            let children = self.nodes(Some(&name), known_noscript);
             self.aria_svg = outer;
             self.text_only = outer_text;
             self.parsing = outer_parsing;
@@ -1942,7 +1969,7 @@ impl Cursor {
 
     fn branch(&self, group: &Group, changed: &mut bool) -> Result<Vec<Node>, Error> {
         let mut cursor = self.inner(group);
-        let nodes = cursor.nodes(None)?;
+        let nodes = cursor.nodes(None, false)?;
         *changed |= cursor.opaque != self.opaque;
         Ok(nodes)
     }
@@ -2011,7 +2038,7 @@ impl Cursor {
                     self.branch(&g, &mut changed)?
                 }
                 _ => {
-                    let node = cursor.node()?;
+                    let node = cursor.node(false)?;
                     changed |= cursor.opaque != self.opaque;
                     cursor.opaque = self.opaque;
                     cursor.parsing = self.parsing;

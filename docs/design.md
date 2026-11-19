@@ -4772,7 +4772,10 @@ rules something out.
     SVG's or MathML's elements, so `<iframe><p><div>"Detail"</div></p></iframe>` at the top of a
     component compiles (all three engines keep it as the iframe's text), and after a
     `<plaintext>` there nothing is refused. What a `<noscript>` holds is unseen everywhere: text
-    with scripting on, markup without it. In an `<svg>` or `<math>` the markup places (a
+    with scripting on, markup without it. This is a structural rule: for literal encoding, a
+    direct `<style>` in a known HTML `<noscript>` can keep its bytes in either scripting mode
+    when preceding content preserves the context and the text cannot close either element early.
+    In an `<svg>` or `<math>` the markup places (a
     literal `<svg>` under a `<div>`) they hold elements, which are read as before. Kind by kind:
     an element read as text needs its holder to be parsed as HTML (an element that is HTML's
     wherever it lands, or an integration point of an `<svg>` or `<math>` such an element holds,

@@ -484,6 +484,58 @@ fn foreign_script_and_style_literals_are_escaped() {
 }
 
 #[test]
+fn a_head_noscript_stylesheet_keeps_its_literal_bytes() {
+    #[component]
+    fn FallbackDocument() -> impl Document {
+        html! {
+            <!DOCTYPE html>
+            <html>
+                <head>
+                    <noscript>
+                        <meta name="theme-color" content="#fff">
+                        <style>"@media (width < 48rem) { .fallback { & p { display: none } } }"</style>
+                        <style>".fallback::after { content: 'R&D' }"</style>
+                    </noscript>
+                    <title>"Fallback"</title>
+                    <Corten />
+                </head>
+                <body><main>"Fallback"</main></body>
+            </html>
+        }
+    }
+
+    let html = FallbackDocument {}.to_html();
+    assert!(
+        html.contains(concat!(
+            r##"<head><noscript><meta name="theme-color" content="#fff">"##,
+            "<style>@media (width < 48rem) { .fallback { & p { display: none } } }</style>",
+            "<style>.fallback::after { content: 'R&D' }</style></noscript><title>Fallback</title>"
+        )),
+        "{html}"
+    );
+}
+
+#[test]
+fn a_body_noscript_stylesheet_keeps_its_literal_bytes_without_structural_checks() {
+    let html = html! {
+        <body>
+            <noscript>
+                <style>"@media (width < 48rem) { .fallback { & p { display: none } } }"</style>
+                <p><div>"Fallback"</div></p>
+            </noscript>
+        </body>
+    }
+    .to_html();
+    assert_eq!(
+        html,
+        concat!(
+            "<body><noscript><style>@media (width < 48rem) { .fallback { & p { display: none } } }",
+            "</style><p><div>Fallback</div></p></noscript></body>"
+        )
+    );
+}
+
+#[test]
 fn svg_and_mathml_integration_points_use_html_raw_text() {
     assert_eq!(
         html! { <div><svg><foreignObject><style>"a <g></g> &lt; &&"</style></foreignObject></svg></div> }.to_html(),

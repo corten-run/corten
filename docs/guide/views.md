@@ -60,6 +60,10 @@ in its literal text at compile time so the browser keeps them as text, rather th
 or character references. If you previously wrote `&lt;` or `&amp;` by hand to get `<` or `&` in
 foreign content, replace those references with the characters you want the browser to receive.
 Known HTML (including HTML integration points) continues to write the text as is.
+This includes a direct literal `<style>` in a known HTML `<noscript>` in the head or body,
+before any content that could change its parsing context, so long as the literal cannot end
+either tag early. With scripting on, it is part of the `<noscript>` text; with scripting off,
+the `<style>` reads its own text. Structural checks inside `<noscript>` do not change.
 
 When the context is unknown, a script or style literal containing either character does not
 compile, even if it worked at its one actual placement. Root fragments, component children
