@@ -329,16 +329,14 @@ that accepts a coding HAProxy is set to use, as a browser's does.
 The tag is half of it: for a page the proxy does not answer from a store of its own, the `304`
 needs the browser's `If-None-Match` to reach the app too. nginx takes it off in a `location`
 that has `proxy_cache`, which is why the [configuration above](#nginx) leaves `proxy_cache` off
-`/`. In such a `location` nginx answers a tag itself for a page it stored; a page it does not
-store (a private one, which a page is unless its handler says `Public`) is sent whole on every
-reload. Passing the header on by hand beside `proxy_cache`
-(`proxy_set_header If-None-Match $http_if_none_match`) is not the way to have both: nginx then
-stored a public page's `304` and gave it to the next reader, who held no page, and with
-`proxy_no_cache` on the header to stop that, a request that names a tag never refreshes the
-stored copy. This paragraph's two cautions and HAProxy's `compression offload` were checked with
-nginx 1.27.5 and HAProxy 3.0.31 in front of a server that answered as a private and a public
-page do and printed what reached it, not in front of a Corten app. What Cloudflare and
-CloudFront do with the two headers was not checked.
+`/`. In a `location` that has it, nginx answers a tag itself for a page it stored. Passing the
+header on by hand beside `proxy_cache` (`proxy_set_header If-None-Match $http_if_none_match`)
+is not the way to have both: nginx then stored a public page's `304` and gave it to the next
+reader, who held no page, and with `proxy_no_cache` on the header to stop that, a request that
+names a tag never refreshes the stored copy. What this section says of nginx with `proxy_cache`
+and of HAProxy was checked with nginx 1.27.5 and HAProxy 3.0.31 in front of a server that
+answered as a private and a public page do and printed what reached it, not in front of a
+Corten app. What Cloudflare and CloudFront do with the two headers was not checked.
 
 To check both, pick a page that carries an `ETag` when asked straight from the app with the
 `Accept-Encoding` below (one whose layout takes `req.nonce()`, that draws a `SubmitKey::field`,
@@ -352,11 +350,12 @@ curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' https://
 curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' -H 'If-None-Match: W/"<the tag>"' https://shop.example/account
 ```
 
-The first must show the `ETag`, and the second `304`. Behind the [configuration above](#nginx)
-both do for a page under `/`; with `/account` in a `location` that has `proxy_cache`, the second
-shows `200` and the page again, the reload described above. A page nginx stores does not test
-the second header, since nginx answers its `304` from the store; it still needs the first,
-without which the copy it stores has no tag to match.
+The first must show the `ETag`, and the second `304`. The [configuration above](#nginx) leaves
+both headers on for a page under `/`, and its check saw a private page's tag reach the app and
+the `304` come back; with `/account` in a `location` that has `proxy_cache`, the second shows
+`200` and the page again, the whole body [that section](#nginx) describes. A page nginx stores
+does not test the second header, since nginx answers its `304` from the store; it still needs
+the first, without which the copy it stores has no tag to match.
 
 ## Building the image
 
