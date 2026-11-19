@@ -2055,8 +2055,10 @@ rules something out.
     credentials. Nearly all the cost of the work it did not need was the tag. The tag is now
     decided from the request
     ([#1661 Skip unsolicited page ETags without a coding in lean builds](https://github.com/corten-run/corten/pull/1661),
-    [Limit 21](#limit-etag)): a client that keeps no pages pays no hash on this GET, and a browser
-    that can keep the page still gets a tag, with nothing new for an app to declare. The stages
+    [Limit 21](#limit-etag)): the measured request, a `GET` with `Accept-Encoding: identity` and no
+    `If-None-Match`, pays no hash, while a browser that asks for a coding or names a tag still gets one,
+    with nothing new for an app to declare. The rule reads the request's headers, not whether the client
+    keeps pages: a client that asks for a coding pays the hash whether or not it keeps the page. The stages
     hold the request once
     ([#1674 Shrink the boxed future for staged requests](https://github.com/corten-run/corten/pull/1674)).
     An HTML answer never goes without security headers: a staged page keeps its document
@@ -2215,7 +2217,8 @@ rules something out.
     catalog lane at `229b1e928`, one binary with switches to turn stages off, `perf stat` on the
     server pinned to one CPU and `wrk` with 64 connections on three others, 500 record IDs
     requested with `Accept-Encoding: identity`, 12 alternated rounds for the stage switches.
-    In cycles a request, user and kernel together: the tag cost 14,000 to 17,000 across batches;
+    In cycles a request, user and kernel together: the tag cost 14,003 by the difference of the low quartiles and 16,561 by the difference of the
+    medians, within that one batch (cycle levels are not compared across batches, which drifted by up to 15%);
     the cache rule cost nothing the rounds could see; all security headers together cost about
     3,500; the host check, same-origin check, nonce slot, signal and credentials together cost
     about 5,000. In a separate 14-round batch at the same commit, with the request-based tag

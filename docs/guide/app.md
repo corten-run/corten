@@ -965,7 +965,9 @@ before it (a route that says `unstaged` goes through none;
    middleware sees neither the error page nor that wait.
 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak `ETag` on
    an eligible answer to a `GET` or `HEAD` (outside an API and Corten's own paths). A `GET` must
-   send `If-None-Match` or explicitly accept a non-identity coding to get a tag.
+   send `If-None-Match` or explicitly accept a non-identity coding to get a tag: with the `compress`
+   feature, only a coding Corten can send, named with a positive weight, counts; without it, any
+   named non-identity coding with a positive weight counts, and so does a positive `*`.
    `304 Not Modified` replaces the body when the client's tag matches
    ([design Limit 21](../design.md#limit-etag)), then compression. A middleware sees the `200` with the
    whole body, also when the client gets the `304`.
