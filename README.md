@@ -297,7 +297,7 @@ static site (a static site generator is simpler).
 | [The app](docs/guide/app.md) | every default `App` puts around your routes, and how to replace each |
 | [Headless components](docs/guide/ui.md) | `corten-ui`: number field, combobox, tabs, menu button, toaster, copy button, relative time, checkbox group, required-when |
 | [The UI kit](docs/guide/kit.md) | `corten ui`: theme tokens and styled components copied into the app as source |
-| [Deploying](docs/guide/deploy.md) | behind a proxy or CDN: what it must do, an nginx configuration, cache settings for Cloudflare and CloudFront; the release profile and what it costs |
+| [Deploying](docs/guide/deploy.md) | behind a proxy or CDN: what it must do, an nginx configuration, cache settings for Cloudflare and CloudFront; the release profile and what it costs; a profile-guided build and what it gained |
 | [Surfaces](docs/architecture.md) | one server for web, native apps and agents |
 | [Design decisions and limits](docs/design.md) | why it is built this way, and what it does not do |
 | [Performance](docs/performance.md) | every benchmark table, against seventeen other apps and five client frameworks |

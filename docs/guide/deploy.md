@@ -272,50 +272,61 @@ not for speed.
 ## A profile-guided build
 
 A release build can be given a profile of the app at work, which the compiler uses to lay out
-and inline the code its requests run. Corten adds nothing to it and needs nothing for it: it is
-the toolchain's own three steps.
+and inline the code its requests run. Corten adds nothing to it and needs nothing for it; the
+steps are the toolchain's.
 
 ```sh
 rustup component add llvm-tools
-RUSTFLAGS="-Cprofile-generate=/tmp/profile" cargo build --release --locked
-# run that build, send it requests like the ones it will serve, then stop it (SIGTERM or Ctrl-C)
+RUSTFLAGS="-Cprofile-generate=/tmp/profile-build" cargo build --release --locked
+rm -rf /tmp/profile
+LLVM_PROFILE_FILE="/tmp/profile/%m-%p.profraw" ./target/release/shop
+# send it requests like the ones it will serve, then stop it (SIGTERM or Ctrl-C)
 "$(rustc --print sysroot)/lib/rustlib/$(rustc --print host-tuple)/bin/llvm-profdata" \
     merge -o /tmp/app.profdata /tmp/profile
 RUSTFLAGS="-Cprofile-use=/tmp/app.profdata" cargo build --release --locked
 ```
 
 The first build is for the training run only. It writes its profile as the process exits, which
-a Corten app does on `SIGTERM` and Ctrl-C ([Shutdown](app.md#the-app)), so stopping it the usual
-way is enough. The directory holds other profiles before that: the macros and build scripts that
-ran during the first build were built the same way and wrote theirs (18 files here), and the
-merge takes them with the app's.
+a Corten app does on `SIGTERM` and Ctrl-C (Shutdown, in [The app](app.md#the-app)); the run here
+was stopped with `SIGTERM`. `LLVM_PROFILE_FILE` puts the app's profile in a directory of its
+own, emptied first: the macros and build scripts that run during the first build are built the
+same way and write theirs to the directory the flag names (18 files here), and a profile left
+from an earlier release would be merged with this one. Each of the two builds compiles every
+crate again, since the flags changed, and `RUSTFLAGS` in the environment replaces the
+`build.rustflags` of a `.cargo/config.toml`. The Dockerfile `corten new` writes does one release
+build; where the training run and the profile go in an image's build is not worked out here.
 
-Measured on the lean catalog app (`bench/catalog/corten`, built with `--no-default-features`) at
-`7685c7f24` with rustc 1.99.1 in `rust:1-bookworm`, on a desktop under Docker with other work
-running. Every build served the same catalog page load, `wrk` with 64 connections, and answered
-the same bytes; they differ in what the profile was taken from. Cycles are a request on the app's
-CPU by `perf stat`, over 12 rounds with the builds taking turns; instructions are one connection
-under callgrind (1,300 requests less 300).
+Measured on the lean catalog app (`bench/catalog/corten`) at `7685c7f24` with rustc 1.99.1 in
+`rust:1-bookworm`, on a desktop under Docker with other work running. That app is not the
+starter's: built with `--no-default-features` (no `compress`) and one codegen unit, run with
+`PROFILE=catalog-lean` (no deadline or timeouts), on glibc's allocator. Five builds that differ
+only in the profile served the same catalog page load and answered the same bytes: the app on
+one CPU, `wrk` with 64 connections on three others in the same container. Cycles are user and
+kernel together, a request, by `perf stat` on the app's CPU, over 12 rounds in which the builds
+took turns in the same order; instructions are one connection under callgrind (1,300 requests
+less 300).
 
-| Profile taken from | Cycles a request, median | Low quartile | Pages a second, median | Instructions a request |
-|---|---|---|---|---|
-| none | 132,339 | 125,994 | 17,730 | 44,786 |
-| the measured load itself | 100,411 | 89,464 | 21,647 | 37,207 |
-| the same page asked one request at a time with a browser's headers (3,000 requests over half the records) | 99,935 | 90,137 | 21,609 | 36,621 |
-| a mix: that page, its JSON, the home page and a 404, 1,000 of each | 97,968 | 91,638 | 22,800 | 36,283 |
-| the JSON API alone, never a page (3,000 requests) | 114,941 | 106,360 | 17,910 | 40,480 |
+| Profile taken from | Cycles a request, median | Range | Instructions a request |
+|---|---|---|---|
+| none | 132,337 | 124,688 to 161,670 | 44,786 |
+| the measured load itself (15 seconds of it) | 99,755 | 86,659 to 115,794 | 37,207 |
+| the same page, 3,000 requests each on a new connection, asking for `text/html` and accepting a browser's codings | 98,882 | 86,496 to 114,087 | 36,621 |
+| a mix: that page, its JSON, the home page and a 404, 1,000 of each | 96,738 | 88,814 to 103,948 | 36,283 |
+| the JSON API, 3,000 requests, after the one page request that waits for the app to start | 114,522 | 103,714 to 125,277 | 40,480 |
 
-Each profiled build took fewer cycles than the build without one in all 12 rounds. A profile from
-a mix of the app's routes, or from the page asked another way, gained what a profile of the
-measured load itself did, about a quarter fewer cycles a request; round by round the two were
-within 1,000 and 5,600 cycles of it and lower in 5 and 7 of the 12. A profile that never rendered
-a page still took 13% off the page's cycles, and added no pages a second. So the training run
-need not match production's load, only reach the routes that carry it: a few thousand requests
-across them was enough here.
+Each profiled build took fewer cycles than the build without one in all 12 rounds: by the
+medians a quarter fewer for the first three (25%, 25% and 27%) and 13% fewer for the profile of
+the JSON API, which had rendered one page. Paired by round against the profile of the measured
+load itself, the page asked another way was 918 cycles higher at the median and lower in 5 of
+the 12 rounds (single rounds from 9,892 lower to 7,132 higher), and the mix 5,727 lower and
+lower in 7 (11,965 lower to 16,117 higher): these rounds do not tell either from it. So on this
+app and this load a profile did not have to come from the load it was measured with, only from
+requests that reach the same route; a profile that barely reached it gained about half as much.
 
-It costs a second release build and a training run for each release, neither timed here. Not
-measured: an app built with `compress`, a profile taken from an earlier version of the app, or a
-profile used on another kind of CPU than it was taken on.
+Not measured: an app with the default features and the starter's release profile, another app
+or page, a profile taken from an earlier version of the app or with another rustc, a profile
+used on another kind of CPU than it was taken on, and the time the two builds and the training
+run add to a release.
 
 ## Response compression
 
