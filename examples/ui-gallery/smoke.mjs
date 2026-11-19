@@ -1546,6 +1546,28 @@ async function run(browser) {
     `${wrappedSortStopped} ${JSON.stringify(wrappedOrder)} ${page.url()}`,
   );
   await page.goto(unsorted);
+  // A ref-valued link in a table nested in a header cell is that table's, not a sorter of this
+  // head: sorting the outer table leaves its address alone.
+  const nestedHref = await sales.getByRole("columnheader", { name: "Price" }).evaluate((header) => {
+    const source = header.querySelector("a");
+    if (!source) throw new Error("missing sort link");
+    const inner = document.createElement("table");
+    const cell = inner.createTBody().insertRow().insertCell();
+    const link = /** @type {HTMLAnchorElement} */ (source.cloneNode(true));
+    link.textContent = "Nested";
+    link.setAttribute("href", "?inner=kept");
+    cell.append(link);
+    header.append(inner);
+    return link.getAttribute("href");
+  });
+  await sales.getByRole("link", { name: "Buyer" }).click();
+  const nestedAfter = await sales.getByRole("link", { name: "Nested" }).getAttribute("href");
+  check(
+    "a ref-valued link in a nested table is not read as the outer head's sorter",
+    (await sortedBy()).buyers === "Ada Lovelace|Alan Turing|Grace Hopper" && nestedAfter === nestedHref,
+    `${nestedHref} -> ${nestedAfter}`,
+  );
+  await page.goto(unsorted);
   // A handler still wired to an old or misconfigured kit must not partially sort in place.
   await sales.locator("thead").evaluate((head) => head.removeAttribute("data-on"));
   const nativeSort = page.waitForRequest((request) => new URL(request.url()).searchParams.get("sold") === "buyer");

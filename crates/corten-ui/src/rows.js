@@ -30,7 +30,8 @@ export function read(event, ascendingFirst, descendingFirst) {
   event.stopPropagation();
   for (const link of head.querySelectorAll(/** @type {"a"} */ (":scope > tr > th a"))) {
     const cell = link.closest("th");
-    if (cell?.parentElement?.parentElement !== head) continue;
+    // A link in a table nested in a header cell belongs to that table, not this head.
+    if (cell?.parentElement?.parentElement !== head || link.closest("table") !== head.parentElement) continue;
     const up = ascendingFirst.get(link);
     const down = descendingFirst.get(link);
     // No value, or the same ref incorrectly passed for both directions: leave the link alone.
