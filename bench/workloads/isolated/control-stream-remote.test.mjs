@@ -27,7 +27,9 @@ async function fixture(t, { survivor = false, autoExit = true } = {}) {
   const launches = [], child = new EventEmitter(); let samples = 0;
   child.stdin = new PassThrough(); child.stdout = new PassThrough();
   child.stdin.once("finish", () => { if (autoExit) setImmediate(() => child.emit("close", 0, null)); });
-  const runtime = { root, now: () => at, launch(...args) {
+  const log = join(root, "run.log"), faultFd = fs.openSync(log, "ax", 0o600);
+  const lastFault = () => JSON.parse(readFileSync(log, "utf8").trimEnd().split("\n").at(-1).slice("control fault: ".length));
+  const runtime = { root, faultFd, now: () => at, launch(...args) {
       launches.push(args); setImmediate(() => child.stdout.write("R")); return child;
     }, sample: () => { samples++; return { host: registration.host, members: structuredClone(registration.members), listener: structuredClone(registration.listener), monoNs: String(at) }; },
     sleep: async () => {
@@ -38,8 +40,8 @@ async function fixture(t, { survivor = false, autoExit = true } = {}) {
       }
     }, probe: () => (++probes < 2 || survivor ? { status: 3 } : { status: 0, stdout: JSON.stringify(drain()) }) };
   supervisor = await superviseControlStream(binding, { apparatus: registration }, abort, runtime);
-  t.after(async () => { await supervisor.dispose(); assert.ok(resolve(root).startsWith(resolve(tmpdir()) + (process.platform === "win32" ? "\\" : "/"))); rmSync(root, { recursive: true }); });
-  return { root, abort, supervisor, put, get, lease, drain, runtime, launches, child, samples: () => samples, tick: (ns) => { at += ns; }, probes: () => probes };
+  t.after(async () => { await supervisor.dispose(); fs.closeSync(faultFd); assert.ok(resolve(root).startsWith(resolve(tmpdir()) + (process.platform === "win32" ? "\\" : "/"))); rmSync(root, { recursive: true }); });
+  return { root, abort, supervisor, put, get, lastFault, lease, drain, runtime, launches, child, samples: () => samples, tick: (ns) => { at += ns; }, probes: () => probes };
 }
 
 test("only the independent watchdog is launched on CPU0; native-window ticks never scan in the campaign parent", async (t) => {
@@ -53,7 +55,7 @@ test("only the independent watchdog is launched on CPU0; native-window ticks nev
   assert.equal(f.samples(), samples);
   f.child.emit("close", 1, null);
   assert.equal(f.abort.signal.aborted, true); assert.throws(() => f.supervisor.close(), /revoked/);
-  assert.equal(f.get("stream-invalid.json").reason, "watchdog exit");
+  assert.equal(f.lastFault().reason, "watchdog exit");
 });
 
 test("a normal process name truncated mid-character by Linux still has a readable identity",
@@ -133,8 +135,8 @@ test("expired or stale guardian lease irrevocably cancels native independently o
   const f = await fixture(t); f.tick(16000000000n); assert.throws(() => f.supervisor.check());
   assert.equal(f.abort.signal.aborted, true); assert.ok(existsSync(join(f.root, "stream-invalid.json")));
   f.lease(); assert.throws(() => f.supervisor.check(), /revoked/);
-  assert.equal(f.get("stream-invalid.json").reason, "campaign lease expiry");
-  assert.equal(f.get("stream-invalid.json").remoteDrained, undefined);
+  assert.equal(f.lastFault().reason, "campaign lease expiry");
+  assert.equal(readFileSync(join(f.root, "stream-invalid.json")).length, 0);
 });
 
 test("a pinned watchdog winning at publication preserves its first failure", async (t) => {
@@ -155,28 +157,50 @@ test("a pinned watchdog winning at publication preserves its first failure", asy
   assert.ok(f.abort.signal.aborted); assert.deepEqual(f.get("stream-invalid.json"), first);
 });
 
-test("interrupted Linux helper leaves collectible bytes and a diagnostic in the job log",
+test("custody stays identical across a paused or interrupted Linux fault writer",
   { skip: process.platform !== "linux" }, () => {
-  const program = `import os, pathlib, sys, tempfile
+  const program = `import os, pathlib, sys, tempfile, types
 ns = {'__name__':'fixture'}
 exec(compile(sys.stdin.read(), '<guardian>', 'exec'), ns)
-with tempfile.TemporaryDirectory() as tmp:
-    root = pathlib.Path(tmp) / 'control'; root.mkdir(mode=0o700)
+for mode in ('resume', 'exit'):
+  with tempfile.TemporaryDirectory() as tmp:
+    root = pathlib.Path(tmp) / 'live'; root.mkdir(mode=0o700)
+    archive = root.parent / 'control'
+    ns['pathlib'] = types.SimpleNamespace(Path=lambda path: archive if str(path) == '/bench/control' else pathlib.Path(path))
     log = root.parent / 'run.log'; log.touch(mode=0o600)
-    opened, write = os.open, os.write
+    opened = os.open
     os.open = lambda path, *args, **kw: opened(log if path == '/bench/run.log' else path, *args, **kw)
     try:
+        ready, signal_ready = os.pipe()
+        resume, signal_resume = os.pipe()
         child = os.fork()
         if child == 0:
-            os.write = lambda fd, data: write(fd, data) if data.startswith(b'control fault: ') else os._exit(7)
-            ns['stream_fault_files'](root, b'{"reason":"first"}\\n')
-            os._exit(8)
-        assert os.waitstatus_to_exitcode(os.waitpid(child, 0)[1]) == 7
+            os.close(ready); os.close(signal_resume)
+            def at_open(path, *args, **kw):
+                fd = opened(log if path == '/bench/run.log' else path, *args, **kw)
+                if path == root / 'stream-invalid.json':
+                    os.write(signal_ready, b'R')
+                    if os.read(resume, 1) != b'S' or mode == 'exit': os._exit(7)
+                return fd
+            os.open = at_open
+            try: ns['stream_fault_files'](root, b'{"reason":"first"}\\n')
+            except BaseException: os._exit(8)
+            os._exit(0)
+        os.close(signal_ready); os.close(resume)
+        try:
+            assert os.read(ready, 1) == b'R'
+            ns['custody'](root)
+            os.write(signal_resume, b'S')
+        finally:
+            os.close(ready); os.close(signal_resume)
+            status = os.waitstatus_to_exitcode(os.waitpid(child, 0)[1])
+        assert status == (0 if mode == 'resume' else 7)
         try: ns['stream_fault_files'](root, b'{"reason":"later"}\\n')
         except FileExistsError: pass
         else: raise AssertionError('existing marker replaced')
         marker = root / 'stream-invalid.json'
-        assert list(root.iterdir()) == [marker] and ns['read'](marker) == b''
+        ns['custody'](root)
+        assert list(root.iterdir()) == [marker] and ns['read'](archive / marker.name) == ns['read'](marker) == b''
         assert log.read_bytes().splitlines() == [b'control fault: {"reason":"first"}', b'control fault: {"reason":"later"}']
     finally: os.open = opened
 `;
@@ -192,8 +216,9 @@ test("campaign marker I/O failure still aborts and settles the child exit", asyn
   try { f.child.emit("close", 254, null); }
   finally { failed.mock.restore(); syncBuiltinESMExports(); }
   assert.ok(f.abort.signal.aborted);
-  assert.deepEqual(fs.readdirSync(f.root).sort(), ["stream-invalid.json", "stream-lease.json", "stream-registration.json"]);
-  assert.equal(f.get("stream-invalid.json").reason, "watchdog exit");
+  assert.deepEqual(fs.readdirSync(f.root).sort(), ["run.log", "stream-invalid.json", "stream-lease.json", "stream-registration.json"]);
+  assert.equal(f.lastFault().reason, "watchdog exit");
+  assert.equal(readFileSync(join(f.root, "stream-invalid.json")).length, 0);
   await f.supervisor.dispose();
 });
 

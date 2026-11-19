@@ -74,10 +74,10 @@ export async function superviseControlStream(binding, admission, abort, runtime 
     revoked = true;
     try {
       const record = JSON.stringify({ id: registration.id, host: registration.host, monoNs: String(now()), reason });
-      // Job stderr is captured. Log before claiming the slot so an interrupted write
-      // leaves usable context and at most one ordinary, collectible marker.
-      try { writeSync(2, "control fault: " + record + "\n"); } catch { /* still revoke */ }
-      durable(join(root, "stream-invalid.json"), record);
+      // Job stderr is captured. The historical marker path is an existence gate;
+      // never change its contents after custody can see it.
+      try { writeSync(runtime.faultFd ?? 2, "control fault: " + record + "\n"); } catch { /* still revoke */ }
+      durable(join(root, "stream-invalid.json"), "");
     } catch {
       // Another reporter won, or storage failed. Never skip abort or child settlement.
     } finally { abort.abort(); }

@@ -89,11 +89,9 @@ def stream_fault_files(root, record):
             os.close(fd)
     except OSError:
         pass
-    # Existence revokes; custody copies bytes, even if a dying writer left an empty marker.
+    # Existence revokes. Custody may copy it immediately, so never populate it.
     fd = os.open(root / 'stream-invalid.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
-        if os.write(fd, record) != len(record):
-            raise OSError('incomplete control diagnostic')
         os.fsync(fd)
     finally:
         os.close(fd)
