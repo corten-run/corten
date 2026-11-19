@@ -316,8 +316,9 @@ zstd altogether, turn off the `compress` feature in the app's `Cargo.toml`.
 
 ## Building the image
 
-The Dockerfile builds with `cargo build --release --locked`, as `corten check` holds its Cargo
-steps to the lock. `corten new` writes `Cargo.lock` with the app; run `cargo build` or
+The Dockerfile uses Debian 13 (trixie) in both stages: `rust:1-trixie` builds the app and
+`debian:trixie-slim` runs it. It builds with `cargo build --release --locked`, as `corten check`
+holds its Cargo steps to the lock. `corten new` writes `Cargo.lock` with the app; run `cargo build` or
 `corten dev` after a dependency change and commit `Cargo.lock` before checking or building the
 image. A missing or stale lock fails rather than resolving crate versions the check did not
 test. For a workspace app, include the workspace-root manifest and lockfile in the Docker build

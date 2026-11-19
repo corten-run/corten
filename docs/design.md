@@ -1170,7 +1170,7 @@ rules something out.
    Stands on: measured (memory after eight floods, three runs each, seven allocator settings; page
    faults a request, repeatable to 0.1 in every round; idle CPU, three rounds; instructions a
    request under callgrind, five runs each); measured, noisy (CPU time and throughput in three
-   rounds on a shared desktop, whose rounds moved by up to 2.4 times); platform (Debian 12's
+   rounds on a shared desktop, whose rounds moved by up to 2.4 times); platform (Debian 13's
    `libjemalloc2`, 5.3.0, has `background_thread` off and a 32 KiB `tcache_max` unless set, and
    takes these option names); bet (an app's image is Debian with that package); reasoned (an image
    package binds only the image, where a `#[global_allocator]` crate compiles C into every build).
@@ -1183,9 +1183,9 @@ rules something out.
 
    Last checked: 2026-11-06, the callgrind runs on `547b54ae`, recorded at `b179987a`; 2026-11-08,
    the floods, the page faults and the rounds, images of `81f1f8ef` (but for the tuned image in
-   `results/alloc-faults` and `alloc-idle`, a build whose commit was not recorded); 2026-11-09,
-   Debian's libjemalloc2 5.3.0 (package 5.3.0-1) in `debian:bookworm-slim`, its options printed by
-   `MALLOC_CONF=stats_print:true`.
+   `results/alloc-faults` and `alloc-idle`, a build whose commit was not recorded); 2026-11-19,
+   Debian's libjemalloc2 5.3.0 (package 5.3.0-3) in `debian:trixie-slim` on amd64, its defaults
+   printed by `MALLOC_CONF=stats_print:true`.
 
 24. <a id="choice-openapi"></a>**An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
    cannot say.** OpenAPI is the standard other services, gateways and client generators read, and

@@ -22,7 +22,8 @@
 //! The app provides its rows through [`Source`] and writes through [`begin`] / [`Write::commit`],
 //! with an optional idempotency key so a retried request commits once.
 //!
-//! It uses async-nats 0.53 and SQLx 0.8 on Rust 1.89; [design Choice 51](https://github.com/corten-run/corten/blob/main/docs/design.md#choice-msrv)
+//! The integration tests run against PostgreSQL 18 and NATS JetStream.
+//! The crate uses async-nats 0.53 and SQLx 0.8 on Rust 1.89; [design Choice 51](https://github.com/corten-run/corten/blob/main/docs/design.md#choice-msrv)
 //! says why and when they move.
 
 mod hub;
