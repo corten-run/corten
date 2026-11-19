@@ -575,13 +575,14 @@ bytes plus two copies each of the generation and sequence. Look on `corten::feed
   on failure). A disconnect can interrupt other feeds and other users of the shared client.
 
 The relay pipelines up to 256 ordinary patches in outbox-ID order (feed-sequence order
-within a generation) and reads ready acknowledgements while sending. Each patch or
-reload-marker batch has a fresh NATS reply inbox and closes its subscriptions when the
-attempt ends. Missing acknowledgements do not build up reply registrations across retries,
-and a late reply to an abandoned attempt cannot retire a row. If some replies arrive but
-others time out, the relay uses one subscription per reply slot on subsequent attempts to
-avoid overrunning a small shared reply queue. No minimum `subscription_capacity` above the
-NATS client's own requirements is needed.
+within a generation) and reads ready acknowledgements while sending. The relay uses one
+NATS reply subscription while it holds the lease, with separate reply slots for each patch
+or reload-marker batch. It closes the subscription when a batch is abandoned or the relay
+stops. Missing acknowledgements do not build up reply registrations across retries, and
+a late reply to an abandoned attempt cannot retire a row. If some patch replies arrive
+but others time out, the relay limits subsequent patch batches to one outstanding reply
+at a time on the same subscription. No minimum `subscription_capacity` above the NATS
+client's own requirements is needed.
 
 Two failures can change the order JetStream stores:
 

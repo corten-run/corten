@@ -1031,14 +1031,26 @@ async fn the_relay_retries_an_acknowledgement_error_that_is_not_a_size_refusal()
 #[tokio::test]
 async fn a_broker_disconnect_can_reorder_a_feed_but_the_follower_recovers() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    disconnect_and_recover(&db, &nats).await;
+}
+
+#[tokio::test]
+async fn a_partial_timeout_retries_on_a_broker_with_capped_subscriptions() {
+    let (Ok(db), Ok(nats)) = (std::env::var("CORTEN_TEST_DATABASE_URL"), std::env::var("CORTEN_TEST_NATS_CAPPED_URL")) else {
+        return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_CAPPED_URL (max_subscriptions: 3)");
+    };
+    disconnect_and_recover(&db, &nats).await;
+}
+
+async fn disconnect_and_recover(db: &str, nats: &str) {
     let schema = key("interrupted_");
-    let pool = schema_pool(&db, &schema).await;
+    let pool = schema_pool(db, &schema).await;
     migrate(&pool).await.unwrap();
     test_items(&pool).await;
     new_feed(&pool, "feed").await;
     new_feed(&pool, "other").await;
     let options = Arc::new(Options { stream: schema.to_uppercase(), subject_prefix: schema.clone(), ..Options::default() });
-    let observer = async_nats::connect(&nats).await.unwrap();
+    let observer = async_nats::connect(nats).await.unwrap();
     let js = jetstream::new(observer.clone());
     let logs = Capture::default();
     let _capture = tracing::subscriber::set_default(logs.clone());
@@ -1077,7 +1089,8 @@ async fn a_broker_disconnect_can_reorder_a_feed_but_the_follower_recovers() {
         let mut server = TcpStream::connect((upstream.host(), upstream.port())).await.unwrap();
         let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
     });
-    let publisher = async_nats::ConnectOptions::new().ignore_discovered_servers().connect(addr).await.unwrap();
+    let publisher =
+        async_nats::ConnectOptions::new().ignore_discovered_servers().subscription_capacity(64).connect(addr).await.unwrap();
     assert_eq!(publisher.max_payload(), advertised);
     let before_refusal = Arc::new(Semaphore::new(0));
     let before_reconnect = Arc::new(Semaphore::new(0));
@@ -1179,7 +1192,7 @@ async fn a_broker_disconnect_can_reorder_a_feed_but_the_follower_recovers() {
     relay.abort();
     assert!(relay.await.unwrap_err().is_cancelled());
     proxy.abort();
-    delete_test_stream_and_schema(&db, &js, &options.stream, &schema).await;
+    delete_test_stream_and_schema(db, &js, &options.stream, &schema).await;
 }
 
 async fn unacknowledged_batch(pool: &PgPool, nats: &str, schema: &str) -> (jetstream::Context, jetstream::stream::Config) {

@@ -6065,14 +6065,17 @@ rules something out.
     and inspection until ordinary pruning.
 
     The relay pipelines a batch of up to 256 patches, even when every patch belongs to one
-    feed, draining ready acknowledgements while it sends. It uses a fresh NATS inbox
-    for each patch batch and another for its marker batch. The reply subject names the slot
-    within that batch, so replies do not have to arrive in order. The client's subscription
-    capacity is not exposed to the relay. If some slots reply but others time out, subsequent
-    batches on that relay use a separate subscription per slot so a burst cannot overfill
-    a small shared reply queue again. Dropping the batch's subscriptions on success, failure,
-    or cancellation keeps late replies out of retries. The longest slot suffix fits in
-    the existing control-line reserve.
+    feed, draining ready acknowledgements while it sends. It uses one NATS reply subscription
+    while holding the relay lease, allocating a distinct range of reply slots to each patch or
+    marker batch. Replies do not have to arrive in order. Successful batches reuse the
+    subscription without another subscribe or flush; a batch with unresolved replies closes
+    the inbox before a retry can use a new one. Losing the lease or cancelling the relay also
+    closes the inbox. No unanswered publish leaves a registration in the client's multiplexer.
+    The longest slot suffix fits in the existing control-line reserve.
+    The client does not expose its subscription capacity. If some patches reply but others
+    time out, subsequent patch batches on that relay keep only one reply outstanding, which fits
+    any positive queue capacity without using more broker subscriptions. Marker batches can
+    retire the replies that arrived without waiting for an identically sized retry to succeed.
     A broker's connection-wide `Maximum Payload Violation`
     or disconnect identifies no publish; the relay retries all selected rows on an ordinary send
     or acknowledgement failure and does not force a reconnect. Later patches can overtake a
@@ -6084,8 +6087,9 @@ rules something out.
     no supported app can publish. Checking only new keys leaves the pre-upgrade relay failure
     in place. Using async-nats 0.53's JetStream publish acknowledgements retains one reply
     registration per unanswered publish, even after the acknowledgement future is
-    dropped. Always subscribing per publish instead of per batch sends a subscribe and
-    unsubscribe for each row on the healthy path. Using `Subject::is_valid` would copy the key
+    dropped. Subscribing per batch adds subscribe and unsubscribe commands even for a single
+    update; subscribing per reply slot can exceed the broker's connection subscription limit.
+    Using `Subject::is_valid` would copy the key
     and accept whitespace outside the framing bytes. Dropping a refused notification leaves a
     loaded feed stale if no later patch arrives; retrying the same oversized body can keep the
     feed stale and block the relay's ordinary pending scan. A per-feed hold adds an index to
@@ -6146,7 +6150,8 @@ rules something out.
 
     Last checked: 2026-11-19, async-nats 0.53.0's reply map and subscription cleanup,
     real JetStream retries with publish acknowledgements suppressed and then restored, a full
-    batch on a 64-reply subscription, and the relay throughput, follower latency and
+    batch on a 64-reply subscription, recovery after a partial timeout with a three-subscription
+    broker limit and a 64-reply queue, and the relay throughput, follower latency and
     missing-ack RSS tests;
     2026-11-18, async-nats 0.53.0's INFO and reconnect handling and the
     `corten-cluster` integration tests on Postgres 16.13 and NATS 2.15.2 with 0.53.0,

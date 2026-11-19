@@ -31,7 +31,7 @@ use async_nats::{
     },
     Client, HeaderMap, Message, StatusCode, Subscriber,
 };
-use futures_util::{stream::SelectAll, StreamExt};
+use futures_util::StreamExt;
 use sqlx::{postgres::PgListener, PgConnection, PgPool};
 
 use crate::{store, valid_key, Error, Options, RELOAD_HEADER};
@@ -105,8 +105,9 @@ async fn lead(pool: &PgPool, publisher: &Publisher, options: &Options, active: &
 async fn publish(pool: &PgPool, publisher: &Publisher, options: &Options, held: &mut Held) -> Result<(), Error> {
     let mut wake = PgListener::connect_with(pool).await?;
     wake.listen("corten_outbox").await?;
+    let mut inbox = None;
     loop {
-        drain(pool, publisher, options, held).await?;
+        drain(pool, publisher, options, held, &mut inbox).await?;
         tokio::select! {
             n = wake.recv() => { n?; }
             // Renew on time even when idle; also a safety net for a lost notification.
@@ -119,7 +120,13 @@ async fn publish(pool: &PgPool, publisher: &Publisher, options: &Options, held: 
 }
 
 /// Publishes pending rows oldest first, pipelining up to `BATCH` acknowledgements.
-async fn drain(pool: &PgPool, publisher: &Publisher, options: &Options, held: &mut Held) -> Result<(), Error> {
+async fn drain(
+    pool: &PgPool,
+    publisher: &Publisher,
+    options: &Options,
+    held: &mut Held,
+    inbox: &mut Option<ReplyInbox>,
+) -> Result<(), Error> {
     loop {
         if held.renewed.elapsed() >= options.lease / 4 {
             held.renew(options).await?;
@@ -129,39 +136,53 @@ async fn drain(pool: &PgPool, publisher: &Publisher, options: &Options, held: &m
             return Ok(());
         }
         held.check()?;
-        let mut replies = Replies::new(publisher);
-        let mut awaiting = Vec::with_capacity(rows.len());
         let mut sent = Vec::with_capacity(rows.len());
         let mut refused = Vec::new();
-        for row in &rows {
-            if !valid_key(&row.feed) {
-                refused.push((row, Refusal::InvalidKey));
-                continue;
-            }
-            let slot = awaiting.len();
-            awaiting.push(None);
-            match replies.send(options, row, false, slot).await {
-                Ok(()) => awaiting[slot] = Some(row),
-                Err(error) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
-                    refused.push((row, Refusal::Cached(error)));
+        {
+            let mut replies = Replies::new(publisher, inbox);
+            let mut awaiting = Vec::with_capacity(rows.len());
+            let window = if publisher.single_reply.load(Ordering::Relaxed) { 1 } else { BATCH as usize };
+            for rows in rows.chunks(window) {
+                let first = awaiting.len();
+                for row in rows {
+                    if !valid_key(&row.feed) {
+                        refused.push((row, Refusal::InvalidKey));
+                        continue;
+                    }
+                    let slot = awaiting.len();
+                    match replies.send(options, row, false, slot, slot != first).await {
+                        Ok(()) => awaiting.push(Some(row)),
+                        Err(error) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
+                            awaiting.push(None);
+                            refused.push((row, Refusal::Cached(error)));
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
                 }
-                Err(error) => return Err(error.into()),
+                let deadline = tokio::time::Instant::now() + publisher.timeout;
+                let mut had_reply = false;
+                for _ in 0..awaiting[first..].iter().flatten().count() {
+                    match replies.recv(&mut awaiting, deadline).await {
+                        Ok((row, Ok(_))) => sent.push(row.id),
+                        Ok((row, Err(error))) if stream_size_refusal(&error) => refused.push((row, Refusal::Stream)),
+                        Ok((_, Err(error))) => return Err(error.into()),
+                        Err(error) => {
+                            // The client does not expose its subscription capacity. A partial
+                            // timeout might be overflow; one outstanding reply fits any queue.
+                            if had_reply {
+                                publisher.single_reply.store(true, Ordering::Relaxed);
+                            }
+                            return Err(error);
+                        }
+                    }
+                    had_reply = true;
+                }
             }
         }
-        let deadline = tokio::time::Instant::now() + publisher.timeout;
-        for _ in 0..awaiting.iter().flatten().count() {
-            let (row, ack) = replies.recv(&mut awaiting, deadline).await?;
-            match ack {
-                Ok(_) => sent.push(row.id),
-                Err(error) if stream_size_refusal(&error) => refused.push((row, Refusal::Stream)),
-                Err(error) => return Err(error.into()),
-            }
-        }
-        drop(replies);
         if refused.is_empty() {
             store::mark_published(pool, &sent).await?;
         } else {
-            finish_refusals(pool, publisher, options, held, &mut sent, refused).await?;
+            finish_refusals(pool, publisher, options, held, &mut sent, refused, inbox).await?;
         }
         if (rows.len() as i64) < BATCH || sent.is_empty() {
             // A full batch with nothing retired would only select the same rows again.
@@ -174,7 +195,7 @@ pub(crate) struct Publisher {
     js: jetstream::Context,
     client: Client,
     timeout: Duration,
-    isolate_replies: AtomicBool,
+    single_reply: AtomicBool,
     #[cfg(test)]
     pub(crate) pause_before: Vec<(i64, Arc<tokio::sync::Semaphore>)>,
 }
@@ -185,7 +206,7 @@ impl Publisher {
             client: js.client(),
             js,
             timeout: PUBLISH_TIMEOUT,
-            isolate_replies: AtomicBool::new(false),
+            single_reply: AtomicBool::new(false),
             #[cfg(test)]
             pause_before: Vec::new(),
         }
@@ -198,77 +219,69 @@ impl Publisher {
     }
 }
 
-// async-nats 0.53 keeps unanswered publish requests in the connection's reply map. Use a
-// fresh inbox per batch and let Subscriber::drop unsubscribe on every exit, including
-// cancellation. A reply's slot identifies the publish even if replies arrive out of order.
+// Reuse one subscription while leading, not the client's map (which retains unanswered
+// JetStream requests). Each batch has its own range of reply slots. Abandon the inbox
+// when a batch fails so outstanding replies cannot fill the queue during a retry.
+struct ReplyInbox {
+    name: String,
+    subscription: Subscriber,
+    next_slot: u64,
+}
+
 struct Replies<'a> {
     publisher: &'a Publisher,
-    inbox: String,
-    subscriptions: ReplySubscriptions,
+    inbox: &'a mut Option<ReplyInbox>,
+    first_slot: u64,
     buffered: VecDeque<Message>,
-    had_reply: bool,
-}
-
-enum ReplySubscriptions {
-    Shared(Option<Subscriber>),
-    Isolated(SelectAll<Subscriber>),
-}
-
-impl ReplySubscriptions {
-    async fn next(&mut self) -> Option<Message> {
-        match self {
-            Self::Shared(Some(subscription)) => subscription.next().await,
-            Self::Shared(None) => None,
-            Self::Isolated(subscriptions) => subscriptions.next().await,
-        }
-    }
 }
 
 impl<'a> Replies<'a> {
-    fn new(publisher: &'a Publisher) -> Self {
-        let subscriptions = if publisher.isolate_replies.load(Ordering::Relaxed) {
-            ReplySubscriptions::Isolated(SelectAll::new())
-        } else {
-            ReplySubscriptions::Shared(None)
-        };
-        Self { publisher, inbox: publisher.client.new_inbox(), subscriptions, buffered: VecDeque::new(), had_reply: false }
+    fn new(publisher: &'a Publisher, inbox: &'a mut Option<ReplyInbox>) -> Self {
+        let first_slot = inbox.as_mut().map_or(0, |inbox| {
+            let first = inbox.next_slot;
+            inbox.next_slot += BATCH as u64;
+            first
+        });
+        Self { publisher, inbox, first_slot, buffered: VecDeque::new() }
     }
 
-    async fn send(&mut self, options: &Options, row: &store::Pending, reload: bool, slot: usize) -> Result<(), PublishError> {
-        let reply = format!("{}.{slot}", self.inbox);
+    async fn send(
+        &mut self,
+        options: &Options,
+        row: &store::Pending,
+        reload: bool,
+        slot: usize,
+        pipelined: bool,
+    ) -> Result<(), PublishError> {
         let publisher = self.publisher;
-        let subject = match &self.subscriptions {
-            ReplySubscriptions::Shared(None) => Some(format!("{}.*", self.inbox)),
-            ReplySubscriptions::Shared(Some(_)) => None,
-            ReplySubscriptions::Isolated(_) => Some(reply.clone()),
-        };
-        let deadline = tokio::time::Instant::now() + publisher.timeout;
-        if let Some(subject) = subject {
-            let subscription = tokio::time::timeout_at(deadline, publisher.client.subscribe(subject))
+        if self.inbox.is_none() {
+            let name = publisher.client.new_inbox();
+            let subscription = tokio::time::timeout(publisher.timeout, publisher.client.subscribe(format!("{name}.*")))
                 .await
                 .map_err(|error| PublishError::with_source(PublishErrorKind::TimedOut, error))?
                 .map_err(|error| PublishError::with_source(PublishErrorKind::Other, error))?;
-            match &mut self.subscriptions {
-                ReplySubscriptions::Shared(shared) => *shared = Some(subscription),
-                ReplySubscriptions::Isolated(subscriptions) => subscriptions.push(subscription),
-            }
+            *self.inbox = Some(ReplyInbox { name, subscription, next_slot: BATCH as u64 });
         }
+        let inbox = self.inbox.as_mut().expect("the reply subscription was opened");
+        let reply = format!("{}.{}", inbox.name, self.first_slot + slot as u64);
         let mut send = pin!(async {
             #[cfg(test)]
-            let (_permit, deadline) = match publisher.pause_before.iter().find(|(id, _)| *id == row.id) {
-                Some((_, gate)) => (gate.acquire().await.ok(), tokio::time::Instant::now() + publisher.timeout),
-                None => (None, deadline),
+            let _permit = if let Some((_, gate)) = publisher.pause_before.iter().find(|(id, _)| *id == row.id) {
+                gate.acquire().await.ok()
+            } else {
+                None
             };
-            tokio::time::timeout_at(deadline, enqueue(publisher, options, row, reload, reply))
+            tokio::time::timeout(publisher.timeout, enqueue(publisher, options, row, reload, reply))
                 .await
                 .map_err(|error| PublishError::with_source(PublishErrorKind::TimedOut, error))?
         });
-        let ReplySubscriptions::Shared(Some(subscription)) = &mut self.subscriptions else { return send.await };
-        // Only the shared queue can overflow with one reply per publish.
+        if !pipelined {
+            return send.await;
+        }
         loop {
             tokio::select! {
                 biased;
-                Some(reply) = subscription.next(), if self.buffered.len() < BATCH as usize => {
+                Some(reply) = inbox.subscription.next(), if self.buffered.len() < BATCH as usize => {
                     self.buffered.push_back(reply);
                 }
                 result = &mut send => return result,
@@ -281,34 +294,35 @@ impl<'a> Replies<'a> {
         awaiting: &mut [Option<T>],
         deadline: tokio::time::Instant,
     ) -> Result<(T, Result<PublishAck, PublishError>), Error> {
-        let result = tokio::time::timeout_at(deadline, async {
+        let inbox = self.inbox.as_mut().expect("an awaiting publish has a reply subscription");
+        tokio::time::timeout_at(deadline, async {
             while let Some(reply) = match self.buffered.pop_front() {
                 Some(reply) => Some(reply),
-                None => self.subscriptions.next().await,
+                None => inbox.subscription.next().await,
             } {
-                let slot = reply.subject.as_str().rsplit_once('.').and_then(|(_, slot)| slot.parse::<usize>().ok());
+                let slot = reply_slot(self.first_slot, reply.subject.as_str());
                 if let Some(row) = slot.and_then(|slot| awaiting.get_mut(slot)).and_then(Option::take) {
                     return Ok((row, acknowledgement(reply)));
                 }
             }
             Err(PublishError::new(PublishErrorKind::BrokenPipe).into())
         })
-        .await;
-        match result {
-            Ok(reply) => {
-                self.had_reply |= reply.is_ok();
-                reply
-            }
-            Err(error) => {
-                // Capacity is private to async-nats. Overflow on a fresh inbox lets at
-                // least one reply through; don't let the same burst stall every retry.
-                if self.had_reply {
-                    self.publisher.isolate_replies.store(true, Ordering::Relaxed);
-                }
-                Err(error.into())
-            }
-        }
+        .await?
     }
+
+    async fn abandon(self) -> Result<(), Error> {
+        // A marker failure need not end leadership. Queue UNSUB before a later batch
+        // can open a replacement, even if the client's command queue is full.
+        if let Some(mut inbox) = self.inbox.take() {
+            tokio::time::timeout(self.publisher.timeout, inbox.subscription.unsubscribe()).await??;
+        }
+        Ok(())
+    }
+}
+
+fn reply_slot(first: u64, subject: &str) -> Option<usize> {
+    let (_, slot) = subject.rsplit_once('.')?;
+    usize::try_from(slot.parse::<u64>().ok()?.checked_sub(first)?).ok()
 }
 
 async fn enqueue(
@@ -397,6 +411,7 @@ async fn finish_refusals(
     held: &mut Held,
     sent: &mut Vec<i64>,
     refused: Vec<(&store::Pending, Refusal)>,
+    inbox: &mut Option<ReplyInbox>,
 ) -> Result<(), Error> {
     held.check()?;
     if held.renewed.elapsed() >= options.lease / 4 {
@@ -405,7 +420,7 @@ async fn finish_refusals(
     // Pipeline the markers too, but bound the whole attempt to leave time to retire
     // acknowledgements before the lease gets stale, even if a marker gets no reply.
     let deadline = (held.renewed + options.lease / 2).into();
-    let mut replies = Replies::new(publisher);
+    let mut replies = Replies::new(publisher, inbox);
     let mut markers = Vec::new();
     let mut completed = Vec::new();
     for (row, refusal) in refused {
@@ -417,7 +432,7 @@ async fn finish_refusals(
         held.check()?;
         let slot = markers.len();
         markers.push(None);
-        match poll_send_before(deadline, replies.send(options, row, true, slot)).await {
+        match poll_send_before(deadline, replies.send(options, row, true, slot, slot != 0)).await {
             Some(Ok(())) => markers[slot] = Some((row, refusal)),
             Some(Err(error)) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
                 marker_size_refused(options, row, None, &error);
@@ -427,6 +442,7 @@ async fn finish_refusals(
         }
     }
     let mut stream_failed_markers = Vec::new();
+    let mut abandoned = false;
     for _ in 0..markers.iter().flatten().count() {
         // Unlike sends, an already-ready acknowledgement is useful even at the deadline.
         match replies.recv(&mut markers, deadline).await {
@@ -440,11 +456,11 @@ async fn finish_refusals(
                 for (row, _) in markers.into_iter().flatten() {
                     marker_publish_failed(options, row, &error);
                 }
+                abandoned = true;
                 break;
             }
         }
     }
-    drop(replies);
     // 10054 does not carry the limit. Look it up once for diagnostics only.
     let stream_limit =
         if !stream_failed_markers.is_empty() || completed.iter().any(|(_, refusal, _)| matches!(refusal, Refusal::Stream)) {
@@ -461,7 +477,7 @@ async fn finish_refusals(
         marker_size_refused(options, row, stream_limit, &error);
     }
     if sent.is_empty() {
-        return Ok(());
+        return if abandoned { replies.abandon().await } else { Ok(()) };
     }
     held.check()?;
     let mut retired = store::mark_published_returning(pool, sent).await?;
@@ -488,12 +504,23 @@ async fn finish_refusals(
             patch_bytes = row.body.len(), stream = %options.stream, stream_max_message_size = stream_limit,
             error = error.as_ref().map(tracing::field::display), "{outcome}: {reason}; patch kept for inspection");
     }
-    Ok(())
+    if abandoned {
+        replies.abandon().await
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reused_inbox_distinguishes_batches_by_slot() {
+        assert_eq!(reply_slot(256, "_INBOX.test.255"), None);
+        assert_eq!(reply_slot(256, "_INBOX.test.256"), Some(0));
+        assert_eq!(reply_slot(256, "_INBOX.test.511"), Some(255));
+    }
 
     #[tokio::test]
     async fn an_expired_marker_deadline_does_not_attempt_a_publish() {
