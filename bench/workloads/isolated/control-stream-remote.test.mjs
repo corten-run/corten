@@ -70,6 +70,21 @@ test("a first-scan watchdog fault aborts now but can report to the job log befor
   assert.equal(kill.mock.callCount(), 0);
 });
 
+test("a wedged first-fault reporter is killed at the original startup deadline", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = await fixture(t, { beforeReady: true });
+  const kill = t.mock.fn(); f.child.kill = kill;
+  const rejected = assert.rejects(f.pending, /control watchdog deadline expired/);
+  try {
+    t.mock.timers.tick(2500); f.child.stdout.write("F");
+    assert.ok(f.abort.signal.aborted);
+    t.mock.timers.tick(2499); await new Promise(setImmediate);
+    assert.equal(kill.mock.callCount(), 0);
+    t.mock.timers.tick(1); await new Promise(setImmediate);
+    assert.deepEqual(kill.mock.calls.map((call) => call.arguments), [["SIGKILL"]]);
+  } finally { f.child.emit("close", 254, null); t.mock.timers.reset(); await rejected; }
+});
+
 test("only the independent watchdog is launched on CPU0; native-window ticks never scan in the campaign parent", async (t) => {
   const f = await fixture(t);
   assert.equal(f.launches.length, 1);
