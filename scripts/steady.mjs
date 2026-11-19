@@ -17,6 +17,8 @@ const CHANGED = "net::ERR_NETWORK_CHANGED";
 /** What Chromium logs for a resource aborted by `ERR_NETWORK_CHANGED`. */
 const ABORTED = `Failed to load resource: ${CHANGED}`;
 
+const WEBKIT_ROUTE_TIMEOUT = 5000;
+
 /**
  * Returns `browser`, every page it opens from now on (`newPage`, or `newContext` then
  * `newPage`) retrying `goto` and `reload` once on `ERR_NETWORK_CHANGED`, and the console
@@ -68,14 +70,41 @@ export function gateInitialLoad(page) {
     // Let an existing page or context route handle this request as before, or let the browser
     // send it if there is none.
     const release = (/** @type {import("@playwright/test").Route} */ route) => route.fallback();
-    await page.route(match, release, { times: 1 });
+    let navigated = false;
     try {
-      return await goto(url, options);
+      await webKitRouteCommand("setup", page.route(match, release, { times: 1 }));
+      const response = await goto(url, options);
+      navigated = true;
+      return response;
     } finally {
-      if (!page.isClosed()) await page.unroute(match, release);
+      // Playwright can register the handler locally before setup is acknowledged. Try to remove
+      // it even after setup fails, but keep the setup or navigation error if cleanup fails too.
+      try {
+        if (!page.isClosed()) await webKitRouteCommand("cleanup", page.unroute(match, release));
+      } catch (error) {
+        if (navigated) throw error;
+      }
     }
   };
   return page;
+}
+
+/**
+ * Playwright does not time out interception updates. Bound the wait without changing goto's
+ * timeout; this does not cancel the underlying command.
+ * @param {"setup" | "cleanup"} step
+ * @param {Promise<void>} command
+ */
+async function webKitRouteCommand(step, command) {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  try {
+    await Promise.race([command, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`WebKit gate route ${step} timed out after ${WEBKIT_ROUTE_TIMEOUT} ms`)), WEBKIT_ROUTE_TIMEOUT);
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

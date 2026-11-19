@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { gateInitialLoad, steady } from "./steady.mjs";
 
 /** A console message as Playwright gives one. */
@@ -141,3 +142,42 @@ test("the WebKit gate cleans up after a navigation that times out without retryi
   await assert.rejects(page.goto("http://localhost:18482/orders"), (error) => error === failure);
   assert.deepEqual(calls, ["route", "goto", "unroute"]);
 });
+
+test("the WebKit gate times out stalled route setup without starting navigation", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const calls = [];
+  const page = gateInitialLoad(/** @type {any} */ ({
+    url: () => "about:blank",
+    isClosed: () => false,
+    route() { calls.push("route"); return new Promise(() => {}); },
+    async goto() { calls.push("goto"); },
+    async unroute() { calls.push("unroute"); },
+  }));
+  // Fail the assertion instead of hanging if the fake command still blocks after the tick.
+  const result = Promise.race([page.goto("http://localhost:18482/orders"), nextTurn()]);
+  t.mock.timers.tick(5000);
+  await assert.rejects(result, /WebKit gate route setup timed out/);
+  assert.deepEqual(calls, ["route", "unroute"]);
+});
+
+for (const navigationFails of [true, false]) {
+  test(`stalled WebKit gate cleanup ${navigationFails ? "preserves the navigation error" : "fails a successful navigation clearly"}`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const failure = new Error("Timeout 30000ms exceeded");
+    const { promise: cleaning, resolve: startedCleanup } = Promise.withResolvers();
+    const page = gateInitialLoad(/** @type {any} */ ({
+      url: () => "about:blank",
+      isClosed: () => false,
+      async route() {},
+      async goto() { if (navigationFails) throw failure; },
+      unroute() { startedCleanup(undefined); return new Promise(() => {}); },
+    }));
+    const result = Promise.race([page.goto("http://localhost:18482/orders"), nextTurn()]);
+    assert.equal(await Promise.race([cleaning.then(() => true), nextTurn()]), true, "cleanup started");
+    t.mock.timers.tick(5000);
+    await assert.rejects(result, (error) => {
+      if (navigationFails) return error === failure;
+      return error instanceof Error && /WebKit gate route cleanup timed out/.test(error.message);
+    });
+  });
+}
