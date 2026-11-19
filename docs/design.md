@@ -5430,9 +5430,13 @@ rules something out.
     Stands on: measured (the runtime's and the field module's minified sizes by Node's `zlib` gzip
     and brotli at their defaults, once each build, and the module as the watchlist serves it, once;
     a field's `data-on` and markup against a ref's for the same four
-    controls, once; the item page's `render_cost`, five alternated runs of each release build; the lookup of three
-    fields in a form of 50, 500 and 2,000 controls against a walk over them, the median of 15
-    batches in each of the three engines, once); platform (a form's `elements`
+    controls, once; the item page's `render_cost`, five alternated runs of each release build;
+    in-process Callgrind instruction counts for matched fields and a no-match control, three
+    alternating trials per release build; the lookup of three fields in a form of 50, 500 and
+    2,000 controls against a walk over them, the median of 15 batches in each of the three
+    engines, once; compile probes showing that definite kind mismatches are rejected,
+    reassigned names and ambiguous owners are left to the browser, and non-field and unmatched
+    examples expand as before); platform (a form's `elements`
     lists its controls in tree order, `form=` ones included, and a control's `localName` is its
     tag; the smoke's field checks in Chromium, Firefox and WebKit); reasoned (a posted name
     denotes one field of the form, a single control or the radios or checkboxes of a group that
@@ -5473,10 +5477,16 @@ rules something out.
     element's `form=` among them, which the field module of `037bb827b` fails in each), and
     `corten dev`'s reports, on `98e7ca184`; 2026-11-18, compile-fail probes for a mismatched
     control, the default text input and a checkbox group, and compile-pass probes for
-    reassigned field names and IDs and nested form recovery, on `51935e3e9`. Comparing that
-    revision with `eb6e077b4` also left the Rust expansion of matching ordinary string
-    arguments and unmatched field calls unchanged. Six alternating native release item page
-    `render_cost` runs on `4192475fd` and `eb6e077b4` measured median `<main>` render times of
+    reassigned field names and IDs and nested form recovery, on `b2dc3fe9a`. Comparing that
+    revision with `eb6e077b4` left the Rust expansion of matching ordinary string arguments
+    and unmatched field calls unchanged. Callgrind 3.19 counted the difference between 1,200
+    and 200 in-process requests, divided by 1,000, on those releases. In three alternating
+    trials per build, a page with one implicit and one explicit field match took 23,634.631
+    instructions per request before (23,634.614-23,634.675) and 23,634.689 after
+    (23,634.464-23,634.692), median and range. The item page without a matched field took
+    40,696.147 before (40,651.831-40,975.925) and 40,661.722 after (40,634.797-40,685.303).
+    Response sizes stayed at 823 and 3,694 bytes respectively. Six earlier alternating native
+    release item page `render_cost` runs on `4192475fd` and `eb6e077b4` measured median `<main>` render times of
     15.3 and 17.3 us, with overlapping ranges (14.1-22.1 and 14.7-20.5 us). The item page has
     no matched field call.
 
