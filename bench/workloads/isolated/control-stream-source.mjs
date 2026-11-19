@@ -77,13 +77,39 @@ def helper_line(error):
     return line
 
 
-def stream_failure(root, registration, reason, error):
-    # write() installs without replacement. Keep the first reporter even if two fail together.
+def stream_fault_files(root, record):
+    # The SSH monitor's stderr is not the job log. Never create or follow a log path.
     try:
-        write(root / 'stream-invalid.json', encoded({'id': registration['id'], 'host': registration['host'],
-              'monoNs': str(time.monotonic_ns()), 'reason': reason, 'helperLine': helper_line(error)}))
-    except FileExistsError:
+        fd = os.open('/bench/run.log', os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            if stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid():
+                os.write(fd, b'control fault: ' + record)
+        finally:
+            os.close(fd)
+    except OSError:
         pass
+    # Existence revokes; custody copies bytes, even if a dying writer left an empty marker.
+    fd = os.open(root / 'stream-invalid.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        if os.write(fd, record) != len(record):
+            raise OSError('incomplete control diagnostic')
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def stream_failure(root, registration, reason, error):
+    try:
+        stream_fault_files(root, encoded({'id': registration['id'], 'host': registration['host'],
+              'monoNs': str(time.monotonic_ns()), 'reason': reason, 'helperLine': helper_line(error)}))
+    except OSError:
+        pass  # Collision or failed diagnostics cannot replace the original failure.
 
 
 def stream_watchdog(root, expected_hash):

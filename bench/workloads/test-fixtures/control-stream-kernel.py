@@ -124,8 +124,11 @@ def emit(frame):
 def opened(path, flags, *args):
     global next_fd
     name = str(path)
+    if name == '/bench/run.log' and name not in data:
+        raise FileNotFoundError()
     if flags & 64:
-        assert name not in data; data[name] = b''
+        if name in data: raise FileExistsError()
+        data[name] = b''
     next_fd += 1; descriptors[next_fd] = {'path': name, 'offset': 0}; return next_fd
 def file_stat(path, directory=False):
     return types.SimpleNamespace(st_dev=1, st_ino=int(hashlib.sha256(path.encode()).hexdigest()[:8], 16), st_size=len(data.get(path, b'')), st_uid=0,
@@ -158,7 +161,7 @@ class Scan:
     def __exit__(self, *args): return False
 fake_os = types.SimpleNamespace(getuid=lambda: 0, getpid=lambda: 21, uname=lambda: types.SimpleNamespace(nodename=host['hostname']), environ={'SSH_CONNECTION': '192.0.2.20 40000 192.0.2.10 22'},
     readlink=readlink, sched_setaffinity=pin, scandir=Scan, open=opened, fstat=fstat, read=raw_read, write=raw_write, replace=replace, fsync=lambda fd: None,
-    close=lambda fd: None, set_blocking=lambda fd, value: None, O_RDONLY=0, O_WRONLY=1, O_CREAT=64, O_EXCL=128, O_NOFOLLOW=256, O_DIRECTORY=512, O_NONBLOCK=1024)
+    close=lambda fd: None, set_blocking=lambda fd, value: None, O_RDONLY=0, O_WRONLY=1, O_CREAT=64, O_EXCL=128, O_NOFOLLOW=256, O_DIRECTORY=512, O_NONBLOCK=1024, O_APPEND=2048)
 scope.update({'os': fake_os, 'pathlib': types.SimpleNamespace(Path=Path), 'private': lambda p: None, 'read': read, 'write': write,
               'time': types.SimpleNamespace(monotonic_ns=lambda: clock)})
 sys.modules['select'] = types.SimpleNamespace(select=select)

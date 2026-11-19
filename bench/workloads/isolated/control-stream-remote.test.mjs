@@ -96,7 +96,7 @@ for mode in ('normal','wrong-at-start','drift','stale','eof','late-stop'):
         clock[0] += 3000000000 if mode == 'late-stop' else 250000000
         return ([0] if len(scans) == 2 or mode == 'late-stop' else [], [], [])
     sys.modules['select'] = types.SimpleNamespace(select=poll)
-    ns.update(write=lambda path, data: faults.append(json.loads(data)), os=types.SimpleNamespace(sched_getaffinity=lambda tid: {1} if mode == 'wrong-at-start' or mode == 'drift' and scans else {0},
+    ns.update(stream_fault_files=lambda root, data: faults.append(json.loads(data)), os=types.SimpleNamespace(sched_getaffinity=lambda tid: {1} if mode == 'wrong-at-start' or mode == 'drift' and scans else {0},
         write=lambda fd, b: ready.append(b) or len(b), read=lambda *args: b'' if mode == 'eof' else b'S'),
         load=lambda *args: r, stream_sample=lambda *args: scans.append(True), time=types.SimpleNamespace(monotonic_ns=lambda: clock[0]),
         stream_load=lambda *args: {'id':'stream','host':{},'renewal':1,'expiresMonoNs':str(clock[0]+15000000000),
@@ -139,47 +139,62 @@ test("expired or stale guardian lease irrevocably cancels native independently o
 
 test("a pinned watchdog winning at publication preserves its first failure", async (t) => {
   const f = await fixture(t), first = { id: registration.id, host: registration.host, monoNs: "2000000", reason: "pinned watchdog", helperLine: 23 };
-  const link = fs.linkSync;
-  const raced = t.mock.method(fs, "linkSync", (stage, destination) => {
-    assert.equal(JSON.parse(readFileSync(stage)).reason, "watchdog exit");
-    assert.equal(existsSync(destination), false);
-    f.put("stream-invalid.json", first);
-    return link(stage, destination);
+  const open = fs.openSync;
+  let collisions = 0;
+  const raced = t.mock.method(fs, "openSync", (path, flags, ...args) => {
+    if (path === join(f.root, "stream-invalid.json") && flags === "wx") {
+      assert.equal(existsSync(path), false);
+      f.put("stream-invalid.json", first); collisions++;
+    }
+    return open(path, flags, ...args);
   });
   syncBuiltinESMExports();
   try { f.child.emit("close", 254, null); }
   finally { raced.mock.restore(); syncBuiltinESMExports(); }
-  assert.equal(raced.mock.callCount(), 1); assert.ok(!existsSync(join(f.root, "stream-invalid.pending")));
+  assert.equal(collisions, 1);
   assert.ok(f.abort.signal.aborted); assert.deepEqual(f.get("stream-invalid.json"), first);
 });
 
-test("failed helper fsync leaves neither partial evidence nor a scratch file in custody", () => {
-  const program = `import pathlib, sys, tempfile
-from unittest.mock import patch
+test("interrupted Linux helper leaves collectible bytes and a diagnostic in the job log",
+  { skip: process.platform !== "linux" }, () => {
+  const program = `import os, pathlib, sys, tempfile
 ns = {'__name__':'fixture'}
 exec(compile(sys.stdin.read(), '<guardian>', 'exec'), ns)
 with tempfile.TemporaryDirectory() as tmp:
-    root = pathlib.Path(tmp)
-    with patch('os.fsync', side_effect=OSError('test fsync')):
-        try: ns['write'](root / 'stream-invalid.json', b'{}')
-        except OSError as e: assert str(e) == 'test fsync'
-        else: raise AssertionError('fsync failure ignored')
-    assert not list(root.iterdir())
+    root = pathlib.Path(tmp) / 'control'; root.mkdir(mode=0o700)
+    log = root.parent / 'run.log'; log.touch(mode=0o600)
+    opened, write = os.open, os.write
+    os.open = lambda path, *args, **kw: opened(log if path == '/bench/run.log' else path, *args, **kw)
+    try:
+        child = os.fork()
+        if child == 0:
+            os.write = lambda fd, data: write(fd, data) if data.startswith(b'control fault: ') else os._exit(7)
+            ns['stream_fault_files'](root, b'{"reason":"first"}\\n')
+            os._exit(8)
+        assert os.waitstatus_to_exitcode(os.waitpid(child, 0)[1]) == 7
+        try: ns['stream_fault_files'](root, b'{"reason":"later"}\\n')
+        except FileExistsError: pass
+        else: raise AssertionError('existing marker replaced')
+        marker = root / 'stream-invalid.json'
+        assert list(root.iterdir()) == [marker] and ns['read'](marker) == b''
+        assert log.read_bytes().splitlines() == [b'control fault: {"reason":"first"}', b'control fault: {"reason":"later"}']
+    finally: os.open = opened
 `;
   const result = spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "-c", program],
     { input: guardianSource, encoding: "utf8", timeout: 5000 });
   assert.ifError(result.error); assert.equal(result.status, 0, result.stderr);
 });
 
-test("campaign record sync failure still cancels and leaves the other reporters a free slot", async (t) => {
+test("campaign marker I/O failure still aborts and settles the child exit", async (t) => {
   const f = await fixture(t);
-  f.tick(16000000000n);
   const failed = t.mock.method(fs, "fsyncSync", () => { throw new Error("test fsync"); });
   syncBuiltinESMExports();
-  try { assert.throws(() => f.supervisor.check(), /test fsync/); }
+  try { f.child.emit("close", 254, null); }
   finally { failed.mock.restore(); syncBuiltinESMExports(); }
   assert.ok(f.abort.signal.aborted);
-  for (const name of ["stream-invalid.pending", "stream-invalid.json"]) assert.ok(!existsSync(join(f.root, name)));
+  assert.deepEqual(fs.readdirSync(f.root).sort(), ["stream-invalid.json", "stream-lease.json", "stream-registration.json"]);
+  assert.equal(f.get("stream-invalid.json").reason, "watchdog exit");
+  await f.supervisor.dispose();
 });
 
 test("local EOF and expired drain deadline cannot replace an actual terminal apparatus probe", async (t) => {

@@ -1,10 +1,10 @@
 // Campaign-owned lease consumer, independent of the SSH guardian. No reconnect.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { constants, closeSync, existsSync, fstatSync, fsyncSync, linkSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { digest, durable, physical, readRegular, syncDirectory } from "./evidence.mjs";
+import { digest, durable, readRegular, syncDirectory } from "./evidence.mjs";
 import { guardianSource } from "../cloud-control-runtime.mjs";
 import { apparatusProof, readApparatus, streamHash, streamLimits, verifyApparatus, verifyStreamDrain, verifyStreamSeal } from "./control-stream.mjs";
 
@@ -73,17 +73,13 @@ export async function superviseControlStream(binding, admission, abort, runtime 
     if (revoked) return;
     revoked = true;
     try {
-      // The single campaign writer must not expose a partial record to the two Python reporters.
-      const stage = join(physical(root), "stream-invalid.pending"), fd = openSync(stage, "wx", 0o600);
-      try {
-        try {
-          writeFileSync(fd, JSON.stringify({ id: registration.id, host: registration.host, monoNs: String(now()), reason }));
-          fsyncSync(fd);
-        } finally { closeSync(fd); }
-        try { linkSync(stage, join(root, "stream-invalid.json")); }
-        catch (error) { if (error.code !== "EEXIST") throw error; }
-      } finally { unlinkSync(stage); }
-      syncDirectory(root);
+      const record = JSON.stringify({ id: registration.id, host: registration.host, monoNs: String(now()), reason });
+      // Job stderr is captured. Log before claiming the slot so an interrupted write
+      // leaves usable context and at most one ordinary, collectible marker.
+      try { writeSync(2, "control fault: " + record + "\n"); } catch { /* still revoke */ }
+      durable(join(root, "stream-invalid.json"), record);
+    } catch {
+      // Another reporter won, or storage failed. Never skip abort or child settlement.
     } finally { abort.abort(); }
   };
   const check = () => {

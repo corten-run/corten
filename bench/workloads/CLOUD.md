@@ -413,8 +413,12 @@ If an SSH or SFTP watcher raises an exception, its archived
 `control/helper.py`. Match the ID to the sealed ledger to find the failed check.
 This is diagnostic evidence, never a terminal watcher receipt. A missing receipt
 still prevents admission, even when the associated command exited successfully.
-During timing, the first control-stream failure is kept in
-`control/stream-invalid.json`. For a pinned watchdog or monitor exception,
+During timing, reporters log a bounded `control fault:` diagnostic before
+attempting to create `control/stream-invalid.json`. The first reporter to create
+the marker owns it, not necessarily the first to observe a fault. Its existence
+revokes the run even if the writer stopped before finishing the JSON. In that
+case consult the job log; a storage failure can also prevent a diagnostic.
+For a pinned watchdog or monitor exception,
 `helperLine` points into that run's archived `control/helper.py`. The campaign
 names its failed lease or watchdog check instead. If an outer operation such as
 seal validation throws, the marker may record disposal; consult the campaign
