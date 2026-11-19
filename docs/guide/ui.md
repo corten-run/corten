@@ -264,7 +264,9 @@ is the page's address, which the sort keeps as the order on screen: whether the 
 in its default order (a route that leaves a sort it does not have out of the address) or
 sorted, the keys the header links differ in are put in, replaced or taken out, as for the page's
 own address. It is a module of its own (`ordered`, served with `corten_ui::COMPONENTS`), so a
-page that only sorts a table does not load it.
+page that only sorts a table does not load it. Apps that list only `ordered::COMPONENT` can
+still start; to carry an in-place sort they need the table head's route reader from
+`rows::COMPONENT` as shown below.
 
 Put `data-no-prefetch` on the `<thead>`, or a hover fetches
 the page the server sorts, which the click then does not use. A cell can also sort by the one

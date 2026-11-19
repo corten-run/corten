@@ -15,7 +15,8 @@ declare module "corten/events" {
   }
   /** The `ui-read-sort-links` event, from #[event] ReadSortLinks. */
   export class ReadSortLinks extends Event {
-    constructor(init?: {});
+    constructor(init: { urls: string[] });
+    readonly urls: string[];
   }
 }
 

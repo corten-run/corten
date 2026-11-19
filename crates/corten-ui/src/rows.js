@@ -8,7 +8,7 @@
 import { ReadSortLinks } from "corten/events";
 
 /**
- * @typedef {{ link: HTMLAnchorElement, up: string, down: string, first: 1 | -1, other: string, href: string }} SortLink
+ * @typedef {{ link: HTMLAnchorElement, up: string, down: string, first: 1 | -1, other: string, href: string, active: string | null }} SortLink
  */
 /** @type {WeakMap<HTMLAnchorElement, SortLink>} */
 const routes = new WeakMap();
@@ -24,9 +24,9 @@ const requests = new WeakMap();
  * @param {Map<HTMLAnchorElement, string>} descendingFirst
  */
 export function read(event, ascendingFirst, descendingFirst) {
-  const links = requests.get(event);
   const head = event.target;
-  if (!links || !(head instanceof HTMLTableSectionElement)) return;
+  if (!(event instanceof ReadSortLinks) || !(head instanceof HTMLTableSectionElement)) return;
+  const links = requests.get(event);
   event.stopPropagation();
   for (const link of head.querySelectorAll(/** @type {"a"} */ (":scope > tr > th > a"))) {
     const up = ascendingFirst.get(link);
@@ -38,36 +38,32 @@ export function read(event, ascendingFirst, descendingFirst) {
     const first = upFirst ? 1 : -1;
     const href = link.getAttribute("href");
     if (href === null) continue;
-    const kept = routes.get(link);
-    if (kept && kept.other === other && kept.first === first && kept.href === href) {
-      links.push(kept);
-      continue;
+    const active = link.parentElement?.getAttribute("aria-sort") ?? null;
+    let route = routes.get(link);
+    // Retained anchors can receive a new route pair without another connect, even if only
+    // aria-sort changed. Client rewrites record their own href and aria-sort together.
+    if (!route || route.other !== other || route.first !== first || route.href !== href || route.active !== active) {
+      const hrefIsUp = active === "descending" || (active !== "ascending" && first === 1);
+      route = { link, up: hrefIsUp ? href : other, down: hrefIsUp ? other : href, first, other, href, active };
+      routes.set(link, route);
     }
-    // Take a fresh pair before any client href rewrite. On a retained anchor a redraw can
-    // change the ref or href without another connect; a client rewrite records its own href.
-    const active = link.parentElement?.getAttribute("aria-sort");
-    const hrefIsUp = active === "descending" || (active !== "ascending" && first === 1);
-    /** @type {SortLink} */
-    const route = { link, up: hrefIsUp ? href : other, down: hrefIsUp ? other : href, first, other, href };
-    routes.set(link, route);
-    links.push(route);
+    if (links) links.push(route);
+    else event.urls.push(route.up, route.down);
   }
 }
 
 /**
  * Read from today's refs, including a replaced header or one changed in place, without
  * resolving the same maps once per anchor at startup.
- * @param {HTMLTableElement} table
+ * @param {HTMLTableSectionElement} head
  */
-export function sortLinks(table) {
+function sortLinks(head) {
   /** @type {SortLink[]} */
   const links = [];
-  if (table.tHead) {
-    const event = new ReadSortLinks();
-    requests.set(event, links);
-    table.tHead.dispatchEvent(event);
-    requests.delete(event);
-  }
+  const event = new ReadSortLinks({ urls: [] });
+  requests.set(event, links);
+  head.dispatchEvent(event);
+  requests.delete(event);
   return links;
 }
 
@@ -130,7 +126,7 @@ function sortRows(event, link, head, cells) {
   const header = link.closest("th");
   const table = header?.closest("table");
   if (!header || !table || !head || table.tHead !== head || !head.contains(header)) return;
-  const sorters = sortLinks(table);
+  const sorters = sortLinks(head);
   const route = sorters.find((sorter) => sorter.link === link);
   if (!route) return;
   for (const part of [head, ...table.tBodies]) if (part.querySelector(SPANS)) return;
@@ -139,7 +135,7 @@ function sortRows(event, link, head, cells) {
   const collator = collatorFor(link);
   const column = header.cellIndex;
   // The other way when sorted by this column, else the way its first click goes.
-  const now = header.getAttribute("aria-sort");
+  const now = route.active;
   const order = now === "ascending" ? -1 : now === "descending" ? 1 : route.first;
   const sorted = Array.from(table.tBodies, (body) => {
     // A body none of whose rows were seen is as the page drew it.
@@ -160,7 +156,8 @@ function sortRows(event, link, head, cells) {
     body.append(moved);
   }
   for (const other of head.querySelectorAll("th[aria-sort]")) if (other !== header) other.removeAttribute("aria-sort");
-  header.setAttribute("aria-sort", order === 1 ? "ascending" : "descending");
+  const active = order === 1 ? "ascending" : "descending";
+  header.setAttribute("aria-sort", active);
   const shown = order === 1 ? route.up : route.down;
   // The address is the page sorted as shown, and each link the page its next click gives: this
   // header's the other way, the others' first direction (none of them is sorted now).
@@ -170,6 +167,7 @@ function sortRows(event, link, head, cells) {
     const to = keeping(way === 1 ? up : down, links);
     to.hash = "";
     sorter.href = to.href;
+    sorter.active = other === link ? active : null;
     other.setAttribute("href", sorter.href);
   }
   const to = keeping(shown, links);

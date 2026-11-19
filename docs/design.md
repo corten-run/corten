@@ -3653,7 +3653,9 @@ rules something out.
     a sort header appeared to need a record of two addresses and its first direction. It already
     has one address in the native `href` and its active direction in `aria-sort`. One text ref
     gives the other address; the ref it belongs to gives the first direction. The head's typed
-    event reads the current values only when a sort or ordered control asks. A draft that split
+    event reads the current values only when a sort or ordered control asks, and takes `aria-sort`
+    from the live header even if both URLs stayed the same. The alternate route writes directly to
+    its ref value's output unless the URL needs JSON or HTML escaping. A draft that split
     the record over the anchor, cell and arrow repeated the native route and resolved the table's
     maps once per header on connect. The single value needs neither a record type nor any runtime
     reader change, and still leaves the link useful without JavaScript.

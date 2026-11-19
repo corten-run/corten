@@ -2363,9 +2363,9 @@ pub struct Valued<T, V, X: RefValue, K = NoKey, const EXPORTED: bool = false> {
 }
 
 /// A value an element gives its ref's handlers ([`Ref::with`]): a number ([`ts::Number`]), text
-/// ([`ts::String`]) or a `bool` ([`ts::Boolean`]), the kinds a handler's `Map<El, number>`,
-/// `Map<El, string>` or `Map<El, boolean>` takes. It is sealed: an app's own type gives the
-/// number or text it stands for.
+/// ([`ts::String`], including the URL of a `&dyn Href`) or a `bool` ([`ts::Boolean`]), the kinds a
+/// handler's `Map<El, number>`, `Map<El, string>` or `Map<El, boolean>` takes. It is sealed: an
+/// app's own type gives the number or text it stands for.
 #[diagnostic::on_unimplemented(
     message = "an element gives its script a number, text or a bool with its ref, not {Self}",
     label = "the value of ref={{row.with(..)}}",
@@ -2405,6 +2405,15 @@ impl RefValue for str {
     #[inline]
     fn write_value(&self, out: &mut String) {
         __private::json_str(self, out)
+    }
+}
+
+impl value::Sealed for dyn crate::Href + '_ {}
+impl RefValue for dyn crate::Href + '_ {
+    type Kind = ts::String;
+    #[inline]
+    fn write_value(&self, out: &mut String) {
+        __private::json_link(self, out);
     }
 }
 
@@ -3802,6 +3811,19 @@ pub mod __private {
     pub fn json_str(text: &str, out: &mut String) {
         out.push('"');
         json_chars(text, out);
+        out.push('"');
+    }
+
+    /// Write the URL into the output first; only copy it out if JSON or HTML needs an escape.
+    #[inline]
+    pub(super) fn json_link(link: &dyn crate::Href, out: &mut String) {
+        out.push('"');
+        let start = out.len();
+        link.write_link(out, false);
+        if !json_plain(&out[start..]) {
+            let url = out.split_off(start);
+            json_chars(&url, out);
+        }
         out.push('"');
     }
 

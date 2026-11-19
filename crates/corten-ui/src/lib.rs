@@ -331,10 +331,18 @@ pub mod dialog {
 /// A sort or an ordered control asks the table's head for its current sort links
 /// (`on:ReadSortLinks={rows::read(event, up, down)}`).
 #[corten::event]
-pub struct ReadSortLinks {}
+pub struct ReadSortLinks {
+    /// Starts empty; the head's handler adds the current routes.
+    pub urls: Vec<String>,
+}
 
 script!(pub mod rows = "rows.js");
 script!(pub mod ordered = "ordered.js");
+
+#[test]
+fn ordered_can_be_registered_without_rows() {
+    let _ = corten::App::new(corten::Routes::new()).components(&[ordered::COMPONENT]).router();
+}
 
 /// The id of a sorted table, or of an element around it, as [`ordered`]'s `send` and `link`
 /// take it. A form or link outside the table's part whose route reads the table's order (a

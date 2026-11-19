@@ -3,7 +3,7 @@
 // order (a "Refresh" beside the table whose answer redirects back to the page) sends the order
 // `rows::sort` put on screen: called from its own markup with the tables' ids. A page that only
 // sorts a table does not load this module.
-import { sortLinks } from "./ui.rows.js";
+import { ReadSortLinks } from "corten/events";
 /** @import { ElementId } from "corten" */
 
 /**
@@ -80,8 +80,10 @@ function tableLinks(tables) {
     if (!found) return [];
     const all = found instanceof HTMLTableElement ? [found] : Array.from(found.querySelectorAll("table"));
     return all.flatMap((table) => {
-      const queries = sortLinks(table).flatMap(({ up, down }) => [up, down]).map((to) => new URL(to, location.href).searchParams);
-      return queries.length ? [queries] : [];
+      if (!table.tHead) return [];
+      const event = new ReadSortLinks({ urls: [] });
+      table.tHead.dispatchEvent(event);
+      return event.urls.length ? [event.urls.map((to) => new URL(to, location.href).searchParams)] : [];
     });
   });
 }

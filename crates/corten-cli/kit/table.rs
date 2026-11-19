@@ -160,7 +160,7 @@ pub fn SortHeader<'a, L: Render, C: ClassList>(
                     Sort::Descending => links.descending_first,
                 };
                 <a
-                    ref={alternate.with(corten::route::link(other))}
+                    ref={alternate.with(other)}
                     class={Sorter}
                     href={link}
                     on:click={on_sort}
