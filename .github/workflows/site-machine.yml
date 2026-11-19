@@ -22,7 +22,6 @@ on:
       - examples/corten-site/deploy/provision.sh
       - examples/corten-site/deploy/provision.test.sh
       - examples/corten-site/deploy/release.sh
-      - examples/corten-site/deploy/release.test.sh
       - examples/corten-site/deploy/nginx.conf
       - examples/corten-site/deploy/corten-site.service
       - .github/workflows/site-machine.yml
@@ -68,7 +67,7 @@ jobs:
       - name: The scripts the machine, a deploy and an operator run
         run: >-
           shellcheck --severity=warning boot.sh bootstrap.sh handover.sh handover.test.sh relay.sh
-          relay.test.sh ../provision.sh ../provision.test.sh ../release.sh ../release.test.sh
+          relay.test.sh ../provision.sh ../provision.test.sh ../release.sh
       # The one command the handover key runs as root, with the names a deploy could give a
       # release: in a container, since it writes where a machine keeps its certificates.
       - name: What the handover's command gives, takes and refuses
@@ -77,8 +76,6 @@ jobs:
       # links that user could have put there.
       - name: What provision.sh writes in the deploy user's directories
         run: docker run --rm -v "$PWD/..:/deploy:ro" ubuntu:24.04 sh /deploy/provision.test.sh
-      - name: Keep a ready backup through a restart and put-back
-        run: docker run --rm -v "$PWD/..:/deploy:ro" ubuntu:24.04 sh /deploy/release.test.sh
       # Whether the address moves, moves first or stays, by what two sshds and a stand-in for
       # the site answer.
       - name: What the relay decides

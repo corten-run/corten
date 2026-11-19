@@ -1,7 +1,7 @@
 # Ships examples/corten-site to the machine that serves it (examples/corten-site/deploy/README.md):
-# tests the site, builds the release binary, copies it over SSH, serves it and asks the site
-# for its page, its commit and its live stream. A site that does not answer as this commit is
-# put back on the release before. Does nothing until the
+# tests the site, builds the release binary, copies it over SSH, points `current` at it and
+# restarts the service, then asks the site for its page, its commit and its live stream. A site
+# that does not answer as this commit is put back on the release before. Does nothing until the
 # repository variable SITE_HOST names a machine.
 name: Site
 
@@ -20,7 +20,6 @@ on:
       - "!examples/corten-site/deploy/provision.sh"
       - "!examples/corten-site/deploy/nginx.conf"
       - "!examples/corten-site/deploy/corten-site.service"
-      - "!examples/corten-site/deploy/release.test.sh"
       - "!examples/corten-site/deploy/README.md"
       - crates/**
       - Cargo.toml
@@ -81,27 +80,66 @@ jobs:
           # release being served, and there is always the one before to go back to.
           release="/opt/corten-site/releases/${GITHUB_SHA::12}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           site="https://$SITE_DOMAIN"
-          # The Site machine apply counts the same page. This is an observation, not a gate.
+          # Observe the public page throughout the ship without gating it.
           if asked=$(mktemp "$RUNNER_TEMP/site-asked.XXXXXX"); then
             (
               trap 'exit 0' TERM
+              # Linux uptime has 10 ms resolution and does not jump with the wall clock.
+              probe_clock() {
+                read -r uptime _ < /proc/uptime
+                probe_ms=${uptime/./}0
+              }
               while :; do
-                echo started
-                if got=$(curl -fsS --max-time 2 "$site/" 2>/dev/null) && grep -q 'built from' <<< "$got"; then echo answered; else echo lost; fi
-                sleep 1
+                probe_clock
+                started=$probe_ms
+                printf 'started %s\n' "$started"
+                if got=$(curl -fsS --max-time 0.25 "$site/" 2>/dev/null) && grep -q 'built from' <<< "$got"; then
+                  echo answered
+                else
+                  echo lost
+                fi
+                probe_clock
+                delay=$((100 - (probe_ms - started)))
+                if (( delay > 0 )); then
+                  printf -v pause '0.%03d' "$delay"
+                  sleep "$pause"
+                fi
               done
             ) > "$asked" &
             asking=$!
             counted() {
+              local ship_status=$1
               kill "$asking" 2>/dev/null || true
               wait "$asking" 2>/dev/null || true
-              started=$(grep -cx started "$asked" || true)
-              answered=$(grep -cx answered "$asked" || true)
-              lost=$(grep -cx lost "$asked" || true)
-              echo "While the ship ran, $site/ had $((answered + lost)) completed probes ($lost did not answer as the site) and $((started - answered - lost)) interrupted. The observer waits one second after each completed probe."
+              awk '
+                function save(gap) {
+                  if (run > longest || (run == longest && gap > bracket)) {
+                    longest = run
+                    bracket = gap
+                  }
+                }
+                $1 == "started" { started++; timestamp = $2 }
+                $1 == "lost" { lost++; run++ }
+                $1 == "answered" {
+                  if (run) save(answered ? timestamp - last_success : -1)
+                  answered++
+                  last_success = timestamp
+                  run = 0
+                }
+                END {
+                  if (run) save(-1)
+                  printf "While the ship ran: %d completed page probes (%d missed), %d interrupted.\n", answered + lost, lost, started - answered - lost
+                  print "Target: 100 ms between starts, one request at a time, 250 ms timeout."
+                  printf "Longest run: %d consecutive misses", longest
+                  if (!longest) print "."
+                  else if (bracket < 0) print "; no successful probes on both sides."
+                  else printf "; bracketing successful starts %d ms apart.\n", bracket
+                }
+              ' "$asked" || true
               rm -f "$asked" || true
+              exit "$ship_status"
             }
-            trap counted EXIT
+            trap 'counted "$?"' EXIT
           fi
           # A machine that stops answering is given up on within 20 seconds, so the step goes on
           # to put the release before back over a new connection.
@@ -109,7 +147,7 @@ jobs:
           ssh="ssh $options deploy@$SITE_HOST"
           # deploy/release.sh runs on the machine, sent with each deploy.
           machine() { $ssh sh -s -- "$@" < examples/corten-site/deploy/release.sh; }
-          before=$($ssh 'readlink /opt/corten-site/current 2>/dev/null || echo none')
+          before=$($ssh 'readlink /opt/corten-site/current 2>/dev/null || true')
           # Nothing on the machine has changed until `serve`: a failure up to there leaves the
           # site as it was.
           $ssh "mkdir -p $release"
@@ -120,8 +158,8 @@ jobs:
           page() { got=$(curl -fsS --max-time 5 "$site/") && printf '%s' "$got" | grep -q "built from $1"; }
           json() { got=$(curl -fsS --max-time 5 -H 'accept: application/json' "$site/") && printf '%s' "$got" | grep -q "\"heat\":\"$1\""; }
           stream() { curl -sS -N --max-time 5 "$site/live/works" 2>/dev/null | grep -q '^event: patch'; }
-          if machine serve "$release" "$before"; then
-            for _ in $(seq 1 20); do
+          if machine serve "$release"; then
+            for try in $(seq 1 20); do
               if page "$commit" && json "$commit" && stream; then
                 echo "$site/ is serving $commit"
                 machine prune || echo "the older releases were not removed; the next deploy tries again"
@@ -133,20 +171,20 @@ jobs:
           else
             echo "the machine did not take $release"
           fi
-          if [ "$before" = none ]; then
+          if [ -z "$before" ]; then
             echo "there is no release before this one to put back"
             exit 1
           fi
           # The machine may be out of reach for a moment, which is what failed the deploy: the
           # put-back is tried three times.
-          put_back() { for _ in 1 2 3; do machine restore "$before" "$release" && return 0; sleep 5; done; return 1; }
+          put_back() { for try in 1 2 3; do machine serve "$before" && return 0; sleep 5; done; return 1; }
           # A release's directory starts with its commit, which its page names: the put-back is
           # checked as that release, not as any answer. It is read with this commit's words for
           # it, so a change to how the page names its commit fails this check once.
           was="${before%/}"
           was="${was##*/}"
           if put_back; then
-            for _ in $(seq 1 20); do
+            for try in $(seq 1 20); do
               if page "${was::7}"; then
                 echo "put back on $before, which answers as itself"
                 # A deploy that failed is a release too, and the disk is small.
@@ -158,7 +196,7 @@ jobs:
             echo "put back on $before, which does not answer as itself"
           else
             echo "$before could not be put back in three tries"
-            # If the restart failed, the backup can still be answering instead of current.
+            # The link moves before the restart, so it may not be what the service runs.
             echo "current points at $($ssh 'readlink /opt/corten-site/current' 2>/dev/null || echo 'a release not known: the machine did not answer')"
             if page "$commit"; then echo "the site answers as $commit, which was not checked in full"; fi
           fi

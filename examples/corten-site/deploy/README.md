@@ -12,7 +12,7 @@ what is in use of that limit instead, and each gauge says which it is.
 | File | What it is |
 |---|---|
 | `provision.sh` | sets up a fresh Ubuntu 24.04 machine, and leaves what is in place when run again |
-| `corten-site.service` | the systemd service: the binary as a user that owns nothing; provisioning derives the temporary backup unit from it |
+| `corten-site.service` | the systemd service: the binary as a user that owns nothing |
 | `nginx.conf` | TLS and HTTP/2 in front, as [the deploy guide](../../../docs/guide/deploy.md) lists, limits on what one reader may ask for and on the live streams it may hold ([below](#what-one-address-can-do)), the streams asked for as zstd or uncompressed, and other names sent on to the site's |
 | `release.sh` | what a deploy runs on the machine: check an upload, switch to a release, and prune old ones |
 | `hold.mjs` | measures what the site holds: memory idle and with streams open, uncompressed or as a browser asks for them, and pages a second meanwhile, with the CPU and memory the server says are in use |
@@ -322,60 +322,45 @@ visited; serve the site from a name whose subdomains are all HTTPS, or from a su
 A push to `main` that touches the site, the crates or the lockfile runs the workflow. It runs
 the site's tests, builds the release with the commit's name in it and copies it to a directory
 of its own, `/opt/corten-site/releases/<commit>-<run>-<attempt>`, where the machine checks it
-against the build's SHA-256. With a release already in place, `release.sh serve` starts the
-candidate on loopback port 3001 and waits for `/health/ready`. If the backup does not answer,
-an answering primary is left alone by `serve`; a down primary can still be restarted. The
-script selects the ready backup in nginx, points `/opt/corten-site/current` at the candidate
-and restarts the primary on port 3000. Both units then run the candidate. Once the primary
-answers readiness, the script selects it again before stopping the backup.
-Readiness checks a listener, not that the release serves the page, JSON or live stream correctly.
-nginx reads the `bridge-ready` marker for each new request. It prefers the primary without
-the marker and the backup with it, so it does not first wait for a restarting primary to
-answer. It can still try the other port after an upstream error or timeout before it sends a
-response. Neither instance is skipped after a failure. On loopback nginx waits up to 250 ms
-to connect and keeps the usual 60-second idle timeout for upstream reads. nginx does not retry
-sent non-idempotent writes.
-nginx does not reload during a ship, and neither service needs a listener passed to it. The
-extra process runs only for the change; on first deploy there is nothing to bridge. The backup
-is not enabled at boot. If a reboot leaves the marker behind but loses the backup, nginx can
-fall back to the primary.
+against the build's SHA-256. Nothing the site is served from has changed up to there. Then it
+points `/opt/corten-site/current` at the release and restarts the service, and asks for the
+page, which names its commit, for the same as JSON, and for a reading from the live stream. If
+the machine does not take the release, or the site does not answer all three as this commit
+within 20 tries, the workflow points `current` back at the release before, restarts, says
+whether that one answers as its own commit, and fails. The newest three releases are kept, and the one served
+always.
 
-The workflow asks for the page, which names its commit, for the same as JSON, and for a reading
-from the live stream. If the machine does not take the release, or the site does not answer all
-three as this commit within 20 tries, it uses `release.sh restore` to put back the release before,
-says whether it answers as its own commit, and fails. An answering backup left by a failed or
-interrupted restart stays up until a primary is ready. A failed backup does not block put-back,
-and a put-back retries the restart even if the previous link is already in place.
-The host bounds the lock and systemctl client waits, and checks queued systemd jobs before it
-acts on the units. The workflow checks the expected `current` under that lock, using `none` on
-the first ship, so an overlapping ship or a late put-back does not displace a different release.
-The newest three installed releases are kept, as are the ones named by `current` and `bridge`;
-an upload has the ship job's 45 minutes before pruning can remove its unfinished directory.
-The workflow also asks for the page while the ship step runs. It waits one second after each
-completed probe and reports completed probes, misses and interrupted probes separately. Those
-counts do not decide the deploy's result.
+Three cases leave a release served that was not checked. The first deploy has no release before
+it to go back to, so one that fails stays as it is. A put-back that does not succeed in three
+tries can leave the new release served; the run says where `current` points, if the machine
+answers, and fails. And a run cancelled by hand, or ended by the job's 45 minutes, after the
+switch and before the checks or the put-back are done leaves the new release served: run the
+workflow again. The release put back is whatever was served before, checked or not, so after
+any of the three, look at the site before trusting a later put-back. A machine that stops
+answering is given up on within 20 seconds and counts as a failure, so the put-back runs over a
+new connection.
 
-Machines provisioned before the backup was added need the updated nginx config, unit and sudo
-rules from provisioning before they can ship this way. The Site machine workflow provisions a
-replacement when those files change. If the Site run started by the same push reaches the old
-machine first, its attempt to start the backup fails before it changes the primary's release;
-the Site run after replacement is the one that ships.
+A restart ends each open page's live stream. The browser asks for it again after a few seconds
+and is sent the new process's readings, whose counts start over, when the service is up by
+then, as a restart of one binary normally is. If that request arrives while the service is still down, nginx answers
+502, and a browser stops asking after an answer that is not the stream: that page's readings stay
+as they were until it is loaded again. The same holds for a stream the limit refused (429). Any
+other request that arrives while the service is down gets nginx's 502.
 
-Three cases can leave a release served that was not checked. The first deploy has no release
-before it to go back to. A put-back that does not succeed in three tries can leave the new
-release served; the run says where `current` points, if the machine answers, and fails. A run
-cancelled by hand, or ended by the job's 45 minutes, can stop before the checks or the put-back
-are done: `current` can point at the old release or an unchecked candidate, and the backup
-can be the one answering. Run the workflow again. The release put back is the primary release
-from before the run, checked or not, so look at the site before trusting a later put-back. A
-machine that stops answering is given up on within 20 seconds and counts as a failure, so the
-put-back runs over a new connection.
+In ten local deploys of the same binary, on Debian 13 with systemd, nginx over loopback TLS,
+one CPU and 512 MiB, page probes started every 50 ms. The successful probes bracketing a
+run of 502s started 152 to 337 ms apart in the first rehearsal. Across rehearsals, 36 to 78
+of 600 to 1,000 dense probes got a 502 per ten deploys; probes a second apart usually missed
+the gap. The bracket is a sampling interval, not a measurement of the exact outage boundaries.
 
-A stream still ends with its process, including one opened on the backup. The browser asks
-again after a few seconds and gets the readings from whichever process answers; its counts start
-over. During an ordinary restart a new stream can open on the backup rather than getting a 502
-while the primary comes up. If neither instance answers, or a limit refuses a stream (429), the
-browser stops asking and the page's readings stay as they were until it is loaded again.
+The Site workflow now measures the production gap during the ship step. It targets 100 ms
+between public page probe starts, one request at a time, with a 250 ms timeout. A slow probe
+delays the next start. The log separates completed misses (including 502s, connection errors,
+timeouts or a missing page marker) from probes interrupted when the step ends. It reports the
+longest run of misses and the time between the successful starts on either side, when both
+were seen. The observation does not decide the ship result. Keep the ordinary restart unless
+the production gap is well beyond the local measurements or a reader reports disruption;
+then revisit the smallest handoff the evidence justifies.
 
 ## What it holds
 
@@ -959,15 +944,14 @@ real machines, a request in flight while the address moves other than those aske
 apart, or a renewal on a machine that was handed its certificate been seen. The rig is not
 in the repository, as none of this directory's rehearsals are: CI lints these scripts,
 validates
-`main.tf`, and runs tests in containers. `infra/handover.test.sh` runs the handover's
+`main.tf`, and runs three tests in containers. `infra/handover.test.sh` runs the handover's
 command against the names a deploy could give a release, a handover cut short and one with
 no release in it. `provision.test.sh` runs the lines of `provision.sh` that write in the
 deploy user's directories, over links that user could have put there.
 `infra/relay.test.sh` runs the relay against two sshds, with a stand-in for the command
 the key runs on a machine and one for the site, and with the relay's waits passing at once:
-it sees which way the relay decides, and none of what a real machine does. `release.test.sh`
-checks when the instances start and stop, using stand-ins for systemd and readiness probes.
-The rest is rehearsed again by whoever changes it.
+it sees which way the relay decides, and none of what a real machine does. The rest is
+rehearsed again by whoever changes it.
 
 Among what has still not run on a real machine: an apply that fails once begun or a droplet
 that cannot be made, a first deploy that fails, a put-back of the release before, a machine
