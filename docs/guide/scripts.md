@@ -755,6 +755,11 @@ no `import()` to wait for. Markup the runtime inserts (a navigation, a patch, a 
 waits for the modules its handlers name, and modules named inside a `<template>` load with the
 page. On the first page, an event that arrives before its module is in gets the browser's
 default and no handler, as without JavaScript. `on:connect` waits for its module instead.
+
+A focus handler that runs while a patch restores focus sees refs in the markup inserted so
+far. A later `on:connect` in that patch sees the refs after all its replacements, even if the
+component's refs had already been read before the patch.
+
 A module that did not load (a request the network dropped: the page's script tag's, then the
 runtime's import, or the import alone for a module only inserted markup names) is asked for
 again once a wait is over that grows with each failure in a row (0.5 s, doubling, at most 30 s, as

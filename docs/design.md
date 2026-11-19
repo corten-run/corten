@@ -4554,10 +4554,12 @@ rules something out.
     only inside recorded roots, follows a detached counterpart through any further recorded
     replacements, and acts after the sweep, innermost first. A ref lookup during a patch reads
     the current tree without using the ref cache or draining mutation records. Once all the
-    replacements are recorded, the patch ends the removed elements' lives before wiring the
-    rest of that patch. The observer scans after the patch sets CSS variables and current nav
-    links, then clears the recorded roots as usual. If the successor is drawn open and has not
-    connected at abort, the dialog widget passes the opener on after it connects
+    replacements are recorded, a patch that had such a lookup discards the warmed cache and
+    ends the removed elements' lives before wiring the rest of that patch. A later connect
+    then sees the new refs even before the observer has counted their changes. The observer
+    scans after the patch sets CSS variables and current nav links, then clears the recorded
+    roots as usual. If the successor is drawn open and has not connected at abort, the
+    dialog widget passes the opener on after it connects
     ([#1629 A ref-taking focus handler between overlapping dialog replacements in one patch loses the dialog's close](https://github.com/corten-run/corten/issues/1629)).
     A dialog needs the drawn-state record made before connect, so a dialog a connect handler
     just created cannot receive the old close. Duplicate ids are invalid; moving an
@@ -4646,6 +4648,8 @@ rules something out.
     159 and WebKit 27.2. In each engine, a later connect sees the old signal aborted and the
     patch's CSS variables and current nav link applied, unlike on `ac87c5b03`. An overlapping
     redraw that keeps the modal open still returns focus to the original opener on a later close.
+    In the same three engines, the warmed-ref smoke's later connect saw only the surviving ref on
+    `ed1ce4b21` and both the surviving and added refs after the cache reset.
 
 53. <a id="choice-page-actions"></a>**A page's several writes are named posts of its own route, chosen by a `do` parameter
     in the address each form posts to, not by the pressed button's name in the body or a route per

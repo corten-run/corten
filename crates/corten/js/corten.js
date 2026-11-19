@@ -338,7 +338,7 @@ function findRefs(from, owner, name) {
   /** @type {ReturnType<typeof refCache.get>} */
   let cached;
   let changes = 0;
-  if (patching) patchRef = true;
+  if (patching) patching = 2;
   else {
     const pending = observer.takeRecords();
     if (pending.length) observed(pending);
@@ -364,15 +364,16 @@ function findRefs(from, owner, name) {
 }
 
 /**
- * How often elements with a ref of this name (`rows`, for `rows` and `offer-list/rows`) joined
+ * The latest change for each ref name (`rows`, for `rows` and `offer-list/rows`) that joined
  * the page. Only those can add to what a ref resolves to; elements that leave are noticed when a
  * cached ref is next used. So 10,000 rows put in or taken out of a list leave the refs of the
  * list's component cached.
  * @type {Map<string, number>}
  */
 const refChanges = new Map();
+let refVersion = 0;
 /** Each component root's resolved refs. @type {WeakMap<Element, Map<string, { changes: number, found: Element[] }>>} */
-const refCache = new WeakMap();
+let refCache = new WeakMap();
 
 /** @param {Element} el @param {Set<string>} names */
 function refName(el, names) {
@@ -791,8 +792,8 @@ function sweep() {
  */
 const MANY = 16;
 
-let patching = false;
-let patchRef = false;
+// 0: idle, 1: applying a patch, 2: a ref was read while applying it.
+let patching = 0;
 
 /**
  * Markup that joins the page (a navigation, a patch, a script's insert) is wired;
@@ -814,7 +815,7 @@ function observed(records) {
   }
   // Wiring is the same however often it runs, so a parent scanned whole may hold rows wired before.
   for (const parent of wide) if (inPage(parent)) scan(parent, names, true);
-  for (const name of names) refChanges.set(name, (refChanges.get(name) ?? 0) + 1);
+  for (const name of names) refChanges.set(name, ++refVersion);
   if (removed) sweep();
   if (replacements?.size) for (const { removedNodes } of records) for (const node of removedNodes) replacements.delete(node);
 }
@@ -1091,7 +1092,7 @@ async function apply(html, signal, sent, took, own, asked, within) {
   let again;
   // Whether it removes a nav link, which can leave another of its nav current.
   let navs = false;
-  patching = true;
+  patching = 1;
   try {
     for (const el of Array.from(content.children)) {
       // Read from the attribute, as `target.id` is a control named id when the target is a form.
@@ -1132,9 +1133,13 @@ async function apply(html, signal, sent, took, own, asked, within) {
     // A ref read would normally already have swept. End those lives before the observer wires
     // later replacements, but only now that the whole chain of replacement roots is available.
     try {
-      if (patchRef) sweep();
+      if (patching === 2) {
+        // Later connects can read refs before the deferred observer counts their changes.
+        refCache = new WeakMap();
+        sweep();
+      }
     } finally {
-      patchRef = patching = false;
+      patching = 0;
     }
   }
   if (again) {
@@ -1897,7 +1902,7 @@ function drawLayout(old, fresh, before, said, inside = false) {
   // kept element's `on:connect` does not run again.
   if (wiring() !== was) {
     scan(old, names);
-    for (const name of names) refChanges.set(name, (refChanges.get(name) ?? 0) + 1);
+    for (const name of names) refChanges.set(name, ++refVersion);
   }
   if (matchesOf(old, LIVE)) {
     const content = document.createDocumentFragment();
