@@ -345,6 +345,9 @@ impl<'a> Markup<'a> {
         // A table's paragraph close also depends on the document's quirks mode.
         if name != "table" && closes_p(name) {
             self.close_scoped("p", &["button"]);
+        } else if name == "input" {
+            // The in-body rule closes the select before inserting the void input.
+            self.close_scoped("select", &[]);
         }
     }
 

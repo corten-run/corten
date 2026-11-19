@@ -7429,10 +7429,12 @@ by design; where it is known, a limit says what would lift it or why it is so.
     references and `&Tab;` and `&NewLine;` in HTML text and textarea values, and leaves
     script and stylesheet source, iframe fallback and inert template contents out of
     hint text. The open-element stack follows SVG and MathML exits and the in-body
-    start tags that close list items, definition items and paragraphs. It ignores a
-    nested form start outside template contents while the form pointer is set, before
-    considering a paragraph close. For explicit ends it checks list-item scope for
-    `</li>`, button scope for `</p>`, and ordinary scope for `</dd>` and `</dt>`.
+    start tags that close list items, definition items and paragraphs. An `<input>`
+    start pops an in-scope `<select>` and its open descendants before inserting the
+    input. It ignores a nested form start outside template contents while the form
+    pointer is set, before considering a paragraph close. For explicit ends it checks
+    list-item scope for `</li>`, button scope for `</p>`, and ordinary scope for `</dd>`
+    and `</dt>`.
     It does not insert the empty paragraph that a stray `</p>` creates or model the
     special stack removal for a misnested `</form>`. It does not follow other insertion
     modes or reparenting (for example, moving text out of a table), or the paragraph

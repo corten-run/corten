@@ -886,8 +886,9 @@ that draws such a hint and no element `id` (a radio group without an id). A lone
 `raw(..)` can be text; script and stylesheet source and inert templates do not supply hint
 text. The scan respects browser scope when closing list items, definition items and
 paragraphs, so the second item's text in `<li id=qty-hint><li>Outside` is not part of the
-hint. A nested form start the browser ignores does not close a hint paragraph. It does not follow all
-of the browser's tree building or computed visibility
+hint. An `<input>` that closes a `<select>` lets a following block close the hint paragraph.
+A nested form start the browser ignores does not close a hint paragraph. The scan does not
+follow all of the browser's tree building or computed visibility
 ([Limit 33](../design.md#limit-developer-markup-scan)). A patch that redraws the
 hint alone, its control staying on the page, is not checked. A tag that writes `id`, `name` or the
 ARIA attributes beside `e.control(..)` does not compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes
