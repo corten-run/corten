@@ -24,7 +24,7 @@ bytes = "1"
 corten-macros.workspace = true
 # `alloc` for `join_all` over the listeners.
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
-getrandom = "0.3"
+getrandom = "0.4"
 # The HTTP vocabulary (`StatusCode`, `HeaderMap`, `Uri`, `request::Parts`), which apps name as
 # `corten::http`, the crate hyper and HTTP clients share.
 http = "1"
