@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { apparatus, digest, workerHeadroom } from "./apparatus.mjs";
 import { verifyTimedPhase } from "./timed.mjs";
+import { cpuSettings } from "./contract.mjs";
 
 export const preflightSchema = "catalog-apparatus-preflight/v1";
 export const preflightCases = ["fixture", "api"].map((source) => ({ app: "corten", source, target: "page" }));
@@ -22,6 +23,7 @@ export function requiredRoundArtifacts(summary) {
       if (summary.apps[app].checks[source].failure) keys.push(`${prefix}/checks.json.failure.json`);
       if (!gated) for (let pass = 1; pass <= summary.options.passes; pass++) {
         const raw = `${prefix}/p${pass}-page`;
+        if (summary.measurement.loadLayout === "c16-generator-v1") keys.push(`${raw}/cold-probe.json`);
         keys.push(...["cold.json", "cold.log", "container.json", "app.log",
           ...["warmup", "fixed", "sat64", "sat256"].flatMap(phaseArtifacts)].map((k) => `${raw}/${k}`));
       }
@@ -39,10 +41,15 @@ export function verifyArtifactIndex(summary, reader) {
 }
 export const preflightBinding = (s) => ({ commit: s.commit, sourceSha256: s.savedEvidence.apparatusSourceSha256,
   fixtureSha256: s.fixtureSha256, tools: s.tools, imageId: s.apps.corten.imageId, cpus: s.measurement.cpus, apparatus,
+  ...(s.measurement.loadLayout === undefined ? {} : { loadLayout: s.measurement.loadLayout }),
   warmup: s.options.warmup, duration: s.options.duration, rate: s.options.rate });
 export function admission(summary, observed) {
   assert.equal(observed.metrics.outcome, "passed", "apparatus preflight request/drop failure");
-  assert.ok(observed.resources[`${summary.runId}-k6`].cpuMaxPct < 320, "preflight generator has no headroom");
+  const { cpus, loadLayout } = summary.measurement;
+  const env = Object.fromEntries(["app", "api", "load"].map(role => [`CATALOG_${role.toUpperCase()}_CPUS`, cpus[role].cpuset]));
+  const { load } = cpuSettings(env, loadLayout);
+  assert.equal(cpus.load.quota, load.quota, "preflight generator quota differs from layout");
+  assert.ok(observed.resources[`${summary.runId}-k6`].cpuMaxPct < load.quota * 80, "preflight generator has no headroom");
   workerHeadroom(observed.workerPeaks, observed.resources[`${summary.runId}-upstream`].cpuMaxPct);
 }
 export function verifyPreflight(summary, reader) {

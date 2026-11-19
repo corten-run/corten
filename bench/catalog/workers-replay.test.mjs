@@ -44,6 +44,56 @@ test("v4 round replays both positive and attributed negative outcomes with first
   }
 });
 
+test("wide generator raw replay checks twelve CPUs for k6, four for checker, and headroom for successful targets", () => {
+  const f = workerRound(null, { wideGenerator: true });
+  assert.equal(replayCatalog(f.summary, f.reader, f.commit).baseline, true);
+  const saved = f.reader.readJson("preflight.json");
+  assert.equal(saved.binding.loadLayout, "c16-generator-v1");
+  const checkerKey = "fixture/corten/checker.json", checker = f.reader.readJson(checkerKey);
+  assert.equal(checker.checker.HostConfig.NanoCpus, 4e9);
+  assert.equal(checker.checker.HostConfig.CpusetCpus, "4-7");
+  const load = f.reader.readJson(`${prefix}/sat256-boundary.json`).after.load;
+  assert.equal(load.budget.NanoCpus, 12e9); assert.equal(load.budget.CpusetCpus, "4-15");
+  assert.equal(phase(f).resources[`${f.summary.runId}-k6`].cpuMaxPct, 391.36);
+  const limitsKey = `${prefix}/sat256-boundary.json`, originalLimits = f.reader.readText(limitsKey);
+  const finishing = JSON.parse(originalLimits);
+  finishing.loadLimits.observations.pop(); // Kernel dropped the PID before the last scheduled sample.
+  f.put(limitsKey, finishing); phase(f); // Final Docker exit is still inside the measured window.
+  for (const [mutate, message] of [
+    [(r) => { r.observations[1].membershipBefore = "0::/other.scope\n"; }, /PID cgroup membership/],
+    [(r) => { r.observations[1].pid++; }, /PID cgroup membership/],
+    [(r) => { r.observations[1].quotas[1].cpuMax = "800000 100000\n"; }, /parent quota restricts/],
+    [(r) => { r.observations = r.observations.slice(0, 1); }, /sample count/],
+    [(r) => { r.observations = r.observations.slice(0, 2); }, /sampling stopped early/],
+  ]) {
+    const boundary = JSON.parse(originalLimits); mutate(boundary.loadLimits);
+    f.put(limitsKey, boundary);
+    assert.throws(() => phase(f), message);
+  }
+  f.put(limitsKey, originalLimits);
+  const checkerText = f.reader.readText(checkerKey);
+  checker.checker.HostConfig.NanoCpus = 12e9;
+  f.put(checkerKey, checker); indexRound(f);
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit));
+  f.put(checkerKey, checkerText);
+  const coldKey = `${prefix}/cold-probe.json`, originalCold = f.reader.readText(coldKey);
+  for (const [field, value, message] of [["cpuset", "4-15", /probe affinity/], ["quotaNanoCpus", 12e9, /probe quota/]]) {
+    f.put(coldKey, { ...JSON.parse(originalCold), [field]: value }); indexRound(f);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), message);
+  }
+  f.put(coldKey, originalCold);
+  const preflightText = f.reader.readText("preflight.json");
+  delete saved.binding.loadLayout; f.put("preflight.json", saved); indexRound(f);
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /preflight source\/recipe differs/);
+  f.put("preflight.json", preflightText); stats(f, "k6", 960); indexRound(f);
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /generator.*headroom/);
+});
+
+test("historical successful phases above 320% remain replayable after a valid four-core preflight", () => {
+  const f = workerRound(); stats(f, "k6", 391.36); indexRound(f);
+  assert.equal(replayCatalog(f.summary, f.reader, f.commit).baseline, true);
+});
+
 test("native document header evidence cannot be relabeled, omitted, weakened or detached from checker execution", () => {
   const current = groupDescriptor("catalog-page"), historical = groupDescriptor("catalog-page", { historical: true });
   const old = workerRound(null, { historical: true });

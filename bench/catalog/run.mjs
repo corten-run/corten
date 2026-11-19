@@ -32,14 +32,17 @@ try {
   observations = await import("./raw.mjs");
 }
 finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
-const { aggregate, cpuSettings, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets,
+const { aggregate, cpuSettings, probeCpu, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets,
   validateCatalog, verifyDocumentHeaderChecks, workload } = contract;
 const { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } = grouping;
 const { containerEvidence, rawSchema, verifyFailedCheck, verifyCheckBoundary, checkBoundaryEvidence, imageCommandEvidence } = observations;
 const options = parseArgs(process.argv.slice(2), inventory);
 const group = options.group === undefined ? null : groupDescriptor(options.group);
 const plan = timingPlan(options, sources, targets);
-const cpus = cpuSettings(process.env);
+const loadLayout = process.env.CATALOG_LOAD_LAYOUT;
+if (loadLayout !== undefined) assert.equal(options.group, "catalog-page", "generator qualification requires the catalog-page group");
+const cpus = cpuSettings(process.env, loadLayout);
+const probeCpus = probeCpu({ cpus, loadLayout });
 const runId = `catalog-${options.round}-${randomBytes(5).toString("hex")}`;
 const network = `${runId}-net`;
 const label = "run.corten.catalog";
@@ -54,6 +57,7 @@ const summary = { workload, round: options.round, runId, options, startedAt: new
     cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU", coldClock: "Docker-host container StartedAt to first complete 200, not process exec",
     leanProfile: { name: leanProfile, apps: leanApps } } };
 summary.host.checkout = repo.replaceAll("\\", "/").replace(/\/$/, "");
+if (loadLayout !== undefined) summary.measurement.loadLayout = loadLayout;
 // Ungrouped runs header-check only the lean contenders (check.mjs); record that scope so
 // reports never present the mixed run as a feature-parity comparison.
 if (!group) summary.measurement.documentHeaders = { contract: groupDescriptor("catalog-page").documentHeaders, apps: [...leanApps] };
@@ -182,7 +186,7 @@ async function coldStart(name, source, target, image, raw) {
   const probe = `${name}-probe`;
   const path = `${target === "json" ? "/api" : ""}/catalog/record_1`;
   try {
-    await owned(["run", "-d", "--network", network, ...cpus.load.args, "--memory", "256m", ...mount, nodeImage, "node", "/bench/catalog/cold.mjs", `http://${name}:8080`, path, String(options.startupTimeout)], probe);
+    await owned(["run", "-d", "--network", network, ...probeCpus.args, "--memory", "256m", ...mount, nodeImage, "node", "/bench/catalog/cold.mjs", `http://${name}:8080`, path, String(options.startupTimeout)], probe);
     const deadline = Date.now() + 10000;
     while (!(await docker(["logs", probe])).includes("catalog-probe-ready")) {
       if (Date.now() > deadline) throw new Error("cold sidecar did not become ready");
@@ -195,6 +199,11 @@ async function coldStart(name, source, target, image, raw) {
     assert.equal(exit, "0", `cold probe: ${output}`);
     const result = JSON.parse(output.split("\n").findLast((line) => line.startsWith("{")));
     const info = await inspect(name);
+    if (loadLayout === "c16-generator-v1") {
+      const observed = await inspect(probe);
+      writeFileSync(join(raw, "cold-probe.json"), JSON.stringify({ ...containerEvidence(observed),
+        name: observed.Name, command: observed.Config.Cmd, finishedAt: observed.State.FinishedAt }, null, 2));
+    }
     const ms = Date.parse(result.first200At) - Date.parse(info.State.StartedAt);
     assert.ok(ms >= 0 && ms <= options.startupTimeout * 1000, "invalid Docker-host cold clock");
     const cold = { ...result, first200MsFromContainerStart: ms, containerStartedAt: info.State.StartedAt, clock: "Docker host wall clock; container start, not process exec; polling interval 10ms", measuredBeforeReadinessOrWarmup: true };
@@ -340,7 +349,7 @@ try {
         // Share ONLY the app's network namespace, not its PID namespace: loopback
         // stays a trustworthy browser origin without disabling security features.
         const workerBefore = group ? await upstreamControl() : undefined;
-        await owned(["create", "--network", `container:${name}`, ...cpus.load.args, "--memory", "2g", "--shm-size", "1g", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
+        await owned(["create", "--network", `container:${name}`, ...probeCpus.args, "--memory", "2g", "--shm-size", "1g", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
           "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", checker.Id, "node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, apiBase,
           "/results/checks.json", ...(leanApps.includes(app) ? [app] : [])], checkContainer);
         let checkerFailure, boundary;
@@ -388,7 +397,7 @@ try {
     summary.tools.k6 = await describeK6(docker, ["--label", `${label}=${runId}`], { pullLog: join(folder, "pull-k6.log") });
     if (group) summary.tools.k6Execution = imageCommandEvidence(JSON.parse(await docker(["image", "inspect", summary.tools.k6.imageId]))[0]);
     writeFileSync(join(folder, "tools.json"), JSON.stringify(summary.tools, null, 2));
-    await owned(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
+    await owned(["run", "-d", "--network", "none", "--cpus", "1", ...(probeCpus.cpuset ? ["--cpuset-cpus", probeCpus.cpuset] : []), "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
       nodeImage, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
     if (group) {
       const receipt = { schema: preflightSchema, binding: preflightBinding(summary), passed: false, hashes: {}, cleanup: null };

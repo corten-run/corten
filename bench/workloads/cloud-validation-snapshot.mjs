@@ -10,6 +10,7 @@ import { Worker } from "node:worker_threads";
 
 export const validationPaths = Object.freeze([
   "bench/catalog/apparatus.mjs",
+  "bench/catalog/cgroup.mjs",
   "bench/catalog/check.mjs",
   "bench/catalog/contract.mjs",
   "bench/catalog/droplet-contract.mjs",
