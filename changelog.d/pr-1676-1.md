@@ -1,0 +1,1 @@
+- Pin new grouped benchmark fleets to DigitalOcean's sfo3 region without changing their c-8 size or the region of historical catalog runs.

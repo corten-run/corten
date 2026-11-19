@@ -2,11 +2,19 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
-import { host } from "../catalog/droplet-contract.mjs";
+import { host as catalogHost } from "../catalog/droplet-contract.mjs";
 import { contractSha256, groupNames, registrySchema, selectedApps } from "./registry.mjs";
 
-export { host };
+const legacyHost = Object.freeze({ ...catalogHost, region: "sfo2" });
+export const host = Object.freeze({ ...catalogHost, region: "sfo3" });
+const historicalFleetSchema = "benchmark-group-fleet/v1", launchFleetSchema = "benchmark-group-fleet/v2";
+export function providerCreateHost(mode) {
+  if (mode === "legacy") return legacyHost;
+  if (mode === "dedicated") return host;
+  assert.equal(mode, null, "unknown provider create mode");
+}
 export const tags = Object.freeze(["corten-bench", "corten-bench-groups"]);
+const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const full = (value, pattern, name) => {
   assert.equal(typeof value, "string", `${name} must be a string`);
   const match = pattern.exec(value);
@@ -27,34 +35,54 @@ const exact = (value, fields) => {
   assert.ok(value && Object.getPrototypeOf(value) === Object.prototype, "plain object required");
   assert.deepEqual(Object.keys(value).sort(), [...fields].sort(), "unexpected or missing fields");
 };
-export function fleetPlan(input, createdAt = new Date().toISOString()) {
+// Exact ordered rosters written by the pre-placement controllers. These pins
+// decode saved state only; the controller's separate recovery policies
+// still decide which measured sources and host attempts may be acted on.
+const historicalSelections = new Set([
+  "d9c74b1fee3f6d5c71cee7405b24db73da1ffbef8f0d00c66924ebf7b475a251", // Retained r21 fleets.
+  "57bf46a0e3e03d8a48bdcca952b522c148d91a7892c74e6bfbe2e860b927e19a", // 19defc76, immediately before placement.
+]);
+const historicalSelection = (selected) => selected && historicalSelections.has(digest(selected));
+function buildFleet(input, createdAt, schema, placement, selected) {
   exact(input, ["round", "commit", "token", "tokens", "provider", "sshKey"]);
   const { round, commit, token, tokens, provider, sshKey } = input;
   roundName(round); assert.ok(Number(round.slice(1)) >= 17, "official campaigns start at r17");
   full(commit, /[a-f0-9]{40}/, "measured commit"); full(token, /[a-f0-9]{16}/, "fleet token");
-  exact(tokens, groupNames); exact(provider, ["accountId", "context"]);
+  const names = selected.groups.map(({ group }) => group);
+  exact(tokens, names); exact(provider, ["accountId", "context"]);
   full(provider.accountId, /(?:user|team):[A-Za-z0-9][A-Za-z0-9-]{0,127}/, "scoped stable account UUID required");
   full(provider.context, /[A-Za-z0-9][A-Za-z0-9_.-]{0,127}/, "explicit saved doctl context required");
   full(sshKey, /[1-9]\d*/, "SSH key ID required"); date(createdAt);
-  const jobs = groupNames.map((group) => {
+  const jobs = names.map((group) => {
     const ownership = full(tokens[group], /[a-f0-9]{16}/, "ownership token");
     return { group, token: ownership, name: `corten-bench-groups-${round}-${ownership}`,
       tag: `corten-bench-groups-run-${ownership}` };
   });
   assert.equal(new Set([token, ...jobs.map((row) => row.token)]).size, jobs.length + 1, "unique fleet/host tokens required");
-  const body = { schema: "benchmark-group-fleet/v1", round, commit, token, createdAt,
-    provider: { ...provider }, sshKey, host: { ...host }, selection: selection(), jobs };
-  return { ...body, fleetSha256: createHash("sha256").update(JSON.stringify(body)).digest("hex") };
+  const body = { schema, round, commit, token, createdAt,
+    provider: { ...provider }, sshKey, host: { ...placement }, selection: selected, jobs };
+  return { ...body, fleetSha256: digest(body) };
+}
+export function fleetPlan(input, createdAt = new Date().toISOString()) {
+  return buildFleet(input, createdAt, launchFleetSchema, host, selection());
 }
 export function validateFleet(plan) {
   assert.ok(plan && Array.isArray(plan.jobs), "complete fleet plan required");
-  const expected = fleetPlan({ round: plan.round, commit: plan.commit, token: plan.token,
-    tokens: Object.fromEntries(plan.jobs.map((row) => [row.group, row.token])), provider: plan.provider, sshKey: plan.sshKey }, plan.createdAt);
+  assert.ok([historicalFleetSchema, launchFleetSchema].includes(plan.schema), "unknown fleet schema");
+  const historical = plan.schema === historicalFleetSchema;
+  if (historical) assert.ok(historicalSelection(plan.selection), "historical fleet selection differs");
+  const expected = buildFleet({ round: plan.round, commit: plan.commit, token: plan.token,
+    tokens: Object.fromEntries(plan.jobs.map((row) => [row.group, row.token])), provider: plan.provider, sshKey: plan.sshKey },
+    plan.createdAt, plan.schema, historical ? legacyHost : host, historical ? plan.selection : selection());
   assert.deepEqual(plan, expected, "fleet differs from complete fixed registry and owned hosts");
   return plan;
 }
+export function validateLaunchFleet(plan) {
+  assert.equal(plan?.schema, launchFleetSchema, "historical fleet cannot authorize launch");
+  return validateFleet(plan);
+}
 export function assertFleetCensus(droplets, plan) {
-  validateFleet(plan); assert.ok(Array.isArray(droplets));
+  validateLaunchFleet(plan); assert.ok(Array.isArray(droplets));
   const names = new Set(), ids = new Set();
   for (const d of droplets) {
     if (!d.name?.startsWith("corten-bench-groups-") && !d.tags?.includes(tags[0])) continue;
@@ -64,7 +92,7 @@ export function assertFleetCensus(droplets, plan) {
     assert.ok(!names.has(d.name) && !ids.has(String(d.id)), "duplicate fleet host identity");
     names.add(d.name); ids.add(String(d.id));
     for (const tag of [...tags, job.tag]) assert.ok(d.tags?.includes(tag), "fleet ownership tag differs");
-    assert.equal(d.size_slug ?? d.size?.slug, host.size); assert.equal(d.region?.slug, host.region);
+    assert.equal(d.size_slug ?? d.size?.slug, plan.host.size); assert.equal(d.region?.slug, plan.host.region);
   }
   return true;
 }
@@ -76,13 +104,16 @@ export function reservation(input, createdAt = new Date().toISOString()) {
   full(token, /[a-f0-9]{16}/, "ownership token");
   const name = `corten-bench-groups-${round}-${token}`;
   if (group !== undefined) {
-    validateFleet(fleet); assert.equal(fleet.round, round); assert.equal(fleet.commit, commit);
+    validateLaunchFleet(fleet); assert.equal(fleet.round, round); assert.equal(fleet.commit, commit);
     assert.equal(fleet.jobs.find((row) => row.group === group)?.token, token, "host not reserved in fleet");
   }
   return validateState({ schema: group === undefined ? "benchmark-group-host/v1" : "benchmark-dedicated-group-host/v1", round, commit, token, name,
-    tag: `corten-bench-groups-run-${token}`, unit: `${name}.service`, host: { ...host },
-    selection: group === undefined ? selection() : { schema: registrySchema, groups: selection().groups.filter((row) => row.group === group) },
+    tag: `corten-bench-groups-run-${token}`, unit: `${name}.service`, host: { ...(fleet?.host ?? legacyHost) },
+    selection: fleet === undefined ? selection() : structuredClone(groupSelection(fleet, group)),
     ...(group === undefined ? {} : { group, fleet: structuredClone(fleet) }), createdAt, status: "reserved" }, round);
+}
+function groupSelection(fleet, group) {
+  return { schema: fleet.selection.schema, groups: fleet.selection.groups.filter((row) => row.group === group) };
 }
 export function validateState(s, round) {
   assert.ok(s && typeof s === "object" && !Array.isArray(s), "host state required");
@@ -94,15 +125,16 @@ export function validateState(s, round) {
   assert.equal(s.name, `corten-bench-groups-${round}-${s.token}`);
   assert.equal(s.tag, `corten-bench-groups-run-${s.token}`);
   assert.equal(s.unit, `${s.name}.service`);
-  assert.deepEqual(s.host, host);
   if (dedicated) {
     validateFleet(s.fleet); assert.equal(s.fleet.round, round); assert.equal(s.fleet.commit, s.commit);
-    assert.ok(groupNames.includes(s.group));
+    assert.deepEqual(s.host, s.fleet.host);
     assert.equal(s.fleet.jobs.find((row) => row.group === s.group)?.token, s.token, "host not reserved in fleet");
-    assert.deepEqual(s.selection, { schema: registrySchema, groups: selection().groups.filter((row) => row.group === s.group) }, "complete native group required");
+    assert.deepEqual(s.selection, groupSelection(s.fleet, s.group), "complete native group required");
   } else {
+    assert.deepEqual(s.host, legacyHost);
     assert.ok(!Object.hasOwn(s, "group") && !Object.hasOwn(s, "fleet"), "legacy host cannot select a group");
-    assert.deepEqual(s.selection, selection(), "complete current registry selection differs");
+    if (!historicalSelection(s.selection))
+      assert.deepEqual(s.selection, selection(), "complete current registry selection differs");
   }
   date(s.createdAt);
   assert.ok(["reserved", "creating", "preparing", "starting", "running", "collected", "retired"].includes(s.status));

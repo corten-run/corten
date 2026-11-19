@@ -32,6 +32,7 @@ function action(message, host) {
     assert.equal(command.length, 5); assert.deepEqual(command.slice(0, 3), ["compute", "droplet", "delete"]);
     assert.match(command[3], /^[1-9]\d*$/); assert.equal(command[4], "--force");
   } else {
+    assert.ok(host, "provider create is not authorized for this mode");
     assert.equal(command.length, 17);
     assert.deepEqual(command.filter((_, i) => ![3, 5, 7, 9, 11, 13].includes(i)), ["compute", "droplet", "create", "--size", "--region", "--image", "--ssh-keys", "--tag-names", "--wait", "--output", "json"]);
     assert.match(command[3], /^corten-bench-groups-r[1-9]\d{0,8}-[a-f0-9]{16}$/);
@@ -62,7 +63,7 @@ export function serveProviderWorker(dependencies = {}) {
     let ok = false, result = null, account = false, deadline;
     try {
       if (nonce === undefined) {
-        exact(message, ["schema", "nonce", "sources"]); assert.equal(message.schema, "cloud-provider-init/v1");
+        exact(message, ["schema", "nonce", "sources", "createMode"]); assert.equal(message.schema, "cloud-provider-init/v2");
         assert.match(message.nonce, /^[a-f0-9]{32}$/); nonce = message.nonce;
         assert.deepEqual(message.sources.map((value) => value.name), names);
         const approved = new Map();
@@ -83,10 +84,10 @@ export function serveProviderWorker(dependencies = {}) {
         } });
         const engine = await import(pathToFileURL(join(directory, "cloud-provider-engine.mjs")).href);
         providerFailure = (await import(pathToFileURL(join(directory, "cloud-options.mjs")).href)).providerFailure;
-        host = (await import(pathToFileURL(join(directory, "cloud-contract.mjs")).href)).host;
+        host = (await import(pathToFileURL(join(directory, "cloud-contract.mjs")).href)).providerCreateHost(message.createMode);
         const { createProviderEngine } = engine;
         isSettledAccountFailure = engine.isSettledAccountFailure;
-        run = createProviderEngine({ ...dependencies, repo: process.cwd(), interrupted: () => closing }); result = "ready";
+        run = createProviderEngine({ ...dependencies, repo: process.cwd(), interrupted: () => closing, createMode: message.createMode }); result = "ready";
       } else {
         action(message, host); assert.equal(message.schema, "cloud-provider-action/v1"); assert.equal(message.sequence, sequence + 1); sequence++;
         account = message.args[0] === "account";

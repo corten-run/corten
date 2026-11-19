@@ -14,10 +14,10 @@ import { accountId, campaign, commit, context, harness as controllerHarness, sub
 import { settlementControl } from "./test-fixtures/provider-settlement-control.mjs";
 
 const account = ["account", "get", "--output", "json", "--context", "synthetic-worker-context"];
-function harness(t, mode = "success", transform = (value) => value, interrupted = () => false, receive = (value) => value) {
+function harness(t, mode = "success", transform = (value) => value, interrupted = () => false, receive = (value) => value, createMode = "dedicated") {
   const root = mkdtempSync(join(tmpdir(), "cloud-diagnostic-test-")), output = join(root, "observation.json");
   let child, tokenIPC = false, launches = 0;
-  const run = provider.providerTransport({ repo: resolve("."), interrupted, launch(path, args, options) {
+  const run = provider.providerTransport({ repo: resolve("."), interrupted, createMode, launch(path, args, options) {
     launches++; assert.equal(path, realpathSync(process.execPath)); assert.equal(args.length, 3);
     assert.deepEqual(args.slice(0, 2), ["--input-type=module", "-"]); assert.ok(args[2].endsWith("cloud-provider-worker.mjs"));
     assert.deepEqual(options.execArgv, []); assert.equal(options.stdio[0], "pipe");
@@ -42,7 +42,7 @@ test("clean worker uses one immutable private credential across account/create/a
   for (const mode of ["success", "scoped-create-link"]) await t.test(mode, async (t) => {
   const h = harness(t, mode);
   assert.equal(JSON.parse((await h.run(account)).stdout).uuid, "synthetic-user-0001");
-  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
     "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
   await h.run(create); await h.run(["compute", "droplet", "list", "--output", "json", ...account.slice(-2)]);
   await h.run(["compute", "droplet", "delete", "123", "--force", ...account.slice(-2)]);
@@ -53,6 +53,27 @@ test("clean worker uses one immutable private credential across account/create/a
   await h.run.close(); assert.notEqual(h.child.exitCode, null);
   await assert.rejects(h.run(account));
   });
+});
+
+test("worker create mode accepts only its pinned region and recovery cannot create", async (t) => {
+  for (const [createMode, region, allowed] of [["legacy", "sfo2", true], ["dedicated", "sfo3", true],
+    ["legacy", "sfo3", false], ["dedicated", "sfo2", false], ["dedicated", "nyc1", false], [null, "sfo3", false], ["sfo3", "sfo3", false]]) {
+    const h = createMode === "sfo3"
+      ? harness(t, "success", (message) => message.sources ? { ...message, createMode } : message)
+      : harness(t, "success", undefined, undefined, undefined, createMode);
+    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", region,
+      "--image", "ubuntu-24-04-x64", "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef",
+      "--wait", "--output", "json", ...account.slice(-2)];
+    if (allowed) {
+      assert.equal((await h.run(create)).status, 0);
+      const listed = JSON.parse((await h.run(["compute", "droplet", "list", "--output", "json", ...account.slice(-2)])).stdout);
+      assert.equal(listed[0].region.slug, region);
+    } else {
+      await assert.rejects(h.run(create));
+      assert.equal(h.state().consumes, 0);
+      assert.equal(h.state().requests, 0);
+    }
+  }
 });
 
 test("strict worker grammar/source handshake refuses URL/sequence/context changes without fallback", async (t) => {
@@ -110,7 +131,7 @@ test("bounded create classifications survive real worker IPC and cached teardown
     ["first-action-http-failure", { code: "create-action-http", httpStatus: 403 }, 2],
   ]) await t.test(mode, async (t) => {
     const h = harness(t, mode);
-    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
       "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
     const check = (error) => {
       assert.equal(error.controlTreeUncertain, true); assert.equal(error.controlUncertain, true);
@@ -182,7 +203,7 @@ test("public errors only format the closed diagnostic table, never native error 
 
 test("permitted HTTP failure carries only its diagnostic and leaves the worker usable", async (t) => {
   const h = harness(t, "first-action-http-failure");
-  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
     "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
   assert.deepEqual(await h.run(create, 1000, true), { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "create-action-http", httpStatus: 403 } });
   assert.equal((await h.run(account)).status, 0); await h.run.close();
@@ -194,7 +215,7 @@ test("supported lifecycle real worker retains one private credential through kno
     ["post-link-id", "create-link-id"], ["post-invalid-action-id", "create-link-id"],
     ["first-action-invalid", "create-action-response"]]) await t.test(mode, async (t) => {
     const h = harness(t, mode), suffix = account.slice(-2);
-    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
       "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...suffix];
     assert.deepEqual(await h.run(create, 1000, true), { status: 1, stdout: "", stderr: "", providerDiagnostic: {
       code } });
@@ -252,7 +273,7 @@ test("supported lifecycle real worker count convergence passes its third observa
 test("unused arbitrary create metadata never crosses real IPC or selects requests", async (t) => {
   for (const mode of ["post-link-rel", "post-link-href-variant", "post-link-href-type", "arbitrary-create-hints"]) await t.test(mode, async (t) => {
     const h = harness(t, mode);
-    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
       "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
     assert.deepEqual(await h.run(create, 1000, true), { status: 0, stdout: '[{"id":123}]', stderr: "" });
     assert.equal((await h.run(account)).status, 0); await h.run.close();
@@ -305,7 +326,7 @@ test("controller exposes no direct credential-taking REST constructor", () => {
 });
 
 test("pinned collect retires a refused create through the actual worker without another POST", async (t) => {
-  const h = controllerHarness(t, { missingUnit: true }), w = harness(t, "post-invalid-action-id");
+  const h = controllerHarness(t, { missingUnit: true }), w = harness(t, "post-invalid-action-id", undefined, undefined, undefined, "legacy");
   const run = (binary, args, timeout, allowFail) => binary === "doctl" ? w.run(args, timeout, allowFail) : h.run(binary, args, timeout, allowFail);
   await assert.rejects(h.launch({ run }).launch(), /create completion/);
   assert.equal(h.saved().status, "preparing"); assert.equal(h.saved().id, "123");
@@ -330,7 +351,7 @@ test("approved productionMain reaps the actual clean worker and retains locks fo
   };
   const deps = { ...settlementControl(t, h), repo: h.repo, interrupted, sleep: async () => {}, inspect: async () => h.report(),
     write(value) { approval = JSON.parse(value).approvalSha256; },
-    providerFactory({ interrupted }) { const w = harness(t, mode, undefined, interrupted); workers.push(w); return w.run; } };
+    providerFactory({ interrupted, createMode }) { const w = harness(t, mode, undefined, interrupted, undefined, createMode); workers.push(w); return w.run; } };
   const args = ["r21", "--state-dir", h.base, "--detach", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
   assert.equal(await productionMain([...args, "--print-approval"], deps), 3);
   assert.equal(workers[0].launches, 0);

@@ -6,7 +6,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { accountId, archive, context, harness, metadata } from "./cloud-fixtures.mjs";
-import { fleetPlan, reservation } from "./cloud-contract.mjs";
+import { tags } from "./cloud-contract.mjs";
 import { groupNames } from "./registry.mjs";
 import { digest, treeHash } from "./cloud-local.mjs";
 import { parseDropletArgs } from "./cloud-options.mjs";
@@ -37,9 +37,15 @@ async function recoveryHarness(t, flags = {}, group = "catalog-page", measuredCo
   const exactAttempt = [dbeAttempt, leanAttempt].find((attempt) => attempt.commit === measuredCommit);
   if (exactAttempt) Object.assign(flags, { hostId: exactAttempt.id, token: exactAttempt.token });
   const h = harness(t, flags); h.seed();
-  const tokens = Object.fromEntries(groupNames.map((g, i) => [g, g === group ? h.saved().token : (i + 1).toString(16).padStart(16, "0")]));
-  const fleet = fleetPlan({ round: "r21", commit: measuredCommit, token: "f".repeat(16), tokens, provider: { accountId, context }, sshKey: "42" });
-  const bound = reservation({ round: "r21", commit: fleet.commit, token: tokens[group], group, fleet });
+  // Bind this fake host to the original pre-placement wire format and roster.
+  const captured = JSON.parse(readFileSync(new URL("./test-fixtures/grouped-sfo2-reservation.json", import.meta.url)));
+  const { fleetSha256, ...body } = captured.fleet;
+  const { token, name, tag, unit } = h.saved();
+  body.commit = measuredCommit; body.provider = { accountId, context };
+  Object.assign(body.jobs.find((row) => row.group === group), { token, name, tag });
+  const fleet = { ...body, fleetSha256: digest(JSON.stringify(body)) };
+  const bound = { ...captured, commit: measuredCommit, token, name, tag, unit, fleet, group,
+    selection: { schema: fleet.selection.schema, groups: fleet.selection.groups.filter((row) => row.group === group) } };
   h.change((s) => Object.assign(s, bound, { status: "running" }));
   if (exactAttempt) h.change((s) => {
     s.bootstrapReady = { sha256: digest(`${JSON.stringify(bootstrapMarker(s))}\n`), observedAt: "2026-11-16T12:00:00.000Z" };
@@ -133,6 +139,18 @@ test("explicit failed-native retirement preserves old failure and every custody 
     assert.ok(!existsSync(join(r.h.local, "operation.lock")));
     assert.ok(!r.calls.some(([b, ...args]) => b === "ssh" && args.at(-1).includes("systemctl start")));
   }
+});
+
+test("failed-native retirement rejects exact-identity provider rows in the wrong region", async (t) => {
+  const r = await recoveryHarness(t), s = r.h.saved();
+  assert.equal(s.host.region, "sfo2");
+  r.h.hosts([{ ...r.h.host(), name: s.name, tags: [...tags, s.tag], region: { slug: "sfo3" } }]);
+  const start = r.h.calls.length;
+  await assert.rejects(r.task().retireFailedNative());
+  assert.ok(r.h.calls.length > start);
+  assert.ok(!r.h.calls.slice(start).some(([binary]) => binary === "ssh" || binary === "scp"));
+  assert.equal(r.probes, 0); assert.equal(r.h.deletes, 0);
+  assert.deepEqual(readFileSync(r.h.statePath), r.originalState);
 });
 
 test("uncertain worker settlement after failed retirement keeps the operation lock and never retries deletion", async (t) => {
@@ -301,7 +319,8 @@ test("operator-gated production recovery rechecks merged source and exact locked
       return r.run(binary, copy, options.timeout);
     };
     const deps = { repo: r.h.repo, spawn, write: (s) => output.push(JSON.parse(s)),
-      providerFactory: () => Object.assign((argv, timeout, allowFail, deleteProofExpiresAtMs) => {
+      providerFactory: ({ createMode }) => Object.assign((argv, timeout, allowFail, deleteProofExpiresAtMs) => {
+        assert.equal(createMode, null);
         if (argv[2] === "delete") assert.ok(Number.isSafeInteger(deleteProofExpiresAtMs)
           && Date.now() < deleteProofExpiresAtMs && deleteProofExpiresAtMs - Date.now() <= 60000);
         calls.push(["provider", ...argv]); return r.run("doctl", argv, timeout, allowFail);

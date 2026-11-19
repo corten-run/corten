@@ -21,6 +21,10 @@ test("planning discovers current official options, but never fabricates ready ev
       assert.deepEqual(p.execution.descriptor, groupDescriptor(name));
       assert.equal(p.execution.status, "requires-exact-image-page-and-json-browser-gates");
       assert.equal(p.execution.cloud.runner, "bench/catalog/droplet.mjs");
+      assert.equal(p.execution.cloud.hostContract, "bench/catalog/droplet-contract.mjs");
+      assert.equal(p.execution.groupedFleet.runner, "bench/workloads/fleet.mjs");
+      assert.equal(p.execution.groupedFleet.hostContract, "bench/workloads/cloud-contract.mjs");
+      assert.doesNotMatch(p.execution.cloud.settings, /grouped host/);
       assert.equal(p.execution.cloud.group, name);
       assert.equal(p.execution.cloud.status, "explicit-merged-commit-independent-state-root-native-gates-required");
     }

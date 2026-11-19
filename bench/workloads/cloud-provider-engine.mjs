@@ -9,7 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { debuglog } from "node:util";
 import { url as inspectorUrl } from "node:inspector";
 import { controlCheckpoint, controlEnvironment } from "./cloud-transport.mjs";
-import { host } from "./cloud-contract.mjs";
+import { providerCreateHost } from "./cloud-contract.mjs";
 import { providerDiagnostic, providerFailure } from "./cloud-options.mjs";
 
 const origin = "https://api.digitalocean.com";
@@ -183,7 +183,8 @@ function restRequest({ method, path, credential, body, timeout, interrupted = ()
 // Production calls this only inside the clean credential worker. Dependency
 // injection is for synthetic controls, never an IPC/CLI option.
 export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsRequest,
-  request, interrupted = () => false, sleep = delay, now = Date.now } = {}) {
+  request, interrupted = () => false, sleep = delay, now = Date.now, createMode = null } = {}) {
+  const host = providerCreateHost(createMode);
   const env = controlEnvironment("doctl");
   const resources = { live: new Set(), notify: new Set() };
   request ??= (options) => restRequest(options, connect, resources);
@@ -213,6 +214,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
   return async (args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs) => {
     const started = now(), deadline = started + timeout;
     assert.ok(Array.isArray(args) && args.at(-2) === "--context", "saved provider context required");
+    if (args[2] === "create") assert.ok(host && args[7] === host.region, "provider create placement differs from authorized mode");
     if (deleteProofExpiresAtMs !== undefined) assert.ok(args[2] === "delete" && positive(deleteProofExpiresAtMs));
     const consumptionBudget = Math.ceil(deadline - now());
     if (!Number.isSafeInteger(consumptionBudget) || consumptionBudget <= 0 || consumptionBudget > timeout)
@@ -328,7 +330,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       } else if (command[2] === "create") {
         assert.equal(command.length, 17);
         assert.deepEqual(command.filter((_, i) => ![3, 5, 7, 9, 11, 13].includes(i)), ["compute", "droplet", "create", "--size", "--region", "--image", "--ssh-keys", "--tag-names", "--wait", "--output", "json"]);
-        assert.equal(command[5], host.size); assert.equal(command[7], host.region); assert.equal(command[9], host.image);
+        assert.equal(command[5], host.size); assert.equal(command[9], host.image);
         assert.ok(/^corten-bench-groups-r[1-9]\d{0,8}-[a-f0-9]{16}$/.test(command[3]) && /^[1-9]\d*$/.test(command[11]));
         assert.ok(/^corten-bench,corten-bench-groups,corten-bench-groups-run-[a-f0-9]{16}$/.test(command[13]));
         assert.equal(command[13], `corten-bench,corten-bench-groups,corten-bench-groups-run-${command[3].slice(-16)}`);

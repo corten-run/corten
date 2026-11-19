@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { controlEnvironment } from "./cloud-transport.mjs";
 import { providerDiagnostic } from "./cloud-options.mjs";
+import { providerCreateHost } from "./cloud-contract.mjs";
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const worker = join(directory, "cloud-provider-worker.mjs");
@@ -29,8 +30,9 @@ const keys = (value, names) => value && typeof value === "object" && !Array.isAr
   && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...names].sort());
 
 // Entry dependency injection is for local tests, not a CLI/path/URL option.
-export function providerTransport({ repo, interrupted = () => false, launch = spawn } = {}) {
+export function providerTransport({ repo, interrupted = () => false, launch = spawn, createMode = null } = {}) {
   assert.equal(resolve(repo), repo);
+  providerCreateHost(createMode);
   const env = controlEnvironment("doctl");
   let child, pending, sequence = 0, closed = false, failed = false, exitPromise, closing;
   let diagnostic, terminal;
@@ -94,7 +96,7 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
     child.stdin.end(current.bootstrap);
     await bounded(boot, 10000);
     const ready = new Promise((resolve, reject) => { pending = { sequence: 0, resolve, reject }; });
-    child.send({ schema: "cloud-provider-init/v1", nonce, sources: installed }, (error) => { if (error) fail(); });
+    child.send({ schema: "cloud-provider-init/v2", nonce, sources: installed, createMode }, (error) => { if (error) fail(); });
     await bounded(ready, 10000);
   };
   async function bounded(promise, timeout) {

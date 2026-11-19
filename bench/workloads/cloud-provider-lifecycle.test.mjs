@@ -9,7 +9,7 @@ const context = ["--context", "synthetic-lifecycle"];
 const list = ["compute", "droplet", "list", "--output", "json", ...context];
 const get = (id = "123") => ["compute", "droplet", "get", id, "--output", "json", ...context];
 const account = ["account", "get", "--output", "json", ...context];
-const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2",
+const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3",
   "--image", "ubuntu-24-04-x64", "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef",
   "--wait", "--output", "json", ...context];
 const page = (rows, total) => ({ status: 200, value: { droplets: rows, meta: { total }, links: {} } });

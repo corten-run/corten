@@ -6,6 +6,7 @@ import test from "node:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as contract from "./cloud-contract.mjs";
+import { host as catalogHost } from "../catalog/droplet-contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
 import { accountId, archive, commit, context, harness, metadata, syntheticInspection } from "./cloud-fixtures.mjs";
 import { campaignOutcome, controllerState, parseDropletArgs } from "./cloud-options.mjs";
@@ -27,7 +28,7 @@ const droplet = (row, id = 123) => ({ id, name: row.name, tags: [...contract.tag
 test("fleet fixes the complete current registry to one unique host per group", () => {
   const fleet = plan();
   assert.equal(contract.validateFleet(fleet), fleet);
-  assert.equal(fleet.schema, "benchmark-group-fleet/v1");
+  assert.equal(fleet.schema, "benchmark-group-fleet/v2");
   assert.deepEqual(fleet.selection, contract.selection());
   assert.deepEqual(fleet.jobs.map((row) => row.group), groupNames);
   assert.equal(new Set(fleet.jobs.map((row) => row.token)).size, groupNames.length);
@@ -43,6 +44,45 @@ test("fleet fixes the complete current registry to one unique host per group", (
     assert.ok(job.includes(`campaign-entry.mjs r21 --commit ${fleet.commit} --state-dir /bench/campaign --group ${group}`));
     assert.ok(!job.includes("--apps") && !job.includes("--duration") && !job.includes("--passes"));
   }
+});
+
+test("new grouped fleets bind sfo3 without retargeting an sfo2 reservation", () => {
+  const fleet = plan(), s = state(fleet), actual = droplet(fleet.jobs[0]);
+  assert.equal(catalogHost.region, "sfo2");
+  assert.deepEqual(fleet.host, { ...catalogHost, region: "sfo3" });
+  assert.deepEqual(s.host, fleet.host);
+  assert.equal(contract.assertFleetCensus([actual], fleet), true);
+  assert.throws(() => contract.assertFleetCensus([{ ...actual, region: { slug: "sfo2" } }], fleet));
+  assert.throws(() => contract.validateState({ ...s, host: catalogHost }, s.round));
+  assert.throws(() => contract.validateFleet({ ...fleet, host: catalogHost }));
+});
+
+// Captured by evaluating the committed 9f3d3588 generator and its committed
+// imports against synthetic account/SSH/ownership values, not today's fleetPlan.
+const originalReservation = () => JSON.parse(readFileSync(new URL("./test-fixtures/grouped-sfo2-reservation.json", import.meta.url)));
+
+test("a historical sfo2 fleet is readable, but cannot authorize a fresh dedicated launch", async (t) => {
+  const s = originalReservation(), fleet = s.fleet;
+  assert.notDeepEqual(fleet.selection, contract.selection());
+  assert.equal(contract.validateFleet(fleet), fleet);
+  assert.equal(contract.validateState(s, s.round), s);
+  const owned = { ...droplet(fleet.jobs[0]), region: { slug: "sfo2" } };
+  assert.equal(contract.ownedDroplet([owned], s), owned);
+  assert.throws(() => contract.ownedDroplet([{ ...owned, region: { slug: "sfo3" } }], s));
+  assert.throws(() => contract.validateState({ ...s, host: { ...s.host, region: "sfo3" } }, s.round));
+  const changed = structuredClone(s);
+  changed.fleet.selection.groups[0].contractSha256 = "0".repeat(64);
+  changed.selection.groups[0] = changed.fleet.selection.groups[0];
+  const { fleetSha256, ...body } = changed.fleet;
+  changed.fleet.fleetSha256 = digest(JSON.stringify(body));
+  assert.throws(() => contract.validateState(changed, changed.round));
+
+  const { h, options, path } = configured(t);
+  writeFileSync(path, JSON.stringify(fleet));
+  await assert.rejects(async () => h.task({}, { ...options, commit: fleet.commit,
+    accountId: fleet.provider.accountId, context: fleet.provider.context }).launch(), /historical fleet cannot authorize launch/);
+  assert.equal(h.creates, 0);
+  assert.deepEqual(h.calls, []);
 });
 
 test("partial, duplicate, reordered or altered fleet plans cannot authorize a host", () => {

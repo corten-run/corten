@@ -49,7 +49,7 @@ function nativeHarness(t, attack = null) {
     return { status: 202, value: { droplet: value[0], links: { actions: [{ id: 456, rel: "create", href: "https://api.digitalocean.com/v2/actions/456" }] } } };
   };
   const deps = { ...control, spawn, providerRequest, repo: h.repo, inspect: async () => h.report(), sleep: async () => {}, write(value) { approval = JSON.parse(value).approvalSha256; } };
-  deps.providerFactory = ({ repo, interrupted }) => Object.assign(createProviderEngine({ repo, interrupted, spawn, request: providerRequest, sleep: deps.sleep }), { close: async () => {} });
+  deps.providerFactory = ({ repo, interrupted, createMode }) => Object.assign(createProviderEngine({ repo, interrupted, createMode, spawn, request: providerRequest, sleep: deps.sleep }), { close: async () => {} });
   const args = (detach) => ["r21", "--state-dir", h.base, ...(detach ? ["--detach", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context] : ["--collect"])];
   async function action(detach = false, sleep = deps.sleep) {
     const values = args(detach), options = { ...deps, sleep };

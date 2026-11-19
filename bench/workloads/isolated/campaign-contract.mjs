@@ -41,7 +41,7 @@ export function bindGroupCampaign(input) {
 function bindNativeCampaign(input, order, schema) {
   const rounds = campaignRounds(input.round);
   const bindings = order.map((group) => bindExecution({ group, round: rounds[group], commit: input.commit,
-    recipe: productionRecipes[group], review: null }));
+    recipe: productionRecipes[group], review: null }, schema === groupCampaignSchema ? "dedicated" : "legacy"));
   const first = bindings[0];
   assert.ok(bindings.every((b) => b.sources.sha256 === first.sources.sha256), "source changed while binding campaign");
   const procedures = ["bench/catalog/README.md", "bench/json-api/README.md", "bench/marketplace/nightly.md",

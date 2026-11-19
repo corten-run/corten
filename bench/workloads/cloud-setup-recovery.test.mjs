@@ -27,6 +27,7 @@ test("observed common bootstrap is retained provenance, not native entry for leg
     Object.assign(s, reservation({ round: s.round, commit, token, group, fleet }, s.createdAt), { status: s.status });
     s.bootstrapReady = { sha256: digest(JSON.stringify(bootstrapMarker(s)) + "\n"), observedAt: new Date().toISOString() };
   });
+  h.hosts([{ ...h.host(), region: { slug: fleet.host.region } }]);
   const bootstrap = h.saved().bootstrapReady;
   assert.equal(await h.task(noNative).collect(), 1);
   const s = h.saved(); assert.equal(s.retirement.kind, "setup-failed"); assert.equal(s.status, "retired");

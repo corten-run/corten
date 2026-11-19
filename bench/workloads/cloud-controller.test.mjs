@@ -28,6 +28,24 @@ test("detach reserves before one completed create, uploads fixed job and starts 
   assert.ok(job.includes(`campaign-entry.mjs' 'r21' --commit '${commit}' --state-dir '/bench/campaign'`));
   assert.ok(!job.includes("--apps")); await assert.rejects(h.launch().launch(), /already reserved/); assert.equal(h.creates, 1);
 });
+
+test("legacy detach keeps sfo2 and scans an older retired sfo2 reservation without changing it", async (t) => {
+  const h = harness(t, { active: true });
+  const historical = JSON.parse(readFileSync(new URL("./test-fixtures/grouped-sfo2-reservation.json", import.meta.url)));
+  const { fleet, group, ...prior } = historical;
+  const retired = { ...prior, schema: "benchmark-group-host/v1", round: "r20",
+    name: prior.name.replace("-r21-", "-r20-"), unit: prior.unit.replace("-r21-", "-r20-"),
+    selection: fleet.selection, status: "retired", provider: fleet.provider, id: "456", ip: "192.0.2.11",
+    fullGroupQualified: false, createIntentAt: prior.createdAt, deletionIntentAt: prior.createdAt, destroyedAt: prior.createdAt,
+    retirement: { kind: "unused", evidenceSha256: "d".repeat(64) } };
+  const folder = join(h.base, "groups-r20"), path = join(folder, "state.json"), bytes = JSON.stringify(retired);
+  mkdirSync(folder); writeFileSync(path, bytes);
+  await h.launch().launch();
+  const create = h.calls.find(([command, , , action]) => command === "doctl" && action === "create");
+  assert.equal(create[create.indexOf("--region") + 1], "sfo2");
+  assert.equal(h.saved().host.region, "sfo2");
+  assert.equal(readFileSync(path, "utf8"), bytes);
+});
 test("ambiguous/missing/crashed create and start acknowledgement loss never launch again", async (t) => {
   for (const flags of [{ createMissing: true }, { createAmbiguous: true }, { createCrash: true }]) {
     const h = harness(t, flags); await assert.rejects(h.launch().launch());
@@ -62,7 +80,7 @@ test("foreign host identity and bad terminal units never permit access/deletion"
     const h = harness(t, flags); h.seed(); await assert.rejects(h.task().collect()); assert.equal(h.deletes, 0);
   }
   for (const change of [(d) => d.id++, (d) => d.name = "foreign", (d) => d.tags.pop(), (d) => d.tags.shift(),
-    (d) => d.size_slug = "s-8vcpu-16gb", (d) => d.region.slug = "nyc1", (d) => d.networks.v4[0].ip_address = "192.0.2.11",
+    (d) => d.size_slug = "s-8vcpu-16gb", (d) => d.region.slug = "sfo3", (d) => d.networks.v4[0].ip_address = "192.0.2.11",
     (d) => d.networks.v4.push({ type: "public", ip_address: "192.0.2.12" })]) {
     const h = harness(t); h.seed(); const d = { id: 123, name: h.saved().name,
       tags: ["corten-bench", "corten-bench-groups", h.saved().tag], size_slug: "c-8", region: { slug: "sfo2" }, networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } };
