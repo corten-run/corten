@@ -164,8 +164,10 @@ export function verifyTimedPhase(summary, { app, source, target, phase, seconds,
   const workerEvidence = workers ? readJson(`${phase}-workers.json`) : null;
   const workerPeaks = workers ? verifyWorkers(summary, { app, source, target, phase }, workerEvidence,
     { start, end, container: receipt.after.upstream }) : null;
-  if (metrics.outcome === "failed") {
+  if (metrics.outcome === "failed" || summary.measurement.loadLayout === "c16-generator-v1") {
     assert.ok(derived[loadName].cpuMaxPct < summary.measurement.cpus.load.quota * 80, "load generator has no demonstrated CPU headroom");
+  }
+  if (metrics.outcome === "failed") {
     if (source === "api") {
       if (workers) workerHeadroom(workerPeaks, derived[upstreamName].cpuMaxPct);
       else assert.ok(derived[upstreamName].cpuMaxPct < 80, "busy upstream cannot establish an app request outcome");

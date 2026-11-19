@@ -44,6 +44,28 @@ test("v4 round replays both positive and attributed negative outcomes with first
   }
 });
 
+test("wide generator raw replay checks twelve CPUs for k6, four for checker, and headroom for successful targets", () => {
+  const f = workerRound(null, { wideGenerator: true });
+  assert.equal(replayCatalog(f.summary, f.reader, f.commit).baseline, true);
+  const saved = f.reader.readJson("preflight.json");
+  assert.equal(saved.binding.loadLayout, "c16-generator-v1");
+  const checkerKey = "fixture/corten/checker.json", checker = f.reader.readJson(checkerKey);
+  assert.equal(checker.checker.HostConfig.NanoCpus, 4e9);
+  assert.equal(checker.checker.HostConfig.CpusetCpus, "4-7");
+  const load = f.reader.readJson(`${prefix}/sat256-boundary.json`).after.load;
+  assert.equal(load.budget.NanoCpus, 12e9); assert.equal(load.budget.CpusetCpus, "4-15");
+  assert.equal(phase(f).resources[`${f.summary.runId}-k6`].cpuMaxPct, 391.36);
+  const checkerText = f.reader.readText(checkerKey);
+  checker.checker.HostConfig.NanoCpus = 12e9;
+  f.put(checkerKey, checker); indexRound(f);
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit));
+  f.put(checkerKey, checkerText);
+  delete saved.binding.loadLayout; f.put("preflight.json", saved); indexRound(f);
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /preflight source\/recipe differs/);
+  stats(f, "k6", 960);
+  assert.throws(() => phase(f), /generator.*headroom/);
+});
+
 test("native document header evidence cannot be relabeled, omitted, weakened or detached from checker execution", () => {
   const current = groupDescriptor("catalog-page"), historical = groupDescriptor("catalog-page", { historical: true });
   const old = workerRound(null, { historical: true });

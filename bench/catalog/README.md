@@ -479,7 +479,10 @@ For a dedicated 16-vCPU catalog-page qualification, `CATALOG_LOAD_LAYOUT=c16-gen
 requires the explicit CPU sets `CATALOG_APP_CPUS=1`, `CATALOG_API_CPUS=2-3`, and
 `CATALOG_LOAD_CPUS=4-15`. Only the generator quota changes, from four CPUs to twelve.
 The runner records the layout and verifies the same strict peak limit (below 80% of
-the generator's quota). Keep the load profile, request checks and app budget unchanged.
+the generator's quota) in preflight and in every timed phase in this layout, including
+successful responses. A phase without headroom is not comparison evidence. The browser
+checker and first-response probe retain their original four CPUs (4–7), and the
+observer keeps its original placement. The load profile, request checks and app budget are unchanged.
 This opt-in does not select a larger host for the nightly fleet or qualify a mixed-layout
 comparison. A wider CPU set without the named layout still has the original four-CPU quota.
 By default they are not pinned. For dedicated-host measurements set

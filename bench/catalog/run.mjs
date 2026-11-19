@@ -32,7 +32,7 @@ try {
   observations = await import("./raw.mjs");
 }
 finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
-const { aggregate, cpuSettings, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets,
+const { aggregate, cpuSettings, probeCpu, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets,
   validateCatalog, verifyDocumentHeaderChecks, workload } = contract;
 const { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } = grouping;
 const { containerEvidence, rawSchema, verifyFailedCheck, verifyCheckBoundary, checkBoundaryEvidence, imageCommandEvidence } = observations;
@@ -42,6 +42,7 @@ const plan = timingPlan(options, sources, targets);
 const loadLayout = process.env.CATALOG_LOAD_LAYOUT;
 if (loadLayout !== undefined) assert.equal(options.group, "catalog-page", "generator qualification requires the catalog-page group");
 const cpus = cpuSettings(process.env, loadLayout);
+const probeCpus = probeCpu({ cpus, loadLayout });
 const runId = `catalog-${options.round}-${randomBytes(5).toString("hex")}`;
 const network = `${runId}-net`;
 const label = "run.corten.catalog";
@@ -185,7 +186,7 @@ async function coldStart(name, source, target, image, raw) {
   const probe = `${name}-probe`;
   const path = `${target === "json" ? "/api" : ""}/catalog/record_1`;
   try {
-    await owned(["run", "-d", "--network", network, ...cpus.load.args, "--memory", "256m", ...mount, nodeImage, "node", "/bench/catalog/cold.mjs", `http://${name}:8080`, path, String(options.startupTimeout)], probe);
+    await owned(["run", "-d", "--network", network, ...probeCpus.args, "--memory", "256m", ...mount, nodeImage, "node", "/bench/catalog/cold.mjs", `http://${name}:8080`, path, String(options.startupTimeout)], probe);
     const deadline = Date.now() + 10000;
     while (!(await docker(["logs", probe])).includes("catalog-probe-ready")) {
       if (Date.now() > deadline) throw new Error("cold sidecar did not become ready");
@@ -343,7 +344,7 @@ try {
         // Share ONLY the app's network namespace, not its PID namespace: loopback
         // stays a trustworthy browser origin without disabling security features.
         const workerBefore = group ? await upstreamControl() : undefined;
-        await owned(["create", "--network", `container:${name}`, ...cpus.load.args, "--memory", "2g", "--shm-size", "1g", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
+        await owned(["create", "--network", `container:${name}`, ...probeCpus.args, "--memory", "2g", "--shm-size", "1g", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
           "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", checker.Id, "node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, apiBase,
           "/results/checks.json", ...(leanApps.includes(app) ? [app] : [])], checkContainer);
         let checkerFailure, boundary;
@@ -391,7 +392,7 @@ try {
     summary.tools.k6 = await describeK6(docker, ["--label", `${label}=${runId}`], { pullLog: join(folder, "pull-k6.log") });
     if (group) summary.tools.k6Execution = imageCommandEvidence(JSON.parse(await docker(["image", "inspect", summary.tools.k6.imageId]))[0]);
     writeFileSync(join(folder, "tools.json"), JSON.stringify(summary.tools, null, 2));
-    await owned(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
+    await owned(["run", "-d", "--network", "none", "--cpus", "1", ...(probeCpus.cpuset ? ["--cpuset-cpus", probeCpus.cpuset] : []), "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
       nodeImage, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
     if (group) {
       const receipt = { schema: preflightSchema, binding: preflightBinding(summary), passed: false, hashes: {}, cleanup: null };

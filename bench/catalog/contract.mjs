@@ -8,6 +8,11 @@ export const targets = ["page", "json"];
 export const phases = ["fixed", "sat64", "sat256"];
 export const leanProfile = "catalog-lean";
 export const leanApps = Object.freeze(groupDescriptor("catalog-page").apps);
+// The wider placement is for k6 only. Probes/checkers run on the original client cores.
+export function probeCpu(measurement) {
+  return measurement.loadLayout === "c16-generator-v1"
+    ? cpuSettings({ CATALOG_LOAD_CPUS: "4-7" }).load : measurement.cpus.load;
+}
 export function cpuSettings(env, loadLayout) {
   if (loadLayout !== undefined) {
     assert.equal(loadLayout, "c16-generator-v1", "unknown catalog generator layout");

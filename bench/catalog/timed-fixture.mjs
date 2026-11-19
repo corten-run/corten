@@ -60,6 +60,9 @@ export function timedFixture(f, failure = { app: "fastapi", source: "api", pass:
       ["node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, `http://${upstreamName}:8080`, "/results/checks.json"], null, [],
       [mount(checkout, "/repo"), { ...mount(`${checkout}/bench/catalog/results/${s.round}/${source}/${app}`, "/results"), RW: true }], "exited");
     checker.id = id(`${source}/${app}/checker`); checker.budget.NetworkMode = `container:${runtime.id}`;
+    if (s.measurement.loadLayout === "c16-generator-v1") {
+      checker.budget.NanoCpus = 4e9; checker.budget.CpusetCpus = "4-7";
+    }
     checker.state.FinishedAt = stamp(tick + 100);
     f.put(`${source}/${app}/checker.json`, { runtime: checkInfo(runtime), upstream: checkInfo(upstreamInfo()), checker: checkInfo(checker),
       exit: { code: 0, signal: null, expired: false, interrupted: false } });
@@ -93,7 +96,7 @@ export function timedFixture(f, failure = { app: "fastapi", source: "api", pass:
         before: { runtime, upstream, load }, after: { runtime, upstream, load: afterLoad }, observedAt: finishedAt + 10 };
       const names = [appName, ...(source === "api" ? [upstreamName] : [])], sampled = [...names, loadName];
       const samples = Object.fromEntries(sampled.map((name) => [name, Array.from({ length: seconds + 1 }, (_, i) => ({ t: nativeStart + i * 1000,
-        cpu: name === appName ? 99 : name === loadName ? 50 : 4, mem: 8 }))]));
+        cpu: name === appName ? 99 : name === loadName ? (s.measurement.loadLayout ? 391.36 : 50) : 4, mem: 8 }))]));
       const stats = Object.fromEntries(sampled.map((name) => [name, summarizeSamples(samples[name])]));
       const before = { [appName]: appCounter, ...(source === "api" ? { [upstreamName]: upstreamCounter } : {}) };
       const after = Object.fromEntries(names.map((name) => [name, before[name] + seconds * (name === appName ? 900000 : 40000)]));

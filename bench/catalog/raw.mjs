@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { aggregate, leanApps, leanProfile, phases, readLoad, verifyDocumentHeaderChecks } from "./contract.mjs";
+import { aggregate, leanApps, leanProfile, phases, probeCpu, readLoad, verifyDocumentHeaderChecks } from "./contract.mjs";
 import { inspectCatalog, completeChecks } from "./report.mjs";
 import { records } from "./fixtures.mjs";
 import { qualificationIdentity } from "./group.mjs";
@@ -120,8 +120,9 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
   }
   assert.match(checker.Id, /^[a-f0-9]{64}$/); assert.equal(checker.Image, summary.tools.checker.imageId);
   assert.equal(checker.Config.Labels?.["run.corten.catalog"], summary.runId);
-  assert.equal(checker.HostConfig.NanoCpus, budget.load.quota * 1e9);
-  assert.equal(checker.HostConfig.CpusetCpus, budget.load.cpuset ?? ""); assert.equal(checker.HostConfig.Memory, 2 ** 31);
+  const checkerCpu = probeCpu(summary.measurement);
+  assert.equal(checker.HostConfig.NanoCpus, checkerCpu.quota * 1e9);
+  assert.equal(checker.HostConfig.CpusetCpus, checkerCpu.cpuset ?? ""); assert.equal(checker.HostConfig.Memory, 2 ** 31);
   assert.ok([`container:${runtime.Id}`, `container:${summary.runId}-${app}`].includes(checker.HostConfig.NetworkMode));
   mounts(checker, [mount(checkout, "/repo"), mount(`${checkout}/bench/catalog/results/${summary.round}/${source}/${app}`, "/results", true)]);
   const headersChecked = summary.group ? !!summary.group.documentHeaders : leanApps.includes(app);
