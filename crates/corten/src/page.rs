@@ -3380,21 +3380,24 @@ async fn errors_rendered<S: crate::app::Steps>(
     (mode, fetched): (Mode, bool),
     late: bool,
 ) -> Response {
-    if api.is_some() || mode == Mode::Data {
-        let shape = api.and_then(|mount| mount.errors.as_ref());
-        return crate::api::json_failure(run::<S, false>(pending, next, deadline, signal).await, shared.dev, shape).await;
-    }
-    if late {
-        // The uncommon path owns the late poller's state, not the ordinary request future.
+    let json = api.is_some() || mode == Mode::Data;
+    if late && !json {
+        // Keep the late poller's state in this box, not in a second box or the ordinary future.
         let _release = ReleasesEarlyHeads(signal);
         let answer: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
             crate::layout::LateWrite::stage(pending.get(), deadline);
-            page_or_error::<S, true>(shared, pending, next, deadline, signal, (mode, fetched)).await
+            let dispatch = |pending| within_late(pending, next, deadline, signal);
+            page_or_error(shared, pending, dispatch, deadline, signal, (mode, fetched)).await
         });
         return answer.await;
     }
+    let dispatch = |pending| within_deadline(pending, next, deadline);
+    if json {
+        let shape = api.and_then(|mount| mount.errors.as_ref());
+        return crate::api::json_failure(run(pending, dispatch, deadline, signal).await, shared.dev, shape).await;
+    }
     if shared.layout_reads.is_empty() || mode.swaps() {
-        return page_or_error::<S, false>(shared, pending, next, deadline, signal, (mode, fetched)).await;
+        return page_or_error(shared, pending, dispatch, deadline, signal, (mode, fetched)).await;
     }
     // A whole document: a page route starts the layout's reads as it is called, and they are
     // polled with the handler on this task, then drawn into whichever page answers: the
@@ -3406,7 +3409,7 @@ async fn errors_rendered<S: crate::app::Steps>(
     let here = crate::layout::StartHere::new(shared.clone(), until);
     pending.get().extensions_mut().insert(here.clone());
     let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
-        let res = here.beside(page_or_error::<S, false>(shared, pending, next, deadline, signal, (mode, fetched))).await;
+        let res = here.beside(page_or_error(shared, pending, dispatch, deadline, signal, (mode, fetched))).await;
         here.fill(res).await
     });
     filled.await
@@ -3426,10 +3429,10 @@ impl Drop for ReleasesEarlyHeads<'_> {
 }
 
 /// The handler's page, or the error page in its place.
-async fn page_or_error<S: crate::app::Steps, const LATE_FILL: bool>(
+async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     shared: &Arc<Shared>,
-    pending: &mut PendingRequest,
-    next: Next<'_, S>,
+    pending: &'r mut PendingRequest,
+    dispatch: impl FnOnce(&'r mut PendingRequest) -> F,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
     (mode, fetched): (Mode, bool),
@@ -3448,7 +3451,7 @@ async fn page_or_error<S: crate::app::Steps, const LATE_FILL: bool>(
     // answers it as the whole document at the address it asked; its method, for what it is told.
     #[cfg(debug_assertions)]
     let plain = (browser && !fetched && mode == Mode::Document && top_level(req.headers())).then(|| req.method().clone());
-    let res = run::<S, LATE_FILL>(pending, next, deadline, signal).await;
+    let res = run(pending, dispatch, deadline, signal).await;
     #[cfg(debug_assertions)]
     let res = refresh_header_is_an_error(res, shared.dev);
     #[cfg(debug_assertions)]
@@ -3654,25 +3657,31 @@ fn sign_in_loops(path: &str, to: &HeaderValue) -> Option<String> {
     })
 }
 
-/// The handler's response, through [`within_deadline`]; a handler that panics is answered as a
-/// handler error (500), whose message only `corten dev` shows.
-async fn run<S: crate::app::Steps, const LATE_FILL: bool>(
-    pending: &mut PendingRequest,
-    next: Next<'_, S>,
+/// The handler's response, its deadline failure or, if it panics, a 500 whose message only
+/// `corten dev` shows.
+async fn run<'r, F: Future<Output = Result<Response, Late>>>(
+    pending: &'r mut PendingRequest,
+    dispatch: impl FnOnce(&'r mut PendingRequest) -> F,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
 ) -> Response {
-    use std::{future::Future, panic::AssertUnwindSafe, pin::pin, task::Poll};
+    use std::{panic::AssertUnwindSafe, pin::pin, task::Poll};
     // For the log only: a method and a URI clone without allocating.
     let req = pending.get();
     let (method, uri) = (req.method().clone(), req.uri().clone());
-    // A handler that panics fails its request like one that returned an error, instead of
-    // dropping the connection with no answer. Nothing runs unless it panics.
-    let mut fut = pin!(within_deadline::<S, LATE_FILL>(pending, next, deadline, signal, (&method, &uri)));
-    let outcome = std::future::poll_fn(|cx| match std::panic::catch_unwind(AssertUnwindSafe(|| fut.as_mut().poll(cx))) {
-        Ok(Poll::Ready(res)) => Poll::Ready(Ok(res)),
-        Ok(Poll::Pending) => Poll::Pending,
-        Err(panic) => Poll::Ready(Err(panic)),
+    // Both dispatchers only construct a future here. Polling it, including taking the request
+    // and answering a timeout, stays inside the panic catch.
+    let mut fut = pin!(dispatch(pending));
+    let outcome = std::future::poll_fn(|cx| {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| {
+            fut.as_mut()
+                .poll(cx)
+                .map(|result| result.unwrap_or_else(|late| deadline_failure(late, deadline, signal, (&method, &uri))))
+        })) {
+            Ok(Poll::Ready(res)) => Poll::Ready(Ok(res)),
+            Ok(Poll::Pending) => Poll::Pending,
+            Err(panic) => Poll::Ready(Err(panic)),
+        }
     })
     .await;
     match outcome {
@@ -3691,38 +3700,25 @@ async fn run<S: crate::app::Steps, const LATE_FILL: bool>(
     }
 }
 
-/// The handler's response, or once it has waited past `deadline` an empty 503, or a 408 when it
-/// was waiting for the client to send the body (the 413 while a body over its limit is read past).
-async fn within_deadline<S: crate::app::Steps, const LATE_FILL: bool>(
-    pending: &mut PendingRequest,
-    next: Next<'_, S>,
+fn deadline_failure(
+    Late(waited): Late,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
     (method, uri): (&http::Method, &Uri),
 ) -> Response {
-    let req = pending.take();
-    let result = if LATE_FILL {
-        // The late layout poller does not belong in the ordinary request's future.
-        Box::pin(within_late(deadline, next.run(req), signal)).await
-    } else if let Some(limit) = deadline {
-        within(limit, next.run(req)).await
-    } else {
-        return next.run(req).await;
-    };
-    match result {
-        Ok(res) => res,
+    match waited {
         // The handler was waiting for the client to send the rest of the body: the request had
         // not arrived whole in time, which is the client's 408 (a stalled upload with the
         // defaults, whose idle time is longer than the deadline), not the server's 503. Still
         // warned of, as the 503 is: a large upload still being sent says the deadline is short.
-        Err(Late(Waited::Body)) => {
+        Waited::Body => {
             let limit = deadline.expect("timed out");
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline waiting for the request's body", uri.path());
             Error::new("the request's body did not arrive in time").with_status(StatusCode::REQUEST_TIMEOUT).into_response()
         }
         // A body over its limit, read past so the client reads the 413: still the 413.
-        Err(Late(Waited::PastLimit(over))) => {
+        Waited::PastLimit(over) => {
             signal.abort(crate::Abort::Deadline);
             match over {
                 Over::Body(limit) => Error::from(crate::extract::BodyError::TooLarge { limit }),
@@ -3730,7 +3726,7 @@ async fn within_deadline<S: crate::app::Steps, const LATE_FILL: bool>(
             }
             .into_response()
         }
-        Err(Late(Waited::Nothing)) => {
+        Waited::Nothing => {
             let limit = deadline.expect("timed out");
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline", uri.path());
@@ -3738,6 +3734,20 @@ async fn within_deadline<S: crate::app::Steps, const LATE_FILL: bool>(
             res.extensions_mut().insert(Cause::TimedOut);
             res
         }
+    }
+}
+
+/// Dispatch the ordinary request with only the state its deadline can need.
+async fn within_deadline<S: crate::app::Steps>(
+    pending: &mut PendingRequest,
+    next: Next<'_, S>,
+    deadline: Option<std::time::Duration>,
+) -> Result<Response, Late> {
+    let req = pending.take();
+    if let Some(limit) = deadline {
+        within(limit, next.run(req)).await
+    } else {
+        Ok(next.run(req).await)
     }
 }
 
@@ -3768,13 +3778,14 @@ async fn within<F: Future>(limit: std::time::Duration, fut: F) -> Result<F::Outp
 }
 
 /// Like `within`, with one more possible stage: filling a page that no typed route has filled.
-async fn within_late(
+async fn within_late<S: crate::app::Steps>(
+    pending: &mut PendingRequest,
+    next: Next<'_, S>,
     limit: Option<std::time::Duration>,
-    fut: impl Future<Output = Response>,
     signal: &crate::Signal,
 ) -> Result<Response, Late> {
     use std::{future::Future, pin::pin, task::Poll};
-    let mut fut = pin!(Some(fut));
+    let mut fut = pin!(Some(next.run(pending.take())));
     let mut timer = pin!(None::<tokio::time::Sleep>);
     let mut fill: Option<std::pin::Pin<Box<dyn Future<Output = Response> + Send>>> = None;
     std::future::poll_fn(|cx| {

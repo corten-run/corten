@@ -1927,8 +1927,9 @@ rules something out.
     can skip the hash for a `GET`, but not for an otherwise taggable `HEAD`: without its
     validator, a cache could freshen an older page of the same length ([Limit 21](#limit-etag)).
     The stage future holds the request once. The stages borrow it until dispatch moves it to
-    the first middleware or, when there is none, the route. The late layout poller is boxed
-    only on the late path, so its state does not enlarge the ordinary future.
+    the first middleware or, when there is none, the route. The late layout poller lives
+    in the existing late-write box, so it neither enlarges the ordinary future nor adds
+    a box to a late-eligible write.
     An area's or an API's own steps (`Area::middleware`, `Api::middleware`) run right after the
     app's, for the requests at its prefix; they are boxed, since which run depends on the route, and
     an app with none pays nothing for them. What an area or API sets (its deadline, body limit, policy and middleware,
