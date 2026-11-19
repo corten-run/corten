@@ -34,13 +34,13 @@ def stream_member(pid, pin=False):
         for tid in tasks:
             os.sched_setaffinity(tid, {0})
     def affinity(path):
-        found = re.search(r'^Cpus_allowed_list:\s*([^\r\n]+)$', (path / 'status').read_text(), re.M)
+        found = re.search(r'^Cpus_allowed_list:\s*([^\r\n]+)$', task_text(path / 'status'), re.M)
         assert found and found[1] == '0', 'control affinity changed'
         return found[1]
     threads = []
     for tid in tasks:
         task = directory / 'task' / str(tid)
-        fields = (task / 'stat').read_text().rsplit(') ', 1)[1].split()
+        fields = task_text(task / 'stat').rsplit(') ', 1)[1].split()
         threads.append({'pid': tid, 'startTicks': fields[19], 'cpus': affinity(task)})
     namespaces = {}
     for name in ('cgroup', 'ipc', 'mnt', 'net', 'pid', 'user', 'uts'):
@@ -68,10 +68,66 @@ def stream_sample(registration):
     return {'host': host(), 'monoNs': str(time.monotonic_ns()), 'members': members, 'listener': listener}
 
 
+def helper_line(error):
+    frame, line = error.__traceback__, 0
+    while frame:
+        if frame.tb_frame.f_code.co_filename == helper_line.__code__.co_filename:
+            line = frame.tb_lineno
+        frame = frame.tb_next
+    return line
+
+
+def stream_revoke(root):
+    # Existence revokes. Custody may copy it immediately, so never populate it.
+    fd = os.open(root / 'stream-invalid.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def stream_failure(root, registration, reason, error):
+    pinned = reason == 'pinned watchdog'
+    if pinned:
+        # Only one ready byte preceded this notification on the campaign pipe.
+        try:
+            os.write(1, b'F')
+        except OSError:
+            pass
+    try:
+        stream_revoke(root)
+    except OSError:
+        pass  # The peer may already have created the marker.
+    line = helper_line(error)
+    try:
+        if pinned:
+            os.write(2, b'control fault: ' + encoded({'id': registration['id'], 'host': registration['host'],
+                     'monoNs': str(time.monotonic_ns()), 'reason': reason, 'helperLine': line}))
+        else:
+            # The SSH peer may already have packaged run.log. Its local close receipt
+            # can keep this bounded location without copying arbitrary SSH stderr.
+            os.write(2, ('CORTEN_MONITOR_FAULT %s %d\n' % (registration['id'], line)).encode('ascii'))
+    except OSError:
+        pass
+
+
 def stream_watchdog(root, expected_hash):
-    import select
     registration = load(root, 'stream-registration.json')
     assert sha(encoded(registration)[:-1]) == expected_hash
+    try:
+        return stream_watchdog_loop(root, registration)
+    except Exception as error:
+        stream_failure(root, registration, 'pinned watchdog', error)
+        raise
+
+
+def stream_watchdog_loop(root, registration):
+    import select
     previous, renewal = None, 0
     while True:
         # taskset execs this single-threaded consumer, never the campaign or its native children.
@@ -359,9 +415,9 @@ def stream_monitor(root, expected):
                     delivery = None
                 else:
                     raise AssertionError('untyped control input')
-    except Exception:
-        if not terminal and not (root / 'stream-invalid.json').exists():
-            write(root / 'stream-invalid.json', encoded({'id': expected['id'], 'host': host(), 'monoNs': str(time.monotonic_ns()), 'reason': 'control transport, lease or apparatus failed'}))
+    except Exception as error:
+        if not terminal:
+            stream_failure(root, registration, 'control monitor', error)
         raise
     finally:
         os.close(observations)

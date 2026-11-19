@@ -23,6 +23,7 @@ data = {root + '/helper.py': source.encode(), root + '/binding.json': json.dumps
         folder + '/json-audit-subject.json': json.dumps({'subjectSha256': subject, 'commit': binding['commit'], 'sourcesManifest': {'snapshot': {'entries': entries}}}).encode(),
         folder + '/audit-sources/blobs/' + blob_hash: blob}
 rows, descriptors, incoming, output, pinned = {}, {}, bytearray(), [], []
+diagnostic = bytearray()
 clock, next_fd = 1000000, 2
 session = '/user.slice/user-0.slice/session-7.scope'
 
@@ -61,7 +62,7 @@ class Path:
         if self.name == 'fd': return [Path(self.value + '/3')] if int(parts[2]) in (10, 20) else []
         names = {p[len(self.value) + 1:].split('/')[0] for p in data if p.startswith(self.value + '/')}
         return [Path(self.value + '/' + p) for p in sorted(names)]
-    def read_text(self):
+    def read_text(self, **kwargs):
         if self.value == '/proc/sys/kernel/hostname': return host['hostname'] + '\n'
         if self.value == '/proc/sys/kernel/random/boot_id': return host['bootId'] + '\n'
         if self.value == '/proc/net/tcp': return 'header\n0: 00000000:0016 00000000:0000 0A 0 0 0 0 0 500\n1: 0A0200C0:0016 140200C0:9C40 01 0 0 0 0 0 501\n'
@@ -125,7 +126,8 @@ def opened(path, flags, *args):
     global next_fd
     name = str(path)
     if flags & 64:
-        assert name not in data; data[name] = b''
+        if name in data: raise FileExistsError()
+        data[name] = b''
     next_fd += 1; descriptors[next_fd] = {'path': name, 'offset': 0}; return next_fd
 def file_stat(path, directory=False):
     return types.SimpleNamespace(st_dev=1, st_ino=int(hashlib.sha256(path.encode()).hexdigest()[:8], 16), st_size=len(data.get(path, b'')), st_uid=0,
@@ -138,6 +140,7 @@ def raw_read(fd, length):
 def raw_write(fd, value):
     if fd == 1:
         for line in bytes(value).splitlines(): emit(json.loads(line))
+    elif fd == 2: diagnostic.extend(value)
     else: data[descriptors[fd]['path']] += bytes(value)
     return len(value)
 def replace(old, new): data[str(new)] = data.pop(str(old))
@@ -180,5 +183,6 @@ if terminal:
 print(json.dumps({'binding': binding, 'registration': next((v['payload'] for v in output if v['kind'] == 'registered'), None),
     'frames': [v['kind'] for v in output], 'pinned': pinned, 'terminal': terminal, 'failed': failed, 'reason': reason, 'drain': drain,
     'renewal': json.loads(data[root + '/stream-lease.json'])['renewal'] if root + '/stream-lease.json' in data else None,
-    'invalid': root + '/stream-invalid.json' in data, 'auditPublished': folder + '/json-audit-delivery-pending.json' in data,
+    'invalid': root + '/stream-invalid.json' in data, 'diagnostic': diagnostic.decode(),
+    'auditPublished': folder + '/json-audit-delivery-pending.json' in data,
     'seal': json.loads(data[root + '/stream-sealed.json']) if root + '/stream-sealed.json' in data else None}))
