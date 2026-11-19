@@ -28,7 +28,7 @@ use http::Uri;
 
 use crate::{
     answer::{HtmlResponse, HtmlResult},
-    app::{Next, PendingRequest},
+    app::{Inbound, Next},
     assets::Assets,
     extract::{Over, Waited},
     security::NonceSlot,
@@ -3341,7 +3341,7 @@ pub(crate) struct AsIs;
 /// ([`crate::api`]). A request a [`crate::Caller`] sent to sign in is redirected there.
 pub(crate) fn render_errors<'s, 'n, 'g, 'm, 'r, S: crate::app::Steps>(
     shared: &'s Arc<Shared>,
-    pending: &'r mut PendingRequest,
+    mut pending: Inbound<'r>,
     next: Next<'n, S>,
     deadline: Option<std::time::Duration>,
     signal: &'g crate::Signal,
@@ -3372,7 +3372,7 @@ pub(crate) fn render_errors<'s, 'n, 'g, 'm, 'r, S: crate::app::Steps>(
 #[allow(clippy::too_many_arguments)]
 async fn errors_rendered<S: crate::app::Steps>(
     shared: &Arc<Shared>,
-    pending: &mut PendingRequest,
+    mut pending: Inbound<'_>,
     next: Next<'_, S>,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
@@ -3431,8 +3431,8 @@ impl Drop for ReleasesEarlyHeads<'_> {
 /// The handler's page, or the error page in its place.
 async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     shared: &Arc<Shared>,
-    pending: &'r mut PendingRequest,
-    dispatch: impl FnOnce(&'r mut PendingRequest) -> F,
+    mut pending: Inbound<'r>,
+    dispatch: impl FnOnce(Inbound<'r>) -> F,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
     (mode, fetched): (Mode, bool),
@@ -3660,8 +3660,8 @@ fn sign_in_loops(path: &str, to: &HeaderValue) -> Option<String> {
 /// The handler's response, its deadline failure or, if it panics, a 500 whose message only
 /// `corten dev` shows.
 async fn run<'r, F: Future<Output = Result<Response, Late>>>(
-    pending: &'r mut PendingRequest,
-    dispatch: impl FnOnce(&'r mut PendingRequest) -> F,
+    mut pending: Inbound<'r>,
+    dispatch: impl FnOnce(Inbound<'r>) -> F,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
 ) -> Response {
@@ -3739,7 +3739,7 @@ fn deadline_failure(
 
 /// Dispatch the ordinary request with only the state its deadline can need.
 async fn within_deadline<S: crate::app::Steps>(
-    pending: &mut PendingRequest,
+    pending: Inbound<'_>,
     next: Next<'_, S>,
     deadline: Option<std::time::Duration>,
 ) -> Result<Response, Late> {
@@ -3779,7 +3779,7 @@ async fn within<F: Future>(limit: std::time::Duration, fut: F) -> Result<F::Outp
 
 /// Like `within`, with one more possible stage: filling a page that no typed route has filled.
 async fn within_late<S: crate::app::Steps>(
-    pending: &mut PendingRequest,
+    pending: Inbound<'_>,
     next: Next<'_, S>,
     limit: Option<std::time::Duration>,
     signal: &crate::Signal,

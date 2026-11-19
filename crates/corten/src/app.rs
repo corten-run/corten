@@ -2295,19 +2295,37 @@ struct At<S> {
     scope: Option<Arc<Scope>>,
 }
 
-/// Held once in the stage future. The stages borrow the request until dispatch hands it to
-/// middleware (or directly to the route).
-pub(crate) struct PendingRequest(Option<Request>);
+/// A handle to the request held once in the stage future. Each stage moves it to the next,
+/// and dispatch consumes it, so neither can read the request after handing it off.
+pub(crate) struct Inbound<'a>(&'a mut Option<Request>);
 
-impl PendingRequest {
+impl Inbound<'_> {
     pub(crate) fn get(&mut self) -> &mut Request {
         self.0.as_mut().expect("the stages have not dispatched the request yet")
     }
 
-    pub(crate) fn take(&mut self) -> Request {
+    pub(crate) fn take(self) -> Request {
         self.0.take().expect("the stages have not dispatched the request yet")
     }
+
+    /// An early answer drops the undispatched request before compression finishes the response.
+    fn discard(self) {
+        *self.0 = None;
+    }
 }
+
+// Check the private type in-crate. A second matching marker makes inference ambiguous if
+// Inbound ever implements Copy or Clone, either of which would allow reads after hand-off.
+#[cfg(test)]
+const _: fn() = || {
+    trait UniqueIfMoveOnly<Marker> {
+        fn check() {}
+    }
+    impl<T> UniqueIfMoveOnly<()> for T {}
+    impl<T: Copy> UniqueIfMoveOnly<u8> for T {}
+    impl<T: Clone> UniqueIfMoveOnly<u16> for T {}
+    <Inbound<'_> as UniqueIfMoveOnly<_>>::check();
+};
 
 /// The stages around each staged route, as the router runs them: one boxed future per request,
 /// beside the handler's own. Not axum's `from_fn`, which boxes the rest of the stack again for
@@ -2315,8 +2333,9 @@ impl PendingRequest {
 impl<S: Steps> crate::router::Stages for At<S> {
     fn run(self: Arc<Self>, req: Request, route: &Route) -> crate::router::Answering {
         let route = route.clone();
-        let mut pending = PendingRequest(Some(req));
-        Box::pin(async move { self.layer.handle(&mut pending, route, self.scope.as_deref()).await })
+        // Capture the slot directly instead of moving a captured request into it.
+        let mut held = Some(req);
+        Box::pin(async move { self.layer.handle(Inbound(&mut held), route, self.scope.as_deref()).await })
     }
 }
 
@@ -2448,7 +2467,7 @@ struct Layer<S> {
 
 impl<S: Steps> Layer<S> {
     /// `scope` is the request's route's, when its route says it.
-    async fn handle(&self, pending: &mut PendingRequest, route: Route, scope: Option<&Scope>) -> Response {
+    async fn handle(&self, mut pending: Inbound<'_>, route: Route, scope: Option<&Scope>) -> Response {
         #[cfg(feature = "compress")]
         let coding = crate::compress::negotiate(pending.get().headers());
         #[cfg(feature = "compress")]
@@ -2456,8 +2475,6 @@ impl<S: Steps> Layer<S> {
         #[cfg(not(feature = "compress"))]
         let accepts_coding = cache::accepts_a_coding(pending.get().headers());
         let res = self.secure(pending, route, accepts_coding, scope).await;
-        // An early refusal leaves the request in the slot. Drop it before finishing the answer.
-        pending.0 = None;
         #[cfg(feature = "compress")]
         let res = crate::compress::finish(res, coding).await;
         res
@@ -2465,7 +2482,7 @@ impl<S: Steps> Layer<S> {
 
     /// The security policy around the request: the host and same-origin checks first, the
     /// headers last.
-    async fn secure(&self, pending: &mut PendingRequest, route: Route, accepts_coding: bool, scope: Option<&Scope>) -> Response {
+    async fn secure(&self, mut pending: Inbound<'_>, route: Route, accepts_coding: bool, scope: Option<&Scope>) -> Response {
         let req = pending.get();
         // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
         // page, no caller lookup.
@@ -2473,6 +2490,7 @@ impl<S: Steps> Layer<S> {
             let mut res = crate::security::misdirected();
             self.policy.headers(&mut res, None, &self.policy.csp);
             res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
+            pending.discard();
             return res;
         }
         // The area or API the request is in: its route's, or, for an unknown URL or a route that
@@ -2494,6 +2512,7 @@ impl<S: Steps> Layer<S> {
             if let Some(mut res) = mount.preflight(req.method(), req.headers()) {
                 self.policy.headers(&mut res, None, csp);
                 res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
+                pending.discard();
                 return res;
             }
         }
@@ -2527,6 +2546,7 @@ impl<S: Steps> Layer<S> {
                 self.policy.document(&mut refused, csp, swap);
             }
             refused.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
+            pending.discard();
             return refused;
         }
         // Every path under an API's prefix is its own: a parameter or a catch-all of a route
@@ -2648,7 +2668,7 @@ impl<S: Steps> Layer<S> {
     /// runtime sent it ([`page::Mode::asked`]).
     async fn run<'a>(
         &'a self,
-        pending: &mut PendingRequest,
+        mut pending: Inbound<'_>,
         route: Option<Route>,
         api: Option<&Mount>,
         deadline: Option<Duration>,

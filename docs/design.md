@@ -1926,9 +1926,10 @@ rules something out.
     `corten::middleware`'s; the app's steps are resolved at compile time. The page tag stage
     can skip the hash for a `GET`, but not for an otherwise taggable `HEAD`: without its
     validator, a cache could freshen an older page of the same length ([Limit 21](#limit-etag)).
-    The stage future holds the request once. The stages borrow it until dispatch moves it to
-    the first middleware or, when there is none, the route. The late layout poller lives
-    in the existing late-write box, so it neither enlarges the ordinary future nor adds
+    The stage future holds the request once. Each stage moves its handle to the next, and
+    dispatch consumes it to give the request to the first middleware or, when there is none,
+    the route. The compiler rejects a stage that reads it after hand-off. The late layout poller
+    lives in the existing late-write box, so it neither enlarges the ordinary future nor adds
     a box to a late-eligible write.
     An area's or an API's own steps (`Area::middleware`, `Api::middleware`) run right after the
     app's, for the requests at its prefix; they are boxed, since which run depends on the route, and
@@ -2233,7 +2234,9 @@ rules something out.
     before (`7620ef9be`) and after (`ca900161d`) keeping the request in one slot; 2026-11-18,
     rechecked after moving the poller into the existing late-write box (`8db1903dd`): in DHAT,
     100 catalog GETs on one connection allocated one 2,144-byte stage and one 1,880-byte handler
-    future each, against 4,952 and 1,880 bytes at the baseline.
+    future each, against 4,952 and 1,880 bytes at the baseline; 2026-11-19, rustc 1.99.1 rejected
+    reads after hand-off and after both dispatchers took the request, in the change that makes
+    the handle move-only ([#1674 Shrink the boxed future for staged requests](https://github.com/corten-run/corten/pull/1674#round-two)).
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
