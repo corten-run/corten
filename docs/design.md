@@ -2257,7 +2257,9 @@ rules something out.
     without app middleware or layout reads. The bounds leave room for build profiles,
     features and compiler layout changes; remeasure before raising one.
 
-    Last checked: 2026-10-29, the area middleware runs of
+    Last checked: 2026-11-19, the header lookup and extension counts before (`aa0f0c7e1`) and
+    after sharing the reads, from 1,300 less 300 catalog GETs on one connection per run;
+    2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
     (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its
     own); 2026-11-09, the `unstaged` runs on this change against main `c65c10ec` and `stages = bare`
@@ -2301,9 +2303,7 @@ rules something out.
     100 catalog GETs on one connection allocated one 2,144-byte stage and one 1,880-byte handler
     future each, against 4,952 and 1,880 bytes at the baseline; 2026-11-19, rustc 1.99.1 rejected
     reads after hand-off and after both dispatchers took the request, in the change that makes
-    the handle move-only ([#1674 Shrink the boxed future for staged requests](https://github.com/corten-run/corten/pull/1674#round-two));
-    2026-11-19, the header lookup and extension counts before (`aa0f0c7e1`) and after sharing
-    the reads, from 1,300 less 300 catalog GETs on one connection per run.
+    the handle move-only ([#1674 Shrink the boxed future for staged requests](https://github.com/corten-run/corten/pull/1674#round-two)).
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
