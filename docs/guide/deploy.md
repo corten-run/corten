@@ -10,7 +10,7 @@ release profile an app builds with, how its image builds beside other apps', and
 monitoring it.
 
 For live streams this is a requirement, not just a choice of where to end TLS: another server
-to configure, update and operate. Nine of the twelve rows below are proxy-specific concerns;
+to configure, update and operate. Ten of the thirteen rows below are proxy-specific concerns;
 row 5 is conditional on a shared cache, while health checks (9) and HTTPS policy (12) also apply
 without a proxy. Not every row is a new cost caused by the HTTP/2 requirement.
 An opt-in prototype passed an eight-tab h2 check but missed a flow-controlled send timeout;
@@ -97,6 +97,7 @@ does not add HTTP/2; the live-stream limitation at the top of this guide still a
 | 10 | allow request bodies as large as the app's largest form, and pass a large upload on as it arrives | nginx refuses a body over `client_max_body_size` (1 MB) with a page of its own, before the app can answer it in the form; and it holds the whole body before passing it on (`proxy_request_buffering on`), so a route that reads a body as it arrives (`pieces_up_to`) gets a `location` of its own with its limit and `proxy_request_buffering off` (below) |
 | 11 | keep a quiet WebSocket open, or let the app ping it | nginx closes a proxied connection that sends nothing for `proxy_read_timeout` (60 seconds), a WebSocket included; Corten's `Upgrade` sends no pings of its own, so a socket that may go quiet longer pings from the app or gets a longer timeout in its `location` |
 | 12 | set `Policy::hsts` in the app when it is served only over HTTPS, even when the proxy or CDN already sends `Strict-Transport-Security` | the app sees plain HTTP from a proxy that ends TLS and reads no `X-Forwarded-Proto`, so `hsts` is how it knows its pages are `https`: with it, a write or a WebSocket handshake without `Sec-Fetch-Site` from a plain-http page on the app's host is refused, and without it that page passes ([design Limit 26](../design.md#limit-origin-scheme)); it also keeps a redirect's notice in the `__Host-` cookie ([WebSockets](app.md#websockets-and-relays)) |
+| 13 | pass the browser's `Accept-Encoding` and `If-None-Match` on to the app | a page `GET` is tagged only for a request that accepts a coding or names a tag, and answered `304` only when the tag it names reaches the app; without them every reload ships the whole page ([Response compression](#response-compression)) |
 
 ### Live streams
 
@@ -148,6 +149,8 @@ server {
         proxy_set_header Upgrade $http_upgrade;                        # WebSockets (Upgrade)
         proxy_set_header Connection $connection_upgrade;
         proxy_cache app;       # keys on Vary; stores only answers sent public
+        proxy_set_header If-None-Match $http_if_none_match;   # proxy_cache takes it off otherwise: no 304 for a page it does not store
+        proxy_no_cache $http_if_none_match;                   # and the 304 that answers it is not stored for the next reader
     }
 }
 ```
@@ -169,7 +172,7 @@ neither refuses it at the forms' limit nor holds all of it before the app sees a
 app's own 413 (the API's shape, or the handler's) is what the browser reads for a body up to
 that size (a limit of only `max` would have nginx refuse first); past it, the browser reads
 nginx's page. A prefix that also serves downloads keeps
-`proxy_cache app;` here too:
+`proxy_cache app;` and the two lines under it here too:
 
 ```nginx
     location /files/ {
@@ -288,14 +291,38 @@ system zstd is installed. The starter's Dockerfile instead sets `ZSTD_SYS_USE_PK
 library, remove the setting so the build compiles zstd and links it into the app. To avoid
 zstd altogether, turn off the `compress` feature in the app's `Cargo.toml`.
 
-A proxy that compresses in the app's place must still pass the browser's `Accept-Encoding` on to
-it. With the feature or without, a page `GET` is hashed for an `ETag` only when the request accepts
-a coding or already names a tag ([design Limit 21](../design.md#limit-etag)), and what counts is
-the header as it reaches the app. Behind a proxy that takes it off, a browser that holds no tag is
-never sent one, and so gets the whole page each time where it would get a `304`. A proxy takes it
-off when it is told to (nginx's `proxy_set_header Accept-Encoding ""`), and some do as part of
-compressing for the app (HAProxy's `compression offload`). To check, ask for a page through the
-proxy with `Accept-Encoding: gzip` and look for its `ETag`.
+Whichever compresses, the proxy passes the browser's `Accept-Encoding` on to the app (row 13
+above). With the feature or without, a page `GET` is hashed for an `ETag` only when the request
+accepts a coding or already names a tag ([design Limit 21](../design.md#limit-etag)), and what
+counts is the header as it reaches the app. Behind a proxy that takes it off, a browser that holds
+no tag is never sent one, and so gets the whole page each time where it would get a `304`. With
+the feature on and the header passed, the app compresses and the proxy has nothing left to do; to
+have the proxy compress instead, build without the feature and still pass the header. A proxy
+takes it off when it is told to (nginx's `proxy_set_header Accept-Encoding ""`), and one that
+compresses for the app may be set to: HAProxy's `compression offload` takes it off each request
+that names a coding HAProxy is set to use, which a browser's always does.
+
+The tag is half of it: the `304` needs the browser's `If-None-Match` to reach the app too. nginx
+takes it off, with the other conditional headers, in a `location` that has `proxy_cache`
+([`proxy_set_header`](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)):
+it answers a tag itself from what it stored, and a page it does not store (a private one) would be
+sent whole on every reload. The [configuration above](#nginx) therefore passes the header on by
+hand, and its `proxy_no_cache` line keeps the `304` that answers it out of the store; without that
+line nginx stored a public page's `304` and gave it to the next reader, who held no page. Checked
+with nginx 1.27.5 and HAProxy 3.0.31 in front of a server that answered as a private and a public
+page do and printed what reached it.
+
+To check both, pick a page that carries an `ETag` when asked straight from the app (one whose
+layout takes `req.nonce()`, or that is `no_store`, never does), and send the proxy the two requests
+a browser would, as `GET`s with the header a browser sends (a `HEAD`, which `curl -I` sends, is
+always tagged and shows nothing):
+
+```sh
+curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' https://example.com/
+curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' -H 'If-None-Match: W/"<the tag>"' https://example.com/
+```
+
+The first must show the `ETag` and the second `304`.
 
 ## Building the image
 

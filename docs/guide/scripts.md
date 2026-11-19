@@ -1256,7 +1256,8 @@ not `SetListing<'a>`), since the handler's return type names it.
 
 The read goes through the browser's HTTP cache. Corten tags a `200` it may be asked about again
 with a weak `ETag` and sends it `private, no-cache` by default, so each read asks with the tag it
-kept and an unchanged answer is a `304` with no body; a `Public` route's `max-age` lets a read
+kept and an unchanged answer is a `304` with no body (behind a proxy, when it passes
+`Accept-Encoding` and `If-None-Match` on: [deploying](deploy.md#response-compression)); a `Public` route's `max-age` lets a read
 within it make no request at all. The page and its data share the URL, and `Vary: corten, accept`
 keeps a cached page from answering a read. The browser keeps one answer per URL, so the 304 holds
 while nothing else fetched that URL in between: once the page itself is fetched there again (a

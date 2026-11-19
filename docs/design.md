@@ -6969,7 +6969,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     nothing. A CDN that fetches pages without asking for a coding gets no tag to revalidate them.
     What counts is the header as it reaches the app: behind a proxy that takes `Accept-Encoding`
     off, a browser that holds no tag is never sent one (one that still holds a tag names it, and
-    is answered).
+    is answered when the proxy passes `If-None-Match` on too;
+    [deploying](guide/deploy.md#response-compression)).
     With `compress`, only explicitly named codings Corten can send count.
     Without it, any named non-identity coding with a positive weight counts, as does a positive
     `*` (it allows unlisted codings, RFC 9110 section 12.5.3). An absent or empty

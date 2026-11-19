@@ -130,7 +130,7 @@ unbounded search across runtimes, compilers or framework internals.
 
 | Contender | Supported lean configuration |
 |---|---|
-| Corten | No optional response compression or handler/header/send timers; normal page stages and error logs remain. The timed requests accept no coding and name no tag, so their pages carry no `ETag`; a build without compression hashed one for each until it decided a tag as a build with compression does, and results from before keep that cost. |
+| Corten | No optional response compression or handler/header/send timers; normal page stages and error logs remain. The timed requests accept no coding and name no tag, so their pages carry no `ETag`. Only lean runs of commits from `2704dba9e`, which turned compression off for this recipe, up to `f93b94358`, which made a build without compression decide a tag as one with it does, hashed one for each page. |
 | Axum + Maud | Lean router with document headers on the catalog page, without the rest of the matched production middleware. |
 | ASP.NET Razor | Minimum request/response data rates unset; native Kestrel header/keepalive timers remain at their defaults after infinite timers caused early connection closure in Linux checks. Razor rendering, source failures and logging remain. |
 | Express | Production EJS view cache; no ETag generation or HTTP header/request/keepalive timers; fresh response rendering remains. |
