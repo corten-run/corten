@@ -37,7 +37,7 @@ impl Source {
             let path = std::env::var("CATALOG_FIXTURE_PATH").unwrap_or_else(|_| "fixtures/catalog.json".into());
             return Ok(Self::Fixture(Arc::new(serde_json::from_slice(&std::fs::read(path)?)?)));
         }
-        Self::api(&std::env::var("API_BASE")?)
+        Self::api(&std::env::var("API_BASE").map_err(|error| format!("API_BASE: {error}"))?)
     }
 
     /// The records of the API at `base`, which must be a URL a path can be added to.
@@ -66,7 +66,7 @@ impl Source {
                 // Anything else that is not a success is the upstream's failure. A redirect is one:
                 // it is not followed, and its body is not read as a record.
                 if !response.status().is_success() {
-                    return Err(corten::Error::new(format!("catalog API returned {}", response.status())));
+                    return Err(corten::Error::new(format!("catalog API returned {} for record {id}", response.status())));
                 }
                 let record = corten::json::from_slice(&response.bytes().await?)?;
                 Ok(Some(Arc::new(record)))
@@ -78,7 +78,7 @@ impl Source {
 const NOT_A_BASE: &str = "API_BASE must be hierarchical";
 
 /// Where the API at `base` has the record `id`. `url` says adding a path can fail; it cannot for
-/// a base [`Source::api`] took, which is the only one there is.
+/// a base [`Source::api`] took, and nothing else in this crate builds a [`Source::Api`].
 fn record_url(base: &reqwest::Url, id: &str) -> corten::Result<reqwest::Url> {
     let mut url = base.clone();
     url.path_segments_mut().map_err(|_| corten::Error::new(NOT_A_BASE))?.pop_if_empty().extend(["catalog", "records", id]);
@@ -111,7 +111,7 @@ mod tests {
     }
 
     #[test]
-    fn a_record_s_id_is_one_segment_whatever_it_holds() {
+    fn an_id_with_a_slash_or_a_query_in_it_stays_one_segment() {
         assert_eq!(record_url(&base("http://upstream"), "a/b?c").unwrap().as_str(), "http://upstream/catalog/records/a%2Fb%3Fc");
     }
 
@@ -161,7 +161,7 @@ mod tests {
         let (at, thread) = upstream(vec![
             ("200 OK", String::new(), record.into()),
             ("404 Not Found", String::new(), "{}".into()),
-            // A redirect whose body is a record and whose target would answer with one.
+            // A redirect whose body is a record, to a place that is listening.
             ("302 Found", format!("location: {elsewhere}\r\n"), record.into()),
             ("503 Service Unavailable", String::new(), record.into()),
         ]);
@@ -173,8 +173,8 @@ mod tests {
         let asked = tokio::task::spawn_blocking(move || thread.join().unwrap()).await.unwrap();
         let lines = ["record_1", "missing", "moved", "down"].map(|id| format!("GET /catalog/records/{id} HTTP/1.1"));
         assert_eq!(asked, lines);
-        // Nothing asked the redirect's target.
+        // Nothing connected to the redirect's target.
         listener.set_nonblocking(true).unwrap();
-        assert!(listener.accept().is_err());
+        assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
     }
 }
