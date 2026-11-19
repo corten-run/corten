@@ -342,9 +342,10 @@ with, which allows neither, so the runtime sets those values through the CSSOM
 way, not its own: a script that fills rows draws their sizes itself. The block has the values
 written while the page renders: markup rendered ahead (a body that is also a live stream's
 fragment) goes in a `corten::Rendered` (`req.rendered(view)`), which keeps them and places them with its markup
-(`{body}`, a reference to it); text placed with `raw()` carries none, and under `corten dev` a page with a
-`data-vars` value its block has no rule for is an error, including markup in a `<noscript>`
-fallback. A property registered with another syntax
+(`{body}`, a reference to it); text placed with `raw()` carries none. In a debug build under
+`corten dev`, a page with a `data-vars` value its block has no rule for is an error. This
+includes markup in templates that scripts can copy and live `<noscript>` fallback, but
+not fallback inside an inert template. Release builds do not run this check. A property registered with another syntax
 (`<color>`, to animate it) is scoped the same way and has no constant.
 
 The block costs a page that uses it the hash of its text: measured with callgrind (release

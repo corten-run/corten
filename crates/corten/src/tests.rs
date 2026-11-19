@@ -1009,7 +1009,7 @@ fn placed_meters_listing(
 }
 
 /// Markup rendered ahead into a `Rendered` keeps its values, so its page's style block has their
-/// rules; the same markup placed with `raw` has none, which `corten dev` reports.
+/// rules; the same markup placed with `raw` has none, which a debug build in dev mode reports.
 #[tokio::test]
 async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_reported() {
     let rules = r#"[data-vars="--meter__fill:42.5%"]{--meter__fill:42.5%!important}[data-vars="--meter__fill:7%"]{--meter__fill:7%!important}"#;
@@ -1021,8 +1021,12 @@ async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_rep
     let (status, _, body) = call(placed_meters(false, |body| Box::new(crate::raw(body.as_str().to_string()))), "GET", None).await;
     assert!(status == 200 && !body.contains("<style>"), "raw markup's values are not noted: {body}");
     let (status, _, body) = call(placed_meters(true, |body| Box::new(crate::raw(body.as_str().to_string()))), "GET", None).await;
-    assert_eq!(status, 500, "{body}");
-    assert!(body.contains("data-vars=&quot;--meter__fill:42.5%&quot; and no rule for it"), "{body}");
+    if cfg!(debug_assertions) {
+        assert_eq!(status, 500, "{body}");
+        assert!(body.contains("data-vars=&quot;--meter__fill:42.5%&quot; and no rule for it"), "{body}");
+    } else {
+        assert!(status == 200 && !body.contains("<style>"), "release runs no markup check in dev mode: {body}");
+    }
     // In a debug build, a component rendered ahead counts as rendered where it is placed. A
     // release build does not note a view's components, so only a debug build reports it.
     // Outside `corten dev` too, as an app's own router test runs (#1029): the message describes the

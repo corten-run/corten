@@ -1,8 +1,10 @@
 //! Small HTML helpers with no dependencies.
 
+#[cfg(any(debug_assertions, test))]
 mod scan;
 #[cfg(any(debug_assertions, test))]
 use scan::{lone_lt, raw_text_end, script_end, Mode, Token, Tokens};
+#[cfg(debug_assertions)]
 pub(crate) use scan::{Event, Markup};
 
 /// Escapes text for use in HTML text or a quoted attribute.
@@ -70,6 +72,7 @@ pub(crate) fn json_string(text: &str) -> String {
 }
 
 /// A start tag as `html!` writes it, read by [`start_tag`].
+#[cfg(any(debug_assertions, test))]
 pub(crate) struct Tag<'a> {
     /// Where its `<` is, and one past its `>`.
     pub start: usize,
@@ -86,6 +89,7 @@ pub(crate) struct Tag<'a> {
     pub complete: bool,
 }
 
+#[cfg(any(debug_assertions, test))]
 impl Tag<'_> {
     /// The value of its first attribute `name` (in any case), as written.
     pub fn attr(&self, name: &str) -> Option<&str> {
@@ -98,6 +102,7 @@ impl Tag<'_> {
 /// taken for the tag's own: `data-on` is single-quoted and its JSON has `"` in it
 /// (`docs/design.md#choice-data-on-single-quoted`). Whitespace may come around an attribute's
 /// `=`, and only a `/` right before the `>` makes it self-closing.
+#[cfg(any(debug_assertions, test))]
 fn start_tag(html: &str, start: usize) -> Tag<'_> {
     let mut attrs = Vec::new();
     let (name, end, self_closing) = scan::read_tag(html, start + 1, |name, value| attrs.push((name, value)));
@@ -116,6 +121,7 @@ pub(crate) fn start_tags_no_script(html: &str) -> impl Iterator<Item = Tag<'_>> 
 }
 
 /// Elements that have no end tag, and those the HTML parser closes at once as it does them.
+#[cfg(any(debug_assertions, test))]
 const VOID: &[&str] = &[
     "area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "img", "input", "keygen", "link", "meta",
     "param", "source", "track", "wbr",
@@ -385,16 +391,19 @@ const TABLE_PARTS: &[&str] = &["caption", "col", "colgroup", "tbody", "td", "tfo
 /// The SVG elements whose children are HTML's: the HTML standard's HTML integration points in SVG.
 /// The same list as `SVG_HTML_POINTS` in `crates/corten-macros/src/html.rs`, which
 /// `the_macro_s_patch_lists_are_the_check_s` holds it to.
+#[cfg(any(debug_assertions, test))]
 const SVG_HTML_POINTS: &[&str] = &["foreignObject", "desc", "title"];
 
 /// The MathML elements whose children are HTML's but a `<mglyph>` and a `<malignmark>`: the HTML
 /// standard's MathML text integration points. The same list as `MATH_HTML_POINTS` in
 /// `crates/corten-macros/src/html.rs`.
+#[cfg(any(debug_assertions, test))]
 const MATH_HTML_POINTS: &[&str] = &["mi", "mo", "mn", "ms", "mtext"];
 
 /// The start tags the HTML standard's rules for foreign content take out of an `<svg>` or a
 /// `<math>` (and a `<font>` with a `color`, `face` or `size`). The same list as `BREAKOUT` in
 /// `crates/corten-macros/src/html.rs`, which refuses one written straight in either.
+#[cfg(any(debug_assertions, test))]
 const BREAKOUT: &[&str] = &[
     "b",
     "big",
@@ -444,6 +453,7 @@ const BREAKOUT: &[&str] = &[
 
 /// How the start tags in an open element are read, as the HTML standard's tree construction
 /// dispatcher reads them, as far as a patch's foreign content needs.
+#[cfg(any(debug_assertions, test))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Within {
     /// As HTML's: outside foreign content, and in an SVG or MathML HTML integration point.
@@ -474,6 +484,7 @@ struct Open {
 /// it is foreign content's and how what it holds is read. `None` for an element HTML's wherever it
 /// lands written straight in foreign content (`BREAKOUT`), which the browser takes out of it, closing
 /// the elements around it: not followed here, and `html!` refuses it.
+#[cfg(any(debug_assertions, test))]
 fn placed(within: Within, tag: &Tag) -> Option<(bool, Within)> {
     let is = |name: &str| tag.name.eq_ignore_ascii_case(name);
     let any = |list: &[&str]| list.iter().any(|name| is(name));
@@ -506,6 +517,7 @@ fn placed(within: Within, tag: &Tag) -> Option<(bool, Within)> {
 /// decoded, with or without its `;` (U+FFFD for one that is no character, which neither has),
 /// and `&sol;` and `&plus;`, the only named ones for a character of theirs (no named one
 /// is a letter). Any other is left as written, which neither is either way.
+#[cfg(any(debug_assertions, test))]
 fn encoding_decoded(value: &str) -> std::borrow::Cow<'_, str> {
     if !value.contains('&') {
         return value.into();
@@ -638,49 +650,55 @@ const TABLE_HOLDERS: &[&str] = &["colgroup", "table", "tbody", "tfoot", "thead",
 
 /// Start tags the "in body" insertion mode closes a `<p>` open in button scope for.
 #[cfg(any(debug_assertions, test))]
-const CLOSES_P: &[&str] = &[
-    "address",
-    "article",
-    "aside",
-    "blockquote",
-    "center",
-    "dd",
-    "details",
-    "dialog",
-    "dir",
-    "div",
-    "dl",
-    "dt",
-    "fieldset",
-    "figcaption",
-    "figure",
-    "footer",
-    "form",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "header",
-    "hgroup",
-    "hr",
-    "li",
-    "listing",
-    "main",
-    "menu",
-    "nav",
-    "ol",
-    "p",
-    "plaintext",
-    "pre",
-    "search",
-    "section",
-    "summary",
-    "table",
-    "ul",
-    "xmp",
-];
+fn closes_p(name: &str) -> bool {
+    matches!(
+        name,
+        "address"
+            | "article"
+            | "aside"
+            | "blockquote"
+            | "center"
+            | "dd"
+            | "details"
+            | "dialog"
+            | "dir"
+            | "div"
+            | "dl"
+            | "dt"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "form"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "header"
+            | "hgroup"
+            | "hr"
+            | "li"
+            | "listing"
+            | "main"
+            | "menu"
+            | "nav"
+            | "ol"
+            | "p"
+            | "plaintext"
+            | "pre"
+            | "search"
+            | "section"
+            | "summary"
+            | "table"
+            | "ul"
+            | "xmp"
+    )
+}
+
+#[cfg(any(debug_assertions, test))]
+const SCOPE: &[&str] = &["applet", "caption", "html", "table", "td", "th", "marquee", "object", "template"];
 
 /// Why the browser does not put the HTML element of `tag` where the patch writes it, in the
 /// elements `open` around it (innermost last, a `<template>`'s content read on its own), or
@@ -709,7 +727,7 @@ fn misplaced(open: &[Open], tag: &Tag) -> Option<String> {
         }
         false
     };
-    let scope = |name: &str| ["applet", "caption", "html", "table", "td", "th", "marquee", "object", "template"].contains(&name);
+    let scope = |name: &str| SCOPE.contains(&name);
     let closes = |what: &str| Some(format!("which closes the <{what}> open around it"));
     // The innermost open element, when it is HTML's.
     let current = open.last().filter(|el| !el.foreign).map(|el| el.name.as_str());
@@ -745,7 +763,7 @@ fn misplaced(open: &[Open], tag: &Tag) -> Option<String> {
         };
         return (!kept).then(|| "content of a <select>, which the engines read by rules of their own".into());
     }
-    if CLOSES_P.contains(&name) && open_in(&["p"], &|el| scope(el) || el == "button") {
+    if closes_p(name) && open_in(&["p"], &|el| scope(el) || el == "button") {
         return closes("p");
     }
     let heading = |el: &str| matches!(el, "h1" | "h2" | "h3" | "h4" | "h5" | "h6");

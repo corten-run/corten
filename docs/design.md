@@ -7428,19 +7428,20 @@ by design; where it is known, a limit says what would lift it or why it is so.
     check recognizes SVG and MathML text (including CDATA), decodes numeric whitespace
     references and `&Tab;` and `&NewLine;` in HTML text and textarea values, and leaves
     script and stylesheet source, iframe fallback and inert template contents out of
-    hint text. It follows explicit closes and the SVG and MathML exits, not HTML's
-    automatic closing or reparenting of elements: `<li id=qty-hint><li>Outside` can still
-    count text after the first list item. This is the remaining case in
-    [#1620 Track known limits of the debug form-hint scan](https://github.com/corten-run/corten/issues/1620).
+    hint text. The open-element stack follows SVG and MathML exits and the in-body
+    start tags that close list items, definition items and paragraphs, up to the
+    corresponding scope boundaries. It does not follow other insertion modes or
+    reparenting (for example, moving text out of a table), or the paragraph close
+    that depends on whether a table is parsed in quirks mode.
     Hints and submit keys distinguish an ordinary template from a declarative shadow root
     on an eligible document host without a root already. This is a scan of written markup:
     it does not decode attribute values, model the accessibility tree or follow slotting,
     script changes or custom-element registration. A patch uses a template fragment and
-    does not attach declarative shadow roots. The hint, key and patch id checks run only
-    in debug builds; the `data-vars` check runs only on full documents with development
-    mode enabled, even in a release build. It checks the scripting-on parse (including
-    templates whose contents can be copied) and, when it finds an HTML `<noscript>`, also
-    the scripting-off parse, where the fallback can contain markup.
+    does not attach declarative shadow roots. The server scanner is not compiled into
+    release builds. The `data-vars` check also requires development mode and a full document.
+    It checks the scripting-on parse, including templates whose contents can be copied,
+    and, when it finds an HTML `<noscript>`, the scripting-off parse, where it checks
+    fallback markup only outside inert template contents.
 
 34. <a id="limit-relay-stream-order"></a>JetStream stream order is not always Corten feed
     order. Postgres commits each feed's sequence under its row lock. The relay submits

@@ -1,6 +1,6 @@
 //! Token boundaries for developer checks, not an HTML tree builder.
 
-use super::{placed, Tag, Within, VOID};
+use super::{closes_p, placed, Tag, Within, SCOPE, SPECIAL, VOID};
 
 pub(super) fn space(byte: u8) -> bool {
     matches!(byte, b'\t' | b'\n' | b'\x0c' | b'\r' | b' ')
@@ -154,7 +154,6 @@ impl Mode {
     }
 }
 
-#[cfg_attr(not(any(debug_assertions, test)), allow(dead_code))]
 pub(super) enum Token<'a> {
     Text(&'a str),
     Cdata(&'a str, bool),
@@ -256,8 +255,8 @@ pub(super) fn comment(html: &str, at: usize) -> (usize, bool) {
     (html.len(), true)
 }
 
-/// For scans that need to continue after foreign content or an inert template. The stack
-/// dispatches tokenizer modes; it does not implement the HTML insertion modes.
+/// An open-element stack for developer scans. It dispatches tokenizer modes and follows
+/// selected in-body closes, but does not implement all of the HTML insertion modes.
 pub(crate) struct Markup<'a> {
     tokens: Tokens<'a>,
     open: Vec<Element<'a>>,
@@ -276,14 +275,20 @@ struct Element<'a> {
     can_attach_shadow: bool,
 }
 
-#[cfg_attr(not(any(debug_assertions, test)), allow(dead_code))]
+impl Element<'_> {
+    /// The special foreign elements are also boundaries for an element in scope.
+    fn foreign_boundary(&self) -> bool {
+        self.foreign && matches!(self.within, Within::Html | Within::MathText | Within::AnnotationXml)
+    }
+}
+
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
 pub(crate) enum Event<'a> {
     Start { tag: Tag<'a>, foreign: bool, opens: bool, live: bool },
     Text { text: &'a str, literal: bool, rcdata: bool },
     Other,
 }
 
-#[cfg(any(debug_assertions, test))]
 pub(super) fn tags(html: &str, scripting: bool) -> impl Iterator<Item = Tag<'_>> {
     Markup::new(html, false, scripting).filter_map(|event| match event {
         Event::Start { tag, .. } => Some(tag),
@@ -307,6 +312,41 @@ impl<'a> Markup<'a> {
             self.open.pop();
         }
     }
+
+    fn close_in(&mut self, names: &[&str], boundary: impl Fn(&Element<'_>) -> bool) {
+        for (i, el) in self.open.iter().enumerate().rev() {
+            if el.foreign {
+                if el.foreign_boundary() {
+                    break;
+                }
+            } else if names.iter().any(|name| el.name.eq_ignore_ascii_case(name)) {
+                self.open.truncate(i);
+                break;
+            } else if boundary(el) {
+                break;
+            }
+        }
+    }
+
+    fn close_implied(&mut self, name: &str) {
+        let items: &[&str] = match name {
+            "li" => &["li"],
+            "dd" | "dt" => &["dd", "dt"],
+            _ => &[],
+        };
+        if !items.is_empty() {
+            self.close_in(items, |el| {
+                !["address", "div", "p"].iter().any(|name| el.name.eq_ignore_ascii_case(name))
+                    && SPECIAL.iter().any(|name| el.name.eq_ignore_ascii_case(name))
+            });
+        }
+        // A table's paragraph close also depends on the document's quirks mode.
+        if name != "table" && closes_p(name) {
+            self.close_in(&["p"], |el| {
+                el.name.eq_ignore_ascii_case("button") || SCOPE.iter().any(|name| el.name.eq_ignore_ascii_case(name))
+            });
+        }
+    }
 }
 
 impl<'a> Iterator for Markup<'a> {
@@ -325,6 +365,9 @@ impl<'a> Iterator for Markup<'a> {
                     self.pop_foreign();
                     placed(Within::Html, &tag).expect("HTML placement")
                 });
+                if !foreign {
+                    self.close_implied(&tag.name);
+                }
                 // In HTML, an image token is reprocessed as the void img element.
                 if !foreign && tag.name == "image" {
                     tag.name = "img".into();
@@ -440,16 +483,17 @@ fn browser_checked_markup_cases() {
         patch: bool,
         scripting: bool,
         idless: bool,
+        live_vars: Option<Vec<String>>,
         #[cfg(debug_assertions)]
         hint: bool,
         #[cfg(debug_assertions)]
         key: bool,
         #[cfg(debug_assertions)]
-        scanner_hint: Option<bool>,
+        hint_text: Option<String>,
     }
 
     let cases: Vec<Case> = serde_json::from_str(include_str!("scan-cases.json")).expect("browser fixture");
-    for Case { name, html, tags, patch, scripting, idless, .. } in &cases {
+    for Case { name, html, tags, patch, scripting, idless, live_vars, .. } in &cases {
         let got: Vec<_> = self::tags(html, *scripting)
             .map(|tag| {
                 use std::fmt::Write as _;
@@ -463,15 +507,33 @@ fn browser_checked_markup_cases() {
             })
             .collect();
         assert_eq!(&got, tags, "{name}");
+        if let Some(expected) = live_vars {
+            let got: Vec<_> = Markup::new(html, !patch, *scripting)
+                .filter_map(|event| {
+                    let Event::Start { tag, live: true, .. } = event else { return None };
+                    tag.attr("data-vars").map(str::to_owned)
+                })
+                .collect();
+            assert_eq!(&got, expected, "{name}");
+        }
         if *patch {
             assert_eq!(super::patch_problem(html).is_some(), *idless, "{name}");
         }
     }
     #[cfg(debug_assertions)]
-    for Case { name, html, patch, hint, key, scanner_hint, .. } in cases {
+    for Case { name, html, patch, hint, key, hint_text, .. } in cases {
         let hints = ["qty-hint".to_owned()];
-        let got = crate::form::unnamed_hint(&html, &hints, !patch);
-        assert_eq!(got, scanner_hint.unwrap_or(hint).then_some("qty-hint"), "{name}");
+        if let Some(expected) = hint_text {
+            let tags = crate::form::hint_tags(&html, &hints, !patch);
+            let found = tags.iter().find(|(tag, _)| tag.attr("id") == Some("qty-hint"));
+            let got = match found {
+                Some((_, true)) => "nonblank",
+                Some((_, false)) => "blank",
+                None => "absent",
+            };
+            assert_eq!(got, expected, "{name}");
+        }
+        assert_eq!(crate::form::unnamed_hint(&html, &hints, !patch), hint.then_some("qty-hint"), "{name}");
         if !patch {
             assert_eq!(crate::form::keyless_submit_field(&html).is_some(), key, "{name}");
         }
