@@ -28,7 +28,9 @@ export function read(event, ascendingFirst, descendingFirst) {
   if (!(event instanceof ReadSortLinks) || !(head instanceof HTMLTableSectionElement)) return;
   const links = requests.get(event);
   event.stopPropagation();
-  for (const link of head.querySelectorAll(/** @type {"a"} */ (":scope > tr > th > a"))) {
+  for (const link of head.querySelectorAll(/** @type {"a"} */ (":scope > tr > th a"))) {
+    const cell = link.closest("th");
+    if (cell?.parentElement?.parentElement !== head) continue;
     const up = ascendingFirst.get(link);
     const down = descendingFirst.get(link);
     // No value, or the same ref incorrectly passed for both directions: leave the link alone.
@@ -38,7 +40,7 @@ export function read(event, ascendingFirst, descendingFirst) {
     const first = upFirst ? 1 : -1;
     const href = link.getAttribute("href");
     if (href === null) continue;
-    const active = link.parentElement?.getAttribute("aria-sort") ?? null;
+    const active = cell.getAttribute("aria-sort");
     let route = routes.get(link);
     // Retained anchors can receive a new route pair without another connect, even if only
     // aria-sort changed. Client rewrites record their own href and aria-sort together.

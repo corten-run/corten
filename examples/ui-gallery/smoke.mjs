@@ -1525,6 +1525,26 @@ async function run(browser) {
     newest.buyers === "Grace Hopper|Alan Turing|Ada Lovelace" && newest.sort === ",descending,,," && new URL(page.url()).searchParams.get("sold") === "buyer_down" && newestNext.searchParams.get("sold") === "buyer",
     `${JSON.stringify(newest)} ${page.url()} ${newestNext}`,
   );
+  await page.goto(`${base}/?sold=price`);
+  const wrappedSortStopped = await sales.getByRole("link", { name: "Price" }).evaluate((link) => {
+    const span = document.createElement("span");
+    link.before(span);
+    span.append(link);
+    // Observe whether the sort handled the click without letting a regression navigate away.
+    let stopped = false;
+    window.addEventListener("click", (event) => {
+      stopped = event.defaultPrevented;
+      event.preventDefault();
+    }, { once: true });
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    return stopped;
+  });
+  const wrappedOrder = await sortedBy();
+  check(
+    "a wrapped sort link reverses the header's order in place and updates the address",
+    wrappedSortStopped && wrappedOrder.buyers === "Ada Lovelace|Grace Hopper|Alan Turing" && wrappedOrder.sort === ",,,,descending" && new URL(page.url()).searchParams.get("sold") === "price_down",
+    `${wrappedSortStopped} ${JSON.stringify(wrappedOrder)} ${page.url()}`,
+  );
   await page.goto(unsorted);
   // A handler still wired to an old or misconfigured kit must not partially sort in place.
   await sales.locator("thead").evaluate((head) => head.removeAttribute("data-on"));

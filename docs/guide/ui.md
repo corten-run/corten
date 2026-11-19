@@ -181,7 +181,8 @@ to the one a click gives: the other way when the table is sorted by it, else the
 (`Sort::Descending` for a column read newest or largest first). For client sorting, declare the
 table's two `SortLinks` refs and pass them to each `SortHeader` as `links`. On its `<thead>`, put
 `ref={head}` and `on:ReadSortLinks={rows::read(event, up, down)}` with those same refs. Each header
-uses the ref for its first direction to carry the route not in its native `href`. The sort and
+uses the ref for its first direction to carry the route not in its native `href`. A custom
+header can wrap the link inside its `<th>`; the cell still carries `aria-sort`. The sort and
 ordered controls ask the head for its current refs when they act, including after a patch replaces
 a header or a layout redraw keeps the anchor and changes its attributes. Without the route reader
 or the clicked link's route ref, the script leaves navigation to the link.
