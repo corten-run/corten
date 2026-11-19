@@ -296,12 +296,13 @@ fn handler(
     let call = unparen(expr.clone());
     let mut tokens: Vec<_> = call.clone().into_iter().collect();
     let Some(TokenTree::Group(args)) = tokens.pop() else { return None };
+    let [path @ .., TokenTree::Ident(_)] = tokens.as_slice() else { return None };
+    let (segments, rest) = path.as_chunks::<3>();
     if args.delimiter() != Delimiter::Parenthesis
-        || !matches!(tokens.last(), Some(TokenTree::Ident(_)))
-        || !tokens[..tokens.len() - 1].chunks_exact(3).remainder().is_empty()
-        || !tokens[..tokens.len() - 1]
-            .chunks_exact(3)
-            .all(|t| matches!(t[0], TokenTree::Ident(_)) && is_punct(t.get(1), ':') && is_punct(t.get(2), ':'))
+        || !rest.is_empty()
+        || !segments.iter().all(|[name, first, second]| {
+            matches!(name, TokenTree::Ident(_)) && is_punct(Some(first), ':') && is_punct(Some(second), ':')
+        })
     {
         return None;
     }
