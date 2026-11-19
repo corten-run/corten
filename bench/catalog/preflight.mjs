@@ -23,6 +23,7 @@ export function requiredRoundArtifacts(summary) {
       if (summary.apps[app].checks[source].failure) keys.push(`${prefix}/checks.json.failure.json`);
       if (!gated) for (let pass = 1; pass <= summary.options.passes; pass++) {
         const raw = `${prefix}/p${pass}-page`;
+        if (summary.measurement.loadLayout === "c16-generator-v1") keys.push(`${raw}/cold-probe.json`);
         keys.push(...["cold.json", "cold.log", "container.json", "app.log",
           ...["warmup", "fixed", "sat64", "sat256"].flatMap(phaseArtifacts)].map((k) => `${raw}/${k}`));
       }

@@ -199,6 +199,11 @@ async function coldStart(name, source, target, image, raw) {
     assert.equal(exit, "0", `cold probe: ${output}`);
     const result = JSON.parse(output.split("\n").findLast((line) => line.startsWith("{")));
     const info = await inspect(name);
+    if (loadLayout === "c16-generator-v1") {
+      const observed = await inspect(probe);
+      writeFileSync(join(raw, "cold-probe.json"), JSON.stringify({ ...containerEvidence(observed),
+        name: observed.Name, command: observed.Config.Cmd, finishedAt: observed.State.FinishedAt }, null, 2));
+    }
     const ms = Date.parse(result.first200At) - Date.parse(info.State.StartedAt);
     assert.ok(ms >= 0 && ms <= options.startupTimeout * 1000, "invalid Docker-host cold clock");
     const cold = { ...result, first200MsFromContainerStart: ms, containerStartedAt: info.State.StartedAt, clock: "Docker host wall clock; container start, not process exec; polling interval 10ms", measuredBeforeReadinessOrWarmup: true };

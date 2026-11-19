@@ -194,6 +194,15 @@ export function workerRound(failure = null, { historical = false, wideGenerator 
     hashes: Object.fromEntries(preflightArtifacts().map((key) => [key, digest(f.reader.readText(key))])) });
   for (const entry of Object.values(s.apps)) for (const [key, runs] of Object.entries(entry.runs))
     entry.phases[key] = Object.fromEntries(phases.map((p) => [p, { ...aggregate(runs.map((r) => r.phases[p])), asked: s.options.passes }]));
+  if (wideGenerator) for (const [app, entry] of Object.entries(s.apps)) {
+    for (const runs of Object.values(entry.runs)) for (const run of runs) {
+      const raw = `${run.evidence.source}/${app}/p${run.pass}-page`, appName = `${s.runId}-${app}`;
+      f.put(`${raw}/cold-probe.json`, { id: digest(`${raw}/cold-probe`), name: `/${appName}-probe`,
+        imageId: s.tools.upstream.imageId, runId: s.runId, startedAt: run.cold.containerStartedAt,
+        finishedAt: run.cold.first200At, quotaNanoCpus: 4e9, cpuset: "4-7", memoryBytes: 256 * 2 ** 20,
+        command: ["node", "/bench/catalog/cold.mjs", `http://${appName}:8080`, "/catalog/record_1", String(s.options.startupTimeout)] });
+    }
+  }
   indexRound(f); return f;
 }
 

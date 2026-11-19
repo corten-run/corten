@@ -60,10 +60,22 @@ test("wide generator raw replay checks twelve CPUs for k6, four for checker, and
   f.put(checkerKey, checker); indexRound(f);
   assert.throws(() => replayCatalog(f.summary, f.reader, f.commit));
   f.put(checkerKey, checkerText);
+  const coldKey = `${prefix}/cold-probe.json`, originalCold = f.reader.readText(coldKey);
+  for (const [field, value, message] of [["cpuset", "4-15", /probe affinity/], ["quotaNanoCpus", 12e9, /probe quota/]]) {
+    f.put(coldKey, { ...JSON.parse(originalCold), [field]: value }); indexRound(f);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), message);
+  }
+  f.put(coldKey, originalCold);
+  const preflightText = f.reader.readText("preflight.json");
   delete saved.binding.loadLayout; f.put("preflight.json", saved); indexRound(f);
   assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /preflight source\/recipe differs/);
-  stats(f, "k6", 960);
-  assert.throws(() => phase(f), /generator.*headroom/);
+  f.put("preflight.json", preflightText); stats(f, "k6", 960); indexRound(f);
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /generator.*headroom/);
+});
+
+test("historical successful phases above 320% remain replayable after a valid four-core preflight", () => {
+  const f = workerRound(); stats(f, "k6", 391.36); indexRound(f);
+  assert.equal(replayCatalog(f.summary, f.reader, f.commit).baseline, true);
 });
 
 test("native document header evidence cannot be relabeled, omitted, weakened or detached from checker execution", () => {
