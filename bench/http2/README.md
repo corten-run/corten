@@ -156,7 +156,7 @@ stronger than today's watch, not a prerequisite for matching HTTP/1.1. A send-wa
 must cover DATA still queued after the body ends, not just credit awaited before the handoff.
 An opt-in `serve` design must preserve both connection bounds together without a second parser.
 
-[limits.mjs](limits.mjs) is the **acceptance client**. It prints each case and its timing,
+[limits.mjs](limits.mjs) is the **isolated acceptance client**. It prints each case and its timing,
 and exits nonzero if any case in the selected suite fails. The tag's older client is only a
 historical observation: it succeeds when the zero-window stall reproduces.
 
@@ -175,7 +175,12 @@ historical observation: it succeeds when the zero-window stall reproduces.
    tail must not trip the detector.
 
 Run the idle and send suites separately when evaluating a detector so that one timer cannot
-pass the other's cases. Before shipping, also run the full three-engine TLS runtime smoke,
+pass the other's cases. Qualify the combined path separately, with both watches and the
+socket write watch enabled and with controls that expect their joint behavior. For example,
+a final tail stalled past the send deadline must close the connection even though it
+keeps the idle watch busy; after the last normal response completes, the connection must
+return to idle and close at the idle deadline, not remain reusable after 500 ms of inactivity.
+Before shipping, also run the full three-engine TLS runtime smoke,
 reset flood and resource checks, shutdown with open streams, decoded-head bounds and explicit
 h2 Upgrade refusal/HTTP/1 WebSocket fallback. Shipping Corten is unchanged.
 
@@ -213,24 +218,30 @@ mode still uses the same body and buffer wrapper types but records no progress o
 
 ### Follow-up Results
 
-Measured 2026-11-18 in three rounds over loopback TLS, with the Linux release probe in
-Docker Desktop and the Node 24 client on the host. The probe checked elapsed time every
-10 ms with both strict suites run at `TIMEOUT_MS=100`; the client required actual connection
-closure by 500 ms, not just GOAWAY or a reset. The ranges below are measured min to max
-across the three rounds. Every pass or fail repeated in all three.
-[Per-case observations](results/follow-up-wire.jsonl) include the late-write attempt and
-whether an old answer appeared.
+Rerun on 2026-11-19 UTC after resolving the [probe lockfile](probe/Cargo.lock) with
+Cargo 1.100: `bytes` 1.12.2 and `smallvec` 1.16.6 were younger than three days at the
+first measurement. The replacements are `bytes` 1.12.1 (published 2026-07-08 UTC)
+and `smallvec` 1.16.5 (published 2026-11-06 UTC). The crates.io index confirmed
+the checksum and publish time of all 77 registry entries, all at least three days old.
+
+Three rounds over loopback TLS used the Linux release probe (Rust 1.99.1) in Docker Desktop
+and the Node 24 client on the host. The probe checked elapsed time every 10 ms with both strict
+suites run at `TIMEOUT_MS=100`; the client required actual connection closure by 500 ms,
+not just GOAWAY or a reset. The ranges below are measured min to max across the three
+rounds. [Rerun observations](results/follow-up-wire-r2.jsonl) include the late-write attempt
+and whether an old answer appeared. All 120 pass/fail outcomes match the
+[earlier-lock observations](results/follow-up-wire.jsonl), retained unchanged.
 
 | Idle case | Hyper service count | Direct h2 count |
 |---|---|---|
-| No first request | Pass, closed 127.9-138.6 ms | Pass, closed 133.6-146.1 ms |
-| Partial first request | Pass, closed 116.2-125.7 ms | Pass, closed 117.2-119.4 ms |
-| Partial head after a complete answer | Pass, closed 102.1-113.0 ms | Pass, closed 107.7-109.7 ms |
-| Last of two overlapping answers | Pass, closed 105.8-131.3 ms after last end | Pass, closed 112.7-136.9 ms after last end |
-| Reset with sibling open, then reset sibling | Pass, closed 108.5-118.3 ms after last reset | Pass, closed 114.6-164.0 ms after last reset |
-| Cancel before the handler answers | Pass, closed 114.0-118.1 ms after reset | Pass, closed 110.0-118.9 ms after reset |
-| Partial head beside open `/quiet` | Pass, late answer at 517.4-535.6 ms | Pass, late answer at 508.3-521.7 ms |
-| Queued final answer stays busy | **Fail**, closed at 106.4-118.6 ms without credit | Pass, drained at 508.1-512.3 ms, closed 102.0-109.2 ms later |
+| No first request | Pass, closed 121.8-139.4 ms | Pass, closed 129.9-132.0 ms |
+| Partial first request | Pass, closed 118.1-127.0 ms | Pass, closed 114.7-119.2 ms |
+| Partial head after a complete answer | Pass, closed 110.1-112.9 ms | Pass, closed 110.5-113.2 ms |
+| Last of two overlapping answers | Pass, closed 107.7-112.3 ms after last end | Pass, closed 111.0-112.7 ms after last end |
+| Reset with sibling open, then reset sibling | Pass, closed 106.6-112.3 ms after last reset | Pass, closed 104.8-112.8 ms after last reset |
+| Cancel before the handler answers | Pass, closed 108.1-110.7 ms after reset | Pass, closed 106.7-113.7 ms after reset |
+| Partial head beside open `/quiet` | Pass, late answer at 511.9-516.8 ms | Pass, late answer at 508.8-517.6 ms |
+| Queued final answer stays busy | **Fail**, closed at 97.5-100.9 ms without credit | Pass, drained at 504.4-515.9 ms, closed 107.1-108.7 ms later |
 
 The first two ranges start at the client's connection open. The other closure times start
 at the relevant response end or reset, except the premature close for queued DATA, measured
@@ -241,18 +252,18 @@ independent idle-watch result, not a requirement for a new header-block timeout.
 
 | Send case | No detector | Body polls/drop | Buffer consumption/drop |
 |---|---|---|---|
-| Zero-window `/events?n=1` | **Fail**, late event 511.3-525.6 ms | Pass, closed 115.4-127.8 ms | Pass, closed 115.9-123.9 ms |
-| Final chunk buffered after first byte | **Fail**, late tail 508.6-518.2 ms | **Fail**, late tail 513.4-532.6 ms | Pass, closed 112.4-120.7 ms |
-| Same tail with progressing sibling | **Fail**, late tail 511.9-527.3 ms | **Fail**, late tail 511.6-521.2 ms | Pass, closed 110.1-113.5 ms; five sibling writes each time |
-| Quiet producer | Pass, still open 514.2-517.3 ms | Pass, still open 511.8-534.9 ms | Pass, still open 505.5-509.0 ms |
-| Normal response | Pass, reused at 517.3-549.6 ms | Pass, reused at 514.8-526.1 ms | Pass, reused at 510.6-522.8 ms |
-| Credit restored before the bound | Pass, completed 46.9-133.7 ms | Pass, completed 53.6-63.4 ms | Pass, completed 40.2-67.7 ms |
-| Incremental credit for one final chunk | Pass, completed 279.2-302.8 ms | Pass, completed 273.6-359.3 ms | Pass, completed 265.6-277.2 ms |
-| Reset discards a queued tail | Pass, reused at 511.9-521.5 ms | Pass, reused at 518.0-523.6 ms | Pass, reused at 508.1-513.0 ms |
+| Zero-window `/events?n=1` | **Fail**, late event 503.6-522.2 ms | Pass, closed 111.8-117.3 ms | Pass, closed 111.9-114.5 ms |
+| Final chunk buffered after first byte | **Fail**, late tail 507.8-523.6 ms | **Fail**, late tail 512.5-530.9 ms | Pass, closed 111.0-116.6 ms |
+| Same tail with progressing sibling | **Fail**, late tail 507.4-511.7 ms | **Fail**, late tail 510.5-512.1 ms | Pass, closed 111.8-112.5 ms; five sibling writes each time |
+| Quiet producer | Pass, still open 503.7-508.5 ms | Pass, still open 506.5-515.9 ms | Pass, still open 504.9-523.4 ms |
+| Normal response | Pass, reused at 514.0-523.3 ms | Pass, reused at 515.3-519.3 ms | Pass, reused at 508.8-533.4 ms |
+| Credit restored before the bound | Pass, completed 49.8-67.0 ms | Pass, completed 52.4-66.2 ms | Pass, completed 56.9-59.2 ms |
+| Incremental credit for one final chunk | Pass, completed 249.5-279.8 ms | Pass, completed 259.1-276.7 ms | Pass, completed 251.6-279.2 ms |
+| Reset discards a queued tail | Pass, reused at 513.8-516.5 ms | Pass, reused at 510.4-515.1 ms | Pass, reused at 504.5-511.0 ms |
 
 Stall times start at the request. In the passing stall cases the late WINDOW_UPDATE could
 not be written to the closed connection and no old DATA appeared. Early credit was sent
-38.3-65.0 ms from the request across the three modes. The body-only detector clears on
+45.4-64.6 ms from the request across the three modes. The body-only detector clears on
 another poll or drop, as it must to leave normal answers and quiet producers alone. That
 misses the two tails still in h2. The buffer detector follows DATA handed from Hyper to h2:
 consuming bytes renews its deadline, and exhaustion or drop removes it. With the pinned
@@ -266,20 +277,24 @@ listed above.
 
 #### Follow-up Cost
 
-Measured server instructions with Callgrind 3.19.0, three alternating paired runs
-([raw counts](results/follow-up-costs.csv)). The page has a 9-byte body; the event sample
-is a single response carrying the original 84-byte SSE event, repeated. Subtracting the
-200-count run from the 1,200-count run removes startup and one TLS handshake.
+Measured server instructions with Callgrind 3.19.0, three alternating paired rounds on the
+revised lock ([rerun counts](results/follow-up-costs-r2.csv);
+[earlier-lock counts](results/follow-up-costs.csv)). The page has a 9-byte body; the event
+sample is a single response carrying the original 84-byte SSE event, repeated, followed by
+one fixed 22-byte end event. Subtracting the 200-count run from the 1,200-count run removes
+startup and one TLS handshake, and removes the fixed end event from the event comparison.
 
 | Transport and enabled watch | Unit | Detector off median [min, max] | Detector on median [min, max] |
 |---|---|---:|---:|
-| Hyper service count | instructions/page | 30,155 [30,069, 30,304] | 30,872 [30,668, 30,885] |
-| Direct h2 active count | instructions/page | 25,984 [25,977, 25,984] | 26,772 [26,760, 26,774] |
-| Hyper body polls/drop | instructions/event | 5,050 [5,049, 5,051] | 5,587 [5,586, 5,590] |
-| Hyper buffer consumption/drop | instructions/event | 5,050 [5,049, 5,051] | 5,704 [5,698, 5,704] |
+| Hyper service count | instructions/page | 29,917 [29,903, 30,149] | 30,587 [30,561, 30,618] |
+| Direct h2 active count | instructions/page | 25,940 [25,937, 25,943] | 26,721 [26,719, 26,721] |
+| Hyper body polls/drop | instructions/event | 5,043 [5,043, 5,045] | 5,583 [5,582, 5,585] |
+| Hyper buffer consumption/drop | instructions/event | 5,043 [5,043, 5,045] | 5,696 [5,695, 5,696] |
 
-These are enabled-path costs in the fixture, not an estimate of combined overhead, a
-network latency comparison, or a change to shipping Corten's request path.
+Compared with the earlier lock, all seven medians are lower by 4 to 285 instructions per
+unit (rounded). Each enabled median is still above its corresponding off median. The
+rerun does not isolate the cause of the shift. These are fixture costs, not an estimate of
+combined overhead, a network latency comparison, or a change to shipping Corten's request path.
 
 ## Reproduction
 

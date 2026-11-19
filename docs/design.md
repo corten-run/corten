@@ -1284,13 +1284,13 @@ rules something out.
        **Idle disposition:** use protocol stream activity, not response-body lifetime.
        Direct [h2's active-stream count](https://github.com/hyperium/h2/blob/v0.4.20/src/server.rs#L562-L565)
        passed all eight [idle cases](../bench/http2/README.md#follow-up-results) in three runs:
-       the reused connection with an incomplete head closed in 108 to 110 ms with 100 ms set,
+       the reused connection with an incomplete head closed in 110.5 to 113.2 ms with 100 ms set,
        the watch returned to idle after overlap, reset and cancellation, and an open sibling
        kept the watch busy. The Hyper service count passed those cases but went idle too early
-       with a final DATA tail still waiting for credit (closed in 106 to 119 ms); direct h2
-       stayed busy until the tail drained. Hyper does not expose the h2 count. This establishes
-       an idle-watch candidate independently of the send decision. It is not a wire-flush signal
-       or a header-block timer while a sibling remains open.
+       with a final DATA tail still waiting for credit (closed in 97.5 to 100.9 ms from its
+       first byte); direct h2 stayed busy until the tail drained. Hyper does not expose the h2
+       count. This establishes an idle-watch candidate independently of the send decision.
+       It is not a wire-flush signal or a header-block timer while a sibling remains open.
 
        A detector based only on polling and dropping Corten's `Answered` body cannot preserve
        the send bound. In [hyper 1.12.0's send loop](https://github.com/hyperium/hyper/blob/v1.12.0/src/proto/h2/mod.rs#L157-L186),
@@ -1304,11 +1304,11 @@ rules something out.
        former. Socket writes cannot identify progress on one response rather than a sibling.
 
        **Send disposition:** do not use body polls and drop alone. The tested `Answered`
-       detector closed the zero-window connection in 115 to 128 ms but missed both final-tail
+       detector closed the zero-window connection in 111.8 to 117.3 ms but missed both final-tail
        cases: the old DATA still arrived after the client gave credit past 500 ms, with or
        without a progressing sibling. A parser-free `Body::Data` tracker stayed with the
        bytes after the body ended. In the pinned Hyper/h2 probe it closed all three stalls
-       in 110 to 124 ms, and distinguished quiet production, normal completion, resumed or
+       in 111.0 to 116.6 ms, and distinguished quiet production, normal completion, resumed or
        incremental credit, and reset. This is a measured candidate for flow-control waits,
        not a general send guarantee: h2 can consume the buffer into its encoder before
        TLS flush, so the socket write watch still matters.
@@ -1692,10 +1692,14 @@ rules something out.
     `watch.take()` in the prototype loses the return to idle); reasoned (hyper
     1.12.0 can finish the body while h2 0.4.20 still has queued data, so body polls and drop
     alone do not tell Corten that a stream made progress or completed); measured
-    ([follow-up raw TLS cases](../bench/http2/README.md#follow-up-results), three rounds:
+    ([follow-up raw TLS cases](../bench/http2/README.md#follow-up-results), three rounds
+    on the publish-age-checked lockfile, repeating every earlier pass and failure:
     h2's active count preserved the idle bound where Hyper's service count did not, and a
     byte-consumption watch preserved the send bound on these cases where body polls and drop
-    alone did not; the passing candidates were tested separately); value (fast and proven
+    alone did not; the passing candidates were tested separately, with
+    [Callgrind medians](../bench/http2/README.md#follow-up-cost) off to on of 25,940 to 26,721
+    instructions per page for the direct h2 count and 5,043 to 5,696 per event for buffer
+    tracking); value (fast and proven
     fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
     which is why the dispatch suite comes first and an opt-in protocol must not silently
     weaken a security bound even though the no-proxy live app already fails).
@@ -1705,10 +1709,12 @@ rules something out.
     counts more than axum's on any request measured in step 2 (that step then waits, and this
     Choice says why); a `Response<Body>` grows past 128 bytes (step 4); for HTTP/2, an upstream
     active-stream count exposed through Hyper reopens the idle design, and a per-stream send-wait
-    signal covering queued data after the body ends reopens the send design. A parser-free
-    opt-in path that combines both bounds with the socket watch and passes the
-    [acceptance cases](../bench/http2/README.md#follow-up-acceptance), including final buffered
-    data, sibling progress, reset and cancellation, reopens the proxy decision. An upstream header-block timeout
+    signal covering queued data after the body ends reopens the send design. The
+    [isolated controls](../bench/http2/README.md#follow-up-acceptance) qualify each detector
+    with the other disabled. Reopen the proxy decision when a parser-free opt-in path
+    demonstrates both bounds with the socket watch, using separate combined-path controls
+    with expectations for both watches enabled, including final buffered data, sibling
+    progress, reset and cancellation. An upstream header-block timeout
     ([hyperium/h2 #928 Proposal: enable an HTTP/2 header-block read timeout](https://github.com/hyperium/h2/issues/928))
     reopens the header half only. The historical open-sibling case is a control, not a demand
     for a stronger header guarantee. Shipping still needs shutdown, reset-flood and resource
@@ -1752,7 +1758,9 @@ rules something out.
     the same dispatch suite passed in the merged workspace's full debug tests at `66cb2936e`;
     2026-11-18, hyper 1.12.0's send loop and h2 0.4.20's active count and send queue read
     against Corten's `Answered` at `e927c2463`, then exercised in the
-    [standalone TLS probe](../bench/http2/README.md#follow-up-results).
+    [standalone TLS probe](../bench/http2/README.md#follow-up-results); 2026-11-19,
+    the same probe rerun with bytes 1.12.1 and smallvec 1.16.5 in its lockfile, three wire
+    and Callgrind rounds per mode.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
