@@ -5694,9 +5694,12 @@ rules something out.
     first and last days), the nearest instant it has stands in, so `day.start(Utc)` is midnight
     UTC on every day the platform has. A time whose instant is past a zone's rules is refused
     (drawn as nothing, read as `None`, the field's message) rather than taken at UTC's offset,
-    which `Visitor::offset` gives there for a written date. A test reads every zone in the bundled tz database
-    around every change of offset from 1970 to 2040, compares each reading with jiff's
-    `compatible()`, which finds the candidates in the database itself, fails if any zone
+    which `Visitor::offset` gives there for a written date. `Visitor::known_offset` gives Jiff the
+    original timestamp: since 0.2.41, TZif transition lookup uses the second that contains the
+    instant, even for a fractional timestamp before 1970. The Toronto regression test checks
+    the offset a millisecond before the 1919 transition and at the transition. A test reads every
+    zone in the bundled tz database around every change of offset from 1970 to 2040, compares each
+    reading with jiff's `compatible()`, which finds the candidates in the database itself, fails if any zone
     changes its offset twice within two days, checks that a `min` and a `max` drawn around each
     change hold every value drawn between them, and checks that each zone is sent by a name a
     `FormZone` reads back. Another reads every zone from its first change (its local mean time,
@@ -5774,12 +5777,9 @@ rules something out.
     Chicago), resolved across the gap, 30,862, +3,074 (11%). Only a page that draws such a field
     and a post that reads one pay it: no other page or form calls these. Correctness comes before
     speed (README, Values), and the cost buys a time read in the zone it was typed in, with the
-    browser's own bounds and validation, no dependency and no client script. Not measured: the
-    change to `Visitor::known_offset`, through which every date `t.date_time` writes in the
-    visitor's zone goes; it now compares the instant's fraction of a second and, only before
-    1970, makes a second timestamp); value (a standard's answer
-    before one of Corten's, HTML that works on its own, a mistake the compiler can catch is a
-    compile error, one way to do each thing and a small surface: Values 2, 3, 4, 5 and 6).
+    browser's own bounds and validation, no dependency and no client script); value (a standard's
+    answer before one of Corten's, HTML that works on its own, a mistake the compiler can catch
+    is a compile error, one way to do each thing and a small surface: Values 2, 3, 4, 5 and 6).
 
     Revisit when: an app needs to ask a visitor which of two repeated times they meant, or to
     refuse a skipped one; an app needs a time of day alone; the tz database gives a zone two

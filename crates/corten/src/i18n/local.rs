@@ -716,8 +716,7 @@ mod tests {
         // began at the change, half an hour before `00:00` read as a typed time (01:00, 05:00Z).
         let toronto = Visitor::named("America/Toronto");
         assert_eq!(Day::new(1919, 3, 31).unwrap().start(&toronto), Some(ts("1919-03-31T04:30:00Z")));
-        // A millisecond before that change is still before it, though jiff looks an instant before
-        // 1970 up by its second toward zero, the change's own.
+        // A millisecond before this pre-1970 change still has the old offset.
         let change = ts("1919-03-31T04:30:00Z");
         assert_eq!(toronto.known_offset(change - Duration::from_millis(1)), Some(-5 * 3600));
         assert_eq!(toronto.known_offset(change), Some(-4 * 3600));
