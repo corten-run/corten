@@ -137,11 +137,12 @@ reserves the name before calling the closure, so a recursive field can call its 
 with the same generator and get a `$ref` back. Borrowed types do not need a `'static` bound.
 
 Use a name like `BillingInvoice`: a letter or underscore followed by ASCII letters, digits
-or underscores, and not a reserved TypeScript type name such as `string`. The same name
-must work in a JSON Schema reference, an OpenAPI component key and a TypeScript declaration.
-The derives check the Rust name at compile time when schema generation is enabled. For a
-hand-written literal, use `const { Generator::definition_name("BillingInvoice") }`; a
-computed name passed to `define` is checked when generating the document.
+or underscores. Names that TypeScript refuses in both kinds of declaration or in a bare type
+reference, such as `string` and `infer`, are not allowed. The derives check these shared rules
+at compile time when schema generation is enabled. For a hand-written literal, use
+`const { Generator::definition_name("BillingInvoice") }`; a computed name passed to `define`
+is checked when generating the document. `as` works in JSON Schema, OpenAPI and TypeScript
+interfaces, but TypeScript generation rejects it as a type alias name.
 
 If you used the old hidden `Generator::define` helper, add `::<Self>` and remove the string
 identity argument. Keep the direction and closure, and check the definition name:

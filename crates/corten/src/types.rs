@@ -158,6 +158,7 @@ impl Types {
     }
 
     /// All collected declarations as one file: one `export` per type, in name order.
+    /// Panics if a definition named `as` would be emitted as a type alias rather than an interface.
     pub fn typescript(&self) -> String {
         self.typescript_for(None)
     }
@@ -179,6 +180,7 @@ impl Types {
             if is_interface {
                 let _ = writeln!(block, "export interface {name} {}", object(&schema, ""));
             } else {
+                assert!(name != "as", "invalid TypeScript alias name {name:?}: use another schema definition name");
                 let _ = writeln!(block, "export type {name} = {};", ts(&schema, ""));
             }
             blocks.insert(name, block);
@@ -470,6 +472,44 @@ mod tests {
 
     const APP_DECLARATIONS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests/types/app.d.ts");
     const LIBRARY_DECLARATIONS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests/library/types/app.d.ts");
+
+    #[derive(ToJson)]
+    #[allow(non_camel_case_types)]
+    struct r#as {
+        amount: u32,
+    }
+
+    #[test]
+    fn a_contextual_name_works_as_an_interface_and_in_references() {
+        #[derive(ToJson)]
+        #[serde(untagged)]
+        #[allow(dead_code)]
+        enum AsReference {
+            Named(r#as),
+            Number(u32),
+        }
+
+        let types = Types::new().add::<AsReference>();
+        let schema = types.json_schema();
+        assert_eq!(schema["$defs"]["AsReference"]["anyOf"][0]["$ref"], "#/$defs/as");
+        assert_eq!(schema["$defs"]["as"]["properties"]["amount"]["type"], "integer");
+        types.sync(concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests/types/contextual-name.d.ts"));
+    }
+
+    #[test]
+    fn a_contextual_alias_name_is_checked_after_numbering() {
+        mod alias {
+            #[derive(crate::ToJson)]
+            #[allow(non_camel_case_types)]
+            pub(super) struct r#as(u32);
+        }
+
+        let types = Types::new().add::<alias::r#as>();
+        assert_eq!(types.json_schema()["$defs"]["as"]["type"], "integer");
+        assert_type_error(|| types.typescript(), "invalid TypeScript alias name \"as\"");
+        let ts = Types::new().add::<r#as>().add::<alias::r#as>().typescript();
+        assert!(ts.contains("export type as2 = number;"), "{ts}");
+    }
 
     /// A card on the watchlist.
     #[derive(ToJson)]

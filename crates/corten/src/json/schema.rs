@@ -98,7 +98,8 @@ impl Generator {
         Self::default()
     }
 
-    /// Checks a literal name for [`Generator::define`] in a const context and returns it unchanged.
+    /// Checks a literal name against the shared rules in [`Generator::define`] in a const context
+    /// and returns it unchanged.
     ///
     /// ```compile_fail,E0080
     /// use corten::json::schema::Generator;
@@ -122,9 +123,11 @@ impl Generator {
     /// The name is reserved before `make` runs, so a recursive field can refer back to it.
     ///
     /// A name is shared by JSON Schema, OpenAPI and TypeScript. It must match
-    /// `[A-Za-z_][A-Za-z0-9_]*` and not be a word reserved in TypeScript type declarations
-    /// or references (such as `class` or `string`). Use [`Generator::definition_name`] in a
-    /// const block to check a literal at compile time, as the JSON derives do.
+    /// `[A-Za-z_][A-Za-z0-9_]*` and not be a word TypeScript cannot use as either kind of
+    /// declaration or in a bare type reference (such as `class`, `string` or `infer`).
+    /// Use [`Generator::definition_name`] in a const block to check a literal at compile time,
+    /// as the JSON derives do. TypeScript generation separately rejects `as` as an alias name;
+    /// `as` is valid in an interface declaration and in references to one.
     ///
     /// # Panics
     ///
@@ -285,10 +288,11 @@ const fn valid_definition_name(name: &str) -> bool {
         }
         i += 1;
     }
+    // Reject words that break both declarations or a bare reference. The alias-only
+    // restriction on `as` is checked when Types emits the declaration.
     !matches!(
         name.as_bytes(),
         b"any"
-            | b"as"
             | b"bigint"
             | b"boolean"
             | b"break"
