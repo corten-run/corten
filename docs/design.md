@@ -7429,16 +7429,22 @@ by design; where it is known, a limit says what would lift it or why it is so.
     references and `&Tab;` and `&NewLine;` in HTML text and textarea values, and leaves
     script and stylesheet source, iframe fallback and inert template contents out of
     hint text. The open-element stack follows SVG and MathML exits and the in-body
-    start tags that close list items, definition items and paragraphs, up to the
-    corresponding scope boundaries. It does not follow other insertion modes or
-    reparenting (for example, moving text out of a table), or the paragraph close
-    that depends on whether a table is parsed in quirks mode.
+    start tags that close list items, definition items and paragraphs. It ignores a
+    nested form start outside template contents while the form pointer is set, before
+    considering a paragraph close. For explicit ends it checks list-item scope for
+    `</li>`, button scope for `</p>`, and ordinary scope for `</dd>` and `</dt>`.
+    It does not insert the empty paragraph that a stray `</p>` creates or model the
+    special stack removal for a misnested `</form>`. It does not follow other insertion
+    modes or reparenting (for example, moving text out of a table), or the paragraph
+    close that depends on whether a table is parsed in quirks mode.
     Hints and submit keys distinguish an ordinary template from a declarative shadow root
     on an eligible document host without a root already. This is a scan of written markup:
     it does not decode attribute values, model the accessibility tree or follow slotting,
     script changes or custom-element registration. A patch uses a template fragment and
-    does not attach declarative shadow roots. The server scanner is not compiled into
-    release builds. The `data-vars` check also requires development mode and a full document.
+    does not attach declarative shadow roots. The server scanner runs only with debug
+    assertions. The `data-vars` check also requires development mode and a full document.
+    A normal release build still serves browser diagnostics in development mode but
+    does not return the server error for a missing `data-vars` rule.
     It checks the scripting-on parse, including templates whose contents can be copied,
     and, when it finds an HTML `<noscript>`, the scripting-off parse, where it checks
     fallback markup only outside inert template contents.

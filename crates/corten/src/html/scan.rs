@@ -262,6 +262,7 @@ pub(crate) struct Markup<'a> {
     open: Vec<Element<'a>>,
     page: bool,
     scripting: bool,
+    form_pointer_set: bool,
     body_shadow: bool,
 }
 
@@ -299,7 +300,7 @@ pub(super) fn tags(html: &str, scripting: bool) -> impl Iterator<Item = Tag<'_>>
 impl<'a> Markup<'a> {
     /// A document allows declarative shadow roots; the runtime's patch template does not.
     pub(crate) fn new(html: &'a str, page: bool, scripting: bool) -> Self {
-        Self { tokens: Tokens::new(html), open: Vec::new(), page, scripting, body_shadow: false }
+        Self { tokens: Tokens::new(html), open: Vec::new(), page, scripting, form_pointer_set: false, body_shadow: false }
     }
 
     #[cfg(debug_assertions)]
@@ -313,16 +314,20 @@ impl<'a> Markup<'a> {
         }
     }
 
-    fn close_in(&mut self, names: &[&str], boundary: impl Fn(&Element<'_>) -> bool) {
+    fn in_template(&self) -> bool {
+        !self.page || self.open.iter().any(|el| !el.foreign && el.name.eq_ignore_ascii_case("template"))
+    }
+
+    fn close_in(&mut self, names: &[&str], boundary: impl Fn(&str) -> bool) {
         for (i, el) in self.open.iter().enumerate().rev() {
             if el.foreign {
                 if el.foreign_boundary() {
                     break;
                 }
-            } else if names.iter().any(|name| el.name.eq_ignore_ascii_case(name)) {
+            } else if name_in(el.name, names) {
                 self.open.truncate(i);
                 break;
-            } else if boundary(el) {
+            } else if boundary(el.name) {
                 break;
             }
         }
@@ -335,18 +340,61 @@ impl<'a> Markup<'a> {
             _ => &[],
         };
         if !items.is_empty() {
-            self.close_in(items, |el| {
-                !["address", "div", "p"].iter().any(|name| el.name.eq_ignore_ascii_case(name))
-                    && SPECIAL.iter().any(|name| el.name.eq_ignore_ascii_case(name))
-            });
+            self.close_in(items, |name| !name_in(name, &["address", "div", "p"]) && name_in(name, SPECIAL));
         }
         // A table's paragraph close also depends on the document's quirks mode.
         if name != "table" && closes_p(name) {
-            self.close_in(&["p"], |el| {
-                el.name.eq_ignore_ascii_case("button") || SCOPE.iter().any(|name| el.name.eq_ignore_ascii_case(name))
-            });
+            self.close_scoped("p", &["button"]);
         }
     }
+
+    fn close_scoped(&mut self, name: &str, extra: &[&str]) {
+        self.close_in(&[name], |el| name_in(el, SCOPE) || name_in(el, extra));
+    }
+
+    fn close_explicit(&mut self, name: &str, foreign: bool) {
+        let breakout = foreign && name_in(name, &["p", "br"]);
+        let from_foreign = foreign && !breakout;
+        if breakout {
+            self.pop_foreign();
+        } else if from_foreign {
+            let found = self
+                .open
+                .iter()
+                .enumerate()
+                .rev()
+                .take_while(|(_, el)| el.foreign)
+                .find(|(_, el)| el.name.eq_ignore_ascii_case(name));
+            if let Some((i, _)) = found {
+                self.open.truncate(i);
+                return;
+            }
+        }
+        // The foreign end-tag rule hands off to HTML if no foreign element matched.
+        if let Some(&name) = ["li", "p", "dd", "dt"].iter().find(|target| name.eq_ignore_ascii_case(target)) {
+            let extra: &[&str] = match name {
+                "li" => &["ol", "ul"],
+                "p" => &["button"],
+                _ => &[],
+            };
+            self.close_scoped(name, extra);
+            return;
+        }
+        if name.eq_ignore_ascii_case("form") && !self.in_template() {
+            self.form_pointer_set = false;
+        }
+        let found = self.open.iter().rposition(|el| {
+            (!el.foreign || !from_foreign)
+                && (el.name.eq_ignore_ascii_case(name) || (!el.foreign && el.name.eq_ignore_ascii_case("template")))
+        });
+        if let Some(i) = found.filter(|&i| self.open[i].name.eq_ignore_ascii_case(name)) {
+            self.open.truncate(i);
+        }
+    }
+}
+
+fn name_in(name: &str, names: &[&str]) -> bool {
+    names.iter().any(|candidate| name.eq_ignore_ascii_case(candidate))
 }
 
 impl<'a> Iterator for Markup<'a> {
@@ -366,6 +414,13 @@ impl<'a> Iterator for Markup<'a> {
                     placed(Within::Html, &tag).expect("HTML placement")
                 });
                 if !foreign {
+                    if tag.name == "form" && !self.in_template() {
+                        if self.form_pointer_set {
+                            return Some(Event::Other);
+                        }
+                        // The form pointer stays set even if an ancestor close pops the form.
+                        self.form_pointer_set = true;
+                    }
                     self.close_implied(&tag.name);
                 }
                 // In HTML, an image token is reprocessed as the void img element.
@@ -403,23 +458,7 @@ impl<'a> Iterator for Markup<'a> {
                 Some(Event::Start { tag, foreign, opens, live: !inside_inert && !attached })
             }
             Token::End { name, .. } => {
-                let breakout = foreign && (name.eq_ignore_ascii_case("p") || name.eq_ignore_ascii_case("br"));
-                if breakout {
-                    self.pop_foreign();
-                }
-                // The foreign end-tag rule hands off to HTML at the first HTML element.
-                // From there an explicit HTML close must not match a foreign ancestor.
-                let from_foreign = foreign && !breakout;
-                let mut foreign_walk = from_foreign;
-                if let Some(i) = self.open.iter().rposition(|el| {
-                    foreign_walk &= el.foreign;
-                    (!el.foreign || !from_foreign || foreign_walk)
-                        && (el.name.eq_ignore_ascii_case(name) || (!el.foreign && el.name.eq_ignore_ascii_case("template")))
-                }) {
-                    if self.open[i].name.eq_ignore_ascii_case(name) {
-                        self.open.truncate(i);
-                    }
-                }
+                self.close_explicit(name, foreign);
                 Some(Event::Other)
             }
             Token::Text(text) | Token::Cdata(text, _) if !parent.is_some_and(|el| el.hidden || el.inert) => {

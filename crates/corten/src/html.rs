@@ -698,7 +698,7 @@ fn closes_p(name: &str) -> bool {
 }
 
 #[cfg(any(debug_assertions, test))]
-const SCOPE: &[&str] = &["applet", "caption", "html", "table", "td", "th", "marquee", "object", "template"];
+const SCOPE: &[&str] = &["applet", "caption", "html", "table", "td", "th", "marquee", "object", "select", "template"];
 
 /// Why the browser does not put the HTML element of `tag` where the patch writes it, in the
 /// elements `open` around it (innermost last, a `<template>`'s content read on its own), or
