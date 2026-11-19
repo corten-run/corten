@@ -2213,14 +2213,13 @@ rules something out.
     showed nothing for one until a fix in December 2024, which was read, not run); bet (apps have an answer anyone may read whose cost the
     stages would make about 2.5 times as costly, beside pages that need them all; listings-feed's
     sequence route, which its failover benchmark reads, is the first use, and no app's in
-    production is yet); value
+    production is yet); measured (callgrind, x86-64 Linux release, `catalog-lean` identity GETs:
+    sharing the staged header reads reduced named request-map lookups from 17 to 14, kept three
+    response-map lookups and three request extension inserts, and changed 43,273.3 to 42,835.4
+    instructions per request); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
-    for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1);
-    measured (callgrind, x86-64 Linux release, `catalog-lean` identity GETs: sharing the staged
-    header reads reduced named request-map lookups from 17 to 14, kept three response-map
-    lookups and three request extension inserts, and changed 43,273.3 to 42,835.4 instructions
-    per request).
+    for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
     layer around the app cannot serve it; or a route needs some stages and not others, which
