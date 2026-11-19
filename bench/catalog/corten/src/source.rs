@@ -42,9 +42,9 @@ impl Source {
 
     /// The records of the API at `base`, which must be a URL a path can be added to.
     fn api(base: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let base = reqwest::Url::parse(base.trim_end_matches('/'))?;
+        let base = reqwest::Url::parse(base.trim_end_matches('/')).map_err(|error| format!("API_BASE is not a URL: {error}"))?;
         if base.cannot_be_a_base() {
-            return Err("API_BASE must be hierarchical".into());
+            return Err(NOT_A_BASE.into());
         }
         Ok(Self::Api {
             client: reqwest::Client::builder()
@@ -63,20 +63,25 @@ impl Source {
                 if response.status() == reqwest::StatusCode::NOT_FOUND {
                     return Ok(None);
                 }
-                let record = corten::json::from_slice(&response.error_for_status()?.bytes().await?)?;
+                // Anything else that is not a success is the upstream's failure. A redirect is one:
+                // it is not followed, and its body is not read as a record.
+                if !response.status().is_success() {
+                    return Err(corten::Error::new(format!("catalog API returned {}", response.status())));
+                }
+                let record = corten::json::from_slice(&response.bytes().await?)?;
                 Ok(Some(Arc::new(record)))
             }
         }
     }
 }
 
-/// Where the API at `base` has the record `id`.
+const NOT_A_BASE: &str = "API_BASE must be hierarchical";
+
+/// Where the API at `base` has the record `id`. `url` says adding a path can fail; it cannot for
+/// a base [`Source::api`] took, which is the only one there is.
 fn record_url(base: &reqwest::Url, id: &str) -> corten::Result<reqwest::Url> {
     let mut url = base.clone();
-    url.path_segments_mut()
-        .map_err(|_| corten::Error::new("API_BASE must be hierarchical"))?
-        .pop_if_empty()
-        .extend(["catalog", "records", id]);
+    url.path_segments_mut().map_err(|_| corten::Error::new(NOT_A_BASE))?.pop_if_empty().extend(["catalog", "records", id]);
     Ok(url)
 }
 
@@ -98,16 +103,78 @@ mod tests {
             ("http://127.0.0.1:8080/", "http://127.0.0.1:8080/catalog/records/record_1"),
             ("http://upstream/v1", "http://upstream/v1/catalog/records/record_1"),
             ("http://upstream/v1//", "http://upstream/v1/catalog/records/record_1"),
+            // A query stays after the path it is added to.
+            ("http://upstream/v1?key=1", "http://upstream/v1/catalog/records/record_1?key=1"),
         ] {
             assert_eq!(record_url(&base(of), "record_1").unwrap().as_str(), url, "{of}");
         }
-        // An id is one segment, whatever it holds.
+    }
+
+    #[test]
+    fn a_record_s_id_is_one_segment_whatever_it_holds() {
         assert_eq!(record_url(&base("http://upstream"), "a/b?c").unwrap().as_str(), "http://upstream/catalog/records/a%2Fb%3Fc");
     }
 
     #[test]
-    fn a_base_no_path_can_be_added_to_fails_at_startup() {
-        assert!(Source::api("mailto:records@example.com").is_err());
-        assert!(Source::api("not a url").is_err());
+    fn a_base_that_is_not_one_fails_at_startup_and_says_which_variable() {
+        for of in ["mailto:records@example.com", "not a url", ""] {
+            let Err(error) = Source::api(of) else { panic!("{of:?} is no API's base") };
+            assert!(error.to_string().contains("API_BASE"), "{of:?}: {error}");
+        }
+    }
+
+    /// An upstream that gives one answer to each request, on a connection of its own, and says
+    /// the request lines it was sent.
+    fn upstream(answers: Vec<(&'static str, String, String)>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = format!("http://{}", listener.local_addr().unwrap());
+        let thread = std::thread::spawn(move || {
+            let mut asked = Vec::new();
+            for (status, headers, body) in answers {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+                let mut head = Vec::new();
+                while !head.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).unwrap();
+                    head.push(byte[0]);
+                }
+                asked.push(String::from_utf8(head).unwrap().lines().next().unwrap().to_string());
+                let length = body.len();
+                let answer = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {length}\r\n\
+                     connection: close\r\n{headers}\r\n{body}"
+                );
+                socket.write_all(answer.as_bytes()).unwrap();
+            }
+            asked
+        });
+        (at, thread)
+    }
+
+    #[tokio::test]
+    async fn a_record_is_fetched_once_and_only_a_success_is_read_as_one() {
+        let record = r#"{"id":"record_1","title":"One","subtitle":"","description":"","tags":[],"fields":[],"related":[]}"#;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let elsewhere = format!("http://{}/catalog/records/record_1", listener.local_addr().unwrap());
+        let (at, thread) = upstream(vec![
+            ("200 OK", String::new(), record.into()),
+            ("404 Not Found", String::new(), "{}".into()),
+            // A redirect whose body is a record and whose target would answer with one.
+            ("302 Found", format!("location: {elsewhere}\r\n"), record.into()),
+            ("503 Service Unavailable", String::new(), record.into()),
+        ]);
+        let source = Source::api(&at).unwrap();
+        assert_eq!(source.record("record_1").await.unwrap().unwrap().title, "One");
+        assert!(source.record("missing").await.unwrap().is_none());
+        assert!(source.record("moved").await.is_err());
+        assert!(source.record("down").await.is_err());
+        let asked = tokio::task::spawn_blocking(move || thread.join().unwrap()).await.unwrap();
+        let lines = ["record_1", "missing", "moved", "down"].map(|id| format!("GET /catalog/records/{id} HTTP/1.1"));
+        assert_eq!(asked, lines);
+        // Nothing asked the redirect's target.
+        listener.set_nonblocking(true).unwrap();
+        assert!(listener.accept().is_err());
     }
 }
