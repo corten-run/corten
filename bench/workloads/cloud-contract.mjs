@@ -383,6 +383,40 @@ while IFS= read -r member; do test "$member" = "$$"; done < "$parent/supervisor/
 export function remoteFiles(s) {
   validateState(s, s.round);
   const loadLayout = savedLoadLayout(s);
+  // Dedicated group runners are system services. Their root SSH sessions need
+  // logind scopes, not a user service manager. Leave any existing session alone.
+  const marker = s.group && s.control?.monitor ? `/run/corten-bench-control-${s.token}/binding.json` : null;
+  const loginPolicy = marker ? `bootstrap_stage=root-manager-policy
+test -f '${marker}'
+test ! -L '${marker}'
+dropin=/run/systemd/system/user@0.service.d/90-corten-benchmark.conf
+test ! -L /run/systemd/system/user@0.service.d
+mkdir -p -- /run/systemd/system/user@0.service.d
+test ! -e "$dropin"
+test ! -L "$dropin"
+( set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${marker}' > "$dropin" )
+systemctl daemon-reload
+` : "";
+  const waitForIdleUserManager = marker ? `bootstrap_stage=root-manager-idle
+timeout 120 bash -ec '
+  while :; do
+    echo "root-manager: querying ActiveState" >&2
+    state=$(systemctl show user@0.service --property=ActiveState --value)
+    case "$state" in
+      active|activating|deactivating|reloading|inactive|failed) ;;
+      *) echo "root-manager: unexpected ActiveState" >&2; exit 1 ;;
+    esac
+    echo "root-manager: ActiveState=$state; querying MainPID" >&2
+    main_pid=$(systemctl show user@0.service --property=MainPID --value)
+    [[ "$main_pid" =~ ^[0-9]{1,10}$ ]] || { echo "root-manager: invalid MainPID" >&2; exit 1; }
+    echo "root-manager: ActiveState=$state MainPID=$main_pid" >&2
+    case "$state" in
+      inactive) test "$main_pid" = 0; break ;;
+      failed) exit 1 ;;
+      *) sleep 1 ;;
+    esac
+  done'
+` : "";
   const pack = `#!/bin/bash
 set -euo pipefail
 cd /bench
@@ -404,7 +438,7 @@ trap 'bootstrap_error "$LINENO"' ERR
 ${supervisorBootstrap(s.unit)}
 bootstrap_stage=cloud-init
 timeout 900 cloud-init status --wait
-# Fresh disposable hosts only: prevent timer and D-Bus firmware activation before baseline.
+${loginPolicy}# Fresh disposable hosts only: prevent timer and D-Bus firmware activation before baseline.
 bootstrap_stage=firmware-mask
 systemctl mask --runtime --now fwupd.service fwupd-refresh.service fwupd-refresh.timer
 bootstrap_stage=package-services
@@ -488,7 +522,7 @@ done
 # The entry derives all nine groups and their native settings from this measured source.
 # Popular/performance views reuse the same evidence; no second workload execution.
 unset BENCH_APPS BENCH_TIER BENCH_EDGE PROFILE
-bootstrap_stage=native-entry
+${waitForIdleUserManager}bootstrap_stage=native-entry
 node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign${s.group === undefined ? "" : ` --group ${s.group}`}${loadLayout ? ` --load-layout ${loadLayout}` : ""}
 `;
   return { "job.sh": job, "pack.sh": pack, [s.unit]: `[Unit]
