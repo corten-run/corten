@@ -6958,7 +6958,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
    A value borrowed from one the view owns is computed inside the markup:
    `html! { let shown = saved.as_deref().unwrap_or(typed); <input value={shown}> }`.
 9. <a id="limit-stylesheet-support"></a>Component stylesheets support plain CSS with nesting.
-   The supported block at-rules are listed below; their names match ASCII case-insensitively:
+   At-rule names match ASCII case-insensitively in both blocks and statements.
+   The supported block at-rules are listed below:
 
 | At-rules | Processing |
 |---|---|
@@ -6971,8 +6972,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
 
    Raw bodies still compact trivia, and references to registered custom
    properties are renamed there too. Their nested block at-rules are copied raw (for example
-   `@styleset` and `@top-left`), not independently checked against this list. The statement parser recognizes
-   lowercase `@layer` (copied) and `@charset` (discarded: the generated stylesheet is UTF-8).
+   `@styleset` and `@top-left`), not independently checked against this list. The statement parser
+   copies `@layer` without changing the name's case, and discards `@charset` in any case
+   (the generated stylesheet is UTF-8).
    `@import` is refused because it loads a stylesheet the component does not own;
    `@custom-media` is refused because tokens define breakpoints. Unrecognized rules such as
    `@namespace` and `@document` are refused outside raw bodies; put them in the app's global
