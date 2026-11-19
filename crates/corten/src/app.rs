@@ -2346,10 +2346,10 @@ pub(crate) mod inbound {
             Inbound(held)
         }
 
-        /// The request, read in place. An `async fn` that calls this and then passes the handle
-        /// on keeps the handle in its own future too, a pointer for each such stage, which is
-        /// what the handle costs over a borrowed slot: 15 instructions a request on the lean
-        /// catalog page (docs/design.md#choice-fixed-stages).
+        /// The request, read in place. Three of the stages that call this and then pass the
+        /// handle on (`secure`, `Layer::run`, `page::run`) keep it in their own future too, a
+        /// pointer each. Over a borrowed slot the handle costs those 24 bytes and 15
+        /// instructions a request on the lean catalog page (docs/design.md#choice-fixed-stages).
         pub fn request(&mut self) -> &mut Request {
             self.0.as_mut().expect("only dispatch takes the request, and that uses this up")
         }

@@ -1933,10 +1933,10 @@ rules something out.
     request is held. So a stage that reads the request after its route took it does not
     compile, where a borrowed slot would compile and panic on the first request to reach the
     read; the examples on the handle (`Inbound`, in `crates/corten/src/app.rs`) run the read
-    before the request is taken and show the read after it does not compile. A stage that
-    reads through its handle and then passes it on keeps the handle, a pointer, in its own
-    future beside the one it passed on, which is what the handle costs over the borrowed slot.
-    The late layout poller lives
+    before the request is taken and show the read after it does not compile. Three of the
+    stages (`secure`, `Layer::run` and `page::run`) keep the handle in their own future beside
+    the copy they pass on, a pointer each, which is the size the handle adds over the borrowed
+    slot. The late layout poller lives
     in the existing late-write box, so it neither enlarges the ordinary future nor adds
     a box to a late-eligible write.
     An area's or an API's own steps (`Area::middleware`, `Api::middleware`) run right after the
@@ -2161,8 +2161,13 @@ rules something out.
     counted 43,388 against 43,364 with glibc, 43,377 to 43,389 and 43,364 to 43,377, and 40,778
     against 40,776 with jemalloc, whose own count moved by up to 260 between runs of one build;
     `router::tests::staged_page_future_sizes` printed a stage future of 2,176 bytes against
-    2,152 in release and 2,632 against 2,600 in debug, with all features; no script in the
-    repository drives the counting runs); reasoned (one place for the app's steps is
+    2,152 in release and 2,632 against 2,600 in debug, with all features, and rustc's
+    `-Zprint-type-sizes` on the lean app's release build shows the 24 bytes as one more
+    pointer in each of `secure`, `Layer::run` and `page::run`; `perf stat` on the server under
+    `wrk` with 64 connections, ten rounds with the builds taking turns, counted 154,600 cycles
+    a request at the median, 138,915 to 161,094, against 158,281, 134,930 to 166,122, and
+    within a round a median of 2,418 fewer with quartiles 6,237 fewer and 8,533 more, which
+    does not tell the builds apart; no script in the repository drives these runs); reasoned (one place for the app's steps is
     one order to read, a tuple resolved at compile time costs no box, and a route that needs none
     of it says so where it is declared); platform (a PDF sent with a sandbox shows in the viewers of
     Chrome, Edge and Firefox as one sent without it, probed as Last checked says; Safari's is not
@@ -2174,9 +2179,11 @@ rules something out.
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
     for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1;
-    and a stage that reads the request after its route took it fails to compile, Value 4, for
-    the 15 instructions and 24 bytes a request measured above, 0.03% of that page's count, a
-    cost Value 1 asks to be measured and this pays knowingly).
+    and correctness and reliability before performance, the first of the order the README
+    gives for a conflict: the mistake the handle rules out is a panic while a request is
+    answered, on whichever path the late read sits, a test of an ordinary request or not, and
+    it is bought with the 15 instructions and 24 bytes a request measured above, which Value 4
+    asks to be a compile error and Value 1 asks to be counted).
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
     layer around the app cannot serve it; or a route needs some stages and not others, which
@@ -2213,10 +2220,11 @@ rules something out.
     budget on x86-64 Linux. It measures the real stages and typed handler for a small page
     without app middleware or layout reads. The bounds leave room for build profiles,
     features and compiler layout changes; remeasure before raising one.
-    Also revisit if the handle the stages pass on costs more than about 50 instructions a
-    request over a borrowed slot on the lean catalog page, counted as above, or a stage must
-    read the request after the stage inside it has answered, which a handle passed on by value
-    cannot give.
+    Also revisit if a stage must read the request after the stage inside it has answered,
+    which a handle passed on by value cannot give; or anything but the stage future's own
+    block comes to hold the place the request is in, which the handle's guarantee rests on; or
+    a compiler lays an `async fn` out without a second copy of a handle it passes on, when the
+    handle's 24 bytes are gone and its count is worth taking again.
 
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
