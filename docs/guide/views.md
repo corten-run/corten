@@ -820,7 +820,7 @@ neither has a time, so `t.date_time` takes neither. A date is in UTC unless `.zo
 of your own (`corten::i18n::Zone`, for one with daylight saving time) says otherwise, so a page
 reads the same wherever it is rendered; `parse_timestamp` reads the RFC 3339 text APIs send.
 For dates where the visitor is ("your listings come back on Nov 2"), the app turns on Corten's
-`zones` feature (jiff and its bundled tz database) and sets `App::zoned_dates()`; the feature
+`zones` feature (Jiff 1 and its bundled IANA tz database) and sets `App::zoned_dates()`; the feature
 alone changes no app's dates, so a library that turns it on does not change yours.
 The runtime keeps the browser's zone (`America/Chicago`) in a cookie from the first page it
 loads, so the form posts and pages after it carry it, and while Corten renders a request's

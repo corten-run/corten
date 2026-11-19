@@ -5808,9 +5808,12 @@ rules something out.
     first and last days), the nearest instant it has stands in, so `day.start(Utc)` is midnight
     UTC on every day the platform has. A time whose instant is past a zone's rules is refused
     (drawn as nothing, read as `None`, the field's message) rather than taken at UTC's offset,
-    which `Visitor::offset` gives there for a written date. A test reads every zone in the bundled tz database
-    around every change of offset from 1970 to 2040, compares each reading with jiff's
-    `compatible()`, which finds the candidates in the database itself, fails if any zone
+    which `Visitor::offset` gives there for a written date. `Visitor::known_offset` gives Jiff the
+    original timestamp: since 0.2.41, TZif transition lookup uses the second that contains the
+    instant, even for a fractional timestamp before 1970. The Toronto regression test checks
+    the offset a millisecond before the 1919 transition and at the transition. A test reads every
+    zone in the bundled tz database around every change of offset from 1970 to 2040, compares each
+    reading with jiff's `compatible()`, which finds the candidates in the database itself, fails if any zone
     changes its offset twice within two days, checks that a `min` and a `max` drawn around each
     change hold every value drawn between them, and checks that each zone is sent by a name a
     `FormZone` reads back. Another reads every zone from its first change (its local mean time,
@@ -5862,8 +5865,9 @@ rules something out.
     database name (`America/Chicago`, `UTC`) or an offset to the minute written `±HH:MM`
     (RFC 3339's `time-numoffset`), which a browser's reported zone is one of and a `FormZone` is
     sent as;
-    RFC 5545 section 3.3.5; jiff 0.2.38 and its bundled tz database, jiff-tzdb 0.1.9, whose
-    `compatible()` agrees with `at` in `every_change_in_every_zone_reads_as_temporal_compatible_reads_it`;
+    RFC 5545 section 3.3.5; Jiff 1 and its bundled IANA tz database (`jiff-tzdb` 1.0.0,
+    tzdb 2026f in the workspace lock), whose `compatible()` is checked against `at` in
+    `every_change_in_every_zone_reads_as_temporal_compatible_reads_it`;
     a browser reports its zone only from a script, so `req.zone()` is UTC before the first page's
     script runs and without one (`App::client_zone`)); reasoned (a zone whose offset changes at
     most once in any two days has, for a time on its clock, its candidates at the time minus the
@@ -5887,12 +5891,9 @@ rules something out.
     Chicago), resolved across the gap, 30,862, +3,074 (11%). Only a page that draws such a field
     and a post that reads one pay it: no other page or form calls these. Correctness comes before
     speed (README, Values), and the cost buys a time read in the zone it was typed in, with the
-    browser's own bounds and validation, no dependency and no client script. Not measured: the
-    change to `Visitor::known_offset`, through which every date `t.date_time` writes in the
-    visitor's zone goes; it now compares the instant's fraction of a second and, only before
-    1970, makes a second timestamp); value (a standard's answer
-    before one of Corten's, HTML that works on its own, a mistake the compiler can catch is a
-    compile error, one way to do each thing and a small surface: Values 2, 3, 4, 5 and 6).
+    browser's own bounds and validation, no dependency and no client script); value (a standard's
+    answer before one of Corten's, HTML that works on its own, a mistake the compiler can catch
+    is a compile error, one way to do each thing and a small surface: Values 2, 3, 4, 5 and 6).
 
     Revisit when: an app needs to ask a visitor which of two repeated times they meant, or to
     refuse a skipped one; an app needs a time of day alone; the tz database gives a zone two
@@ -5921,7 +5922,9 @@ rules something out.
     `GetStartOfDay` in its spec (read that day), Toronto's 1919-03-31 change in the bundled
     database, and `day.start` against Temporal's start of day around every change in every zone
     from its first, with `Visitor::known_offset` asking jiff at the second an instant is in,
-    passing on `591222898`; 2026-11-17, the measured costs above, counted on `939be002f`.
+    passing on `591222898`; 2026-11-17, the measured costs above, counted on `939be002f`;
+    2026-11-19, both all-zones comparisons and the `Timestamp::MAX` range test passing in CI
+    with Jiff 1.0.0 and jiff-tzdb 1.0.0 (tzdb 2026f) on `ecd649c69`.
 
 60. <a id="choice-connection-info"></a>**A connection's handshake value reaches requests through an opt-in typed extension.**
     `serve_wrapped_with` takes a step returning `(Io, T)`, where
