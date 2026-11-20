@@ -989,7 +989,7 @@ This follows [Node's documented diagnostic controls](https://nodejs.org/docs/lat
 The worker's fixed provider action grammar supports only account lookup, complete bounded
 droplet census, one exact-host create, matching create-action polling and one exact-ID delete.
 The HTTPS origin is fixed, certificate verification is explicit, redirects are
-never followed and no HTTP error/network failure is retried. Census pagination
+never followed, and only the narrow account transport retry below is allowed. Census pagination
 must remain on the fixed endpoint, contain unique IDs and match its stable total;
 an incomplete census cannot prove absence. Create waits only through bounded
 read-only polling of its exact droplet/action identity, never a repeated POST.
@@ -1025,13 +1025,19 @@ before releasing its operation lock, including early-return and error paths. For
 worker termination or uncertain shutdown retains the operation lock and any acquired
 root launch lock. The outer finalizer awaits that same settlement, not a new teardown
 after lock release. Ordinary confirmed shutdown releases the locks normally.
-The exact account command has one narrow terminal failure protocol, not a retry.
-After settled credential consumption, the private native request path observes
+After settled credential consumption, the exact account command's private native request path observes
 actual `ClientRequest`, any `IncomingMessage`, and assigned socket close events.
 All requests dispatched by that engine must have closed; `destroy()`, `end`, an
-HTTP failure or a diagnostic label alone is not proof. Closure spends the original
-command deadline, including credential consumption; cancellation, expiry, reverse
-time, unknown resources and any unresolved prior mutation refuse this disposition.
+HTTP failure or a diagnostic label alone is not proof. One native `ECONNRESET`
+before any response on `GET /v2/account` permits one read on a fresh connection,
+only after that closure proof and a cancellation checkpoint. Both attempts share
+the original command deadline, including credential consumption and closure, and
+use the same pinned token, HTTPS verification and response bounds. The controller
+still checks account identity and capacity where it did before. Cancellation,
+expiry, reverse time, unknown resources and unresolved prior mutations fail closed.
+The account command keeps one clock record across both connections; once a
+sample goes backwards, a later sample cannot make that command valid again.
+HTTP statuses, other errors and other commands cannot authorize this retry.
 Only a privately identified failed account read can produce the exact-key
 `cloud-provider-account-failed/v2` reply: `nonce`, `sequence`,
 `disposition: resources-closed`, and its closed `diagnostic`. Success and other
@@ -1040,8 +1046,8 @@ exact account command, its matching nonce/sequence, timely terminal proof and an
 observed exit0 without a signal before cached settlement may resolve. Terminal
 proof precedes expected disconnect/exit; an exit without proof, malformed or
 duplicate reply, forced close or cancellation stays uncertain.
-The original account operation still fails without an accepted identity, even
-with `allowFail`; this worker is terminal and cannot service another request.
+If the account command still fails, its terminal protocol does not accept an
+identity even with `allowFail`; this worker cannot service another request.
 An HTTP refusal and a worker lifetime failure are different outcomes, not different
 authorities. Only this proved orderly failed read can release normal lifecycle
 locks; a later explicitly approved collect must independently re-prove ownership
@@ -1056,15 +1062,16 @@ Unexpected HTTP responses use a `-http` code and optionally a numeric status fro
 that module's closed status table; unlisted statuses are omitted, not accepted or
 retried. Only those validated data fields cross the worker failure boundary or a
 permitted HTTP-failure result, never native exceptions, raw bodies or credentials.
-Classification survives cached teardown and failed create reconciliation; it is
+The public classification survives cached teardown and failed create reconciliation; it is
 diagnostic only and changes no action schema, ownership proof, retry, deadline,
 approval, uncertainty or lock-release rule. Missing/invalid diagnostics remain
 generic errors, not evidence about the provider's response.
 For native account-request failures, the optional closed `detail` is the rejection
 site: `internal-refusal`, `connect`, `send`, `request-error`, `response-error`,
 `response-aborted`, `response-status`, `body-limit`, `invalid-json`, `deadline` or
-`cancelled`. These labels inspect no native exception fields: `connect` does not
-prove DNS/TLS failure or that a connection was established. Details survive the
+`cancelled`. These labels do not identify native exception codes: `request-error`
+does not prove `ECONNRESET`, and `connect` does not prove DNS/TLS failure or that
+a connection was established. Details survive the
 existing private-worker IPC and cached finalizer diagnostic; the direct CLI renders
 only the closed stage, detail and allowed HTTP status. Unknown, extra or accessor diagnostic fields
 are not forwarded. Other phases and unclassified failures retain their coarse
