@@ -570,6 +570,7 @@ async fn a_flush_that_waits_while_its_bytes_go_out_is_held_only_to_the_send_time
     assert!(waiting, "the client that stopped was closed while a flush waited");
     assert!(closed <= 2 * send, "the client that stopped was closed within twice the send timeout: {closed:?}");
 }
+
 /// Shutdown gives connections the longer of the grace and the longest deadline: a request in
 /// progress past the grace, within its deadline, is answered in full, and an answer its client has
 /// stopped reading is closed then, with no send timeout to close it before (#858).

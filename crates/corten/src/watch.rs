@@ -19,7 +19,7 @@ use std::{
     io,
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, Ordering::Relaxed},
+        atomic::{AtomicU64, Ordering::Relaxed, Ordering::SeqCst},
         Arc, Mutex, Weak,
     },
     task::{Context, Poll, Wake, Waker},
@@ -92,6 +92,7 @@ impl Clock {
             waker: AtomicWaker::new(),
             stalled: AtomicU64::new(FLOWING),
             writer: AtomicWaker::new(),
+            wakes: AtomicU64::new(0),
             clock: self.clone(),
         });
         self.watches.lock().expect("never poisoned").push(Arc::downgrade(&watch));
@@ -120,7 +121,7 @@ impl Clock {
                 && now.saturating_sub(stalled - 1) >= self.send
                 && watch.stalled.compare_exchange(stalled, STALLED, Relaxed, Relaxed).is_ok()
             {
-                watch.writer.wake();
+                watch.wake_writer();
             }
             true
         });
@@ -138,8 +139,12 @@ pub(crate) struct Watch {
     /// [`FLOWING`], [`STALLED`], or one past the time a write found the socket full, or the IO
     /// last reported room while it waited.
     stalled: AtomicU64,
-    /// The task whose write is waiting.
+    /// The task whose write, flush or close is waiting; empty while none is, and for a moment
+    /// while a call takes it to register its own ([`Watched::send`]).
     writer: AtomicWaker,
+    /// How many times [`Watch::wake_writer`] has run, so a call can tell a wake that came while
+    /// `writer` was empty.
+    wakes: AtomicU64,
     clock: Arc<Clock>,
 }
 
@@ -176,6 +181,13 @@ impl Watch {
     fn expired(&self) -> bool {
         self.since.load(Relaxed) == EXPIRED
     }
+
+    /// Wakes the waiting call's task: the IO has room, or the clock has expired the wait.
+    /// Counted first, so a call that had `writer` empty when this ran sees it.
+    fn wake_writer(&self) {
+        self.wakes.fetch_add(1, SeqCst);
+        self.writer.wake();
+    }
 }
 
 /// The IO's waker while a write, a flush or a close waits ([`Watched::send`]). The IO wakes it
@@ -195,7 +207,7 @@ impl Wake for Watch {
         if stalled != FLOWING && stalled != STALLED {
             let _ = self.stalled.compare_exchange(stalled, self.clock.now.load(Relaxed) + 1, Relaxed, Relaxed);
         }
-        self.writer.wake();
+        self.wake_writer();
     }
 }
 
@@ -315,9 +327,11 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
         // Before the IO can wake the watch, so its wake reaches the task. A call already waiting
         // (this task's own, or another's on a switched connection a route shares) is put back below
         // if this one goes through, so the IO's next report of room still reaches it; another
-        // task's is also woken, in case the IO now holds this call's waker instead. A finished
-        // call leaves no registration of its own, so two tasks that flush when woken do not wake
-        // each other in turn. Two calls that both wait are woken only the last, as tokio's own are.
+        // task's is also woken, in case the IO now holds this call's waker instead, and this
+        // task's is woken if a wake came while `writer` was empty. A finished call that displaced
+        // none leaves no registration, so two tasks that flush when woken do not wake each other
+        // in turn. Two calls that both wait are woken only the last, as tokio's own are.
+        let wakes = watch.wakes.load(SeqCst);
         let previous = watch.writer.take();
         watch.writer.register(cx.waker());
         let done = if tokio::task::coop::has_budget_remaining() {
@@ -343,7 +357,7 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
         match previous {
             Some(previous) => {
                 watch.writer.register(&previous);
-                if !previous.will_wake(cx.waker()) {
+                if !previous.will_wake(cx.waker()) || watch.wakes.load(SeqCst) != wakes {
                     previous.wake();
                 }
             }

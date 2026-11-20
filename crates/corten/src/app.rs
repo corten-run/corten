@@ -1165,16 +1165,18 @@ impl<M: Middleware> App<M> {
     /// events is not cut, and a download is cut only when its reader goes that long without the
     /// system reporting room, which it does once a good part of the buffer is free, so a reader
     /// that takes a little each minute can be. Over TLS a write or a flush stays pending while the
-    /// TLS library sends what it holds, and its wait starts over at each report of room too, but
-    /// room was measured coming at less even intervals there, and a short timeout can cut a slow
-    /// reader that plain HTTP keeps: one taking 2 KiB every 125 ms (16 KiB buffers) kept a plain
-    /// connection open past 30 seconds with a 2-second timeout, and over tokio-rustls was cut
-    /// within 9. While the connection's task has spent tokio's cooperative
-    /// budget (a route reading a flood of input), a report of room does not start the wait over.
-    /// A TLS connection's last record, written as it closes, is held to it too. `None` removes
-    /// it, for a server that only
-    /// a proxy which reads answers as they come reaches; with [`App::header_timeout`] also `None`,
-    /// the clock and its per-request work are gone.
+    /// TLS library sends what it holds, and its wait starts over at each report of room too. What
+    /// decides how far apart the reports come is how the client takes bytes from its socket: one
+    /// that takes them in bursts (a TLS client reading whole records, `curl --limit-rate`) leaves
+    /// longer gaps than one that takes the same rate evenly, over TLS and plain HTTP alike, so a
+    /// short timeout can cut a slow reader that reads in bursts: with 16 KiB buffers and a
+    /// 2-second timeout, a tokio-rustls client taking 2 KiB every 125 ms was cut within 9 seconds,
+    /// and the same rate taken evenly from the socket was kept past 30, over TLS and plain HTTP.
+    /// While the connection's task has spent tokio's cooperative budget (a route reading a flood
+    /// of input), a report of room does not start the wait over. A TLS connection's last record,
+    /// written as it closes, is held to it too. `None` removes it, for a server that only a proxy
+    /// which reads answers as they come reaches; with [`App::header_timeout`] also `None`, the
+    /// clock and its per-request work are gone.
     pub fn send_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
         self.connections.send_timeout = timeout.into();
         self

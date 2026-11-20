@@ -1233,12 +1233,17 @@ rules something out.
        4 KiB every 62 ms against a 700 ms timeout got its whole answer over plain HTTP in 5 of 5
        rounds and was cut over tokio-rustls through `serve_wrapped` in 5 of 5, as the
        [steady reader control](../bench/http2/README.md#steady-reader-control) had reasoned, and
-       after it got it over both in 5 of 5. Over TLS room was still measured coming at less even
-       intervals than over plain HTTP (in 2 traced rounds each, plain reported room every 1.5 s
-       and TLS after about 1 s, 1 s, then gaps of 1.8 and 2 s), for a reason not yet measured
-       ([#1757 send_timeout still cuts a slow TLS reader that plain HTTP keeps: room is reported at less even intervals over TLS](https://github.com/corten-run/corten/issues/1757)): one reading 2 KiB every
-       125 ms against 2 seconds was kept past 30 seconds over plain HTTP and cut over TLS within
-       9 in every round, 3 before the change and 5 after; and while the connection's task has
+       after it got it over both in 5 of 5. A slower reader is still cut where it takes bytes
+       from its socket in bursts: a tokio-rustls client reading 2 KiB every 125 ms against
+       2 seconds was cut within 9 seconds in every round (3 before the change, 5 after), its
+       socket reads coming as whole 16 KiB records; in 2 traced rounds the server's socket
+       reported room about a second apart twice and then not for the last 1.8 or 2 seconds
+       before the cut, where plain HTTP's came every 1.5 seconds. The same rate read evenly from
+       the socket was kept past 30 seconds over TLS and plain HTTP alike, and plain readers in
+       bursts (16 KiB a second, `curl --limit-rate 16K`) were cut, so the reading pattern decides
+       it, not TLS
+       ([#1757 send_timeout still cuts a slow TLS reader that plain HTTP keeps: room is reported at less even intervals over TLS](https://github.com/corten-run/corten/issues/1757));
+       and while the connection's task has
        spent tokio's cooperative budget a report of room does not start the wait over
        ([#1742 A TLS flush that stays pending while a slow client reads steadily may trip send_timeout: test serve_wrapped over TLS with a steady reader](https://github.com/corten-run/corten/issues/1742)));
        a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a client that sends
@@ -1738,8 +1743,8 @@ rules something out.
     that leaves steady readers open; a TLS flush pending while records drain and a capped
     receive window reopening only in large steps both fit, each reasoned, not measured on the
     probe; the first has since been measured on shipping HTTP/1.1 over tokio-rustls, which cut
-    such a reader until the send timeout's wait started over at each report of room, and room
-    arriving there at less even intervals still cuts a slower reader at a 2-second timeout
+    such a reader until the send timeout's wait started over at each report of room, and a
+    slower reader that takes its bytes in bursts is still cut at a 2-second timeout
     (Protocol, item 2 above));
     value (fast and proven fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
     which is why the dispatch suite comes first and an opt-in protocol must not silently
@@ -1820,7 +1825,10 @@ rules something out.
     (five rounds each at `4bf5b1e78`, and three of the 2-second case at `efdb1df36`, whose
     crates are the same) and after (five rounds each at `ee411b38e`), recorded at the commit
     that adds this entry, and the gaps between the socket's reports of room traced in two of
-    the 2-second case's rounds each, plain and TLS, at `ee411b38e`.
+    the 2-second case's rounds each, plain and TLS, at `ee411b38e`; 2026-11-20, the 2-second
+    case at `5596df8b5` with the reading pattern varied, five rounds each: even 2 KiB reads
+    every 125 ms from the socket over TLS and plain kept, tokio-rustls cut, 16 KiB a second
+    over plain cut, `curl --limit-rate 16K` (7.88.1) over plain and TLS cut.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
