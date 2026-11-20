@@ -127,6 +127,11 @@ async function idlePartial(c, timing, id, start = performance.now()) {
   await requireClosure(c, timing, start, late, () => c.find(HEADERS, id));
 }
 
+async function idleAfterPage(c, t, at, next) {
+  await requireClosure(c, t, at, () => c.request(next, '/'), () => c.find(HEADERS, next));
+  assert(t.closedMs >= timeoutMs - 10 && t.closedMs <= timeoutMs + 50, 'normal completion got a new idle period');
+}
+
 const idle = [
   ['no first request', 65535, async (c, t) => {
     await requireClosure(c, t, c.openAt, () => c.request(1, '/'), () => c.find(HEADERS, 1));
@@ -241,17 +246,20 @@ const send = [
     assert(c.alive() && c.request(3, '/'), 'normal completion left no send timer armed');
     t.reusedMs = round(await page(c, 3) - at);
   }],
-  ['credit recovers before the bound', 0, async (c, t) => {
+  ['credit recovers before the bound', 0, async (c, t, combined) => {
+    if (combined) await open(c, 1, '/quiet');
+    const id = combined ? 3 : 1;
     const at = performance.now();
-    await open(c, 1, '/events?n=1');
+    await open(c, id, '/events?n=1');
     await delay(35);
     t.creditMs = round(performance.now() - at);
-    assert(t.creditMs < timeoutMs && c.credit(1), 'early credit sent');
-    t.completedMs = round(await ended(c, 1) - at);
-    assert(c.data(1).includes(fragment), 'event arrived');
+    assert(t.creditMs < timeoutMs && c.credit(id), 'early credit sent');
+    t.completedMs = round(await ended(c, id) - at);
+    assert(c.data(id).includes(fragment), 'event arrived');
     await delay(2 * timeoutMs);
-    assert(c.alive() && c.request(3, '/') && c.credit(3), 'no stale timer after recovery');
-    await page(c, 3);
+    assert(c.alive() && c.request(id + 2, '/') && c.credit(id + 2), 'no stale timer after recovery');
+    const reused = await page(c, id + 2);
+    if (combined) t.reusedMs = round(reused - at);
   }],
   ['incremental credit for one final chunk', 1, async (c, t) => {
     await open(c, 1, '/final');
@@ -265,28 +273,79 @@ const send = [
     t.completedMs = round(await ended(c, 1) - at);
     assert(t.completedMs > timeoutMs && c.alive(), 'a draining chunk can take longer than the bound in total');
   }],
-  ['reset discards a queued tail', 1, async (c, t) => {
-    await open(c, 1, '/final');
-    await c.ready(() => c.data(1).length === 1, 'tail queued before reset');
+  ['reset discards a queued tail', 1, async (c, t, combined) => {
+    if (combined) await open(c, 1, '/quiet');
+    const id = combined ? 3 : 1;
+    await open(c, id, '/final');
+    await c.ready(() => c.data(id).length === 1, 'tail queued before reset');
     const at = performance.now();
-    assert(c.reset(1));
+    assert(c.reset(id));
     await delay(observeMs);
-    assert(c.alive() && c.request(3, '/') && c.credit(3), 'no stale timer after reset');
-    t.reusedMs = round(await page(c, 3) - at);
-    assert.equal(c.data(1).length, 1);
+    assert(c.alive() && c.request(id + 2, '/') && c.credit(id + 2), 'no stale timer after reset');
+    t.reusedMs = round(await page(c, id + 2) - at);
+    assert.equal(c.data(id).length, 1);
+  }],
+];
+
+const combined = [
+  ...idle.slice(0, -1),
+  ['queued final answer exceeds send bound while busy', 1, async (c, t) => {
+    await open(c, 1, '/final');
+    await c.ready(() => c.data(1).length === 1, 'one byte sent and a tail withheld');
+    await requireClosure(c, t, c.find(DATA, 1).at, () => c.credit(1), () => c.data(1).length > 1);
+  }],
+  ...send.map(test => test[0] !== 'normal response' ? test :
+    ['normal response returns to idle', 65535, async (c, t) => {
+      assert(c.request(1, '/'));
+      await idleAfterPage(c, t, await page(c, 1), 3);
+    }]),
+  ['paused TCP reader stalls after h2 consumes DATA', 16 * 1024 * 1024, async (c, t) => {
+    await open(c, 1, '/quiet'); // Idle must not be able to close this connection.
+    assert(c.credit(0, 16 * 1024 * 1024), 'connection has credit for the entire socket fixture');
+    c.socket.pause();
+    const at = performance.now();
+    assert(c.request(3, '/socket-stall'));
+    await delay(observeMs);
+    t.pausedMs = round(performance.now() - at);
+
+    // Read the deadline report before resuming the blocked reader. Its own
+    // close event cannot tell when the server first gave up on its write.
+    const report = await connect(65535, performance.now());
+    let resumed;
+    try {
+      assert(report.request(1, '/socket-report'));
+      await ended(report, 1);
+      const [op, pending, waited, sinceRequest] = report.data(1).toString().split(' ');
+      t.socketOperation = op || null;
+      t.pendingBuffers = pending === undefined ? null : Number(pending);
+      t.socketWaitMs = waited === undefined ? null : Number(waited);
+      t.socketExpiredMs = sinceRequest === undefined ? null : Number(sinceRequest);
+    } finally {
+      report.socket.destroy();
+      resumed = performance.now();
+      c.socket.resume();
+    }
+    const closed = await waitUntil(() => c.closedAt !== undefined, performance.now() + observeMs);
+    t.closedAfterResumeMs = closed ? round(c.closedAt - resumed) : null;
+    t.receivedBytes = c.data(3).length;
+    assert(closed, 'peer closed after reads resumed');
+    assert(['write', 'write_vectored', 'flush'].includes(t.socketOperation), 'socket write watch expired before reads resumed');
+    assert.equal(t.pendingBuffers, 0, 'h2 had consumed all outstanding DATA buffers');
+    assert(t.socketWaitMs >= timeoutMs && t.socketExpiredMs <= observeMs, 'socket wait expired within the send bound');
+    assert(t.receivedBytes > 0 && !c.end(3) && !c.find(RESET, 3), 'only a prefix of the response reached the TCP reader');
   }],
 ];
 
 const suite = process.argv[2] ?? 'all';
-assert(['idle', 'send', 'all'].includes(suite), 'usage: node limits.mjs [idle|send|all]');
-const cases = suite === 'idle' ? idle : suite === 'send' ? send : [...idle, ...send];
+assert(['idle', 'send', 'all', 'combined'].includes(suite), 'usage: node limits.mjs [idle|send|all|combined]');
+const cases = suite === 'idle' ? idle : suite === 'send' ? send : suite === 'combined' ? combined : [...idle, ...send];
 for (const [check, window, run] of cases) {
   const at = performance.now();
   const result = { check, configuredTimeoutMs: timeoutMs };
   let c;
   try {
     c = await connect(window, at);
-    await run(c, result);
+    await run(c, result, suite === 'combined');
     result.pass = true;
   } catch (error) {
     result.pass = false;
