@@ -105,6 +105,15 @@ test("one native account reset retries on the pinned credential before replying"
   assert.equal(w.messages.some((message) => message.schema === "cloud-provider-account-failed/v2"), false);
 });
 
+test("account retry refuses a clock rollback at request start before a second connect", async (t) => {
+  const a = await api(t, "reset"), w = worker(t, a, { mode: "retry-start-rollback" });
+  await assert.rejects(w.run(account, 5000), (error) => error.controlUncertain === true);
+  await assert.rejects(w.run.close(), (error) => error.controlUncertain === true);
+  assert.equal(w.state().requests, 1); assert.equal(w.state().consumes, 1);
+  assert.equal(a.calls.length, 1);
+  assert.equal(w.messages.some((message) => message.schema === "cloud-provider-account-failed/v2"), false);
+});
+
 const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
   "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", "--context", context];
 test("native account settlement cannot erase preceding create ambiguity or authorize other command replies", { timeout: 15000 }, async (t) => {

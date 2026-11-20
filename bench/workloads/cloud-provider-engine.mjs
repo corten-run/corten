@@ -53,11 +53,14 @@ function privateDiagnostics() {
     throw new Error("provider diagnostics must be disabled");
 }
 
-function restRequest({ method, path, credential, body, timeout, accountDeadline = Infinity, interrupted = () => false, deleteProofExpiresAtMs }, connect, resources) {
+function restRequest({ method, path, credential, body, timeout, accountDeadline = Infinity, accountNotBefore = -Infinity, interrupted = () => false, deleteProofExpiresAtMs }, connect, resources) {
   return new Promise((resolve, reject) => {
     let settled = false, informationSeen = false, req, timer, cancellation, failureDetail = "internal-refusal";
     const account = method === "GET" && path === "/v2/account";
     const started = Date.now(), expires = Math.min(started + timeout, accountDeadline);
+    if (account && !(started >= accountNotBefore)) {
+      reject(stopped(true, { code: "account-request", detail: "deadline" })); return;
+    }
     let lastTime = started, outcome;
     const inTime = () => {
       const current = Date.now(), valid = current >= lastTime && current < expires;
@@ -208,7 +211,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       const current = now();
       if (!(current >= proof.at && current < options.accountDeadline))
         throw stopped(true, providerFailure(error));
-      return nativeRequest({ ...options, timeout: Math.ceil(options.accountDeadline - current) });
+      return nativeRequest({ ...options, accountNotBefore: current, timeout: Math.ceil(options.accountDeadline - current) });
     }
   }
   let credential, context;

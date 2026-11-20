@@ -19,10 +19,23 @@ const save = () => writeFileSync(output, JSON.stringify(observed)); save();
 const exit = process.exit.bind(process);
 if (["withhold-exit", "deadline-exit", "exit"].includes(mode)) process.exit = (code) => { if (code !== 0) exit(code); };
 if (mode === "exit2") process.exit = (code) => exit(code === 0 ? 2 : code);
-let lastReset;
+let lastReset, retryClockSet = false;
 serveProviderWorker({
-  now: () => Date.now() + (observed.requests >= 2 && observed.socketClose >= 2
-    ? mode === "reset-expired" ? 50000 : ["engine-clock", "reset-engine-clock"].includes(mode) ? -50000 : 0 : 0),
+  now: () => {
+    if (mode === "retry-start-rollback" && !retryClockSet && lastReset?.request && lastReset.socket) {
+      retryClockSet = true;
+      const clock = Date.now, checkpoint = clock() + 1;
+      // Only the first sample inside the retry goes backwards. A later
+      // check before connect must not erase that observation.
+      Date.now = () => {
+        Date.now = () => Math.max(clock(), checkpoint);
+        return checkpoint - 1;
+      };
+      return checkpoint;
+    }
+    return Date.now() + (observed.requests >= 2 && observed.socketClose >= 2
+      ? mode === "reset-expired" ? 50000 : ["engine-clock", "reset-engine-clock"].includes(mode) ? -50000 : 0 : 0);
+  },
   spawn(binary, args, options) {
     assert.equal(binary, "doctl"); assert.deepEqual(args.slice(0, 2), ["auth", "token"]);
     assert.ok(options.timeout > 0 && options.timeout <= 10000);
