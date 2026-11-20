@@ -1,5 +1,6 @@
 import tls from 'node:tls';
 import { once } from 'node:events';
+import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -287,8 +288,9 @@ const send = [
   }],
 ];
 
+// Both watches on: the two isolated controls get joint expectations; every other case stays.
 const combined = [
-  ...idle.slice(0, -1),
+  ...idle.filter(([check]) => check !== 'queued final answer keeps connection busy'),
   ['queued final answer exceeds send bound while busy', 1, async (c, t) => {
     await open(c, 1, '/final');
     await c.ready(() => c.data(1).length === 1, 'one byte sent and a tail withheld');
@@ -300,6 +302,11 @@ const combined = [
       await idleAfterPage(c, t, await page(c, 1), 3);
     }]),
   ['paused TCP reader stalls after h2 consumes DATA', 16 * 1024 * 1024, async (c, t) => {
+    // Uncapped, Linux sometimes let a paused reader's receive buffer grow to several
+    // MiB and the stall came after 500 ms. The fixture caps it for this network namespace.
+    const rmem = await readFile('/proc/sys/net/ipv4/tcp_rmem', 'utf8').catch(() => null);
+    t.receiveBufferMax = rmem === null ? null : Number(rmem.trim().split(/\s+/)[2]);
+    assert(t.receiveBufferMax !== null && t.receiveBufferMax <= 128 * 1024, 'fixture caps the TCP receive buffer at 128 KiB');
     await open(c, 1, '/quiet'); // Idle must not be able to close this connection.
     assert(c.credit(0, 16 * 1024 * 1024), 'connection has credit for the entire socket fixture');
     c.socket.pause();
