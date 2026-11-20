@@ -22,6 +22,10 @@ fn byte(at: usize) -> u8 {
     (at % 251) as u8
 }
 
+/// The whole answer, built once: comparing with it is one `memcmp`, so checking one download's
+/// bytes does not hold up the other readers on the test's task.
+static EXPECTED: std::sync::LazyLock<Vec<u8>> = std::sync::LazyLock::new(|| (0..BODY).map(byte).collect());
+
 #[corten::routes]
 mod url {
     #[route("/big", get = big)]
@@ -31,7 +35,7 @@ mod url {
 }
 
 async fn big() -> corten::Media {
-    corten::Media::new("application/octet-stream", (0..BODY).map(byte).collect::<Vec<u8>>())
+    corten::Media::new("application/octet-stream", EXPECTED.clone())
 }
 
 async fn small() -> &'static str {
@@ -96,7 +100,8 @@ async fn download(stream: &mut TcpStream, what: &str) -> Instant {
     }
     let (last, took) = (Instant::now(), started.elapsed());
     assert!(body.len() == BODY, "{what}: the reader got {} of {BODY} body bytes in {took:?}, {ended}", body.len());
-    if let Some(at) = body.iter().enumerate().position(|(at, &b)| b != byte(at)) {
+    if body != *EXPECTED {
+        let at = body.iter().zip(EXPECTED.iter()).position(|(a, b)| a != b).unwrap_or(BODY);
         panic!("{what}: the body differs from what was sent at byte {at}");
     }
     // The pace alone takes over 2.4 s, so this holds however slow the machine.

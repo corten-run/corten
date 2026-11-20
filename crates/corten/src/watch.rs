@@ -30,8 +30,9 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 const BUSY: u64 = u64::MAX;
 /// A connection idle past the timeout.
 const EXPIRED: u64 = u64::MAX - 1;
-/// A connection whose answer's body hyper has taken whole, with bytes of it perhaps still to send:
-/// idle from the next flush that completes ([`Watch::flushed`]), not from now.
+/// A connection whose answer's body hyper has taken (whole, or a stream's last chunk), with bytes
+/// of it perhaps still to send: idle from the next flush that completes ([`Watch::flushed`]), not
+/// from now.
 const DRAINING: u64 = u64::MAX - 2;
 /// A timeout that is not set.
 const NEVER: u64 = u64::MAX;
@@ -431,6 +432,12 @@ mod tests {
         // Handed over but perhaps not yet sent: no expiry, however long that takes (#1746).
         std::thread::sleep(Duration::from_millis(150));
         assert!(!watch.expired(), "an answer still going out does not expire");
+        // A pipelined head read before that answer's flush completes: the flush leaves it busy.
+        let third = watch.busy();
+        watch.flushed();
+        std::thread::sleep(Duration::from_millis(150));
+        assert!(!watch.expired(), "a head read while the last answer drained keeps the connection busy");
+        watch.idle(third);
         watch.flushed();
         // Idle from the clock's last tick, which a starved clock thread makes older than now: the
         // promise is a timeout from that time, to within a tick, not from this call.
