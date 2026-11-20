@@ -128,7 +128,7 @@ pub fn run(command: &[String], cargo: &[String]) -> Result<(), String> {
         return Err(format!("cargo build --release {}failed", cargo.iter().map(|arg| format!("{arg} ")).collect::<String>()));
     }
     println!(
-        "\ncorten: built the release binary in target/release with a profile of the app under {shown}. The static files are compiled into it. An image built from the Dockerfile builds its own binary, without this profile."
+        "\ncorten: built the release binary in target/release with a profile of the app under {shown}. The static files are compiled into it. An image built from the Dockerfile builds its own binary, with a profile when its build is given --build-arg PROFILE_FROM=<script>."
     );
     Ok(())
 }

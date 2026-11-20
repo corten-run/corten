@@ -1,6 +1,18 @@
 # syntax=docker/dockerfile:1
 FROM rust:1-trixie AS build
 WORKDIR /src
+# `docker build --build-arg PROFILE_FROM=train.sh .` builds the release with a profile of the app
+# at work: `corten build --profile-from sh train.sh` runs a copy of the app in this build while
+# the app's script sends it requests, and gives the release build what the copy recorded
+# (https://github.com/corten-run/corten/blob/main/docs/guide/deploy.md#a-profile-in-the-image).
+# The copy starts with what a build has, so not beside a database or another service. Without the
+# argument this RUN does nothing and the build below is the ordinary one. The command is the
+# release `corten new` wrote this file with, installed outside cargo's home, which other apps'
+# builds share.
+ARG PROFILE_FROM=
+RUN --mount=type=cache,target=/var/cache/cargo \
+    if [ -n "$PROFILE_FROM" ]; then rustup component add llvm-tools \
+    && CARGO_HOME=/var/cache/cargo cargo install corten-cli --version {{version}} --locked --root /usr/local; fi
 COPY . .
 # zstd (corten's `compress`) is linked to this build image's libzstd instead of compiled from its
 # C sources, the slowest crate in a clean build, so the server needs libzstd.so.1 where it runs:
@@ -16,7 +28,10 @@ ENV ZSTD_SYS_USE_PKG_CONFIG=1
 RUN --mount=type=cache,target=/var/cache/cargo \
     --mount=type=cache,id={{name}}-target,target=/src/target,sharing=locked \
     find . -name target -prune -o -type f -exec touch {} + \
-    && CARGO_HOME=/var/cache/cargo cargo build --release --locked && cp target/release/{{name}} /server
+    && if [ -z "$PROFILE_FROM" ]; then CARGO_HOME=/var/cache/cargo cargo build --release --locked; \
+    elif [ -f "$PROFILE_FROM" ]; then CARGO_HOME=/var/cache/cargo corten build --locked --profile-from sh "$PROFILE_FROM"; \
+    else echo "PROFILE_FROM=$PROFILE_FROM: the app has no such file" >&2; exit 1; fi \
+    && cp target/release/{{name}} /server
 
 FROM debian:trixie-slim
 # jemalloc, preloaded, gives back memory a burst of connections took: eight floods of unfinished

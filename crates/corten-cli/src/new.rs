@@ -41,8 +41,12 @@ fn write_app(args: &[String]) -> Result<(PathBuf, String), String> {
         return Err(format!("{} exists and is not empty", dir.display()));
     }
     for (path, text) in FILES {
-        let text =
-            text.replace("{{name}}", &name).replace("{{crate}}", &name.replace('-', "_")).replace("{{corten}}", &dependency);
+        // `{{version}}`: the `corten` command the Dockerfile's profiled build installs, this one.
+        let text = text
+            .replace("{{name}}", &name)
+            .replace("{{crate}}", &name.replace('-', "_"))
+            .replace("{{corten}}", &dependency)
+            .replace("{{version}}", env!("CARGO_PKG_VERSION"));
         write(&dir.join(path), &text)?;
     }
     Ok((dir, name))
@@ -207,6 +211,20 @@ mod tests {
         assert!(!dockerfile.contains("{{"), "a placeholder is left in the Dockerfile:\n{dockerfile}");
         assert!(dockerfile.contains("id=shop-front-target,target=/src/target"), "{dockerfile}");
         assert!(dockerfile.contains("cargo build --release --locked"), "{dockerfile}");
+    }
+
+    #[test]
+    fn a_new_apps_dockerfile_installs_this_command_for_a_profiled_build() {
+        // The image's profiled build runs the command that wrote the Dockerfile, so the release
+        // it names has the option the Dockerfile uses.
+        let dir = std::env::temp_dir().join(format!("corten-new-profiled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write_app(&[dir.to_string_lossy().into_owned(), "--name".into(), "shop-front".into()]).unwrap();
+        let dockerfile = std::fs::read_to_string(dir.join("Dockerfile")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let install = format!("cargo install corten-cli --version {} --locked --root /usr/local", env!("CARGO_PKG_VERSION"));
+        assert!(dockerfile.contains(&install), "{dockerfile}");
+        assert!(dockerfile.contains("corten build --locked --profile-from sh \"$PROFILE_FROM\""), "{dockerfile}");
     }
 
     #[test]

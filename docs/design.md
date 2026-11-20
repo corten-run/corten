@@ -6943,9 +6943,10 @@ rules something out.
     Not chosen: the steps left to the guide, which each app then copies with their traps (the
     profiles the build's own macros write, a profile left from an earlier run, the
     configuration's flags dropped, the copy killed); a command that starts and stops the copy
-    itself, which moves the same traps into every app's script; the steps in the starter's
-    Dockerfile behind a build argument, which gives a build outside the image nothing and has
-    the image's build run the app and its load; a profile by default, since a build cannot know
+    itself, which moves the same traps into every app's script; the four steps written into the
+    starter's Dockerfile behind a build argument, which gives a build outside the image nothing
+    and has the traps over again in a Dockerfile (the image's build runs this command instead,
+    [Choice 69](#choice-profile-image)); a profile by default, since a build cannot know
     an app's requests and the second build and the run are minutes; reading Cargo's
     configuration as Cargo does to keep its flags, which takes a TOML parser the command does
     not have; an `llvm-profdata` found on the `PATH`, which may read another LLVM's format;
@@ -6993,6 +6994,65 @@ rules something out.
     --locked --bin` and an empty `-F` on Cargo 1.100.0, selecting a workspace member that is not
     the default one: each build was given exactly them, as written and in order (a `cargo` on
     the `PATH` recorded each argument), and the test fails when the release build is not.
+
+69. <a id="choice-profile-image"></a>**The starter's image is built with a profile when its build is given the
+    app's script, by the same command.** `docker build --build-arg PROFILE_FROM=train.sh` has
+    the Dockerfile `corten new` writes run `corten build --locked --profile-from sh train.sh`
+    where it runs `cargo build --release --locked`
+    ([deploying](guide/deploy.md#a-profile-in-the-image)). So an app deployed the documented way
+    can have what [Choice 68](#choice-profile-build) measured, by the one command that builds a
+    profiled release, and the binary is built and profiled on the system the image is built
+    for. Without the argument the build is what it was and fetches nothing: the `RUN` that adds
+    `llvm-tools` and installs the `corten` command does nothing. The argument names a file, not
+    a command line, so the Dockerfile quotes it once and the shell splits nothing; a name that
+    is no file fails the build before the app is built. The command installed is the release
+    that wrote the Dockerfile, built from source with its lock, under `/usr/local` and not in
+    cargo's home, which every app's build on a builder mounts and from which cargo would run it
+    for the others. It is installed before the sources are copied in, so a builder that keeps
+    its layers installs it once. The cost is that the image's build runs the app: the copy has
+    to start in a build, which has no other container beside it, so an app that needs a
+    database as it starts cannot use the argument, and the build takes between two and three
+    times as long.
+    Not chosen: a profile in every image build, since a build cannot know the app's requests,
+    an app that needs a service would not build at all, and every build would pay the time; the
+    argument as a whole command line, which the shell would split; a script that `corten new`
+    writes into every app, which would still ask for the starter's one page when the app has
+    others, and a profile that barely reached an app's routes gained about half as much
+    ([Choice 68](#choice-profile-build)); the command's version read from `Cargo.lock` during
+    the build, which is a parser written in shell and has no release to install for an app on a
+    git revision; a second Dockerfile, or a stage, that copies in a binary built where the
+    app's services are, since the builder's system then has to match the image's and a mismatch
+    fails when the container starts, not when the image is built; and a profile file taken
+    elsewhere and handed to the image's build, which goes stale without a word when the app's
+    code or the compiler moves.
+
+    Stands on: measured (the app `corten new` writes, built in `rust:1-trixie` and run on
+    `debian:trixie-slim` with the image's jemalloc settings, took 41,922 fewer cycles a request
+    on its home page at the median of 10 alternated rounds, 32% of the ordinary build's
+    130,903, and 40,193 fewer where each answer is compressed, 22% of 183,102, lower in all 10
+    rounds of each, from a script of 500 requests; its image built in 188 seconds with the
+    argument against 69 without, one build each); platform (a `RUN` has a loopback interface,
+    so a server and its client run in one; a build argument declared before a `RUN` that uses
+    it is part of that layer's cache key; a build has no service container beside it; cargo
+    runs a program in its home's `bin/` for a subcommand ahead of one on `PATH`); reasoned (the
+    same command inside the image and outside it is one way to build a profiled release; a
+    file name quoted once cannot be split); bet (an app that deploys from this Dockerfile and
+    wants the gain can start with nothing beside it); value (fast and proven fast for the
+    documented deploy, with the ordinary build kept as the default and the profile one
+    argument away, README Values).
+
+    Revisit when: a build can run a service beside it, so the argument can cover an app with a
+    database; the `corten` command a release publishes cannot be built in the build stage; a
+    workflow builds the starter's image, so these lines are checked on every change and not by
+    hand; or apps keep a script from the day they are written, so the starter could carry one.
+
+    Last checked: 2026-11-20, the rounds above at `9fae8ff55` with rustc 1.100.0, the app on
+    one CPU under `wrk` with 64 connections; 2026-11-20, the Dockerfile `corten new` writes at
+    this change, built with Docker 29.9.3 three ways, its install line pointed at the checkout
+    since no release has the option yet: without the argument (the first `RUN` did nothing and
+    the image was the ordinary build's), with a name that is no file (the build failed after
+    the install and before the app's build, naming the file), and with the guide's script (the
+    copy ran in the build, and the image's server answered its page as user 10001).
 
 ## Rules
 
