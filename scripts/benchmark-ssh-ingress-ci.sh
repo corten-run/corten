@@ -81,6 +81,10 @@ owner "rm -- '$work/result'" </dev/null
 test ! -e "$work/result"
 test "$(forks)" -eq 6
 /bin/bash "$work/verify"
+# A stricter rule still changes the verified policy, even though the table exists.
+/usr/sbin/nft insert rule inet corten_bench_ssh input tcp dport 22 ip saddr 127.0.0.2 drop
+/usr/sbin/nft list table inet corten_bench_ssh >/dev/null
+if /bin/bash "$work/verify"; then echo 'accepted a modified SSH ingress table' >&2; exit 1; fi
 /usr/sbin/nft delete table inet corten_bench_ssh
 if /bin/bash "$work/verify" 2>/dev/null; then exit 1; fi
 kill "$listener"
