@@ -310,11 +310,12 @@ fn cargo_arguments_before_the_command_reach_both_builds() {
     // A lock, which `--locked` needs.
     let locked = Command::new(env!("CARGO")).arg("generate-lockfile").current_dir(&fixture.0).output().unwrap();
     assert!(locked.status.success(), "{}", text(&locked));
-    // Each argument in brackets, so their boundaries (an empty one's included) are kept.
+    // Each call as its argument count, then its arguments, each ended by a NUL, so boundaries
+    // (an empty argument's, one with a newline's) are kept.
     let bin = fixture.0.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let cargo = bin.join("cargo");
-    let script = "#!/bin/sh\n{ for arg in \"$@\"; do printf '[%s]' \"$arg\"; done; printf '\\n'; } >> \"$ARGS_LOG\"\nexec \"$REAL_CARGO\" \"$@\"\n";
+    let script = "#!/bin/sh\nprintf '%s\\0' \"$#\" \"$@\" >> \"$ARGS_LOG\"\nexec \"$REAL_CARGO\" \"$@\"\n";
     std::fs::write(&cargo, script).unwrap();
     std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
     let log = fixture.0.join("cargo-args.txt");
@@ -324,9 +325,16 @@ fn cargo_arguments_before_the_command_reach_both_builds() {
     let builds = || -> Vec<Vec<String>> {
         let logged = std::fs::read_to_string(&log).unwrap_or_default();
         let _ = std::fs::remove_file(&log);
-        let args =
-            |line: &str| line.strip_prefix('[')?.strip_suffix(']').map(|line| line.split("][").map(str::to_string).collect());
-        logged.lines().filter_map(args).filter(|args: &Vec<String>| args[0] == "build").collect()
+        assert_eq!(logged.chars().last(), Some('\0'), "a call's record was cut: {logged:?}");
+        let mut fields = logged.split('\0');
+        let mut calls = Vec::new();
+        while let Some(count) = fields.next().filter(|count| !count.is_empty()) {
+            let count: usize = count.parse().unwrap_or_else(|_| panic!("not a count: {count:?}"));
+            let call: Vec<String> = fields.by_ref().take(count).map(str::to_string).collect();
+            assert_eq!(call.len(), count, "a call's record was cut: {logged:?}");
+            calls.push(call);
+        }
+        calls.into_iter().filter(|call| call.first().is_some_and(|arg| arg == "build")).collect()
     };
     let given = ["--no-default-features", "--features=given", "-F", "", "-p", "app", "--locked", "--bin", "app"];
     let release: Vec<String> = ["build", "--release"].iter().chain(&given).map(|arg| arg.to_string()).collect();
@@ -351,7 +359,8 @@ fn cargo_arguments_before_the_command_reach_both_builds() {
     assert!(said.contains("of the 1 profile file(s) the app wrote"), "{said}");
     let released = fixture.0.join("target").join("release").join("app");
     let built_from = std::fs::read_to_string(released.with_extension("d")).unwrap();
-    assert!(built_from.contains("app.profdata"), "the release was not built from the profile: {built_from}");
+    let profile = fixture.profile().display().to_string();
+    assert!(built_from.contains(&profile), "the release was not built from {profile}: {built_from}");
     assert!(instrumented_binary(&copy.join("release").join("app")) && !instrumented_binary(&released));
     let worker = fixture.0.join("target").join("release").join("worker");
     assert!(!worker.exists(), "--bin did not reach the release build");

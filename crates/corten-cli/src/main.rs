@@ -180,7 +180,8 @@ fn command_help(args: &[String]) -> Option<String> {
 /// Whether `--help` or `-h` stands in a flag position of `command`'s arguments: not as the
 /// value of an option of that command that takes one (`new --corten-path --help` names a directory,
 /// `ui add --port --help` asks for help). No command reads `--` as the end of its options, so
-/// neither does this: the command would still read a flag after it.
+/// neither does this: the command would still read a flag after it. `build` is read with its own
+/// grammar ([`build_asks_help`]), which refuses `--`.
 fn asks_help(command: &str, args: &[String]) -> bool {
     if command == "build" {
         return build_asks_help(args);

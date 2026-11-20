@@ -300,8 +300,9 @@ not for speed.
 
 A release build can be given a profile of the app at work, which the compiler uses to lay out
 and inline the code its requests run. `corten build --profile-from <command>` builds an
-instrumented copy of the app, runs it while `<command>` sends it requests, and builds
-`target/release` with the profile the copy wrote.
+instrumented copy of the app, runs it while `<command>` sends it requests, and builds the
+release (in `target/release`, unless Cargo's configuration puts it elsewhere) with the profile
+the copy wrote.
 
 ```sh
 rustup component add llvm-tools     # once: the toolchain's llvm-profdata merges the profile
@@ -371,10 +372,10 @@ The four steps are the toolchain's own, and Corten adds nothing to the binary:
    reads what its rustc writes; one on the `PATH` may be another LLVM's. A toolchain without
    the component is refused before the first build, with the `rustup` line above.
 4. `cargo build --release` with `-Cprofile-use`. Every crate compiles again, since the flag
-   changed, and again whenever a new profile replaces the file. Cargo keeps the ordinary
+   changed, and again whenever a new profile replaces the file. Cargo keeps an ordinary
    build's crates beside these, so a `corten build` afterwards with the same Cargo arguments and
-   no `--profile-from` compiles nothing and puts the binary without the profile back in
-   `target/release`.
+   no `--profile-from` reuses an ordinary build already made and puts the binary without the
+   profile back in the release directory.
 
 The two flags reach Cargo in the environment, after any `RUSTFLAGS` already there. Cargo takes
 its flags from the environment or from its configuration, never both, so flags that a
