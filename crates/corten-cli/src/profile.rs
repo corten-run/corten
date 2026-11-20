@@ -28,7 +28,9 @@ const BETWEEN_FLAGS: &str = "\u{1f}";
 const STARTS_WITHIN: Duration = Duration::from_secs(60);
 const STOPS_WITHIN: Duration = Duration::from_secs(60);
 
-pub fn run(command: &[String]) -> Result<(), String> {
+/// Builds with `cargo`, the Cargo arguments `corten build` passes on (main.rs, `CARGO_ARGS`),
+/// given to both builds in the same order, so the profile is of the binary the release is.
+pub fn run(command: &[String], cargo: &[String]) -> Result<(), String> {
     // The app writes its profile as it exits, so it has to be asked to stop, not killed, and
     // the standard library can only kill. On Unix the shell's `kill` asks; Windows has no
     // command that sends another process a Ctrl-C.
@@ -58,7 +60,9 @@ pub fn run(command: &[String]) -> Result<(), String> {
     step("the instrumented build, in target/corten-profile");
     let built = dev::binaries_of(
         Command::new("cargo")
-            .args(["build", "--release", "--message-format=json-render-diagnostics", "--target-dir"])
+            .args(["build", "--release"])
+            .args(cargo)
+            .args(["--message-format=json-render-diagnostics", "--target-dir"])
             .arg(dir.join("target"))
             .env("CARGO_ENCODED_RUSTFLAGS", with(&flags, "-Cprofile-generate=", &written_by_build))
             .current_dir(&root),
@@ -115,12 +119,13 @@ pub fn run(command: &[String]) -> Result<(), String> {
     step("the release build, with the profile");
     let status = Command::new("cargo")
         .args(["build", "--release"])
+        .args(cargo)
         .env("CARGO_ENCODED_RUSTFLAGS", with(&flags, "-Cprofile-use=", &merged))
         .current_dir(&root)
         .status()
         .map_err(|e| format!("could not run cargo: {e}"))?;
     if !status.success() {
-        return Err("cargo build --release failed".into());
+        return Err(format!("cargo build --release {}failed", cargo.iter().map(|arg| format!("{arg} ")).collect::<String>()));
     }
     println!(
         "\ncorten: built the release binary in target/release with a profile of the app under {shown}. The static files are compiled into it. An image built from the Dockerfile builds its own binary, without this profile."
@@ -180,7 +185,7 @@ fn the_one_binary(mut built: Vec<PathBuf>) -> Result<PathBuf, String> {
             let names: Vec<String> =
                 built.iter().filter_map(|path| path.file_name()).map(|name| name.to_string_lossy().into_owned()).collect();
             Err(format!(
-                "the build makes {} binaries ({}), and a profile is of one; run corten build --profile-from in the directory of a package with one binary",
+                "the build makes {} binaries ({}), and a profile is of one; name the one with --bin (and its package with -p) before --profile-from",
                 built.len(),
                 names.join(", ")
             ))

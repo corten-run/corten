@@ -320,6 +320,20 @@ for i in $(seq 500); do
 done
 ```
 
+Cargo arguments the release needs go before `--profile-from`, and both builds get them in the
+same order, so the profile is of the binary the release is:
+
+```sh
+corten build --no-default-features --features=lean --locked --bin shop --profile-from sh train.sh
+```
+
+`corten build` passes on `--features` (`-F`), `--all-features`, `--no-default-features`,
+`--locked`, `--package` (`-p`) and `--bin`, with or without a profile, and refuses any other
+argument before it builds. Everything after `--profile-from` is the command and its own
+arguments. `--target`, `--target-dir` and `--profile` are refused: they move the binary out of
+`target/release`, where the release is and where the steps below look for it, and a binary
+built for another target cannot run here to be profiled.
+
 `corten build` starts the copy in the app's directory with the environment it was given, less
 `HOST` so that it listens on this machine only, on a port nothing else has, and runs the command
 once the copy accepts a connection. When the command ends it stops the copy with `SIGTERM` and waits for it: the copy
@@ -339,8 +353,8 @@ The four steps are the toolchain's own, and Corten adds nothing to the binary:
 1. `cargo build --release` with `-Cprofile-generate`, into a target directory of its own under
    `target/corten-profile`. So `target/release` never holds a binary that writes a profile, and a
    step that fails leaves the last release as it was. The copy is kept: the next profiled build
-   compiles only what changed in it. A package that builds more than one binary is refused
-   here, since a profile is of one program. Apps that share a target directory (a workspace's)
+   compiles only what changed in it. A build that makes more than one binary is refused
+   here, since a profile is of one program: `--bin` names the one. Apps that share a target directory (a workspace's)
    share `target/corten-profile` too, so a profiled build is refused while another runs there.
 2. The copy, run with `LLVM_PROFILE_FILE` naming a directory of this run's own, after what
    earlier runs left is removed. The macros and build scripts that ran during the first build
@@ -368,8 +382,8 @@ Dockerfile, as `corten new` writes it, does one release build with no profile, i
 a binary built here is not the one the image runs, and where the command and what it sends go
 in an image's build is not worked out here. A `corten build` that is itself stopped by a signal
 (a cancelled job, `timeout`) leaves the copy running, as `corten dev` leaves the app. For a
-build the option refuses or does not cover (a second binary, Windows, Cargo arguments such as
-features), the same steps by hand are in the rustc book's
+build the option refuses or does not cover (Windows, a cross build, a Cargo argument not on
+its list), the same steps by hand are in the rustc book's
 [profile-guided optimization](https://doc.rust-lang.org/rustc/profile-guided-optimization.html).
 
 Measured on the lean catalog app (`bench/catalog/corten`) at `7685c7f24` with rustc 1.99.1 in

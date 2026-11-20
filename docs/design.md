@@ -6506,6 +6506,8 @@ rules something out.
     a workspace's lock already has, so their output passes the check with no step between.
     `corten dev`, `corten build` and ordinary Cargo builds keep Cargo's normal lock updates;
     those are the edit loop, while a check verifies what is ready to commit and ship.
+    `corten build --locked` passes the flag to its builds, profiled or not, for a release that
+    ships from `target/release` with the lock it was checked with.
     Not chosen: an opt-in `corten check --locked` or an opt-out that lets CI silently repair
     the graph; an additional metadata subprocess when the check already resolves metadata;
     `cargo generate-lockfile` in `corten new`, which rebuilds an existing workspace lock with
@@ -6927,6 +6929,12 @@ rules something out.
     go in the environment, would replace. A command that fails,
     a copy that exits early or does not listen, a profile not written, and a package that
     builds two binaries each stop the build after the copy and before the release.
+    Cargo arguments come from a closed list given before `--profile-from` (`--features`,
+    `--all-features`, `--no-default-features`, `--locked`, `--package`, `--bin`), passed in
+    the same order to both builds, so the profile is of the binary the release is, and a
+    misspelled one is refused rather than built past; an argument that moves the binary out of
+    `target/release` (`--target`, `--target-dir`, `--profile`) or a cross build, which cannot
+    run where it is built to be profiled, is refused.
     The standard library the `corten` command is held to can kill a child but not ask it to
     stop, so the command has the shell send `SIGTERM`, and the option is Unix only: Windows
     has no command that sends another process a Ctrl-C.
@@ -6938,7 +6946,9 @@ rules something out.
     the image's build run the app and its load; a profile by default, since a build cannot know
     an app's requests and the second build and the run are minutes; reading Cargo's
     configuration as Cargo does to keep its flags, which takes a TOML parser the command does
-    not have; and an `llvm-profdata` found on the `PATH`, which may read another LLVM's format.
+    not have; an `llvm-profdata` found on the `PATH`, which may read another LLVM's format;
+    and every argument after a `--` passed to Cargo, which lets one that moves the binary or
+    its messages through to steps that read both.
 
     Stands on: measured (the catalog app built by the option took 30,730 fewer cycles a request
     than its ordinary build on the catalog page at the median of 10 alternated rounds, 21% of
@@ -6962,8 +6972,8 @@ rules something out.
 
     Revisit when: Cargo can add a flag to the ones its configuration sets, or builds with a
     profile itself, so the refusal or the steps go; the standard library can ask a child
-    process to stop, or an app on Windows needs the option; an app's release takes Cargo
-    arguments `corten build` does not pass; or an app measures a profile from its own command
+    process to stop, or an app on Windows needs the option; an app's release needs a Cargo
+    argument not on the list (a cross build, a custom profile); or an app measures a profile from its own command
     gaining nothing over the ordinary build.
 
     Last checked: 2026-11-19, the rounds above at `b032155e2` (the earlier ones on the sources
@@ -6975,7 +6985,10 @@ rules something out.
     `target/release`, an empty `RUSTFLAGS` left the configuration's flags out, and a file
     named by `include` had its `rustflags` read; 2026-11-19, rustc 1.99.1: an instrumented
     server ended by `SIGTERM`'s default action left no profile file, and the same server
-    leaving through `exit` on that signal left one.
+    leaving through `exit` on that signal left one; 2026-11-20, the list of Cargo arguments
+    ([#1731 corten build --profile-from passes no Cargo arguments, so an app whose release needs features, a package, a target or the lock cannot use it: decide what corten build passes on](https://github.com/corten-run/corten/issues/1731)),
+    a profiled build of a two-binary package given `--no-default-features --features=given
+    --bin` on Cargo 1.100.0, which fails when the release build is not given them.
 
 ## Rules
 

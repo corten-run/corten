@@ -257,8 +257,10 @@ fn flags_the_configuration_sets_refuse_the_build_and_flags_given_in_the_environm
 fn build_refuses_what_it_does_not_take_before_building() {
     let fixture = Fixture::new("refused");
     for (args, says) in [
-        (&["--profile-form", "sh"][..], "corten build takes only --profile-from <command>"),
-        (&["--release"], "corten build takes only --profile-from <command>"),
+        (&["--profile-form", "sh"][..], "corten build takes --features"),
+        (&["--release"], "corten build takes --features"),
+        (&["--target", "x86_64-unknown-linux-musl", "--profile-from", "true"], "not \"--target\""),
+        (&["--bin", "--profile-from", "true"], "--bin needs a value"),
         (&["--profile-from"], "--profile-from needs a command"),
         (&["--profile-from", "/no/such/command"], "there is no command \"/no/such/command\""),
         (&["--profile-from", "--help"], "there is no command \"--help\""),
@@ -279,8 +281,41 @@ fn a_package_with_two_binaries_is_refused_and_neither_is_run() {
     assert!(!output.status.success());
     let said = text(&output);
     assert!(said.contains("the build makes 2 binaries") && said.contains("worker"), "{said}");
+    assert!(said.contains("name the one with --bin"), "{said}");
     assert!(!fixture.0.join("pid.txt").exists() && !fixture.0.join("port.txt").exists(), "one was run");
     assert!(!fixture.release().exists(), "a release was built");
+}
+
+/// The Cargo arguments given before `--profile-from` reach both builds: the program compiles
+/// only with a feature its defaults leave off, and `--bin` names it beside a second binary.
+#[test]
+fn cargo_arguments_before_the_command_reach_both_builds() {
+    let fixture = Fixture::new("args");
+    let manifest = "[package]\nname = \"profiled\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"plain\"]\nplain = []\ngiven = []\n\n[workspace]\n";
+    std::fs::write(fixture.0.join("Cargo.toml"), manifest).unwrap();
+    let needs_feature = format!(
+        "#[cfg(any(not(feature = \"given\"), feature = \"plain\"))]\ncompile_error!(\"the arguments were dropped\");\n{MAIN}"
+    );
+    std::fs::write(fixture.0.join("src/main.rs"), needs_feature).unwrap();
+    std::fs::create_dir_all(fixture.0.join("src/bin")).unwrap();
+    std::fs::write(fixture.0.join("src/bin/worker.rs"), "fn main() {}\n").unwrap();
+
+    let mut args = vec!["--no-default-features", "--features=given", "--bin", "profiled"];
+    args.extend(NOTES_ITS_PORT);
+    let output = fixture.build(&args).output().unwrap();
+    let said = text(&output);
+    assert!(output.status.success(), "{said}");
+    assert!(said.contains("of the 1 profile file(s) the app wrote"), "{said}");
+    let built_from = std::fs::read_to_string(fixture.release().with_extension("d")).unwrap();
+    assert!(built_from.contains("app.profdata"), "the release was not built from the profile: {built_from}");
+    let worker = fixture.0.join("target").join("release").join("worker");
+    assert!(!worker.exists(), "--bin did not reach the release build");
+
+    // And the build without a profile.
+    std::fs::remove_file(fixture.release()).unwrap();
+    let plain = fixture.build(&args[..4]).output().unwrap();
+    assert!(plain.status.success(), "{}", text(&plain));
+    assert!(fixture.release().is_file() && !worker.exists());
 }
 
 #[test]

@@ -4,7 +4,7 @@
 //! - `corten dev` builds and runs the app, rebuilds and restarts it when a file changes (a failed
 //!   build keeps the running server), and open pages reload by themselves.
 //! - `corten build` builds the release binary, with `--profile-from` laid out by a profile of
-//!   the app at work. `corten check` runs format, a check that every
+//!   the app at work, passing a closed list of Cargo's arguments on. `corten check` runs format, a check that every
 //!   styled component is listed, lint, a build of every target and tests, then a type check of
 //!   the app's scripts (with TypeScript's `tsc`, which it needs unless told
 //!   `--no-script-types`).
@@ -34,8 +34,11 @@ Usage:
   corten dev [--port <port>]
                    Build and run the app in this directory; rebuild and restart on every
                    change, and reload open pages. Default port 3000.
-  corten build [--profile-from <command> [<argument> ..]]
-                   Build the release binary. With --profile-from, build it with a profile of
+  corten build [<cargo argument> ..] [--profile-from <command> [<argument> ..]]
+                   Build the release binary. Cargo's --features (-F), --all-features,
+                   --no-default-features, --locked, --package (-p) and --bin, given before
+                   --profile-from, go to each build; any other argument is refused.
+                   With --profile-from, build it with a profile of
                    the app at work: build an instrumented copy under target/corten-profile,
                    start it on a free port, run <command> with that port in PORT to send it
                    requests like the ones the app will serve, stop the copy, and build
@@ -126,9 +129,9 @@ fn main() -> ExitCode {
         }
         Some("new") => new::run(&args[1..]),
         Some("dev") => dev::run(&args[1..]),
-        Some("build") => build_flags(&args[1..]).and_then(|profile_from| match profile_from {
-            Some(command) => profile::run(command),
-            None => cargo(&["build", "--release"]).map(|()| {
+        Some("build") => build_flags(&args[1..]).and_then(|build| match build.profile_from {
+            Some(command) => profile::run(command, &build.cargo),
+            None => cargo(&["build", "--release"].into_iter().chain(build.cargo.iter().map(String::as_str)).collect::<Vec<_>>()).map(|()| {
                 println!(
                     "\ncorten: built the release binary in target/release. It is the whole deploy: the static files are compiled into it (see Dockerfile)."
                 );
@@ -182,6 +185,7 @@ fn asks_help(command: &str, args: &[String]) -> bool {
     let takes_value: &[&str] = match command {
         "new" => &["--name", "--corten-path"],
         "dev" => &["--port"],
+        "build" => &["--features", "-F", "--package", "-p", "--bin"],
         _ => &[],
     };
     let mut args = args.iter();
@@ -199,20 +203,76 @@ fn asks_help(command: &str, args: &[String]) -> bool {
     false
 }
 
-/// `corten build`'s flags: the command after `--profile-from`, with its arguments, if any.
-/// Anything else is refused, so a misspelled flag is not an ordinary build that looks profiled.
-fn build_flags(args: &[String]) -> Result<Option<&[String]>, String> {
-    match args {
-        [] => Ok(None),
-        [flag, command @ ..] if flag == "--profile-from" => {
+/// The Cargo arguments `corten build` passes on to each build it runs, and whether each takes a
+/// value. A closed list: an argument that moves the build's output (`--target-dir`, `--profile`,
+/// `--target`) or its messages would break the profiled build's steps, which read both.
+const CARGO_ARGS: [(&str, bool); 8] = [
+    ("--features", true),
+    ("-F", true),
+    ("--all-features", false),
+    ("--no-default-features", false),
+    ("--locked", false),
+    ("--package", true),
+    ("-p", true),
+    ("--bin", true),
+];
+
+/// What `corten build` was asked for.
+#[derive(Debug, PartialEq)]
+struct Build<'a> {
+    /// The Cargo arguments, each value its own item, given to every build in their order.
+    cargo: Vec<String>,
+    /// The command after `--profile-from`, with its arguments, if any.
+    profile_from: Option<&'a [String]>,
+}
+
+/// `corten build`'s flags: the [`CARGO_ARGS`] before `--profile-from` (`--features a` or
+/// `--features=a`), then the command after it. Anything else is refused, so a misspelled flag
+/// is not an ordinary build that looks profiled, and a value cannot be a flag, so
+/// `--bin --profile-from sh` does not take `--profile-from` for a binary's name.
+fn build_flags(args: &[String]) -> Result<Build<'_>, String> {
+    let mut cargo = Vec::new();
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        at += 1;
+        if arg == "--profile-from" {
+            let command = &args[at..];
             if command.is_empty() {
-                Err("--profile-from needs a command".into())
-            } else {
-                Ok(Some(command))
+                return Err("--profile-from needs a command".into());
+            }
+            return Ok(Build { cargo, profile_from: Some(command) });
+        }
+        let (flag, joined) = match arg.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => (flag, Some(value)),
+            _ => (arg.as_str(), None),
+        };
+        match (CARGO_ARGS.iter().find(|(name, _)| *name == flag), joined) {
+            (Some((_, false)), None) => cargo.push(flag.to_string()),
+            (Some((_, true)), joined) => {
+                let value = match joined {
+                    Some(value) => Some(value),
+                    None => args.get(at).map(|value| {
+                        at += 1;
+                        value.as_str()
+                    }),
+                };
+                match value {
+                    Some(value) if !value.is_empty() && !value.starts_with('-') => {
+                        cargo.extend([flag.to_string(), value.to_string()]);
+                    }
+                    _ => return Err(format!("{flag} needs a value")),
+                }
+            }
+            _ => {
+                let list: Vec<&str> = CARGO_ARGS.iter().map(|(name, _)| *name).collect();
+                return Err(format!(
+                    "corten build takes {} for Cargo, then --profile-from <command>; not {arg:?}",
+                    list.join(", ")
+                ));
             }
         }
-        _ => Err(format!("corten build takes only --profile-from <command>, not {:?}", args.join(" "))),
     }
+    Ok(Build { cargo, profile_from: None })
 }
 
 /// `corten check`'s flags: whether `--no-script-types` skips the scripts' type check.
@@ -313,7 +373,7 @@ fn option<'a>(args: &'a [String], flag: &str) -> Result<Option<&'a str>, String>
 
 #[cfg(test)]
 mod tests {
-    use super::{asks_help, build_flags, check_flags, lint_build_test, option};
+    use super::{Build, asks_help, build_flags, check_flags, lint_build_test, option};
     use std::cell::RefCell;
 
     #[test]
@@ -334,18 +394,52 @@ mod tests {
         assert!(!asks_help("build", &args(&["--profile-from", "./train.sh", "--help"])));
         assert!(!asks_help("build", &args(&["--profile-from", "--help"])));
         assert!(asks_help("dev", &args(&["--profile-from", "--help"])));
+        // A Cargo argument's value is a value.
+        assert!(!asks_help("build", &args(&["--bin", "--help"])));
+        assert!(asks_help("build", &args(&["--locked", "--help"])));
     }
 
     #[test]
     fn build_takes_only_the_command_a_profile_comes_from() {
         let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
-        assert_eq!(build_flags(&[]), Ok(None));
+        assert_eq!(build_flags(&[]), Ok(Build { cargo: vec![], profile_from: None }));
         let command = args(&["--profile-from", "sh", "train.sh", "--profile-from"]);
-        assert_eq!(build_flags(&command), Ok(Some(&command[1..])));
+        assert_eq!(build_flags(&command), Ok(Build { cargo: vec![], profile_from: Some(&command[1..]) }));
         assert_eq!(build_flags(&args(&["--profile-from"])), Err("--profile-from needs a command".into()));
         // A misspelled flag is refused, not built without a profile.
         assert!(build_flags(&args(&["--profile-form", "sh"])).is_err());
         assert!(build_flags(&args(&["--release"])).is_err());
+    }
+
+    #[test]
+    fn build_passes_on_the_cargo_arguments_it_lists_before_the_command() {
+        let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        let given = args(&[
+            "--no-default-features",
+            "--features=a,b",
+            "-F",
+            "c",
+            "--locked",
+            "-p",
+            "shop",
+            "--bin",
+            "web",
+            "--profile-from",
+            "sh",
+            "--locked",
+        ]);
+        let cargo = args(&["--no-default-features", "--features", "a,b", "-F", "c", "--locked", "-p", "shop", "--bin", "web"]);
+        // An argument after the command's name is the command's.
+        assert_eq!(build_flags(&given), Ok(Build { cargo: cargo.clone(), profile_from: Some(&given[10..]) }));
+        assert_eq!(build_flags(&given[..9]), Ok(Build { cargo, profile_from: None }));
+        // A value is not a flag, and not missing.
+        for refused in [&["--bin", "--profile-from", "sh"][..], &["--features"], &["--features="], &["-p", "-F", "a"]] {
+            assert!(build_flags(&args(refused)).is_err_and(|error| error.ends_with("needs a value")), "{refused:?}");
+        }
+        // What would move the build's output, or is not on the list, is refused.
+        for refused in [&["--target", "x86_64-unknown-linux-musl"][..], &["--target-dir", "t"], &["--locked=yes"], &["-Fa"]] {
+            assert!(build_flags(&args(refused)).is_err_and(|error| error.starts_with("corten build takes")), "{refused:?}");
+        }
     }
 
     #[test]
