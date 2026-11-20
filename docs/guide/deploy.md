@@ -220,8 +220,9 @@ upstream connections are not kept, a `location` with `proxy_request_buffering of
 a chunked upload, and a WebSocket fails. A proxy that passes `Upgrade` on over HTTP/1.0 gets an
 `Option<Upgrade>` route's other answer (its page) and an `Upgrade` route's 400, since a server
 ignores `Upgrade` in an HTTP/1.0 request (RFC 9110, 7.8). Before 1.29.7 nginx also sent
-`Connection: close` by default, so a `location` that serves no WebSocket clears it
-(`proxy_set_header Connection ""`, as `/files/` does) for its connections to be kept. A
+`Connection: close` by default, so every `location` sets `Connection` for its connections to be
+kept: the map sends none for a request without `Upgrade` (`location /` and `/assets/`), and
+`proxy_set_header Connection ""` sends none at all (`/files/`, which serves no WebSocket). A
 `location` that serves WebSockets keeps `Upgrade` and the mapped `Connection` on any version: the
 map sends `Connection: upgrade` when the browser asks for an upgrade, and nothing otherwise.
 

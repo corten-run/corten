@@ -114,10 +114,12 @@ result.relayTakeoverMs = result.events
     const wasLeader = e.relay ?? activations.filter((a) => a.at < e.at).sort((x, y) => y.at - x.at)[0]?.c === e.name;
     return { killed: e.name, wasLeader, takeoverMs: wasLeader && next ? next.at - e.at : null };
   });
-// nginx -v writes its version line to stderr; anything else is recorded as unknown, not as a version.
+// nginx -v writes its version line to stderr; a failed probe or one without that line is recorded as
+// unknown, not as a version.
 const nginxProbe = spawnSync("docker", ["exec", "fb-lb", "nginx", "-v"], { encoding: "utf8" });
-const nginxVersion = /nginx version: nginx\/\S+/.exec(nginxProbe.stderr ?? "")?.[0]
-  ?? `unknown (nginx -v: ${nginxProbe.error?.message ?? (nginxProbe.signal ? `signal ${nginxProbe.signal}` : `exit ${nginxProbe.status}`)})`;
+const nginxLine = nginxProbe.status === 0 ? /^nginx version: nginx\/\S+$/m.exec(nginxProbe.stderr ?? "")?.[0] : undefined;
+const nginxVersion = nginxLine
+  ?? `unknown (nginx -v: ${nginxProbe.error?.message ?? (nginxProbe.signal ? `signal ${nginxProbe.signal}` : nginxProbe.status === 0 ? "no version line" : `exit ${nginxProbe.status}`)})`;
 result.nginx = nginxVersion;
 result.stats = Object.fromEntries(["fb-a", "fb-b", "fb-pg", "fb-nats", "fb-lb"].map((c) => [c, docker("stats", "--no-stream", "--format", "{{.CPUPerc}} {{.MemUsage}}", c)]));
 mkdirSync(dirname(out), { recursive: true });
