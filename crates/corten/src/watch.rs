@@ -2,9 +2,10 @@
 //! [`crate::App::send_timeout`]: how long a write may wait for the client to take more of an
 //! answer. Each connection has a [`Watch`]: busy from when hyper hands over a request's head until
 //! its answer's last bytes have gone to the socket, otherwise the time it went idle; and the time a
-//! write found the socket full, until one goes through. One thread per server ticks a coarse clock
-//! a few times a second and expires the connections idle or stalled past their timeout; the
-//! connection's next read or write then fails and hyper closes it. hyper's own header timer was
+//! write found the socket full, or the socket last reported room while it waited, until one goes
+//! through. One thread per server ticks a coarse clock a few times a second and expires the
+//! connections idle or stalled past their timeout; the connection's next read or write then fails
+//! and hyper closes it. hyper's own header timer was
 //! measured first: about 900 instructions a keep-alive request with a coarse timer of Corten's
 //! (1,400 with tokio's), since it sets up a sleep for every head and reads once more to start it.
 //! This costs about 300 (callgrind, keep-alive requests over TCP), which Corten's accept loop saved
@@ -21,7 +22,7 @@ use std::{
         atomic::{AtomicU64, Ordering::Relaxed},
         Arc, Mutex, Weak,
     },
-    task::{Context, Poll},
+    task::{Context, Poll, Wake, Waker},
     time::{Duration, Instant},
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -134,7 +135,8 @@ pub(crate) struct Watch {
     /// mark the connection idle. Only the connection's task writes it.
     heads: AtomicU64,
     waker: AtomicWaker,
-    /// [`FLOWING`], [`STALLED`], or one past the time a write found the socket full.
+    /// [`FLOWING`], [`STALLED`], or one past the time a write found the socket full, or the IO
+    /// last reported room while it waited.
     stalled: AtomicU64,
     /// The task whose write is waiting.
     writer: AtomicWaker,
@@ -174,34 +176,26 @@ impl Watch {
     fn expired(&self) -> bool {
         self.since.load(Relaxed) == EXPIRED
     }
+}
 
-    /// A write's, a flush's or a close's outcome, for [`crate::App::send_timeout`]: one that waits
-    /// starts the stall, or fails once the clock has expired it, so a call is failed only while
-    /// the IO still has no room. A write that went through (or failed) clears it; a flush or a
-    /// close does not (`clears`), since a plain socket's flush is done at once whether anything
-    /// went or not, and a route on a switched connection could otherwise restart the clock with
-    /// flushes while its writes wait.
-    fn sent<T>(&self, written: Poll<io::Result<T>>, clears: bool, cx: &Context<'_>) -> Poll<io::Result<T>> {
-        if self.clock.send == NEVER {
-            return written;
+/// The IO's waker while a write, a flush or a close waits ([`Watched::send`]). The IO wakes it
+/// when it has room again, so the wait starts over from then, and wakes the connection's task.
+/// A TLS stream (tokio-rustls) moves the records it holds to the socket as the client makes room,
+/// but its write stays pending until it has room for more and its flush until all have gone: a
+/// client reading steadily but slower than the server writes would otherwise be cut at the send
+/// timeout while bytes are still going to it (#1742).
+impl Wake for Watch {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        let stalled = self.stalled.load(Relaxed);
+        // Not one that has gone through meanwhile, nor one the clock has expired.
+        if stalled != FLOWING && stalled != STALLED {
+            let _ = self.stalled.compare_exchange(stalled, self.clock.now.load(Relaxed) + 1, Relaxed, Relaxed);
         }
-        if written.is_ready() {
-            if clears && self.stalled.load(Relaxed) != FLOWING {
-                self.stalled.store(FLOWING, Relaxed);
-            }
-            return written;
-        }
-        match self.stalled.load(Relaxed) {
-            STALLED => return Poll::Ready(Err(stalled())),
-            FLOWING => self.stalled.store(self.clock.now.load(Relaxed) + 1, Relaxed),
-            _ => {}
-        }
-        self.writer.register(cx.waker());
-        // Expired between the first look and the registration: its wake may have been missed.
-        if self.stalled.load(Relaxed) == STALLED {
-            return Poll::Ready(Err(stalled()));
-        }
-        Poll::Pending
+        self.writer.wake();
     }
 }
 
@@ -269,21 +263,85 @@ impl<I: AsyncRead + Unpin> AsyncRead for Watched<I> {
     }
 }
 
+impl<I: AsyncWrite + Unpin> Watched<I> {
+    /// A write, a flush or a close (`call`), for [`crate::App::send_timeout`]: one that waits
+    /// starts the stall, or fails once the clock has expired it, so a call is failed only while
+    /// the IO still has no room. While it waits the IO is polled with the watch's waker, so each
+    /// time the IO reports room the wait starts over ([`Watch`]'s `Wake`): a TLS stream's call
+    /// can stay pending while its bytes go out. A write that went through (or failed) clears it; a
+    /// flush or a close does not (`clears`), since a plain socket's flush is done at once whether
+    /// anything went or not, and a route on a switched connection could otherwise restart the
+    /// clock with flushes while its writes wait. Nor does a wake tokio's cooperative budget makes:
+    /// with the budget spent the IO is polled with the task's waker, or a client that floods a
+    /// route's reads could keep a write that never goes through waiting.
+    #[inline]
+    fn send<T>(
+        &mut self,
+        cx: &mut Context<'_>,
+        clears: bool,
+        mut call: impl FnMut(Pin<&mut I>, &mut Context<'_>) -> Poll<io::Result<T>>,
+    ) -> Poll<io::Result<T>> {
+        let Watched { io, watch, .. } = self;
+        let watch = match watch {
+            Some(watch) if watch.clock.send != NEVER => watch,
+            _ => return call(Pin::new(io), cx),
+        };
+        let flowing = watch.stalled.load(Relaxed) == FLOWING;
+        if flowing {
+            let done = call(Pin::new(io), cx);
+            if done.is_ready() {
+                return done;
+            }
+        }
+        Self::wait(io, watch, cx, clears, flowing, call)
+    }
+
+    /// [`Watched::send`] once its call waits, or found the IO waiting: out of line, so a call that
+    /// goes through at once costs what it did before.
+    #[cold]
+    fn wait<T>(
+        io: &mut I,
+        watch: &Arc<Watch>,
+        cx: &mut Context<'_>,
+        clears: bool,
+        flowing: bool,
+        mut call: impl FnMut(Pin<&mut I>, &mut Context<'_>) -> Poll<io::Result<T>>,
+    ) -> Poll<io::Result<T>> {
+        if flowing {
+            watch.stalled.store(watch.clock.now.load(Relaxed) + 1, Relaxed);
+        }
+        // Before the IO can wake the watch, so its wake reaches the task.
+        watch.writer.register(cx.waker());
+        let done = if tokio::task::coop::has_budget_remaining() {
+            // A call that has just waited on the task's waker is polled again, so the IO holds the
+            // watch's instead.
+            call(Pin::new(io), &mut Context::from_waker(&Waker::from(watch.clone())))
+        } else if flowing {
+            Poll::Pending
+        } else {
+            call(Pin::new(io), cx)
+        };
+        match done {
+            Poll::Ready(_) => {
+                if clears {
+                    watch.stalled.store(FLOWING, Relaxed);
+                }
+                done
+            }
+            // Expired before the registration: its wake may have been missed.
+            Poll::Pending if watch.stalled.load(Relaxed) == STALLED => Poll::Ready(Err(stalled())),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        let Some(watch) = &this.watch else {
-            return Pin::new(&mut this.io).poll_write(cx, buf);
-        };
-        watch.sent(Pin::new(&mut this.io).poll_write(cx, buf), true, cx)
+        self.get_mut().send(cx, true, |io, cx| io.poll_write(cx, buf))
     }
 
     fn poll_write_vectored(self: Pin<&mut Self>, cx: &mut Context<'_>, bufs: &[io::IoSlice<'_>]) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        let Some(watch) = &this.watch else {
-            return Pin::new(&mut this.io).poll_write_vectored(cx, bufs);
-        };
-        watch.sent(Pin::new(&mut this.io).poll_write_vectored(cx, bufs), true, cx)
+        self.get_mut().send(cx, true, |io, cx| io.poll_write_vectored(cx, bufs))
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -292,24 +350,17 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
-        let Some(watch) = &this.watch else {
-            return Pin::new(&mut this.io).poll_flush(cx);
-        };
-        let flushed = Pin::new(&mut this.io).poll_flush(cx);
-        if let Poll::Ready(Ok(())) = flushed {
+        let flushed = this.send(cx, false, |io, cx| io.poll_flush(cx));
+        if let (Poll::Ready(Ok(())), Some(watch)) = (&flushed, &this.watch) {
             watch.flushed();
         }
-        watch.sent(flushed, false, cx)
+        flushed
     }
 
     /// Watched too: over TLS, closing writes a last record, which waits on the client as any
     /// write does.
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        let Some(watch) = &this.watch else {
-            return Pin::new(&mut this.io).poll_shutdown(cx);
-        };
-        watch.sent(Pin::new(&mut this.io).poll_shutdown(cx), false, cx)
+        self.get_mut().send(cx, false, |io, cx| io.poll_shutdown(cx))
     }
 }
 
@@ -417,6 +468,39 @@ mod tests {
             let error = done.await.unwrap_or_else(|_| panic!("a {step} that waits is ended")).unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{step}");
         }
+    }
+
+    /// A wake from tokio's cooperative budget is not the IO making room: a write to a client that
+    /// reads nothing still fails at the send timeout when its task spends the budget before each
+    /// try, as a route reading a flood of requests from that client would.
+    #[tokio::test]
+    async fn a_write_that_waits_with_the_budget_spent_still_fails_after_the_send_timeout() {
+        let clock = Clock::start(None, Some(Duration::from_millis(40))).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let _client = tokio::net::TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+        let (tcp, _) = listener.accept().await.unwrap();
+        // The client reads nothing, so the socket fills.
+        while tcp.try_write(&[0; 64 << 10]).is_ok() {}
+        let mut io = Watched { io: tcp, watch: Some(clock.watch()), _open: None };
+        let (spend, mut budget) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let started = Instant::now();
+        let written = loop {
+            assert!(started.elapsed() < Duration::from_secs(2), "a write that waits is ended");
+            for _ in 0..200 {
+                spend.send(()).unwrap();
+            }
+            let written = std::future::poll_fn(|cx| {
+                // Each message received takes from the budget, until none is left.
+                while let Poll::Ready(Some(())) = budget.poll_recv(cx) {}
+                Poll::Ready(Pin::new(&mut io).poll_write(cx, b"x"))
+            })
+            .await;
+            match written {
+                Poll::Ready(written) => break written,
+                Poll::Pending => tokio::task::yield_now().await,
+            }
+        };
+        assert_eq!(written.unwrap_err().kind(), io::ErrorKind::TimedOut);
     }
 
     #[test]
