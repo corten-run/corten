@@ -103,22 +103,27 @@ does not add HTTP/2; the live-stream limitation at the top of this guide still a
 
 `<corten-live>` and feeds answer `text/event-stream` with `X-Accel-Buffering: no`, which tells
 nginx not to buffer that response whatever `proxy_buffering` says, and write a keep-alive comment
-on a quiet stream every 15 seconds, under nginx's 60-second `proxy_read_timeout`. Measured with
-`examples/watchlist`'s `/live/trades` (an event a second) through nginx 1.27: without the header,
-nginx's default there (HTTP/1.0 to the app, `proxy_buffering on`) and `gzip on` for
-`text/event-stream` each sent no byte in 25 seconds; with it, every case delivered events 1,000 ms
-apart, as the app wrote them, compressed or not. A CDN must not cache a
-stream either; Corten sends it `no-cache`. A `Relay` passes an upstream's stream on with the
-upstream's headers, so one without the header is buffered unless its `location` says
-`proxy_buffering off`.
+on a quiet stream every 15 seconds, under nginx's 60-second `proxy_read_timeout`. Measured on
+2026-11-20 with `examples/watchlist`'s `/live/trades` through nginx 1.31.9: the sample delivered
+events a second apart over HTTP/1.1 and HTTPS `h2`, with steady-state gaps of 1,000 to 1,020 ms
+for identity, gzip and zstd. With the header ignored, nginx 1.27.5's default HTTP/1.0 upstream
+and `proxy_buffering on` sent no byte in 25 seconds. nginx 1.31.9's default HTTP/1.1 upstream
+delivered the events even with the header ignored, as 1.27.5 did with the sample's explicit
+HTTP/1.1. Forcing HTTP/1.0 upstream or having nginx gzip `text/event-stream` still sent no byte
+in 25 seconds when the header was ignored. With the header honored, both delivered events as
+the app wrote them. A CDN must not cache a stream either; Corten sends it `no-cache`. A `Relay`
+passes the upstream's headers on, so a stream without the header can be buffered. Set
+`proxy_buffering off` in its `location` to turn buffering off there.
 
 ## nginx
 
-Checked on 2026-11-19 with nginx 1.27.5 in front of `examples/watchlist`: the browser smoke test
-(`scripts/smoke.mjs`) passes through it over HTTP/1.1, and HTTPS negotiates `h2` and streams events
-a second apart. In front of `examples/card-market`, nginx passed a private page's tag to the app
-on reload and returned its `304`; a versioned stylesheet was a cache
-`MISS` on its first request and a `HIT` on the next ([Caching](#caching)).
+Checked on 2026-11-20 with nginx 1.31.9: both configurations below passed `nginx -t`. In front of
+`examples/watchlist`, the browser smoke test (`scripts/smoke.mjs`) passed in Chromium, Firefox and
+WebKit over HTTP/1.1 and again over HTTPS with the test's local fixtures on TLS. A separate HTTPS
+check negotiated `h2` and streamed events a second apart. In front of `examples/card-market`, three
+runs each over HTTP/1.1 and HTTPS `h2` gave the same result: nginx passed a private page's tag to the
+app and returned its `304` without a cache lookup. For a versioned stylesheet it returned
+`200 MISS`, then `200 HIT`, then `304 HIT` without asking the app on the hits ([Caching](#caching)).
 
 ```nginx
 map $http_upgrade $connection_upgrade {
@@ -208,13 +213,17 @@ reaches the app; give a prefix `proxy_cache app;` only when everything under it 
     }
 ```
 
-`keepalive` needs `proxy_http_version 1.1` and a `Connection` header other than `close`, which
-the map gives a request that is not a WebSocket. Leave `proxy_ignore_headers` without `Vary`
-and `Cache-Control`.
+Since 1.29.7, nginx reuses upstream connections by default, sends HTTP/1.1 to the app and omits
+`Connection` by default. The explicit `proxy_http_version 1.1` and empty `Connection` for ordinary
+requests are for older nginx, such as 1.27.5. Keep the map for WebSockets: it sends
+`Connection: upgrade` when the browser asks for an upgrade. A proxy that passes `Upgrade` on over
+HTTP/1.0 gets an `Option<Upgrade>` route's other answer (its page) and an `Upgrade` route's 400,
+since a server ignores `Upgrade` in an HTTP/1.0 request (RFC 9110, 7.8).
 
-A WebSocket needs `proxy_http_version 1.1` too: a proxy that passes `Upgrade` on over HTTP/1.0
-gets an `Option<Upgrade>` route's other answer (its page) and an `Upgrade` route's 400, since
-a server ignores `Upgrade` in an HTTP/1.0 request (RFC 9110, 7.8).
+Keep the shorter `keepalive_timeout` from row 7. Measured with the sample on nginx 1.31.9: two
+separate client connections reused one connection to the app, which nginx closed after 25.1 s
+idle, before the app's 30 s `App::header_timeout`. Leave `proxy_ignore_headers` without `Vary`
+and `Cache-Control`.
 
 [`examples/corten-site/deploy`](../../examples/corten-site/deploy/README.md) is a whole deploy
 written out: this configuration with a certificate, limits on what one address may ask for
@@ -226,16 +235,18 @@ machine that is replaced by one that serves before the address moves to it.
 
 ## Caching
 
-A page route answers several clients at one URL: the whole document, a client navigation
+A page route can answer several clients at one URL: the whole document, a client navigation
 (`corten: nav`), a form's answer, and JSON for `Accept: application/json`. Only the document may be
 shared, and only from a `Public` handler ([Caching](app.md#caching)); its answers say `Vary: corten,
 accept, accept-encoding`, `cookie` when the request had none, and `accept-language` with
 `App::messages`. A cache that keys on the URL alone hands the stored document to every request for
-it. Measured with nginx's `proxy_cache` in front of `examples/card-market`: by default it keys on
-`Vary`, and each kind of request got its own answer; with `proxy_ignore_headers Vary`, a
-navigation, a JSON request and a brotli request after the first document each got that document
-(no `corten-page`, no encoding). The runtime loads a navigation answered with a document as a
-whole page, so it still works, more slowly; a data client gets HTML where it asked for JSON.
+it. Measured on 2026-11-20 with nginx 1.31.9's `proxy_cache`: in front of `examples/card-market`,
+the second document request was a `HIT`, and a navigation and a Brotli request got their own
+answers. With `proxy_ignore_headers Vary`, both got the stored document (no `corten-page`, no
+encoding). The example's home page does not serve JSON. With a stand-in that served both formats
+and sent `Vary: Accept`, nginx fetched JSON for the JSON request by default and sent the stored
+HTML with `Vary` ignored. The runtime loads a navigation answered with a document as a whole
+page, so it still works, more slowly; a data client gets HTML where it asked for JSON.
 
 | Cache | Pages are cached | To key on `Vary` |
 |---|---|---|
@@ -258,8 +269,8 @@ The Cloudflare and CloudFront rows are from their documentation, not run here. C
 the way it was measured, on a location that caches: request a public page as a document twice and
 confirm the second came from the cache (nginx's `$upstream_cache_status` is `HIT`, Cloudflare's
 `cf-cache-status: HIT`, CloudFront's `x-cache: Hit from cloudfront`); without a hit the rest
-proves nothing. Then request the same URL with `corten: nav` and with `Accept: application/json`.
-The first must carry `corten-page` and the second must be JSON.
+proves nothing. Then request the same URL with `corten: nav`; the response must carry `corten-page`.
+If the route serves JSON too, request `Accept: application/json` and check that the response is JSON.
 
 ## The release profile
 
@@ -494,10 +505,10 @@ that has `proxy_cache`, which is why the [configuration above](#nginx) leaves `p
 header on by hand beside `proxy_cache` (`proxy_set_header If-None-Match $http_if_none_match`)
 is not the way to have both: nginx then stored a public page's `304` and gave it to the next
 reader, who held no page, and with `proxy_no_cache` on the header to stop that, a request that
-names a tag never refreshes the stored copy. What this section says of nginx with `proxy_cache`
-and of HAProxy was checked with nginx 1.27.5 and HAProxy 3.0.31 in front of a server that
-answered as a private and a public page do and printed what reached it, not in front of a
-Corten app. What Cloudflare and CloudFront do with the two headers was not checked.
+names a tag never refreshes the stored copy. The nginx behavior was rechecked on 2026-11-20
+with nginx 1.31.9 in front of `examples/card-market` and a stand-in server that printed the
+headers it received. The HAProxy behavior was checked with HAProxy 3.0.31 in front of a stand-in,
+not a Corten app. What Cloudflare and CloudFront do with the two headers was not checked.
 
 To check both, pick a page that carries an `ETag` when asked straight from the app with the
 `Accept-Encoding` below (one whose layout takes `req.nonce()`, that draws a `SubmitKey::field`,

@@ -10,7 +10,9 @@
 import { spawnSync } from "node:child_process";
 import { request } from "node:https";
 
-export const edgeImage = "nginx:1.29.8-alpine";
+// nginx 1.31.9 since 2026-11-20; rounds before it ran 1.29.8 (each round's edge.json records the image),
+// so compare edge numbers across that change as a changed input.
+export const edgeImage = "nginx:1.31.9-alpine@sha256:fb4658584bd9a916ffb6f6e365f97c25cfdb2923801f551ea08356e695f14ff7";
 /** Makes the edge's key and certificate (P-256) into the edge's volume before it starts. */
 export const edgeCertImage = "alpine/openssl@sha256:6821afa2476e11be343f29275f2ca24291720ff0a7148bd131fd8e314ff26d9e";
 export const edgeContainer = "fsw-edge";
