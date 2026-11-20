@@ -215,7 +215,7 @@ try {
   // Push: the app's worker script (Pwa::import_script) handles a push sent through DevTools, in
   // full Chromium (channel "chromium"): the headless shell denies notifications however they are
   // granted, so its worker's showNotification fails. The app's message, and one of another shape
-  // (no title, a url that is not text) shown untitled with / as the stored destination (#1039).
+  // (no title, a url that is not text) shown untitled with / passed to showNotification (#1039).
   const full = await chromium.launch({ headless: true, channel: "chromium" });
   try {
     const pushContext = await full.newContext();
@@ -258,29 +258,51 @@ try {
     }).finally(() => cdp.off("ServiceWorker.workerVersionUpdated", onVersion));
     if (!registrationId) throw new Error("DevTools did not report the activated worker controlling the push page");
 
+    const setUp = async (step, run) => {
+      const result = await withinFiveSeconds(run);
+      if (result === null) throw new Error(`Push setup: ${step} did not finish within five seconds`);
+      return result;
+    };
+
     // Chromium's display event reports the title and body, but does not guarantee the
     // notification is listable. A getNotifications() read can delete an unlisted row. Instead,
-    // observe the data passed to the real showNotification call, and report it only on success.
+    // check the destination passed to showNotification and the event lifetime when it succeeds.
     const isPushWorker = (worker) => worker.url() === scriptURL;
-    const worker = pushContext.serviceWorkers().find(isPushWorker) ??
-      await pushContext.waitForEvent("serviceworker", { predicate: isPushWorker, timeout: 5000 });
-    const readDestination = await worker.evaluateHandle(() => {
+    const worker = await setUp("worker discovery", async () => pushContext.serviceWorkers().find(isPushWorker) ??
+      pushContext.waitForEvent("serviceworker", { predicate: isPushWorker, timeout: 0 }));
+    const readNotification = await setUp("observer installation", () => worker.evaluateHandle(() => {
       const results = new Map();
       const resultFor = (body) => {
         if (!results.has(body)) results.set(body, Promise.withResolvers());
         return results.get(body);
       };
+      const lifetimes = new Map();
+      const waitUntil = ExtendableEvent.prototype.waitUntil;
+      ExtendableEvent.prototype.waitUntil = function (promise) {
+        waitUntil.call(this, promise);
+        if (!(this instanceof PushEvent)) return;
+        const body = this.data?.json()?.body;
+        if (!lifetimes.has(body)) lifetimes.set(body, []);
+        const lifetime = { settled: false };
+        lifetimes.get(body).push(lifetime);
+        const settle = () => { lifetime.settled = true; };
+        Promise.resolve(promise).then(settle, settle);
+      };
       const show = self.registration.showNotification.bind(self.registration);
       self.registration.showNotification = async (title, options) => {
         const body = options?.body;
-        const url = structuredClone(options?.data)?.url;
+        const data = options?.data;
+        const destination = data != null && Object.getPrototypeOf(data) === Object.prototype
+          ? Object.getOwnPropertyDescriptor(data, "url") : undefined;
+        const plainData = destination !== undefined && !("get" in destination);
         await show(title, options);
-        resultFor(body).resolve({ url });
+        const extended = lifetimes.get(body)?.some(({ settled }) => !settled) ?? false;
+        resultFor(body).resolve({ url: plainData ? destination.value : undefined, plainData, extended });
       };
       return (body) => resultFor(body).promise;
-    });
-    await cdp.send("BackgroundService.startObserving", { service: "notifications" });
-    await cdp.send("BackgroundService.setRecording", { service: "notifications", shouldRecord: true });
+    }));
+    await setUp("BackgroundService.startObserving", () => cdp.send("BackgroundService.startObserving", { service: "notifications" }));
+    await setUp("BackgroundService.setRecording", () => cdp.send("BackgroundService.setRecording", { service: "notifications", shouldRecord: true }));
 
     /** @param {{ title?: string, body: string, url: unknown }} message */
     const sendAndObserve = async (message) => {
@@ -296,12 +318,12 @@ try {
       cdp.on("BackgroundService.backgroundServiceEventReceived", onDisplay);
       try {
         const shown = await withinFiveSeconds(async () => {
-          const [title, { url }] = await Promise.all([
+          const [title, notification] = await Promise.all([
             display.promise,
-            readDestination.evaluate((read, body) => read(body), body),
+            readNotification.evaluate((read, body) => read(body), body),
             cdp.send("ServiceWorker.deliverPushMessage", { origin: base, registrationId, data: JSON.stringify({ ...message, body }) }),
           ]);
-          return { title, url };
+          return { title, ...notification };
         });
         return shown ?? { missed: 1, displayed };
       } finally {
@@ -309,9 +331,9 @@ try {
       }
     };
     const first = await sendAndObserve({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" });
-    check("a push message shows a notification with the stored item destination", first.title === "Price drop" && first.url === "/items/item_5", JSON.stringify(first));
+    check("a push shows the titled notification within its event lifetime and passes the item destination to showNotification", first.title === "Price drop" && first.url === "/items/item_5" && first.extended === true, JSON.stringify(first));
     const odd = await sendAndObserve({ body: "Card Name 7 is back", url: 5 });
-    check("a push message with no title and a url that is not text shows untitled with / as the stored destination", odd.title === "" && odd.url === "/", JSON.stringify(odd));
+    check("a push with no title and a url that is not text shows an untitled notification within its event lifetime and passes / to showNotification", odd.title === "" && odd.url === "/" && odd.extended === true, JSON.stringify(odd));
   } finally {
     await full.close();
   }
