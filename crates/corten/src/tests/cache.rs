@@ -1229,6 +1229,14 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
             .route("/now", typed(move |req: Req| async move { Public::new(Duration::ZERO, req.test_page_for("Now", home())) }).0)
             .route("/moved", typed(move |req: Req| async move { Public::new(minute, req.redirect(&Root)) }).0)
             .route("/text", typed(move || async move { Public::new(minute, "text") }).0)
+            .route(
+                "/keyed",
+                typed(move |req: Req| async move {
+                    let form = html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> };
+                    Public::new(minute, req.test_page_for("Keyed", form))
+                })
+                .0,
+            )
     };
     let router = App::new(Routes::from(routes())).router();
     let kept = |router: Router, uri: &'static str| async move {
@@ -1244,6 +1252,7 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
         ("/now", "no lifetime"),
         ("/moved", "a redirect"),
         ("/text", "not a page"),
+        ("/keyed", "a submit key drawn for this request"),
         ("/missing", "no route"),
     ] {
         assert!(!kept(router.clone(), uri).await, "{uri}: {why}");

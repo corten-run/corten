@@ -32,7 +32,7 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasher, DefaultHasher, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock, PoisonError, RwLock};
+use std::sync::{Arc, OnceLock, PoisonError, RwLock, Weak};
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -60,10 +60,12 @@ const OVERHEAD: usize = 256;
 const GONE: usize = usize::MAX;
 
 /// The app's kept answers, at most `bound` bytes of them.
-pub(crate) struct Answers {
+pub(crate) struct Answers(Arc<Store>);
+
+struct Store {
     bound: usize,
-    /// The bytes kept, shared with each entry, which adds what is made for it later.
-    bytes: Arc<AtomicUsize>,
+    /// The bytes kept: every entry's size, with what was made for it since it was kept.
+    bytes: AtomicUsize,
     inner: RwLock<Inner>,
 }
 
@@ -98,9 +100,10 @@ pub(crate) struct Entry {
     #[cfg(feature = "compress")]
     coded: [OnceLock<Bytes>; 3],
     used: AtomicBool,
-    /// What it counts for in `bytes`, or [`GONE`].
+    /// What it counts for in the store's bytes, or [`GONE`].
     size: AtomicUsize,
-    bytes: Arc<AtomicUsize>,
+    /// Where it is kept, to count what is made for it later and make room for that.
+    store: Weak<Store>,
 }
 
 /// On a response whose body is a kept answer's: the stages after the handler find the body's
@@ -160,22 +163,28 @@ impl Kept {
 }
 
 impl Entry {
-    /// Counts `more` bytes made for it, unless it is no longer kept.
+    /// Counts `more` bytes made for it, unless it is no longer kept, and makes room for them when
+    /// they take the store past its bound, as keeping a page does.
     #[cfg(feature = "compress")]
     fn grew(&self, more: usize) {
+        let Some(store) = self.store.upgrade() else { return };
         // Added first and taken back if it is gone, so the total never falls below what the
         // entries count for.
-        self.bytes.fetch_add(more, Ordering::AcqRel);
+        store.bytes.fetch_add(more, Ordering::AcqRel);
         let mut now = self.size.load(Ordering::Acquire);
         loop {
             if now == GONE {
-                self.bytes.fetch_sub(more, Ordering::AcqRel);
+                store.bytes.fetch_sub(more, Ordering::AcqRel);
                 return;
             }
             match self.size.compare_exchange_weak(now, now + more, Ordering::AcqRel, Ordering::Acquire) {
-                Ok(_) => return,
+                Ok(_) => break,
                 Err(actual) => now = actual,
             }
+        }
+        if store.bytes.load(Ordering::Acquire) > store.bound {
+            let mut inner = store.inner.write().unwrap_or_else(PoisonError::into_inner);
+            store.make_room(&mut inner, self);
         }
     }
 
@@ -193,22 +202,42 @@ impl Entry {
     }
 }
 
-impl Inner {
-    /// Takes `entry` out of its slot and its URL's copies.
-    fn drop_entry(&mut self, entry: &Arc<Entry>) {
-        if self.slots.get(entry.slot).and_then(Option::as_ref).is_some_and(|held| Arc::ptr_eq(held, entry)) {
-            self.slots[entry.slot] = None;
-            self.free.push(entry.slot);
+impl Store {
+    /// Takes `entry` out of its slot and its URL's copies, and its size out of the bytes kept.
+    fn drop_entry(&self, inner: &mut Inner, entry: &Arc<Entry>) {
+        if inner.slots.get(entry.slot).and_then(Option::as_ref).is_some_and(|held| Arc::ptr_eq(held, entry)) {
+            inner.slots[entry.slot] = None;
+            inner.free.push(entry.slot);
         }
-        if let Some(copies) = self.at.get_mut(&entry.at) {
+        if let Some(copies) = inner.at.get_mut(&entry.at) {
             copies.retain(|copy| !Arc::ptr_eq(copy, entry));
             if copies.is_empty() {
-                self.at.remove(&entry.at);
+                inner.at.remove(&entry.at);
             }
         }
         let size = entry.size.swap(GONE, Ordering::AcqRel);
         if size != GONE {
-            entry.bytes.fetch_sub(size, Ordering::AcqRel);
+            self.bytes.fetch_sub(size, Ordering::AcqRel);
+        }
+    }
+
+    /// Drops entries until the bound holds: one past its lifetime, or not used since the hand
+    /// last passed it, as the hand comes to it. Never `kept`, the one room is made for.
+    fn make_room(&self, inner: &mut Inner, kept: &Entry) {
+        let now = Instant::now();
+        // Twice around: the first pass clears every mark, so the second finds one to drop.
+        let mut steps = inner.slots.len() * 2;
+        while self.bytes.load(Ordering::Acquire) > self.bound && steps > 0 {
+            steps -= 1;
+            inner.hand = (inner.hand + 1) % inner.slots.len();
+            let Some(entry) = inner.slots[inner.hand].clone() else { continue };
+            if std::ptr::eq(&*entry, kept) {
+                continue;
+            }
+            if entry.fresh(now) && entry.used.swap(false, Ordering::Relaxed) {
+                continue;
+            }
+            self.drop_entry(inner, &entry);
         }
     }
 }
@@ -216,18 +245,18 @@ impl Inner {
 impl Answers {
     /// Room for `bound` bytes of answers; none for a bound of 0.
     pub(crate) fn new(bound: usize) -> Option<Self> {
-        (bound > 0).then(|| Answers { bound, bytes: Arc::default(), inner: RwLock::default() })
+        (bound > 0).then(|| Answers(Arc::new(Store { bound, bytes: AtomicUsize::new(0), inner: RwLock::default() })))
     }
 
     /// The bytes kept now.
     #[cfg(test)]
     pub(crate) fn bytes(&self) -> usize {
-        self.bytes.load(Ordering::Acquire)
+        self.0.bytes.load(Ordering::Acquire)
     }
 
     /// The answer kept for a request, while its lifetime lasts, with its age in seconds.
     fn find(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Option<(Arc<Entry>, u64)> {
-        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
         let entry = inner.at.get(at)?.iter().find(|entry| entry.is_for(host, language))?;
         let age = entry.age(Instant::now());
         if age >= entry.lifetime {
@@ -242,10 +271,11 @@ impl Answers {
     }
 
     /// Keeps `entry`, in the place of the copy it stands for, and makes room for it.
-    fn keep(&self, make: impl FnOnce(usize, Arc<AtomicUsize>) -> Entry) -> Arc<Entry> {
-        let mut inner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
+    fn keep(&self, make: impl FnOnce(usize, Weak<Store>) -> Entry) -> Arc<Entry> {
+        let store = &*self.0;
+        let mut inner = store.inner.write().unwrap_or_else(PoisonError::into_inner);
         let slot = inner.free.pop().unwrap_or(inner.slots.len());
-        let entry = Arc::new(make(slot, self.bytes.clone()));
+        let entry = Arc::new(make(slot, Arc::downgrade(&self.0)));
         let copies = inner.at.get(&entry.at).map(Vec::as_slice).unwrap_or_default();
         // The copy this one stands for: asked the same way. With none, the oldest of a full set.
         let replaced = copies
@@ -254,46 +284,27 @@ impl Answers {
             .or_else(|| copies.first().filter(|_| copies.len() >= COPIES))
             .cloned();
         if let Some(replaced) = replaced {
-            inner.drop_entry(&replaced);
+            store.drop_entry(&mut inner, &replaced);
         }
         if slot == inner.slots.len() {
             inner.slots.push(None);
         }
         inner.slots[slot] = Some(entry.clone());
         inner.at.entry(entry.at.clone()).or_default().push(entry.clone());
-        self.bytes.fetch_add(entry.size.load(Ordering::Acquire), Ordering::AcqRel);
-        self.make_room(&mut inner, &entry);
+        store.bytes.fetch_add(entry.size.load(Ordering::Acquire), Ordering::AcqRel);
+        store.make_room(&mut inner, &entry);
         entry
-    }
-
-    /// Drops entries until the bound holds: one past its lifetime, or not used since the hand
-    /// last passed it, as the hand comes to it. Never `kept`, the one just made.
-    fn make_room(&self, inner: &mut Inner, kept: &Arc<Entry>) {
-        let now = Instant::now();
-        // Twice around: the first pass clears every mark, so the second finds one to drop.
-        let mut steps = inner.slots.len() * 2;
-        while self.bytes.load(Ordering::Acquire) > self.bound && steps > 0 {
-            steps -= 1;
-            inner.hand = (inner.hand + 1) % inner.slots.len();
-            let Some(entry) = inner.slots[inner.hand].clone() else { continue };
-            if Arc::ptr_eq(&entry, kept) {
-                continue;
-            }
-            if entry.fresh(now) && entry.used.swap(false, Ordering::Relaxed) {
-                continue;
-            }
-            inner.drop_entry(&entry);
-        }
     }
 
     /// Drops what is kept for `at` (a path and query), every copy: a write changed it.
     pub(crate) fn forget(&self, at: &str) {
-        if !self.inner.read().unwrap_or_else(PoisonError::into_inner).at.contains_key(at) {
+        let store = &*self.0;
+        if !store.inner.read().unwrap_or_else(PoisonError::into_inner).at.contains_key(at) {
             return;
         }
-        let mut inner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
+        let mut inner = store.inner.write().unwrap_or_else(PoisonError::into_inner);
         for entry in inner.at.get(at).cloned().unwrap_or_default() {
-            inner.drop_entry(&entry);
+            store.drop_entry(&mut inner, &entry);
         }
     }
 
@@ -436,7 +447,7 @@ impl Missed {
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
         let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + 32).sum();
         let size = self.at.len() + head + OVERHEAD + length as usize;
-        if length == 0 || size > answers.bound / SHARE {
+        if length == 0 || size > answers.0.bound / SHARE {
             return res;
         }
         let (mut parts, body) = res.into_parts();
@@ -445,7 +456,7 @@ impl Missed {
             return Response::from_parts(parts, Body::empty());
         };
         let Missed { at, host, language: asked, .. } = self;
-        let entry = answers.keep(|slot, bytes| Entry {
+        let entry = answers.keep(|slot, store| Entry {
             at,
             slot,
             host,
@@ -461,7 +472,7 @@ impl Missed {
             coded: Default::default(),
             used: AtomicBool::new(false),
             size: AtomicUsize::new(size),
-            bytes,
+            store,
         });
         // This answer's tag and compression are the kept one's first.
         parts.extensions.insert(Kept(entry));
@@ -490,9 +501,9 @@ fn varies(headers: &HeaderMap) -> Option<bool> {
 mod tests {
     use super::*;
 
-    fn entry(at: &str, host: Option<&'static str>, lifetime: u64, body: usize) -> impl FnOnce(usize, Arc<AtomicUsize>) -> Entry {
+    fn entry(at: &str, host: Option<&'static str>, lifetime: u64, body: usize) -> impl FnOnce(usize, Weak<Store>) -> Entry {
         let at: Box<str> = at.into();
-        move |slot, bytes| Entry {
+        move |slot, store| Entry {
             at,
             slot,
             host: host.map(HeaderValue::from_static),
@@ -508,7 +519,7 @@ mod tests {
             coded: Default::default(),
             used: AtomicBool::new(false),
             size: AtomicUsize::new(body + OVERHEAD),
-            bytes,
+            store,
         }
     }
 
@@ -635,5 +646,25 @@ mod tests {
             Kept::coded(&extensions, &kept.body, Coding::Brotli, encode);
             assert_eq!((made.get(), answers.bytes()), (4, 0), "no longer kept: nothing is counted for it");
         }
+    }
+
+    /// The bound holds for what is made after a page is kept too: a coded form that takes the
+    /// store past it makes room as a new page does, and not by dropping the page it was made for.
+    #[cfg(feature = "compress")]
+    #[test]
+    fn a_coded_form_that_passes_the_bound_makes_room() {
+        use crate::compress::Coding;
+        let size = 1000 + OVERHEAD;
+        let answers = Answers::new(size * 2 + 100).expect("a bound");
+        let first = answers.keep(entry("/a", None, 60, 1000));
+        let second = answers.keep(entry("/b", None, 60, 1000));
+        assert_eq!(answers.bytes(), size * 2);
+        let mut extensions = http::Extensions::new();
+        extensions.insert(Kept(second.clone()));
+        let coded = Kept::coded(&extensions, &second.body, Coding::Zstd, || Bytes::from(vec![b'z'; 400]));
+        assert_eq!(coded.len(), 400);
+        assert_eq!(answers.bytes(), size + 400, "the other page went, and the bound holds");
+        assert!(answers.find("/a", None, None).is_none() && answers.find("/b", None, None).is_some());
+        assert_eq!(first.size.load(Ordering::Acquire), GONE);
     }
 }

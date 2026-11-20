@@ -38,6 +38,11 @@
 //! [`crate::security::Nonce`]), and an answer to a request whose handler or middleware read a
 //! [`crate::Caller`]. They get `private, no-cache`, and `corten dev` logs the first two.
 //!
+//! The app is the first shared cache of its own `Public` pages: the whole document one made for a
+//! request without credentials is kept for its shared lifetime and given again in the handler's
+//! place ([`crate::App::kept_answers`], `docs/design.md#choice-kept-pages`), and goes out through
+//! the same checks as the handler's own answer.
+//!
 //! A `Public` handler cannot read a cookie or a header through an extractor of the app's own unless
 //! the app marks it [`crate::answer::Anonymous`]. A `Cache-Control` written by hand is the app's
 //! own choice apart from the rules above. A cache in front must key on `Vary` (`corten`, `accept`,
