@@ -10,7 +10,7 @@ import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, validateLaunchFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
-import { failedNativePolicy, failedNativeRoots, unusedBootstrap } from "./cloud-retirement.mjs";
+import { failedNativePolicy, failedNativeRoots, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -63,11 +63,14 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
     const bytes = regular(join(physicalRequest, `groups-${options.round}`, "state.json"), 1024 * 1024);
     const saved = controllerState(JSON.parse(bytes), options.round);
     if (options.unusedBootstrapKnownHosts !== undefined) {
-      assert.ok(unusedBootstrap(saved), "unused bootstrap requires no dispatch or only an unacknowledged first SSH no-op");
-      if (saved.commit !== head) await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
+      const settled = settledBootstrap(saved, join(physicalRequest, `groups-${options.round}`));
+      assert.ok(settled || unusedBootstrap(saved), "unused bootstrap requires no dispatch or only an unacknowledged first SSH no-op, unless the upload prefix is settled");
+      if (settled) assert.equal(saved.commit, head, "settled uploads require the measured checkout");
+      else if (saved.commit !== head) await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
       const key = regular(options.unusedBootstrapKnownHosts, 1024 * 1024);
       assert.ok(key.length, "verified host key required");
-      recovery = { measuredCommit: saved.commit, hostId: saved.id, ip: saved.ip, knownHostsSha256: digest(key), policy: "first-ssh-unused-only-no-qualification" };
+      recovery = { measuredCommit: saved.commit, hostId: saved.id, ip: saved.ip, knownHostsSha256: digest(key),
+        policy: settled ? "settled-uploads-unused-only-no-qualification" : "first-ssh-unused-only-no-qualification" };
     } else if (options.cancelMixedWait) {
       ownedMixedWait(saved); assert.equal(saved.status, "running");
       for (const key of ["mixedCancellation", "archiveSha256", "evidence", "deletionIntentAt", "collectedAt"]) assert.equal(saved[key], undefined);
