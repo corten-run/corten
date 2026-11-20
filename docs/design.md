@@ -2022,8 +2022,9 @@ rules something out.
     the same checks in the handler (about 1%, which wall times did not show), taken for one place
     that says what goes around a route: the router holds the app's stages or the route's lane for
     each path, and its own `404`, `405` and `501` meet the lane as the handler's answer does, with no
-    handler of their own. Value 1 still holds with it: the route stays under axum's plain router
-    in the same build and inside the bound below, which is what this Choice holds it to
+    handler of their own. In that build the unstaged route retired fewer instructions than
+    axum's plain router and stayed inside the instruction bound below, which is what this Choice
+    holds it to. That count does not show that it ran faster
     ([Choice 25](#choice-axum-router), step 2, has the shapes measured). Its answer gets `X-Content-Type-Options: nosniff` and its own
     `Content-Security-Policy: sandbox` beside any the handler set, whatever its type, both
     added as the lane takes its answer: a browser takes it only as the type it

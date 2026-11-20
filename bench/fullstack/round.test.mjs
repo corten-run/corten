@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
-import { countRow, parsePerfCounts, perfCountArgs } from "./count-perf.mjs";
+import { countRow, measurePerfCounts, parsePerfCounts, perfCountArgs } from "./count-perf.mjs";
 import { maxPasses } from "./passes.mjs";
 import { browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fixtureError, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, startMinutes, steps, stepsUntil, unit } from "./round.mjs";
 
@@ -199,10 +199,14 @@ test("count.mjs has perf watch the app's pinned cores on a bench host, and every
 });
 
 test("count.mjs measures instructions, cycles and user L1i misses on the same cgroup and load", () => {
-  assert.deepEqual(perfCountArgs(["-C", "1"], "app.scope", "/tmp/stat.csv"), [
-    "stat", "-C", "1", "-x", ",", "-o", "/tmp/stat.csv", "-e",
+  assert.deepEqual(perfCountArgs(["-C", "1"], "app.scope"), [
+    "stat", "-C", "1", "-x", ",", "--log-fd", "1", "-e",
     "instructions:u,instructions:k,cycles:u,cycles:k,L1-icache-load-misses:u",
     "-G", "app.scope,app.scope,app.scope,app.scope,app.scope",
+  ]);
+  assert.deepEqual(perfCountArgs(["-C", "1"], "app.scope", true), [
+    "stat", "-C", "1", "-x", ",", "--log-fd", "1", "-e", "instructions:u,instructions:k",
+    "-G", "app.scope,app.scope",
   ]);
   for (const cacheEvent of ["L1-icache-load-misses", "L1-icache-load-misses:u"]) {
     const counts = parsePerfCounts([
@@ -216,21 +220,90 @@ test("count.mjs measures instructions, cycles and user L1i misses on the same cg
     assert.deepEqual(countRow(counts, 10, 0), {
       requests: 10, failed: 0, userPerRequest: 1235, kernelPerRequest: 123,
       userCyclesPerRequest: 568, kernelCyclesPerRequest: 0, userL1iMissesPerRequest: 9,
+      perfRunningPct: { "instructions:u": 100, "instructions:k": 100, "cycles:u": 100, "cycles:k": 100, "L1-icache-load-misses:u": 100 },
+      perfDiagnostics: {},
     });
   }
 });
 
+const fullInstructions = "12345,,instructions:u,app.scope,60000,100.00,\n1234,,instructions:k,app.scope,60000,100.00,";
+
 test("count.mjs keeps instructions when optional perf events are unavailable", () => {
   const counts = parsePerfCounts([
-    "12345,,instructions:u,app.scope,60000,100.00,",
-    "1234,,instructions:k,app.scope,60000,100.00,",
+    fullInstructions,
     "<not supported>,,cycles:u,app.scope,0,100.00,",
     "<not counted>,,cycles:k,app.scope,0,100.00,",
   ].join("\n"));
   assert.deepEqual(JSON.parse(JSON.stringify(countRow(counts, 10, 0))), {
     requests: 10, failed: 0, userPerRequest: 1235, kernelPerRequest: 123,
     userCyclesPerRequest: null, kernelCyclesPerRequest: null, userL1iMissesPerRequest: null,
+    perfRunningPct: { "instructions:u": 100, "instructions:k": 100, "cycles:u": 100, "cycles:k": 100, "L1-icache-load-misses:u": null },
+    perfDiagnostics: {
+      "cycles:u": "<not supported>", "cycles:k": "<not counted>", "L1-icache-load-misses:u": "no perf row",
+    },
   });
+});
+
+test("count.mjs records partial and missing optional coverage without reporting usable counts", async () => {
+  const counts = await measurePerfCounts((instructionsOnly) => {
+    assert.equal(instructionsOnly, false);
+    return { text: [
+      fullInstructions,
+      "5678,,cycles:u,app.scope,60000,8.00,",
+      "1200,,cycles:k,app.scope,60000,100.00,",
+      "87,,L1-icache-load-misses:u,app.scope,60000,,",
+    ].join("\n") };
+  }, assert.fail);
+  const row = countRow(counts, 10, 0);
+  assert.equal(row.userCyclesPerRequest, null);
+  assert.equal(row.kernelCyclesPerRequest, 120);
+  assert.equal(row.userL1iMissesPerRequest, null);
+  assert.equal(row.perfRunningPct["cycles:u"], 8);
+  assert.equal(row.perfRunningPct["L1-icache-load-misses:u"], null);
+  assert.match(row.perfDiagnostics["cycles:u"], /8% of enabled time/);
+  assert.match(row.perfDiagnostics["L1-icache-load-misses:u"], /missing or invalid/);
+});
+
+test("count.mjs retries partial instruction coverage without optional events, then rejects if still partial", async () => {
+  const partial = fullInstructions.replace("60000,100.00", "60000,12.50");
+  const warnings = [];
+  const collect = (instructionsOnly) => ({ text: instructionsOnly ? fullInstructions : partial });
+  const row = countRow(await measurePerfCounts(collect, (message) => warnings.push(message)), 10, 0);
+  assert.equal(row.userPerRequest, 1235);
+  assert.equal(row.perfRunningPct["instructions:u"], 100);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /instructions:u: perf ran 12\.5% .*retrying with instructions only/);
+  await assert.rejects(
+    measurePerfCounts(() => ({ text: partial }), () => {}),
+    /instructions-only perf failed: instructions:u: perf ran 12\.5%/,
+  );
+});
+
+test("count.mjs falls back to instructions when an optional event makes perf abort before any rows", async () => {
+  const attempts = [];
+  const warnings = [];
+  const counts = await measurePerfCounts((instructionsOnly) => {
+    attempts.push(instructionsOnly);
+    return instructionsOnly
+      ? { text: fullInstructions }
+      : { text: "", error: "event syntax error: L1-icache-load-misses:u" };
+  }, (message) => warnings.push(message));
+  assert.deepEqual(attempts, [false, true]);
+  assert.deepEqual(warnings, ["event syntax error: L1-icache-load-misses:u; retrying with instructions only"]);
+  const row = countRow(counts, 10, 0);
+  assert.equal(row.userPerRequest, 1235);
+  assert.equal(row.kernelPerRequest, 123);
+  assert.equal(row.userCyclesPerRequest, null);
+  assert.equal(row.perfDiagnostics["cycles:u"], "no perf row");
+});
+
+test("the counter rejects an unknown target before starting the benchmark", () => {
+  const result = spawnSync(process.execPath, ["count.mjs", "target-test", "1", "corten", "page,typo"], {
+    cwd: import.meta.dirname, encoding: "utf8",
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /unknown target "typo"; expected page or json/);
+  assert.equal(result.stdout, "");
 });
 
 test("an app that serves only the JSON is in the JSON phases, cold start and count, not the pages", () => {

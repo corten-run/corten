@@ -1,7 +1,8 @@
 // Counters per request: each app's container (items from memory), warmed up, then exactly
 // ITERATIONS requests while one `perf stat` counts its user and kernel instructions and cycles,
-// and user L1 instruction-cache misses. Cycles and misses are null in the output (including
-// instructions.json) when unavailable; instructions are required. Alternate one-repeat runs
+// and user L1 instruction-cache misses. All counts require a reported 100% running percentage.
+// Unusable optional counts are null with a diagnostic; if instructions are unusable with
+// optional events enabled, repeat the load with instructions only. Alternate one-repeat runs
 // of the builds on a quiet host to compare cycles, which are noisier than instructions.
 // Needs Linux with hardware counters (`perf`, root, cgroup v2): a bench host, not Docker Desktop.
 // Usage: node count.mjs <round> [repeats=3] [apps=all] [targets=page,json] [fixture|api]
@@ -12,13 +13,17 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs, tier } from "./apps.mjs";
-import { countRow, parsePerfCounts, perfCountArgs } from "./count-perf.mjs";
+import { countRow, measurePerfCounts, perfCountArgs } from "./count-perf.mjs";
 import { roundNameError } from "./round.mjs";
 import { k6Image, recordLoadTool } from "./load-tool.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [round = "r1", repeats = "3", appsArg = Object.keys(catalog).join(","), targetsArg = "page,json", source = "fixture"] = process.argv.slice(2);
 if (!["fixture", "api"].includes(source)) throw new Error("source is fixture or api");
+const targets = targetsArg.split(",");
+for (const target of targets) {
+  if (target !== "page" && target !== "json") throw new Error(`unknown target ${JSON.stringify(target)}; expected page or json`);
+}
 // The matched tier's numbers never go into an r<n> round, nor the defaults' into an m<n> one.
 if (roundNameError(round, tier)) throw new Error(/** @type {string} */ (roundNameError(round, tier)));
 const suffix = source === "api" ? "/api" : "";
@@ -38,33 +43,37 @@ function k6(base, target, envs, summary) {
 }
 
 /** Counts events in the container's cgroup until `work` resolves. */
-async function counted(container, work) {
+async function counted(container, work, instructionsOnly) {
   const id = docker("inspect", "-f", "{{.Id}}", container).stdout.trim();
   const cgroup = `system.slice/docker-${id}.scope`;
-  const out = join("/tmp", `perf-${id}.csv`);
   // Timed lines in the round's log: when a step hangs the machine (#466), the log says whether
   // `perf` attached to the cgroup with no load yet or the load had started.
   console.log(new Date().toISOString(), "perf stat", countCpus.join(" "), "-G", container);
-  const perf = spawn("perf", perfCountArgs(countCpus, cgroup, out));
+  const perf = spawn("perf", perfCountArgs(countCpus, cgroup, instructionsOnly), { env: { ...process.env, LC_ALL: "C" } });
+  let text = "";
   let said = "";
-  perf.stderr?.on("data", (d) => (said += d));
-  const exited = new Promise((r) => perf.on("exit", r));
+  let spawnError;
+  perf.stdout.on("data", (d) => (text += d));
+  perf.stderr.on("data", (d) => (said += d));
+  perf.on("error", (error) => { spawnError = error.message; });
+  const closed = new Promise((resolve) => perf.on("close", (code, signal) => resolve({ code, signal })));
+  const ready = await Promise.race([sleep(500).then(() => true), closed.then(() => false)]);
+  let stopped = false;
   // perf stops however the work ends, so a failed run leaves no counter on a removed cgroup.
   try {
-    await sleep(500);
-    console.log(new Date().toISOString(), "counting", container);
-    await work();
+    if (ready) {
+      console.log(new Date().toISOString(), "counting", container);
+      await work();
+    }
   } finally {
-    perf.kill("SIGINT");
-    await exited;
+    if (ready) stopped = perf.kill("SIGINT");
+    await closed;
   }
-  const text = existsSync(out) ? readFileSync(out, "utf8") : "";
-  const counts = parsePerfCounts(text);
-  // A `perf` that could not count (an option this kernel's lacks) says so rather than leave holes.
-  if (!Number.isFinite(counts.get("instructions:u")) || !Number.isFinite(counts.get("instructions:k"))) {
-    throw new Error(`perf counted nothing for ${container}: ${said.trim() || text.trim() || "no output"}`);
-  }
-  return counts;
+  const { code, signal } = await closed;
+  const error = !stopped || (code !== 0 && signal !== "SIGINT")
+    ? `perf did not count the full load: ${spawnError ?? (said.trim() || signal || `exit ${code}`)}`
+    : null;
+  return { text, error };
 }
 
 // Before any load: the kernel this runs on, and `perf` counting an idle second on it, so a `perf`
@@ -87,7 +96,7 @@ const file = join(dir, "instructions.json");
 const results = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
 for (const name of appsArg.split(",")) {
   if (!catalog[name]) throw new Error(`unknown app ${name}`);
-  for (const target of targetsArg.split(",")) {
+  for (const target of targets) {
     // A JSON-only app has no page to count.
     if (target === "page" && catalog[name].pages === false) continue;
     docker("rm", "-f", `fsw-${name}`);
@@ -121,7 +130,10 @@ for (const name of appsArg.split(",")) {
       const runs = [];
       for (let r = 0; r < Number(repeats); r += 1) {
         const summary = `results/${round}/count-${name}-${target}${suffix.replace("/", "-")}-${r}.json`;
-        const counts = await counted(`fsw-${name}`, async () => k6(base, target, { MODE: "iterations", VUS: "4", ITERATIONS: String(ITERATIONS) }, summary));
+        const counts = await measurePerfCounts(
+          (instructionsOnly) => counted(`fsw-${name}`, () => k6(base, target, { MODE: "iterations", VUS: "4", ITERATIONS: String(ITERATIONS) }, summary), instructionsOnly),
+          (message) => console.warn(name, target + suffix, message),
+        );
         const k = JSON.parse(readFileSync(join(here, summary), "utf8"));
         const requests = k.metrics.http_reqs.count;
         const failed = k.metrics.http_req_failed.passes ?? 0;

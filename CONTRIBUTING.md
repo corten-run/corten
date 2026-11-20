@@ -363,18 +363,24 @@ establish a general ranking.
 
       For work around the handler (routing, middleware and other stages, headers read or
       written, future sizes, allocations or copies per request), give the instruction count
-      **and** cycles per request under load from [`bench/fullstack/count.mjs`](bench/fullstack/count.mjs)
-      on a quiet Linux bench host. Report user and kernel cycles separately, and user L1
-      instruction-cache misses per request when the change adds or moves code. Use one repeat
-      per invocation (`node bench/fullstack/count.mjs <round> 1 <app> <target>`), with a fresh
-      round name each time. Alternate the two release builds; for the same app, tag each
-      build in turn with the image name the script expects. Verify the response bytes and
-      headers before timing, and report any failed requests. Predeclare the smallest
-      difference worth claiming, then report the number of paired rounds, best, median and
-      range, and the differences within rounds. If the spread hides the difference or the
-      counters are unavailable (`null`), say what the run did not resolve. An instruction count
-      bounds work, not how fast it runs; a speed comparison with another framework needs
-      cycles or CPU time per request under equivalent load, not instructions alone.
+      **and** cycles per request under equivalent load on a quiet Linux bench host.
+      For changes exercised by the catalog item page or item JSON, use
+      [`bench/fullstack/count.mjs`](bench/fullstack/count.mjs) with target `page` or `json` and
+      one repeat per invocation (`node bench/fullstack/count.mjs <round> 1 <app> <target>`).
+      Use a fresh round name each time and tag each build in turn with the image name the script
+      expects. Otherwise, measure the affected route with an equivalent under-load test; an
+      unaffected route does not count. Alternate the two release builds, verify the response bytes
+      and headers before measuring, and report any failed requests.
+
+      Compare the change in **user plus kernel cycles per request within each pair** against
+      the smallest worthwhile reduction, declared before running. Report the number of pairs,
+      best, median and range, and the per-pair changes. Report the user and kernel split and,
+      when adding or moving code, user L1 instruction-cache misses per request as diagnostics.
+      The counter records perf's running percentage and requires a reported 100% for every
+      counter it uses. Do not claim a CPU-cost win if either cycle count is missing or unusable
+      (`null`) in either build, or if the bound on the paired changes does not establish the
+      predeclared margin. Say what the run did not resolve. Retired instructions measure work,
+      not speed; fewer cycles per request show lower CPU cost, not lower request latency.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,
