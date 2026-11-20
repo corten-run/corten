@@ -19,7 +19,7 @@ use std::{
     io,
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, Ordering::Relaxed, Ordering::SeqCst},
+        atomic::{AtomicBool, AtomicU64, Ordering::Relaxed, Ordering::SeqCst},
         Arc, Mutex, Weak,
     },
     task::{Context, Poll, Wake, Waker},
@@ -93,6 +93,7 @@ impl Clock {
             stalled: AtomicU64::new(FLOWING),
             writer: AtomicWaker::new(),
             wakes: AtomicU64::new(0),
+            held: AtomicBool::new(false),
             clock: self.clone(),
         });
         self.watches.lock().expect("never poisoned").push(Arc::downgrade(&watch));
@@ -145,6 +146,12 @@ pub(crate) struct Watch {
     /// How many wakes ([`Watch::wake_writer`]) found `writer` empty, so a call that had taken it
     /// can tell one came meanwhile.
     wakes: AtomicU64,
+    /// Whether a write or a close holds the stall: set when one is left waiting, kept when the
+    /// clock fails it, and cleared when the IO finishes a write (it went through or the IO failed
+    /// it). A flush or a close that goes through ends the stall only while none does
+    /// ([`Watched::send`]), so another task's flushes cannot start a waiting write's or close's
+    /// wait over. A close that waited and went through leaves it held: the connection is done.
+    held: AtomicBool,
     clock: Arc<Clock>,
 }
 
@@ -291,17 +298,20 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
     /// starts the stall, or fails once the clock has expired it, so a call is failed only while
     /// the IO still has no room. While it waits the IO is polled with the watch's waker, so each
     /// time the IO reports room the wait starts over ([`Watch`]'s `Wake`): a TLS stream's call
-    /// can stay pending while its bytes go out. A write that went through (or failed) clears it; a
-    /// flush or a close does not (`clears`), since a plain socket's flush is done at once whether
-    /// anything went or not, and a route on a switched connection could otherwise restart the
-    /// clock with flushes while its writes wait. Nor does a wake tokio's cooperative budget makes:
-    /// with the budget spent the IO is polled with the task's waker, or a client that floods a
-    /// route's reads could keep a write that never goes through waiting.
+    /// can stay pending while its bytes go out. A write the IO finished (it went through or the IO
+    /// failed it) clears it (`clears`); a flush or a close does only when no write or close that
+    /// waited holds it (`holds`, `Watch`'s `held`), since a plain socket's
+    /// flush is done at once whether anything went or not, and a route on a switched connection
+    /// could otherwise restart the clock with flushes while its writes wait. Nor does a wake
+    /// tokio's cooperative budget makes: with the budget spent the IO is polled with the task's
+    /// waker, or a client that floods a route's reads could keep a write that never goes through
+    /// waiting.
     #[inline]
     fn send<T>(
         &mut self,
         cx: &mut Context<'_>,
         clears: bool,
+        holds: bool,
         mut call: impl FnMut(Pin<&mut I>, &mut Context<'_>) -> Poll<io::Result<T>>,
     ) -> Poll<io::Result<T>> {
         let Watched { io, watch, .. } = self;
@@ -316,7 +326,7 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
                 return done;
             }
         }
-        Self::wait(io, watch, cx, clears, flowing, call)
+        Self::wait(io, watch, cx, clears, holds, flowing, call)
     }
 
     /// [`Watched::send`] once its call waits, or found the IO waiting: out of line, so the path of a
@@ -329,6 +339,7 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
         watch: &Arc<Watch>,
         cx: &mut Context<'_>,
         clears: bool,
+        holds: bool,
         flowing: bool,
         mut call: impl FnMut(Pin<&mut I>, &mut Context<'_>) -> Poll<io::Result<T>>,
     ) -> Poll<io::Result<T>> {
@@ -359,13 +370,26 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
         let done = match done {
             Poll::Ready(done) => {
                 if clears {
+                    watch.held.store(false, Relaxed);
+                    watch.stalled.store(FLOWING, Relaxed);
+                } else if !watch.held.load(Relaxed) {
+                    // A flush, or a close that did not wait, that went through with no write or
+                    // close holding the stall ends the stall, even one the clock had expired (it
+                    // found room after all), so a later wait starts its own (#1762).
                     watch.stalled.store(FLOWING, Relaxed);
                 }
                 done
             }
             // Expired before the registration: its wake may have been missed.
+            // A held stall stays held (`held`), so a flush that goes through later does not end it
+            // and the next call that waits fails too.
             Poll::Pending if watch.stalled.load(Relaxed) == STALLED => Err(stalled()),
-            Poll::Pending => return Poll::Pending,
+            Poll::Pending => {
+                if holds {
+                    watch.held.store(true, Relaxed);
+                }
+                return Poll::Pending;
+            }
         };
         match previous {
             Some(previous) => {
@@ -398,11 +422,11 @@ fn at(_: u8) {}
 
 impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        self.get_mut().send(cx, true, |io, cx| io.poll_write(cx, buf))
+        self.get_mut().send(cx, true, true, |io, cx| io.poll_write(cx, buf))
     }
 
     fn poll_write_vectored(self: Pin<&mut Self>, cx: &mut Context<'_>, bufs: &[io::IoSlice<'_>]) -> Poll<io::Result<usize>> {
-        self.get_mut().send(cx, true, |io, cx| io.poll_write_vectored(cx, bufs))
+        self.get_mut().send(cx, true, true, |io, cx| io.poll_write_vectored(cx, bufs))
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -411,7 +435,7 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
-        let flushed = this.send(cx, false, |io, cx| io.poll_flush(cx));
+        let flushed = this.send(cx, false, false, |io, cx| io.poll_flush(cx));
         if let (Poll::Ready(Ok(())), Some(watch)) = (&flushed, &this.watch) {
             watch.flushed();
         }
@@ -421,7 +445,7 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
     /// Watched too: over TLS, closing writes a last record, which waits on the client as any
     /// write does.
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.get_mut().send(cx, false, |io, cx| io.poll_shutdown(cx))
+        self.get_mut().send(cx, false, true, |io, cx| io.poll_shutdown(cx))
     }
 }
 
@@ -624,6 +648,166 @@ mod tests {
         fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
             Poll::Ready(Ok(()))
         }
+    }
+
+    /// An IO whose first write waits for `write` polls and then goes through and whose later
+    /// writes wait, and whose flush waits for `flush` polls and then goes through: an app's own
+    /// IO under `serve_wrapped` can stay full right after its flush has gone through.
+    struct FlushesLate {
+        write: Option<u8>,
+        flush: u8,
+    }
+
+    impl AsyncWrite for FlushesLate {
+        fn poll_write(self: Pin<&mut Self>, _: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+            let write = &mut self.get_mut().write;
+            match write {
+                Some(0) => {
+                    *write = None;
+                    Poll::Ready(Ok(buf.len()))
+                }
+                Some(polls) => {
+                    *polls -= 1;
+                    Poll::Pending
+                }
+                None => Poll::Pending,
+            }
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            let polls = &mut self.get_mut().flush;
+            if *polls == 0 {
+                return Poll::Ready(Ok(()));
+            }
+            *polls -= 1;
+            Poll::Pending
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// A flush that waited and then went through leaves no stall behind it, even when the clock
+    /// had expired it meanwhile (`expire`): a write that waits after the connection sat idle
+    /// longer than the send timeout gets a whole send timeout of its own, not the flush's (#1762).
+    /// A write waited and went through before the flush, as on most connections.
+    async fn a_write_after_a_flush_that_waited_gets_its_own_send_timeout(expire: bool) {
+        let send = Duration::from_millis(200);
+        let clock = Clock::start(None, Some(send)).unwrap();
+        let watch = clock.watch();
+        // A call that waits is polled twice (`Watched::wait` polls it again with the watch's waker).
+        let mut io = Watched { io: FlushesLate { write: Some(2), flush: 2 }, watch: Some(watch.clone()), _open: None };
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        assert!(Pin::new(&mut io).poll_write(&mut cx, b"x").is_pending());
+        assert!(matches!(Pin::new(&mut io).poll_write(&mut cx, b"x"), Poll::Ready(Ok(1))));
+        assert!(Pin::new(&mut io).poll_flush(&mut cx).is_pending());
+        if expire {
+            let started = Instant::now();
+            while watch.stalled.load(Relaxed) != STALLED {
+                assert!(started.elapsed() < send * 10, "the flush's wait expires");
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+        assert!(matches!(Pin::new(&mut io).poll_flush(&mut cx), Poll::Ready(Ok(()))));
+        // Idle, past the send timeout.
+        tokio::time::sleep(send * 4).await;
+        assert!(Pin::new(&mut io).poll_write(&mut cx, b"x").is_pending(), "the write was failed at once");
+        // It still fails once its own send timeout has passed, counted in the clock's time from the
+        // start this write set (one past it), which a starved clock thread makes older than now.
+        let started = watch.stalled.load(Relaxed) - 1;
+        let error = std::future::poll_fn(|cx| Pin::new(&mut io).poll_write(cx, b"x")).await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let failed = clock.base.elapsed().as_millis() as u64;
+        assert!(failed - started >= send.as_millis() as u64, "failed {} ms after its start", failed - started);
+    }
+
+    #[tokio::test]
+    async fn a_write_that_waits_after_a_flush_went_through_and_the_connection_sat_idle_gets_its_own_send_timeout() {
+        a_write_after_a_flush_that_waited_gets_its_own_send_timeout(false).await;
+    }
+
+    #[tokio::test]
+    async fn a_write_that_waits_after_an_expired_flush_went_through_gets_its_own_send_timeout() {
+        a_write_after_a_flush_that_waited_gets_its_own_send_timeout(true).await;
+    }
+
+    /// A write waits while another task's flushes go through over and over, as on a switched
+    /// connection a route shares: the flushes do not start the write's wait over, so it still fails
+    /// at the send timeout (#1762 keeps this while letting a flush end its own stall).
+    #[tokio::test]
+    async fn flushes_that_go_through_while_a_write_waits_do_not_hold_it_past_the_send_timeout() {
+        let send = Duration::from_millis(200);
+        let clock = Clock::start(None, Some(send)).unwrap();
+        let mut io = Watched { io: Flushes, watch: Some(clock.watch()), _open: None };
+        let (writer, flusher) = (Waker::noop(), Waker::noop());
+        assert!(Pin::new(&mut io).poll_write(&mut Context::from_waker(writer), b"x").is_pending());
+        let started = Instant::now();
+        let failed = loop {
+            assert!(started.elapsed() < send * 10, "the waiting write was never failed");
+            assert!(Pin::new(&mut io).poll_flush(&mut Context::from_waker(flusher)).is_ready());
+            match Pin::new(&mut io).poll_write(&mut Context::from_waker(writer), b"x") {
+                Poll::Ready(written) => break written,
+                Poll::Pending => tokio::time::sleep(Duration::from_millis(5)).await,
+            }
+        };
+        assert_eq!(failed.unwrap_err().kind(), io::ErrorKind::TimedOut);
+    }
+
+    /// A write the send timeout failed leaves its stall behind for the next call: a flush that
+    /// goes through at once, as a plain socket's does, does not end it, so the next write that
+    /// waits fails on its first poll rather than getting a send timeout of its own.
+    #[tokio::test]
+    async fn a_flush_after_a_write_the_send_timeout_failed_does_not_give_the_next_write_a_new_timeout() {
+        let send = Duration::from_millis(100);
+        let clock = Clock::start(None, Some(send)).unwrap();
+        let mut io = Watched { io: Flushes, watch: Some(clock.watch()), _open: None };
+        let failed = tokio::time::timeout(send * 20, std::future::poll_fn(|cx| Pin::new(&mut io).poll_write(cx, b"x")))
+            .await
+            .expect("the waiting write is failed");
+        assert_eq!(failed.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(matches!(Pin::new(&mut io).poll_flush(&mut cx), Poll::Ready(Ok(()))));
+        match Pin::new(&mut io).poll_write(&mut cx, b"x") {
+            Poll::Ready(Err(error)) => assert_eq!(error.kind(), io::ErrorKind::TimedOut),
+            other => panic!("the next write got a new send timeout: {other:?}"),
+        }
+    }
+
+    /// An IO whose writes and close wait and whose flushes go through at once.
+    struct Closes;
+
+    impl AsyncWrite for Closes {
+        fn poll_write(self: Pin<&mut Self>, _: &mut Context<'_>, _: &[u8]) -> Poll<io::Result<usize>> {
+            Poll::Pending
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    /// A close waits (TLS writes its last record there) while another task's flushes go through
+    /// over and over: they do not start the close's wait over, so it still fails at the send
+    /// timeout.
+    #[tokio::test]
+    async fn flushes_that_go_through_while_a_close_waits_do_not_hold_it_past_the_send_timeout() {
+        let send = Duration::from_millis(200);
+        let clock = Clock::start(None, Some(send)).unwrap();
+        let mut io = Watched { io: Closes, watch: Some(clock.watch()), _open: None };
+        let (closer, flusher) = (Waker::noop(), Waker::noop());
+        assert!(Pin::new(&mut io).poll_shutdown(&mut Context::from_waker(closer)).is_pending());
+        let started = Instant::now();
+        let failed = loop {
+            assert!(started.elapsed() < send * 10, "the waiting close was never failed");
+            assert!(Pin::new(&mut io).poll_flush(&mut Context::from_waker(flusher)).is_ready());
+            match Pin::new(&mut io).poll_shutdown(&mut Context::from_waker(closer)) {
+                Poll::Ready(closed) => break closed,
+                Poll::Pending => tokio::time::sleep(Duration::from_millis(5)).await,
+            }
+        };
+        assert_eq!(failed.unwrap_err().kind(), io::ErrorKind::TimedOut);
     }
 
     /// Counts its wakes.
