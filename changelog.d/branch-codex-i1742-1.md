@@ -1,2 +1,2 @@
-- `send_timeout`'s wait now starts over each time the connection reports room, so a steady reader is not cut over TLS. Room comes in record-sized steps there, so a short timeout can still cut a slow TLS reader plain HTTP keeps.
+- `send_timeout`'s wait now starts over each time the connection reports room, so a steady reader is not cut over TLS. Room comes in record-sized steps there: reading 2 KiB per 125 ms, a client is still cut over TLS at a 2 s timeout but kept over plain HTTP.
   ([#1742 A TLS flush that stays pending while a slow client reads steadily may trip send_timeout: test serve_wrapped over TLS with a steady reader](https://github.com/corten-run/corten/issues/1742))
