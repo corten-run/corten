@@ -61,8 +61,10 @@ or the connection closes, so a client that sends requests and stops reading cann
 connection, and a live stream, a feed or a WebSocket to one ends rather than waiting on it. With
 `None`, such a client holds its connection until shutdown, whether its answer is a stream or a
 whole body: the header timeout does not start until the answer has been sent. It
-counts only while a write waits: a download whose reader keeps freeing room and a stream quiet
-between events are not cut, though a reader that takes a little each minute can be, since the
+counts only while a write waits, from when the connection last reported room: a download whose
+reader keeps freeing room and a stream quiet between events are not cut, over TLS too, where a
+write or a flush stays pending while the TLS library sends what it holds to a client reading
+slower than the server writes; a reader that takes a little each minute can be, since the
 system reports room only once a good part of the buffer is free. A TLS connection's last record,
 written as it closes, is held to it too. The same clock checks it; with both timeouts `None`
 (behind a proxy) the clock and its work per request are gone. Once shutdown begins, a connection

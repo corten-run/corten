@@ -1161,10 +1161,12 @@ impl<M: Middleware> App<M> {
     /// closes the connection: 60 seconds unless set, as nginx's `send_timeout`. A client that
     /// sends requests and stops reading their answers cannot hold its connection, and a live
     /// stream, a feed or a WebSocket to one ends (the route sees its write fail). It counts only
-    /// while a write waits: a download whose reader keeps freeing room and a stream quiet between
-    /// events are not cut, though a reader that takes a little each minute can be, since the
-    /// system reports room only once a good part of the buffer is free. A TLS connection's last
-    /// record, written as it closes, is held to it too. `None` removes it, for a server that only
+    /// while a write waits, from when the connection last reported room: a download whose reader
+    /// keeps freeing room and a stream quiet between events are not cut, over TLS too, where a
+    /// write or a flush stays pending while the TLS library sends what it holds; a reader that
+    /// takes a little each minute can be, since the system reports room only once a good part of
+    /// the buffer is free. A TLS connection's last record, written as it closes, is held to it
+    /// too. `None` removes it, for a server that only
     /// a proxy which reads answers as they come reaches; with [`App::header_timeout`] also `None`,
     /// the clock and its per-request work are gone.
     pub fn send_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {

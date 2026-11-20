@@ -1227,11 +1227,12 @@ rules something out.
        progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
        seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
        bytes a second, which would need a count of bytes and a window in the connection's writer, for
-       every connection; whether over TLS a flush that stays pending while a slow client reads
-       steadily trips it is reasoned in the
-       [steady reader control](../bench/http2/README.md#steady-reader-control), not measured, and
-       open in
-       [#1742 A TLS flush that stays pending while a slow client reads steadily may trip send_timeout: test serve_wrapped over TLS with a steady reader](https://github.com/corten-run/corten/issues/1742));
+       every connection; over TLS a write or a flush stays pending while the TLS library sends
+       what it holds, so the wait starts over each time the socket reports room, when a plain
+       socket's write would go through: without that, a client reading steadily but slower than
+       the server writes was cut over tokio-rustls through `serve_wrapped`, as the
+       [steady reader control](../bench/http2/README.md#steady-reader-control) had reasoned
+       ([#1742 A TLS flush that stays pending while a slow client reads steadily may trip send_timeout: test serve_wrapped over TLS with a steady reader](https://github.com/corten-run/corten/issues/1742)));
        a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a client that sends
        nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose
        waits, in all, pass that idle time plus a second for every 240 bytes that came (Kestrel's
