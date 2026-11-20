@@ -11,7 +11,9 @@
 // the view app's code to a file that never existed): an inline link (`[text](target)`,
 // `![alt](target)`, spaces around the target allowed) and, inside an HTML tag that closes on its
 // line (a `>` in a quoted value does not close it), a `src`, `srcset` or `href` (the README's
-// logo). Not read for links: a URL (`https:`, `//host`), the anchor and query of a target, inline
+// logo). For links to the root or per-version changelog, also check the fragment against its
+// ATX headings and explicit HTML anchors. Not read for other links: a URL (`https:`, `//host`),
+// the anchor and query of a target, inline
 // code (a span may wrap onto the paragraph's next lines, and a backslash in it is its own
 // character; a backtick run with no partner in its paragraph is text, as Markdown shows it, and a
 // heading, list item, HTML line, table row or blank line ends the paragraph), an escaped bracket or
@@ -29,18 +31,33 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
+/** @param {string} file */
+export const isChangelog = (file) => /^CHANGELOG(?:\.\d+\.\d+\.\d+)?\.md$/.test(file);
+
+/** @param {string} part */
+function decoded(part) {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return part;
+  }
+}
+
 /**
  * The problems in the Markdown file `file` (its path from the repository's root) whose text is
  * `text`, where `present` has every file and folder of the repository (`.` the root), and how
  * many table rows and relative links it read.
  * @param {string} file @param {string} text @param {Set<string>} present
- * @returns {{ problems: string[], rows: number, links: number }}
+ * @param {(file: string) => Set<string>} [anchorsFor]
  */
-export function scan(file, text, present) {
+export function scan(file, text, present, anchorsFor) {
   /** @type {string[]} */
   const problems = [];
   let rows = 0;
   let links = 0;
+  const inChangelog = isChangelog(file);
+  const anchors = new Set();
+  const headingIds = new Set();
   /** The open fence's character and length, or null outside one. @type {{ char: string, length: number } | null} */
   let fence = null;
   // Inside an HTML comment that started a line, and where it started.
@@ -52,16 +69,33 @@ export function scan(file, text, present) {
   const read = () => {
     const lines = outsideCode(paragraph.map((p) => p.body).join("\n")).split("\n");
     paragraph.forEach(({ at }, n) => {
-      for (const path of targetsIn(lines[n])) {
-        links += 1;
-        let to = path;
-        try {
-          to = decodeURIComponent(path);
-        } catch {}
+      for (const target of targetsIn(lines[n])) {
+        // Check links to the current branch; historical tags, commits and other repos are not this tree.
+        const onMain = /^https:\/\/github\.com\/corten-run\/corten\/blob\/main\//i.exec(target);
+        const external = /^[a-z][a-z\d+.-]*:/i.test(target) || target.startsWith("//");
+        if (external && !onMain) continue;
+        const tail = onMain ? target.slice(onMain[0].length) : target;
+        const path = tail.split(/[#?]/)[0];
+        const hash = tail.indexOf("#");
+        const anchor = hash === -1 ? "" : decoded(tail.slice(hash + 1));
+        let to = decoded(path);
         // GitHub reads a target starting with `/` from the repository's root.
-        to = posix.normalize(to.startsWith("/") ? to.slice(1) || "." : posix.join(posix.dirname(file), to));
-        to = to === "/" ? "." : to.replace(/\/$/, "");
+        to = !path ? file : posix.normalize(to.startsWith("/") || onMain
+          ? to.replace(/^\//, "") || "." : posix.join(posix.dirname(file), to)).replace(/\/$/, "");
+        if ((external || !path) && !(anchor && isChangelog(to))) continue;
+        links += 1;
         if (!present.has(to)) problems.push(`${at}: a link to ${path}, which the repository does not have`);
+        else if (anchor && isChangelog(to) && anchorsFor && !anchorsFor(to).has(anchor)) {
+          problems.push(`${at}: a link to ${target}, but ${to} has no #${anchor} anchor`);
+        }
+      }
+      if (inChangelog) {
+        for (const [, attributes] of lines[n].matchAll(new RegExp(tag, "gi"))) {
+          for (const [, name, double, single, bare] of attributes.matchAll(new RegExp(attribute, "gi"))) {
+            const value = double ?? single ?? bare;
+            if (value && /^(?:id|name)$/i.test(name)) anchors.add(value);
+          }
+        }
       }
     });
     paragraph = [];
@@ -113,6 +147,17 @@ export function scan(file, text, present) {
     // item, HTML) starts a new paragraph, so a code span never runs into or out of one.
     const tableRow = body.startsWith("|");
     const heading = /^#{1,6}(\s|$)/.test(body);
+    if (heading && inChangelog) {
+      // GitHub lowercases heading text, drops punctuation and suffixes duplicate IDs.
+      const slug = body.replace(/^#+\s*/, "").replace(/\s+#+\s*$/, "").trim()
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/<[^>]+>/g, "")
+        .replace(/(\*{1,3}|_{1,3})(?=\S)(.+?)(?<=\S)\1/g, "$2")
+        .toLowerCase().replace(/[^\p{L}\p{M}\p{N}_ -]/gu, "").replaceAll(" ", "-");
+      let id = slug;
+      for (let i = 1; headingIds.has(id); i++) id = `${slug}-${i}`;
+      headingIds.add(id);
+      anchors.add(id);
+    }
     if (!body.trim() || tableRow || heading || /^(([-*+]|\d{1,9}[.)])(\s|$)|<[a-z/!?])/i.test(body)) read();
     if (body.trim()) paragraph.push({ at, body });
     if (tableRow || heading) read();
@@ -129,7 +174,7 @@ export function scan(file, text, present) {
   if (fence) problems.push(`${file}: a fence (${fence.char.repeat(fence.length)}) that never closes`);
   // GitHub hides the rest of the file, links and all.
   if (comment) problems.push(`${commentAt}: an HTML comment that never closes`);
-  return { problems, rows, links };
+  return { problems, rows, links, anchors };
 }
 
 // An attribute as CommonMark reads inline HTML: its name, then its value double-quoted,
@@ -201,8 +246,7 @@ export function outsideCode(text) {
  * The relative targets of one line's prose: an inline link's or image's (`[text](target)`, spaces
  * around it allowed, `<..>` holding one with spaces) and, inside an HTML tag that closes on the
  * line (a `>` in a quoted value does not close it), a `src`, `srcset` or `href` value, quoted
- * either way or not at all. A URL, an anchor alone and an empty target are left out, and the
- * anchor and query are cut off.
+ * either way or not at all.
  * @param {string} prose
  */
 function targetsIn(prose) {
@@ -218,7 +262,7 @@ function targetsIn(prose) {
       else if (lower === "src" || lower === "href") targets.push(value);
     }
   }
-  return targets.map((t) => t.split(/[#?]/)[0]).filter((path) => path && !/^[a-z][a-z\d+.-]*:/i.test(path) && !path.startsWith("//"));
+  return targets;
 }
 
 /** Every path of `paths` (files, from the root) and every folder above one, and `.`. @param {string[]} paths */
@@ -237,6 +281,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const files = [...new Set(git(["ls-files", "-z", "--", "*.md"]))];
   // Every file a commit would hold: tracked, or new and not ignored.
   const present = presentIn(git(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]));
+  /** @type {Map<string, Set<string>>} */
+  const changelogAnchors = new Map();
+  const anchorsFor = (/** @type {string} */ file) => {
+    let anchors = changelogAnchors.get(file);
+    if (!anchors) {
+      const path = join(root, file);
+      anchors = existsSync(path) ? scan(file, readFileSync(path, "utf8"), present).anchors : new Set();
+      changelogAnchors.set(file, anchors);
+    }
+    return anchors;
+  };
   /** @type {string[]} */
   const problems = [];
   let rows = 0;
@@ -244,7 +299,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   for (const file of files) {
     // A tracked file deleted in the working tree but not staged is still listed.
     if (!existsSync(join(root, file))) continue;
-    const found = scan(file, readFileSync(join(root, file), "utf8"), present);
+    const found = scan(file, readFileSync(join(root, file), "utf8"), present, anchorsFor);
     problems.push(...found.problems);
     rows += found.rows;
     links += found.links;

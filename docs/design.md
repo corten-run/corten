@@ -6155,7 +6155,8 @@ rules something out.
     PR number and an entry suffix keep two pull requests for one issue from taking the same
     path; before there is a PR number, a unique branch slug takes its place. Release preparation
     collects the notes into the dated version section, with bullets starting with the Breaking
-    marker first and filename order within each group, and leaves the older changelog alone.
+    marker first and filename order within each group. It moves the previous release unchanged
+    to a file beside the main changelog, so existing relative links in that section still work.
     Fragments use prose with single-line inline HTTPS links so a link works before and after its
     note moves, without rewriting it or depending on a reference definition.
 

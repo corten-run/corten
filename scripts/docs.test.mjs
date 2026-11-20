@@ -114,6 +114,31 @@ test("a target is the repository's own spelling: its case, %-escapes, query and 
   ]);
 });
 
+test("changelog anchors follow headings, duplicate suffixes and explicit HTML anchors", () => {
+  const archive = "CHANGELOG.0.2.0.md";
+  const paths = presentIn(["CHANGELOG.md", archive, "docs/guide/kit.md"]);
+  const sections = scan(archive, [
+    "## 0.2.0 (2026-11-11)", "### Breaking changes", "### Breaking changes",
+    "### Use `App` and *Café*", '<a id="upgrade"></a>', "```markdown", "# Not a heading", "```",
+  ].join("\n"), paths).anchors;
+  const anchorsFor = (/** @type {string} */ file) => file === archive ? sections : new Set(["unreleased"]);
+  const text = [
+    "[old](../../CHANGELOG.0.2.0.md#breaking-changes-1) [up](/CHANGELOG.0.2.0.md#upgrade)",
+    "[new](../../CHANGELOG.md#unreleased) [version](/CHANGELOG.0.2.0.md#020-2026-11-11)",
+    "[Unicode](https://github.com/corten-run/corten/blob/main/CHANGELOG.0.2.0.md#use-app-and-caf%C3%A9)",
+    "[moved](/CHANGELOG.md#breaking-changes) [code](/CHANGELOG.0.2.0.md#not-a-heading)",
+    "[other repo](https://github.com/nats-io/nats.rs/blob/main/CHANGELOG.md#breaking-changes)",
+    "[historic tag](https://github.com/corten-run/corten/blob/v0.2.0/CHANGELOG.md#breaking-changes)",
+  ].join("\n");
+  assert.deepEqual(scan("docs/guide/kit.md", text, paths, anchorsFor).problems, [
+    "docs/guide/kit.md:4: a link to /CHANGELOG.md#breaking-changes, but CHANGELOG.md has no #breaking-changes anchor",
+    "docs/guide/kit.md:4: a link to /CHANGELOG.0.2.0.md#not-a-heading, but CHANGELOG.0.2.0.md has no #not-a-heading anchor",
+  ]);
+  assert.deepEqual(scan(archive, "[self](#breaking-changes) [bad](#absent)", paths, anchorsFor).problems, [
+    "CHANGELOG.0.2.0.md:1: a link to #absent, but CHANGELOG.0.2.0.md has no #absent anchor",
+  ]);
+});
+
 test("a backtick with no partner in its paragraph is text, and hides no link after it", () => {
   const text = ["1. A stray ` here", "2. [x](m1.md)", "3. [y](m2.md)", "", "# A heading with ` open", "[z](m3.md)", "Path `C:\\` then [w](m4.md)"].join("\n");
   assert.deepEqual(found("README.md", text).problems, [
