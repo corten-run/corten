@@ -117,7 +117,9 @@ result.relayTakeoverMs = result.events
 // nginx -v writes its version line to stderr; a failed probe or one without that line is recorded as
 // unknown, not as a version.
 const nginxProbe = spawnSync("docker", ["exec", "fb-lb", "nginx", "-v"], { encoding: "utf8" });
-const nginxLine = nginxProbe.status === 0 ? /^nginx version: nginx\/\S+$/m.exec(nginxProbe.stderr ?? "")?.[0] : undefined;
+const nginxLine = !nginxProbe.error && nginxProbe.status === 0
+  ? (nginxProbe.stderr ?? "").split(/\r?\n/).find((line) => /^nginx version: nginx\/\d+(?:\.\d+)+$/.test(line))
+  : undefined;
 const nginxVersion = nginxLine
   ?? `unknown (nginx -v: ${nginxProbe.error?.message ?? (nginxProbe.signal ? `signal ${nginxProbe.signal}` : nginxProbe.status === 0 ? "no version line" : `exit ${nginxProbe.status}`)})`;
 result.nginx = nginxVersion;
