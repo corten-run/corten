@@ -313,9 +313,8 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
 }
 
 /// A request's answer, whose body marks its connection as sending its last bytes when hyper has
-/// taken it, idle once they are flushed ([`Watch::idle`]). A
-/// switched connection (a 101, or a 2xx to `CONNECT`: a tunnel) stays busy: it is the route's
-/// from then on.
+/// taken it ([`Watch::idle`]), idle once they are flushed ([`Watch::flushed`]). A switched
+/// connection (a 101, or a 2xx to `CONNECT`: a tunnel) stays busy: it is the route's from then on.
 pub(crate) struct Answer<F> {
     pub inner: F,
     /// The connection's watch and the head's number.

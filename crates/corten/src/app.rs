@@ -1687,7 +1687,9 @@ where
 /// (rustls, native-tls) stays the app's, and so does its configuration: ALPN offers `http/1.1`,
 /// what Corten speaks. A step whose future borrows from what it captures clones it first:
 /// `move |tcp| { let acceptor = acceptor.clone(); async move { acceptor.accept(tcp).await } }`.
-/// The step's error is not read: the connection closes.
+/// The step's error is not read: the connection closes. The IO's flush must complete only once
+/// the bytes it holds have been written (tokio-rustls's does): the header timeout counts from the
+/// first flush that completes after an answer's body has been taken.
 pub async fn serve_wrapped<L, W, F, Io, E, M>(listeners: Vec<L>, wrap: W, app: App<M>) -> std::io::Result<()>
 where
     L: Listener,

@@ -42,12 +42,13 @@ not remove that requirement.
 
 `App::header_timeout` (30 seconds unless set) bounds what comes before a request: a client that
 opens connections and sends its head slowly, or never finishes it, cannot hold them (an idle
-keep-alive connection closes after it too). It counts from when an answer's last bytes have gone
-to the socket, not from when the handler returned, so a long download its client reads steadily is
-not cut by it. A connection that switches, with a `101` (a
-WebSocket) or a `2xx` to `CONNECT` (a tunnel), is the route's from then on: the header timeout
-no longer applies and `App::send_timeout` bounds only its writes that wait, so one on which
-neither side sends stays open until the route ends it, and idle limits there are the route's
+keep-alive connection closes after it too). It counts from when an answer's last bytes have been
+handed to the socket (the system may still hold some of them to send), not from when the server
+took the answer's last part, so a long download its client reads steadily is not cut by it. A
+connection that switches, with a `101` (a WebSocket) or a `2xx` to `CONNECT` (a tunnel), is the
+route's from then on: the header timeout no longer applies and `App::send_timeout` bounds only
+its writes that wait, so one on which neither side sends stays open until the route ends it, and
+idle limits there are the route's
 ([design Limit 13](../design.md#limit-protocol-switch)). It counts against `App::max_connections`
 while it is open, so a route that accepts them ends idle ones (closing one that has sent no frame
 for a set time, and pinging one that only listens so its pongs count) and bounds how many it
@@ -57,7 +58,9 @@ second, so a connection closes within a tenth of the timeout of it (at most a se
 every listener. `App::send_timeout` (60 seconds unless set, nginx's `send_timeout`) bounds what
 comes after: a write that finds the connection's send buffer full may wait that long for room,
 or the connection closes, so a client that sends requests and stops reading cannot hold its
-connection, and a live stream, a feed or a WebSocket to one ends rather than waiting on it. It
+connection, and a live stream, a feed or a WebSocket to one ends rather than waiting on it. With
+`None`, such a client holds its connection until shutdown, whether its answer is a stream or a
+whole body: the header timeout does not start until the answer has been sent. It
 counts only while a write waits: a download whose reader keeps freeing room and a stream quiet
 between events are not cut, though a reader that takes a little each minute can be, since the
 system reports room only once a good part of the buffer is free. A TLS connection's last record,
