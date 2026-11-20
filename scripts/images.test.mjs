@@ -73,7 +73,7 @@ test("every example has an image, and each is checked", () => {
  * out. Any other `RUN` before the run stage, or another shape, is refused, so a second build, a
  * build behind a variable or a flag in a comment cannot slip past. */
 const BUILD =
-  /^find \. -name target -prune -o -type f -exec touch \{\} \+ && (?:CARGO_HOME=[\w/.-]+ )?cargo build --release --locked(?: -p [\w-]+)? && (?:mkdir -p \/out && )?cp target\/release\/[\w{}-]+ \/[\w/]+$/;
+  /^find \. -name target -prune -o -type f -exec touch \{\} \+ && cargo build --release --locked(?: -p [\w-]+)? && (?:mkdir -p \/out && )?cp target\/release\/[\w-]+ \/[\w/]+$/;
 
 /** The two `RUN`s of the template's build stage, which builds with a profile when `PROFILE_FROM`
  * names the app's script (docs/design.md#choice-profile-image), each in its one shape. The first
@@ -84,27 +84,31 @@ const BUILD =
 const INSTALL =
   /^if \[ -n "\$PROFILE_FROM" \]; then rustup component add llvm-tools && CARGO_HOME=[\w/.-]+ cargo install corten-cli --version \{\{version\}\} --locked --root \/usr\/local && if ! corten help build \| grep -q -e --profile-from; then echo "[^"$`\\]*" >&2; exit 1; fi; fi$/;
 const BUILD_EITHER =
-  /^find \. -name target -prune -o -type f -exec touch \{\} \+ && if \[ -z "\$PROFILE_FROM" \]; then CARGO_HOME=[\w/.-]+ cargo build --release --locked; elif \[ -f "\$PROFILE_FROM" \]; then CARGO_HOME=[\w/.-]+ corten build --locked --profile-from sh -- "\$PROFILE_FROM"; else echo "PROFILE_FROM=\$PROFILE_FROM: [^"$`\\]*" >&2; exit 1; fi && cp target\/release\/[\w{}-]+ \/[\w/]+$/;
+  /^find \. -name target -prune -o -type f -exec touch \{\} \+ && if \[ -z "\$PROFILE_FROM" \]; then CARGO_HOME=[\w/.-]+ cargo build --release --locked; elif \[ -f "\$PROFILE_FROM" \]; then CARGO_HOME=[\w/.-]+ corten build --locked --profile-from sh -- "\$PROFILE_FROM"; else echo "PROFILE_FROM=\$PROFILE_FROM: [^"$`\\]*" >&2; exit 1; fi && cp target\/release\/\{\{name\}\} \/server$/;
 
-/** Why a Dockerfile does not build the way {@link BUILD} reads, or {@link INSTALL} and
- * {@link BUILD_EITHER} in that order, or nothing when it does. */
-function unlocked(/** @type {string} */ text) {
+/** Why a Dockerfile does not build the way it has to, or nothing when it does: an example's one
+ * `RUN` as {@link BUILD} reads, or, for the template (`profiled`), {@link INSTALL} and
+ * {@link BUILD_EITHER} in that order. Each file has the one shape that is its own, so an example
+ * cannot take the template's. */
+function unlocked(/** @type {string} */ text, profiled = false) {
   const lines = instructions(text);
   const runs = lines
     .slice(0, lines.findLastIndex((line) => /^FROM\s/i.test(line)))
     .filter((line) => /^RUN\s/i.test(line))
     .map((line) => line.replace(/^RUN\s+((--mount=\S+)\s+)*/i, "").replace(/\s+/g, " ").trim());
-  if (runs.length === 2) {
+  if (profiled) {
+    if (runs.length !== 2) return `has ${runs.length} RUN instructions before its run stage, not the 2 of a build that may take a profile`;
     if (!INSTALL.test(runs[0])) return `installs otherwise than the one locked install of a profiled build: ${runs[0]}`;
     return BUILD_EITHER.test(runs[1]) ? undefined : `builds otherwise than locked, with a profile or without: ${runs[1]}`;
   }
-  if (runs.length !== 1) return `has ${runs.length} RUN instructions before its run stage, not 1, or the 2 of a build that may take a profile`;
+  if (runs.length !== 1) return `has ${runs.length} RUN instructions before its run stage, not 1`;
   return BUILD.test(runs[0]) ? undefined : `builds otherwise than its one locked release build: ${runs[0]}`;
 }
 
-test("an image's build is read in its one shape", () => {
-  const image = (/** @type {string} */ ...runs) =>
-    unlocked(["FROM rust AS build", ...runs.map((run) => `RUN ${run}`), "FROM debian", "RUN echo cargo"].join("\n"));
+test("an example's build is read in its one shape, and the template's two RUNs each in theirs", () => {
+  const dockerfile = (/** @type {string[]} */ runs) => ["FROM rust AS build", ...runs.map((run) => `RUN ${run}`), "FROM debian", "RUN echo cargo"].join("\n");
+  const image = (/** @type {string} */ ...runs) => unlocked(dockerfile(runs));
+  const template = (/** @type {string} */ ...runs) => unlocked(dockerfile(runs), true);
   const touch = "find . -name target -prune -o -type f -exec touch {} +";
   const copy = "mkdir -p /out && cp target/release/app /out/server";
   assert.equal(image(`--mount=type=cache,target=/t ${touch} \\\n    && cargo build --release --locked -p app && ${copy}`), undefined);
@@ -123,31 +127,37 @@ test("an image's build is read in its one shape", () => {
     assert.notEqual(image(...bad), undefined, bad.join(" / "));
   // The template's two, read from the template so that these are its lines with one thing changed.
   const [install, build] = instructions(source(TEMPLATE)).filter((line) => /^RUN\s/i.test(line)).map((line) => line.replace(/^RUN\s+/i, ""));
-  assert.equal(image(install, build), undefined);
-  const without = (/** @type {string} */ run, /** @type {string} */ part) => {
-    assert.ok(run.includes(part), `the template has no ${part}`);
-    return run.replace(part, "");
+  assert.equal(template(install, build), undefined);
+  assert.notEqual(image(install, build), undefined, "an example does not take the template's two RUNs");
+  assert.notEqual(template(`${touch} && cargo build --release --locked -p app && ${copy}`), undefined, "nor the template an example's one");
+  // One thing changed, which has to be there to change.
+  const swapped = (/** @type {string} */ run, /** @type {string} */ from, /** @type {string} */ to) => {
+    assert.ok(run.includes(from), `the template has no ${from}`);
+    return run.replace(from, to);
   };
   for (const bad of [
-    [without(install, " --locked"), build],
-    [install, without(build, "cargo build --release --locked").replace("then CARGO_HOME=/var/cache/cargo ;", "then CARGO_HOME=/var/cache/cargo cargo build --release;")],
-    [install, build.replace("corten build --locked", "corten build")],
-    [without(install, "exit 1; "), build],
-    [install.replace("if ! corten", "if corten"), build],
-    [install, build.replace('sh -- "$PROFILE_FROM"', "sh $PROFILE_FROM")],
-    [install, build.replace('[ -f "$PROFILE_FROM" ]', "true")],
+    [swapped(install, " --locked", ""), build],
+    [install, swapped(build, "cargo build --release --locked", "cargo build --release")],
+    [install, swapped(build, "corten build --locked", "corten build")],
+    [swapped(install, "exit 1; ", ""), build],
+    [install, swapped(build, "exit 1; ", "")],
+    [swapped(install, "if ! corten", "if corten"), build],
+    [install, swapped(build, 'sh -- "$PROFILE_FROM"', "sh $PROFILE_FROM")],
+    [install, swapped(build, '[ -f "$PROFILE_FROM" ]', "true")],
+    [install, swapped(build, "cp target/release/{{name}} /server", "cp target/release/server /server")],
+    [install, swapped(build, "cp target/release/{{name}} /server", "cp target/release/{{name}} /srv")],
     [build, install],
     [install, build, build],
     [install, `${touch} && cargo build --release --locked -p app && ${copy}`],
     [install],
   ])
-    assert.notEqual(image(...bad), undefined, bad.join(" / "));
+    assert.notEqual(template(...bad), undefined, bad.join(" / "));
 });
 
 // An image builds the versions the lock names, which `corten check` ran, and fails when the lock is
 // missing or stale instead of repairing it inside the build (#1579, #1584).
 test("every image's cargo build is --locked", () => {
-  for (const file of files) assert.equal(unlocked(source(file)), undefined, file);
+  for (const file of files) assert.equal(unlocked(source(file), file === TEMPLATE), undefined, file);
 });
 
 test("card-market's run stage is the template's, so its smoke checks the template's image", () => {
@@ -217,8 +227,12 @@ test("the template's build takes a profile only when PROFILE_FROM names the app'
   assert.equal(lines.findIndex((line) => /^FROM\s/i.test(line)), 0);
   assert.ok(argument < lines.findIndex(run), "PROFILE_FROM is declared before the RUNs that read it");
   assert.ok(lines.findIndex(run) < lines.indexOf("COPY . ."), "the command is installed before the sources, so a changed source does not install it again");
+  // And nothing between takes it away again: an argument lasts to the end of its stage, so a
+  // `FROM` before the build would start a stage without it, and an `ENV` of the name is read
+  // in the argument's place. Either builds the ordinary image whatever the build was given.
+  assert.equal(lines.filter((line) => /^FROM\s/i.test(line)).length, 2, "one build stage and the run stage");
+  assert.deepEqual(lines.filter((line) => /PROFILE_FROM/.test(line) && !/^RUN\s/i.test(line)), ["ARG PROFILE_FROM="], "nothing else sets the name");
   // What the two RUNs run is read whole by "every image's cargo build is --locked".
-  assert.equal(unlocked(source(TEMPLATE)), undefined);
   assert.equal(lines.filter(run).length, 3, "two RUNs build, and the run stage's installs jemalloc");
 });
 

@@ -6558,8 +6558,8 @@ rules something out.
     wrote identical locks; 2026-11-20, each image's one build read as a locked release build by
     `scripts/images.test.mjs`, and card-market's timed recipe as a locked fetch and build by
     `bench/fullstack/builds.test.mjs`, at `d8832da25`; 2026-11-20, the starter's image read by
-    the same test as two `RUN`s in one shape, the install of the `corten` command and the
-    build with a profile or without, each of the three Cargo commands locked, at `99c6ccc85`
+    the same test as two `RUN`s, each in its one shape: the install of the `corten` command,
+    locked, and the build, `cargo build` or `corten build`, locked either way, at `99c6ccc85`
     merged with `4225a2837`.
 
 66. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in document mode or an action
