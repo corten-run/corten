@@ -658,10 +658,28 @@ benchmark (200 clients, 50 writes a second, each instance killed and restarted u
 every patch arrived in both committed runs: 777,600 of 777,600, and 800,000 of 800,000 with
 clients back on the other instance after 1.1 s at the median (measured on async-nats 0.50,
 `examples/listings-feed/results/failover-r1.json` and `failover-r2.json`). Those 200
-clients are the benchmark's own Node client of the feed's protocol, on its own retry schedule,
-and it counts a gap in `seq` as lost rather than loading a snapshot: they show what the server
-sends through a failover. Beside them a Chromium page runs `subscribe()` itself through the
-same run, and it lost nothing either (3,888 of 3,888 and 4,000 of 4,000, one snapshot each).
+clients are the benchmark's own Node client of the feed's protocol. They listen again to a
+stream answered with an HTTP error as `subscribe()` does: after 1 s, doubling to 30 s while the
+errors go on, and after 1 s again once a stream has opened. They retry a failed snapshot on
+their own schedule and count a gap in `seq` as lost rather than loading a snapshot: they show
+what the server sends through a failover. Beside them a Chromium page runs `subscribe()`
+itself through the same run, and it lost nothing either (3,888 of 3,888 and 4,000 of 4,000, one
+snapshot each).
+
+Behind nginx with more than one instance, give feed streams an `upstream` of their own with
+`max_fails=0` on its servers, as the benchmark's
+[`nginx.conf`](../../examples/listings-feed/bench/nginx.conf) does. nginx lets a server that
+failed back in through one trial request and counts it as up only when that request ends, and a
+stream does not end. With one upstream for everything, a stream sent as the trial kept its
+instance out, and once the other instance was killed nginx answered every reconnect in that
+worker 502 itself (`no live upstreams`) for 8 s and more: in 1 of 10 runs at `e33484d44`, the
+slowest clients took 17.3 s to reconnect and 60 of them loaded a new snapshot. In 6 runs at
+`389ec774d`, with the streams' own upstream, none got a 502 and the slowest took 1.3 to 1.6 s;
+the median went from 1.1 to 1.3 s, since half the streams first try the dead instance. A stopped
+container's address does not refuse a connection, it does not answer, so the streams'
+`proxy_connect_timeout` there is 250 ms; no connect to a running instance took longer in those
+runs.
+
 The runtime checks the envelope of what it is sent: a snapshot's `epoch`, `seq` and `rows`, and a
 patch's `seq` and each change's `op` and `id` (and an upsert's `value`). An answer that is not a
 snapshot (from a server of another version than the page's runtime, or a route that answers other
