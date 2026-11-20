@@ -173,6 +173,112 @@ test("unused retirement replays legacy proofs and requires the key digest for a 
   assert.throws(() => verifyUnusedEvidence(pinned, state));
 });
 
+// Execute the emitted drain function with bounded synthetic observations. The
+// native unused-host program above independently exercises unit and file proof.
+const drainFixture = String.raw`import ast, hashlib, json, os, re, sys
+from types import SimpleNamespace as S
+config = json.load(sys.stdin)
+requests = config['requests']
+function, = [n for n in ast.parse(config['program']).body if isinstance(n, ast.FunctionDef) and n.name == 'settled_receipts']
+code = compile(ast.Module(body=[function], type_ignores=[]), '<emitted-drain>', 'exec')
+token = requests[0]['invocation']['token']
+host = {'hostname': 'fixture', 'bootId': 'fixture-boot'}
+binding = {**{k: requests[0]['invocation'][k] for k in ('round', 'commit', 'token')}, 'helperSha256': requests[0]['helperSha256']}
+root_name = 'corten-bench-control-' + token
+root_path = '/run/' + root_name
+def row(pid, parent, cgroup):
+    return {'pid': pid, 'parent': parent, 'startTicks': '100', 'cgroup': '0::' + cgroup + '\n', 'executable': {'device': '1', 'inode': '2'}}
+listener = row(10, 1, '/system.slice/ssh.service')
+probe = row(11, 10, '/user.slice/probe.scope')
+names = {'binding.json': binding, 'helper.py': {}, 'mutex': {}}
+units = []
+for n, request in enumerate(requests):
+    inv = request['invocation']
+    identifier = inv['id']
+    unit = root_name + '-' + identifier + '.service'
+    units.append(unit)
+    scope = '/user.slice/session-' + str(n) + '.scope'
+    child, escaped, observer = row(20+n, 10, scope), row(40+n, 1, '/escaped.scope'), row(60+n, 1, '/system.slice/' + unit)
+    registration = dict(invocation=inv, host=host, listener=listener, observer=observer, socket={'connection': str(n)},
+                        session=dict(scope=scope, chain=[child]))
+    result = {'transport': 'exited', 'code': 0}
+    for prefix, data in dict(request=request, start={'unit': unit}, launcher={'unit': unit, 'code': 0}, registration=registration,
+                             result=result, receipt=dict(schema='benchmark-control-session/v2', result=result, **registration,
+                                                          samples=[{'processes': [listener, observer, child, escaped]}])).items():
+        names[prefix+'-'+identifier+'.json'] = data
+first = requests[0]['invocation']['id']
+class Path:
+    def __init__(self, value): self.value, self.name = value, value.rsplit('/', 1)[-1]
+    def __truediv__(self, child): return Path(self.value+'/'+child)
+    @property
+    def parent(self): return Path(self.value.rsplit('/', 1)[0])
+    def iterdir(self): return [self / name for name in records]
+    def glob(self, pattern):
+        assert pattern == 'corten-bench-control-*'
+        return [self / root_name] if self.value == '/run' else [self / units[0]] if mode == 'terminal' else []
+def terminal(root, identifier, receipt):
+    return None if mode == 'watcher' else {'unit': root_name + '-' + identifier + '.service'}
+def scope_read(scope, rows):
+    return {'exists': True, 'members': [], 'events': 'populated 1\n' if mode == 'scope' else 'populated 0\n'}
+def run(args, **kwargs):
+    assert args[-1] == 'corten-bench-control-*.service' and kwargs['timeout'] == 5
+    return S(returncode=0, stdout='foreign.service loaded active\n' if mode == 'foreign-watcher' else '')
+def raw(path): return json.dumps(records[path.name]).encode()
+def inventory():
+    rows = [listener, probe]
+    if mode == 'escaped': rows.append(row(40, 1, '/escaped.scope'))
+    if mode == 'other-session': rows.append(row(90, 10, '/unknown.scope'))
+    if mode == 'foreign-control': rows.append(row(90, 1, '/system.slice/corten-bench-control-foreign.service'))
+    if mode == 'changed-listener': rows[0] = dict(listener, startTicks='101')
+    return {p['pid']:p for p in rows}
+def load(root, name): return records[name]
+g = dict(private=lambda root: None, load=load, read=raw, ancestry=lambda *args: (listener, [probe], None),
+         host=lambda: host, watcher_terminal=terminal, inventory=inventory, key=lambda p: (p['pid'],p['startTicks']),
+         scope_read=scope_read, parent=lambda p: p['parent'])
+space = dict(hashlib=hashlib, json=json, os=S(getpid=os.getpid, environ={'SSH_CONNECTION':'fixture'}), re=re,
+             pathlib=S(Path=Path), subprocess=S(run=run))
+exec(code, space)
+for mode in ['terminal', 'missing', 'extra', 'wrong-host', 'wrong-request', 'partial-result', 'watcher', 'scope', 'escaped', 'other-session',
+             'foreign-control', 'foreign-watcher', 'changed-listener']:
+    records = dict(names)
+    if mode == 'missing': del records['receipt-'+first+'.json']
+    if mode == 'extra': records['seal-bootstrap.json'] = {}
+    if mode == 'wrong-host': records['receipt-'+first+'.json'] = dict(records['receipt-'+first+'.json'], host={})
+    if mode == 'wrong-request': records['request-'+first+'.json'] = {}
+    if mode == 'partial-result':
+        records['result-'+first+'.json'] = {'code': 0}
+        records['receipt-'+first+'.json'] = dict(records['receipt-'+first+'.json'], result=records['result-'+first+'.json'])
+    try:
+        result = space['settled_receipts'](Path(root_path), binding, requests, g)
+    except (AssertionError, KeyError):
+        if mode == 'terminal': raise
+        continue
+    assert mode == 'terminal', mode
+    assert result == [hashlib.sha256(raw(Path('receipt-'+r['invocation']['id']+'.json'))).hexdigest() for r in requests]
+print('drain fixtures passed')
+`;
+
+test("settled bootstrap probe requires exact requests, terminal watchers, dead sessions and no foreign actors", { skip: !available }, () => {
+  const state = { ...reservation({ round: "r21", commit, token: "0123456789abcdef" }), id: "123", ip: "192.0.2.10", status: "preparing",
+    createIntentAt: "2026-11-18T00:00:00.000Z", control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
+      monitor: { schema: "benchmark-supervised-control/v1", id: "a".repeat(32), phase: "pending" } } };
+  const steps = [["ssh", "true", 30000], ["ssh", "mkdir -m 700 /bench && touch /bench/run.log", 60000]];
+  for (const [name, content] of Object.entries(remoteFiles(state)).slice(0, 2))
+    steps.push(["scp", "/bench/" + name, 15 * 60000],
+      ["ssh", "printf '%s  %s\\n' '" + digest(content) + "' '/bench/" + name + "' | sha256sum --check --status", 60000]);
+  for (const [binary, payload, timeout] of steps) {
+    const request = controlRequest(state, binary, ["fixture", payload], timeout, "bootstrap");
+    state.control.ledger.push({ request, code: 0, localTerminal: true });
+  }
+  const script = unusedHostScript(state, { bootstrap: true });
+  const program = script.split("<<'CORTEN_UNUSED_HOST'\n")[1].split("\nCORTEN_UNUSED_HOST")[0];
+  const requests = state.control.ledger.map((row) => row.request);
+  const r = spawnSync(python, ["-I", "-c", drainFixture], { input: JSON.stringify({ program, requests }),
+    encoding: "utf8", timeout: 5000, maxBuffer: 4096, windowsHide: true });
+  assert.equal(r.error, undefined); assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), "drain fixtures passed");
+});
+
 const setupFixture = `import contextlib, io, json, os, pathlib, stat, subprocess, sys, time, urllib.request
 from unittest.mock import patch
 from types import SimpleNamespace
