@@ -5063,7 +5063,9 @@ rules something out.
     refusals go or change with it; or a browser keeps one of the refused patch shapes as written
     after some first element or in some place a view is written, when `patch-parsing.json`'s cases
     fail in the smoke (or the probe in Last checked, run again, finds it kept) and that refusal
-    goes; or an app is found to write one of the refused shapes across a component's edge or an
+    goes (a whole-patch refusal goes only when every supported engine keeps the shape, since it
+    exists for the engines that lose it: Firefox keeps a row after a leading `<base>`, Chromium and
+    WebKit drop it); or an app is found to write one of the refused shapes across a component's edge or an
     expression (a component whose top-level element lands in an `<svg>` and writes an element
     there a browser moves out, children a component writes into a `<textarea>`, a block in a `<p>`
     after a text expression, a row after a `<table>` whose rows an expression writes), when
