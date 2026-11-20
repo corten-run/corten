@@ -67,9 +67,10 @@ publication. Coordinate disclosure with the fixed release so users know what to 
    command. It reuses byte-identical archives and refuses to overwrite a differing archive.
    Review the changelog diff and include the archive and fragment deletions in the preparation
    pull request. Repoint links that named the moved headings in `CHANGELOG.md`; `npm run check`
-   checks anchors in both the current changelog and archives. Check the new section contains
-   any upgrade instructions. Get the preparation pull request independently reviewed and merge after its
-   required checks pass.
+   checks anchors in both the current changelog and archives, accepting known anchors and skipping
+   unmatched ones only if the target file has a heading whose anchor cannot be determined.
+   Check the new section contains any upgrade instructions. Get the preparation pull request
+   independently reviewed and merge after its required checks pass.
 4. Record the resulting commit SHA on `main`. Confirm the release gates against that exact
    commit, including green CI, the workspace publish dry run in the checks and
    `node scripts/changelog.mjs --check-release` from a clean checkout of that SHA. The command

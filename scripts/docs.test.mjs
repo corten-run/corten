@@ -119,7 +119,7 @@ test("changelog anchors follow headings, duplicate suffixes and explicit HTML an
   const paths = presentIn(["CHANGELOG.md", archive, "docs/guide/kit.md"]);
   const sections = scan(archive, [
     "## 0.2.0 (2026-11-11)", "### Breaking changes", "### Breaking changes",
-    "### Use `App` and Café", '<a id="upgrade"></a>', "```markdown", "# Not a heading", "```",
+    "### Use `App` and Café", '<a id="upgrade"></a>', "```markdown", "    ```", "# Not a heading", "```",
   ].join("\n"), paths).anchors;
   const anchorsFor = (/** @type {string} */ file) => file === archive ? sections
     : { ids: new Set(["unreleased"]), unsupported: false };
@@ -160,7 +160,7 @@ test("changelog heading slugs keep literal code and identifier underscores", () 
   ]);
 });
 
-test("links to unsupported changelog headings get a clear diagnostic", () => {
+test("unverifiable changelog headings do not hide later supported anchors or fail links", () => {
   const archive = "CHANGELOG.0.2.0.md";
   const paths = presentIn(["README.md", archive]);
   for (const [heading, slug] of [
@@ -169,18 +169,35 @@ test("links to unsupported changelog headings get a clear diagnostic", () => {
     ["### Use <strong>CLI</strong>", "use-cli"],
     ["### Use **the _CLI_**", "use-the-cli"],
   ]) {
-    const anchorsFor = () => scan(archive, [
-      "### Earlier heading", heading, '<a id="explicit"></a>', "### Earlier heading",
+    const index = scan(archive, [
+      "### Earlier heading", heading, '<a id="explicit"></a>', "### Unique plain heading", "### Earlier heading",
     ].join("\n"), paths).anchors;
+    assert.equal(index.unsupported, true, heading);
+    assert.deepEqual(index.ids, new Set(["earlier-heading", "explicit", "unique-plain-heading", "earlier-heading-1"]), heading);
     const link = (/** @type {string} */ id) => "[section](" + archive + "#" + id + ")";
-    const text = [link("earlier-heading"), link("explicit"), link(slug), link("earlier-heading-1")].join("\n");
-    assert.deepEqual(scan("README.md", text, paths, anchorsFor).problems, [
-      "README.md:3: a link to " + archive + "#" + slug + ", but " + archive +
-        " has an unsupported heading for anchor check; link to an explicit HTML anchor instead",
-      "README.md:4: a link to " + archive + "#earlier-heading-1, but " + archive +
-        " has an unsupported heading for anchor check; link to an explicit HTML anchor instead",
-    ], heading);
+    assert.equal(index.ids.has(slug), false, heading);
+    const text = [link(slug), link("unique-plain-heading"), link("missing")].join("\n");
+    assert.deepEqual(scan("README.md", text, paths, () => index).problems, [], heading);
   }
+});
+
+test("changelog anchors ignore indented code but keep headings in list continuations", () => {
+  const archive = "CHANGELOG.0.2.0.md";
+  const paths = presentIn([archive]);
+  const headings = [
+    "    ### At the start", "", "    ### Still code &amp; not a heading",
+    "### A plain heading", "", "    ### Only an example", "    ```",
+    "10. An item", "", "    ### A list heading", "", "### Back at top level", "", "    ### Not in the list",
+  ].join("\n");
+  const index = scan(archive, headings, paths);
+  assert.deepEqual(index.problems, []);
+  const links = "[start](#at-the-start) [example](#only-an-example) [list](#a-list-heading) [outside](#not-in-the-list) [missing](#missing)";
+  assert.deepEqual(scan(archive, links, paths, () => index.anchors).problems, [
+    "CHANGELOG.0.2.0.md:1: a link to #at-the-start, but CHANGELOG.0.2.0.md has no #at-the-start anchor",
+    "CHANGELOG.0.2.0.md:1: a link to #only-an-example, but CHANGELOG.0.2.0.md has no #only-an-example anchor",
+    "CHANGELOG.0.2.0.md:1: a link to #not-in-the-list, but CHANGELOG.0.2.0.md has no #not-in-the-list anchor",
+    "CHANGELOG.0.2.0.md:1: a link to #missing, but CHANGELOG.0.2.0.md has no #missing anchor",
+  ]);
 });
 
 test("a backtick with no partner in its paragraph is text, and hides no link after it", () => {

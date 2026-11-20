@@ -3,16 +3,16 @@
 // `corten ui add` row was, at a marker inside the row's text). The house rule this leans on: every
 // table row ends with `|`. Fenced code is not read, so a guide can show a conflict. A paragraph
 // cut at a marker inside its text is not caught: the text can name a marker (an issue's title).
-// Indentation is not measured: indented code (four spaces, outside a list) is read as text, and a
-// bare fence line indented or quoted inside fenced code closes it; the guides fence their code
-// unindented.
+// Outside changelogs, indentation is not measured: indented code is read as text, and a bare
+// fence line indented or quoted inside fenced code closes it; the guides fence their code unindented.
 //
 // And for a link to a file or folder the repository does not have (bench/browser's README linked
 // the view app's code to a file that never existed): an inline link (`[text](target)`,
 // `![alt](target)`, spaces around the target allowed) and, inside an HTML tag that closes on its
 // line (a `>` in a quoted value does not close it), a `src`, `srcset` or `href` (the README's
 // logo). For links to the root or per-version changelog, also check the fragment against its
-// supported ATX headings and explicit HTML anchors. Not read for other links: a URL (`https:`, `//host`),
+// supported ATX headings and explicit HTML anchors; skip unknown IDs if any heading is unverifiable.
+// Not read for other links: a URL (`https:`, `//host`),
 // the anchor and query of a target, inline
 // code (a span may wrap onto the paragraph's next lines, and a backslash in it is its own
 // character; a backtick run with no partner in its paragraph is text, as Markdown shows it, and a
@@ -63,6 +63,8 @@ export function scan(file, text, present, anchorsFor) {
   const headingIds = new Set();
   /** The open fence's character and length, or null outside one. @type {{ char: string, length: number } | null} */
   let fence = null;
+  let indentedCode = false;
+  let listIndent = 0;
   // Inside an HTML comment that started a line, and where it started.
   let comment = false;
   let commentAt = "";
@@ -90,11 +92,8 @@ export function scan(file, text, present, anchorsFor) {
         if (!present.has(to)) problems.push(`${at}: a link to ${path}, which the repository does not have`);
         else if (anchor && isChangelog(to) && anchorsFor) {
           const index = anchorsFor(to);
-          if (!index.ids.has(anchor)) {
-            const reason = index.unsupported
-              ? "has an unsupported heading for anchor check; link to an explicit HTML anchor instead"
-              : `has no #${anchor} anchor`;
-            problems.push(`${at}: a link to ${target}, but ${to} ${reason}`);
+          if (!index.ids.has(anchor) && !index.unsupported) {
+            problems.push(`${at}: a link to ${target}, but ${to} has no #${anchor} anchor`);
           }
         }
       }
@@ -109,8 +108,9 @@ export function scan(file, text, present, anchorsFor) {
     });
     paragraph = [];
   };
-  text.split(/\r?\n/).forEach((line, i) => {
+  text.split(/\r?\n/).forEach((line, i, lines) => {
     const at = `${file}:${i + 1}`;
+    const indent = inChangelog ? (/^ */.exec(line)?.[0].length ?? 0) : 0;
     // A block quote's `>`s and a list item's marker come before a fence or a row.
     const body = line.replace(/^(\s*>)*\s*/, "");
     // A fence opens with three or more of one character and closes on a bare fence of that
@@ -127,10 +127,23 @@ export function scan(file, text, present, anchorsFor) {
     if (fence) {
       // A closing fence is bare: no list marker before it, nothing after it.
       const close = /^(`{3,}|~{3,})\s*$/.exec(body);
-      if (close && close[1][0] === fence.char && close[1].length >= fence.length) fence = null;
+      if (indent < listIndent + 4 && close && close[1][0] === fence.char && close[1].length >= fence.length) fence = null;
       return;
     }
-    if (mark && !(mark[1][0] === "`" && mark[2].includes("`"))) {
+    if (inChangelog && body) {
+      if (indent < listIndent) listIndent = 0;
+      // A blank line can separate blocks in a list item without ending the item.
+      if (!listIndent && indent >= 4 && (indentedCode || !lines[i - 1]?.trim())) {
+        read();
+        indentedCode = true;
+        return;
+      }
+      indentedCode = false;
+      const item = /^ {0,3}(?:[-*+]|\d{1,9}[.)]) {1,4}(?=\S)/.exec(line);
+      if (item) listIndent = item[0].length;
+    }
+    const tooIndented = !listIndent && indent >= 4;
+    if (!tooIndented && mark && !(mark[1][0] === "`" && mark[2].includes("`"))) {
       read();
       fence = { char: mark[1][0], length: mark[1].length };
       return;
@@ -155,10 +168,8 @@ export function scan(file, text, present, anchorsFor) {
     // A table row and a heading are lines of their own, and a line that starts a block (a list
     // item, HTML) starts a new paragraph, so a code span never runs into or out of one.
     const tableRow = body.startsWith("|");
-    const heading = /^#{1,6}(\s|$)/.test(body);
-    if (heading && inChangelog && !anchors.unsupported) {
-      // An unknown slug can change duplicate suffixes below it. Keep earlier heading IDs and
-      // explicit HTML anchors, but do not guess any subsequent heading IDs.
+    const heading = !tooIndented && /^#{1,6}(\s|$)/.test(body);
+    if (heading && inChangelog) {
       const slug = headingSlug(body.replace(/^#+\s*/, "").replace(/\s+#+\s*$/, ""));
       if (slug === undefined) anchors.unsupported = true;
       else {
