@@ -35,7 +35,7 @@ Usage:
                    Build and run the app in this directory; rebuild and restart on every
                    change, and reload open pages. Default port 3000.
   corten build [<cargo argument> ..] [--profile-from <command> [<argument> ..]]
-                   Build the release binary. Cargo's --features (-F), --all-features,
+                   Run Cargo's release build. Cargo's --features (-F), --all-features,
                    --no-default-features, --locked, --package (-p) and --bin, given before
                    --profile-from, go to each build; any other argument is refused.
                    With --profile-from, build it with a profile of
@@ -133,7 +133,7 @@ fn main() -> ExitCode {
             Some(command) => profile::run(command, &build.cargo),
             None => cargo(&["build", "--release"].into_iter().chain(build.cargo.iter().map(String::as_str)).collect::<Vec<_>>()).map(|()| {
                 println!(
-                    "\ncorten: the release build finished. The app's binary (in target/release unless Cargo's configuration moves it) is the whole deploy: the static files are compiled into it (see Dockerfile)."
+                    "\ncorten: the release build finished. An app binary it built (in target/release unless Cargo's configuration moves it) is the whole deploy: the static files are compiled into it (see Dockerfile)."
                 );
             }),
         }),
@@ -470,7 +470,17 @@ mod tests {
         assert_eq!(build_flags(&given), Ok(Build { cargo: cargo.clone(), profile_from: Some(&given[10..]) }));
         assert_eq!(build_flags(&given[..9]), Ok(Build { cargo, profile_from: None }));
         // Cargo's other spellings of a value, an empty one included.
-        for written in [&["-Fa"][..], &["-F=a"], &["-pshop"], &["--features="], &["--features", ""], &["--bin=web"]] {
+        for written in [
+            &["-Fa"][..],
+            &["-F=a"],
+            &["-pshop"],
+            &["--package", "shop"],
+            &["--package=shop"],
+            &["--all-features"],
+            &["--features="],
+            &["--features", ""],
+            &["--bin=web"],
+        ] {
             let written = args(written);
             assert_eq!(build_flags(&written), Ok(Build { cargo: written.clone(), profile_from: None }));
         }
