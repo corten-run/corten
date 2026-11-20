@@ -213,16 +213,17 @@ reaches the app; give a prefix `proxy_cache app;` only when everything under it 
     }
 ```
 
-Keep `proxy_http_version 1.1` in each `location` that passes requests to the app. Since 1.29.7,
-nginx sends HTTP/1.1 to the app, omits `Connection` and reuses upstream connections by default,
-so the explicit lines change nothing there, but a `proxy_http_version 1.0` inherited from an
-outer block still applies, and so does an older nginx's default of HTTP/1.0 (1.27.5's): with it,
-`keepalive` does not reuse connections, a `location` with `proxy_request_buffering off` still
-buffers a chunked upload, and WebSockets fail. A proxy that passes `Upgrade` on over HTTP/1.0 gets
-an `Option<Upgrade>` route's other answer (its page) and an `Upgrade` route's 400, since a server
-ignores `Upgrade` in an HTTP/1.0 request (RFC 9110, 7.8). Keep both the `Upgrade` and the
-`Connection` header lines: the map sends `Connection: upgrade` when the browser asks for an
-upgrade, and nothing otherwise.
+Each `location` that passes requests to the app keeps `proxy_http_version 1.1`. Since 1.29.7 it is
+nginx's default for an ordinary request, but a `proxy_http_version 1.0` inherited from an outer
+block still applies, as does an older nginx's default (1.27.5's): over HTTP/1.0 the sample's
+upstream connections are not kept, a `location` with `proxy_request_buffering off` still buffers
+a chunked upload, and a WebSocket fails. A proxy that passes `Upgrade` on over HTTP/1.0 gets an
+`Option<Upgrade>` route's other answer (its page) and an `Upgrade` route's 400, since a server
+ignores `Upgrade` in an HTTP/1.0 request (RFC 9110, 7.8). Before 1.29.7 nginx also sent
+`Connection: close` by default, so a `location` that serves no WebSocket clears it
+(`proxy_set_header Connection ""`, as `/files/` does) for its connections to be kept. A
+`location` that serves WebSockets keeps `Upgrade` and the mapped `Connection` on any version: the
+map sends `Connection: upgrade` when the browser asks for an upgrade, and nothing otherwise.
 
 Keep the shorter `keepalive_timeout` from row 7. Measured with the sample on nginx 1.31.9: two
 separate client connections reused one connection to the app, which nginx closed after 25.1 s
