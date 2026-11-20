@@ -666,7 +666,8 @@ snapshot, so they show what the server sends through a failover. Beside them a C
 itself through the same run, and it lost nothing either (3,888 of 3,888 and 4,000 of 4,000, one
 snapshot each).
 
-Behind nginx with more than one instance and its passive health checks (`max_fails`), route
+Behind nginx with more than one instance in one upstream with its passive health checks
+(`max_fails`), streams can keep a restarted instance out, as the benchmark found; to avoid it, route
 the app's stream addresses to an `upstream` of their own with `max_fails=0` on its servers, as
 the benchmark's [`nginx.conf`](../../examples/listings-feed/bench/nginx.conf) does for
 `/feeds/<seller>/live` (its location assumes a seller key without `/`; match your own routes).
@@ -675,8 +676,8 @@ clears its failures only when a trial ends well, and a stream does not end. With
 everything, an instance that had restarted could stay out of one nginx worker's upstream a trial
 at a time, and once the other instance was killed that worker answered reconnects 502 itself
 (`no live upstreams`, 406 lines from one worker over 16 s while the restarted instance was up).
-In 1 of 11 runs at `e33484d44`, of the Node clients whose stream was cut, the 237 that resumed
-with a patch took up to 17.3 s, as long as four failed tries on the 1, 2, 4 and 8 s backoff take,
+In 1 of 11 runs at `e33484d44`, the Node clients' 237 timed reconnects (those that resumed
+with a patch) took up to 17.3 s, as long as four failed tries on the 1, 2, 4 and 8 s backoff take,
 and 60 more fell past the replay window and loaded a new snapshot (not timed). In 6 runs
 at `389ec774d`, with the streams' own upstream, no Node client got an HTTP error, the slowest
 took 1.3 to 1.6 s, and the median of the runs' medians went from 1.1 to 1.25 s: about half of
