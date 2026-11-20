@@ -2171,6 +2171,43 @@ mod tests {
         }
     }
 
+    /// The literal whole-patch shapes in `a_whole_patch_knows_which_literal_element_decides`,
+    /// held to the parser's browser vectors as well as the debug check's diagnosis.
+    #[cfg(feature = "json")]
+    #[test]
+    fn a_whole_patch_s_literal_top_level_follows_the_browser_vectors() {
+        let vectors: serde_json::Value = serde_json::from_str(include_str!("patch-parsing.json")).unwrap();
+        let cases = vectors["cases"].as_array().unwrap();
+        for (html, loss) in [
+            (r#"<div id="a"></div><tr id="b"><td>1</td></tr>"#, Some(r#"<tr id="b"> is dropped"#)),
+            (r#"<p id="a"></p><td id="b">1</td>"#, Some(r#"<td id="b"> is dropped"#)),
+            (r#"<title>t</title><tr id="a"><td>1</td></tr>"#, Some("in Chromium and WebKit")),
+            (r#"<tr id="a"></tr><tbody id="b"></tbody>"#, Some(r#"<tbody id="b"> is dropped"#)),
+            (r#"<tr id="a"></tr><td id="b">1</td>"#, Some(r#"<td id="b"> is put in a <tr>"#)),
+            (r#"<td id="a"></td><tr id="b"></tr>"#, Some(r#"<tr id="b"> is dropped"#)),
+            (r#"<tbody id="a"></tbody><tr id="b"></tr>"#, Some(r#"<tr id="b"> is put in a <tbody>"#)),
+            (r#"<caption id="a">x</caption><td id="b">1</td>"#, Some(r#"<td id="b"> is put in a <tbody> and a <tr>"#)),
+            (r#"<colgroup id="a"></colgroup><col id="b">"#, Some(r#"<col id="b"> is put in a <colgroup>"#)),
+            (r#"<col id="a"><link rel="stylesheet" href="/s.css" data-corten-style>"#, Some("is dropped")),
+            (r#"<tr id="h"><td>1</td></tr><p id="a">x</p><tr id="b"><td>2</td></tr>"#, None),
+            (r#"<td id="a">1</td><th id="b">2</th><div id="c"></div>"#, None),
+            (r#"<col id="a"><col id="b"><template id="t" data-remove></template>"#, None),
+        ] {
+            let case = cases.iter().find(|case| case["html"] == html).unwrap_or_else(|| panic!("no case {html}"));
+            let as_written = serde_json::Value::from(written(html));
+            let differs = case["parsed"] != as_written
+                || case["parsedIn"].as_object().is_some_and(|engines| engines.values().any(|parsed| *parsed != as_written));
+            assert_eq!(differs, loss.is_some(), "{html}");
+            match loss {
+                Some(loss) => {
+                    assert!(case["lost"].as_str().is_some_and(|why| why.contains(loss)), "{html}: {case}");
+                    assert!(patch_parse_problem(html).is_some_and(|why| why.contains(loss)), "{html}: {loss}");
+                }
+                None => assert_eq!(patch_parse_problem(html), None, "{html}"),
+            }
+        }
+    }
+
     /// The lists `html!`'s refusal reads a patch's top level and foreign content by are this check's:
     /// `corten-macros` has no dependency to share them through. (Skipped outside the repository.)
     #[test]
@@ -2183,6 +2220,7 @@ mod tests {
             source[start..end].split('"').skip(1).step_by(2).map(str::to_owned).collect()
         };
         assert_eq!(list("TEMPLATE_HEAD"), super::HEAD_TAGS);
+        assert_eq!(list("DECIDING_HEAD"), super::DECIDING_HEAD);
         assert_eq!(list("TABLE_PARTS"), super::TABLE_PARTS);
         assert_eq!(list("SVG_HTML_POINTS"), super::SVG_HTML_POINTS);
         assert_eq!(list("MATH_HTML_POINTS"), super::MATH_HTML_POINTS);

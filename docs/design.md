@@ -4736,7 +4736,8 @@ rules something out.
     is written (an element in an element whose content is text, a `<plaintext>`, and an element
     taken out of foreign content, and literal HTML nesting that closes or discards an open
     element), and the shapes of a patch's top level the runtime's parse of it loses wherever they
-    are written, where the markup shows how a browser parses it. Script and style literals
+    are written, where the markup shows how a browser parses it. A code-generating build also
+    refuses known top-level losses when it sees the view sent as the entire patch. Script and style literals
     that need a known context are refused when the markup cannot prove one.** An element written in a
     `<textarea>`, an HTML `<title>`, a `<script>`, a `<style>`, an `<iframe>`, an `<xmp>`, a
     `<noembed>` or a `<noframes>` was written by `html!` as markup and read by the browser as
@@ -4806,14 +4807,21 @@ rules something out.
     `<button>`, a `<label>` around them) after a first table part, which the patch's parse puts in
     empty, is kept as written in an `<svg>` or a `<math>`, where none of them is taken out, so it
     compiles, though few views will be written there: refusing it would refuse a component that is
-    correct where its parent writes it, which the rule below does not allow. Those shapes, what a
-    component, an expression or a block writes, a refused shape with an expression or a component
-    at or between its two elements, and a first element an `<svg>` keeps, are left to the debug
-    check that answers such a patch with a 500 when it is sent
-    ([Limit 2](#limit-whole-element-patches)); a release build sends them as drawn. Head tags
-    before the first element do not change a refused shape: the standard and Firefox read them as
-    a head's, and Chromium and WebKit, which let a leading `<title>`, `<base>`, `<basefont>`,
-    `<bgsound>` or `<noframes>` decide, read the rest as a body's, where each is lost too.
+    correct where its parent writes it, which the rule below does not allow.
+
+    Where the whole patch is a concrete `html!` view, the first literal element can decide the
+    reading. The macro marks a loss at a later literal sibling: a table part dropped after a body
+    element, a table part dropped or wrapped after a different kind of table part, or anything but
+    a `<col>` or `<template>` dropped after a first `<col>`. It checks both readings of a leading
+    `<title>`, `<base>`, `<basefont>`, `<bgsound>` or `<noframes>`: the standard and Firefox read
+    it as a head's, and Chromium and WebKit let it choose body rules. A zero-sized return shape
+    carries the diagnostic as a lazy constant. `Action::patch_with_status` and `FormPatch::draw`
+    evaluate it when Rust generates code for a concrete view; `cargo check` does not. The sealed
+    method adds no bound to `Patch` callers and does not enter the `dyn Patch` vtable. A component,
+    reference, optional patch or collection can be part of a larger composition and supplies no
+    verdict. `corten::live` already takes rendered fragments. The debug check still reads every
+    patch sent, reports a loss with a 500 (or panics for a live fragment), and is where losses
+    involving unseen output or top-level blocks are found ([Limit 2](#limit-whole-element-patches)).
 
     `html!` sees only its own markup, so it acts only where that markup shows how a browser
     parses it, following the HTML standard's tree construction: HTML under an element that is
@@ -4944,7 +4952,8 @@ rules something out.
     expression after a first `<table>`. That
     gives up a `<form>` after a first table part with an expression in it, which the parse empties
     at its start tag whatever the expression writes, as a miss. Where the patch lands is not
-    needed: the shapes are the ones lost wherever they are written.
+    needed for the refusals made where `html!` is written; the send boundary adds that fact for
+    the literal whole-patch cases.
 
     `html/nesting.rs` walks the parsed nodes once in document order with a stack of literal
     ancestors and stops refusing at the first unseen node; each control-flow body starts from
@@ -4987,6 +4996,9 @@ rules something out.
     in a `<table>` still compiles (foster parenting), as does a `<table>` in a `<p>`, whose
     closure depends on quirks mode, not just literal
     ancestors. The key check's table limit is in [Choice 46](#choice-ref-values).
+    A separate `WholePatch` bound would make `cargo check` report the loss but would require apps
+    generic over `Patch` to change their bounds. An associated constant directly on the sealed
+    supertrait would make existing `dyn Patch` uses stop compiling.
     Refusing where the markup does not show the context, which would refuse a
     component's SVG fragment, valid wherever its parent writes it in an `<svg>`. Following the
     context across components, which the macro does not see: each component's render would
@@ -5011,7 +5023,9 @@ rules something out.
     `MATH_HTML_POINTS` and `BREAKOUT` in `crates/corten-macros/src/html.rs` copy; the "in
     template" insertion mode's head tags and table start tags, and what the table insertion
     modes do with the tags after them, which `TEMPLATE_HEAD` and `TABLE_PARTS` copy, held equal to
-    the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there;
+    the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there,
+    which also holds both copies of `DECIDING_HEAD` equal; the literal whole-patch losses and
+    kept shapes are checked against the browser vectors there;
     the tokenizer's script data, RAWTEXT and data states, in which an appropriate end tag ends a
     `<script>` or `<style>` whatever the markup around it says, `<!--` and `<script` carry a
     script past one, and in foreign content `<` may start a tag and `&` a character reference;
@@ -5057,9 +5071,15 @@ rules something out.
     keep it open, when that text would stop being unseen output too; or an app needs components drawn inside
     script text (a client-side template filled from a component's markup), when the precondition
     that output is drawn where a browser reads tags goes too, and with it every refusal outside a
-    patch's top level but the two of a single start tag.
+    patch's top level but the two of a single start tag; or Rust can check the marked shape before
+    code generation without new public bounds, when `cargo check` should report it too.
 
-    Last checked: 2026-11-18, the HTML tokenizer's data state and foreign-content rules.
+    Last checked: 2026-11-19, for the whole-patch send boundary: on Rust 1.89.0 and stable 1.99.1,
+    a cross-crate probe with a lazy constant passed `cargo check` and reported the lost `<tr>`
+    at its macro invocation under `cargo build`. A generic `Patch` caller and reference, optional,
+    vector and `dyn Patch` inputs still built. `patch-parsing.json` records loss for a paragraph
+    before a table part and no loss for a paragraph between two rows. 2026-11-18, the HTML
+    tokenizer's data state and foreign-content rules.
     Chromium 159.0.8154.6, Firefox 159.0 and WebKit 27.2 all decoded the reference and opened
     a child element in unescaped `<script>` and `<style>` literals in SVG and MathML, and
     kept the escaped versions as literal text without a child element (`parsesAsHtmlMeans`).
@@ -6876,14 +6896,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
    after a first `<table>`; an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>`
    ..) after a first `<col>`; and after a first other table part, a `<table>` at the top level or
    in a later element, and a `<form>` there that holds an element, with an element HTML's
-   wherever it lands in or around it ([Choice 54](#choice-html-parse-refusals)). The rest depend
-   on what the patch began with or where the view is written (a `<p>` and a `<tr>` after it are
-   kept after a first `<tr>`, and an `<svg>` keeps a `<form>` of fields after a `<tr>`), so for
-   them, where a component or an expression writes the first element, and where one is written
-   between the two elements (it may leave an element open), a debug build refuses such a patch, as
-   `html!` writes it, when it sends it, naming the element, but a release build sends it as drawn
-   and the browser loses the part, so a mix that only some data draws is found only by a debug
-   render that draws it
+   wherever it lands in or around it ([Choice 54](#choice-html-parse-refusals)). When a concrete
+   `html!` is sent whole, a code-generating build also refuses literal losses that depend on
+   what came first (a `<tr>` after a first `<p>`). Where the compiler does not see the loss, for
+   example when a component or an expression writes an element or when one leaves an element open
+   between two literals, a debug build refuses the patch as drawn when it sends it, naming the
+   element. A release build sends those unchecked shapes, so a mix that only some data draws is
+   found only by a debug render that draws it
    ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
    That check refuses a patch from an area's handler that begins with a `<col>` even where the page
    already has the area's stylesheet, whose link Corten writes after the patch's elements and the

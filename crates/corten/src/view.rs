@@ -1691,11 +1691,11 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <form id={FilterId}><p>"Filters"</p></form> };
 /// ```
 ///
-/// Every other shape the parse may lose depends on what the patch began with or where the view is
-/// written, which a component's markup does not show: after a first `<tr>` a `<p>` and a row
-/// after it are both kept, and an `<svg>` keeps a `<form>` of fields after a `<tr>`, so a
-/// component that writes them compiles, and a debug build answers a patch the browser would lose
-/// part of with a 500 when it is sent (a `<p>` and then a `<tr>` on their own, below):
+/// Other shapes depend on what came first: a `<p>` and then a `<tr>` lose the row on their own,
+/// but a `<tr>` before both keeps them. `html!` can mark this shape, but it does not refuse the
+/// markup where it is written. [`Action::patch`](crate::Action::patch) checks the concrete view
+/// when a build generates code for sending it whole. A component remains free to write that
+/// markup as part of another view. A debug build checks the actual patch when sent:
 ///
 /// ```
 /// use corten::{prelude::*, view::Patch};
@@ -1771,7 +1771,12 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 )]
 pub trait Patch: Render + __private::PatchSealed {}
 
-impl<F: FnOnce(&mut String) -> S, S: __private::PatchShape> __private::PatchSealed for Html<F> {}
+impl<F: FnOnce(&mut String) -> S, S: __private::PatchShape> __private::PatchSealed for Html<F> {
+    #[inline(always)]
+    fn __check_whole_patch(&self) {
+        const { S::CHECK_WHOLE }
+    }
+}
 impl<F: FnOnce(&mut String) -> S, S: __private::PatchShape> Patch for Html<F> {}
 impl<T: Id> __private::PatchSealed for Remove<T> {}
 impl<T: Id> Patch for Remove<T> {}
@@ -2618,7 +2623,16 @@ pub mod __private {
 
     /// Implemented only by Corten and `#[component]`: what makes [`super::Patch`] a promise
     /// the compiler checked.
-    pub trait PatchSealed {}
+    pub trait PatchSealed {
+        /// Only a direct `html!` shape can supply a verdict. Wrappers and components still use
+        /// the debug check of what they draw; a component may be only part of a patch.
+        #[inline(always)]
+        fn __check_whole_patch(&self)
+        where
+            Self: Sized,
+        {
+        }
+    }
 
     // The shape of a view from `html!`, returned by its closure: one per top-level part, `Yes`
     // when the part is a patch and a type that says why when it is not (the error names it), a
@@ -2645,7 +2659,9 @@ pub mod __private {
         label = "a patch replaces elements by id",
         note = "the type this says is not a PatchShape tells which part: `ComponentOrExpressionNotAPatch` (declare that component -> impl Patch; an expression must be a Patch), `IdNotADeriveIdType` (give the element an id={{..}} of a #[derive(Id)] type) or `TextOrElementWithoutId` (text and elements without an id cannot be a patch's top level); it names the kind of part, not its place, so look for that kind among the view's top-level parts (rustc's `required for` line, when it prints it in full, lists them in order: `Yes` for each that is a patch, an `Option` for the body of a for, if or match)"
     )]
-    pub trait PatchShape {}
+    pub trait PatchShape {
+        const CHECK_WHOLE: () = ();
+    }
     impl PatchShape for Yes {}
     impl PatchShape for End {}
     impl<T: PatchShape> PatchShape for Option<T> {}

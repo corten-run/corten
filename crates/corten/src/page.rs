@@ -1094,6 +1094,41 @@ impl Action<'_> {
     /// It is any [`HtmlResult`], `HtmlResult<Patches>` too ([`crate::Patches`]).
     ///
     /// Obtain this builder from [`Req::action`], or answer both modes with [`Req::patch_or`].
+    /// A build that generates code also refuses a direct `html!` whose literal top level would
+    /// lose an element when sent whole. A paragraph before a row makes the browser drop the row:
+    ///
+    /// ```compile_fail,E0080
+    /// use corten::{prelude::*, Action};
+    /// #[derive(Id)]
+    /// struct StatusId;
+    /// #[derive(Id)]
+    /// struct RowId;
+    /// fn answer(action: Action<'_>) -> HtmlResult {
+    ///     action.patch(html! {
+    ///         <p id={StatusId}>"Saved"</p>
+    ///         <tr id={RowId}><td>"1"</td></tr>
+    ///     })
+    /// }
+    /// # std::hint::black_box(answer as fn(Action<'_>) -> HtmlResult);
+    /// ```
+    ///
+    /// Starting the patch with a row instead keeps the paragraph and the later row:
+    ///
+    /// ```
+    /// use corten::{prelude::*, Action};
+    /// #[derive(Id)]
+    /// struct PatchExampleStatusId;
+    /// #[derive(Id)]
+    /// struct PatchExampleRowId(u32);
+    /// fn answer(action: Action<'_>) -> HtmlResult {
+    ///     action.patch(html! {
+    ///         <tr id={PatchExampleRowId(1)}><td>"1"</td></tr>
+    ///         <p id={PatchExampleStatusId}>"Saved"</p>
+    ///         <tr id={PatchExampleRowId(2)}><td>"2"</td></tr>
+    ///     })
+    /// }
+    /// # std::hint::black_box(answer as fn(Action<'_>) -> HtmlResult);
+    /// ```
     pub fn patch<For, Kind: crate::answer::PatchingKind>(
         self,
         view: impl crate::view::Patch,
@@ -1107,6 +1142,7 @@ impl Action<'_> {
         status: StatusCode,
         view: impl crate::view::Patch,
     ) -> crate::Result<HtmlResponse<For, Kind>> {
+        view.__check_whole_patch();
         let mut body = String::new();
         crate::form::DREW_KEY.set(false);
         // A debug build notes the places a patch draws: a patch is not a page, so none is filled.
@@ -1145,7 +1181,25 @@ pub struct FormPatch<'r>(&'r Req);
 
 impl FormPatch<'_> {
     /// The form, re-rendered with the errors, as the refusal's patch.
+    /// Like [`Action::patch`], this refuses literal top-level elements a browser would not
+    /// keep as written. A cell after a first row is wrapped in a new row:
+    ///
+    /// ```compile_fail,E0080
+    /// use corten::{prelude::*, DrawnPatch, FormPatch};
+    /// #[derive(Id)]
+    /// struct RowId;
+    /// #[derive(Id)]
+    /// struct CellId;
+    /// fn answer(form: FormPatch<'_>) -> corten::Result<DrawnPatch> {
+    ///     form.draw(html! {
+    ///         <tr id={RowId}><td>"1"</td></tr>
+    ///         <td id={CellId}>"2"</td>
+    ///     })
+    /// }
+    /// # std::hint::black_box(answer as fn(FormPatch<'_>) -> corten::Result<DrawnPatch>);
+    /// ```
     pub fn draw(self, view: impl crate::view::Patch) -> Result<DrawnPatch> {
+        view.__check_whole_patch();
         let mut body = String::new();
         self.0.render_into(view, &mut body, false)?;
         self.0.section_links(&mut body);
