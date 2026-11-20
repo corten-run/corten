@@ -122,11 +122,13 @@ try {
       summary[`${app} gap=${gap}us ${regime}`] = cell;
     }
   }
+  // nginx -v writes to stderr; a failed probe is recorded as unknown, not as a version.
+  const nginxVersion = spawnSync("docker", ["run", "--rm", ...labels, nginxImage, "nginx", "-v"], { encoding: "utf8" });
   const result = {
     name,
     image,
     taken: new Date().toISOString(),
-    nginx: spawnSync("docker", ["run", "--rm", ...labels, nginxImage, "nginx", "-v"], { encoding: "utf8" }).stderr.trim(),
+    nginx: nginxVersion.status === 0 ? nginxVersion.stderr.trim() : `unknown (nginx -v exited ${nginxVersion.status})`,
     kernel: docker("run", "--rm", ...labels, "alpine:3", "uname", "-r").trim(),
     rounds: Number(rounds),
     repeat: Number(repeat),

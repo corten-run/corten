@@ -3236,9 +3236,10 @@ rules something out.
     hyper-util 0.1.21 (`Cargo.lock`) read for `nodelay`, with nginx's `tcp_nodelay` documentation
     (nginx.org, for 1.29.8) and Go's `net` package documentation and source on its master branch
     (`TCPConn.SetNoDelay`, "The default is true"; `newTCPConn` sets it); 2026-11-20, a short
-    `bench/nodelay` run on nginx 1.31.9 with Corten as at `4225a2837` (2 rounds of 2 streams, gaps 0
-    and 1 ms): with the line no burst was over 20 ms, and without it (`off`) every busy burst held
-    its second event 39.9 to 44.1 ms.
+    `bench/nodelay` run on nginx 1.31.9 with one build as at `4225a2837` (2 rounds of 2 streams,
+    gaps 0 and 1 ms, the `default`, `on` and `off` listeners, not a build without the line): `default`
+    and `on` had no burst over 20 ms, and in all four busy `off` bursts the second event was 39.9 to
+    44.1 ms late against when the app wrote it.
 
 42. <a id="choice-locale-same-language"></a>**A negotiated locale is RFC 4647 Lookup, then a step of
     Corten's own: a range Lookup matches to nothing takes the first listed locale of its

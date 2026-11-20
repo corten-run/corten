@@ -114,8 +114,9 @@ result.relayTakeoverMs = result.events
     const wasLeader = e.relay ?? activations.filter((a) => a.at < e.at).sort((x, y) => y.at - x.at)[0]?.c === e.name;
     return { killed: e.name, wasLeader, takeoverMs: wasLeader && next ? next.at - e.at : null };
   });
-// nginx -v writes to stderr.
-result.nginx = spawnSync("docker", ["exec", "fb-lb", "nginx", "-v"], { encoding: "utf8" }).stderr.trim();
+// nginx -v writes to stderr; a failed probe is recorded as unknown, not as a version.
+const nginxVersion = spawnSync("docker", ["exec", "fb-lb", "nginx", "-v"], { encoding: "utf8" });
+result.nginx = nginxVersion.status === 0 ? nginxVersion.stderr.trim() : `unknown (nginx -v exited ${nginxVersion.status})`;
 result.stats = Object.fromEntries(["fb-a", "fb-b", "fb-pg", "fb-nats", "fb-lb"].map((c) => [c, docker("stats", "--no-stream", "--format", "{{.CPUPerc}} {{.MemUsage}}", c)]));
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, JSON.stringify(result, null, 1));

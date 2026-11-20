@@ -213,12 +213,16 @@ reaches the app; give a prefix `proxy_cache app;` only when everything under it 
     }
 ```
 
-Since 1.29.7, nginx reuses upstream connections by default, sends HTTP/1.1 to the app and omits
-`Connection` by default. The explicit `proxy_http_version 1.1` and empty `Connection` for ordinary
-requests are for older nginx, such as 1.27.5. Keep the map for WebSockets: it sends
-`Connection: upgrade` when the browser asks for an upgrade. A proxy that passes `Upgrade` on over
-HTTP/1.0 gets an `Option<Upgrade>` route's other answer (its page) and an `Upgrade` route's 400,
-since a server ignores `Upgrade` in an HTTP/1.0 request (RFC 9110, 7.8).
+Keep `proxy_http_version 1.1` in each `location` that passes requests to the app. Since 1.29.7,
+nginx sends HTTP/1.1 to the app, omits `Connection` and reuses upstream connections by default,
+so the explicit lines change nothing there, but a `proxy_http_version 1.0` inherited from an
+outer block still applies, and so does an older nginx's default of HTTP/1.0 (1.27.5's): with it,
+`keepalive` does not reuse connections, a `location` with `proxy_request_buffering off` still
+buffers a chunked upload, and WebSockets fail. A proxy that passes `Upgrade` on over HTTP/1.0 gets
+an `Option<Upgrade>` route's other answer (its page) and an `Upgrade` route's 400, since a server
+ignores `Upgrade` in an HTTP/1.0 request (RFC 9110, 7.8). Keep both the `Upgrade` and the
+`Connection` header lines: the map sends `Connection: upgrade` when the browser asks for an
+upgrade, and nothing otherwise.
 
 Keep the shorter `keepalive_timeout` from row 7. Measured with the sample on nginx 1.31.9: two
 separate client connections reused one connection to the app, which nginx closed after 25.1 s

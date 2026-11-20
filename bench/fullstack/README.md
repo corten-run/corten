@@ -1682,7 +1682,7 @@ The tier's load phases and browser pass reach each app through the edge (`edge.m
 deployed app is reached: Corten's design has HTTP/2 and HTTP/3 to browsers come from a proxy or
 CDN in front of `corten::serve` ([Limit 14](../../docs/design.md#limit-http1)), which usually ends
 TLS too, and the defaults tier measures every app without one. The edge is one nginx (1.31.9,
-pinned by digest; rounds before 2026-11-20 ran 1.29.8, as each round's `edge.json` records) with one config for every app, the one the deploy guide checks Corten with
+pinned by digest; rounds before 2026-11-20 ran 1.29.8; a round's load step records the image in `edge.json`, and its browser step, which starts its own edge, does not, so a browser step rerun after 2026-11-20 measured 1.31.9 whatever `edge.json` says) with one config for every app, the one the deploy guide checks Corten with
 ([nginx](../../docs/guide/deploy.md#nginx)) less its cache and with the app's own name as Host: a
 worker a core, each with its own listening socket (`reuseport`), TLS with a P-256
 certificate made for the run, HTTP/2 to k6 and Chromium (HTTP/1.1 to a client that asks; no
