@@ -88,7 +88,7 @@ async fn served<M: crate::Middleware>(
 /// `TCP_MAX_CONNECTIONS=n`, under `App::max_connections(n)`. Counting it at two
 /// numbers of requests gives the difference per request: `cargo test --release -p corten-run --lib
 /// --no-run`, then `TCP_REQUESTS=1200 valgrind --tool=callgrind <that binary> --ignored --exact
-/// tests::what_a_request_over_tcp_costs` and again at 200.
+/// tests::server::what_a_request_over_tcp_costs` and again at 200.
 #[tokio::test(flavor = "current_thread")]
 #[ignore]
 async fn what_a_request_over_tcp_costs() {

@@ -2198,7 +2198,7 @@ rules something out.
     `Router::new` still reports every insertion error with the rejected path and matchit's
     conflicting route. The count now refuses empty parameter values, including a hand-written
     `/corten{x}/{b}` against `/corten/`. It is not exact: a static route beside a route may
-    answer first the paths it counts. `tests::can_match_under_never_says_no_where_matchit_matches`
+    answer first the paths it counts. `tests::url::can_match_under_never_says_no_where_matchit_matches`
     checks the count against 0.9.2 and requires every tested route to insert); measured (callgrind,
     release, three runs each, every run the same, an uncommitted variant of `fa0b1525` whose
     `laned` adds the headers as it takes the handler's answer: 7,022
@@ -2260,7 +2260,7 @@ rules something out.
     Corten counts the same in both builds (a plain axum router, 7,085 in both, until step 4; since
     step 4 a `service_fn` with no framework, 3,190 in both), or the control itself moves between
     builds by more than the route does, which says the harness no longer separates them; or, in
-    one build of `tests::what_a_request_in_an_area_costs` with jemalloc, a request in its app
+    one build of `tests::patches::what_a_request_in_an_area_costs` with jemalloc, a request in its app
     with two areas and an API costs more than about 100 instructions over the same request in its
     app with none, beyond the difference measured once each route was given its scope (at
     `6ffc316f`: 5,472 for the page in the inner area against the same page as an app route, and
@@ -2273,7 +2273,7 @@ rules something out.
     beside it answering those paths first, which says the segment count has grown looser
     than it reads; or one is given a scope while one of its paths is under another prefix, which a
     request would then answer with the wrong area's settings; or
-    `tests::can_match_under_never_says_no_where_matchit_matches` fails, which says the matchit a
+    `tests::url::can_match_under_never_says_no_where_matchit_matches` fails, which says the matchit a
     build resolves matches a path the count says a route cannot reach; or Corten's exact
     matchit 0.9.2 pin changes, whose matching and conflict rules must be read again;
     or a derived route, or an area's or API's, may put text before a parameter, which
@@ -4105,7 +4105,7 @@ rules something out.
     ([ibraheemdev/matchit#60 Reject Empty Route Parameters](https://github.com/ibraheemdev/matchit/pull/60)).
     The bug gives a wrong answer: under 0.8.4 an empty value lets a parameter route shadow a
     catch-all, so `/x//y` reaches a POST-only `/x/{a}/y` instead of a `/{*page}` page, and a
-    GET there fails (`tests::serves_agrees_with_the_router` now requires the page to answer it).
+    GET there fails (`tests::url::serves_agrees_with_the_router` now requires the page to answer it).
     And 0.8 gets no more fixes; they ship only on 0.9.x, so a pin on 0.8.4 would take the next
     one only through a forced minor-version move. 0.8.4 also matches an empty value in some
     places and not others: as the first segment (`//posts` reaches `/{user}/posts` with `user`
@@ -4134,7 +4134,7 @@ rules something out.
     likewise `/{z}/b` after `/a{x}`, and `/{slug}/more` after `/shop{x}/desk` (0.8.6 takes all
     three in either order). Reorder the routes, or drop the text before the parameter, which no
     derived route has anyway. `tests/matchit.rs` and
-    `tests::a_prefixed_hand_written_route_conflicts_in_one_order_only` hold this, so a matchit
+    `tests::url::a_prefixed_hand_written_route_conflicts_in_one_order_only` hold this, so a matchit
     that fixes it fails them and this paragraph goes.
 
     What the exact pin costs: Cargo allows one semver-compatible version of a crate in a build,

@@ -146,12 +146,12 @@ fn an_app_with_a_stylesheet_and_no_error_page_is_told_once() {
     };
     let once = usize::from(cfg!(debug_assertions));
     assert_eq!(
-        told(|| App::new(Routes::from(meters())).components(&[Meter]).router()),
+        told(|| App::new(Routes::from(meters())).components(&[TestMeter]).router()),
         once,
         "components' stylesheet, no error page"
     );
     assert_eq!(
-        told(|| App::new(Routes::new()).area(|area| docs_url::area(area).components(&[Meter])).router()),
+        told(|| App::new(Routes::new()).area(|area| docs_url::area(area).components(&[TestMeter])).router()),
         once,
         "an area's"
     );

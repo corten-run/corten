@@ -18,9 +18,9 @@ fn a_literal_style_beside_custom_properties_is_another_attribute() {
     );
 }
 
-/// The meters' page, with `Meter` listed, as a debug build requires of a page that renders it.
+/// The meters' page, with `TestMeter` listed, as a debug build requires of a page that renders it.
 pub(super) fn meters_app() -> Router {
-    App::new(Routes::from(meters())).error_page(test_error_page, ()).components(&[Meter]).router()
+    App::new(Routes::from(meters())).error_page(test_error_page, ()).components(&[TestMeter]).router()
 }
 
 /// A full page's custom properties are one style block at `<Corten />`, allowed by its hash in
@@ -28,9 +28,9 @@ pub(super) fn meters_app() -> Router {
 #[tokio::test]
 async fn a_page_s_custom_properties_are_one_style_block_its_csp_allows_by_hash() {
     let (_, headers, body) = call(meters_app(), "GET", None).await;
-    let rules = r#"[data-vars="--meter__fill:42.5%"]{--meter__fill:42.5%!important}[data-vars="--meter__fill:7%"]{--meter__fill:7%!important}"#;
+    let rules = r#"[data-vars="--test-meter__fill:42.5%"]{--test-meter__fill:42.5%!important}[data-vars="--test-meter__fill:7%"]{--test-meter__fill:7%!important}"#;
     assert!(body.contains(&format!("<style>{rules}</style></head>")), "each value once, after the page's stylesheets: {body}");
-    assert!(body.contains(r#"<div class="meter__meter" data-vars="--meter__fill:7%"></div><div class="meter__meter" data-vars="--meter__fill:42.5%"></div><div class="meter__meter"></div>"#), "a value that is not finite sets nothing: {body}");
+    assert!(body.contains(r#"<div class="test-meter__meter" data-vars="--test-meter__fill:7%"></div><div class="test-meter__meter" data-vars="--test-meter__fill:42.5%"></div><div class="test-meter__meter"></div>"#), "a value that is not finite sets nothing: {body}");
     let csp = headers["content-security-policy"].to_str().unwrap();
     assert!(csp.contains(&format!("style-src 'self' {};", crate::security::hash_source(rules))), "{csp}");
     assert!(!csp.contains("style-src-attr") && !csp.contains("unsafe"), "{csp}");
@@ -42,7 +42,7 @@ async fn a_page_s_custom_properties_are_one_style_block_its_csp_allows_by_hash()
     );
 
     let (_, headers, body) = call(meters_app(), "GET", Some("nav")).await;
-    assert!(body.contains(r#"data-vars="--meter__fill:42.5%""#) && !body.contains("<style>"), "{body}");
+    assert!(body.contains(r#"data-vars="--test-meter__fill:42.5%""#) && !body.contains("<style>"), "{body}");
     let csp = headers["content-security-policy"].to_str().unwrap();
     assert!(csp.contains("style-src 'self';"), "{csp}");
     let (_, headers, _) = call(app(routes(), None), "GET", None).await;
@@ -51,7 +51,7 @@ async fn a_page_s_custom_properties_are_one_style_block_its_csp_allows_by_hash()
 
 /// Meters rendered ahead, placed with `place`, on a page served under `corten dev` or not.
 fn placed_meters(dev: bool, place: fn(crate::Rendered) -> Box<dyn crate::Render>) -> Router {
-    placed_meters_listing(dev, place, &[Meter])
+    placed_meters_listing(dev, place, &[TestMeter])
 }
 
 /// `placed_meters`, with the app listing `components`.
@@ -62,8 +62,8 @@ fn placed_meters_listing(
 ) -> Router {
     let page = move |req: Req| async move {
         let body = req.rendered(html! {
-            <Meter used={42.5} />
-            <Meter used={7.0} />
+            <TestMeter used={42.5} />
+            <TestMeter used={7.0} />
         });
         req.test_page("Meters", place(body))
     };
@@ -78,7 +78,7 @@ fn placed_meters_listing(
 /// rules; the same markup placed with `raw` has none, which a debug build in dev mode reports.
 #[tokio::test]
 async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_reported() {
-    let rules = r#"[data-vars="--meter__fill:42.5%"]{--meter__fill:42.5%!important}[data-vars="--meter__fill:7%"]{--meter__fill:7%!important}"#;
+    let rules = r#"[data-vars="--test-meter__fill:42.5%"]{--test-meter__fill:42.5%!important}[data-vars="--test-meter__fill:7%"]{--test-meter__fill:7%!important}"#;
     for dev in [false, true] {
         let (status, _, body) = call(placed_meters(dev, |body| Box::new(body)), "GET", None).await;
         assert_eq!(status, 200, "{body}");
@@ -89,7 +89,7 @@ async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_rep
     let (status, _, body) = call(placed_meters(true, |body| Box::new(crate::raw(body.as_str().to_string()))), "GET", None).await;
     if cfg!(debug_assertions) {
         assert_eq!(status, 500, "{body}");
-        assert!(body.contains("data-vars=&quot;--meter__fill:42.5%&quot; and no rule for it"), "{body}");
+        assert!(body.contains("data-vars=&quot;--test-meter__fill:42.5%&quot; and no rule for it"), "{body}");
     } else {
         assert!(status == 200 && !body.contains("<style>"), "release runs no markup check in dev mode: {body}");
     }
@@ -101,7 +101,7 @@ async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_rep
         for dev in [true, false] {
             let (status, _, body) = call(placed_meters_listing(dev, |body| Box::new(body), &[]), "GET", None).await;
             assert_eq!(status, 500, "{body}");
-            assert!(body.contains("renders Meter, which the app does not list"), "dev {dev}: {body}");
+            assert!(body.contains("renders TestMeter, which the app does not list"), "dev {dev}: {body}");
         }
     }
 }
@@ -120,12 +120,12 @@ fn a_rendered_view_brings_what_its_render_noted() {
     let ((((html, inner), components), modules), block) = crate::style::capture_vars(|| {
         crate::script::collect(|| {
             crate::style::collect(|| {
-                let mut out = Meter { used: 42.5 }.to_html();
+                let mut out = TestMeter { used: 42.5 }.to_html();
                 let inner = crate::Rendered::new(html! {
-                    <Meter used={7.0} />
+                    <TestMeter used={7.0} />
                     {Handled}
                 });
-                Meter { used: 1.0 }.render(&mut out);
+                TestMeter { used: 1.0 }.render(&mut out);
                 inner.render(&mut out);
                 (out, inner)
             })
@@ -134,14 +134,14 @@ fn a_rendered_view_brings_what_its_render_noted() {
     assert!(html.ends_with("<button></button>"), "{html}");
     assert_eq!(modules, ["stock_grid"]);
     if cfg!(debug_assertions) {
-        assert_eq!(components.iter().map(|c| c.name).collect::<Vec<_>>(), ["Meter"]);
+        assert_eq!(components.iter().map(|c| c.name).collect::<Vec<_>>(), ["TestMeter"]);
         // Placed alone, it reports the component it rendered.
         let ((), alone) = crate::style::collect(|| inner.render(&mut String::new()));
-        assert_eq!(alone.iter().map(|c| c.name).collect::<Vec<_>>(), ["Meter"], "replayed where it is placed");
+        assert_eq!(alone.iter().map(|c| c.name).collect::<Vec<_>>(), ["TestMeter"], "replayed where it is placed");
     }
     let ((), rules) = crate::style::collect_vars(|| crate::style::replay_vars(&block));
     for value in ["42.5%", "7%", "1%"] {
-        assert!(rules.contains(&format!("{{--meter__fill:{value}!important}}")), "{value}: {rules}");
+        assert!(rules.contains(&format!("{{--test-meter__fill:{value}!important}}")), "{value}: {rules}");
     }
 }
 
@@ -188,25 +188,25 @@ fn a_panicking_render_puts_back_what_was_gathering() {
     });
     assert_eq!(modules, ["before", "after"]);
     let ((), rules) = crate::style::collect_vars(|| {
-        Meter { used: 1.0 }.to_html();
+        TestMeter { used: 1.0 }.to_html();
         assert!(std::panic::catch_unwind(|| crate::style::collect_vars::<()>(panics)).is_err());
-        Meter { used: 2.0 }.to_html();
+        TestMeter { used: 2.0 }.to_html();
     });
-    assert!(rules.contains("--meter__fill:1%!important") && rules.contains("--meter__fill:2%!important"), "{rules}");
+    assert!(rules.contains("--test-meter__fill:1%!important") && rules.contains("--test-meter__fill:2%!important"), "{rules}");
     let ((), block) = crate::style::capture_vars(|| {
-        Meter { used: 3.0 }.to_html();
+        TestMeter { used: 3.0 }.to_html();
         assert!(std::panic::catch_unwind(|| crate::style::capture_vars::<()>(panics)).is_err());
-        Meter { used: 4.0 }.to_html();
+        TestMeter { used: 4.0 }.to_html();
     });
     let ((), rules) = crate::style::collect_vars(|| crate::style::replay_vars(&block));
-    assert!(rules.contains("--meter__fill:3%!important") && rules.contains("--meter__fill:4%!important"), "{rules}");
+    assert!(rules.contains("--test-meter__fill:3%!important") && rules.contains("--test-meter__fill:4%!important"), "{rules}");
     if cfg!(debug_assertions) {
-        const OTHER: crate::Component = crate::Component { name: "Other", ..Meter };
+        const OTHER: crate::Component = crate::Component { name: "Other", ..TestMeter };
         let ((), used) = crate::style::collect(|| {
-            crate::style::__private::rendered(&Meter);
+            crate::style::__private::rendered(&TestMeter);
             assert!(std::panic::catch_unwind(|| crate::style::collect::<()>(panics)).is_err());
             crate::style::__private::rendered(&OTHER);
         });
-        assert_eq!(used.iter().map(|c| c.name).collect::<Vec<_>>(), ["Meter", "Other"]);
+        assert_eq!(used.iter().map(|c| c.name).collect::<Vec<_>>(), ["TestMeter", "Other"]);
     }
 }

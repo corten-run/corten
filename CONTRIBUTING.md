@@ -11,6 +11,7 @@ its tests pass; the [review](#review) decides whether it should land.
 ```text
 crates/
   corten/            The framework on hyper: App, Req, html!, components, the runtime (js/corten.js)
+                     Put new crate-level tests in the area's file under crates/corten/src/tests/.
   corten-macros/     html!, #[component], #[event], script!, messages!, tokens!, derives (Fields, Route), on proc_macro alone (no syn)
   corten-cli/        The corten command, standard library only
   corten-feed/       Live feeds: rows, numbered patches, replay, resume
@@ -31,8 +32,6 @@ bench/catalog/       Optional locale-neutral record detail and JSON diagnostic, 
 bench/live/          One price feed pushed to many clients in the same frameworks
 bench/nodelay/       A burst of small live events through nginx, with and without TCP_NODELAY
 ```
-
-Put new crate-level `corten` tests in the area's file under `crates/corten/src/tests/`.
 
 Dependencies of `corten`: `hyper` and `hyper-util` (connections, including ones that switch
 protocols, HTTP/1.1 only), `http` (the HTTP types apps name as `corten::http`), `http-body`

@@ -20,6 +20,7 @@ Choice in the same pull request.
    dependencies there; it must build for native and agent clients.
 2. Server feed (replay, live streams, followers): `crates/corten-feed`.
 3. Pages, request modes, patches, handlers, the runtime, `App` defaults: `crates/corten`.
+   Put new crate-level `corten` tests in the area's file under `crates/corten/src/tests/`.
    Markup is `html!` and `#[component]`, links are `#[derive(Route)]` structs, behavior is a
    `#[component(js)]` (plain `export function`s with JSDoc in the script next to it, called from
    its markup: `let save = refs();`, `ref={save}`, `on:click={js::enable(save)}`) and text is
@@ -51,7 +52,6 @@ Choice in the same pull request.
 6. Every behavior the runtime has is covered by `scripts/smoke.mjs` against `examples/watchlist`
    (live reload under `corten dev` by `scripts/smoke-dev.mjs`), and production modules (security, assets, PWA, head tags, compression) by
    `examples/card-market/smoke.mjs`. Add the check with the behavior.
-   Put new crate-level `corten` tests in the area's file under `crates/corten/src/tests/`.
 7. Types across seams: never hand-write a type the server already defines. Handler calls are
    checked against each handler's JSDoc when the crate compiles; feed rows and typed events
    (`#[event]`) against the declarations `corten::types` generates (`examples/*/types/app.d.ts`,

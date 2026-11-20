@@ -362,9 +362,9 @@ async fn for_host(router: &Router, uri: &str, host: &str, extra: &[(&str, &str)]
     (status, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
 }
 
-/// A meter whose fill comes from data (`meter.css` registers `--fill`).
+/// A meter whose fill comes from data (`test_meter.css` registers `--fill`).
 #[crate::component(css)]
-fn Meter(used: f64) -> impl Render {
+fn TestMeter(used: f64) -> impl Render {
     html! { <div class={Meter} style={FILL.pct(used)}></div> }
 }
 
@@ -373,10 +373,10 @@ fn meters() -> Table {
         "/",
         get(|req: Req| async move {
             let meters = html! {
-                <Meter used={42.5} />
-                <Meter used={7.0} />
-                <Meter used={42.5} />
-                <Meter used={f64::NAN} />
+                <TestMeter used={42.5} />
+                <TestMeter used={7.0} />
+                <TestMeter used={42.5} />
+                <TestMeter used={f64::NAN} />
             };
             req.test_page("Meters", meters)
         }),

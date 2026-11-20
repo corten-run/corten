@@ -1936,7 +1936,7 @@ mod layout_reads {
         }
 
         fn view(used: &f64) -> impl Render + '_ {
-            html! { <super::Meter used={*used} /> }
+            html! { <super::TestMeter used={*used} /> }
         }
     }
 
@@ -1959,10 +1959,10 @@ mod layout_reads {
                 })
             }),
         );
-        let router = App::new(Routes::from(routes)).components(&[super::Meter]).layout_read(CartFill).router();
+        let router = App::new(Routes::from(routes)).components(&[super::TestMeter]).layout_read(CartFill).router();
         let (status, _, body) = call(router, "GET", None).await;
         assert_eq!(status, StatusCode::OK);
-        assert!(body.contains("<header>Cart </header>") && !body.contains("meter__fill"), "{body}");
+        assert!(body.contains("<header>Cart </header>") && !body.contains("test-meter__fill"), "{body}");
     }
 
     #[tokio::test]

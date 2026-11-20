@@ -308,7 +308,7 @@ fn what_a_patch_or_request_costs() {
 /// its own whose `corten::live` stream sends the part once (`SLOW_PART=stream`, as before
 /// #1400), or the page's own route answering `corten: action` with `req.patch_or_with`'s part
 /// side. Count it as `what_a_patch_or_request_costs` says, with `SLOW_PART_REQUESTS=1200` and
-/// `200` and `--exact tests::what_a_slow_part_read_costs`.
+/// `200` and `--exact tests::patches::what_a_slow_part_read_costs`.
 #[test]
 #[ignore]
 fn what_a_slow_part_read_costs() {
@@ -1377,7 +1377,7 @@ fn fifty_rows() -> impl crate::Patch {
 /// What the debug check of a patch's parse costs a debug build, which every test is: a 50-row patch
 /// (`fifty_rows`) checked `PARSE_ROUNDS` times (2,000 by default), timed beside the same patch sent
 /// through `action.patch` in process, which includes one check. Run in a debug build:
-/// `cargo test -p corten-run --all-features --lib -- --ignored --exact tests::what_the_patch_parse_check_costs --nocapture`.
+/// `cargo test -p corten-run --all-features --lib -- --ignored --exact tests::patches::what_the_patch_parse_check_costs --nocapture`.
 #[test]
 #[ignore]
 fn what_the_patch_parse_check_costs() {
@@ -1623,7 +1623,7 @@ struct CostQuote {
 /// callgrind at two numbers of requests gives the instructions per request. The test binary has
 /// no global allocator, so preload the one to count with. Run in release:
 /// `cargo test --release -p corten-run --all-features --lib --no-run`, then
-/// `SCOPE_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::what_a_request_in_an_area_costs`
+/// `SCOPE_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::patches::what_a_request_in_an_area_costs`
 /// (Debian's `libjemalloc2`) and again at 200.
 #[cfg(feature = "json")]
 #[test]

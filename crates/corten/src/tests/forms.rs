@@ -1377,7 +1377,7 @@ async fn a_forms_date_and_time_is_read_in_the_zone_it_was_drawn_in() {
 /// with the field and the zone as text an app does not read, the cost before this field had a
 /// reader. Build the lib's test binary with `cargo test --release -p corten-run --all-features
 /// --lib --no-run`, run `DATE_FORM_REQUESTS=1200 valgrind --tool=callgrind <that binary> --ignored
-/// --exact tests::what_a_date_and_time_field_costs --test-threads=1` and again at 200: the
+/// --exact tests::forms::what_a_date_and_time_field_costs --test-threads=1` and again at 200: the
 /// difference over 1,000 is a request's.
 #[cfg(feature = "zones")]
 #[tokio::test]

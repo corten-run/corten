@@ -42,7 +42,7 @@ async fn action_cost_route(req: Req, Params(p): Params<url_action_cost::DeskPric
 /// requests gives the instructions per request. The test binary has no global allocator, so
 /// preload the one to count with. Run in release: `cargo test --release -p corten-run --all-features --lib --no-run`,
 /// then
-/// `ACTION_CASE=named ACTION_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::what_a_page_with_posts_costs`
+/// `ACTION_CASE=named ACTION_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::actions::what_a_page_with_posts_costs`
 /// (Debian's `libjemalloc2`) and again at 200.
 #[test]
 #[ignore]
