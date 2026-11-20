@@ -196,8 +196,9 @@ a size drawn from data from a custom property ([below](#values-from-data)).
 
 ## At-rules
 
-Component CSS supports the block at-rules below. Their names are ASCII case-insensitive
-(`@MEDIA`, `@LAYER`); this is a scoping pass, not a full CSS validator.
+Component CSS matches at-rule names ASCII case-insensitively in both blocks and statements
+(`@MEDIA`, `@LAYER`). It supports the block at-rules below; this is a scoping pass, not a
+full CSS validator.
 
 | At-rules | What happens |
 |---|---|
@@ -210,10 +211,10 @@ Component CSS supports the block at-rules below. Their names are ASCII case-inse
 
 Raw bodies still compact trivia, and references to registered custom
 properties are renamed there too. Nested block at-rules inside them are copied raw (font
-feature `@styleset`, page margin `@top-left`, and others), not independently selector-checked. The statement parser
-recognizes lowercase `@layer base, widgets;` (copied) and `@charset "utf-8";` (discarded,
-since the generated stylesheet is UTF-8). It refuses unknown statements even inside raw
-bodies.
+feature `@styleset`, page margin `@top-left`, and others), not independently selector-checked.
+The statement parser copies `@layer base, widgets;` without changing the name's case, and
+discards `@charset "utf-8";` in any case (the generated stylesheet is UTF-8). It refuses
+unknown statements even inside raw bodies.
 
 `@import` does not compile: imported CSS is not checked or owned by the component. Put it in
 `static/style.css`. `@custom-media` does not compile either: the token file defines breakpoints,
