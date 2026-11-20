@@ -432,8 +432,9 @@ and the probe must report no socket timeout. Measured on 2026-11-20 UTC with the
 build and container setup, `TIMEOUT_MS=100` and the cap, seven rounds of the whole
 18-case suite, each against a fresh probe process
 ([observations](results/combined-wire-control.jsonl)). Round 0 was the first in a fresh
-container, run to try the new case; the case did not change after it. Rounds 1-3 were the
-planned three, and 4-6 were added to see whether round 0's failure recurred.
+container, run to try the new case; the case did not change after it, and round 0 counts
+as a full round in every total here. A cold start was not shown to matter. Rounds 1-3 were
+the planned three, and 4-6 were added to see whether round 0's failure recurred.
 
 The 17 earlier cases passed in all seven rounds (119 of 119); the paused reader's socket
 watch expired 150-166 ms after the request. The steady reader passed in rounds 1-6: it
@@ -444,14 +445,35 @@ request, although the client had read at least every 20.7 ms. The client had rec
 526,320 bytes and saw the close 443.7 ms after its request.
 
 That is a false close: the socket watch disconnected a client that kept reading, each time
-well within the bound. One failure in seven rounds is not a measured rate. By the
-tokio-rustls 0.26.6 source (reasoned, not measured), `poll_flush` stays pending until every
-buffered TLS record is written, and this watch, like Corten's, does not clear a stall when
-a flush completes, so one flush can stay pending across several steady reads. A socket
-watch that closes a steadily reading client blocks shipping: the combined path does not
-qualify until this control passes repeatedly. Shipping HTTP/1.1 applies the same flush
-rule in `crates/corten/src/watch.rs`; whether it closes such a reader over TLS was not
-tested.
+well within the bound. One failure in seven rounds is not a measured rate. Two causes fit
+the saved row, and neither was measured:
+
+1. A TLS flush that stays pending while records drain (reasoned, not measured). By the
+   tokio-rustls 0.26.6 source, `poll_flush` stays pending until every buffered TLS record
+   is written, even after partial writes, and this watch, like Corten's, clears a stall
+   only on a completed write, not when a flush completes. One flush could then stay
+   pending across several steady reads while bytes go out.
+2. A receive window that reopens only in large steps (reasoned, not measured). Under the
+   128 KiB cap, the loopback receive window may reopen only in large steps, so the
+   server's socket could accept nothing for the whole wait while the client drains its
+   own queue. Renewing the stall on TLS progress would not help then.
+
+The row records the client's reads, not whether the server's socket accepted bytes during
+the 100 ms wait. Counting the bytes written under TLS during a stall would separate the
+two: bytes written while the flush stays pending point to the first, none to the second.
+
+The fixture also limits how far the result carries. It queues its next batch only when the
+socket is not blocked, and any pending call, a flush included, marks it blocked, so every
+batch boundary is an interval with only a flush outstanding and no write that could clear
+the stall. A body that keeps producing would call `poll_write`, which rustls accepts while
+its 64 KiB `sendable_tls` limit has room, and that clears the stall. Shipping HTTP/1.1
+applies the same flush rule in `crates/corten/src/watch.rs`; whether it closes such a
+reader over TLS was not tested, and is the open question in
+[#1742 A TLS flush that stays pending while a slow client reads steadily may trip send_timeout: test serve_wrapped over TLS with a steady reader](https://github.com/corten-run/corten/issues/1742).
+
+A socket watch that closes a steadily reading client blocks shipping: the combined path
+does not qualify until the full combined suite, steady reader included, passes 10
+consecutive rounds with zero failures.
 
 ### Combined Cost
 
@@ -473,12 +495,14 @@ This pull request changed the `h2-off` code path itself (`h2_probe` is now gener
 the lockfile and the client placement are newer; the two sections are not compared. These
 counts were taken before the steady reader control was added, which changed only the client.
 
-These runs show items 1 and 2 of
-[#1686 HTTP/2 in corten::serve: show the idle and send bounds together with the socket watch on one opt-in path](https://github.com/corten-run/corten/issues/1686):
-one parser-free path held both bounds with the socket watch, under controls written for all
-three. The steady reader control also found one false close by the socket watch, so the
-watch must pass that control repeatedly before an opt-in path ships. Shipping Corten is
-unchanged. The remaining shipping checks are tracked in
+These runs are evidence for, not completion of,
+[#1686 HTTP/2 in corten::serve: show the idle and send bounds together with the socket watch on one opt-in path](https://github.com/corten-run/corten/issues/1686).
+One parser-free path held both bounds with the socket watch under the 17 original combined
+controls, which passed in every round. The 18th, the socket watch's steady reader control,
+failed 1 of 7 rounds, so the combined evidence is not complete. That issue stays open for
+the remaining probe work: the full combined suite, steady reader included, passing 10
+consecutive rounds with zero failures. Shipping Corten is unchanged. The shipping work is
+tracked in
 [#1739 HTTP/2 in corten::serve: an opt-in path that passes the combined bounds suite and the shipping checks](https://github.com/corten-run/corten/issues/1739):
 shutdown with open streams, reset-flood and resource bounds, decoded-header limits,
 explicit h2 Upgrade refusal with HTTP/1 WebSocket fallback, three-engine TLS smoke, and
