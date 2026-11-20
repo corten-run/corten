@@ -125,6 +125,16 @@ const nginxLine = !nginxProbe.error && nginxProbe.status === 0
 const nginxVersion = nginxLine
   ?? `unknown (nginx -v: ${nginxProbe.error?.message ?? (nginxProbe.signal ? `signal ${nginxProbe.signal}` : nginxProbe.status === 0 ? "no version line" : `exit ${nginxProbe.status}`)})`;
 result.nginx = nginxVersion;
+// What the load balancer logged (nginx.conf logs warnings): an instance left out after a request to
+// it failed, a request answered 502 at once because every instance was left out, and a connect to
+// an instance that timed out.
+const lbLog = logs("fb-lb").split("\n");
+const lbLines = (/** @type {RegExp} */ re) => lbLog.filter((l) => re.test(l)).length;
+result.loadBalancer = {
+  serverDisabled: lbLines(/upstream server temporarily disabled/),
+  noLiveUpstreams: lbLines(/no live upstreams/),
+  connectTimedOut: lbLines(/upstream timed out .* while connecting to upstream/),
+};
 result.stats = Object.fromEntries(["fb-a", "fb-b", "fb-pg", "fb-nats", "fb-lb"].map((c) => [c, docker("stats", "--no-stream", "--format", "{{.CPUPerc}} {{.MemUsage}}", c)]));
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, JSON.stringify(result, null, 1));
@@ -135,12 +145,13 @@ const line = (s) => `p50 ${s.p50} p95 ${s.p95} p99 ${s.p99} max ${s.max} ms (n $
 console.log(`events: ${result.events.map((e) => `${(e.at / 1000).toFixed(1)}s ${e.action} ${e.name}`).join(", ")}`);
 console.log(`load generator: ${result.workers} threads, event loop delay p99 ${result.loadGenerator.loopDelayP99Ms.toFixed(1)} max ${result.loadGenerator.loopDelayMaxMs.toFixed(1)} ms`);
 console.log(`writes: ${result.writes.ok} ok (${result.writes.replayed} answered from their idempotency key), ${result.writes.retries} retries, ${result.writes.failed} failed after 3 attempts, extra commits ${result.writes.extraCommits}, ${result.writes.skipped} skipped at 64 in flight; commit ${line(result.writes.commitMs)}; committed seq ${committed}`);
-console.log(`delivery: ${d.patchesReceived} patches + ${d.coveredBySnapshot} covered by snapshots of ${d.patchesExpected} expected; lost ${d.lost} (${d.clientsWithLoss} clients), out of order ${d.outOfOrder}, redelivered ${d.redelivered}, duplicates dropped ${d.duplicatesDropped}, extra snapshots ${d.extraSnapshots}, syncs ${d.syncs.n}, reconnects ${d.reconnects}, http errors ${d.httpErrors}, network errors ${d.networkErrors}`);
+console.log(`delivery: ${d.patchesReceived} patches + ${d.coveredBySnapshot} covered by snapshots of ${d.patchesExpected} expected; lost ${d.lost} (${d.clientsWithLoss} clients), out of order ${d.outOfOrder}, redelivered ${d.redelivered}, duplicates dropped ${d.duplicatesDropped}, extra snapshots ${d.extraSnapshots}, syncs ${d.syncs.n}, reconnects ${d.reconnects}, http errors ${d.httpErrors} ${JSON.stringify(d.httpErrorStatuses)}, network errors ${d.networkErrors}`);
 console.log(`commit -> client, steady: ${line(l.commitToClient.steady)}`);
 console.log(`commit -> client, within 5 s of a kill: ${line(l.commitToClient.within5sOfKill)}`);
 console.log(`write -> client, steady: ${line(l.writeToClient.steady)}`);
 console.log(`write -> client, within 5 s of a kill: ${line(l.writeToClient.within5sOfKill)}`);
 console.log(`outages: ${result.outages.n} (${result.outages.resynced} resynced); reconnect ${line(result.outages.reconnectMs)}; silent ${line(result.outages.silentMs)}`);
+console.log(`load balancer: ${result.loadBalancer.serverDisabled} instances left out, ${result.loadBalancer.noLiveUpstreams} requests answered 502 with none left (no live upstreams), ${result.loadBalancer.connectTimedOut} connects timed out`);
 console.log(`relay takeover: ${result.relayTakeoverMs.map((r) => `${r.killed} ${r.wasLeader ? `${r.takeoverMs} ms` : "(not the relay)"}`).join(", ")}`);
 console.log(`browser: ${probe.patches} patches, ${probe.snapshots} snapshot(s) (${result.browser.resyncs} resyncs), last ${probe.last}/${committed}, lost ${result.browser.lost}, status ${probe.status}, errors ${pageErrors.length}`);
 console.log(`wrote ${out}`);
