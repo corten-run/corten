@@ -4,7 +4,7 @@ import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, symlinkSync
 import { join, resolve } from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
 import test from "node:test";
-import { command, controller, publicError } from "./droplet.mjs";
+import { benchPackagePaths, command, controller, publicError } from "./droplet.mjs";
 import { archive, campaign, commit, harness, metadata, subject, syntheticDelivery } from "./cloud-fixtures.mjs";
 import { archiveMembers, extractArchive } from "./cloud-local.mjs";
 import { parseDropletArgs } from "./cloud-options.mjs";
@@ -28,6 +28,18 @@ test("detach reserves before one completed create, uploads fixed job and starts 
   assert.ok(job.includes(`campaign-entry.mjs' 'r21' --commit '${commit}' --state-dir '/bench/campaign'`));
   assert.ok(!job.includes("--apps")); await assert.rejects(h.launch().launch(), /already reserved/); assert.equal(h.creates, 1);
   assert.equal(s.benchPackage, true); assert.ok(job.includes("bootstrap_stage=bench-dependencies\ntimeout 900 npm --prefix bench ci --no-audit --no-fund\n"));
+});
+
+test("locked pre-create check requires both bench package files at the measured commit", async (t) => {
+  assert.deepEqual(benchPackagePaths, ["bench/package.json", "bench/package-lock.json"]);
+  for (const path of benchPackagePaths) {
+    const hook = (binary, args) => { if (binary === "git" && args[0] === "cat-file" && args.at(-1) === `${commit}:${path}`) throw new Error("synthetic absent object"); };
+    const h = harness(t, { active: true, hook });
+    await assert.rejects(h.launch().launch(), /synthetic absent object/);
+    assert.ok(h.calls.some(([binary, ...args]) => binary === "git" && args.at(-1) === `${commit}:${path}`), path);
+    assert.ok(!h.calls.some(([binary]) => binary !== "git"), path); assert.equal(h.creates, 0);
+    assert.equal(h.saved().status, "reserved"); assert.equal(h.saved().createIntentAt, undefined);
+  }
 });
 
 test("legacy detach keeps sfo2 and scans an older retired sfo2 reservation without changing it", async (t) => {

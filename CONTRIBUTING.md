@@ -54,8 +54,10 @@ npm's `latest` verified on 2026-11-20, and also type-checks `jsconfig.json` with
 app: `node_modules/.bin/tsc`, then the PATH, with the minimum checked. The parser checks use
 7.0.2's unstable native API ([Choice 5](docs/design.md#choice-handlers-checked-where-called)).
 The benchmark harness's classic compiler API consumers (`bench/fullstack-browser` and
-`bench/workloads`) use TypeScript 6.0.3 from `bench/package.json`: run `npm --prefix bench ci`
-before `npm run check:workloads` and the `check:groups` suites.
+`bench/workloads`) use TypeScript 6.0.3 from `bench/package.json`, loaded only through
+`bench/typescript.mjs`: run `npm --prefix bench ci` before `npm run check:workloads`,
+`check:catalog`, `check:json-api` and the `check:groups` suites, which otherwise stop at import
+naming that command.
 
 After `npm ci` and the benchmark's normal build has generated `out/_gen/view/views.d.ts`,
 type-check the browser benchmark's view apps with the repository's pinned

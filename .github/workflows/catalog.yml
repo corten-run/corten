@@ -51,6 +51,8 @@ jobs:
         with:
           node-version: 24
       - run: npm ci --no-audit --no-fund
+      # Native replay's binding parser loads the classic TypeScript compiler (bench/package.json).
+      - run: npm --prefix bench ci --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: node bench/catalog/fixtures.mjs
       - run: node bench/marketplace/fixtures.mjs
@@ -182,6 +184,8 @@ jobs:
         with:
           node-version: 24
       - run: npm ci --no-audit --no-fund
+      # Native replay's binding parser loads the classic TypeScript compiler (bench/package.json).
+      - run: npm --prefix bench ci --no-audit --no-fund
       - run: npm run check:json-api
 
   json-aot:

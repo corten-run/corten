@@ -17,6 +17,7 @@ try {
     "bench/hardening/dependency-recovery-capture.mjs",
     "bench/hardening/dependency-recovery-contract.mjs",
     "bench/hardening/resource-sample.mjs",
+    "bench/typescript.mjs",
   ]);
   let remaining = 211;
   assert.ok(Array.isArray(sources) && sources.length > 0 && sources.length <= remaining + additionalSources.size);

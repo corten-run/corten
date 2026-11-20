@@ -328,20 +328,28 @@ rules something out.
    stable 6.0.0, while 6.0.1 and 7.0.0 prereleases are above it. The CLI's version-boundary
    regression was reproduced with 6.0.0-dev.20250801 and the boundary cases checked at
    `f46913f75` and the change;
-   2026-11-20, at `cdd1525e0` and the change: the harness's classic API consumers moved to
-   `bench/package.json`, pinned exactly to TypeScript 6.0.3 (npm's newest 6.x, whose
-   `lib/typescript.d.ts` declares `createSourceFile`, `forEachChild` and `transpileModule`),
-   installed by `npm --prefix bench ci`, and the root `typescript` became 7.0.2, npm's `latest`
-   that day, so the checkout's compiler alias and the CLI's lookup for it were removed. Node's
-   resolver gives 6.0.3 for `typescript` from every importer under `bench/` and 7.0.2 from
-   `scripts/`. The cloud validator binds `bench/node_modules/typescript/lib/typescript.js` by path
-   and SHA-256, the bytes of the npm archive matching the bench lock's integrity. The browser
-   binding extraction with 5.9.3 (main's locked archive) and with 6.0.3 gave identical output on
-   the same inputs: the emitted scripts of two local production Next.js images (21 scripts each,
+   2026-11-20, at `cdd1525e0` and the measured head `60f89ec39`: the harness's classic API
+   consumers moved to `bench/package.json`, pinned exactly to TypeScript 6.0.3 (npm's newest
+   6.x, whose `lib/typescript.d.ts` declares `createSourceFile`, `forEachChild` and
+   `transpileModule`), installed by `npm --prefix bench ci`, and the root `typescript` became
+   7.0.2, npm's `latest` that day, so the checkout's compiler alias and the CLI's lookup for it
+   were removed. Node's resolver gave 6.0.3 for `typescript` from the harness importers checked,
+   `bindings.mjs`, `binding-artifact.mjs`, `binding-effects.mjs`, `binding-links.mjs`,
+   `binding-modules.mjs`, `scopes.mjs` and four tests in `bench/fullstack-browser`, and 7.0.2
+   from `scripts/`. Apps under `bench/fullstack/apps` were not checked and keep their own
+   packages' compilers. Those importers now load the compiler by path through
+   `bench/typescript.mjs`, which stops naming `npm --prefix bench ci` when it is absent. The
+   cloud validator's worker resolves nothing: its own loader maps `typescript` to
+   `bench/node_modules/typescript/lib/typescript.js`, pinned by SHA-256 to the bytes of the npm
+   archive matching the bench lock's integrity, and capture also requires the measured commit's
+   bench manifest and lock to pin that version, archive and integrity. The browser binding
+   extraction with 5.9.3 (main's locked archive) and with 6.0.3 gave identical output on the
+   same inputs: the emitted scripts of two local production Next.js images (21 scripts each,
    5,185 and 5,193 functions: inventory and locations, module registrations, React contracts and
    their closures, free names, form handler discovery and URL resolution), and the 12,526 calls
-   the browser evidence tests made to the extractor's exported functions (2,593 inputs seen under
-   both, none with a different output, and 338 per run that carry per-run random values).
+   the browser evidence tests made to the extractor's exported functions. Of those calls' inputs,
+   2,593 were seen under both compilers, all with the same output. Another 338 per run carry
+   per-run random values, so they never recur across runs and were not compared.
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in

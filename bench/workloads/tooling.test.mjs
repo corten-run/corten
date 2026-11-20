@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse } from "yaml";
 
 test("browser CI keeps its pinned Playwright base and prepares immutable-source Git", () => {
@@ -46,4 +48,47 @@ test("Django qualification checks its Playwright install and resource cleanup wi
   const run = spawnSync(process.execPath, ["--experimental-vm-modules", "--test", suite], { encoding: "utf8", timeout: 30000 });
   assert.ifError(run.error);
   assert.equal(run.status, 0, run.stdout + run.stderr);
+});
+
+test("the harness's classic compiler loads only from the bench install, and its absence names the install", async (t) => {
+  const repo = fileURLToPath(new URL("../../", import.meta.url));
+  // Every harness importer goes through bench/typescript.mjs: a bare import beside only the
+  // root install would load 7.0.2, which has no classic API. Nested apps have their own
+  // packages; the validation test's sources are evaluated by the worker's pinned loader,
+  // and this test's own probe below shows the fallback.
+  const nested = spawnSync("git", ["-C", repo, "ls-files", "bench/**/package.json"], { encoding: "utf8" }).stdout.split("\n")
+    .filter((path) => path && path !== "bench/package.json").map((path) => dirname(path) + "/");
+  const grep = spawnSync("git", ["-C", repo, "grep", "-l", "-E", "(from |import\\(|require\\()[\"']typescript[\"']", "--", "bench"], { encoding: "utf8" });
+  assert.ok([0, 1].includes(grep.status));
+  assert.deepEqual(grep.stdout.split("\n").filter((path) => path && !nested.some((dir) => path.startsWith(dir))),
+    ["bench/workloads/cloud-validation.test.mjs", "bench/workloads/tooling.test.mjs"]);
+
+  const temp = mkdtempSync(join(tmpdir(), "bench-classic-compiler-")), links = [];
+  t.after(() => {
+    // Remove only our links, nonrecursively, so neither real install can be touched.
+    for (const link of links) { assert.ok(lstatSync(link).isSymbolicLink()); if (process.platform === "win32") rmdirSync(link); else unlinkSync(link); }
+    rmSync(temp, { recursive: true, force: true });
+  });
+  const link = (target, path) => { mkdirSync(dirname(path), { recursive: true }); symlinkSync(target, path, "junction"); links.push(path); };
+  const root7 = realpathSync(join(repo, "node_modules/typescript")), bench6 = realpathSync(join(repo, "bench/node_modules/typescript"));
+  // Each case is its own checkout layout with the root's 7.0.2 installed and the real entry point.
+  const layout = (name, benchCompiler) => {
+    const checkout = join(temp, name);
+    link(root7, join(checkout, "node_modules/typescript"));
+    if (benchCompiler) link(benchCompiler, join(checkout, "bench/node_modules/typescript"));
+    mkdirSync(join(checkout, "bench"), { recursive: true });
+    copyFileSync(join(repo, "bench/typescript.mjs"), join(checkout, "bench/typescript.mjs"));
+    return pathToFileURL(join(checkout, "bench/typescript.mjs")).href;
+  };
+  const absent = layout("absent");
+  // The control is real: from bench/, a bare import resolves the root's compiler.
+  const probe = spawnSync(process.execPath, ["--input-type=module", "-e", 'import ts from "typescript"; console.log(ts.version, typeof ts.createSourceFile);'],
+    { cwd: join(temp, "absent/bench"), encoding: "utf8" });
+  assert.equal(probe.stdout.trim(), "7.0.2 undefined");
+  const install = /run npm --prefix bench ci/;
+  await assert.rejects(import(absent), install);
+  await assert.rejects(import(layout("root-compiler-at-bench-path", root7)), install);
+  const ts = (await import(layout("installed", bench6))).default;
+  assert.equal(ts.version, JSON.parse(readFileSync(join(repo, "bench/package-lock.json"), "utf8")).packages["node_modules/typescript"].version);
+  assert.equal(ts.createSourceFile("probe.js", "let x = 1;", ts.ScriptTarget.Latest).statements.length, 1);
 });

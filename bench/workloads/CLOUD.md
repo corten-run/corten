@@ -265,7 +265,8 @@ node bench/workloads/fleet-verify.mjs ROUND --fleet-root ABSOLUTE_ROOT --commit 
 Missing, ambiguous or locked child state stays visible and never triggers another
 launch. Both successful and failed native inspections must match the host's exact
 reserved selection before campaign cleanup. Batch receipts are diagnostics, not proof.
-The read-only fleet verifier replays every saved native archive, rechecks its
+The read-only fleet verifier needs the same local `npm --prefix bench ci`; without it,
+it reports that hint as its `error` before reading any group. It replays every saved native archive, rechecks its
 immutable hashes and confirmed cleanup, and requires unique host identities for
 the entire roster. Its intrinsic `verified` status is not publication approval:
 `publishableBaseline` remains false until the separate review/results workflow
@@ -737,6 +738,16 @@ so collect/delivery must use that same integrated source commit, not a newer
 collector checkout. This compatibility limit must be revisited with the agreed
 intrinsic API, not misreported as failed native evidence after allocation.
 
+Native replay runs on the operator's checkout, never on the host: run
+`npm --prefix bench ci` there after `npm ci`, before a launch or collection. The
+host's job installs its own bench package, which collection does not read.
+Detach also lists `bench/package.json` or `bench/package-lock.json` when either is
+absent at the measured commit. Detach and ordinary collection previews list
+`local bench install missing or differs: run npm --prefix bench ci` when this
+checkout's `bench/node_modules/typescript/lib/typescript.js` is absent or is not
+the pinned 6.0.3 bytes, so neither allocates a host nor collects one it cannot
+validate. Evidence-derived validation failures stay generic.
+
 ```text
 node bench/workloads/cloud-production.mjs rN --detach --commit SHA --ssh-key ID --account-id SCOPED_ACCOUNT_ID --context NAMED_CONTEXT --state-dir ABSOLUTE_LOCAL_ROOT --print-approval
 node bench/workloads/cloud-production.mjs rN --detach --commit SHA --ssh-key ID --account-id SCOPED_ACCOUNT_ID --context NAMED_CONTEXT --state-dir ABSOLUTE_LOCAL_ROOT --approve-reviewed-merged-ready EXACT_ACTION_SHA256
@@ -791,9 +802,12 @@ environment values. Replay and evidence validation failures remain generic.
 The closure includes the observer's durable writer; transitive observer
 imports use those captured bytes under the same deny-unlisted loader.
 The fixed TypeScript bundle (the bench package's 6.0.3, `bench/package.json`) and the
-semver library are captured once and checked against their pinned package-file hashes. Semver's exact tooling declaration and
-npm archive integrity must also match the installed commit's manifest and lock.
-Its extensionless CommonJS imports resolve only within the captured library;
+semver library are captured once and checked against their pinned package-file hashes.
+Each one's exact tooling declaration, resolved archive URL and npm archive integrity
+must also match the installed commit's manifests and locks: the root's for semver,
+`bench/package.json` and `bench/package-lock.json` for TypeScript. The harness
+loads TypeScript only through `bench/typescript.mjs`, itself a captured closure member.
+Semver's extensionless CommonJS imports resolve only within the captured library;
 the CLI, preload entry and unlisted files cannot execute. This adds no package
 resolver or filesystem fallback and retains the existing source-count limit.
 The nested worker executes captured entry bytes and installs a

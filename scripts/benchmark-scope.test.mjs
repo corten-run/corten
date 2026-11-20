@@ -24,6 +24,8 @@ for (const [name, paths, apps, json] of [
   ["shared trace harness", ["bench/fullstack/native-trace-cost.mjs"], allApps, true],
   ["shared trace harness tests", ["bench/fullstack/native-trace-cost.test.mjs"], allApps, true],
   ["shared checker styles", ["bench/fullstack/apps/axum-maud/static/style.css"], allApps, true],
+  ["bench classic compiler package", ["bench/package-lock.json"], allApps, true],
+  ["bench classic compiler entry", ["bench/typescript.mjs"], allApps, true],
   ["Express driver used by FastAPI", ["bench/fullstack/apps/express/check-native.mjs"], ["fastapi", "express"], false],
   ["Express app without shared driver changes", ["bench/fullstack/apps/express/package.json"], ["express"], false],
   ["compiled alert helper", ["bench/fullstack/apps/gin/check-alerts.mjs"], ["leptos", "topcoat", "gin", "drogon"], false],
@@ -65,12 +67,14 @@ async function localImports(entries) {
     }), bundle: true, platform: "node", format: "esm", packages: "external", write: false,
     outdir: "unused", metafile: true, logLevel: "silent",
   });
-  return Object.keys(metafile.inputs).filter(path => !path.startsWith("node_modules/"));
+  // The bench package's installed files are its lock's, which must select the harness itself.
+  return [...new Set(Object.keys(metafile.inputs).filter(path => !path.startsWith("node_modules/"))
+    .map(path => path.startsWith("bench/node_modules/") ? "bench/package-lock.json" : path))];
 }
 
 test("every local module used by the Catalog harness starts the harness", async () => {
   const patterns = workflow.jobs.harness.steps.flatMap(({ run }) => {
-    if (!run || run.startsWith("npm ci ") || run.startsWith("npx playwright install ")) return [];
+    if (!run || run.startsWith("npm ci ") || run.startsWith("npm --prefix bench ci ") || run.startsWith("npx playwright install ")) return [];
     const command = run === "npm run check:marketplace" ? packageScripts["check:marketplace"] : run;
     assert.match(command, /^node (?:--test )?bench\//, "trace new harness commands here");
     return command.replace(/^node (?:--test )?/, "").split(" ");
@@ -78,6 +82,15 @@ test("every local module used by the Catalog harness starts the harness", async 
   for (const input of await localImports(patterns)) {
     const { apps, json } = selectScope(allApps, [input]);
     assert.ok(apps.length > 0 || json, "harness input not selected: " + input);
+  }
+});
+
+test("Catalog jobs whose replay parses bindings install the bench package's classic compiler", () => {
+  for (const job of ["harness", "json-harness"]) {
+    const runs = workflow.jobs[job].steps.map(({ run }) => run);
+    const install = runs.indexOf("npm --prefix bench ci --no-audit --no-fund");
+    assert.ok(install > runs.indexOf("npm ci --no-audit --no-fund") && runs.indexOf("npm ci --no-audit --no-fund") >= 0, job);
+    assert.ok(runs.slice(install + 1).some((run) => run?.startsWith("node ") || run?.startsWith("npm run ")), job);
   }
 });
 

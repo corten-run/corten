@@ -114,7 +114,8 @@ and enclosing component ID before dispatch. It does not assume that `target_pric
 native state-property name. An absolute update URI is reduced to a pathname only when its
 origin matches the document. Next's custom React enhancement is discovered from the mounted
 form's real `onSubmit`, owning fiber props and containing component function before dispatch.
-`bindings.mjs` uses the bench package's installed TypeScript parser (`bench/package.json`) to resolve only a single supported
+`bindings.mjs` uses the bench package's TypeScript parser (`bench/package.json`) through `bench/typescript.mjs`, which
+stops at import with the `npm --prefix bench ci` instruction when that install is absent, to resolve only a single supported
 native POST expression, without invoking that function or evaluating its source. Unresolved,
 shadowed, cross-origin or mismatched bindings remain failures. A sent POST is not used to invent
 a positive binding. Function text and sampled props alone do not prove imported helper effects.

@@ -500,7 +500,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           assert.equal((await execute("git", ["rev-parse", "HEAD"])).stdout.trim(), state.commit, "measured HEAD differs");
           assert.equal((await execute("git", ["status", "--porcelain", "--untracked-files=all"])).stdout.trim(), "", "clean committed source required");
           await execute("git", ["merge-base", "--is-ancestor", state.commit, mergedHead]);
-          for (const path of ["bench/workloads/droplet.mjs", "bench/workloads/cloud-contract.mjs", "bench/workloads/isolated/campaign-entry.mjs", "bench/workloads/isolated/campaign-verify.mjs", "bench/package-lock.json"])
+          for (const path of ["bench/workloads/droplet.mjs", "bench/workloads/cloud-contract.mjs", "bench/workloads/isolated/campaign-entry.mjs", "bench/workloads/isolated/campaign-verify.mjs", ...benchPackagePaths])
             await execute("git", ["cat-file", "-e", `${state.commit}:${path}`]);
           const existing = await list();
           if (fleet) assertFleetCensus(existing, fleet);
@@ -813,6 +813,9 @@ else ${pack}; fi` : pack, 11 * 60000);
     },
   };
 }
+
+// A launch's job runs `npm --prefix bench ci` (benchPackage), so the measured commit must have both.
+export const benchPackagePaths = ["bench/package.json", "bench/package-lock.json"];
 
 // Never print exception messages/stacks or provider output: assertions may echo raw evidence.
 export function publicError(error) {
