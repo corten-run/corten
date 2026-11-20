@@ -521,15 +521,19 @@ for (const prior of ["mutated", "other-process"]) test(`catalog executable succe
   }
 });
 
-for (const scenario of ["stable", "wrong-parent", "reparented", "parent-exited", "parent-reused", "parent-exec", "child-exited"]) {
+for (const scenario of ["stable", "wrong-parent", "reparented", "parent-exited", "parent-reused", "parent-exec", "child-exited",
+  "retry-opening-reparented", "retry-closing-reparented"]) {
   test(`catalog checks a newly forked child's inherited executable: ${scenario}`, async (t) => {
     const f = await fixture(t, [], false, undefined, 0, true);
     const parent = 4242, child = 5000;
     f.members.push(child);
-    let replaced = false;
+    let replaced = false, childReads = 0;
     f.override = (path) => {
       if (path === `/proc/${child}/stat`) {
-        const ppid = scenario === "wrong-parent" || (scenario === "reparented" && replaced) ? 1 : parent;
+        childReads++;
+        const retryReparented = (scenario === "retry-opening-reparented" && childReads === 3)
+          || (scenario === "retry-closing-reparented" && childReads === 4);
+        const ppid = scenario === "wrong-parent" || (scenario === "reparented" && replaced) || retryReparented ? 1 : parent;
         return stat(child, replaced ? "docker" : "node", child * 10, ppid);
       }
       if (path === `/proc/${parent}/stat` && replaced && scenario === "parent-reused") return stat(parent, "node", 100);
@@ -545,6 +549,11 @@ for (const scenario of ["stable", "wrong-parent", "reparented", "parent-exited",
     const replay = await f.finish();
     assert.equal(replaced, true);
     assert.equal(replay.status, scenario === "stable" ? "verified" : "blocked");
+    if (scenario.startsWith("retry-")) {
+      assert.equal(childReads, 4);
+      assert.equal(f.terminal.observerFailures.first.operation, "executable-recheck-successor");
+      assert.equal(f.terminal.observerFailures.first.catalogCensus.attempts, 2);
+    }
     if (scenario === "stable") {
       assert.equal(f.terminal.observerFailures.count, 0);
       assert.equal(f.proof().executables.length, 2);
