@@ -6576,7 +6576,8 @@ rules something out.
 65. <a id="choice-locked-check"></a>**Checking and shipping use the lock; local builds update it.**
     `corten check` uses `--locked` on the full Cargo metadata it already reads, before formatting
     or compiling, and on lint, build and tests. The starter Dockerfile and every example's also
-    build with `--locked`, and so does card-market's timed benchmark recipe, its download too
+    build with `--locked` (the starter's build with a profile too, and its install of the
+    `corten` command, [Choice 69](#choice-profile-image)), and so does card-market's timed benchmark recipe, its download too
     ([#1584 card-market's image and its paired bench recipe still build without --locked](https://github.com/corten-run/corten/issues/1584)). A missing or stale lock is an error, not a successful check that silently
     repairs the dependency graph and leaves CI's committed graph unchecked. Cargo finds the
     workspace-root lock even from a member, including a library. The CLI does not require a
@@ -6610,7 +6611,10 @@ rules something out.
     1.0.19, `cargo update --workspace` kept 1.0.0, and for a standalone app with no lock the two
     wrote identical locks; 2026-11-20, each image's one build read as a locked release build by
     `scripts/images.test.mjs`, and card-market's timed recipe as a locked fetch and build by
-    `bench/fullstack/builds.test.mjs`, at `d8832da25`.
+    `bench/fullstack/builds.test.mjs`, at `d8832da25`; 2026-11-20, the starter's image read by
+    the same test as two `RUN`s, each in its one shape: the install of the `corten` command,
+    locked, and the build, `cargo build` or `corten build`, locked either way, at `99c6ccc85`
+    merged with `4225a2837`.
 
 66. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in document mode or an action
     that prefers it; a patch does not fill a layout read.** A `data-patch` write that answers with its
@@ -7026,9 +7030,10 @@ rules something out.
     Not chosen: the steps left to the guide, which each app then copies with their traps (the
     profiles the build's own macros write, a profile left from an earlier run, the
     configuration's flags dropped, the copy killed); a command that starts and stops the copy
-    itself, which moves the same traps into every app's script; the steps in the starter's
-    Dockerfile behind a build argument, which gives a build outside the image nothing and has
-    the image's build run the app and its load; a profile by default, since a build cannot know
+    itself, which moves the same traps into every app's script; the four steps written into the
+    starter's Dockerfile behind a build argument, which gives a build outside the image nothing
+    and has the traps over again in a Dockerfile (the image's build runs this command instead,
+    [Choice 69](#choice-profile-image)); a profile by default, since a build cannot know
     an app's requests and the second build and the run are minutes; reading Cargo's
     configuration as Cargo does to keep its flags, which takes a TOML parser the command does
     not have; an `llvm-profdata` found on the `PATH`, which may read another LLVM's format;
@@ -7076,6 +7081,80 @@ rules something out.
     --locked --bin` and an empty `-F` on Cargo 1.100.0, selecting a workspace member that is not
     the default one: each build was given exactly them, as written and in order (a `cargo` on
     the `PATH` recorded each argument), and the test fails when the release build is not.
+
+69. <a id="choice-profile-image"></a>**The starter's image is built with a profile when its build is given the
+    app's script, by the same command.** `docker build --build-arg PROFILE_FROM=train.sh` has
+    the Dockerfile `corten new` writes run `corten build --locked --profile-from sh -- train.sh`
+    where it runs `cargo build --release --locked`
+    ([deploying](guide/deploy.md#a-profile-in-the-image)). So an app deployed the documented way
+    can have what [Choice 68](#choice-profile-build) measured, by the one command that builds a
+    profiled release, and the binary is built and profiled on the system the image is built
+    for. Without the argument the build runs what it ran and fetches nothing: the `RUN` that
+    adds `llvm-tools` and installs the `corten` command does nothing. The argument is the
+    script's path, not a command line, so the Dockerfile quotes it once, after a `--`, and the
+    shell splits nothing; a path that is no file fails the build before the app is built. The
+    command installed is the release with the number of the `corten` that wrote the
+    Dockerfile, as the app's manifest names the library's, built from source with its lock. It
+    goes under `/usr/local`, into the layer: cargo's home in this build is a cache mount, which
+    is no part of a layer, so a later build that reused the layer where the cache was gone
+    would have no command, and apps on one builder would write over each other's. It is
+    installed before the sources are copied in, so a builder that has kept the layer does not
+    install it again after a change to the app. A release without the option is refused in
+    that `RUN`: 0.2.0's `corten build` took no arguments, so it would build the ordinary
+    binary and the image would have no profile and no word of it; and a `corten` built from a
+    commit between releases writes the number of the release before it. The cost is that the
+    image's build runs the app: the copy has to start in a build, which has no other container
+    beside it, so an app that needs a database as it starts cannot use the argument, and every
+    build with the argument compiles each crate again for the new profile.
+    Not chosen: a profile in every image build, since a build cannot know the app's requests,
+    an app that needs a service would not build at all, and every build would pay the time; the
+    argument as a whole command line, which the shell would split; a script that `corten new`
+    writes into every app, which would still ask for the starter's one page when the app has
+    others, and a profile that barely reached an app's routes gained about half as much
+    ([Choice 68](#choice-profile-build)); the command's version read from `Cargo.lock` during
+    the build, which is a parser written in shell and has no release to install for an app on a
+    git revision; the command installed from the commit that built the `corten` that wrote
+    the Dockerfile, which is exact between releases too and clones the repository in every
+    build that has not kept the layer; a second Dockerfile, or a stage, that copies in a binary
+    built where the app's services are, since the builder's system then has to match the
+    image's and a mismatch fails when the container starts, not when the image is built; and a
+    profile file taken elsewhere and handed to the image's build, which goes stale without a
+    word when the app's code or the compiler moves.
+
+    Stands on: measured (the app `corten new` writes, its two binaries built in `rust:1-trixie`
+    by the Dockerfile's two commands and run on `debian:trixie-slim` with the image's jemalloc
+    settings: the profiled one took 41,922 fewer cycles a request on the home page at the
+    median of 10 alternated rounds, 32% of the ordinary build's 130,903, and 40,193 fewer where
+    each answer is compressed, 22% of 183,102, lower in all 10 rounds of each, from a script of
+    500 requests; its image built in 188 seconds with the argument against 69 without, one
+    build each, and in 121 after a change to one file); platform (a `RUN` has a loopback
+    interface, so a server and its client run in one; a build argument declared before a
+    `RUN` that reads it is part of that layer's cache key; a cache mount is not part of the
+    layer its `RUN` makes; a build has no service container beside it); reasoned (the same
+    command inside the image and outside it is one way to build a profiled release; a path
+    quoted once after `--` is neither split nor read as an option); bet (an app that deploys
+    from this Dockerfile and wants the gain can start with nothing beside it; and the release
+    that carries this Dockerfile installs from crates.io as 0.2.0 did here); value (fast and
+    proven fast for the documented deploy, with the ordinary build kept as the default and the
+    profile one argument away, and a build that cannot take a profile failing rather than
+    passing without one, README Values).
+
+    Revisit when: a build can run a service beside it, so the argument can cover an app with a
+    database; a release's `corten` command cannot be built in the build stage; a workflow
+    builds the starter's image, so these lines are checked on every change and not by hand; or
+    apps keep a script from the day they are written, so the starter could carry one.
+
+    Last checked: 2026-11-20, the rounds above at `9fae8ff55` with rustc 1.100.0, the app on
+    one CPU under `wrk` with 64 connections; 2026-11-20, the Dockerfile `corten new` writes at
+    this change, built with Docker 29.9.3 and the guide's script. As written, its first `RUN`
+    installed corten-cli 0.2.0 from crates.io and refused it, naming the release, before the
+    sources were copied in. With that one line pointed at this checkout (no release has the
+    option yet): without the argument the first `RUN` did nothing. A path that is no file
+    failed after the install and before the app's build, naming the path. The script's path
+    ran the copy in the build, and the image's server answered its page as user 10001. After
+    a change to one of the app's files the first `RUN` was reused from the builder's layers
+    and only the build ran. The build argument's two values in these runs each ran the
+    first `RUN` anew.
 
 ## Rules
 

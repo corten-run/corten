@@ -6,7 +6,7 @@ Corten speaks HTTP/1.1. HTTP/2 or HTTP/3 to browsers and a shared cache come fro
 in front of `corten::serve` ([design Limit 14](../design.md#limit-http1)), which usually ends TLS too (the app can,
 [`serve_wrapped`](app.md#your-own-listeners)). This page is what that proxy has to do
 for a Corten app, the nginx configuration it was checked with, the settings for two CDNs, the
-release profile an app builds with, what a profile-guided build gained on one app, how its image builds
+release profile an app builds with, what a profile-guided build gained on two apps, how its image builds
 beside other apps', and what to know when monitoring it.
 
 For live streams this is a requirement, not just a choice of where to end TLS: another server
@@ -387,9 +387,9 @@ for another target or includes another file; an empty `RUSTFLAGS` says the build
 
 The option needs a Unix system, since it stops the copy with a signal; on Windows it is refused
 before it builds, and a Linux container builds the release the Dockerfile's way. That
-Dockerfile, as `corten new` writes it, does one release build with no profile, in the image:
-a binary built here is not the one the image runs, and where the command and what it sends go
-in an image's build is not worked out here. A `corten build` that is itself stopped by a signal
+Dockerfile, as `corten new` writes it, builds its own binary in the image, so a binary built
+here is not the one the image runs: the image's build runs this same command when it is given
+the script ([A profile in the image](#a-profile-in-the-image)). A `corten build` that is itself stopped by a signal
 (a cancelled job, `timeout`) leaves the copy running, as `corten dev` leaves the app. For a
 build the option refuses or does not cover (Windows, a cross build, a Cargo argument not on
 its list), the same steps by hand are in the rustc book's
@@ -449,8 +449,27 @@ and, with the machine quieter, about two and a half. The binaries are 6,154,312 
 5,869,496, the merged profile 2.8 MB, and the target directory about 250 MB after the ordinary
 build against about 580 MB with the instrumented copy beside the release.
 
-Not measured: an app as the starter builds and runs it (its release profile, jemalloc, a
-deadline and timeouts), another app or page, a profile taken from an earlier version of the app
+The app `corten new` writes, measured at `9fae8ff55` from binaries its Dockerfile's commands
+built in its build image, run on its run image and not from an image `docker build` made: built in `rust:1-trixie` (rustc 1.100.0) with the starter's release profile and
+`compress`, by the Dockerfile's `cargo build --release --locked` and by
+`corten build --locked --profile-from sh train.sh` in its place, with the script above (500
+requests for the home page); run on `debian:trixie-slim` with jemalloc preloaded and the
+image's settings, as root, the two binaries in one container with `perf` and `wrk`. The home
+page is 1,274 bytes, and 649 in zstd, which the app chose from a browser's codings. The app on
+one CPU, `wrk` with 64 connections on three others, 10 rounds in which the two builds took
+turns, on a desktop with other work running; medians are the sixth of the ten:
+
+| Load | Ordinary build, cycles a request, median (range) | With the profile | Difference in the same round, median (quartiles) | Rounds it was lower |
+|---|---|---|---|---|
+| the home page, accepting no coding | 130,903 (116,483 to 144,262) | 84,456 (75,017 to 94,579) | 41,922 fewer, 32% of the ordinary build's median (39,009 to 51,108 fewer) | 10 of 10 |
+| the same page, accepting a browser's codings, so each answer is compressed | 183,102 (170,580 to 206,422) | 139,061 (132,722 to 170,062) | 40,193 fewer, 22% (37,519 to 47,111 fewer) | 10 of 10 |
+
+On the first load, by the medians, user cycles a request fell from 70,915 to 34,876 and the
+kernel's from 59,988 to 49,595, user instructions from 27,905 to 19,929, L1 instruction-cache
+misses from 4,232 to 1,966 and branch misses from 275 to 141. What the image's build costs for
+it is in [A profile in the image](#a-profile-in-the-image).
+
+Not measured: another app or page, a profile taken from an earlier version of the app
 or with another rustc, and a profile used on another kind of CPU than it was taken on. Nor the
 time a reader waits: no latency was kept, and the pages a second the same
 rounds counted (64 connections against one CPU) say little, 17,567 at the median without a
@@ -563,6 +582,73 @@ the shared home.
 
 Cache mounts are not exported with `--cache-to` or restored with `--cache-from`, so on a new
 builder, such as a hosted CI runner's, the build starts from clean.
+
+### A profile in the image
+
+The image's build takes a profile of the app at work when it is given the app's script:
+
+```sh
+docker build --build-arg PROFILE_FROM=train.sh -t shop .
+```
+
+`PROFILE_FROM` is the script's path from the app's directory. The build then runs
+`corten build --locked --profile-from sh -- train.sh` where it would run
+`cargo build --release --locked`: a copy of the app runs in the build stage while the script
+sends it requests, and the image gets the binary built with what the copy recorded
+([A profile-guided build](#a-profile-guided-build) has the script, the steps and what stops
+them). Without the argument the build runs what it ran before and fetches nothing more. A path
+that is no file fails the build before it builds the app. That is all the build checks of it: a
+path that leads out of the app runs the file it finds, as the build's user, which is root, like
+the app's own build scripts.
+
+An app whose Dockerfile was written before it had the argument takes the `ARG` and the two
+build-stage `RUN`s from a new app's. Without them the argument is read by nothing and the image
+is the ordinary one: Docker 29.9.3 built it without a word about the argument.
+
+The two builds are two lines of one `RUN`. A Cargo argument the app's release needs
+(`--features`, `--bin`) goes on both, before `--profile-from` on the second: on one alone,
+the image with a profile is built with other features than the image without.
+
+What the argument asks of the app and its build, which the ordinary build does not:
+
+- The app starts with what a build has. `docker build` runs no other container beside it, so
+  an app that connects to a database or another service as it starts exits, or does not listen,
+  and the build fails saying which. Such an app's image keeps the ordinary build:
+  `corten build --profile-from` builds a profiled binary where those services are, and putting
+  that binary in an image is not something this Dockerfile does. A secret given as a build
+  argument is kept in the build's record, so an app that needs one to start is not given it
+  that way.
+- The script's tools are in the build stage. `rust:1-trixie` has `curl`; anything else the
+  script runs is installed there first. A script checked out with Windows line endings fails
+  in `sh`.
+- The `corten` command and the toolchain's `llvm-tools` are fetched in the build, in a `RUN` of
+  their own before the sources are copied in, so a builder that has kept that layer does not
+  fetch them again after a change to the app. The command is the release with the number
+  `corten new` wrote the Dockerfile with
+  (`cargo install corten-cli --version <that release> --locked --root /usr/local`), built from
+  source into the layer: cargo's home in this build is a cache, which is no part of a layer.
+  When the app moves to another Corten release, change the version on that line with it. A
+  release without the option is refused there, before the app is built. 0.2.0 is one: its
+  `corten build` took no arguments and would build the ordinary binary without a word. A
+  `corten` built from a commit between releases writes the number of the release before it,
+  so its Dockerfile is refused this way until that line names a release that has the option.
+- `llvm-tools` is added to the build image's toolchain. An app with a `rust-toolchain.toml`
+  builds with its own, and `corten build` refuses a toolchain without the component, naming
+  it; that file's `components` is where rustup takes it from. Not tried in an image build.
+- The build takes longer, and the app's target cache holds the instrumented copy beside the
+  release. The starter's own image at `f909c0d2d`, its install line pointed at that checkout
+  since no release has the option yet, so the 45 seconds are not an install from crates.io;
+  one build each on a desktop with a lint run beside it:
+  69 seconds the ordinary way, and 188 with `PROFILE_FROM` in the same target cache
+  afterwards, of which 45 fetched `llvm-tools` and built the `corten` command and 138 were the
+  build step (63 the ordinary way), the script's 500 requests included. A build with
+  `PROFILE_FROM` after a change to one file, at `99c6ccc85`, took 121 seconds, with the first `RUN` reused: a
+  new profile compiles every crate again, where the ordinary build compiles the app's own.
+
+The gain measured on the starter's own app is with the other measurements in
+[A profile-guided build](#a-profile-guided-build): 32% fewer cycles a request on its home page,
+and 22% fewer where each answer is compressed, from binaries these two commands built in this
+build image, run on the run stage's image.
 
 ## Monitoring
 
