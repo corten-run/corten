@@ -251,8 +251,9 @@ async fn a_request_head_is_held_only_as_large_as_the_app_allows() {
 }
 
 /// `App::send_timeout`: a client that stops reading an answer has its connection closed once a
-/// write has waited that long, an endless stream included; a stream that waits between its own
-/// chunks while the client reads is not cut, and `None` holds the stalled connection.
+/// write has waited that long, an endless stream and a body hyper takes whole included; a stream
+/// that waits between its own chunks while the client reads is not cut, and `None` holds the
+/// stalled connection, past the header timeout too.
 #[tokio::test]
 async fn an_answer_waits_for_its_client_only_as_long_as_the_app_allows() {
     use crate::body::Body;
@@ -301,25 +302,42 @@ async fn an_answer_waits_for_its_client_only_as_long_as_the_app_allows() {
         stream.write_all(b"GET /endless HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
         stream
     };
-    // Reads what is left; Ok once the server has closed, Err while it still sends after 3 s.
+    // A client that reads the start of `/big`, whose body hyper takes whole, then no more: done
+    // but for its sending, which waits on the client (#1746).
+    let whole = |addr| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET /big HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+        let mut head = [0u8; 12];
+        stream.read_exact(&mut head).await.unwrap();
+        assert_eq!(&head, b"HTTP/1.1 200");
+        stream
+    };
+    // Reads what is left; Ok with how much once the server has closed, Err while it still sends
+    // after 3 s.
     let drain = |mut stream: tokio::net::TcpStream| async move {
         let mut buf = vec![0u8; 256 * 1024];
         tokio::time::timeout(Duration::from_secs(3), async move {
+            let mut total = 0;
             while let Ok(read) = stream.read(&mut buf).await {
                 if read == 0 {
                     break;
                 }
+                total += read;
             }
+            total
         })
         .await
     };
 
     let (addr, stop, server) = serve(App::new(routes()).send_timeout(Duration::from_millis(300))).await;
     let stalled = endless(addr).await;
+    let stalled_whole = whole(addr).await;
     // Long enough for the socket's buffers to fill and the timeout to pass, with room for a
     // slow machine: the connection is closed by then, so what is left ends.
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(drain(stalled).await.is_ok(), "a client that stops reading is closed");
+    let read = drain(stalled_whole).await.expect("a client that stops reading a whole body is closed");
+    assert!(read < 32 << 20, "before it is sent the rest: {read} bytes");
     let mut paced = tokio::net::TcpStream::connect(addr).await.unwrap();
     paced.write_all(b"GET /paced HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
     let mut answer = Vec::new();
@@ -345,10 +363,16 @@ async fn an_answer_waits_for_its_client_only_as_long_as_the_app_allows() {
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
 
-    let (addr, stop, server) = serve(App::new(routes()).send_timeout(None)).await;
+    let header = Duration::from_millis(300);
+    let (addr, stop, server) = serve(App::new(routes()).send_timeout(None).header_timeout(header)).await;
     let stalled = endless(addr).await;
+    let stalled_whole = whole(addr).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(drain(stalled).await.is_err(), "without the timeout it is held, and still sending");
+    // A whole body's too: the header timeout bounds only what comes before a request, so the
+    // client gets the rest when it reads again, and the connection is closed once idle.
+    let read = drain(stalled_whole).await.expect("closed once idle");
+    assert!(read > 32 << 20, "without the timeout a whole body is held, then sent in full: {read} bytes");
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
 }
