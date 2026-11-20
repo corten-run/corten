@@ -67,15 +67,16 @@ system reporting room, which it does once a good part of the buffer is free, so 
 takes a little each minute can be. Over TLS a write or a flush stays pending while the TLS library
 sends what it holds to a client reading slower than the server writes, and its wait starts over at
 each report of room too. How far apart the reports come depends on how the client takes bytes
-from its socket: in bursts (a TLS client that reads whole records, `curl --limit-rate`) leaves
-longer gaps than the same rate taken evenly, over TLS and plain HTTP alike. Measured with 16 KiB
+from its socket: one that takes them in bursts (a TLS client that reads whole records,
+`curl --limit-rate`) leaves longer gaps than one taking the same rate evenly, over TLS and plain
+HTTP alike. Measured with 16 KiB
 buffers and a 2-second `send_timeout`, 5 tries each: a tokio-rustls client taking 2 KiB every
 125 ms was cut after 5 to 8.5 seconds, while the same rate taken evenly from the socket was kept
 past 30 seconds over TLS and plain HTTP; a plain reader taking 16 KiB once a second, and
 `curl --limit-rate 16K` over either, were cut. Keep the timeout well above the gaps your
-slowest readers leave: with the 60-second default, a plain reader taking 2 KiB every 4 seconds
-(512 bytes a second) was kept past 300 seconds, and a tokio-rustls one at that rate was cut
-after 123 (one try each).
+slowest readers leave: with the 60-second default, a reader taking 2 KiB every 4 seconds (512
+bytes a second) evenly from its socket was kept past 300 seconds over plain HTTP, and a
+tokio-rustls client at that rate, reading whole records, was cut after 123 (one try each).
 While the connection's task has spent tokio's cooperative budget (a route reading a flood of
 input), a report of room does not start the wait over. A TLS connection's last record, written
 as it closes, is held to it too. The same clock checks it; with both timeouts `None` (behind a

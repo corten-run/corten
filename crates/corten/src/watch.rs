@@ -142,8 +142,8 @@ pub(crate) struct Watch {
     /// The task whose write, flush or close is waiting; empty while none is, and for a moment
     /// while a call takes it to register its own ([`Watched::send`]).
     writer: AtomicWaker,
-    /// How many times [`Watch::wake_writer`] has run, so a call can tell a wake that came while
-    /// `writer` was empty.
+    /// How many wakes ([`Watch::wake_writer`]) found `writer` empty, so a call that had taken it
+    /// can tell one came meanwhile.
     wakes: AtomicU64,
     clock: Arc<Clock>,
 }
@@ -182,9 +182,20 @@ impl Watch {
         self.since.load(Relaxed) == EXPIRED
     }
 
-    /// Wakes the waiting call's task: the IO has room, or the clock has expired the wait.
-    /// Counted first, so a call that had `writer` empty when this ran sees it.
+    /// Wakes the waiting call's task: the IO has room, or the clock has expired the wait. A wake
+    /// that finds `writer` empty is counted only then, after its take, so a call that had taken it
+    /// (and read the count before) sees the count change; and it wakes again, for a call that has
+    /// put its waker back since. Counted before the take, a wake could be counted before the call
+    /// read the count and still find `writer` empty, and be lost.
     fn wake_writer(&self) {
+        match self.writer.take() {
+            Some(waker) => waker.wake(),
+            None => self.missed(),
+        }
+    }
+
+    /// The rest of a wake that found `writer` empty ([`Watch::wake_writer`]).
+    fn missed(&self) {
         self.wakes.fetch_add(1, SeqCst);
         self.writer.wake();
     }
@@ -331,8 +342,10 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
         // task's is woken if a wake came while `writer` was empty. A finished call that displaced
         // none leaves no registration, so two tasks that flush when woken do not wake each other
         // in turn. Two calls that both wait are woken only the last, as tokio's own are.
+        at(0);
         let wakes = watch.wakes.load(SeqCst);
         let previous = watch.writer.take();
+        at(1);
         watch.writer.register(cx.waker());
         let done = if tokio::task::coop::has_budget_remaining() {
             // A call that has just waited on the task's waker is polled again, so the IO holds the
@@ -363,9 +376,25 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
             }
             None => drop(watch.writer.take()),
         }
+        at(2);
         Poll::Ready(done)
     }
 }
+
+/// Runs a test's step at `point` in [`Watched::wait`], so a test can put a wake between its steps:
+/// before it reads the count (0), between its take and its registration (1), and once it is done (2).
+#[cfg(test)]
+fn at(point: u8) {
+    tests::STEP.with(|step| {
+        if let Some(step) = step.borrow_mut().as_mut() {
+            step(point);
+        }
+    });
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn at(_: u8) {}
 
 impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
@@ -460,6 +489,14 @@ impl Drop for Answered {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test's step, given the point in [`Watched::wait`] it runs at.
+    type Step = Box<dyn FnMut(u8)>;
+
+    thread_local! {
+        /// The step [`at`] runs on this thread, if any.
+        pub(super) static STEP: std::cell::RefCell<Option<Step>> = const { std::cell::RefCell::new(None) };
+    }
 
     /// An IO no write or close gets through: a client that reads nothing.
     struct Stuck;
@@ -616,6 +653,50 @@ mod tests {
         // Woken, the first task flushes too, and that wakes nobody.
         assert!(Pin::new(&mut io).poll_flush(&mut Context::from_waker(&one_waker)).is_ready());
         assert_eq!((one.0.load(SeqCst), two.0.load(SeqCst)), (1, 0));
+    }
+
+    /// One task whose write waits and whose flush then goes through, with the clock expiring the
+    /// write while the flush has taken `writer` (`steps` puts the expiry's wake into the flush):
+    /// the task is still woken, so its write fails at the send timeout instead of waiting on.
+    fn the_expirys_wake_reaches_a_waiting_write(steps: impl FnMut(&Watch, u8) + 'static) -> usize {
+        use std::sync::atomic::Ordering::SeqCst;
+        let clock = Clock::start(None, Some(Duration::from_secs(30))).unwrap();
+        let watch = clock.watch();
+        let mut io = Watched { io: Flushes, watch: Some(watch.clone()), _open: None };
+        let task = Arc::new(Counted(0.into()));
+        let waker = Waker::from(task.clone());
+        let mut cx = Context::from_waker(&waker);
+        assert!(Pin::new(&mut io).poll_write(&mut cx, b"x").is_pending());
+        let mut steps = steps;
+        STEP.with(|step| *step.borrow_mut() = Some(Box::new(move |point| steps(&watch, point))));
+        let flushed = Pin::new(&mut io).poll_flush(&mut cx);
+        STEP.with(|step| *step.borrow_mut() = None);
+        assert!(flushed.is_ready());
+        task.0.load(SeqCst)
+    }
+
+    #[tokio::test]
+    async fn an_expiry_whose_wake_comes_while_a_call_has_taken_writer_still_wakes_the_task() {
+        let woken = the_expirys_wake_reaches_a_waiting_write(|watch, point| match point {
+            0 => watch.stalled.store(STALLED, Relaxed),
+            1 => watch.wake_writer(),
+            _ => {}
+        });
+        assert_eq!(woken, 1);
+    }
+
+    /// The expiry's wake takes `writer` while the call has it, finds it empty, and is counted and
+    /// wakes again only once the call is done: the second wake reaches the task.
+    #[tokio::test]
+    async fn an_expiry_whose_wake_finds_writer_empty_and_ends_after_the_call_still_wakes_the_task() {
+        let woken = the_expirys_wake_reaches_a_waiting_write(|watch, point| match point {
+            0 => watch.stalled.store(STALLED, Relaxed),
+            // `wake_writer`'s steps, split around the end of the call.
+            1 => assert!(watch.writer.take().is_none()),
+            2 => watch.missed(),
+            _ => {}
+        });
+        assert_eq!(woken, 1);
     }
 
     /// One task whose write waits and whose flush then goes through, as a route that writes and

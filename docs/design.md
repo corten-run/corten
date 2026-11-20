@@ -1242,7 +1242,7 @@ rules something out.
        the socket was kept past 30 seconds over TLS and plain HTTP alike, and plain readers in
        bursts (16 KiB a second, `curl --limit-rate 16K`) were cut, so the reading pattern decides
        it, not TLS
-       ([#1757 send_timeout still cuts a slow TLS reader that plain HTTP keeps: room is reported at less even intervals over TLS](https://github.com/corten-run/corten/issues/1757));
+       ([#1757 send_timeout cuts a slow reader that takes bytes from its socket in bursts, over TLS and plain HTTP alike](https://github.com/corten-run/corten/issues/1757));
        and while the connection's task has
        spent tokio's cooperative budget a report of room does not start the wait over
        ([#1742 A TLS flush that stays pending while a slow client reads steadily may trip send_timeout: test serve_wrapped over TLS with a steady reader](https://github.com/corten-run/corten/issues/1742)));
