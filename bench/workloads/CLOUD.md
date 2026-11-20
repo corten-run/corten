@@ -199,6 +199,40 @@ termination from a lost local connection. A pending result preserves the host;
 verify the terminal evidence, saved archive and confirmed deletion separately
 for each group before reporting the fleet as complete.
 
+**Collection after systemd forgets an exit.** For a closed supervised run, the
+acknowledged start, registered terminal monitor and native seal prove the run
+started and finished. An inactive, dead unit with no retained start time or
+exit type does not prove that by itself. The collector checks the expected unit
+and boot, no queued job, PID, populated service cgroup, running container or
+benchmark process, then downloads the existing exit archive without running
+`pack.sh`. Local native replay must agree with the monitor. The collector
+rechecks the archive and idle host before recording its ordinary delete intent;
+after intent it only reconciles absence. A live, never-started, unsupervised
+or invalid-monitor run cannot use this proof. Target failures remain results,
+not successful timings or a publishable baseline.
+
+**Pinned r21 only.** Use a separately reviewed, merged successor for one
+closed child of the original staged fleet at a time. Keep the original fleet
+in place. Keep a separate clean checkout at the measured revision
+`4225a2837e04795c11c1b45b3d6af72b7eb5ddc3` with its original root `npm ci`.
+The successor reads that revision's validator, dependency bytes and native
+inputs, not its own compiler, and does not extend the replay deadline.
+First independently verify the pre-existing exit archive's SHA-256.
+
+```sh
+node bench/workloads/cloud-production.mjs r21 --collect --state-dir ABSOLUTE_CHILD_ROOT --r21-measured-checkout ABSOLUTE_MEASURED_CHECKOUT --exit-archive-sha256 REVIEWED_ARCHIVE_DIGEST --print-approval
+```
+
+Review the preview against the exact group, host, unit, saved SSH host key,
+monitor registration, terminal campaign/seal, archive and staged intent. Only
+after independent authorization replace `--print-approval` with
+`--approve-reviewed-merged-ready REVIEWED_EXACT_HASH`. Approval is neither
+transferable across children nor reusable after state changes. An unadmitted
+child cannot be recovered. The first group's admission replay, remaining
+launches and fleet verification still use the **measured checkout**. A replay
+timeout or mismatch before delete intent retains the host; do not substitute a
+remote report, change the measured state or retry a DELETE.
+
 Failed worker results and fleet receipts retain only the existing allowlisted
 `providerDiagnostic` code and optional HTTP status or code-specific finite detail,
 plus an explicit `uncertain`

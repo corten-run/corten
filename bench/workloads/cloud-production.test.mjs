@@ -884,13 +884,18 @@ test("retargeting an ordinary alias invalidates the approved physical root befor
 });
 
 test("production grammar permits authorization only, never arbitrary settings/adapters", () => {
-  assert.equal(controllerPaths.length, 32);
+  assert.equal(controllerPaths.length, 33);
+  assert.ok(controllerPaths.includes("bench/workloads/cloud-sealed-collection.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-cancellation.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-retirement.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-validation-snapshot.mjs"));
   for (const path of ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs", "cloud-control-stream.mjs", "isolated/control-stream-source.mjs"])
     assert.ok(controllerPaths.includes(`bench/workloads/${path}`));
   const args = ["r21", "--collect", "--state-dir", resolve("outside")];
+  const pin = ["--r21-measured-checkout", resolve("measured")], sha = ["--exit-archive-sha256", "a".repeat(64)];
+  for (const suffix of [pin, sha, [...pin, ...sha, "--unused-bootstrap-known-hosts", resolve("verified")]])
+    assert.throws(() => parseProductionArgs([...args, ...suffix]));
+  assert.equal(parseProductionArgs([...args, ...pin, ...sha]).options.exitArchiveSha256, sha[1]);
   for (const suffix of [["--adapter", "evil"], ["--duration", "1"], ["--print-approval", "--print-approval"], ["--approve-reviewed-merged-ready", "not-a-hash"]])
     assert.throws(() => parseProductionArgs([...args, ...suffix]));
 });

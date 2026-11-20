@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { harness } from "./cloud-fixtures.mjs";
+import { archive, harness, metadata } from "./cloud-fixtures.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 import { reservation, validateState } from "./cloud-contract.mjs";
@@ -140,6 +140,40 @@ test("terminal monitor and archived native campaign must agree before deletion",
     await assert.rejects(h.task().collect()); assert.equal(h.deletes, 0); assert.equal(h.saved().deletionIntentAt, undefined);
     assert.ok(h.saved().archiveSha256 && h.saved().evidenceSha256);
   }
+});
+
+test("expired systemd history collects the sealed exit archive once, even after a lost DELETE acknowledgement", async (t) => {
+  const h = harness(t, { active: true, reportStatus: "verified" }); await h.launch().launch();
+  const path = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(path));
+  closed.closedAtMs -= 31000; closed.recoverAfterMs -= 31000; writeFileSync(path, JSON.stringify(closed));
+  Object.assign(h.flags, { active: false, expired: true, deleteLost: true, packError: true });
+  h.setArchive(archive([...metadata().filter(e => e.name !== "exit-code"), { name: "exit-code", body: "0\n" }, { name: "campaign/" }]));
+  const report = h.report(), target = report.groups.find(g => g.group === "catalog-page").appOutcomes.find(a => a.app === "fastapi");
+  Object.assign(target, { outcome: "failed", comparisonEligible: false });
+  const task = () => h.task({ inspect: async () => report });
+  const before = h.calls.length;
+  await assert.rejects(task().collect(), /acknowledgement lost/);
+  assert.equal(h.deletes, 1); assert.ok(h.saved().deletionIntentAt && !h.saved().destroyedAt);
+  assert.equal(await task().collect(), 0); assert.equal(h.deletes, 1); assert.ok(h.saved().destroyedAt);
+  assert.equal(h.saved().evidenceOutcome, "validated"); assert.equal(h.saved().fullGroupQualified, false);
+  assert.deepEqual(target, { app: "fastapi", outcome: "failed", comparisonEligible: false });
+  assert.ok(!h.calls.slice(before).some(([bin, ...args]) => bin === "ssh" && args.at(-1).includes("pack.sh")));
+});
+
+test("expired history without a sealed start, or with a PID, pending job, foreign unit or host work cannot delete", async (t) => {
+  const h = harness(t, { active: true }); await h.launch().launch();
+  const path = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(path));
+  closed.closedAtMs -= 31000; closed.recoverAfterMs -= 31000; writeFileSync(path, JSON.stringify(closed));
+  Object.assign(h.flags, { active: false, expired: true });
+  for (const flags of [{ livePid: true }, { controlPid: 17 }, { job: "42" }, { wrongUnit: true }, { busyHost: true }]) {
+    Object.assign(h.flags, flags);
+    await assert.rejects(h.task().collect());
+    assert.equal(h.deletes, 0); assert.equal(h.saved().archiveSha256, undefined);
+    for (const key of Object.keys(flags)) delete h.flags[key];
+  }
+  h.change(s => { s.control.ledger.find(r => r.request.invocation.requestSha256 === digest(`set -euo pipefail\nsystemctl start ${s.unit}\n`)).code = 1; });
+  await assert.rejects(h.task().collect(), /acknowledged unit start/);
+  assert.equal(h.deletes, 0);
 });
 
 test("a closed supervised reservation refuses legacy or differently registered inspections", async (t) => {

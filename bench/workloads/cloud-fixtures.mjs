@@ -139,9 +139,12 @@ export function harness(t, flags = {}) {
       if (script === "true") return flags.noSsh ? { ...good(), status: 255 } : good();
       if (script.startsWith("systemctl show")) {
         units++; if (flags.unitError) throw new Error("fake unit failure");
-        return good(`Id=${flags.wrongUnit ? "foreign.service" : s.unit}\nLoadState=${flags.missingUnit ? "not-found" : "loaded"}\nFragmentPath=/etc/systemd/system/${s.unit}\nActiveState=${flags.active || flags.activeAfterDownload && downloads ? "active" : "inactive"}\nRestart=${flags.restart ? "always" : "no"}\nMainPID=${flags.livePid ? "1" : "0"}\nExecMainCode=1\nExecMainStartTimestamp=Fri 2026-11-13 00:00:00 UTC\n`);
+        const started = flags.expired ? "ExecMainCode=0\nExecMainStartTimestamp=" : "ExecMainCode=1\nExecMainStartTimestamp=Fri 2026-11-13 00:00:00 UTC";
+        const extra = script.includes("--property=ControlPID") ? `Job=${flags.job ?? ""}\nControlPID=${flags.controlPid ?? 0}\nSubState=dead\n` : "";
+        return good(`Id=${flags.wrongUnit ? "foreign.service" : s.unit}\nLoadState=${flags.missingUnit ? "not-found" : "loaded"}\nFragmentPath=/etc/systemd/system/${s.unit}\nActiveState=${flags.active || flags.activeAfterDownload && downloads ? "active" : "inactive"}\nRestart=${flags.restart ? "always" : "no"}\nMainPID=${flags.livePid ? "1" : "0"}\n${started}\n${extra}`);
       }
-      if (script === "sha256sum /bench/results.tgz") return good(`${flags.wrongHash ? "f".repeat(64) : digest(bytes)}  /bench/results.tgz\n`);
+      if (script.includes("CORTEN_IDLE") && flags.busyHost) return { ...good(), status: 1 };
+      if (script.endsWith("sha256sum /bench/results.tgz")) return good(`${flags.wrongHash ? "f".repeat(64) : digest(bytes)}  /bench/results.tgz\n`);
       if (script.startsWith("systemctl start") && flags.startLost) throw new Error("fake start acknowledgement lost");
       if (script.startsWith("node -e")) { if (flags.auditCollision) throw new Error("fake inbox collision"); return good(`${subject}\n`); }
       if (script.includes("pack.sh") && flags.packError) throw new Error("fake pack failure");

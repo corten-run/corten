@@ -1,0 +1,1 @@
+- The grouped benchmark collector can preserve a finished run and its recorded target failures after systemd forgets the exit metadata. [Collection procedure](https://github.com/corten-run/corten/blob/main/bench/workloads/CLOUD.md)

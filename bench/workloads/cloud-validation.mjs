@@ -3,12 +3,12 @@ import { validationFailure as failure, validationTask } from "./cloud-validation
 
 export const validationLimit = 60000, validationStopLimit = 1000;
 
-export function inspectCampaign(input, { inspect, interrupted = () => false, preserveLock = () => {} } = {}) {
+export function inspectCampaign(input, { inspect, start = validationTask, interrupted = () => false, preserveLock = () => {} } = {}) {
   const started = performance.now();
   let task;
   try {
     if (interrupted()) return Promise.reject(failure());
-    task = inspect === undefined ? validationTask(input) : { result: inspect(input) };
+    task = inspect === undefined ? start(input) : { result: inspect(input) };
   } catch { return Promise.reject(failure()); }
   return new Promise((resolve, reject) => {
     let settled = false, stopping = false, finished = false, grace;

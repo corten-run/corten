@@ -11,6 +11,7 @@ import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArch
 import { campaignOutcome, controllerFailure, controllerState, full, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
+import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-sealed-collection.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, setupEvidence, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript,
   verifyFailedNativeCustody, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
@@ -158,7 +159,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const transport = async (binary, args, timeout, allowFail) => {
     await own(); assert.ok(state.id && state.ip, "bound host required");
     const mixedRecovery = state.group === "mixed-production" && (options.cancelMixedWait || options.retireFailedNative);
-    if (mixedRecovery) assert.equal(fileHash(join(local, "known_hosts")), mixedWait.knownHostsSha256, "native host keys changed");
+    const pinnedKey = mixedRecovery ? mixedWait.knownHostsSha256 : options.r21MeasuredCheckout ? recoveryApproval.knownHostsSha256 : undefined;
+    if (pinnedKey) assert.equal(fileHash(join(local, "known_hosts")), pinnedKey, "native host keys changed");
     if (existsSync(join(local, "known_hosts"))) regular(join(local, "known_hosts"), 1024 * 1024);
     let registration, intent;
     if (state.control) {
@@ -168,9 +170,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       state.control.ledger.push({ request: intent, localTerminal: false }); save();
       registration = controlRegistration(intent);
     }
-    const result = await execute(binary, [...(mixedRecovery ? ["-o", "StrictHostKeyChecking=yes"] : []), ...sshOptions, ...args], timeout, allowFail, undefined, undefined, registration);
+    const result = await execute(binary, [...(pinnedKey ? ["-o", "StrictHostKeyChecking=yes"] : []), ...sshOptions, ...args], timeout, allowFail, undefined, undefined, registration);
     if (intent) { const row = state.control.ledger.at(-1); row.localTerminal = true; row.code = result.status; save(); }
-    if (mixedRecovery) assert.equal(fileHash(join(local, "known_hosts")), mixedWait.knownHostsSha256, "native host keys changed during transport");
+    if (pinnedKey) assert.equal(fileHash(join(local, "known_hosts")), pinnedKey, "native host keys changed during transport");
     return result;
   };
   const ssh = (script, timeout = 60000, allowFail = false) => transport("ssh", [`root@${state.ip}`, script], timeout, allowFail);
@@ -286,7 +288,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     let outcome;
     try {
       report = await inspectCampaign(Object.freeze({ folder: join(extracted, "campaign"), round: state.round, commit: state.commit }), {
-        inspect, interrupted, preserveLock: () => { preserveOperationLock = true; },
+        ...(options.r21MeasuredCheckout ? { start: (await r21Validator(options.r21MeasuredCheckout)).validationTask } : { inspect }),
+        interrupted, preserveLock: () => { preserveOperationLock = true; },
       });
       check();
       assert.ok(state.control?.monitor?.phase !== "invalid" || report.status !== "verified", "lost monitor cannot qualify");
@@ -601,6 +604,37 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (failedMonitorRecovery) assert.equal(observed.control.monitor.phase, "invalid", "foreground monitor has not settled");
       }
       return locked(async () => {
+        if (options.r21MeasuredCheckout) {
+          ownedR21(state);
+          full(recoveryApproval?.controllerCommit, /[a-f0-9]{40}/, "approved successor required");
+          assert.notEqual(recoveryApproval.controllerCommit, state.commit);
+          full(recoveryApproval.knownHostsSha256, /[a-f0-9]{64}/, "approved host key required");
+          assert.equal(options.exitArchiveSha256, recoveryApproval.archiveSha256);
+          if (state.archiveSha256) assert.equal(state.archiveSha256, options.exitArchiveSha256);
+          assert.equal(digest(regular(statePath)), recoveryApproval.reservationSha256, "locked r21 reservation changed");
+        }
+        const sealed = state.control?.monitor?.phase === "closed";
+        let inspectUnit = unit, idleScript;
+        if (sealed) {
+          assert.ok(!existsSync(join(base, ".groups-launch.lock")), "child launch custody still held");
+          const { sealedMonitor } = await import("./cloud-control-stream.mjs");
+          const { terminal, registration } = sealedMonitor(local, state);
+          if (options.r21MeasuredCheckout) {
+            assert.equal(terminal.campaign, recoveryApproval.campaign); assert.equal(terminal.sealSha256, recoveryApproval.sealSha256);
+          }
+          idleScript = idleArchiveScript(state, registration.host.bootId, digest(remoteFiles(state)[state.unit]));
+          inspectUnit = async () => sealedUnit((await ssh(unitQuery(state) + " --all --property=Job --property=SubState --property=ControlPID")).stdout, state);
+        }
+        const remoteHash = async () => {
+          // A settled refusal (e.g. a queued job) is not a lost SSH command.
+          const result = await ssh(idleScript ?? "sha256sum /bench/results.tgz", 60000, sealed);
+          assert.ok(result.status === 0 && !result.error, "terminal archive or idle-host proof unavailable");
+          const line = result.stdout;
+          full(line, /[a-f0-9]{64}  \/bench\/results\.tgz\n/, "invalid remote archive hash");
+          const hash = line.slice(0, 64);
+          if (options.r21MeasuredCheckout) assert.equal(hash, options.exitArchiveSha256, "not the reviewed exit archive");
+          return hash;
+        };
         if (unusedCandidate) assert.ok(neverProvisioned(state), "unused allocation changed; preserve host");
         assert.ok(!(state.status === "preparing" && state.control?.monitor?.phase === "pending"
           && state.control.ledger.length === 0), "unused bootstrap requires an approved pinned observation");
@@ -624,18 +658,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (setupCandidate) {
           const { stdout } = await ssh(unitQuery(state) + `\njob=$(systemctl show ${state.unit} --all --property=Job); test "$job" = 'Job='`);
           assert.ok(terminalUnit(stdout, state) && stdout === state.preBootstrapTerminal.stdout, "startup unit no longer identically terminal");
-        } else if (!await unit()) return 3; // Exactly one look, never waits for a live campaign.
+        } else if (!await inspectUnit()) return 3; // Exactly one look, never waits for a live campaign.
         if (!state.archiveSha256) {
           assert.ok(!existsSync(archive) && !existsSync(`${archive}.download`), "unrecorded download/archive retained; inspect before retry");
           // pack.sh copies current control custody before its archive-exists
           // check. Never change the snapshot beside a pre-existing exit archive.
           const pack = "timeout 600 /bin/bash /bench/pack.sh";
-          await ssh(setupCandidate ? `if test -e /bench/results.tgz || test -L /bench/results.tgz; then
+          if (!sealed) await ssh(setupCandidate ? `if test -e /bench/results.tgz || test -L /bench/results.tgz; then
 test -f /bench/results.tgz && test ! -L /bench/results.tgz && test "$(stat -c '%s' -- /bench/results.tgz)" -le ${archiveLimit}
 else ${pack}; fi` : pack, 11 * 60000);
-          const hashLine = (await ssh("sha256sum /bench/results.tgz")).stdout;
-          full(hashLine, /[a-f0-9]{64}  \/bench\/results\.tgz\n/, "invalid remote archive hash");
-          const hash = hashLine.slice(0, 64), download = `${archive}.download`;
+          const hash = await remoteHash(), download = `${archive}.download`;
           // Reserve the destination before SCP, so a crash cannot make it look retryable.
           durable(download, ""); await scp(`root@${state.ip}:/bench/results.tgz`, download);
           // Re-write through a synced exclusive file; never replace unexplained evidence.
@@ -652,6 +684,7 @@ else ${pack}; fi` : pack, 11 * 60000);
         if (setupCandidate) return retireFailedSetup(); // Never inspect/publish native evidence without supervision.
         try { await validateEvidence(); }
         catch (error) {
+          if (sealed) throw error;
           // No native report can exist before entry. Only a separate fresh,
           // terminal pre-entry proof permits failed-setup cleanup, never success.
           try { setupExit(); } catch { throw error; }
@@ -662,9 +695,12 @@ else ${pack}; fi` : pack, 11 * 60000);
         }
         state.collectedAt ??= new Date().toISOString(); state.status = "collected"; save();
         verifyArchive(); await validateEvidence();
-        assert.ok(await unit(), "unit became active; preserve host"); await own(); check();
+        const expires = sealed ? Date.now() + 60000 : undefined;
+        if (sealed) assert.equal(await remoteHash(), state.archiveSha256, "exit archive changed");
+        assert.ok(await inspectUnit(), "unit became active; preserve host"); await own(); check();
+        if (sealed) assert.ok(Date.now() < expires, "idle proof expired");
         state.deletionIntentAt = new Date().toISOString(); save();
-        await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000);
+        await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, expires);
         await confirmDeleted();
         verifyArchive(); await validateEvidence(); state.destroyedAt = new Date().toISOString(); save(); return deletedCode();
       }, failedMonitorRecovery);
