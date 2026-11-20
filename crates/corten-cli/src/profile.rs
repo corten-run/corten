@@ -7,8 +7,9 @@
 //! `target/corten-profile`, so `target/release` never holds a binary that writes a profile, and
 //! a step that fails leaves the last release as it was. What can be told is wrong without
 //! building (no `llvm-profdata`, flags the profile's would replace, a system that cannot ask the
-//! app to stop, another profiled build in the same target directory) is refused before the
-//! first step.
+//! app to stop, a command that is not there, another profiled build in the same target
+//! directory) is refused before the first step. What only the build tells (a package with two
+//! binaries) is refused after the instrumented build.
 
 use std::{
     ffi::{OsStr, OsString},
@@ -41,6 +42,7 @@ pub fn run(command: &[String]) -> Result<(), String> {
     if !root.join("Cargo.toml").is_file() {
         return Err("run corten build in the app's directory (where Cargo.toml is)".into());
     }
+    there(&command[0])?;
     let profdata = profdata(&root)?;
     let flags = base_flags(std::env::var_os("CARGO_ENCODED_RUSTFLAGS"), std::env::var_os("RUSTFLAGS"), || {
         Ok(set_elsewhere(&root, std::env::vars_os().map(|(name, _)| name), cargo_home()?))
@@ -48,7 +50,10 @@ pub fn run(command: &[String]) -> Result<(), String> {
     let dir = target_directory(&root)?.join("corten-profile");
     // Held until this returns: one profiled build at a time in a target directory.
     let _only = only_build_in(&dir)?;
-    let (written_by_build, taken, merged) = (dir.join("build"), dir.join("run"), dir.join("app.profdata"));
+    let (written_by_build, runs, merged) = (dir.join("build"), dir.join("run"), dir.join("app.profdata"));
+    // This run's own: a copy that an earlier build left running (a build ended by a signal
+    // cannot stop it) writes into that build's directory when it exits, not into this one.
+    let taken = runs.join(std::process::id().to_string());
 
     step("the instrumented build, in target/corten-profile");
     let built = dev::binaries_of(
@@ -64,7 +69,7 @@ pub fn run(command: &[String]) -> Result<(), String> {
     // ran. The app's own profile goes to a directory of its own, emptied of an earlier run's:
     // a file left there would be merged as this run's.
     emptied(&written_by_build)?;
-    emptied(&taken)?;
+    emptied(&runs)?;
 
     let shown = command.join(" ");
     let port = free_port()?;
@@ -125,6 +130,18 @@ pub fn run(command: &[String]) -> Result<(), String> {
 /// The build takes minutes and four steps; say which one the output below belongs to.
 fn step(name: &str) {
     let _ = writeln!(std::io::stderr(), "corten build: {name}");
+}
+
+/// Refuses a command that is not there before the first build, not after it. A name with a
+/// `/` is a path; any other is looked for on the `PATH`, as it is when it is run.
+fn there(command: &str) -> Result<(), String> {
+    let found = if command.contains('/') {
+        Path::new(command).is_file()
+    } else {
+        // Without a PATH the system searches a default one, which this does not know.
+        std::env::var_os("PATH").is_none_or(|path| std::env::split_paths(&path).any(|dir| dir.join(command).is_file()))
+    };
+    if found { Ok(()) } else { Err(format!("--profile-from: there is no command {command:?} to run")) }
 }
 
 /// What a failure before the release build adds to its message.
@@ -204,10 +221,13 @@ fn free_port() -> Result<u16, String> {
 struct Running(Child);
 
 impl Running {
-    /// Starts `app` as `corten dev` starts one, on `port`, writing its profile into `taken`.
+    /// Starts `app` on `port` in the app's directory, writing its profile into `taken`.
     fn start(app: &Path, port: u16, root: &Path, taken: &Path) -> Result<Self, String> {
         Command::new(app)
             .env("PORT", port.to_string())
+            // On this machine only, where `listens` and the command look for it: a HOST set
+            // for the app's deploy would have the copy listen elsewhere, or on every interface.
+            .env_remove("HOST")
             .env("LLVM_PROFILE_FILE", taken.join("%m-%p.profraw"))
             .current_dir(root)
             .spawn()
@@ -319,7 +339,9 @@ fn target_directory(root: &Path) -> Result<PathBuf, String> {
     if !out.status.success() {
         return Err(format!("cargo metadata failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
-    dev::json_string_field(&String::from_utf8_lossy(&out.stdout), "target_directory")
+    crate::json::parse(&String::from_utf8_lossy(&out.stdout))?
+        .get("target_directory")
+        .and_then(crate::json::Value::as_str)
         .map(PathBuf::from)
         .ok_or_else(|| "cargo metadata names no target directory".into())
 }
@@ -421,7 +443,9 @@ fn profiles(dir: &Path) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{base_flags, emptied, may_set_rustflags, set_elsewhere, the_one_binary, with};
+    #[cfg(unix)]
+    use super::emptied;
+    use super::{base_flags, may_set_rustflags, set_elsewhere, the_one_binary, there, with};
     use std::{
         ffi::OsString,
         path::{Path, PathBuf},
@@ -501,7 +525,16 @@ mod tests {
         let result = found(&[]);
         let _ = std::fs::remove_dir_all(&base);
         // Unless a directory above the temporary one sets flags, the last place read is the home.
-        assert!(result == Some(in_home.display().to_string()) || !ours(&result), "{result:?}");
+        let read_home = result.as_ref().is_some_and(|place| *place == in_home.display().to_string() || !ours(&result));
+        assert!(read_home, "{result:?}");
+    }
+
+    #[test]
+    fn a_command_that_is_not_there_is_refused() {
+        assert!(there("/no/such/command").is_err());
+        assert!(there("no-such-command-anywhere").is_err_and(|error| error.contains("no-such-command-anywhere")));
+        #[cfg(unix)]
+        assert_eq!(there("sh"), Ok(()));
     }
 
     #[test]

@@ -319,14 +319,16 @@ for i in $(seq 500); do
 done
 ```
 
-`corten build` starts the copy as `corten dev` starts the app, in the app's directory with the
-environment it was given, on a port nothing else has, and runs the command once the copy accepts
-a connection. When the command ends it stops the copy with `SIGTERM` and waits for it: the copy
+`corten build` starts the copy in the app's directory with the environment it was given, less
+`HOST` so that it listens on this machine only, on a port nothing else has, and runs the command
+once the copy accepts a connection. When the command ends it stops the copy with `SIGTERM` and waits for it: the copy
 writes its profile as it exits, which a Corten app does on `SIGTERM` (Shutdown, in
 [The app](app.md#the-app)), and a copy that is killed writes none. A command that fails stops
 the build, and so does a copy that exits early, does not listen within a minute, is still
 running a minute after `SIGTERM` (it is killed then), or leaves no profile; `curl -f` fails this command on an answer that is not a success, so a profile of error
-pages is not taken for one of the app. What the command sends is the part that decides the gain:
+pages is not taken for one of the app. The build cannot tell a command that sent the copy
+nothing, or sent its requests to another port, from one that did its work: the profile is then
+of the app starting and stopping, and the release is built with it all the same. What the command sends is the part that decides the gain:
 in the measurements below a profile did not have to come from the load it was measured with,
 only from requests that reach the same routes, and one that barely reached them gained about
 half as much.

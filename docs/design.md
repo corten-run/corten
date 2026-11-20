@@ -6786,8 +6786,8 @@ rules something out.
     target directory of its own, so `target/release` never holds a binary that writes a
     profile, and a step that fails leaves the last release standing. What would go wrong
     without a word is refused before the first build: a toolchain without `llvm-profdata`, a
-    system that cannot ask the copy to stop, another profiled build in the same target
-    directory, and a Cargo configuration that may set flags the profile's flag, which has to
+    system that cannot ask the copy to stop, a command that is not there, another profiled
+    build in the same target directory, and a Cargo configuration that may set flags the profile's flag, which has to
     go in the environment, would replace. A command that fails,
     a copy that exits early or does not listen, a profile not written, and a package that
     builds two binaries each stop the build after the copy and before the release.
@@ -6817,8 +6817,9 @@ rules something out.
     separate target directory is the only place an instrumented build cannot be mistaken for
     the release; a refusal before the first build costs nothing, where a dropped linker flag
     or a missing tool found after it costs a build); bet (an app has, or will write, a command
-    that reaches the routes its readers do, and listens on `PORT` as `corten dev` already asks
-    of it); value (fast and proven fast, with mistakes failing early and one way to build a
+    that reaches the routes its readers do, which the build cannot check: a command that sent
+    the copy nothing leaves a profile of the app starting and stopping; and the app listens on
+    `PORT` as `corten dev` already asks of it); value (fast and proven fast, with mistakes failing early and one way to build a
     release, and the option kept off every app that does not ask for it, README Values).
 
     Revisit when: Cargo can add a flag to the ones its configuration sets, or builds with a

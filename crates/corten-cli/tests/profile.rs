@@ -9,8 +9,9 @@ use std::{
     process::{Command, Output},
 };
 
-/// A program that listens on `PORT`, works while it waits, and returns from `main` on SIGTERM,
-/// as a Corten app does. It writes its process id to `pid.txt`. Two variables change it:
+/// A program that listens on `PORT` (at `HOST`, when that is set), works while it waits, and
+/// returns from `main` on SIGTERM, as a Corten app does. It writes its process id to `pid.txt`
+/// and, as it leaves, `stopped.txt`. Two variables change it:
 /// `FIXTURE_EXITS_AT_ONCE` (it never listens) and `FIXTURE_QUITS_WITHOUT_A_PROFILE` (on SIGTERM
 /// it leaves without running what writes a profile, as a killed app does).
 const MAIN: &str = r#"use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,7 +38,8 @@ fn main() {
     }
     unsafe { signal(15, stop) };
     let port = std::env::var("PORT").expect("PORT");
-    let listener = std::net::TcpListener::bind(format!("127.0.0.1:{port}")).unwrap();
+    let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let listener = std::net::TcpListener::bind(format!("{host}:{port}")).unwrap();
     listener.set_nonblocking(true).unwrap();
     let mut sum = 0u64;
     while !STOP.load(Ordering::SeqCst) {
@@ -45,6 +47,7 @@ fn main() {
         sum = (0..1000).fold(sum, |sum, n| sum.wrapping_add(work(n)));
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
+    std::fs::write("stopped.txt", "").unwrap();
     if std::env::var_os("FIXTURE_QUITS_WITHOUT_A_PROFILE").is_some() {
         unsafe { _exit(0) };
     }
@@ -59,6 +62,8 @@ impl Fixture {
         let root = std::env::temp_dir().join(format!("corten-profile-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).unwrap();
+        // As the command names it, where the temporary directory is a link.
+        let root = std::fs::canonicalize(&root).unwrap();
         let manifest = "[package]\nname = \"profiled\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n";
         std::fs::write(root.join("Cargo.toml"), manifest).unwrap();
         std::fs::write(root.join("src/main.rs"), MAIN).unwrap();
@@ -89,7 +94,7 @@ impl Fixture {
     /// Whether the program the last build started is still running.
     fn app_runs(&self) -> bool {
         let pid = std::fs::read_to_string(self.0.join("pid.txt")).unwrap();
-        Command::new("kill").args(["-0", pid.trim()]).output().unwrap().status.success()
+        Command::new("sh").args(["-c", "kill -0 \"$1\"", "sh", pid.trim()]).output().unwrap().status.success()
     }
 }
 
@@ -115,7 +120,9 @@ fn instrumented(binary: &Path) -> bool {
 #[test]
 fn the_release_is_built_with_the_profile_the_app_wrote_while_the_command_ran() {
     let fixture = Fixture::new("built");
-    let output = fixture.build(&NOTES_ITS_PORT).output().unwrap();
+    // A HOST the shell holds for the app's deploy (here one nothing can listen on) is not the
+    // copy's: it listens on this machine, where the build and the command look for it.
+    let output = fixture.build(&NOTES_ITS_PORT).env("HOST", "192.0.2.1").output().unwrap();
     let said = text(&output);
     assert!(output.status.success(), "{said}");
     assert!(said.contains("with a profile of the app under"), "{said}");
@@ -136,6 +143,13 @@ fn the_release_is_built_with_the_profile_the_app_wrote_while_the_command_ran() {
     assert!(!instrumented(&fixture.release()), "target/release writes a profile");
     let copy = fixture.0.join("target").join("corten-profile").join("target").join("release").join("profiled");
     assert!(instrumented(&copy));
+
+    // A second profiled build compiles the release again with the profile that replaced the
+    // first, and has nothing to compile in the copy.
+    let again = fixture.build(&NOTES_ITS_PORT).output().unwrap();
+    let said = text(&again);
+    assert!(again.status.success(), "{said}");
+    assert_eq!(said.matches("Compiling profiled").count(), 1, "{said}");
 }
 
 #[test]
@@ -150,14 +164,10 @@ fn a_command_or_an_app_that_fails_stops_the_build_and_leaves_the_release() {
     assert!(text(&output).contains("so no profile was taken; target/release is as it was"), "{}", text(&output));
     assert!(!fixture.app_runs(), "the instrumented app was left running after its command failed");
 
-    // A command that cannot be started.
-    let output = fixture.build(&["--profile-from", "/no/such/command"]).output().unwrap();
-    assert!(!output.status.success());
-    assert!(text(&output).contains("could not run /no/such/command"), "{}", text(&output));
-    assert!(!fixture.app_runs(), "the instrumented app was left running after its command could not start");
-
-    // An app that exits while its command runs has a profile of part of the run.
-    let stops_the_app = "kill -TERM \"$(cat pid.txt)\"; sleep 1";
+    // An app that exits while its command runs has a profile of part of the run. The command
+    // waits for the app to say it is leaving, and then for it to have left.
+    let stops_the_app =
+        "rm -f stopped.txt; kill -TERM \"$(cat pid.txt)\"; until [ -f stopped.txt ]; do sleep 0.05; done; sleep 0.5";
     let output = fixture.build(&["--profile-from", "sh", "-c", stops_the_app]).output().unwrap();
     assert!(!output.status.success());
     assert!(text(&output).contains("exited while the command ran"), "{}", text(&output));
@@ -223,6 +233,8 @@ fn build_refuses_what_it_does_not_take_before_building() {
         (&["--profile-form", "sh"][..], "corten build takes only --profile-from <command>"),
         (&["--release"], "corten build takes only --profile-from <command>"),
         (&["--profile-from"], "--profile-from needs a command"),
+        (&["--profile-from", "/no/such/command"], "there is no command \"/no/such/command\""),
+        (&["--profile-from", "--help"], "there is no command \"--help\""),
     ] {
         let output = fixture.build(args).output().unwrap();
         assert!(!output.status.success(), "{args:?}");
