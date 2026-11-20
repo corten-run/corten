@@ -338,8 +338,9 @@ rules something out.
    `binding-modules.mjs`, `scopes.mjs` and four tests in `bench/fullstack-browser`, and 7.0.2
    from `scripts/`. Apps under `bench/fullstack/apps` were not checked and keep their own
    packages' compilers. Those importers now load the compiler by path through
-   `bench/typescript.mjs`, which stops naming `npm --prefix bench ci` when it is absent. The
-   cloud validator's worker resolves nothing: its own loader maps `typescript` to
+   `bench/typescript.mjs`, which fails with the install hint (`npm --prefix bench ci`) when the
+   compiler is absent. The cloud validator's worker resolves imports only against the captured
+   allowlist, without filesystem or package lookup: its own loader maps `typescript` to
    `bench/node_modules/typescript/lib/typescript.js`, pinned by SHA-256 to the bytes of the npm
    archive matching the bench lock's integrity, and capture also requires the measured commit's
    bench manifest and lock to pin that version, archive and integrity. The browser binding

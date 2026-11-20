@@ -157,8 +157,11 @@ hashes, complete selection, source/provenance and confirmed host deletion. Only
 the authoritative `verified` campaign can open it; valid failed or unsupported
 competitor outcomes are still retained under that contract. A synthetic inspector,
 bootstrap marker, status string or diagnostic receipt cannot substitute for native
-replay. The new approval binds the first evidence snapshot and every remaining
-child subject. Execution rechecks the snapshot under the fleet lock, consumes an
+replay. That replay reads this checkout's bench install: without it, the preview
+lists the first group as `replay-blocked`, missing
+`local bench install missing or differs: run npm --prefix bench ci`, returns 2
+and does not replay. The new approval binds the first evidence snapshot and every
+remaining child subject. Execution rechecks the snapshot under the fleet lock, consumes an
 exclusive remaining intent and rechecks before each child dispatch. Consumed or
 legacy launch intents cannot acquire this new admission authority.
 
@@ -746,7 +749,8 @@ absent at the measured commit. Detach and ordinary collection previews list
 `local bench install missing or differs: run npm --prefix bench ci` when this
 checkout's `bench/node_modules/typescript/lib/typescript.js` is absent or is not
 the pinned 6.0.3 bytes, so neither allocates a host nor collects one it cannot
-validate. Evidence-derived validation failures stay generic.
+validate. The plan repeated under the operation lock checks that list again before
+any provider access. Evidence-derived validation failures stay generic.
 
 ```text
 node bench/workloads/cloud-production.mjs rN --detach --commit SHA --ssh-key ID --account-id SCOPED_ACCOUNT_ID --context NAMED_CONTEXT --state-dir ABSOLUTE_LOCAL_ROOT --print-approval

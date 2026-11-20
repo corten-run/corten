@@ -177,6 +177,8 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     assert.ok(!interrupted(), "cancelled before provider access");
     const locked = await productionPlan(options, { repo, run, compiler });
     assert.equal(locked.approvalSha256, approval, "locked action changed after approval");
+    // The approval hash excludes missing inputs, such as a bench install removed since the recheck.
+    assert.deepEqual(locked.missing, [], "native campaign integration missing; do not allocate");
     return locked.subject;
   };
   const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration) => {

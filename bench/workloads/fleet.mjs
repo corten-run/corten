@@ -14,6 +14,7 @@ import { providerFiles } from "./cloud-provider.mjs";
 import { streamRecoveryReady } from "./cloud-control-stream.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { fleetRoot, present, readFleet, readGroup, recheckCollectedGroup, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const ownPaths = ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"].map((name) => `bench/workloads/${name}`);
@@ -210,9 +211,9 @@ function stagedIntent(fleet) {
   }
 }
 
-// verify is a code-only synthetic TEST seam, never selected by argv/JSON.
+// verify and compiler are code-only synthetic TEST seams, never selected by argv/JSON.
 export async function fleetOperationPlan(options, { repo = checkout, run, plan = productionPlan, verify = verifyCollectedGroup,
-  inspect, interrupted = () => false } = {}) {
+  inspect, interrupted = () => false, compiler = localCompiler } = {}) {
   repo = realpathSync(repo);
   const root = fleetRoot(options.root, repo), head = await exactSource(repo, run), fleet = readFleet(root, options.round);
   assert.equal(fleet.manifest.commit, head, "fleet-source-mismatch");
@@ -233,10 +234,13 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
   if (mode === "admit-remaining") {
     stagedIntent(fleet);
     assert.ok(!present(join(root, "remaining-intent.json")), "fleet-remaining-already-attempted");
-    firstGroup = await verify(fleet, first, { inspect, interrupted });
-    assert.equal(firstGroup.evidenceMode, "native-replay", "fleet-native-first-group-replay-required");
-    assert.equal(firstGroup.row.outcome, "verified", "fleet-first-group-not-verified-and-deleted");
-    recheckCollectedGroup(fleet, firstGroup.snapshot);
+    // Native replay reads this checkout's bench compiler: without it, name the install instead of replaying.
+    if (inspect !== undefined || compiler()) {
+      firstGroup = await verify(fleet, first, { inspect, interrupted });
+      assert.equal(firstGroup.evidenceMode, "native-replay", "fleet-native-first-group-replay-required");
+      assert.equal(firstGroup.row.outcome, "verified", "fleet-first-group-not-verified-and-deleted");
+      recheckCollectedGroup(fleet, firstGroup.snapshot);
+    }
   }
   const jobs = [], ids = new Set(), ips = new Set();
   for (const { group } of fleet.manifest.jobs) {
@@ -244,7 +248,8 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
     if (mode === "admit-remaining" && group === first) {
       const saved = readGroup(fleet, first);
       ids.add(saved.state.id); ips.add(saved.state.ip);
-      jobs.push({ group, outcome: "verified", snapshot: firstGroup.snapshot }); continue;
+      jobs.push(firstGroup ? { group, outcome: "verified", snapshot: firstGroup.snapshot }
+        : { group, outcome: "replay-blocked", missing: [localCompilerMissing] }); continue;
     }
     if (launching) {
       assert.ok(!present(child.stateDir), "fleet-child-already-reserved");
@@ -294,7 +299,7 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
 // plan/main injection is a synthetic TEST seam at the existing production
 // boundaries. Neither the CLI nor saved JSON can select implementations.
 export async function fleetMain(args, { repo = checkout, spawn, providerFactory, inspect, sleep,
-  interrupted = () => false, write = console.log, plan = productionPlan, verify = verifyCollectedGroup, main, WorkerClass } = {}) {
+  interrupted = () => false, write = console.log, plan = productionPlan, verify = verifyCollectedGroup, compiler, main, WorkerClass } = {}) {
   const options = parseFleetArgs(args); repo = realpathSync(repo);
   const transport = shellTransport({ repo, spawn });
   const run = async (...args) => {
@@ -324,7 +329,7 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
       return 3;
     } finally { physical(root); unlinkSync(lock); syncDirectory(root); }
   }
-  const deps = { repo, run, plan, verify, inspect, interrupted }, preview = await fleetOperationPlan(options, deps);
+  const deps = { repo, run, plan, verify, inspect, interrupted, compiler }, preview = await fleetOperationPlan(options, deps);
   if (options["print-approval"]) {
     write(JSON.stringify({ subject: preview.subject, approvalSha256: preview.approvalSha256, fullGroupQualified: false }));
     return preview.subject.jobs.some((j) => j.missing?.length) ? 2 : 3;

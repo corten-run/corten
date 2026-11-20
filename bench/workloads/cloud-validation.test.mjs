@@ -281,9 +281,11 @@ test("only required catalog cgroup, recovery replay and classic compiler entry s
   assert.equal(snapshot.sources.length - paths.length, 211);
   const task = validationTask(h.input, { snapshot, WorkerClass: class extends Worker {
     constructor(entry, options) {
-      // Inject below the exact parent manifest check to exercise the worker's own bound.
+      // Inject below the exact parent manifest check to exercise the worker's own bound. The
+      // replay never imports the compiler entry, so only its named slot, not a generic extra
+      // one, keeps an unused path in its place from fitting.
       options.workerData.sources = options.workerData.sources.map((row) =>
-        row.path === paths[0] ? { ...row, path: "bench/hardening/unlisted-control.mjs" } : row);
+        row.path === "bench/typescript.mjs" ? { ...row, path: "bench/hardening/unlisted-control.mjs" } : row);
       super(entry, options);
     }
   } });

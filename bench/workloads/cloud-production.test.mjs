@@ -643,6 +643,18 @@ test("detach and native collection previews name a missing local bench install b
   await unused.approve(); assert.deepEqual(unused.stdout.at(-1).missing, []);
 });
 
+// The approval hash excludes missing inputs, so the locked plan must check them itself.
+test("a bench install lost after the source recheck stops launch and collection at the locked plan, before provider access", async (t) => {
+  for (const mode of ["--detach", undefined]) {
+    const p = productionHarness(t); if (!mode) p.h.seed();
+    const approved = await p.approve(mode), calls = p.calls.length;
+    let checks = 0; p.deps.compiler = () => ++checks < 3; // Approved plan and source recheck ready, locked plan missing.
+    await assert.rejects(productionMain(approved, p.deps), /integration missing/);
+    assert.equal(checks, 3, "the third check is the locked plan's");
+    assert.ok(p.calls.slice(calls).every(([binary]) => binary === "git"), "no provider or host access");
+    assert.equal(p.h.creates, 0); assert.equal(p.h.deletes, 0);
+  }
+});
 test("state aliases with resolved SSH expansion characters refuse preview and approved launch before provider access", async (t) => {
   for (const approved of [false, true]) {
     for (const nested of [false, true]) {
