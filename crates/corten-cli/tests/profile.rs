@@ -75,11 +75,13 @@ impl Fixture {
 
     /// `corten build <args>` in the program's directory, with a target directory of its own
     /// and none of the flags of whoever runs the tests: an empty `RUSTFLAGS` has Cargo read
-    /// none from a configuration file either. Cargo says what it compiles, which a test reads.
+    /// none from a configuration file either. Cargo says what it compiles, in plain text, which
+    /// a test reads.
     fn build(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_corten"));
         command.arg("build").args(args).current_dir(&self.0).env("CARGO_TARGET_DIR", self.0.join("target"));
-        command.env_remove("CARGO_ENCODED_RUSTFLAGS").env("RUSTFLAGS", "").env("CARGO_TERM_QUIET", "false");
+        command.env_remove("CARGO_ENCODED_RUSTFLAGS").env("RUSTFLAGS", "");
+        command.env("CARGO_TERM_QUIET", "false").env("CARGO_TERM_COLOR", "never");
         command
     }
 
