@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
+import { countRow, parsePerfCounts, perfCountArgs } from "./count-perf.mjs";
 import { maxPasses } from "./passes.mjs";
 import { browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fixtureError, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, startMinutes, steps, stepsUntil, unit } from "./round.mjs";
 
@@ -195,6 +196,41 @@ test("count.mjs has perf watch the app's pinned cores on a bench host, and every
   assert.deepEqual(cpus({ BENCH_APP_CPUS: "1" }), [["-C", "1"], ["--cpuset-cpus", "1"]]);
   assert.deepEqual(cpus({ BENCH_APP_CPUS: "1-2" }), [["-C", "1-2"], ["--cpuset-cpus", "1-2"]]);
   assert.deepEqual(cpus({})[0], ["-a"]);
+});
+
+test("count.mjs measures instructions, cycles and user L1i misses on the same cgroup and load", () => {
+  assert.deepEqual(perfCountArgs(["-C", "1"], "app.scope", "/tmp/stat.csv"), [
+    "stat", "-C", "1", "-x", ",", "-o", "/tmp/stat.csv", "-e",
+    "instructions:u,instructions:k,cycles:u,cycles:k,L1-icache-load-misses:u",
+    "-G", "app.scope,app.scope,app.scope,app.scope,app.scope",
+  ]);
+  for (const cacheEvent of ["L1-icache-load-misses", "L1-icache-load-misses:u"]) {
+    const counts = parsePerfCounts([
+      "# started on bench host",
+      "12345,,instructions:u,app.scope,60000,100.00,",
+      "1234,,instructions:k,app.scope,60000,100.00,",
+      "5678,,cycles:u,app.scope,60000,100.00,",
+      "0,,cycles:k,app.scope,60000,100.00,",
+      `87,,${cacheEvent},app.scope,60000,100.00,`,
+    ].join("\n"));
+    assert.deepEqual(countRow(counts, 10, 0), {
+      requests: 10, failed: 0, userPerRequest: 1235, kernelPerRequest: 123,
+      userCyclesPerRequest: 568, kernelCyclesPerRequest: 0, userL1iMissesPerRequest: 9,
+    });
+  }
+});
+
+test("count.mjs keeps instructions when optional perf events are unavailable", () => {
+  const counts = parsePerfCounts([
+    "12345,,instructions:u,app.scope,60000,100.00,",
+    "1234,,instructions:k,app.scope,60000,100.00,",
+    "<not supported>,,cycles:u,app.scope,0,100.00,",
+    "<not counted>,,cycles:k,app.scope,0,100.00,",
+  ].join("\n"));
+  assert.deepEqual(JSON.parse(JSON.stringify(countRow(counts, 10, 0))), {
+    requests: 10, failed: 0, userPerRequest: 1235, kernelPerRequest: 123,
+    userCyclesPerRequest: null, kernelCyclesPerRequest: null, userL1iMissesPerRequest: null,
+  });
 });
 
 test("an app that serves only the JSON is in the JSON phases, cold start and count, not the pages", () => {

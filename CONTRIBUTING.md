@@ -352,14 +352,29 @@ establish a general ranking.
    the runtime does.
 2. A change to rendering, the runtime or the request path is measured before and after, with
    the number that can see the change:
-   1. Work done in process (rendering, routing, serialization, middleware, a handler's own
-      code): instructions per request under callgrind (`valgrind --tool=callgrind`). Count a
-      test that sends 1,200 requests through the router in process with `oneshot` and one that
+   1. Work done in process (rendering, serialization, a handler's own code): instructions per
+      request under callgrind (`valgrind --tool=callgrind`). Count a test that sends 1,200
+      requests through the router in process with `oneshot` and one that
       sends 200: the difference over 1,000 leaves out startup and setup. Over a real socket,
       `bench/fullstack/count.mjs` counts with `perf stat`. A count barely moves with other load
       on the machine, so it shows a difference of a few percent that times on a laptop or
       Docker Desktop hide. Reading JSON: `read_cost` in `examples/card-market` reads the
       fixture's 500 item API responses once each, and its doc comment gives the command.
+
+      For work around the handler (routing, middleware and other stages, headers read or
+      written, future sizes, allocations or copies per request), give the instruction count
+      **and** cycles per request under load from [`bench/fullstack/count.mjs`](bench/fullstack/count.mjs)
+      on a quiet Linux bench host. Report user and kernel cycles separately, and user L1
+      instruction-cache misses per request when the change adds or moves code. Use one repeat
+      per invocation (`node bench/fullstack/count.mjs <round> 1 <app> <target>`), with a fresh
+      round name each time. Alternate the two release builds; for the same app, tag each
+      build in turn with the image name the script expects. Verify the response bytes and
+      headers before timing, and report any failed requests. Predeclare the smallest
+      difference worth claiming, then report the number of paired rounds, best, median and
+      range, and the differences within rounds. If the spread hides the difference or the
+      counters are unavailable (`null`), say what the run did not resolve. An instruction count
+      bounds work, not how fast it runs; a speed comparison with another framework needs
+      cycles or CPU time per request under equivalent load, not instructions alone.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,

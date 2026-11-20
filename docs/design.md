@@ -2127,6 +2127,10 @@ rules something out.
     7,076 is 94 over 6,982 (jemalloc), so the next change that adds to an unstaged route reopens
     this.
 
+    The instruction bounds below bound work on the measured routes, not speed. For a change
+    to the request path, also measure cycles under load as
+    [CONTRIBUTING](../CONTRIBUTING.md#pull-requests) describes.
+
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
     one boxed future, 21,374 to 21,511 instructions against 20,497 to 20,646 with none; a request
