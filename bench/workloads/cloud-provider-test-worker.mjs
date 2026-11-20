@@ -1,7 +1,7 @@
 // Test-only entry dependency: synthetic consumption and owned loopback HTTPS.
 // The production worker has no flag/env/IPC switch selecting this entry.
 import assert from "node:assert/strict";
-import { createServer } from "node:net";
+import { createServer } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { once } from "node:events";
 import { writeFileSync } from "node:fs";
@@ -19,7 +19,9 @@ const state = { consumes: 0, requests: 0, execArgv: process.execArgv,
 const save = () => writeFileSync(output, JSON.stringify(state)); save();
 if (mode === "worker-new-debug") process.env.NODE_DEBUG = "https";
 if (mode === "worker-new-report") process.report.reportOnSignal = true;
-const server = createServer((socket) => socket.destroy());
+// Plain HTTP rejects the HTTPS handshake without a retryable connection reset.
+// These controls count native client constructions, not account-read retries.
+const server = createServer((_req, res) => { res.writeHead(400); res.end(); });
 server.listen(0, "127.0.0.1"); await once(server, "listening");
 let created, clock = 0;
 const censusModes = ["shape", "total", "id", "duplicate", "links", "pages", "next", "count", "bounds"].map((predicate) => `list-${predicate}`);

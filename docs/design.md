@@ -1258,7 +1258,7 @@ rules something out.
        through nginx; the browser cap is about six connections per host, not eight tabs.
        The app cannot diagnose this at startup: a feed's snapshot and stream both have rows,
        and a TLS-wrapped origin behind a re-encrypting proxy is valid. The deployment guide
-       has nine proxy-specific concerns, not twelve extra requirements: its rows 5 (shared
+       has ten proxy-specific concerns, not thirteen extra requirements: its rows 5 (shared
        caching), 9 (health) and 12 (HTTPS policy) are conditional or apply without a proxy.
        The measured nginx `$host` port loss causing a WebSocket 403 shows a real configuration
        failure. Operator time, money and memory have not been measured, not counted as zero.
@@ -1792,6 +1792,8 @@ rules something out.
     2026-11-13, matchit 0.9.2's matching and insertion source read and the dispatch suite's
     17 tests passed with empty parameters refused ([Choice 48](#choice-matchit)); 2026-11-14,
     the same dispatch suite passed in the merged workspace's full debug tests at `66cb2936e`;
+    2026-11-18, the deployment guide's rows counted again at `83da31ef1`, with its thirteenth
+    (what a proxy passes on for a page's tag and its `304`): ten are proxy-specific;
     2026-11-18, hyper 1.12.0's send loop and h2 0.4.20's active count and send queue read
     against Corten's `Answered` at `e927c2463`, then exercised in the
     [standalone TLS probe](../bench/http2/README.md#follow-up-results); 2026-11-19,
@@ -1996,7 +1998,7 @@ rules something out.
     `caller = T` module, a path that reaches Corten's own, a method other than `get`,
     `prefetch`, `/health/live`, `/{*rest}`), at `f703d3f8`; 2026-11-10, IANA's HTTP
     Authentication Scheme Registry (no scheme for a session cookie) and the tests that a 401
-    keeps its challenge as JSON and on the error page (`crates/corten/src/tests.rs`), at
+    keeps its challenge as JSON and on the error page ([`tests/caller.rs`](../crates/corten/src/tests/caller.rs)), at
     `96e2c907`, the commit that adds them; 2026-11-10, the tests that a handler's own 401, the
     page swapped in and a middleware's refusal keep it, at `2d6b88d0`; 2026-11-10, those tests
     with a realm on every Bearer challenge and Basic through a handler and a middleware, the
@@ -2245,7 +2247,7 @@ rules something out.
     `Router::new` still reports every insertion error with the rejected path and matchit's
     conflicting route. The count now refuses empty parameter values, including a hand-written
     `/corten{x}/{b}` against `/corten/`. It is not exact: a static route beside a route may
-    answer first the paths it counts. `tests::can_match_under_never_says_no_where_matchit_matches`
+    answer first the paths it counts. `tests::url::can_match_under_never_says_no_where_matchit_matches`
     checks the count against 0.9.2 and requires every tested route to insert); measured (callgrind,
     release, three runs each, every run the same, an uncommitted variant of `fa0b1525` whose
     `laned` adds the headers as it takes the handler's answer: 7,022
@@ -2313,7 +2315,7 @@ rules something out.
     Corten counts the same in both builds (a plain axum router, 7,085 in both, until step 4; since
     step 4 a `service_fn` with no framework, 3,190 in both), or the control itself moves between
     builds by more than the route does, which says the harness no longer separates them; or, in
-    one build of `tests::what_a_request_in_an_area_costs` with jemalloc, a request in its app
+    one build of `tests::patches::what_a_request_in_an_area_costs` with jemalloc, a request in its app
     with two areas and an API costs more than about 100 instructions over the same request in its
     app with none, beyond the difference measured once each route was given its scope (at
     `6ffc316f`: 5,472 for the page in the inner area against the same page as an app route, and
@@ -2326,15 +2328,19 @@ rules something out.
     beside it answering those paths first, which says the segment count has grown looser
     than it reads; or one is given a scope while one of its paths is under another prefix, which a
     request would then answer with the wrong area's settings; or
-    `tests::can_match_under_never_says_no_where_matchit_matches` fails, which says the matchit a
+    `tests::url::can_match_under_never_says_no_where_matchit_matches` fails, which says the matchit a
     build resolves matches a path the count says a route cannot reach; or Corten's exact
     matchit 0.9.2 pin changes, whose matching and conflict rules must be read again;
     or a derived route, or an area's or API's, may put text before a parameter, which
     `parse_path` and `route_shaped` refuse today; any of which the count must then follow.
-    Also revisit if `router::tests::staged_page_future_sizes` exceeds either boxed-future
-    budget on x86-64 Linux. It measures the real stages and typed handler for a small page
-    without app middleware or layout reads. The bounds leave room for build profiles,
-    features and compiler layout changes; remeasure before raising one.
+    Also revisit if `router::tests::staged_page_future_sizes` fails on x86-64 Linux because a
+    boxed future grew. It measures the real stages and typed handler for a small page without
+    app middleware or layout reads, and holds each boxed future within the size of one request
+    of what its build profile measured, so a stage that holds the request again across the
+    stages after it fails the test. A compiler that moves a future's layout by that much fails
+    it too, with no change to the stages, and so does a change that shrinks a future by that
+    much, which only lowers the measurement. Measure both profiles again before moving a
+    measurement.
 
     Last checked: 2026-11-19, the header lookup, extension and instruction counts before
     (`aa0f0c7e1`) and after sharing the reads and restoring the short circuits (`76229a2fd`),
@@ -2531,7 +2537,7 @@ rules something out.
     Stands on: platform (Playwright's WebKit on Windows holds back a flushed brotli event of more
     than 16 KiB and sends `deflate, gzip, br`, no zstd; its Linux build, which CI's smoke runs,
     takes no brotli at all, so the smoke there cannot see the holdback and the rule is held by
-    `compress.rs`'s and `tests.rs`'s tests; the 16 KiB edge matches libcurl's write size, the
+    `compress.rs`'s tests and [`tests/bodies.rs`](../crates/corten/src/tests/bodies.rs); the 16 KiB edge matches libcurl's write size, the
     Windows build's network stack, which suggests the holdback is that stack's, not measured;
     Chromium and Firefox send zstd, which arrives at once there; no WebKit that accepts zstd was
     tried, and Safari, whose network stack is not Playwright's and which caniuse lists as sending
@@ -4162,7 +4168,7 @@ rules something out.
     ([ibraheemdev/matchit#60 Reject Empty Route Parameters](https://github.com/ibraheemdev/matchit/pull/60)).
     The bug gives a wrong answer: under 0.8.4 an empty value lets a parameter route shadow a
     catch-all, so `/x//y` reaches a POST-only `/x/{a}/y` instead of a `/{*page}` page, and a
-    GET there fails (`tests::serves_agrees_with_the_router` now requires the page to answer it).
+    GET there fails (`tests::url::serves_agrees_with_the_router` now requires the page to answer it).
     And 0.8 gets no more fixes; they ship only on 0.9.x, so a pin on 0.8.4 would take the next
     one only through a forced minor-version move. 0.8.4 also matches an empty value in some
     places and not others: as the first segment (`//posts` reaches `/{user}/posts` with `user`
@@ -4191,7 +4197,7 @@ rules something out.
     likewise `/{z}/b` after `/a{x}`, and `/{slug}/more` after `/shop{x}/desk` (0.8.6 takes all
     three in either order). Reorder the routes, or drop the text before the parameter, which no
     derived route has anyway. `tests/matchit.rs` and
-    `tests::a_prefixed_hand_written_route_conflicts_in_one_order_only` hold this, so a matchit
+    `tests::url::a_prefixed_hand_written_route_conflicts_in_one_order_only` hold this, so a matchit
     that fixes it fails them and this paragraph goes.
 
     What the exact pin costs: Cargo allows one semver-compatible version of a crate in a build,
@@ -4361,7 +4367,7 @@ rules something out.
     the handler's name, so the two checks cannot disagree on what answers a patch. The shape to
     write, and the one the message names, is `HtmlResult<Patches>`; as a compatibility detail, a
     handler returning `impl Answer<.., Kind = Patches>` passes both checks too (a test in
-    `tests.rs`), but rustc warns on it (`opaque_hidden_inferred_bound`: the `impl` does not
+    [`tests/patches.rs`](../crates/corten/src/tests/patches.rs)), but rustc warns on it (`opaque_hidden_inferred_bound`: the `impl` does not
     prove `Kind`'s bound, which only the hidden type's impl can), which fails an app that denies
     warnings. The mount's side of that can only be a `const`: stable Rust has no bound for
     "a route that is not a `PatchRoute`", so it is an inline `const { assert!(..) }` beside the
@@ -4392,7 +4398,7 @@ rules something out.
     not mounted: `ReadAgain::from(url::Status)` reads the path, and the other route's handler
     answers it; and a handler that writes `req.mode` (to `Mode::Document`, say) before
     `patch_or`, `invalid` or `invalid_with`, which then answer the mode it wrote, the page or
-    a redirect, as they do for any `HtmlResult` handler (a test in `tests.rs`). Writing
+    a redirect, as they do for any `HtmlResult` handler (a test in [`tests/patches.rs`](../crates/corten/src/tests/patches.rs)). Writing
     `req.mode` is the app's explicit override, and it stays one: a mode those three read but
     the handler cannot write would change what an ordinary `HtmlResult` handler that writes it
     gets, and splitting them by kind would add a concept for a case few apps write. The derive's
@@ -4448,7 +4454,7 @@ rules something out.
     are zero-sized `PhantomData`, so the response and every method's work are what they were, and
     the check is a `const` with nothing to run); measured (callgrind, release, instructions per
     request through a route's `patch_or` in process, 1,200 requests less 200 over 1,000, with the
-    `#[ignore]` test `what_a_patch_or_request_costs` in `crates/corten/src/tests.rs`, three
+    `#[ignore]` test `what_a_patch_or_request_costs` in [`tests/patches.rs`](../crates/corten/src/tests/patches.rs), three
     alternate runs of each build, the median and the range, on `0ff569c69` (before) and on
     `811324247` (after, a handler returning `HtmlResult` and one returning
     `HtmlResult<Patches>`): the patch (`Mode::Action`) 17,971.83 before (17,971.80 to
@@ -5818,7 +5824,7 @@ rules something out.
     through the request APIs);
     measured (callgrind, release, instructions per request through a route's `patch_or` in
     process, 1,200 requests less 200 over 1,000, with the `#[ignore]` test
-    `what_a_patch_or_request_costs` in `crates/corten/src/tests.rs`, alternate runs, the median
+    `what_a_patch_or_request_costs` in [`tests/patches.rs`](../crates/corten/src/tests/patches.rs), alternate runs, the median
     and the range: `55757d723` (before, six runs) against `55757d723` with only this change's
     `crates/corten/src/page.rs` (three runs), the patch (`Mode::Action`) 17,969.79 (17,969.76 to
     17,969.80) and 17,969.83 (17,969.83 to 17,969.87), the page (`Mode::Document`) 18,382.70
@@ -5826,14 +5832,14 @@ rules something out.
     instruction; the whole change (three runs), whose other files are tests, an example and
     documents, 17,974.49 (17,974.48 to 17,975.89) and 18,388.71 (18,388.59 to 18,388.78), about
     five and six more, which the build with `page.rs` alone does not show. Those come from the
-    tests: `55757d723` with only `crates/corten/src/tests.rs` as at `019058f59` (three runs,
+    tests: `55757d723` with only the then-unsplit test file as at `019058f59` (three runs,
     alternating with three of `55757d723` rebuilt) counts 17,975.85 (17,975.82 to 17,975.88)
     and 18,388.76 (18,388.73 to 18,388.76) against 17,969.86 (17,969.78 to 17,969.86) and
     18,382.79 (18,382.69 to 18,382.84), six more in each mode with no line of the request path
-    changed. `tests.rs` is `#[cfg(test)]`, compiled into the same test binary as the code it
+    changed. The `tests` module is `#[cfg(test)]`, compiled into the same test binary as the code it
     counts, and the release profile builds that binary as one codegen unit with thin LTO, so more
     tests in it can move what the optimizer inlines and lays out (reasoned; which functions moved
-    was not traced); an app's binary has no `tests.rs`.
+    was not traced); an app's binary does not include the test module.
     The counted page asks for no HTML, which in a release build reaches the
     same code, since the check and the method it clones are not compiled there);
     measured (the checked-construction comparison above, `abbdf9831` against `bbd9d7432`,
@@ -7342,6 +7348,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     does not explicitly accept a non-identity coding and sends no `If-None-Match` gets no tag:
     for a client like `curl` or a benchmark, the hash would cost about a third of the render for
     nothing. A CDN that fetches pages without asking for a coding gets no tag to revalidate them.
+    What counts is the header as it reaches the app: behind a proxy that takes `Accept-Encoding`
+    off, a browser that holds no tag is never sent one (one that still holds a tag names it, and
+    is answered when the proxy passes `If-None-Match` on too;
+    [deploying](guide/deploy.md#response-compression)).
     With `compress`, only explicitly named codings Corten can send count.
     Without it, any named non-identity coding with a positive weight counts, as does a positive
     `*` (it allows unlisted codings, RFC 9110 section 12.5.3). An absent or empty

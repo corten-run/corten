@@ -1,5 +1,5 @@
 // One private credential value per approved action. No config copies, token
-// environment/arguments, mutable doctl provider subprocesses, redirects or HTTP/mutation retries.
+// environment/arguments, mutable doctl provider subprocesses, redirects or mutation retries.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { request as httpsRequest } from "node:https";
@@ -53,13 +53,28 @@ function privateDiagnostics() {
     throw new Error("provider diagnostics must be disabled");
 }
 
-function restRequest({ method, path, credential, body, timeout, interrupted = () => false, deleteProofExpiresAtMs }, connect, resources) {
+// One clock for an account command, including credential consumption, native
+// callbacks, any retry and final settlement. A later sample cannot undo a rollback.
+function accountClock(clock) {
+  let latest = -Infinity;
+  return () => {
+    const current = clock();
+    latest = Number.isFinite(current) && current >= latest ? current : NaN;
+    return latest;
+  };
+}
+
+function restRequest({ method, path, credential, body, timeout, accountDeadline = Infinity, now = Date.now, interrupted = () => false, deleteProofExpiresAtMs }, connect, resources) {
   return new Promise((resolve, reject) => {
-    let settled = false, req, timer, cancellation, failureDetail = "internal-refusal";
-    const account = method === "GET" && path === "/v2/account", expires = Date.now() + timeout;
-    let lastTime = expires - timeout, outcome;
-    const withinBudget = () => {
-      const current = Date.now(), valid = current >= lastTime && current < expires && !interrupted();
+    let settled = false, informationSeen = false, req, timer, cancellation, failureDetail = "internal-refusal";
+    const account = method === "GET" && path === "/v2/account";
+    const started = now(), expires = Math.min(started + timeout, accountDeadline);
+    if (account && !(started < expires)) {
+      reject(stopped(true, { code: "account-request", detail: "deadline" })); return;
+    }
+    let lastTime = started, outcome;
+    const inTime = () => {
+      const current = now(), valid = current >= lastTime && current < expires;
       lastTime = current; return valid;
     };
     const record = { requestClosed: false, socketClosed: false, socketSeen: false, responseClosed: false, responseSeen: false, native: false };
@@ -73,22 +88,22 @@ function restRequest({ method, path, credential, body, timeout, interrupted = ()
     const complete = (proof) => {
       if (settled) return;
       settled = true; clearTimeout(timer); clearInterval(cancellation); resources.notify.delete(closed);
-      const { detail, result } = outcome;
+      const { detail, result, reset } = outcome;
       if (detail) {
         const error = stopped(true, account ? { code: "account-request", detail } : undefined);
-        if (proof) closedAccountRequests.set(error, lastTime);
+        if (proof) closedAccountRequests.set(error, { at: lastTime, reset });
         reject(error);
       } else {
-        if (proof) closedAccountRequests.set(result, lastTime);
+        if (proof) closedAccountRequests.set(result, { at: lastTime });
         resolve(result);
       }
     };
     const closed = () => {
       if (!outcome || resources.live.size) return;
-      if (withinBudget()) complete(true);
+      if (inTime() && !interrupted()) complete(true);
       else { if (!outcome.detail) outcome = { detail: "internal-refusal" }; complete(false); }
     };
-    const finish = (detail, result) => {
+    const finish = (detail, result, reset = false) => {
       if (settled) return;
       if (outcome) {
         // Expiry/cancellation during closure must not turn a rejected read into
@@ -99,7 +114,7 @@ function restRequest({ method, path, credential, body, timeout, interrupted = ()
         }
         return;
       }
-      outcome = { detail, result };
+      outcome = { detail, result, reset };
       if (detail) {
         req?.destroy();
       }
@@ -112,6 +127,7 @@ function restRequest({ method, path, credential, body, timeout, interrupted = ()
       assert.ok(path.startsWith("/v2/") && !path.startsWith("//"));
       assert.ok(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 900000);
       failureDetail = "cancelled"; assert.ok(!interrupted()); failureDetail = "internal-refusal";
+      if (account && !inTime()) { finish("deadline"); return; }
       const input = body === undefined ? undefined : JSON.stringify(body);
       const fresh = () => {
         if (deleteProofExpiresAtMs === undefined) return;
@@ -151,8 +167,13 @@ function restRequest({ method, path, credential, body, timeout, interrupted = ()
         socket.once("close", () => { record.socketClosed = true; changed(); });
       });
       failureDetail = "internal-refusal";
-      req.on("error", () => finish("request-error"));
-      const remaining = Math.max(1, expires - Date.now());
+      if (account) req.once("information", () => { informationSeen = true; });
+      req.on("error", (error) => finish("request-error", undefined,
+        account && !outcome && record.native && !record.responseSeen && !informationSeen && Error.isError(error)
+          && Object.getOwnPropertyDescriptor(error, "code")?.value === "ECONNRESET"));
+      const timerStart = now();
+      if (account && !(timerStart < expires)) { finish("deadline"); return; }
+      const remaining = Math.max(1, expires - timerStart);
       timer = setTimeout(() => finish("deadline"), deleteProofExpiresAtMs === undefined ? remaining
         : Math.min(remaining, Math.max(1, deleteProofExpiresAtMs - Date.now())));
       cancellation = setInterval(() => {
@@ -163,6 +184,7 @@ function restRequest({ method, path, credential, body, timeout, interrupted = ()
         let detail = "internal-refusal";
         try {
           fresh(); detail = "cancelled"; assert.ok(!interrupted());
+          if (account && !inTime()) { finish("deadline"); return; }
           detail = "send"; req.end(input);
         } catch { finish(detail); }
       };
@@ -183,12 +205,28 @@ function restRequest({ method, path, credential, body, timeout, interrupted = ()
 // Production calls this only inside the clean credential worker. Dependency
 // injection is for synthetic controls, never an IPC/CLI option.
 export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsRequest,
-  request, interrupted = () => false, sleep = delay, now = Date.now, createMode = null } = {}) {
+  request, interrupted = () => false, sleep = delay, now: clock = Date.now, createMode = null } = {}) {
   const host = providerCreateHost(createMode);
   const env = controlEnvironment("doctl");
   const resources = { live: new Set(), notify: new Set() };
-  request ??= (options) => restRequest(options, connect, resources);
   let unsafe = false, mutationPending = false;
+  const nativeRequest = (options) => restRequest(options, connect, resources);
+  request ??= (options) => options.accountDeadline === undefined ? nativeRequest(options) : requestAccount(options);
+  async function requestAccount(options) {
+    try { return await nativeRequest(options); }
+    catch (error) {
+      const proof = closedAccountRequests.get(error);
+      if (!proof?.reset || unsafe || mutationPending) throw error;
+      // Spend the same command budget and keep the captured credential. No
+      // outward diagnostic can authorize a retry or stand in for native close.
+      try { await controlCheckpoint(interrupted); }
+      catch { throw stopped(true, providerFailure(error)); }
+      const current = options.now();
+      if (!(current >= proof.at && current < options.accountDeadline))
+        throw stopped(true, providerFailure(error));
+      return nativeRequest({ ...options, timeout: Math.ceil(options.accountDeadline - current) });
+    }
+  }
   let credential, context;
   const consume = (selected, timeout) => {
     privateDiagnostics();
@@ -212,6 +250,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     finally { if (Buffer.isBuffer(result?.stdout)) result.stdout.fill(0); if (Buffer.isBuffer(result?.stderr)) result.stderr.fill(0); }
   };
   return async (args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs) => {
+    const now = args?.[0] === "account" ? accountClock(clock) : clock;
     const started = now(), deadline = started + timeout;
     assert.ok(Array.isArray(args) && args.at(-2) === "--context", "saved provider context required");
     if (args[2] === "create") assert.ok(host && args[7] === host.region, "provider create placement differs from authorized mode");
@@ -231,7 +270,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     };
     const call = async (phase, method, path, body, expected = 200) => {
       await controlCheckpoint(interrupted);
-      const remaining = phase === "list" || phase === "get" ? readRemaining() : Math.ceil(deadline - now());
+      const remaining = phase === "account" || phase === "list" || phase === "get" ? readRemaining() : Math.ceil(deadline - now());
       if (interrupted() || remaining <= 0) throw stopped(true);
       code = `${phase}-request`;
       let response;
@@ -240,6 +279,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         assert.ok(phase === "delete" && current < deleteProofExpiresAtMs && deleteProofExpiresAtMs - current <= 60000, "current retirement proof expired");
       }
       try { response = await request({ method, path, body, credential, timeout: remaining, interrupted,
+        ...(phase === "account" ? { accountDeadline: deadline, now } : {}),
         ...(deleteProofExpiresAtMs === undefined ? {} : { deleteProofExpiresAtMs }) }); }
       catch (error) {
         const diagnostic = phase === "account" ? providerFailure(error) : undefined;
@@ -254,6 +294,10 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         const failure = Object.assign(stopped(false, diagnostic), { httpFailure: true });
         if (phase === "account" && closedAccountRequests.has(response)) closedAccountRequests.set(failure, closedAccountRequests.get(response));
         throw failure;
+      }
+      if (phase === "account") {
+        listTime = Math.max(listTime, closedAccountRequests.get(response)?.at ?? listTime);
+        readRemaining();
       }
       return response.value;
     };
@@ -373,7 +417,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       code = "provider-output";
       const stdout = value === null ? "" : JSON.stringify(value);
       assert.ok(!stdout.includes(credential), "private provider response refused");
-      if (command[2] === "list" || command[2] === "get") readRemaining();
+      if (command[0] === "account" || command[2] === "list" || command[2] === "get") readRemaining();
       if (command[2] === "create" || command[2] === "delete") {
         const current = now();
         if (current >= started && current < deadline && !interrupted()) mutationPending = false;
@@ -383,7 +427,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       const diagnostic = providerFailure(error) ?? { code };
       const current = now();
       if (closedAccountRequests.has(error)) {
-        if (!unsafe && !mutationPending && current >= closedAccountRequests.get(error)
+        if (!unsafe && !mutationPending && current >= closedAccountRequests.get(error).at
           && current >= started && current < deadline && !interrupted()) {
           const failure = stopped(false, diagnostic); settledAccountFailures.add(failure); throw failure;
         }

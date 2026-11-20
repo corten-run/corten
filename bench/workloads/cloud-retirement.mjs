@@ -560,24 +560,111 @@ export function verifyFailedNativeRetirement(local, state, expectedSha256 = stat
   return record;
 }
 
-// An empty ledger proves no tracked SSH was dispatched. The only exception
-// is the first, fixed SSH no-op; its missing acknowledgement stays missing.
-export function unusedBootstrap(state) {
-  const c = state.control, row = c?.ledger[0], request = row?.request;
+function unusedBootstrapState(state) {
+  const c = state.control;
   return !!(state.id && state.ip && state.createIntentAt && c?.helperSha256 === guardianSha256
     && c.monitor?.phase === "pending" && !c.monitor.registrationSha256 && !c.sealed.length
-    && (c.ledger.length === 0 || c.ledger.length === 1 && request.epoch === "bootstrap" && request.sequence === 0 && !request.seal && !row.localTerminal
-    && request.invocation.channel === "ssh" && request.invocation.deadlineMs === 30000
-    && request.invocation.requestSha256 === digest("set -euo pipefail\ntrue\n"))
     && (state.status === "preparing" ? !state.deletionIntentAt : state.status === "retired" && state.retirement?.kind === "unused")
     && ["bootstrapReady", "preBootstrapTerminal", "auditIntent", "auditIntents", "archiveSha256", "evidenceSha256", "extractionAttempts",
       "evidence", "evidenceOutcome", "exitCode", "validation", "collectedAt", "mixedCancellation"].every((key) => state[key] === undefined));
 }
 
+// Before provisioning, only the unacknowledged first no-op is allowed.
+export function unusedBootstrap(state) {
+  if (!unusedBootstrapState(state)) return false;
+  const { ledger } = state.control, row = ledger[0], request = row?.request;
+  return ledger.length === 0 || ledger.length === 1 && request.epoch === "bootstrap" && request.sequence === 0 && !request.seal && !row.localTerminal
+    && request.invocation.channel === "ssh" && request.invocation.deadlineMs === 30000
+    && request.invocation.requestSha256 === digest("set -euo pipefail\ntrue\n");
+}
+
+export function settledBootstrap(state, local) {
+  if (!unusedBootstrapState(state)) return false;
+  const { ledger } = state.control;
+  if (ledger.length < 3 || ledger.length > 8) return false;
+  const ssh = (script, deadline = 60000) => ["ssh", deadline, digest("set -euo pipefail\n" + script + "\n")];
+  const expected = [ssh("true", 30000), ssh("mkdir -m 700 /bench && touch /bench/run.log")];
+  // Dispatch checks absolute SFTP operands. Replay also works on moved evidence,
+  // where the combined script digest still binds every original request digest.
+  for (const [name, content] of Object.entries(remoteFiles(state))) {
+    expected.push(["sftp", 15 * 60000, local === undefined ? undefined : digest(JSON.stringify([join(local, name), "root@" + state.ip + ":/bench/" + name]))],
+      ssh("printf '%s  %s\\n' '" + digest(content) + "' '/bench/" + name + "' | sha256sum --check --status"));
+  }
+  return ledger.every(({ request, localTerminal, code }, sequence) => {
+    const [channel, deadlineMs, hash] = expected[sequence], invocation = request.invocation;
+    return localTerminal === true && code === 0 && request.epoch === "bootstrap" && request.sequence === sequence && !request.seal
+      && invocation.channel === channel && invocation.deadlineMs === deadlineMs && (hash === undefined || invocation.requestSha256 === hash);
+  });
+}
+
+const settledDrain = String.raw`def settled_receipts(root, binding, requests, g):
+    g['private'](root)
+    assert g['load'](root, 'binding.json') == binding
+    expect = {'helper.py', 'binding.json', 'mutex'}
+    digests, receipts, units = [], [], set()
+    listener, chain, _ = g['ancestry'](os.getpid(), os.environ['SSH_CONNECTION'])
+    identities = ('pid', 'startTicks', 'cgroup', 'executable')
+    same = lambda a, b: all(a[k] == b[k] for k in identities)
+    for request in requests:
+        invocation = request['invocation']
+        identifier = invocation['id']
+        for prefix in ['request', 'start', 'launcher', 'registration', 'result', 'receipt']:
+            expect.add(prefix + '-' + identifier + '.json')
+        assert g['load'](root, 'request-' + identifier + '.json') == request
+        raw = g['read'](root / ('receipt-' + identifier + '.json'))
+        receipt = json.loads(raw)
+        registration = g['load'](root, 'registration-' + identifier + '.json')
+        start = g['load'](root, 'start-' + identifier + '.json')
+        assert g['load'](root, 'launcher-' + identifier + '.json') == {'unit': start['unit'], 'code': 0}
+        assert receipt['schema'] == 'benchmark-control-session/v2' and receipt['invocation'] == registration['invocation'] == invocation
+        assert receipt['host'] == registration['host'] == g['host']()
+        assert receipt['session'] == registration['session'] and receipt['socket'] == registration['socket']
+        assert receipt['result'] == g['load'](root, 'result-' + identifier + '.json')
+        assert receipt['result']['transport'] == 'exited' and receipt['result']['code'] == 0
+        assert receipt['observer'] == registration['observer'] and receipt['listener'] == registration['listener']
+        assert same(receipt['listener'], listener)
+        terminal = g['watcher_terminal'](root, identifier, receipt)
+        assert terminal is not None
+        units.add(terminal['unit'])
+        receipts.append(receipt)
+        digests.append(hashlib.sha256(raw).hexdigest())
+    assert {p.name for p in root.iterdir()} == expect
+    assert {p.name for p in root.parent.glob('corten-bench-control-*')} == {root.name}
+    for directory in ['/run/systemd/transient', '/sys/fs/cgroup/system.slice']:
+        assert {p.name for p in pathlib.Path(directory).glob('corten-bench-control-*')} <= units
+    listed = subprocess.run(['systemctl', 'list-units', '--all', '--plain', '--no-legend', '--no-pager',
+                             'corten-bench-control-*.service'], capture_output=True, text=True, timeout=5)
+    assert listed.returncode == 0 and len(listed.stdout) <= 4096
+    assert {line.split()[0] for line in listed.stdout.splitlines() if line.strip()} <= units
+    rows = g['inventory']()
+    key = g['key']
+    live = {key(p) for p in rows.values()}
+    allowed = {p['pid'] for p in [listener] + chain}
+    assert all(same(rows[p['pid']], p) for p in [listener] + chain)
+    for receipt in receipts:
+        tracked = {key(p) for sample in receipt['samples'] for p in sample['processes']}
+        tracked.remove(key(listener))
+        tracked.update(key(p) for p in receipt['session']['chain'] + [receipt['observer']])
+        assert tracked and not (tracked & live)
+        scope = g['scope_read'](receipt['session']['scope'], rows)
+        assert not scope['members'] and (not scope['exists'] or 'populated 0' in scope['events'].splitlines())
+    for row in rows.values():
+        if row['pid'] in allowed:
+            continue
+        cgroup = row['cgroup']
+        assert g['parent'](row) not in allowed and cgroup != listener['cgroup']
+        assert not cgroup.startswith(listener['cgroup'].rstrip('\n') + '/')
+        assert not cgroup.startswith(('0::/user.slice/', '0::/system.slice/corten-bench'))
+        assert not re.search(r'/session-[^/\n]+\.scope(?:/|\n)', cgroup)
+    return digests`;
+
 export function unusedHostScript(state, { bootstrap = false, legacyTimestamp = false } = {}) {
-  if (bootstrap) assert.ok(unusedBootstrap(state), "unused bootstrap proof requires pre-provisioning custody");
-  const files = bootstrap ? {} : Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
-  const invocation = bootstrap && state.control.ledger[0]?.request.invocation;
+  const settled = bootstrap && settledBootstrap(state), pristine = bootstrap && !settled;
+  if (pristine) assert.ok(unusedBootstrap(state), "unused bootstrap proof requires pre-provisioning custody");
+  assert.ok(!settled || !legacyTimestamp, "settled bootstrap needs current unit proof");
+  const files = pristine ? {} : Object.fromEntries(Object.entries(remoteFiles(state))
+    .slice(0, settled ? Math.ceil((state.control.ledger.length - 2) / 2) : undefined).map(([name, content]) => [name, digest(content)]));
+  const invocation = pristine && state.control.ledger[0]?.request.invocation;
   const watcher = invocation && `corten-bench-control-${state.token}-${invocation.id}.service`;
   const timestamp = legacyTimestamp ? "ExecMainStartTimestamp" : "ExecMainStartTimestampMonotonic";
   return `/usr/bin/timeout 25 /usr/bin/python3 - ${quote(state.id)} ${quote(state.unit)} ${quote(JSON.stringify(files))} <<'CORTEN_UNUSED_HOST'
@@ -599,7 +686,8 @@ assert values['ActiveState'] == 'inactive' and values['MainPID'] == '0'
 assert values['${timestamp}'] == '${legacyTimestamp ? "" : "0"}' and values['Job'] == ''
 assert values['LoadState'] in ['not-found', 'loaded'] and values['Restart'] == 'no'
 assert values['FragmentPath'] == (('/etc/systemd/system/' + unit) if values['LoadState'] == 'loaded' else '')
-${bootstrap ? `def absent(path):
+${settled ? `assert values['LoadState'] == 'not-found'
+` : ""}${pristine ? `def absent(path):
     try:
         pathlib.Path(path).lstat()
     except FileNotFoundError:
@@ -620,7 +708,9 @@ assert watcher.returncode in (0, 1) and watcher.stdout.strip() == 'LoadState=not
 r = subprocess.run(['systemctl', 'list-units', '--all', '--plain', '--no-legend', '--no-pager', 'corten-bench-control-*.service'], capture_output=True, text=True, timeout=5)
 assert r.returncode == 0 and r.stdout.strip() == ''
 `}` : ""}bench = pathlib.Path('/bench')
-if os.path.lexists(bench):
+${settled ? `assert bench.is_dir() and not bench.is_symlink()
+assert {p.name for p in bench.iterdir()} == {'run.log'} | files.keys()
+` : ""}if os.path.lexists(bench):
     assert bench.is_dir() and not bench.is_symlink()
     for entry in bench.iterdir():
         assert stat.S_ISREG(entry.lstat().st_mode) and entry.stat().st_size <= 1048576
@@ -654,25 +744,45 @@ for entry in pathlib.Path('/proc').iterdir():
     except FileNotFoundError:
         continue
     assert b'/bench/' not in command and b'corten-bench-groups-' not in command
-${bootstrap ? `    assert all(value not in command for value in [b'/bench', b'corten-bench-control-', b'corten-control'])
+${pristine ? `    assert all(value not in command for value in [b'/bench', b'corten-bench-control-', b'corten-control'])
 absent('/run/corten-bench-control-${state.token}')
 absent('/bench')
+` : ""}${settled ? `import re
+${settledDrain}
+
+root = pathlib.Path('/run/corten-bench-control-${state.token}')
+binding = json.loads(${JSON.stringify(JSON.stringify({ round: state.round, commit: state.commit, token: state.token, helperSha256: guardianSha256 }))})
+requests = json.loads(${JSON.stringify(JSON.stringify(state.control.ledger.map(({ request }) => request)))})
+with os.fdopen(os.open(root / 'helper.py', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as helper:
+    source = helper.read(1048577)
+assert len(source) <= 1048576 and hashlib.sha256(source).hexdigest() == binding['helperSha256']
+namespace = {'__name__': '_settled_bootstrap_observation'}
+exec(compile(source, 'bound-control-source', 'exec'), namespace)
+assert namespace['read'](root / 'helper.py') == source
+drained = settled_receipts(root, binding, requests, namespace)
 ` : ""}assert os.getppid() == parent_pid and (parent / 'cmdline').read_bytes() == parent_command
 assert os.readlink(parent / 'exe') == '/usr/bin/timeout'
 print(json.dumps(dict(schema='benchmark-unused-host/v1', hostId=host_id, unit=unit,
-                     observedAtMs=int(time.time()*1000), unused=True)))
+                     observedAtMs=int(time.time()*1000), unused=True${settled ? ", drainedReceipts=drained" : ""})))
 CORTEN_UNUSED_HOST`;
 }
 
 export function unusedEvidence(raw, state, script, startedAtMs, finishedAtMs, knownHostsSha256) {
+  const settled = settledBootstrap(state);
   if (knownHostsSha256 !== undefined) {
     assert.equal(typeof knownHostsSha256, "string"); assert.match(knownHostsSha256, /^[a-f0-9]{64}$/);
-    assert.ok(unusedBootstrap(state));
+    assert.ok(settled || unusedBootstrap(state));
   }
+  if (settled) assert.ok(knownHostsSha256 && script === unusedHostScript(state, { bootstrap: true }), "settled uploads require the pinned drain proof");
   assert.ok(typeof raw === "string" && Buffer.byteLength(raw) <= 1024, "bounded unused proof required");
   const observation = JSON.parse(raw);
   assert.ok(observation && typeof observation === "object" && !Array.isArray(observation), "unused proof required");
-  assert.deepEqual(Object.keys(observation).sort(), ["hostId", "observedAtMs", "schema", "unit", "unused"]);
+  assert.deepEqual(Object.keys(observation).sort(), [...(settled ? ["drainedReceipts"] : []), "hostId", "observedAtMs", "schema", "unit", "unused"]);
+  if (settled) {
+    const hashes = observation.drainedReceipts;
+    assert.ok(Array.isArray(hashes) && hashes.length === state.control.ledger.length && new Set(hashes).size === hashes.length
+      && hashes.every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)), "complete distinct drain receipts required");
+  }
   assert.equal(observation.schema, "benchmark-unused-host/v1");
   assert.equal(observation.hostId, state.id); assert.equal(observation.unit, state.unit); assert.equal(observation.unused, true);
   assert.ok(Number.isSafeInteger(startedAtMs) && Number.isSafeInteger(finishedAtMs) && finishedAtMs >= startedAtMs
