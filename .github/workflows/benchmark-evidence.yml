@@ -6,6 +6,12 @@ on:
     branches: [main]
   pull_request:
   workflow_call:
+  workflow_dispatch:
+    inputs:
+      native_only:
+        description: Run only the native Linux check
+        type: boolean
+        default: false
 
 # Keep every main run; only newer PR runs supersede older ones.
 concurrency:
@@ -37,7 +43,7 @@ jobs:
 
   evidence:
     needs: scope
-    if: needs.scope.outputs.run == 'true'
+    if: needs.scope.outputs.run == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.native_only)
     name: benchmark evidence (${{ matrix.suite }})
     runs-on: ubuntu-24.04
     timeout-minutes: 40
