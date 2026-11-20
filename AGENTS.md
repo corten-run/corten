@@ -20,6 +20,7 @@ Choice in the same pull request.
    dependencies there; it must build for native and agent clients.
 2. Server feed (replay, live streams, followers): `crates/corten-feed`.
 3. Pages, request modes, patches, handlers, the runtime, `App` defaults: `crates/corten`.
+   Put new crate-level `corten` tests in the area's file under `crates/corten/src/tests/`.
    Markup is `html!` and `#[component]`, links are `#[derive(Route)]` structs, behavior is a
    `#[component(js)]` (plain `export function`s with JSDoc in the script next to it, called from
    its markup: `let save = refs();`, `ref={save}`, `on:click={js::enable(save)}`) and text is

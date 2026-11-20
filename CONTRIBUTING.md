@@ -11,6 +11,7 @@ its tests pass; the [review](#review) decides whether it should land.
 ```text
 crates/
   corten/            The framework on hyper: App, Req, html!, components, the runtime (js/corten.js)
+                     Put new crate-level tests in the area's file under crates/corten/src/tests/.
   corten-macros/     html!, #[component], #[event], script!, messages!, tokens!, derives (Fields, Route), on proc_macro alone (no syn)
   corten-cli/        The corten command, standard library only
   corten-feed/       Live feeds: rows, numbered patches, replay, resume
