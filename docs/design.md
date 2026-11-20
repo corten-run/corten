@@ -2215,8 +2215,11 @@ rules something out.
     sequence route, which its failover benchmark reads, is the first use, and no app's in
     production is yet); measured (callgrind, x86-64 Linux release, `catalog-lean` identity GETs:
     sharing the staged header reads reduced named request-map lookups from 17 to 14, kept three
-    response-map lookups and three request extension inserts, and changed 43,273.3 to 42,835.4
-    instructions per request); value
+    response-map lookups and three request extension inserts, and reduced median instructions per
+    request from 43,274.3 (43,274.1 to 43,275.6) to 42,763.2 (42,762.1 to 42,770.4).
+    A mounted JSON GET with a session cookie kept six named request-map lookups, none for
+    `Authorization`, and went from 35,796.1 (35,794.0 to 35,797.9) to 35,650.6 (35,647.5 to
+    35,654.7) median instructions per request); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
     for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
@@ -2257,9 +2260,10 @@ rules something out.
     without app middleware or layout reads. The bounds leave room for build profiles,
     features and compiler layout changes; remeasure before raising one.
 
-    Last checked: 2026-11-19, the header lookup and extension counts before (`aa0f0c7e1`) and
-    after sharing the reads (measured tree recorded at `f1765bbe2`), from one short/long pair
-    per build: 1,300 less 300 catalog GETs, on one connection per run;
+    Last checked: 2026-11-19, the header lookup, extension and instruction counts before
+    (`aa0f0c7e1`) and after sharing the reads and restoring the short circuits (`76229a2fd`),
+    from three short/long pairs per build for each workload: 1,300 less 300 catalog GETs,
+    on one connection per run;
     2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
     (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its
