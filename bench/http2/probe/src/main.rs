@@ -34,6 +34,8 @@ const EVENT: &str = "<p id=\"event\">a fixed fragment for the transport comparis
 // encoder, before the TLS writer can report backpressure.
 const SOCKET_CHUNK: usize = 255;
 const SOCKET_CHUNKS: usize = 32 * 1024;
+// A batch (including h2 frame headers) fits into the 16 KiB encoder.
+const SOCKET_BATCH: usize = 48;
 
 // The suite takes the report over a fresh connection while the tested client is
 // still paused. The paused client cannot itself observe when the server closes.
@@ -330,20 +332,22 @@ async fn h2_reply<B: Buf>(
                 if sent == SOCKET_CHUNKS {
                     return None;
                 }
-                // Keep only one DATA buffer outstanding, and don't queue another
-                // after the writer starts waiting. The client grants ample h2 credit.
-                tokio::task::yield_now().await;
-                loop {
-                    let ready = {
-                        let state = state.lock().unwrap();
-                        !state.socket_blocked && state.pending.is_empty()
-                    };
-                    if ready {
-                        break;
+                // Let h2 copy the previous batch before we queue another. Batching
+                // avoids one tiny TLS record per DATA frame on the way to backpressure.
+                if sent % SOCKET_BATCH == 0 {
+                    tokio::task::yield_now().await;
+                    loop {
+                        let ready = {
+                            let state = state.lock().unwrap();
+                            !state.socket_blocked && state.pending.is_empty()
+                        };
+                        if ready {
+                            break;
+                        }
+                        time::sleep(Duration::from_millis(1)).await;
                     }
-                    time::sleep(Duration::from_millis(1)).await;
                 }
-                Some((Ok::<_, io::Error>(Bytes::from(vec![b'x'; SOCKET_CHUNK])), (state, sent + 1)))
+                Some((Ok::<_, io::Error>(Bytes::from_static(&[b'x'; SOCKET_CHUNK])), (state, sent + 1)))
             });
             Response::new(Body::from_stream(chunks))
         } else {
