@@ -608,6 +608,9 @@ produces framework timings.
 
 The grouped benchmark's [disposable-host preparation](../../bench/workloads/CLOUD.md#evidence-and-cleanup)
 holds firmware-update services outside the measurement boundary before baseline.
+On a fresh dedicated group host it also limits incoming SSH to the controller's
+authenticated provisioning IPv4 source. Keep that egress for collection and
+cleanup; do not make a separate login during measurement.
 Its cleanup check retains all process observations and exempts only kernel threads
 proved by saved Linux stat flags and matching PID/start identity. A new user-space
 daemon or application process still fails cleanup; later observations cannot repair

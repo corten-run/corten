@@ -90,5 +90,14 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 26
+      - name: Exercise dedicated SSH ingress bootstrap with simulated APT contention
+        run: node --test --test-name-pattern='SSH ingress' bench/workloads/cloud-bootstrap-execution.test.mjs
+      - name: Exercise dedicated SSH ingress in private Linux namespaces
+        run: |
+          if [[ ! -x /usr/sbin/nft ]]; then
+            sudo apt-get update -qq
+            sudo env NEEDRESTART_SUSPEND=1 apt-get install -y -qq --no-install-recommends nftables
+          fi
+          sudo /bin/bash scripts/benchmark-ssh-ingress-ci.sh "$(command -v node)"
       - name: Exercise actual delegated process and Docker participant boundaries
         run: sudo /bin/bash scripts/benchmark-kernel-ci.sh "$(command -v node)" "$PWD"

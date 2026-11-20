@@ -9,8 +9,8 @@ import test from "node:test";
 import { accountId, archive, commit, context, harness, syntheticInspection, userId } from "./cloud-fixtures.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
-import { bootstrapMarker } from "./cloud-remote.mjs";
-import { savedLoadLayout } from "./cloud-contract.mjs";
+import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
+import { bootstrapWorkspaceScript, captureSshOwner, installSshIngress, savedLoadLayout, verifySshIngress } from "./cloud-contract.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
@@ -54,6 +54,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { controlRegistration } from './cloud-control-runtime.mjs';
 import { bootstrapMarker as syntheticMarker, bootstrapReadScript as syntheticRead } from './cloud-remote.mjs';
+import { bootstrapWorkspaceScript } from './cloud-contract.mjs';
 const syntheticArgs = syntheticData.args;
 const syntheticGroup = syntheticArgs[syntheticArgs.indexOf('--group') + 1];
 const synthetic = (${syntheticDependencies.toString()})({
@@ -62,7 +63,7 @@ const synthetic = (${syntheticDependencies.toString()})({
   commit: ${JSON.stringify(commit)}, userId: ${JSON.stringify(userId)}, mode: ${JSON.stringify(mode)},
   holdUntilGroup: ${mode === "overlap" ? `syntheticGroup === ${JSON.stringify(groupNames[1])} ? ${JSON.stringify(groupNames[2])} : null` : "null"}
 }, { fs: syntheticFs, path: syntheticPath, fork: syntheticFork, providerTransport,
-  bootstrapMarker: syntheticMarker, bootstrapReadScript: syntheticRead, controlRegistration,
+  bootstrapMarker: syntheticMarker, bootstrapReadScript: syntheticRead, bootstrapWorkspaceScript, controlRegistration,
   EventEmitter, PassThrough, Writable, registration: ${JSON.stringify(registration)} });\n`;
     }
     fs.writeFileSync(target, source);
@@ -133,8 +134,28 @@ test("captured production composition ignores arbitrary hints, binds POST identi
     assert.ok(script.includes("--load-layout 'c16-generator-v1'"));
     assert.ok(script.includes('test "$(nproc)" -ge 16'));
     assert.ok(script.indexOf("/bench/bootstrap-ready.json") < script.indexOf("node 'bench/workloads/isolated/campaign-entry.mjs'"));
+    assert.ok(script.includes(installSshIngress) && !script.includes("SSH_CONNECTION"));
+    const verify = script.indexOf(verifySshIngress);
+    assert.ok(script.indexOf(installSshIngress) < verify && verify < script.indexOf("/bench/bootstrap-ready.json"));
     const starts = events.filter((row) => row.group === group && row.boundary === "ssh" && row.options.input.includes(`systemctl start ${saved.unit}`));
     assert.equal(starts.length, 1);
+    const installs = events.filter((row) => row.group === group && row.boundary === "ssh" && row.options.input.includes("systemctl daemon-reload"));
+    assert.equal(installs.length, 1);
+    const [install] = installs;
+    assert.ok(install.options.input.endsWith("systemctl daemon-reload\n"));
+    const capture = events.find((row) => row.group === group && row.boundary === "ssh" && row.options.input.includes(captureSshOwner));
+    assert.equal(capture.options.input, `set -euo pipefail\n${bootstrapWorkspaceScript(saved)}\n`);
+    assert.equal(capture.options.timeout, 60000);
+    assert.equal(capture.argv.at(-2), `root@${saved.ip}`);
+    assert.notEqual(capture.argv.at(-1), "/bin/bash -s");
+    assert.equal(saved.control.ledger[1].request.invocation.requestSha256, digest(capture.options.input));
+    const check = events.find((row) => row.group === group && row.boundary === "ssh" &&
+      row.options.input === `set -euo pipefail\n${bootstrapReadScript}\n`);
+    const monitor = events.find((row) => row.group === group && row.boundary === "monitor");
+    const ordered = [capture, install, starts[0], check, monitor];
+    assert.ok(ordered.every((row, i) => row && (i === 0 || events.indexOf(ordered[i - 1]) < events.indexOf(row))));
+    assert.ok(ordered.every((row) => row.argv.at(-2) === install.argv.at(-2)));
+    assert.ok(events.indexOf(capture) < events.indexOf(uploads[0]));
     const exited = events.filter((row) => row.group === group && row.boundary === "provider-child-exit");
     assert.equal(exited.length, 1); assert.equal(exited[0].code, 0); assert.equal(exited[0].signal, null);
     assert.ok(exited[0].terminal && exited[0].fleetLock && exited[0].launchLock && exited[0].operationLock);
@@ -291,5 +312,20 @@ test("source-mismatched common bootstrap marker preserves first running host and
   assert.equal(p.saved().bootstrapReady, undefined);
   assert.equal(p.output.at(-1).groups[0].controllerStage, "controller-launch");
   assert.equal(p.events().filter((row) => row.method === "POST").length, 1);
+  assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
+});
+
+test("refused authenticated peer capture preserves the host without uploading or starting a unit", { timeout: 15000 }, async (t) => {
+  const p = fixture(t, "owner-capture-fail");
+  assert.equal(await fleetMain(await p.prepare(), p.deps), 2);
+  const saved = p.saved(), events = p.events(), request = saved.control.ledger.at(-1).request;
+  assert.equal(saved.status, "preparing");
+  assert.equal(saved.bootstrapReady, undefined);
+  assert.equal(p.workers.length, 1);
+  assert.equal(events.filter((row) => row.method === "POST").length, 1);
+  assert.ok(!events.some((row) => row.method === "DELETE" || ["monitor", "upload"].includes(row.boundary)
+    || row.boundary === "ssh" && row.options.input.includes(`systemctl start ${saved.unit}`)));
+  const [capture] = events.filter((row) => row.boundary === "ssh" && row.options.input.includes(captureSshOwner));
+  assert.equal(request.invocation.requestSha256, digest(capture.options.input));
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
 });

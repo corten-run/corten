@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertFleetCensus, ownedDroplet, reservation, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
+import { assertFleetCensus, bootstrapWorkspaceScript, ownedDroplet, reservation, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash } from "./cloud-local.mjs";
 import { campaignOutcome, controllerFailure, controllerState, full, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
@@ -534,7 +534,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           "completed create and owned host differ; preserve reservation without provisioning");
           await waitForSsh();
           assert.equal((await ssh("true", 30000, true)).status, 0, "SSH unavailable; never retry or relaunch");
-          await ssh("mkdir -m 700 /bench && touch /bench/run.log");
+          await ssh(bootstrapWorkspaceScript(state, { launch: true }));
           for (const [name, content] of Object.entries(remoteFiles(state))) {
             durable(join(local, name), content); await scp(join(local, name), `root@${state.ip}:/bench/${name}`);
             await ssh(`printf '%s  %s\\n' '${digest(content)}' '/bench/${name}' | sha256sum --check --status`);

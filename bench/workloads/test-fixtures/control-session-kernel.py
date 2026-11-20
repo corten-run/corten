@@ -265,7 +265,7 @@ class Child:
         rows.pop(self.pid)
         if mode == "disconnect":
             raise scope["subprocess"].TimeoutExpired("synthetic-disconnect", timeout)
-        return 0
+        return current.get("code", 0)
 
 
 def run(args, **kwargs):
@@ -391,7 +391,7 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
             invocation = request["invocation"]
             identifier = invocation["id"]
             payload = step["payload"].encode()
-            current.update({"pack": step.get("pack"), "query": "expected" in step})
+            current.update({"pack": step.get("pack"), "query": "expected" in step, "code": step["code"]})
             if current["query"]:
                 argument["expected"] = step["expected"]
         invocations.append(invocation)
@@ -410,7 +410,7 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
             if sequence == 0:
                 arguments.append(source.encode().hex())
             with patch.object(sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO((raw if channel == "ssh" else b"") + payload))):
-                assert scope["main"](arguments) == 0
+                assert scope["main"](arguments) == current.get("code", 0)
         except scope["subprocess"].TimeoutExpired:
             pass
         except AssertionError as error:
