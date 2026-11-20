@@ -894,7 +894,10 @@ campaign module. Immediately before entry the job exclusively creates
 `/bench/campaign` with mode 0700, under its 0077 umask and the entry's UID. Any
 existing directory, file or symlink fails instead of being reused, chmodded or
 removed. The native `begin()` requires this existing physical private root; it
-creates the durable reservation inside it. Each uploaded job/packer/unit is
+creates the durable reservation inside it. A launch saves `benchPackage: true`
+in its reservation and its job runs `npm --prefix bench ci` (the binding parser's
+classic TypeScript) after the root install; a state saved without it regenerates
+the job bytes it uploaded. Each uploaded job/packer/unit is
 SHA256-checked on the owned host before installation/start. The packer requires terminal metadata, keeps an existing
 regular archive instead of overwriting it, and publishes a fresh private GNU tar
 archive with exclusive hard-link creation; a collision does not replace evidence.

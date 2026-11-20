@@ -27,6 +27,7 @@ test("detach reserves before one completed create, uploads fixed job and starts 
   const job = readFileSync(join(h.local, "job.sh"), "utf8");
   assert.ok(job.includes(`campaign-entry.mjs' 'r21' --commit '${commit}' --state-dir '/bench/campaign'`));
   assert.ok(!job.includes("--apps")); await assert.rejects(h.launch().launch(), /already reserved/); assert.equal(h.creates, 1);
+  assert.equal(s.benchPackage, true); assert.ok(job.includes("bootstrap_stage=bench-dependencies\ntimeout 900 npm --prefix bench ci --no-audit --no-fund\n"));
 });
 
 test("legacy detach keeps sfo2 and scans an older retired sfo2 reservation without changing it", async (t) => {
