@@ -1167,9 +1167,9 @@ impl<M: Middleware> App<M> {
     /// that takes a little each minute can be. Over TLS a write or a flush stays pending while the
     /// TLS library sends what it holds, and its wait starts over at each report of room too, but
     /// room was measured coming at less even intervals there, and a short timeout can cut a slow
-    /// reader that plain HTTP keeps: one taking 2 KiB every 125 ms (16 KiB
-    /// buffers) kept a plain connection open past 30 seconds with a 2-second timeout, and over
-    /// tokio-rustls was cut within 9. While the connection's task has spent tokio's cooperative
+    /// reader that plain HTTP keeps: one taking 2 KiB every 125 ms (16 KiB buffers) kept a plain
+    /// connection open past 30 seconds with a 2-second timeout, and over tokio-rustls was cut
+    /// within 9. While the connection's task has spent tokio's cooperative
     /// budget (a route reading a flood of input), a report of room does not start the wait over.
     /// A TLS connection's last record, written as it closes, is held to it too. `None` removes
     /// it, for a server that only

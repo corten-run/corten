@@ -477,10 +477,9 @@ only on a completed write. Shipping HTTP/1.1 no longer does: since
 Corten's watch starts the wait over each time the connection reports room while a write,
 flush or close waits, so a flush that stays pending while its records drain is cut only when
 the connection goes a send timeout without reporting room. Over TLS that room was measured
-coming at less even intervals than over plain HTTP, for a reason not yet measured: with 16
-KiB buffers, a reader taking
-2 KiB every 125 ms was still cut over TLS at a 2 s send timeout in 5 of 5 rounds, where plain
-HTTP kept it past 30 s. The regression test is
+coming at less even intervals than over plain HTTP, for a reason not yet measured: with
+16 KiB buffers, a reader taking 2 KiB every 125 ms was still cut over TLS at a 2 s send
+timeout in 5 of 5 rounds, where plain HTTP kept it past 30 s. The regression test is
 `a_flush_that_waits_while_its_bytes_go_out_is_held_only_to_the_send_timeout` in
 `crates/corten/src/tests/server.rs`. That change does not address the second cause, a
 receive window that reopens only in large steps, and the combined path's HTTP/2 watch

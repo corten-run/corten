@@ -68,8 +68,8 @@ takes a little each minute can be. Over TLS a write or a flush stays pending whi
 sends what it holds to a client reading slower than the server writes, and its wait starts over at
 each report of room too. But over TLS room was measured coming at less even intervals (gaps up to
 the whole timeout where plain HTTP's stayed near 1.5 seconds; why is not yet known), and a short
-timeout can cut a slow reader that plain HTTP keeps:
-measured with 16 KiB buffers, a reader taking 2 KiB every 125 ms kept a plain connection open past
+timeout can cut a slow reader that plain HTTP keeps: measured with 16 KiB buffers, a reader
+taking 2 KiB every 125 ms kept a plain connection open past
 30 seconds with a 2-second `send_timeout` (5 of 5 tries) and was cut over tokio-rustls after 5 to
 8.5 seconds (5 of 5), while one taking 4 KiB every 62 ms got its whole download over both with
 700 ms. Keep the timeout well above the gaps your slowest readers leave. While the connection's

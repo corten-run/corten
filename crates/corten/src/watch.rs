@@ -312,12 +312,12 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
         if flowing {
             watch.stalled.store(watch.clock.now.load(Relaxed) + 1, Relaxed);
         }
-        // Before the IO can wake the watch, so its wake reaches the task. Another task may be
-        // waiting on the same IO (a route that shares a switched connection behind a lock): if this
-        // call goes through, its own registration is taken back and that task is woken below to
-        // register again, rather than lose the wake it is owed, and without leaving this task to
-        // be woken in turn when that one's call goes through. Two calls that both wait are woken
-        // only the last, as tokio's own are.
+        // Before the IO can wake the watch, so its wake reaches the task. A call already waiting
+        // (this task's own, or another's on a switched connection a route shares) is put back below
+        // if this one goes through, so the IO's next report of room still reaches it; another
+        // task's is also woken, in case the IO now holds this call's waker instead. A finished
+        // call leaves no registration of its own, so two tasks that flush when woken do not wake
+        // each other in turn. Two calls that both wait are woken only the last, as tokio's own are.
         let previous = watch.writer.take();
         watch.writer.register(cx.waker());
         let done = if tokio::task::coop::has_budget_remaining() {
@@ -340,9 +340,14 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
             Poll::Pending if watch.stalled.load(Relaxed) == STALLED => Err(stalled()),
             Poll::Pending => return Poll::Pending,
         };
-        watch.writer.take();
-        if let Some(previous) = previous.filter(|previous| !previous.will_wake(cx.waker())) {
-            previous.wake();
+        match previous {
+            Some(previous) => {
+                watch.writer.register(&previous);
+                if !previous.will_wake(cx.waker()) {
+                    previous.wake();
+                }
+            }
+            None => drop(watch.writer.take()),
         }
         Poll::Ready(done)
     }
@@ -597,6 +602,38 @@ mod tests {
         // Woken, the first task flushes too, and that wakes nobody.
         assert!(Pin::new(&mut io).poll_flush(&mut Context::from_waker(&one_waker)).is_ready());
         assert_eq!((one.0.load(SeqCst), two.0.load(SeqCst)), (1, 0));
+    }
+
+    /// One task whose write waits and whose flush then goes through, as a route that writes and
+    /// flushes one stream from joined futures might: the flush leaves the write's registration
+    /// in place, so the client making room wakes the task.
+    #[tokio::test]
+    async fn a_call_that_goes_through_leaves_its_own_tasks_waiting_write_to_be_woken() {
+        use std::sync::atomic::Ordering::SeqCst;
+        use tokio::io::AsyncReadExt;
+        let clock = Clock::start(None, Some(Duration::from_secs(30))).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = tokio::net::TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+        let (tcp, _) = listener.accept().await.unwrap();
+        // The client reads nothing yet, so the socket fills.
+        while tcp.try_write(&[0; 64 << 10]).is_ok() {}
+        let mut io = Watched { io: tcp, watch: Some(clock.watch()), _open: None };
+        let task = Arc::new(Counted(0.into()));
+        let waker = Waker::from(task.clone());
+        let mut cx = Context::from_waker(&waker);
+        assert!(Pin::new(&mut io).poll_write(&mut cx, b"x").is_pending());
+        assert!(Pin::new(&mut io).poll_flush(&mut cx).is_ready());
+        // The client makes room.
+        let reader = tokio::spawn(async move {
+            let mut buf = vec![0; 64 << 10];
+            while client.read(&mut buf).await.is_ok_and(|read| read > 0) {}
+        });
+        let started = Instant::now();
+        while task.0.load(SeqCst) == 0 {
+            assert!(started.elapsed() < Duration::from_secs(2), "the waiting write is woken");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        reader.abort();
     }
 
     #[test]

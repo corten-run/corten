@@ -1,1 +1,0 @@
-- `send_timeout`'s wait now starts over each time the connection reports room, so a TLS write or flush still sending its bytes is no longer cut at one timeout. Over TLS room was measured at less even intervals: reading 2 KiB per 125 ms, a client is still cut over TLS at a 2 s timeout but kept over plain HTTP.

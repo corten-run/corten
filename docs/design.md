@@ -1234,7 +1234,9 @@ rules something out.
        rounds and was cut over tokio-rustls through `serve_wrapped` in 5 of 5, as the
        [steady reader control](../bench/http2/README.md#steady-reader-control) had reasoned, and
        after it got it over both in 5 of 5. Over TLS room was still measured coming at less even
-       intervals than over plain HTTP, for a reason not yet measured: one reading 2 KiB every
+       intervals than over plain HTTP (in 2 traced rounds each, plain reported room every 1.5 s
+       and TLS after about 1 s, 1 s, then gaps of 1.8 and 2 s), for a reason not yet measured
+       ([#1757 send_timeout still cuts a slow TLS reader that plain HTTP keeps: room is reported at less even intervals over TLS](https://github.com/corten-run/corten/issues/1757)): one reading 2 KiB every
        125 ms against 2 seconds was kept past 30 seconds over plain HTTP and cut over TLS within
        9 in every round, 3 before the change and 5 after; and while the connection's task has
        spent tokio's cooperative budget a report of room does not start the wait over
@@ -1817,7 +1819,8 @@ rules something out.
     HTTP, steady readers at three rates, before the wait started over on each report of room
     (five rounds each at `4bf5b1e78`, and three of the 2-second case at `efdb1df36`, whose
     crates are the same) and after (five rounds each at `ee411b38e`), recorded at the commit
-    that adds this entry.
+    that adds this entry, and the gaps between the socket's reports of room traced in two of
+    the 2-second case's rounds each, plain and TLS, at `ee411b38e`.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
