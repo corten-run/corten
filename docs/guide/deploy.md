@@ -10,7 +10,7 @@ release profile an app builds with, what a profile-guided build gained on one ap
 beside other apps', and what to know when monitoring it.
 
 For live streams this is a requirement, not just a choice of where to end TLS: another server
-to configure, update and operate. Nine of the twelve rows below are proxy-specific concerns;
+to configure, update and operate. Ten of the thirteen rows below are proxy-specific concerns;
 row 5 is conditional on a shared cache, while health checks (9) and HTTPS policy (12) also apply
 without a proxy. Not every row is a new cost caused by the HTTP/2 requirement.
 An opt-in prototype passed an eight-tab h2 check but missed a flow-controlled send timeout;
@@ -97,6 +97,7 @@ does not add HTTP/2; the live-stream limitation at the top of this guide still a
 | 10 | allow request bodies as large as the app's largest form, and pass a large upload on as it arrives | nginx refuses a body over `client_max_body_size` (1 MB) with a page of its own, before the app can answer it in the form; and it holds the whole body before passing it on (`proxy_request_buffering on`), so a route that reads a body as it arrives (`pieces_up_to`) gets a `location` of its own with its limit and `proxy_request_buffering off` (below) |
 | 11 | keep a quiet WebSocket open, or let the app ping it | nginx closes a proxied connection that sends nothing for `proxy_read_timeout` (60 seconds), a WebSocket included; Corten's `Upgrade` sends no pings of its own, so a socket that may go quiet longer pings from the app or gets a longer timeout in its `location` |
 | 12 | set `Policy::hsts` in the app when it is served only over HTTPS, even when the proxy or CDN already sends `Strict-Transport-Security` | the app sees plain HTTP from a proxy that ends TLS and reads no `X-Forwarded-Proto`, so `hsts` is how it knows its pages are `https`: with it, a write or a WebSocket handshake without `Sec-Fetch-Site` from a plain-http page on the app's host is refused, and without it that page passes ([design Limit 26](../design.md#limit-origin-scheme)); it also keeps a redirect's notice in the `__Host-` cookie ([WebSockets](app.md#websockets-and-relays)) |
+| 13 | pass the browser's `Accept-Encoding` on to the app, and its `If-None-Match` for a page the proxy does not answer from a store of its own | a page `GET` is tagged only for a request that accepts a coding or names a tag, so without the first a browser that holds no tag is never given one; a `304` for a page the proxy did not store comes only from the app, so without the second that page is sent whole on every reload ([Response compression](#response-compression)) |
 
 ### Live streams
 
@@ -381,6 +382,48 @@ system zstd is installed. The starter's Dockerfile instead sets `ZSTD_SYS_USE_PK
 `libzstd.so.1` in the runtime image. To keep compression in an image without that shared
 library, remove the setting so the build compiles zstd and links it into the app. To avoid
 zstd altogether, turn off the `compress` feature in the app's `Cargo.toml`.
+
+Whichever compresses, the proxy passes the browser's `Accept-Encoding` on to the app (row 13
+above). With the feature or without, a page `GET` is hashed for an `ETag` only when the request
+accepts a coding or already names a tag ([design Limit 21](../design.md#limit-etag)), and what
+counts is the header as it reaches the app. Behind a proxy that takes it off, a browser that holds
+no tag is never sent one, and so gets the whole page each time where it would get a `304`. With
+the feature on and the header passed, the app compresses and the proxy has nothing left to do; to
+have the proxy compress instead, build without the feature and still pass the header. A proxy
+takes it off when it is told to (nginx's `proxy_set_header Accept-Encoding ""`), and one that
+compresses for the app may be set to: HAProxy's `compression offload` takes it off each request
+that accepts a coding HAProxy is set to use, as a browser's does.
+
+The tag is half of it: for a page the proxy does not answer from a store of its own, the `304`
+needs the browser's `If-None-Match` to reach the app too. nginx takes it off in a `location`
+that has `proxy_cache`, which is why the [configuration above](#nginx) leaves `proxy_cache` off
+`/`. In a `location` that has it, nginx answers a tag itself for a page it stored. Passing the
+header on by hand beside `proxy_cache` (`proxy_set_header If-None-Match $http_if_none_match`)
+is not the way to have both: nginx then stored a public page's `304` and gave it to the next
+reader, who held no page, and with `proxy_no_cache` on the header to stop that, a request that
+names a tag never refreshes the stored copy. What this section says of nginx with `proxy_cache`
+and of HAProxy was checked with nginx 1.27.5 and HAProxy 3.0.31 in front of a server that
+answered as a private and a public page do and printed what reached it, not in front of a
+Corten app. What Cloudflare and CloudFront do with the two headers was not checked.
+
+To check both, pick a page that carries an `ETag` when asked straight from the app with the
+`Accept-Encoding` below (one whose layout takes `req.nonce()`, that draws a `SubmitKey::field`,
+or that is `no_store`, never does) and that the proxy does not store, and send the proxy the two
+requests a browser would. Send `GET`s: `curl -I` sends a `HEAD`, which
+the app tags whatever it accepts, and which nginx asks the app for as a `GET` in a `location`
+with `proxy_cache`.
+
+```sh
+curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' https://shop.example/account
+curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' -H 'If-None-Match: W/"<the tag>"' https://shop.example/account
+```
+
+The first must show the `ETag`, and the second `304`. The [configuration above](#nginx) leaves
+both headers on for a page under `/`, and its check saw a private page's tag reach the app and
+the `304` come back; with `/account` in a `location` that has `proxy_cache`, the second shows
+`200` and the page again, the whole body [that section](#nginx) describes. A page nginx stores
+does not test the second header, since nginx answers its `304` from the store; it still needs
+the first, without which the copy it stores has no tag to match.
 
 ## Building the image
 

@@ -1258,7 +1258,7 @@ rules something out.
        through nginx; the browser cap is about six connections per host, not eight tabs.
        The app cannot diagnose this at startup: a feed's snapshot and stream both have rows,
        and a TLS-wrapped origin behind a re-encrypting proxy is valid. The deployment guide
-       has nine proxy-specific concerns, not twelve extra requirements: its rows 5 (shared
+       has ten proxy-specific concerns, not thirteen extra requirements: its rows 5 (shared
        caching), 9 (health) and 12 (HTTPS policy) are conditional or apply without a proxy.
        The measured nginx `$host` port loss causing a WebSocket 403 shows a real configuration
        failure. Operator time, money and memory have not been measured, not counted as zero.
@@ -1792,6 +1792,8 @@ rules something out.
     2026-11-13, matchit 0.9.2's matching and insertion source read and the dispatch suite's
     17 tests passed with empty parameters refused ([Choice 48](#choice-matchit)); 2026-11-14,
     the same dispatch suite passed in the merged workspace's full debug tests at `66cb2936e`;
+    2026-11-18, the deployment guide's rows counted again at `83da31ef1`, with its thirteenth
+    (what a proxy passes on for a page's tag and its `304`): ten are proxy-specific;
     2026-11-18, hyper 1.12.0's send loop and h2 0.4.20's active count and send queue read
     against Corten's `Answered` at `e927c2463`, then exercised in the
     [standalone TLS probe](../bench/http2/README.md#follow-up-results); 2026-11-19,
@@ -7346,6 +7348,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     does not explicitly accept a non-identity coding and sends no `If-None-Match` gets no tag:
     for a client like `curl` or a benchmark, the hash would cost about a third of the render for
     nothing. A CDN that fetches pages without asking for a coding gets no tag to revalidate them.
+    What counts is the header as it reaches the app: behind a proxy that takes `Accept-Encoding`
+    off, a browser that holds no tag is never sent one (one that still holds a tag names it, and
+    is answered when the proxy passes `If-None-Match` on too;
+    [deploying](guide/deploy.md#response-compression)).
     With `compress`, only explicitly named codings Corten can send count.
     Without it, any named non-identity coding with a positive weight counts, as does a positive
     `*` (it allows unlisted codings, RFC 9110 section 12.5.3). An absent or empty
