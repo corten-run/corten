@@ -6525,7 +6525,9 @@ rules something out.
     each with no step between, on the change after `dd4baf7a4`; 2026-11-17, Cargo 1.99.1 on a
     new member of a workspace whose lock held `itoa` 1.0.0: `cargo generate-lockfile` moved it to
     1.0.19, `cargo update --workspace` kept 1.0.0, and for a standalone app with no lock the two
-    wrote identical locks.
+    wrote identical locks; 2026-11-20, each image's one build read as a locked release build, and
+    card-market's timed recipe as a locked fetch and build, by `scripts/images.test.mjs` at
+    `574275fb9`.
 
 66. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in document mode or an action
     that prefers it; a patch does not fill a layout read.** A `data-patch` write that answers with its
