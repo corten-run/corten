@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { closeSync, createReadStream, ftruncateSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
@@ -30,6 +31,15 @@ test("actual immutable local Git closes every binding source and exact native bu
   assert.throws(() => replayBuildContext(reader, context, commit, "rails"));
   assert.throws(() => replayBuildContext(reader, { ...context, body: source.files[0].body }, commit, "nextjs"));
   assert.throws(() => captureBuildContext(store, commit, "../../arbitrary"));
+});
+test("the source receipt holds the bench entry the binding parser loads its compiler through", (t) => {
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const blob = execFileSync("git", ["rev-parse", `${head}:bench/typescript.mjs`], { encoding: "utf8" }).trim();
+  const body = execFileSync("git", ["cat-file", "blob", blob]);
+  const { store } = fixture(t), source = captureSource(store, head);
+  const entry = source.files.find((f) => f.path === "bench/typescript.mjs");
+  assert.ok(entry, "bench/typescript.mjs is in the native browser source receipt");
+  assert.equal(entry.sha256, createHash("sha256").update(body).digest("hex"));
 });
 test("actual Playwright/TypeScript installed files, cache archives, lock and executable bytes replay", async (t) => {
   const { root, store } = fixture(t), tools = captureTools(store, { browserExecutable: chromium.executablePath() });

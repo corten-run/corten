@@ -14,7 +14,7 @@ import { sourceRoots as clientSourceRoots } from "../client-heavy/contract.mjs";
 import { exact, sha256 } from "./native-evidence.mjs";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
-const roots = ["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", "bench/package.json", "bench/package-lock.json", "crates", "bench/fullstack-browser", "bench/fullstack", "bench/marketplace", "bench/workloads"];
+const roots = ["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", "bench/package.json", "bench/package-lock.json", "bench/typescript.mjs", "crates", "bench/fullstack-browser", "bench/fullstack", "bench/marketplace", "bench/workloads"];
 const tools = ["@playwright/test", "playwright", "playwright-core", "typescript"];
 // The binding parser's classic TypeScript compiler is the bench package's lock and install
 // (bench/package.json); the other tools are the root's.
