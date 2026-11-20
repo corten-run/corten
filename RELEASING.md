@@ -61,18 +61,25 @@ publication. Coordinate disclosure with the fixed release so users know what to 
 3. Run `node scripts/changelog.mjs release X.Y.Z YYYY-MM-DD` with the release version and date.
    It puts fragments starting with `**Breaking:**` first, then the rest, in filename order within
    each group. It moves any inline Unreleased entries after them without reordering and keeps the
-   pending-notes link under `## Unreleased`. Review the changelog diff and include the fragment
-   deletions in the preparation pull request. Check the versioned section contains any upgrade
-   instructions. Get the preparation pull request independently reviewed and merge after its
-   required checks pass.
+   pending-notes link under `## Unreleased`. It moves the previous release section unchanged to
+   `CHANGELOG.X.Y.Z.md` beside `CHANGELOG.md` and adds its link under `## Release archive`.
+   If archive creation succeeded but the index is unchanged after a failure, rerun the same
+   command. It reuses byte-identical archives and refuses to overwrite a differing archive.
+   Review the changelog diff and include the archive and fragment deletions in the preparation
+   pull request. Repoint links that named the moved headings in `CHANGELOG.md`; `npm run check`
+   checks anchors in both the current changelog and archives, accepting known anchors and skipping
+   unmatched ones only if the target file has a heading whose anchor cannot be determined.
+   Check the new section contains any upgrade instructions. Get the preparation pull request
+   independently reviewed and merge after its required checks pass.
 4. Record the resulting commit SHA on `main`. Confirm the release gates against that exact
    commit, including green CI, the workspace publish dry run in the checks and
    `node scripts/changelog.mjs --check-release` from a clean checkout of that SHA. The command
    fails if any fragments or inline Unreleased entries remain. The pending-notes link may stay.
    If a fragment or an inline entry lands after collection, rerun preparation from the updated
    base. If preparation already merged, restore its consumed fragments and prior inline
-   Unreleased entries, remove its untagged version section, and rerun step 3 in a follow-up
-   preparation PR, keeping any notes that arrived since the original cut. A check on the pull
+   Unreleased entries, remove its untagged version section (leaving the archive and its links
+   alone), and rerun step 3 in a follow-up preparation PR, keeping any notes that arrived since
+   the original cut. A check on the pull
    request head or a later tip is not a check on this candidate. If the candidate changes,
    repeat validation on the new SHA before tagging it.
 
@@ -112,9 +119,11 @@ branch for one patch, not a maintained release branch.
    which is what users install and what `SECURITY.md` means by the newest published minor. If a
    newer minor shipped meanwhile, patch from its tag instead. Prepare one release at a time, so a
    patch and a minor are never tagged in parallel. Then [publish](#publish) that SHA.
-5. After the release, add its versioned `CHANGELOG.md` section to `main` in a pull request, so
-   `main`'s changelog records every published version. Remove the fix's pending entry from
-   `changelog.d/` (or from `## Unreleased` if it was an inline entry) so it is not released twice.
+5. After the release, add its versioned section to `main` in a pull request, keeping only the
+   newest release in `CHANGELOG.md`. Move the older of the two sections unchanged into its
+   own `CHANGELOG.X.Y.Z.md` and link it under `## Release archive` in version order. Remove the
+   fix's pending entry from `changelog.d/` (or from `## Unreleased` if it was an inline entry)
+   so it is not released twice.
 
 ## Publish
 

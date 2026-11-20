@@ -419,6 +419,9 @@ establish a general ranking.
    different positive integer suffix for each entry in the pull request. Before you have a PR
    number, use `branch-<unique-slug>-<entry>.md`. Pick a branch slug unique in this repository
    (lowercase letters, digits and hyphens; add the fork owner or another discriminator if needed).
+   Say what changed for an app author in one to three lines and link the issue or pull request.
+   Put measurements, reasoning and edge cases in the guide, pull request description or design
+   Choice, not in the entry.
    Each file holds one top-level `- ` bullet: one to four spaces after the hyphen, then a
    paragraph of visible text. Indent continuation lines with spaces to at least the start of the
    first line's text. No blank lines or nested blocks. Start the bullet's text with
@@ -429,6 +432,13 @@ establish a general ranking.
    Use emphasis and single-line code spans for prose; put literal brackets, angle brackets,
    backslashes, URLs, and link examples inside code spans. Do not use raw HTML, character
    references, images, or reference links or definitions. `npm run check` validates this format.
+   It caps entries at 400 visible characters only in `branch-*` files and in numbered fragments
+   for pull requests after [#1736 Keep changelog entries short and move released sections to their own files](https://github.com/corten-run/corten/pull/1736).
+   Count Unicode code points, including spaces and
+   emphasis marks, but not the bullet, Markdown indentation (ASCII spaces and tabs), trailing
+   ASCII spaces, code-span delimiters, or link syntax and destinations. Each line wrap counts as
+   one space. Count code-span contents after Markdown removes a matching pair of leading and
+   trailing ASCII padding spaces from a span that is not all spaces.
 4. Commit messages say what changed and why, in plain sentences.
 5. The description says what changed and why, the checks run and their results, and the
    measurements from 2. It merges after its [review](#review).
