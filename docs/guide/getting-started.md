@@ -47,11 +47,14 @@ it prints that command's usage and exits successfully without inspecting or chan
 `corten help <command>` does the same, and refuses a command it does not know. `corten --help`,
 or `corten help` alone, prints all commands. A `--help` that is the value of an option that takes one
 (`--name`, `--corten-path`, `--port`) is that value, not a request for help; `--` does not end a
-command's options, so a `--help` after it still asks for help. `corten build` reads its arguments as
-it builds with them: an argument it refuses (`--`, a misspelled flag, a missing value) is refused
-even with a `--help` after it, and everything after `--profile-from`, a `-h` included, is the
-command's. Help is answered before anything else
+command's options, so a `--help` after it still asks for help. Help is answered before anything else
 is checked; otherwise `--name`, `--corten-path` or `--port` given twice is refused.
+
+`corten build` is the exception: it reads its arguments as it builds with them. Help counts among
+the Cargo arguments it takes, in place of a value too (`--bin --help`); an argument it refuses
+(`--`, a misspelled flag, a value that reads as a flag) stops the reading there, and that argument
+is refused even with a `--help` after it; and everything after `--profile-from`, a `-h` included,
+is the command's.
 
 `corten check` names each step on stderr before running it, then reports its elapsed time and
 whether it finished or failed, even when output is redirected. Cargo's own output still goes

@@ -335,8 +335,8 @@ argument before it builds. Everything after `--profile-from` is the command and 
 arguments. `--target`, `--target-dir` and `--profile` are refused, since each moves the release
 from Cargo's default `target/release`, and the profiled build's copy has to run on the machine
 that builds it. Corten does not check Cargo's configuration for these: a target or target
-directory set there (`build.target`, `build.target-dir`) is still Cargo's to apply, and a copy
-built for another machine fails at its build or when it is started.
+directory set there (`build.target`, `build.target-dir`) is still Cargo's to apply, and the copy
+it builds has to run on this machine.
 
 `corten build` starts the copy, and runs the command, in the directory it was started in. With
 `-p` at a workspace's root, that is the root, not the member's directory, so the command's path
@@ -374,8 +374,8 @@ The four steps are the toolchain's own, and Corten adds nothing to the binary:
 4. `cargo build --release` with `-Cprofile-use`. Every crate compiles again, since the flag
    changed, and again whenever a new profile replaces the file. Cargo keeps an ordinary
    build's crates beside these, so a `corten build` afterwards with the same Cargo arguments and
-   no `--profile-from` reuses an ordinary build already made and puts the binary without the
-   profile back in the release directory.
+   no `--profile-from` can reuse an ordinary build already made, if nothing has changed since,
+   and puts the binary without the profile back in the release directory.
 
 The two flags reach Cargo in the environment, after any `RUSTFLAGS` already there. Cargo takes
 its flags from the environment or from its configuration, never both, so flags that a

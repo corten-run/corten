@@ -6935,8 +6935,8 @@ rules something out.
     misspelled one is refused rather than built past; an argument that moves the release from
     Cargo's default `target/release` (`--target`, `--target-dir`, `--profile`) is refused, since
     the copy has to run where it is built to be profiled. Cargo's configuration is not checked
-    for them: a target set there is Cargo's to apply, and a copy built for another machine
-    fails at its build or when it is started.
+    for them: a target set there is Cargo's to apply, and the copy it builds has to run on the
+    machine that builds it.
     The standard library the `corten` command is held to can kill a child but not ask it to
     stop, so the command has the shell send `SIGTERM`, and the option is Unix only: Windows
     has no command that sends another process a Ctrl-C.

@@ -80,7 +80,7 @@ impl Fixture {
     fn build(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_corten"));
         command.arg("build").args(args).current_dir(&self.0).env("CARGO_TARGET_DIR", self.0.join("target"));
-        command.env_remove("CARGO_ENCODED_RUSTFLAGS").env("RUSTFLAGS", "");
+        command.env_remove("CARGO_ENCODED_RUSTFLAGS").env("RUSTFLAGS", "").env_remove("CARGO_BUILD_DEP_INFO_BASEDIR");
         command.env("CARGO_TERM_QUIET", "false").env("CARGO_TERM_COLOR", "never");
         command
     }
@@ -119,6 +119,14 @@ fn text(output: &Output) -> String {
     format!("{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))
 }
 
+/// Whether Cargo's dep-info file `built_from` names `path` among a target's inputs, as Cargo
+/// writes a path there: absolute (the fixture's build sets no `build.dep-info-basedir`), with
+/// its spaces escaped.
+fn names_as_input(built_from: &str, path: &Path) -> bool {
+    let written = path.display().to_string().replace(' ', "\\ ");
+    built_from.split_once(':').is_some_and(|(_, inputs)| inputs.contains(&written))
+}
+
 /// Whether `binary` was built to write a profile: the file name pattern it would write to is in it.
 fn instrumented_binary(binary: &Path) -> bool {
     let bytes = std::fs::read(binary).unwrap();
@@ -146,7 +154,7 @@ fn the_release_is_built_with_the_profile_the_app_wrote_while_the_command_ran() {
     // built from, which is also what has Cargo build again when a later profile replaces it.
     assert!(fixture.profile().is_file(), "no merged profile");
     let built_from = std::fs::read_to_string(fixture.release().with_extension("d")).unwrap();
-    assert!(built_from.contains("app.profdata"), "the release was not built from the profile: {built_from}");
+    assert!(names_as_input(&built_from, &fixture.profile()), "the release was not built from the profile: {built_from}");
     // The copy that writes a profile is the one under corten-profile, never the release.
     assert!(!instrumented_binary(&fixture.release()), "target/release writes a profile");
     let copy = fixture.0.join("target").join("corten-profile").join("target").join("release").join("profiled");
@@ -326,10 +334,10 @@ fn cargo_arguments_before_the_command_reach_both_builds() {
         let logged = std::fs::read_to_string(&log).unwrap_or_default();
         let _ = std::fs::remove_file(&log);
         assert_eq!(logged.chars().last(), Some('\0'), "a call's record was cut: {logged:?}");
-        let mut fields = logged.split('\0');
+        let mut fields = logged.split_terminator('\0');
         let mut calls = Vec::new();
-        while let Some(count) = fields.next().filter(|count| !count.is_empty()) {
-            let count: usize = count.parse().unwrap_or_else(|_| panic!("not a count: {count:?}"));
+        while let Some(count) = fields.next() {
+            let count: usize = count.parse().unwrap_or_else(|_| panic!("not a count: {count:?} in {logged:?}"));
             let call: Vec<String> = fields.by_ref().take(count).map(str::to_string).collect();
             assert_eq!(call.len(), count, "a call's record was cut: {logged:?}");
             calls.push(call);
@@ -359,8 +367,7 @@ fn cargo_arguments_before_the_command_reach_both_builds() {
     assert!(said.contains("of the 1 profile file(s) the app wrote"), "{said}");
     let released = fixture.0.join("target").join("release").join("app");
     let built_from = std::fs::read_to_string(released.with_extension("d")).unwrap();
-    let profile = fixture.profile().display().to_string();
-    assert!(built_from.contains(&profile), "the release was not built from {profile}: {built_from}");
+    assert!(names_as_input(&built_from, &fixture.profile()), "the release was not built from the profile: {built_from}");
     assert!(instrumented_binary(&copy.join("release").join("app")) && !instrumented_binary(&released));
     let worker = fixture.0.join("target").join("release").join("worker");
     assert!(!worker.exists(), "--bin did not reach the release build");

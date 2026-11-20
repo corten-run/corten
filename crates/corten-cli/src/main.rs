@@ -133,7 +133,7 @@ fn main() -> ExitCode {
             Some(command) => profile::run(command, &build.cargo),
             None => cargo(&["build", "--release"].into_iter().chain(build.cargo.iter().map(String::as_str)).collect::<Vec<_>>()).map(|()| {
                 println!(
-                    "\ncorten: built the release binary in target/release. It is the whole deploy: the static files are compiled into it (see Dockerfile)."
+                    "\ncorten: the release build finished. The app's binary (in target/release unless Cargo's configuration moves it) is the whole deploy: the static files are compiled into it (see Dockerfile)."
                 );
             }),
         }),
