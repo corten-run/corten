@@ -614,7 +614,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           assert.equal(digest(regular(statePath)), recoveryApproval.reservationSha256, "locked r21 reservation changed");
         }
         const sealed = state.control?.monitor?.phase === "closed";
-        let inspectUnit = unit, idleScript;
+        let inspectUnit = unit, idleScript, unitState;
         if (sealed) {
           assert.ok(!existsSync(join(base, ".groups-launch.lock")), "child launch custody still held");
           const { sealedMonitor } = await import("./cloud-control-stream.mjs");
@@ -622,12 +622,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           if (options.r21MeasuredCheckout) {
             assert.equal(terminal.campaign, recoveryApproval.campaign); assert.equal(terminal.sealSha256, recoveryApproval.sealSha256);
           }
-          idleScript = idleArchiveScript(state, registration.host.bootId, digest(remoteFiles(state)[state.unit]));
+          const unitSha256 = digest(remoteFiles(state)[state.unit]);
+          idleScript = pack => idleArchiveScript(state, registration.host.bootId, unitSha256, { pack });
           inspectUnit = async () => sealedUnit((await ssh(unitQuery(state) + " --all --property=Job --property=SubState --property=ControlPID")).stdout, state);
         }
-        const remoteHash = async () => {
+        const remoteHash = async (pack = false) => {
           // A settled refusal (e.g. a queued job) is not a lost SSH command.
-          const result = await ssh(idleScript ?? "sha256sum /bench/results.tgz", 60000, sealed);
+          const result = await ssh(idleScript?.(pack) ?? "sha256sum /bench/results.tgz", pack ? 11 * 60000 : 60000, sealed);
           assert.ok(result.status === 0 && !result.error, "terminal archive or idle-host proof unavailable");
           const line = result.stdout;
           full(line, /[a-f0-9]{64}  \/bench\/results\.tgz\n/, "invalid remote archive hash");
@@ -658,7 +659,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (setupCandidate) {
           const { stdout } = await ssh(unitQuery(state) + `\njob=$(systemctl show ${state.unit} --all --property=Job); test "$job" = 'Job='`);
           assert.ok(terminalUnit(stdout, state) && stdout === state.preBootstrapTerminal.stdout, "startup unit no longer identically terminal");
-        } else if (!await inspectUnit()) return 3; // Exactly one look, never waits for a live campaign.
+        } else {
+          unitState = await inspectUnit(); if (!unitState) return 3; // Exactly one look; never wait for a live campaign.
+        }
         if (!state.archiveSha256) {
           assert.ok(!existsSync(archive) && !existsSync(`${archive}.download`), "unrecorded download/archive retained; inspect before retry");
           // pack.sh copies current control custody before its archive-exists
@@ -667,7 +670,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           if (!sealed) await ssh(setupCandidate ? `if test -e /bench/results.tgz || test -L /bench/results.tgz; then
 test -f /bench/results.tgz && test ! -L /bench/results.tgz && test "$(stat -c '%s' -- /bench/results.tgz)" -le ${archiveLimit}
 else ${pack}; fi` : pack, 11 * 60000);
-          const hash = await remoteHash(), download = `${archive}.download`;
+          const hash = await remoteHash(unitState === "terminal" && !options.r21MeasuredCheckout), download = `${archive}.download`;
           // Reserve the destination before SCP, so a crash cannot make it look retryable.
           durable(download, ""); await scp(`root@${state.ip}:/bench/results.tgz`, download);
           // Re-write through a synced exclusive file; never replace unexplained evidence.

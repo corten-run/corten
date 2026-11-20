@@ -40,13 +40,14 @@ export function sealedUnit(output, s) {
   if (!["inactive", "failed"].includes(p.ActiveState)) return false;
   assert.equal(p.SubState, p.ActiveState === "inactive" ? "dead" : "failed");
   assert.equal(p.Job, ""); assert.equal(p.MainPID, "0"); assert.equal(p.ControlPID, "0");
-  if (p.ActiveState === "inactive" && p.ExecMainCode === "0" && p.ExecMainStartTimestamp === "") return true;
-  return terminalUnit(output, s);
+  if (p.ActiveState === "inactive" && p.ExecMainCode === "0" && p.ExecMainStartTimestamp === "") return "expired";
+  assert.ok(terminalUnit(output, s));
+  return "terminal";
 }
 
 // The registered guardian supplies the shell on stdin (not argv). An unrelated
 // host process working in /bench, including one outside the unit, blocks cleanup.
-export function idleArchiveScript(s, bootId, unitSha256) {
+export function idleArchiveScript(s, bootId, unitSha256, { pack = false } = {}) {
   full(bootId, /[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/, "registered boot required");
   full(unitSha256, /[a-f0-9]{64}/, "unit bytes required");
   return `test "$(hostname)" = '${s.name}'
@@ -74,7 +75,17 @@ for p in pathlib.Path('/proc').iterdir():
             except FileNotFoundError: continue
             assert '/bench' not in target and 'corten-bench-groups-' not in target
     except FileNotFoundError: continue
-CORTEN_IDLE
+CORTEN_IDLE${pack ? `
+# Only ENOENT on the final entry, never EACCES, a dangling link or a missing parent.
+absent=$(/usr/bin/python3 -I - <<'CORTEN_ABSENT'
+import os
+archive = '/bench/results.tgz'
+fd = os.open(os.path.dirname(archive), os.O_DIRECTORY | os.O_NOFOLLOW)
+try: os.stat(os.path.basename(archive), dir_fd=fd, follow_symlinks=False)
+except FileNotFoundError: print('yes')
+CORTEN_ABSENT
+)
+if test "$absent" = yes; then timeout 600 /bin/bash /bench/pack.sh; fi` : ""}
 test -f /bench/results.tgz
 test ! -L /bench/results.tgz
 test "$(stat -c '%h' /bench/results.tgz)" = 1

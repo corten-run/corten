@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -16,7 +16,8 @@ function scratch(t) {
 }
 test("the expired property set is not ordinary terminal proof", () => {
   const output = `Id=${s.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${s.unit}\nRestart=no\nActiveState=inactive\nSubState=dead\nMainPID=0\nControlPID=0\nJob=\nExecMainCode=0\nExecMainStartTimestamp=\n`;
-  assert.throws(() => terminalUnit(output, s)); assert.ok(sealedUnit(output, s));
+  assert.throws(() => terminalUnit(output, s)); assert.equal(sealedUnit(output, s), "expired");
+  assert.equal(sealedUnit(output.replace("Code=0", "Code=1").replace("Timestamp=\n", "Timestamp=started\n"), s), "terminal");
   for (const [before, after] of [["LoadState=loaded", "LoadState=not-found"], ["Restart=no", "Restart=always"],
     ["FragmentPath=/etc", "FragmentPath=/run"], ["MainPID=0", "MainPID=1"], ["SubState=dead", "SubState=running"],
     ["ControlPID=0", "ControlPID=1"], ["Job=\n", ""], ["Job=\n", "Job=42\n"], ["ExecMainStartTimestamp=\n", ""]])
@@ -36,19 +37,24 @@ test("idle proof checks current work and hashes an existing archive without pack
   for (const dir of ["proc/1", "cg", "system"]) mkdirSync(join(temp, dir), { recursive: true });
   write("boot", boot); write("proc/1/cmdline", "init"); write("cg/cgroup.events", "populated 0\n");
   write("system/" + s.unit, "unit"); write("results.tgz", "exit archive");
-  const script = idleArchiveScript(s, boot, digest("unit")).replaceAll("/etc/systemd/system", temp + "/system")
+  const script = (pack) => idleArchiveScript(s, boot, digest("unit"), { pack }).replaceAll("/etc/systemd/system", temp + "/system")
+    .replace("timeout 600 /bin/bash /bench/pack.sh", `echo packed >> '${temp}/packs'; echo reconstructed > '${temp}/results.tgz'`)
     .replace("/proc/sys/kernel/random/boot_id", temp + "/boot").replace("Path('/proc')", `Path('${temp}/proc')`)
     .replace("/sys/fs/cgroup/system.slice/" + s.unit, temp + "/cg").replaceAll("/bench/results.tgz", temp + "/results.tgz")
     .replaceAll("/run/docker.sock", temp + "/absent-docker").replaceAll("/run/containerd/containerd.sock", temp + "/absent-containerd");
-  const probe = (jobs = "") => spawnSync("bash", ["-s"], { input: `set -euo pipefail
+  const probe = (jobs = "", pack = false) => spawnSync("bash", ["-s"], { input: `set -euo pipefail
 hostname() { echo '${s.name}'; }
 curl() { echo '${s.id}'; }
 systemctl() { echo '${jobs}'; }
-${script}`, encoding: "utf8", timeout: 5000 });
+${script(pack)}`, encoding: "utf8", timeout: 5000 });
   const yes = probe(); assert.equal(yes.status, 0, yes.stderr); assert.ok(yes.stdout.startsWith(digest("exit archive")));
   assert.notEqual(probe("pending").status, 0);
   write("cg/cgroup.events", "populated 1\n"); assert.notEqual(probe().status, 0); write("cg/cgroup.events", "populated 0\n");
   write("proc/1/cmdline", "/bin/bash\0/bench/job.sh"); assert.notEqual(probe().status, 0); write("proc/1/cmdline", "init");
   write("system/" + s.unit, "changed"); assert.notEqual(probe().status, 0); write("system/" + s.unit, "unit");
   rmSync(join(temp, "results.tgz")); assert.notEqual(probe().status, 0);
+  assert.equal(probe("", true).status, 0); assert.ok(probe("", true).stdout.startsWith(digest("reconstructed\n")));
+  assert.equal(readFileSync(join(temp, "packs"), "utf8"), "packed\n");
+  rmSync(join(temp, "results.tgz")); symlinkSync("missing", join(temp, "results.tgz"));
+  assert.notEqual(probe("", true).status, 0); assert.equal(readFileSync(join(temp, "packs"), "utf8"), "packed\n");
 });
