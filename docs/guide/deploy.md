@@ -748,6 +748,10 @@ can use it after interrupted pre-start file uploads only from the same measured 
 once the original local process tree and all registered remote sessions and watchers have
 drained. The result is retirement evidence, not a benchmark result.
 
+When collecting a completed group, allow up to 15 minutes for each local replay of
+the saved evidence. A timed-out or cancelled replay does not qualify the results.
+The replay time is not part of any framework's timing.
+
 To build the Git-capable browser test image manually, run `npm ci` from the repository
 root and pass the image that matches the installed Playwright version, as CI does:
 

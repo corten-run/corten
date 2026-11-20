@@ -829,8 +829,12 @@ function name. `folder` is the extracted `campaign/` root containing
 the pinned base, so normal validation fails closed. Tests inject a synthetic
 report with the current API shape; no synthetic report is native proof.
 
-Each inspection has a fixed 60-second deadline, including snapshot setup, and a 25-millisecond cancellation
-check. The default worker is terminated on completion, timeout or cancellation;
+Each local inspection has a fixed 15-minute deadline including snapshot setup.
+On the r21 catalog archive from `4225a2837`, one Windows scan of 9,131 campaign
+entries took 62 seconds. A complete replay also checks the journal, group results,
+and final tree. This is a limit on reading evidence, not on a workload, a provider
+request, or how recently the host must have been observed for deletion.
+Cancellation is checked every 25 milliseconds. The default worker is terminated on completion, timeout or cancellation;
 no successful report is consumed before its exit is confirmed. Worker stdout,
 stderr and exceptions are not forwarded. Termination confirmation gets at most
 one additional second. If stopping is uncertain, the operation fails while
