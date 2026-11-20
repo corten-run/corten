@@ -1028,6 +1028,38 @@ fn lost_row_routes() -> Table {
         )
 }
 
+#[tokio::test]
+async fn a_patch_can_begin_with_a_row_and_include_a_note_and_another_row() {
+    use crate::{Action, Patch};
+
+    #[derive(crate::view::Id)]
+    struct WholePatchRowId(u32);
+
+    fn send<P: Patch>(action: Action<'_>, patch: P) -> HtmlResult {
+        action.patch(patch)
+    }
+
+    let routes = Table::new().route(
+        "/",
+        crate::router::post(|req: Req| async move {
+            let action = req.action().ok_or_else(crate::Error::not_found)?;
+            let first = html! { <tr id={WholePatchRowId(1)}><td>"1"</td></tr> };
+            // This literal loses its row alone, but the first fragment makes it safe here.
+            let rest = html! {
+                <p id={MsgId}>"saved"</p>
+                <tr id={WholePatchRowId(2)}><td>"2"</td></tr>
+            };
+            send(action, Some(vec![&first as &dyn Patch, &rest]))
+        }),
+    );
+    let (status, _, body) = call_with(app(routes, None), "POST", "/", Some("action"), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        r#"<tr id="whole-patch-row-1"><td>1</td></tr><p id="msg">saved</p><tr id="whole-patch-row-2"><td>2</td></tr>"#
+    );
+}
+
 /// A debug build answers a patch the browser would lose part of with an error that names the
 /// element lost and the one that came first, outside `corten dev` too: through `action.patch` (here
 /// `patch_or`) and a refusal's `form.draw`.
@@ -1688,4 +1720,29 @@ fn what_a_request_in_an_area_costs() {
             assert!(status == StatusCode::OK && body.contains(answer), "{status}: {body}");
         }
     });
+}
+
+#[tokio::test]
+async fn req_reads_mode_after_an_earlier_extractor_changes_accept() {
+    struct Rewrite;
+
+    impl crate::extract::FromRequestParts<()> for Rewrite {
+        type Rejection = std::convert::Infallible;
+
+        async fn from_request_parts(parts: &mut http::request::Parts, _: &()) -> Result<Self, Self::Rejection> {
+            parts.headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+            Ok(Self)
+        }
+    }
+
+    let routes = Table::new().route(
+        "/",
+        get(|_: Rewrite, req: Req| async move {
+            assert_eq!(req.mode, Mode::Data);
+            "answer"
+        }),
+    );
+    let router = App::new(Routes::from(routes)).router();
+    let req = Request::get("/").header(header::ACCEPT, "text/html").body(Body::empty()).unwrap();
+    assert_eq!(router.oneshot(req).await.unwrap().status(), StatusCode::OK);
 }

@@ -289,8 +289,8 @@ pub(crate) struct ZoneName {
 #[cfg(feature = "zones")]
 impl ZoneName {
     /// The zone in the request's cookie, if any.
-    pub(crate) fn of(headers: &http::HeaderMap) -> Option<Self> {
-        let name = zone_of(headers)?;
+    pub(crate) fn of(cookies: http::header::ValueIter<'_, http::HeaderValue>) -> Option<Self> {
+        let name = crate::security::cookie::get_in(cookies, ZONE_COOKIE).filter(|name| zone_name(name))?;
         let mut bytes = [0; 64];
         bytes[..name.len()].copy_from_slice(name.as_bytes());
         Some(ZoneName { len: name.len() as u8, bytes })

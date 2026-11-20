@@ -565,6 +565,10 @@ async fn a_public_page_is_shared_only_when_nothing_makes_it_personal() {
     // App::client_zone's cookie says where the visitor is, not who: alone, it shares as before.
     assert_eq!(cache_control(&router, "/", &[("cookie", "corten-zone=America/Chicago")]).await, "public, max-age=60");
     assert_eq!(cache_control(&router, "/", &[("cookie", "corten-zone=America/Chicago; session=abc")]).await, "private, no-cache");
+    assert_eq!(
+        cache_control(&router, "/", &[("cookie", "corten-zone=America/Chicago"), ("cookie", "session=abc")]).await,
+        "private, no-cache"
+    );
     let inline = App::new(Routes::from(Table::new().route("/", get(inline_page)))).router();
     assert_eq!(cache_control(&inline, "/", &[]).await, "private, no-cache", "the layout took the nonce");
 
@@ -576,6 +580,44 @@ async fn a_public_page_is_shared_only_when_nothing_makes_it_personal() {
         .router();
     assert_eq!(cache_control(&api, "/api/rates", &[("accept", "application/json")]).await, "public, max-age=60");
     assert_eq!(cache_control(&api, "/api/rates", &[("authorization", "Bearer t")]).await, "private, no-cache");
+    assert_eq!(cache_control(&api, "/api/rates", &[("cookie", "session=abc")]).await, "private, no-cache");
+}
+
+#[tokio::test]
+async fn cache_stages_keep_incoming_headers_while_the_handler_sees_middleware_edits() {
+    struct Rewrite;
+
+    impl crate::Middleware for Rewrite {
+        async fn call(&self, mut req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let headers = req.headers_mut();
+            headers.insert("corten", HeaderValue::from_static("nav"));
+            headers.remove(header::COOKIE);
+            headers.remove(header::IF_NONE_MATCH);
+            let mut res = next.run(req).await;
+            assert_eq!(res.status(), StatusCode::OK, "revalidation happens outside middleware");
+            res.headers_mut().insert("x-saw-answer", HeaderValue::from_static("yes"));
+            res
+        }
+    }
+
+    let routes = Table::new().route(
+        "/",
+        get(|req: Req, headers: http::HeaderMap| async move {
+            assert_eq!(req.mode, Mode::Navigation);
+            assert!(!headers.contains_key(header::COOKIE));
+            assert!(!headers.contains_key(header::IF_NONE_MATCH));
+            (Cache::public(std::time::Duration::from_secs(60)), "answer")
+        }),
+    );
+    let router = App::new(Routes::from(routes)).middleware(Rewrite).router();
+    let send = |req: http::request::Builder| router.clone().oneshot(req.body(Body::empty()).unwrap());
+    let first = send(Request::head("/")).await.unwrap();
+    assert_eq!(first.headers()[header::CACHE_CONTROL], "public, max-age=60", "the incoming mode was a document");
+    let tag = first.headers()[header::ETAG].clone();
+    let cached = send(Request::get("/").header(header::COOKIE, "session=abc").header(header::IF_NONE_MATCH, tag)).await.unwrap();
+    assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(cached.headers()[header::CACHE_CONTROL], "private, no-cache", "the incoming request carried a cookie");
+    assert_eq!(cached.headers()["x-saw-answer"], "yes");
 }
 
 /// A `Public` answer with a header of the app's keeps it, and is compressed and shared as one

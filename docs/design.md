@@ -1227,8 +1227,13 @@ rules something out.
        progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
        seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
        bytes a second, which would need a count of bytes and a window in the connection's writer, for
-       every connection); a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a
-       client that sends nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose
+       every connection; whether over TLS a flush that stays pending while a slow client reads
+       steadily trips it is reasoned in the
+       [steady reader control](../bench/http2/README.md#steady-reader-control), not measured, and
+       open in
+       [#1742 A TLS flush that stays pending while a slow client reads steadily may trip send_timeout: test serve_wrapped over TLS with a steady reader](https://github.com/corten-run/corten/issues/1742));
+       a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a client that sends
+       nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose
        waits, in all, pass that idle time plus a second for every 240 bytes that came (Kestrel's
        minimum body rate, the idle time being how far behind it a client may fall), counting only the
        time spent waiting for the client, since one byte resets an idle time alone and a long upload's
@@ -1313,8 +1318,16 @@ rules something out.
        not a general send guarantee: h2 can consume the buffer into its encoder before
        TLS flush, so the socket write watch still matters.
 
-       Keep HTTP/1.1 in `serve` and HTTP/2 at the proxy. The passing idle and send candidates
-       ran in separate transports, not together on one opt-in path with the socket watch.
+       Keep HTTP/1.1 in `serve` and HTTP/2 at the proxy. The probe's
+       [combined mode](../bench/http2/README.md#combined-results) has since run the h2 count,
+       the buffer tracker and a socket write watch like `Watched` on one connection path with
+       no frame parser. The 17 original combined controls passed in every round, including a
+       paused TCP reader that only the socket watch closed, with h2 holding no DATA buffers. The
+       steady reader control, the 18th, failed 1 of 7 rounds with a false close by the socket
+       watch, so the combined evidence is not complete; the remaining probe work stays in
+       [#1686 HTTP/2 in corten::serve: show the idle and send bounds together with the socket watch on one opt-in path](https://github.com/corten-run/corten/issues/1686).
+       Even complete, it is a probe, not `serve`: nothing ships before the checks that Revisit
+       when lists.
        Do not add a second frame parser or treat closing the whole connection as a substitute
        for detecting the stall.
        The auto builder's missing HTTP/1 `max_header_size` setter is also a prototype
@@ -1327,10 +1340,10 @@ rules something out.
        the no-proxy live app already fails at the fourth tab, and an opt-in feature would
        leave the default unchanged. The reason to defer is that a feature must not silently
        weaken a security bound. Keep the proxy requirement (option 2) until the connection-level
-       design (option 1) can demonstrate both bounds. One stream per page (option 3) still
-       exhausts the cross-tab cap and adds a custom format where HTTP/2 is standard, against
-       [Rule 10](#rule-standard-formats). HTTP/3 remains out: `quinn` and an unstable `h3`,
-       TLS tied to QUIC, and no need for it merely to remove this connection cap.
+       design (option 1) holds both bounds on an opt-in `serve` path. One stream per page
+       (option 3) still exhausts the cross-tab cap and adds a custom format where HTTP/2 is
+       standard, against [Rule 10](#rule-standard-formats). HTTP/3 remains out: `quinn` and an
+       unstable `h3`, TLS tied to QUIC, and no need for it merely to remove this connection cap.
     3. Vocabulary: one module, `corten::http`: the `http` crate's types (`StatusCode`,
        `HeaderMap`, `Uri`), which hyper, HTTP clients and HTTP/3 libraries share, and what Corten
        builds on them: `Body` (and `BodyDataStream`), `Request` and `Response` over it, `Bytes`,
@@ -1699,8 +1712,23 @@ rules something out.
     alone did not; the passing candidates were tested separately, with
     [Callgrind medians](../bench/http2/README.md#follow-up-cost) off to on of 25,940 to 26,721
     instructions per page for the direct h2 count and 5,043 to 5,696 per event for buffer
-    tracking); value (fast and proven
-    fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
+    tracking); measured ([combined probe](../bench/http2/README.md#combined-results) at
+    `a8431b062`, three rounds at 100 ms in one Linux container with the paused reader's
+    receive buffer capped at 128 KiB: all 17 combined cases passed, every stall closed in
+    105.6 to 116.4 ms and the socket watch expired 154 to 165 ms after its request; uncapped,
+    two of six rounds missed only the socket case, one with no socket timeout reported
+    within the 500 ms window and one with no socket timeout at all, and a sampled uncapped
+    run's receive buffer grew to 632,943 bytes (about 618 KiB) with the watch firing after a
+    103 ms wait, 514 ms after the request; Callgrind medians off to on of 26,142 to 27,939
+    instructions per page and 4,179 to 5,115 per event, three rounds each, not against
+    HTTP/1.1); measured ([steady reader control](../bench/http2/README.md#steady-reader-control)
+    at `ec476a9f6`, seven rounds of the combined suite at 100 ms with the cap: the 17 earlier
+    cases passed every time, but a client reading at least 16 KiB every 20 ms received the
+    whole answer in six rounds and was closed in one by the socket watch on a `flush` pending
+    for 100 ms, a false close, so the combined evidence does not yet include a socket watch
+    that leaves steady readers open; a TLS flush pending while records drain and a capped
+    receive window reopening only in large steps both fit, each reasoned, not measured);
+    value (fast and proven fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
     which is why the dispatch suite comes first and an opt-in protocol must not silently
     weaken a security bound even though the no-proxy live app already fails).
 
@@ -1711,15 +1739,23 @@ rules something out.
     active-stream count exposed through Hyper reopens the idle design, and a per-stream send-wait
     signal covering queued data after the body ends reopens the send design. The
     [isolated controls](../bench/http2/README.md#follow-up-acceptance) qualify each detector
-    with the other disabled. Reopen the proxy decision when a parser-free opt-in path
-    demonstrates both bounds with the socket watch, using separate combined-path controls
-    with expectations for both watches enabled, including final buffered data, sibling
-    progress, reset and cancellation. An upstream header-block timeout
+    with the other disabled. The probe's combined mode held both bounds with the socket watch
+    under the 17 original [combined controls](../bench/http2/README.md#combined-results) in
+    every round, but the steady reader control failed 1 of 7 rounds, so that evidence is not
+    complete; the full combined suite, steady reader included, passing 10 consecutive rounds
+    with zero failures stays in
+    [#1686 HTTP/2 in corten::serve: show the idle and send bounds together with the socket watch on one opt-in path](https://github.com/corten-run/corten/issues/1686).
+    Reopen the proxy decision when an opt-in path in `serve` passes that suite to the same
+    bar and the shipping checks below
+    ([#1739 HTTP/2 in corten::serve: an opt-in path that passes the combined bounds suite and the shipping checks](https://github.com/corten-run/corten/issues/1739)).
+    A combined case failing on a rerun reopens the combined evidence in Stands on, not the
+    proxy decision. An upstream header-block timeout
     ([hyperium/h2 #928 Proposal: enable an HTTP/2 header-block read timeout](https://github.com/hyperium/h2/issues/928))
     reopens the header half only. The historical open-sibling case is a control, not a demand
-    for a stronger header guarantee. Shipping still needs shutdown, reset-flood and resource
-    checks, decoded head limits, explicit h2 Upgrade refusal and HTTP/1 WebSocket fallback,
-    and full three-engine TLS smoke.
+    for a stronger header guarantee. Shipping still needs shutdown with open streams,
+    reset-flood and resource checks, decoded head limits, explicit h2 Upgrade refusal and
+    HTTP/1 WebSocket fallback, full three-engine TLS smoke, and the enabled path's cost
+    against HTTP/1.1.
     HTTP/3 also waits for a stable `h3` and a need beyond this cap. A new protocol stays below
     the vocabulary in 3 and leaves 4 to 7 as they are.
     The `501` itself (migration step 1) is reopened when a named client or tool is reported
@@ -1760,7 +1796,10 @@ rules something out.
     against Corten's `Answered` at `e927c2463`, then exercised in the
     [standalone TLS probe](../bench/http2/README.md#follow-up-results); 2026-11-19,
     the same probe rerun with bytes 1.12.1 and smallvec 1.16.5 in its lockfile, three wire
-    and Callgrind rounds per mode.
+    and Callgrind rounds per mode; 2026-11-20, the probe's combined mode at `a8431b062`
+    with getrandom 0.4.3 and r-efi 6.0.0 in its lockfile, three wire and Callgrind rounds,
+    and one round of each isolated mode with the same dispositions; 2026-11-20, the steady
+    reader control at `ec476a9f6` on the same probe build, seven rounds with one false close.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -1985,6 +2024,14 @@ rules something out.
     the route. The compiler rejects a stage that reads it after hand-off. The late layout poller
     lives in the existing late-write box, so it neither enlarges the ordinary future nor adds
     a box to a late-eligible write.
+    The stages read the incoming request's mode, credentials, validators, and the host and
+    origin headers they need before dispatch. The error page and cache rule share those reads.
+    `Req` negotiates from the headers where it is taken: middleware and earlier extractors can
+    change them ([Choice 21](#choice-own-extractors)). Keeping those two views separate is what
+    lets a handler see an edit without letting it change the outer cache or same-origin decision.
+    `MatchedPath` and `Signal` remain independently available in the request's extensions;
+    the nonce slot is independent of either. The debug-only form redirect check is held by the
+    stages, not put in the request's extensions.
     An area's or an API's own steps (`Area::middleware`, `Api::middleware`) run right after the
     app's, for the requests at its prefix; they are boxed, since which run depends on the route, and
     an app with none pays nothing for them. What an area or API sets (its deadline, body limit, policy and middleware,
@@ -2241,7 +2288,13 @@ rules something out.
     showed nothing for one until a fix in December 2024, which was read, not run); bet (apps have an answer anyone may read whose cost the
     stages would make about 2.5 times as costly, beside pages that need them all; listings-feed's
     sequence route, which its failover benchmark reads, is the first use, and no app's in
-    production is yet); value
+    production is yet); measured (callgrind, x86-64 Linux release, `catalog-lean` identity GETs:
+    sharing the staged header reads reduced named request-map lookups from 17 to 14, kept three
+    response-map lookups and three request extension inserts, and reduced median instructions per
+    request from 43,274.3 (43,274.1 to 43,275.6) to 42,763.2 (42,762.1 to 42,770.4).
+    A mounted JSON GET with a session cookie kept six named request-map lookups, none for
+    `Authorization`, and went from 35,796.1 (35,794.0 to 35,797.9) to 35,650.6 (35,647.5 to
+    35,654.7) median instructions per request); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
     for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
@@ -2283,7 +2336,11 @@ rules something out.
     without app middleware or layout reads. The bounds leave room for build profiles,
     features and compiler layout changes; remeasure before raising one.
 
-    Last checked: 2026-10-29, the area middleware runs of
+    Last checked: 2026-11-19, the header lookup, extension and instruction counts before
+    (`aa0f0c7e1`) and after sharing the reads and restoring the short circuits (`76229a2fd`),
+    from three short/long pairs per build for each workload: 1,300 less 300 catalog GETs,
+    on one connection per run;
+    2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
     (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its
     own); 2026-11-09, the `unstaged` runs on this change against main `c65c10ec` and `stages = bare`
@@ -4792,7 +4849,8 @@ rules something out.
     is written (an element in an element whose content is text, a `<plaintext>`, and an element
     taken out of foreign content, and literal HTML nesting that closes or discards an open
     element), and the shapes of a patch's top level the runtime's parse of it loses wherever they
-    are written, where the markup shows how a browser parses it. Script and style literals
+    are written, where the markup shows how a browser parses it. A code-generating build also
+    refuses known top-level losses when it sees the view sent as the entire patch. Script and style literals
     that need a known context are refused when the markup cannot prove one.** An element written in a
     `<textarea>`, an HTML `<title>`, a `<script>`, a `<style>`, an `<iframe>`, an `<xmp>`, a
     `<noembed>` or a `<noframes>` was written by `html!` as markup and read by the browser as
@@ -4862,14 +4920,23 @@ rules something out.
     `<button>`, a `<label>` around them) after a first table part, which the patch's parse puts in
     empty, is kept as written in an `<svg>` or a `<math>`, where none of them is taken out, so it
     compiles, though few views will be written there: refusing it would refuse a component that is
-    correct where its parent writes it, which the rule below does not allow. Those shapes, what a
-    component, an expression or a block writes, a refused shape with an expression or a component
-    at or between its two elements, and a first element an `<svg>` keeps, are left to the debug
-    check that answers such a patch with a 500 when it is sent
-    ([Limit 2](#limit-whole-element-patches)); a release build sends them as drawn. Head tags
-    before the first element do not change a refused shape: the standard and Firefox read them as
-    a head's, and Chromium and WebKit, which let a leading `<title>`, `<base>`, `<basefont>`,
-    `<bgsound>` or `<noframes>` decide, read the rest as a body's, where each is lost too.
+    correct where its parent writes it, which the rule below does not allow.
+
+    Where the whole patch is a concrete `html!` view, the first literal element can decide the
+    reading. The macro marks a loss at a later literal sibling: a table part dropped after a body
+    element, a table part dropped or wrapped after a different kind of table part, or anything but
+    a `<col>` or `<template>` dropped after a first `<col>`. It checks both readings of a leading
+    `<title>`, `<base>`, `<basefont>`, `<bgsound>` or `<noframes>`: the standard and Firefox read
+    it as a head's, and Chromium and WebKit let it choose body rules. A zero-sized return shape
+    carries the diagnostic as a lazy constant. `Action::patch_with_status` and `FormPatch::draw`
+    evaluate it when Rust generates code for a concrete view; `cargo check` does not. Even a
+    send inside a literal `if false` is checked, independent of which branch a request takes.
+    The doc-hidden `__private::PatchShape` lost dyn compatibility. No supported API changed:
+    the sealed method adds no bound to `Patch` callers and does not enter the `dyn Patch` vtable.
+    A component, reference, optional patch or collection can be part of a larger composition and
+    supplies no verdict. `corten::live` already takes rendered fragments. The debug check still reads every
+    patch sent, reports a loss with a 500 (or panics for a live fragment), and is where losses
+    involving unseen output or top-level blocks are found ([Limit 2](#limit-whole-element-patches)).
 
     `html!` sees only its own markup, so it acts only where that markup shows how a browser
     parses it, following the HTML standard's tree construction: HTML under an element that is
@@ -5000,7 +5067,8 @@ rules something out.
     expression after a first `<table>`. That
     gives up a `<form>` after a first table part with an expression in it, which the parse empties
     at its start tag whatever the expression writes, as a miss. Where the patch lands is not
-    needed: the shapes are the ones lost wherever they are written.
+    needed for the refusals made where `html!` is written; the send boundary adds that fact for
+    the literal whole-patch cases.
 
     `html/nesting.rs` walks the parsed nodes once in document order with a stack of literal
     ancestors and stops refusing at the first unseen node; each control-flow body starts from
@@ -5043,6 +5111,9 @@ rules something out.
     in a `<table>` still compiles (foster parenting), as does a `<table>` in a `<p>`, whose
     closure depends on quirks mode, not just literal
     ancestors. The key check's table limit is in [Choice 46](#choice-ref-values).
+    A separate `WholePatch` bound would make `cargo check` report the loss but would require apps
+    generic over `Patch` to change their bounds. An associated constant directly on the sealed
+    supertrait would make existing `dyn Patch` uses stop compiling.
     Refusing where the markup does not show the context, which would refuse a
     component's SVG fragment, valid wherever its parent writes it in an `<svg>`. Following the
     context across components, which the macro does not see: each component's render would
@@ -5067,7 +5138,10 @@ rules something out.
     `MATH_HTML_POINTS` and `BREAKOUT` in `crates/corten-macros/src/html.rs` copy; the "in
     template" insertion mode's head tags and table start tags, and what the table insertion
     modes do with the tags after them, which `TEMPLATE_HEAD` and `TABLE_PARTS` copy, held equal to
-    the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there;
+    the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there,
+    which also holds both copies of `DECIDING_HEAD` equal; the macro and browser-vector tests
+    use the same literal whole-patch cases and compare the macro's actual verdict with the
+    recorded parses of its output;
     the tokenizer's script data, RAWTEXT and data states, in which an appropriate end tag ends a
     `<script>` or `<style>` whatever the markup around it says, `<!--` and `<script` carry a
     script past one, and in foreign content `<` may start a tag and `&` a character reference;
@@ -5102,7 +5176,9 @@ rules something out.
     refusals go or change with it; or a browser keeps one of the refused patch shapes as written
     after some first element or in some place a view is written, when `patch-parsing.json`'s cases
     fail in the smoke (or the probe in Last checked, run again, finds it kept) and that refusal
-    goes; or an app is found to write one of the refused shapes across a component's edge or an
+    goes (a whole-patch refusal goes only when every supported engine keeps the shape, since it
+    exists for the engines that lose it: Firefox keeps a row after a leading `<base>`, Chromium and
+    WebKit drop it); or an app is found to write one of the refused shapes across a component's edge or an
     expression (a component whose top-level element lands in an `<svg>` and writes an element
     there a browser moves out, children a component writes into a `<textarea>`, a block in a `<p>`
     after a text expression, a row after a `<table>` whose rows an expression writes), when
@@ -5113,9 +5189,15 @@ rules something out.
     keep it open, when that text would stop being unseen output too; or an app needs components drawn inside
     script text (a client-side template filled from a component's markup), when the precondition
     that output is drawn where a browser reads tags goes too, and with it every refusal outside a
-    patch's top level but the two of a single start tag.
+    patch's top level but the two of a single start tag; or Rust can check the marked shape before
+    code generation without new public bounds, when `cargo check` should report it too.
 
-    Last checked: 2026-11-18, the HTML tokenizer's data state and foreign-content rules.
+    Last checked: 2026-11-19, for the whole-patch send boundary: on Rust 1.89.0 and stable 1.99.1,
+    a cross-crate probe with a lazy constant passed `cargo check` and reported the lost `<tr>`
+    at its macro invocation under `cargo build`. A generic `Patch` caller and reference, optional,
+    vector and `dyn Patch` inputs still built. `patch-parsing.json` records loss for a paragraph
+    before a table part and no loss for a paragraph between two rows. 2026-11-18, the HTML
+    tokenizer's data state and foreign-content rules.
     Chromium 159.0.8154.6, Firefox 159.0 and WebKit 27.2 all decoded the reference and opened
     a child element in unescaped `<script>` and `<style>` literals in SVG and MathML, and
     kept the escaped versions as literal text without a child element (`parsesAsHtmlMeans`).
@@ -5161,14 +5243,14 @@ rules something out.
     one; 2026-11-17, each refusal's facts read again against `html/nesting.rs` and
     the parser after a third review found refusals of kept markup across a component, an
     expression and a foreign root's unseen namespace, and the kept shapes
-    (`parsesAsHtmlMeans` in `scripts/smoke.mjs`: one per nesting kind across a boundary written
+    (`parsesAsHtmlMeans` in `scripts/smoke/patch-parsing.mjs`: one per nesting kind across a boundary written
     by `raw`, a form pair in a template written by `raw` in a document's `<main>`, anchors across
     a `<foreignObject>` and a `<template>` written by `raw`, and the anchors of a `<math>` in an
     `<svg>` and of an `<svg>` in a `<math>`) parsed in Chromium 156, Firefox 157 and WebKit 27.2,
     each of which kept every one as written; 2026-11-16, the HTML standard's "in body" start-tag rules, scope boundaries,
     special elements and active-formatting markers, read against `html/nesting.rs` in this
     change based on `f5f2132aa`, and each of its refusal rules, for every tag the rule names
-    (`refusedNesting` in `scripts/smoke.mjs`), parsed in Chromium 156, Firefox 157 and
+    (`refusedNesting` in `scripts/smoke/patch-parsing.mjs`), parsed in Chromium 156, Firefox 157 and
     WebKit 27.2, each of which moved or dropped the inner element, while keeping the template
     and foreign-content cases, and again after review that the form pointer is the only rule that
     depends on ancestors outside the markup (template contents do not use it); 2026-11-15, the
@@ -5180,7 +5262,7 @@ rules something out.
     `crates/corten-macros/src/html.rs` on `6575d4d8c` and again on this round's change, as its
     tests and the examples of `html!` hold the parse and the refusals to. The MathML and
     SVG-breakout claims rest on that dated read of the standard, and on what the engines below do
-    with it: `scripts/smoke.mjs` (`parsesAsHtmlMeans`, in every engine the watchlist smoke runs)
+    with it: `scripts/smoke/patch-parsing.mjs` (`parsesAsHtmlMeans`, in every engine the watchlist smoke runs)
     loads, written by hand as `html!` writes them (it is not rendered by `html!`), the shapes
     `html!`'s examples hold: a `<title>` in an `<mi>`'s `<mglyph>` and `<malignmark>`, a `<div>`
     in an `<mtext>`, an `<svg>` straight in a `<math>` (MathML's), an `<annotation-xml>` with an
@@ -6155,7 +6237,8 @@ rules something out.
     PR number and an entry suffix keep two pull requests for one issue from taking the same
     path; before there is a PR number, a unique branch slug takes its place. Release preparation
     collects the notes into the dated version section, with bullets starting with the Breaking
-    marker first and filename order within each group, and leaves the older changelog alone.
+    marker first and filename order within each group. It moves the previous release unchanged
+    to a file beside the main changelog, so existing relative links in that section still work.
     Fragments use prose with single-line inline HTTPS links so a link works before and after its
     note moves, without rewriting it or depending on a reference definition.
 
@@ -6932,14 +7015,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
    after a first `<table>`; an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>`
    ..) after a first `<col>`; and after a first other table part, a `<table>` at the top level or
    in a later element, and a `<form>` there that holds an element, with an element HTML's
-   wherever it lands in or around it ([Choice 54](#choice-html-parse-refusals)). The rest depend
-   on what the patch began with or where the view is written (a `<p>` and a `<tr>` after it are
-   kept after a first `<tr>`, and an `<svg>` keeps a `<form>` of fields after a `<tr>`), so for
-   them, where a component or an expression writes the first element, and where one is written
-   between the two elements (it may leave an element open), a debug build refuses such a patch, as
-   `html!` writes it, when it sends it, naming the element, but a release build sends it as drawn
-   and the browser loses the part, so a mix that only some data draws is found only by a debug
-   render that draws it
+   wherever it lands in or around it ([Choice 54](#choice-html-parse-refusals)). When a concrete
+   `html!` is sent whole, a code-generating build also refuses literal losses that depend on
+   what came first (a `<tr>` after a first `<p>`). Where the compiler does not see the loss, for
+   example when a component or an expression writes an element or when one leaves an element open
+   between two literals, a debug build refuses the patch as drawn when it sends it, naming the
+   element. A release build sends those unchecked shapes, so a mix that only some data draws is
+   found only by a debug render that draws it
    ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
    That check refuses a patch from an area's handler that begins with a `<col>` even where the page
    already has the area's stylesheet, whose link Corten writes after the patch's elements and the
