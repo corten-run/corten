@@ -1227,8 +1227,13 @@ rules something out.
        progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
        seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
        bytes a second, which would need a count of bytes and a window in the connection's writer, for
-       every connection); a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a
-       client that sends nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose
+       every connection; whether over TLS a flush that stays pending while a slow client reads
+       steadily trips it is reasoned in the
+       [steady reader control](../bench/http2/README.md#steady-reader-control), not measured, and
+       open in
+       [#1742 A TLS flush that stays pending while a slow client reads steadily may trip send_timeout: test serve_wrapped over TLS with a steady reader](https://github.com/corten-run/corten/issues/1742));
+       a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a client that sends
+       nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose
        waits, in all, pass that idle time plus a second for every 240 bytes that came (Kestrel's
        minimum body rate, the idle time being how far behind it a client may fall), counting only the
        time spent waiting for the client, since one byte resets an idle time alone and a long upload's
@@ -1253,7 +1258,7 @@ rules something out.
        through nginx; the browser cap is about six connections per host, not eight tabs.
        The app cannot diagnose this at startup: a feed's snapshot and stream both have rows,
        and a TLS-wrapped origin behind a re-encrypting proxy is valid. The deployment guide
-       has nine proxy-specific concerns, not twelve extra requirements: its rows 5 (shared
+       has ten proxy-specific concerns, not thirteen extra requirements: its rows 5 (shared
        caching), 9 (health) and 12 (HTTPS policy) are conditional or apply without a proxy.
        The measured nginx `$host` port loss causing a WebSocket 403 shows a real configuration
        failure. Operator time, money and memory have not been measured, not counted as zero.
@@ -1313,8 +1318,16 @@ rules something out.
        not a general send guarantee: h2 can consume the buffer into its encoder before
        TLS flush, so the socket write watch still matters.
 
-       Keep HTTP/1.1 in `serve` and HTTP/2 at the proxy. The passing idle and send candidates
-       ran in separate transports, not together on one opt-in path with the socket watch.
+       Keep HTTP/1.1 in `serve` and HTTP/2 at the proxy. The probe's
+       [combined mode](../bench/http2/README.md#combined-results) has since run the h2 count,
+       the buffer tracker and a socket write watch like `Watched` on one connection path with
+       no frame parser. The 17 original combined controls passed in every round, including a
+       paused TCP reader that only the socket watch closed, with h2 holding no DATA buffers. The
+       steady reader control, the 18th, failed 1 of 7 rounds with a false close by the socket
+       watch, so the combined evidence is not complete; the remaining probe work stays in
+       [#1686 HTTP/2 in corten::serve: show the idle and send bounds together with the socket watch on one opt-in path](https://github.com/corten-run/corten/issues/1686).
+       Even complete, it is a probe, not `serve`: nothing ships before the checks that Revisit
+       when lists.
        Do not add a second frame parser or treat closing the whole connection as a substitute
        for detecting the stall.
        The auto builder's missing HTTP/1 `max_header_size` setter is also a prototype
@@ -1327,10 +1340,10 @@ rules something out.
        the no-proxy live app already fails at the fourth tab, and an opt-in feature would
        leave the default unchanged. The reason to defer is that a feature must not silently
        weaken a security bound. Keep the proxy requirement (option 2) until the connection-level
-       design (option 1) can demonstrate both bounds. One stream per page (option 3) still
-       exhausts the cross-tab cap and adds a custom format where HTTP/2 is standard, against
-       [Rule 10](#rule-standard-formats). HTTP/3 remains out: `quinn` and an unstable `h3`,
-       TLS tied to QUIC, and no need for it merely to remove this connection cap.
+       design (option 1) holds both bounds on an opt-in `serve` path. One stream per page
+       (option 3) still exhausts the cross-tab cap and adds a custom format where HTTP/2 is
+       standard, against [Rule 10](#rule-standard-formats). HTTP/3 remains out: `quinn` and an
+       unstable `h3`, TLS tied to QUIC, and no need for it merely to remove this connection cap.
     3. Vocabulary: one module, `corten::http`: the `http` crate's types (`StatusCode`,
        `HeaderMap`, `Uri`), which hyper, HTTP clients and HTTP/3 libraries share, and what Corten
        builds on them: `Body` (and `BodyDataStream`), `Request` and `Response` over it, `Bytes`,
@@ -1743,8 +1756,23 @@ rules something out.
     alone did not; the passing candidates were tested separately, with
     [Callgrind medians](../bench/http2/README.md#follow-up-cost) off to on of 25,940 to 26,721
     instructions per page for the direct h2 count and 5,043 to 5,696 per event for buffer
-    tracking); value (fast and proven
-    fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
+    tracking); measured ([combined probe](../bench/http2/README.md#combined-results) at
+    `a8431b062`, three rounds at 100 ms in one Linux container with the paused reader's
+    receive buffer capped at 128 KiB: all 17 combined cases passed, every stall closed in
+    105.6 to 116.4 ms and the socket watch expired 154 to 165 ms after its request; uncapped,
+    two of six rounds missed only the socket case, one with no socket timeout reported
+    within the 500 ms window and one with no socket timeout at all, and a sampled uncapped
+    run's receive buffer grew to 632,943 bytes (about 618 KiB) with the watch firing after a
+    103 ms wait, 514 ms after the request; Callgrind medians off to on of 26,142 to 27,939
+    instructions per page and 4,179 to 5,115 per event, three rounds each, not against
+    HTTP/1.1); measured ([steady reader control](../bench/http2/README.md#steady-reader-control)
+    at `ec476a9f6`, seven rounds of the combined suite at 100 ms with the cap: the 17 earlier
+    cases passed every time, but a client reading at least 16 KiB every 20 ms received the
+    whole answer in six rounds and was closed in one by the socket watch on a `flush` pending
+    for 100 ms, a false close, so the combined evidence does not yet include a socket watch
+    that leaves steady readers open; a TLS flush pending while records drain and a capped
+    receive window reopening only in large steps both fit, each reasoned, not measured);
+    value (fast and proven fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
     which is why the dispatch suite comes first and an opt-in protocol must not silently
     weaken a security bound even though the no-proxy live app already fails).
 
@@ -1761,15 +1789,23 @@ rules something out.
     active-stream count exposed through Hyper reopens the idle design, and a per-stream send-wait
     signal covering queued data after the body ends reopens the send design. The
     [isolated controls](../bench/http2/README.md#follow-up-acceptance) qualify each detector
-    with the other disabled. Reopen the proxy decision when a parser-free opt-in path
-    demonstrates both bounds with the socket watch, using separate combined-path controls
-    with expectations for both watches enabled, including final buffered data, sibling
-    progress, reset and cancellation. An upstream header-block timeout
+    with the other disabled. The probe's combined mode held both bounds with the socket watch
+    under the 17 original [combined controls](../bench/http2/README.md#combined-results) in
+    every round, but the steady reader control failed 1 of 7 rounds, so that evidence is not
+    complete; the full combined suite, steady reader included, passing 10 consecutive rounds
+    with zero failures stays in
+    [#1686 HTTP/2 in corten::serve: show the idle and send bounds together with the socket watch on one opt-in path](https://github.com/corten-run/corten/issues/1686).
+    Reopen the proxy decision when an opt-in path in `serve` passes that suite to the same
+    bar and the shipping checks below
+    ([#1739 HTTP/2 in corten::serve: an opt-in path that passes the combined bounds suite and the shipping checks](https://github.com/corten-run/corten/issues/1739)).
+    A combined case failing on a rerun reopens the combined evidence in Stands on, not the
+    proxy decision. An upstream header-block timeout
     ([hyperium/h2 #928 Proposal: enable an HTTP/2 header-block read timeout](https://github.com/hyperium/h2/issues/928))
     reopens the header half only. The historical open-sibling case is a control, not a demand
-    for a stronger header guarantee. Shipping still needs shutdown, reset-flood and resource
-    checks, decoded head limits, explicit h2 Upgrade refusal and HTTP/1 WebSocket fallback,
-    and full three-engine TLS smoke.
+    for a stronger header guarantee. Shipping still needs shutdown with open streams,
+    reset-flood and resource checks, decoded head limits, explicit h2 Upgrade refusal and
+    HTTP/1 WebSocket fallback, full three-engine TLS smoke, and the enabled path's cost
+    against HTTP/1.1.
     HTTP/3 also waits for a stable `h3` and a need beyond this cap. A new protocol stays below
     the vocabulary in 3 and leaves 4 to 7 as they are.
     The `501` itself (migration step 1) is reopened when a named client or tool is reported
@@ -1806,6 +1842,8 @@ rules something out.
     2026-11-13, matchit 0.9.2's matching and insertion source read and the dispatch suite's
     17 tests passed with empty parameters refused ([Choice 48](#choice-matchit)); 2026-11-14,
     the same dispatch suite passed in the merged workspace's full debug tests at `66cb2936e`;
+    2026-11-18, the deployment guide's rows counted again at `83da31ef1`, with its thirteenth
+    (what a proxy passes on for a page's tag and its `304`): ten are proxy-specific;
     2026-11-18, hyper 1.12.0's send loop and h2 0.4.20's active count and send queue read
     against Corten's `Answered` at `e927c2463`, then exercised in the
     [standalone TLS probe](../bench/http2/README.md#follow-up-results); 2026-11-19,
@@ -1813,7 +1851,11 @@ rules something out.
     and Callgrind rounds per mode; 2026-11-19, hyper 1.12.0's HTTP/1 encoder read for the
     `Content-Length` it writes, each answer the socket test asks for seen on the wire before
     and after, and the lean catalog page counted under callgrind and under `perf stat` with
-    rustc 1.99.1, on `0aef5330c` and on it with the router leaving the length to the server.
+    rustc 1.99.1, on `0aef5330c` and on it with the router leaving the length to the server;
+    2026-11-20, the probe's combined mode at `a8431b062`
+    with getrandom 0.4.3 and r-efi 6.0.0 in its lockfile, three wire and Callgrind rounds,
+    and one round of each isolated mode with the same dispositions; 2026-11-20, the steady
+    reader control at `ec476a9f6` on the same probe build, seven rounds with one false close.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -2010,7 +2052,7 @@ rules something out.
     `caller = T` module, a path that reaches Corten's own, a method other than `get`,
     `prefetch`, `/health/live`, `/{*rest}`), at `f703d3f8`; 2026-11-10, IANA's HTTP
     Authentication Scheme Registry (no scheme for a session cookie) and the tests that a 401
-    keeps its challenge as JSON and on the error page (`crates/corten/src/tests.rs`), at
+    keeps its challenge as JSON and on the error page ([`tests/caller.rs`](../crates/corten/src/tests/caller.rs)), at
     `96e2c907`, the commit that adds them; 2026-11-10, the tests that a handler's own 401, the
     page swapped in and a middleware's refusal keep it, at `2d6b88d0`; 2026-11-10, those tests
     with a realm on every Bearer challenge and Basic through a handler and a middleware, the
@@ -2038,6 +2080,14 @@ rules something out.
     the route. The compiler rejects a stage that reads it after hand-off. The late layout poller
     lives in the existing late-write box, so it neither enlarges the ordinary future nor adds
     a box to a late-eligible write.
+    The stages read the incoming request's mode, credentials, validators, and the host and
+    origin headers they need before dispatch. The error page and cache rule share those reads.
+    `Req` negotiates from the headers where it is taken: middleware and earlier extractors can
+    change them ([Choice 21](#choice-own-extractors)). Keeping those two views separate is what
+    lets a handler see an edit without letting it change the outer cache or same-origin decision.
+    `MatchedPath` and `Signal` remain independently available in the request's extensions;
+    the nonce slot is independent of either. The debug-only form redirect check is held by the
+    stages, not put in the request's extensions.
     An area's or an API's own steps (`Area::middleware`, `Api::middleware`) run right after the
     app's, for the requests at its prefix; they are boxed, since which run depends on the route, and
     an app with none pays nothing for them. What an area or API sets (its deadline, body limit, policy and middleware,
@@ -2075,8 +2125,9 @@ rules something out.
     the same checks in the handler (about 1%, which wall times did not show), taken for one place
     that says what goes around a route: the router holds the app's stages or the route's lane for
     each path, and its own `404`, `405` and `501` meet the lane as the handler's answer does, with no
-    handler of their own. Value 1 still holds with it: the route stays under axum's plain router
-    in the same build and inside the bound below, which is what this Choice holds it to
+    handler of their own. In that build the unstaged route retired fewer instructions than
+    axum's plain router and stayed inside the instruction bound below, which is what this Choice
+    holds it to. That count does not show that it ran faster
     ([Choice 25](#choice-axum-router), step 2, has the shapes measured). Its answer gets `X-Content-Type-Options: nosniff` and its own
     `Content-Security-Policy: sandbox` beside any the handler set, whatever its type, both
     added as the lane takes its answer: a browser takes it only as the type it
@@ -2102,10 +2153,26 @@ rules something out.
     not see it; hooks at several stages (before routing, after the caller, around the error page), each a
     place an app's step could run and a reader of the app would have to check; what must see the
     raw request first is a tower layer around the whole app ([Limit 12](#limit-fixed-stages)).
-    Nor presets that keep some stages and drop others, each another order to
-    read and test, with no app yet needing one (`unstaged` is no stage at all, which
+    Nor presets or flags that keep some stages and drop others, each another path to
+    read and test. The lean catalog page met the old Revisit-when in letter: it needed the host
+    check and the document's headers, but not a tag or a cache rule that looks for a caller's
+    credentials. Nearly all the cost of the work it did not need was the tag. The tag is now
+    decided from the request
+    ([#1661 Skip unsolicited page ETags without a coding in lean builds](https://github.com/corten-run/corten/pull/1661),
+    [Limit 21](#limit-etag)): the measured request, a `GET` with `Accept-Encoding: identity` and no
+    `If-None-Match`, pays no hash, with nothing new for an app to declare. A qualifying coding or an `If-None-Match`
+    only lets an otherwise eligible `GET` receive a generated tag ([Limit 21](#limit-etag) says which codings
+    qualify in each build); the rule reads the request's headers, not whether the client keeps pages. The stages
+    hold the request once
+    ([#1674 Shrink the boxed future for staged requests](https://github.com/corten-run/corten/pull/1674)).
+    An HTML answer never goes without security headers: a staged page keeps its document
+    headers, and an unstaged one still gets its sandbox. About 3,500 cycles a request (3% on
+    this page) is no reason to take the document headers away. No flag has a measured case.
+    Where the declaration shows an answer cannot use a group, leave out that work case by case,
+    each in its own change with its own measured cost. `unstaged` is no stage at all, which
     listings-feed's sequence route uses; its lane chooses nothing, only the checks no route goes
-    without, the same for every unstaged route, [Choice 25](#choice-axum-router), step 2); nor the stages rewritten as combinators, measured
+    without, the same for every unstaged route ([Choice 25](#choice-axum-router), step 2).
+    Nor the stages rewritten as combinators, measured
     on variants that are not in the repository (Stands on): on axum's router about 200 to 360
     instructions fewer a request with glibc's allocator but about 200 to 263 more with jemalloc,
     which the images preload, and on Corten's own router more with both, 92 to 367 with jemalloc
@@ -2163,6 +2230,10 @@ rules something out.
     moved the same Corten code by up to 8); either way it counts against the bound: 7,030 is 98 over 6,932 and
     7,076 is 94 over 6,982 (jemalloc), so the next change that adds to an unstaged route reopens
     this.
+
+    The instruction bounds below bound work on the measured routes, not speed. For a change
+    to the request path, also measure cycles under load as
+    [CONTRIBUTING](../CONTRIBUTING.md#pull-requests) describes.
 
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
@@ -2230,7 +2301,7 @@ rules something out.
     `Router::new` still reports every insertion error with the rejected path and matchit's
     conflicting route. The count now refuses empty parameter values, including a hand-written
     `/corten{x}/{b}` against `/corten/`. It is not exact: a static route beside a route may
-    answer first the paths it counts. `tests::can_match_under_never_says_no_where_matchit_matches`
+    answer first the paths it counts. `tests::url::can_match_under_never_says_no_where_matchit_matches`
     checks the count against 0.9.2 and requires every tested route to insert); measured (callgrind,
     release, three runs each, every run the same, an uncommitted variant of `fa0b1525` whose
     `laned` adds the headers as it takes the handler's answer: 7,022
@@ -2250,7 +2321,22 @@ rules something out.
     boxed future most of the rest); measured (callgrind, release, the same request path, on an
     uncommitted variant of main `c65c10ec` with the stages written as combinators on axum's
     router, which the repository does not hold: about 200 to 360 instructions a request fewer
-    than main with glibc's allocator, about 200 to 263 more with jemalloc); reasoned (one place for the app's steps is
+    than main with glibc's allocator, about 200 to 263 more with jemalloc); measured (the lean
+    catalog lane at `229b1e928`, one binary with switches to turn stages off, `perf stat` on the
+    server pinned to one CPU and `wrk` with 64 connections on three others, 500 record IDs
+    requested with `Accept-Encoding: identity`, 12 alternated rounds for the stage switches.
+    In cycles a request, user and kernel together: the tag cost 14,003 by the difference of the low quartiles and 16,561 by the difference of the
+    medians, within that one batch (cycle levels are not compared across batches, which drifted by up to 15%);
+    the cache rule cost nothing the rounds could see; all security headers together cost about
+    3,500; the host check, same-origin check, nonce slot, signal and credentials together cost
+    about 5,000. In a separate 14-round batch at the same commit, with the request-based tag
+    rule and the request held once, Corten sending every security header cost 3% more by the low
+    quartile and 9% more by the median of the per-round differences than axum + Maud sending
+    none, and 3% to 10% less than axum + Maud sending the same headers by one middleware.
+    [The stage decision and figures](https://github.com/corten-run/corten/issues/1651#issuecomment-6985183384)
+    and [the tables and method](https://github.com/corten-run/corten/issues/1644#issuecomment-6985178754)
+    give the rounds);
+    reasoned (one place for the app's steps is
     one order to read, a tuple resolved at compile time costs no box, and a route that needs none
     of it says so where it is declared); platform (a PDF sent with a sandbox shows in the viewers of
     Chrome, Edge and Firefox as one sent without it, probed as Last checked says; Safari's is not
@@ -2258,15 +2344,22 @@ rules something out.
     showed nothing for one until a fix in December 2024, which was read, not run); bet (apps have an answer anyone may read whose cost the
     stages would make about 2.5 times as costly, beside pages that need them all; listings-feed's
     sequence route, which its failover benchmark reads, is the first use, and no app's in
-    production is yet); value
+    production is yet); measured (callgrind, x86-64 Linux release, `catalog-lean` identity GETs:
+    sharing the staged header reads reduced named request-map lookups from 17 to 14, kept three
+    response-map lookups and three request extension inserts, and reduced median instructions per
+    request from 43,274.3 (43,274.1 to 43,275.6) to 42,763.2 (42,762.1 to 42,770.4).
+    A mounted JSON GET with a session cookie kept six named request-map lookups, none for
+    `Authorization`, and went from 35,796.1 (35,794.0 to 35,797.9) to 35,650.6 (35,647.5 to
+    35,654.7) median instructions per request); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
     for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
-    layer around the app cannot serve it; or a route needs some stages and not others, which
-    `unstaged` cannot give (a write, a body, an API's allowed origins or a deadline on it among
-    them); or a
+    layer around the app cannot serve it; or a route needs some stages and not others, and a flag
+    for a group it can do without saves cycles a request under load beyond the spread of
+    alternated rounds, after taking out the work the request or the route's declaration already
+    shows the answer cannot use, without taking away a document's security headers; or a
     browser the runtime supports shows a PDF sent with a sandbox differently from one sent without
     it; or no
     app but listings-feed uses `unstaged` by the next minor release; or an unstaged route costs more
@@ -2276,7 +2369,7 @@ rules something out.
     Corten counts the same in both builds (a plain axum router, 7,085 in both, until step 4; since
     step 4 a `service_fn` with no framework, 3,190 in both), or the control itself moves between
     builds by more than the route does, which says the harness no longer separates them; or, in
-    one build of `tests::what_a_request_in_an_area_costs` with jemalloc, a request in its app
+    one build of `tests::patches::what_a_request_in_an_area_costs` with jemalloc, a request in its app
     with two areas and an API costs more than about 100 instructions over the same request in its
     app with none, beyond the difference measured once each route was given its scope (at
     `6ffc316f`: 5,472 for the page in the inner area against the same page as an app route, and
@@ -2289,17 +2382,31 @@ rules something out.
     beside it answering those paths first, which says the segment count has grown looser
     than it reads; or one is given a scope while one of its paths is under another prefix, which a
     request would then answer with the wrong area's settings; or
-    `tests::can_match_under_never_says_no_where_matchit_matches` fails, which says the matchit a
+    `tests::url::can_match_under_never_says_no_where_matchit_matches` fails, which says the matchit a
     build resolves matches a path the count says a route cannot reach; or Corten's exact
     matchit 0.9.2 pin changes, whose matching and conflict rules must be read again;
     or a derived route, or an area's or API's, may put text before a parameter, which
     `parse_path` and `route_shaped` refuse today; any of which the count must then follow.
-    Also revisit if `router::tests::staged_page_future_sizes` exceeds either boxed-future
-    budget on x86-64 Linux. It measures the real stages and typed handler for a small page
-    without app middleware or layout reads. The bounds leave room for build profiles,
-    features and compiler layout changes; remeasure before raising one.
+    Also revisit if `router::tests::staged_page_future_sizes` fails on x86-64 Linux because a
+    boxed future grew. It measures the real stages and typed handler for a small page without
+    app middleware or layout reads, and holds each boxed future within the size of one request
+    of what its build profile measured, so a stage that holds the request again across the
+    stages after it fails the test. A compiler that moves a future's layout by that much fails
+    it too, with no change to the stages, and so does a change that shrinks a future by that
+    much, which only lowers the measurement. Measure both profiles again before moving a
+    measurement.
 
-    Last checked: 2026-10-29, the area middleware runs of
+    Last checked: 2026-11-20, `staged_page_future_sizes` at `3089d0a97`, after it failed on
+    main: the stage future grew from 2,632 to 3,008 bytes in a debug build and from 2,176 to
+    2,280 in a release one, holding the page snapshot that sharing the staged header reads keeps
+    before dispatch, not the request again (the stage owns one request slot, and dispatch takes
+    it). This Choice's catalog GET counts were taken with that snapshot and are what the stages
+    cost with it, so the Choice stands and the measurements moved; 2026-11-19, the header lookup, extension
+    and instruction counts before
+    (`aa0f0c7e1`) and after sharing the reads and restoring the short circuits (`76229a2fd`),
+    from three short/long pairs per build for each workload: 1,300 less 300 catalog GETs,
+    on one connection per run;
+    2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
     (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its
     own); 2026-11-09, the `unstaged` runs on this change against main `c65c10ec` and `stages = bare`
@@ -2344,6 +2451,9 @@ rules something out.
     future each, against 4,952 and 1,880 bytes at the baseline; 2026-11-19, rustc 1.99.1 rejected
     reads after hand-off and after both dispatchers took the request, in the change that makes
     the handle move-only ([#1674 Shrink the boxed future for staged requests](https://github.com/corten-run/corten/pull/1674#round-two)).
+    2026-11-18, the lean catalog stage switches and comparison with and without the same
+    headers at `229b1e928` (measured above); 2026-11-19, the merged request-based tag rule
+    (`7620ef9be`) and the single owned request (`aa0f0c7e1`) read against those experiments.
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
@@ -2487,7 +2597,7 @@ rules something out.
     Stands on: platform (Playwright's WebKit on Windows holds back a flushed brotli event of more
     than 16 KiB and sends `deflate, gzip, br`, no zstd; its Linux build, which CI's smoke runs,
     takes no brotli at all, so the smoke there cannot see the holdback and the rule is held by
-    `compress.rs`'s and `tests.rs`'s tests; the 16 KiB edge matches libcurl's write size, the
+    `compress.rs`'s tests and [`tests/bodies.rs`](../crates/corten/src/tests/bodies.rs); the 16 KiB edge matches libcurl's write size, the
     Windows build's network stack, which suggests the holdback is that stack's, not measured;
     Chromium and Firefox send zstd, which arrives at once there; no WebKit that accepts zstd was
     tried, and Safari, whose network stack is not Playwright's and which caniuse lists as sending
@@ -4118,7 +4228,7 @@ rules something out.
     ([ibraheemdev/matchit#60 Reject Empty Route Parameters](https://github.com/ibraheemdev/matchit/pull/60)).
     The bug gives a wrong answer: under 0.8.4 an empty value lets a parameter route shadow a
     catch-all, so `/x//y` reaches a POST-only `/x/{a}/y` instead of a `/{*page}` page, and a
-    GET there fails (`tests::serves_agrees_with_the_router` now requires the page to answer it).
+    GET there fails (`tests::url::serves_agrees_with_the_router` now requires the page to answer it).
     And 0.8 gets no more fixes; they ship only on 0.9.x, so a pin on 0.8.4 would take the next
     one only through a forced minor-version move. 0.8.4 also matches an empty value in some
     places and not others: as the first segment (`//posts` reaches `/{user}/posts` with `user`
@@ -4147,7 +4257,7 @@ rules something out.
     likewise `/{z}/b` after `/a{x}`, and `/{slug}/more` after `/shop{x}/desk` (0.8.6 takes all
     three in either order). Reorder the routes, or drop the text before the parameter, which no
     derived route has anyway. `tests/matchit.rs` and
-    `tests::a_prefixed_hand_written_route_conflicts_in_one_order_only` hold this, so a matchit
+    `tests::url::a_prefixed_hand_written_route_conflicts_in_one_order_only` hold this, so a matchit
     that fixes it fails them and this paragraph goes.
 
     What the exact pin costs: Cargo allows one semver-compatible version of a crate in a build,
@@ -4317,7 +4427,7 @@ rules something out.
     the handler's name, so the two checks cannot disagree on what answers a patch. The shape to
     write, and the one the message names, is `HtmlResult<Patches>`; as a compatibility detail, a
     handler returning `impl Answer<.., Kind = Patches>` passes both checks too (a test in
-    `tests.rs`), but rustc warns on it (`opaque_hidden_inferred_bound`: the `impl` does not
+    [`tests/patches.rs`](../crates/corten/src/tests/patches.rs)), but rustc warns on it (`opaque_hidden_inferred_bound`: the `impl` does not
     prove `Kind`'s bound, which only the hidden type's impl can), which fails an app that denies
     warnings. The mount's side of that can only be a `const`: stable Rust has no bound for
     "a route that is not a `PatchRoute`", so it is an inline `const { assert!(..) }` beside the
@@ -4348,7 +4458,7 @@ rules something out.
     not mounted: `ReadAgain::from(url::Status)` reads the path, and the other route's handler
     answers it; and a handler that writes `req.mode` (to `Mode::Document`, say) before
     `patch_or`, `invalid` or `invalid_with`, which then answer the mode it wrote, the page or
-    a redirect, as they do for any `HtmlResult` handler (a test in `tests.rs`). Writing
+    a redirect, as they do for any `HtmlResult` handler (a test in [`tests/patches.rs`](../crates/corten/src/tests/patches.rs)). Writing
     `req.mode` is the app's explicit override, and it stays one: a mode those three read but
     the handler cannot write would change what an ordinary `HtmlResult` handler that writes it
     gets, and splitting them by kind would add a concept for a case few apps write. The derive's
@@ -4404,7 +4514,7 @@ rules something out.
     are zero-sized `PhantomData`, so the response and every method's work are what they were, and
     the check is a `const` with nothing to run); measured (callgrind, release, instructions per
     request through a route's `patch_or` in process, 1,200 requests less 200 over 1,000, with the
-    `#[ignore]` test `what_a_patch_or_request_costs` in `crates/corten/src/tests.rs`, three
+    `#[ignore]` test `what_a_patch_or_request_costs` in [`tests/patches.rs`](../crates/corten/src/tests/patches.rs), three
     alternate runs of each build, the median and the range, on `0ff569c69` (before) and on
     `811324247` (after, a handler returning `HtmlResult` and one returning
     `HtmlResult<Patches>`): the patch (`Mode::Action`) 17,971.83 before (17,971.80 to
@@ -4805,7 +4915,8 @@ rules something out.
     is written (an element in an element whose content is text, a `<plaintext>`, and an element
     taken out of foreign content, and literal HTML nesting that closes or discards an open
     element), and the shapes of a patch's top level the runtime's parse of it loses wherever they
-    are written, where the markup shows how a browser parses it. Script and style literals
+    are written, where the markup shows how a browser parses it. A code-generating build also
+    refuses known top-level losses when it sees the view sent as the entire patch. Script and style literals
     that need a known context are refused when the markup cannot prove one.** An element written in a
     `<textarea>`, an HTML `<title>`, a `<script>`, a `<style>`, an `<iframe>`, an `<xmp>`, a
     `<noembed>` or a `<noframes>` was written by `html!` as markup and read by the browser as
@@ -4875,14 +4986,23 @@ rules something out.
     `<button>`, a `<label>` around them) after a first table part, which the patch's parse puts in
     empty, is kept as written in an `<svg>` or a `<math>`, where none of them is taken out, so it
     compiles, though few views will be written there: refusing it would refuse a component that is
-    correct where its parent writes it, which the rule below does not allow. Those shapes, what a
-    component, an expression or a block writes, a refused shape with an expression or a component
-    at or between its two elements, and a first element an `<svg>` keeps, are left to the debug
-    check that answers such a patch with a 500 when it is sent
-    ([Limit 2](#limit-whole-element-patches)); a release build sends them as drawn. Head tags
-    before the first element do not change a refused shape: the standard and Firefox read them as
-    a head's, and Chromium and WebKit, which let a leading `<title>`, `<base>`, `<basefont>`,
-    `<bgsound>` or `<noframes>` decide, read the rest as a body's, where each is lost too.
+    correct where its parent writes it, which the rule below does not allow.
+
+    Where the whole patch is a concrete `html!` view, the first literal element can decide the
+    reading. The macro marks a loss at a later literal sibling: a table part dropped after a body
+    element, a table part dropped or wrapped after a different kind of table part, or anything but
+    a `<col>` or `<template>` dropped after a first `<col>`. It checks both readings of a leading
+    `<title>`, `<base>`, `<basefont>`, `<bgsound>` or `<noframes>`: the standard and Firefox read
+    it as a head's, and Chromium and WebKit let it choose body rules. A zero-sized return shape
+    carries the diagnostic as a lazy constant. `Action::patch_with_status` and `FormPatch::draw`
+    evaluate it when Rust generates code for a concrete view; `cargo check` does not. Even a
+    send inside a literal `if false` is checked, independent of which branch a request takes.
+    The doc-hidden `__private::PatchShape` lost dyn compatibility. No supported API changed:
+    the sealed method adds no bound to `Patch` callers and does not enter the `dyn Patch` vtable.
+    A component, reference, optional patch or collection can be part of a larger composition and
+    supplies no verdict. `corten::live` already takes rendered fragments. The debug check still reads every
+    patch sent, reports a loss with a 500 (or panics for a live fragment), and is where losses
+    involving unseen output or top-level blocks are found ([Limit 2](#limit-whole-element-patches)).
 
     `html!` sees only its own markup, so it acts only where that markup shows how a browser
     parses it, following the HTML standard's tree construction: HTML under an element that is
@@ -5013,7 +5133,8 @@ rules something out.
     expression after a first `<table>`. That
     gives up a `<form>` after a first table part with an expression in it, which the parse empties
     at its start tag whatever the expression writes, as a miss. Where the patch lands is not
-    needed: the shapes are the ones lost wherever they are written.
+    needed for the refusals made where `html!` is written; the send boundary adds that fact for
+    the literal whole-patch cases.
 
     `html/nesting.rs` walks the parsed nodes once in document order with a stack of literal
     ancestors and stops refusing at the first unseen node; each control-flow body starts from
@@ -5056,6 +5177,9 @@ rules something out.
     in a `<table>` still compiles (foster parenting), as does a `<table>` in a `<p>`, whose
     closure depends on quirks mode, not just literal
     ancestors. The key check's table limit is in [Choice 46](#choice-ref-values).
+    A separate `WholePatch` bound would make `cargo check` report the loss but would require apps
+    generic over `Patch` to change their bounds. An associated constant directly on the sealed
+    supertrait would make existing `dyn Patch` uses stop compiling.
     Refusing where the markup does not show the context, which would refuse a
     component's SVG fragment, valid wherever its parent writes it in an `<svg>`. Following the
     context across components, which the macro does not see: each component's render would
@@ -5080,7 +5204,10 @@ rules something out.
     `MATH_HTML_POINTS` and `BREAKOUT` in `crates/corten-macros/src/html.rs` copy; the "in
     template" insertion mode's head tags and table start tags, and what the table insertion
     modes do with the tags after them, which `TEMPLATE_HEAD` and `TABLE_PARTS` copy, held equal to
-    the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there;
+    the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there,
+    which also holds both copies of `DECIDING_HEAD` equal; the macro and browser-vector tests
+    use the same literal whole-patch cases and compare the macro's actual verdict with the
+    recorded parses of its output;
     the tokenizer's script data, RAWTEXT and data states, in which an appropriate end tag ends a
     `<script>` or `<style>` whatever the markup around it says, `<!--` and `<script` carry a
     script past one, and in foreign content `<` may start a tag and `&` a character reference;
@@ -5115,7 +5242,9 @@ rules something out.
     refusals go or change with it; or a browser keeps one of the refused patch shapes as written
     after some first element or in some place a view is written, when `patch-parsing.json`'s cases
     fail in the smoke (or the probe in Last checked, run again, finds it kept) and that refusal
-    goes; or an app is found to write one of the refused shapes across a component's edge or an
+    goes (a whole-patch refusal goes only when every supported engine keeps the shape, since it
+    exists for the engines that lose it: Firefox keeps a row after a leading `<base>`, Chromium and
+    WebKit drop it); or an app is found to write one of the refused shapes across a component's edge or an
     expression (a component whose top-level element lands in an `<svg>` and writes an element
     there a browser moves out, children a component writes into a `<textarea>`, a block in a `<p>`
     after a text expression, a row after a `<table>` whose rows an expression writes), when
@@ -5126,9 +5255,15 @@ rules something out.
     keep it open, when that text would stop being unseen output too; or an app needs components drawn inside
     script text (a client-side template filled from a component's markup), when the precondition
     that output is drawn where a browser reads tags goes too, and with it every refusal outside a
-    patch's top level but the two of a single start tag.
+    patch's top level but the two of a single start tag; or Rust can check the marked shape before
+    code generation without new public bounds, when `cargo check` should report it too.
 
-    Last checked: 2026-11-18, the HTML tokenizer's data state and foreign-content rules.
+    Last checked: 2026-11-19, for the whole-patch send boundary: on Rust 1.89.0 and stable 1.99.1,
+    a cross-crate probe with a lazy constant passed `cargo check` and reported the lost `<tr>`
+    at its macro invocation under `cargo build`. A generic `Patch` caller and reference, optional,
+    vector and `dyn Patch` inputs still built. `patch-parsing.json` records loss for a paragraph
+    before a table part and no loss for a paragraph between two rows. 2026-11-18, the HTML
+    tokenizer's data state and foreign-content rules.
     Chromium 159.0.8154.6, Firefox 159.0 and WebKit 27.2 all decoded the reference and opened
     a child element in unescaped `<script>` and `<style>` literals in SVG and MathML, and
     kept the escaped versions as literal text without a child element (`parsesAsHtmlMeans`).
@@ -5174,14 +5309,14 @@ rules something out.
     one; 2026-11-17, each refusal's facts read again against `html/nesting.rs` and
     the parser after a third review found refusals of kept markup across a component, an
     expression and a foreign root's unseen namespace, and the kept shapes
-    (`parsesAsHtmlMeans` in `scripts/smoke.mjs`: one per nesting kind across a boundary written
+    (`parsesAsHtmlMeans` in `scripts/smoke/patch-parsing.mjs`: one per nesting kind across a boundary written
     by `raw`, a form pair in a template written by `raw` in a document's `<main>`, anchors across
     a `<foreignObject>` and a `<template>` written by `raw`, and the anchors of a `<math>` in an
     `<svg>` and of an `<svg>` in a `<math>`) parsed in Chromium 156, Firefox 157 and WebKit 27.2,
     each of which kept every one as written; 2026-11-16, the HTML standard's "in body" start-tag rules, scope boundaries,
     special elements and active-formatting markers, read against `html/nesting.rs` in this
     change based on `f5f2132aa`, and each of its refusal rules, for every tag the rule names
-    (`refusedNesting` in `scripts/smoke.mjs`), parsed in Chromium 156, Firefox 157 and
+    (`refusedNesting` in `scripts/smoke/patch-parsing.mjs`), parsed in Chromium 156, Firefox 157 and
     WebKit 27.2, each of which moved or dropped the inner element, while keeping the template
     and foreign-content cases, and again after review that the form pointer is the only rule that
     depends on ancestors outside the markup (template contents do not use it); 2026-11-15, the
@@ -5193,7 +5328,7 @@ rules something out.
     `crates/corten-macros/src/html.rs` on `6575d4d8c` and again on this round's change, as its
     tests and the examples of `html!` hold the parse and the refusals to. The MathML and
     SVG-breakout claims rest on that dated read of the standard, and on what the engines below do
-    with it: `scripts/smoke.mjs` (`parsesAsHtmlMeans`, in every engine the watchlist smoke runs)
+    with it: `scripts/smoke/patch-parsing.mjs` (`parsesAsHtmlMeans`, in every engine the watchlist smoke runs)
     loads, written by hand as `html!` writes them (it is not rendered by `html!`), the shapes
     `html!`'s examples hold: a `<title>` in an `<mi>`'s `<mglyph>` and `<malignmark>`, a `<div>`
     in an `<mtext>`, an `<svg>` straight in a `<math>` (MathML's), an `<annotation-xml>` with an
@@ -5749,7 +5884,7 @@ rules something out.
     through the request APIs);
     measured (callgrind, release, instructions per request through a route's `patch_or` in
     process, 1,200 requests less 200 over 1,000, with the `#[ignore]` test
-    `what_a_patch_or_request_costs` in `crates/corten/src/tests.rs`, alternate runs, the median
+    `what_a_patch_or_request_costs` in [`tests/patches.rs`](../crates/corten/src/tests/patches.rs), alternate runs, the median
     and the range: `55757d723` (before, six runs) against `55757d723` with only this change's
     `crates/corten/src/page.rs` (three runs), the patch (`Mode::Action`) 17,969.79 (17,969.76 to
     17,969.80) and 17,969.83 (17,969.83 to 17,969.87), the page (`Mode::Document`) 18,382.70
@@ -5757,14 +5892,14 @@ rules something out.
     instruction; the whole change (three runs), whose other files are tests, an example and
     documents, 17,974.49 (17,974.48 to 17,975.89) and 18,388.71 (18,388.59 to 18,388.78), about
     five and six more, which the build with `page.rs` alone does not show. Those come from the
-    tests: `55757d723` with only `crates/corten/src/tests.rs` as at `019058f59` (three runs,
+    tests: `55757d723` with only the then-unsplit test file as at `019058f59` (three runs,
     alternating with three of `55757d723` rebuilt) counts 17,975.85 (17,975.82 to 17,975.88)
     and 18,388.76 (18,388.73 to 18,388.76) against 17,969.86 (17,969.78 to 17,969.86) and
     18,382.79 (18,382.69 to 18,382.84), six more in each mode with no line of the request path
-    changed. `tests.rs` is `#[cfg(test)]`, compiled into the same test binary as the code it
+    changed. The `tests` module is `#[cfg(test)]`, compiled into the same test binary as the code it
     counts, and the release profile builds that binary as one codegen unit with thin LTO, so more
     tests in it can move what the optimizer inlines and lays out (reasoned; which functions moved
-    was not traced); an app's binary has no `tests.rs`.
+    was not traced); an app's binary does not include the test module.
     The counted page asks for no HTML, which in a release build reaches the
     same code, since the check and the method it clones are not compiled there);
     measured (the checked-construction comparison above, `abbdf9831` against `bbd9d7432`,
@@ -6168,7 +6303,8 @@ rules something out.
     PR number and an entry suffix keep two pull requests for one issue from taking the same
     path; before there is a PR number, a unique branch slug takes its place. Release preparation
     collects the notes into the dated version section, with bullets starting with the Breaking
-    marker first and filename order within each group, and leaves the older changelog alone.
+    marker first and filename order within each group. It moves the previous release unchanged
+    to a file beside the main changelog, so existing relative links in that section still work.
     Fragments use prose with single-line inline HTTPS links so a link works before and after its
     note moves, without rewriting it or depending on a reference definition.
 
@@ -6424,6 +6560,8 @@ rules something out.
     a workspace's lock already has, so their output passes the check with no step between.
     `corten dev`, `corten build` and ordinary Cargo builds keep Cargo's normal lock updates;
     those are the edit loop, while a check verifies what is ready to commit and ship.
+    `corten build --locked` passes the flag to its builds, profiled or not, so Cargo fails them
+    when the lock is missing or needs updating.
     Not chosen: an opt-in `corten check --locked` or an opt-out that lets CI silently repair
     the graph; an additional metadata subprocess when the check already resolves metadata;
     `cargo generate-lockfile` in `corten new`, which rebuilds an existing workspace lock with
@@ -6825,6 +6963,91 @@ rules something out.
     read at `54f7ca9d`, with the repin that needed a new arm recorded in
     [#1397 Each new Failure variant breaks every app whose error page matches Failure without a `_` arm: decide whether Failure is `#[non_exhaustive]`](https://github.com/corten-run/corten/issues/1397).
 
+68. <a id="choice-profile-build"></a>**A profile-guided release is an option of `corten build`, which runs
+    the app while a command the app names sends it requests.** `corten build --profile-from
+    <command>` runs the toolchain's four steps: an instrumented build, that copy of the app at
+    work, `llvm-profdata merge`, and the release build with the merged profile
+    ([deploying](guide/deploy.md#a-profile-guided-build)). `corten build` alone is the build it
+    was. The command is the app's because what it sends decides the gain, and it does nothing
+    but send: `corten build` starts the copy on a free port it gives the command in `PORT`,
+    waits for it to listen, and stops it with `SIGTERM` when the command ends, so that the copy
+    writes its profile. The copy is started without `HOST`, so it listens on this machine
+    only, where the build and the command look for it. Starting, waiting and stopping are where a script goes wrong without a
+    word (a copy killed, not waited for, or left running writes no profile or a stale one), so
+    they are in the command once and not in each app's script. The instrumented copy has a
+    target directory of its own, so `target/release` never holds a binary that writes a
+    profile, and a step that fails leaves the last release standing. What can be told is wrong
+    without building is refused before the first build: a toolchain without `llvm-profdata`, a
+    system that cannot ask the copy to stop, a command that is not there, another profiled
+    build in the same target directory, and a Cargo configuration that may set flags the profile's flag, which has to
+    go in the environment, would replace. A command that fails,
+    a copy that exits early or does not listen, a profile not written, and a package that
+    builds two binaries each stop the build after the copy and before the release.
+    Cargo arguments come from a closed list given before `--profile-from` (`--features`,
+    `--all-features`, `--no-default-features`, `--locked`, `--package`, `--bin`), passed in
+    the same order to both builds, so the profile is of the binary the release is, and a
+    misspelled one is refused rather than built past; an argument that moves the release from
+    Cargo's default `target/release` (`--target`, `--target-dir`, `--profile`) is refused, since
+    the copy has to run where it is built to be profiled. Cargo's configuration is not checked
+    for them: a target set there is Cargo's to apply, and the copy it builds has to run on the
+    machine that builds it.
+    The standard library the `corten` command is held to can kill a child but not ask it to
+    stop, so the command has the shell send `SIGTERM`, and the option is Unix only: Windows
+    has no command that sends another process a Ctrl-C.
+    Not chosen: the steps left to the guide, which each app then copies with their traps (the
+    profiles the build's own macros write, a profile left from an earlier run, the
+    configuration's flags dropped, the copy killed); a command that starts and stops the copy
+    itself, which moves the same traps into every app's script; the steps in the starter's
+    Dockerfile behind a build argument, which gives a build outside the image nothing and has
+    the image's build run the app and its load; a profile by default, since a build cannot know
+    an app's requests and the second build and the run are minutes; reading Cargo's
+    configuration as Cargo does to keep its flags, which takes a TOML parser the command does
+    not have; an `llvm-profdata` found on the `PATH`, which may read another LLVM's format;
+    and every argument after a `--` passed to Cargo, which lets one that moves the binary or
+    its messages through to steps that read both.
+
+    Stands on: measured (the catalog app built by the option took 30,730 fewer cycles a request
+    than its ordinary build on the catalog page at the median of 10 alternated rounds, 21% of
+    the ordinary build's 143,443, lower in all 10, and 32,516 fewer where it compressed each
+    answer, 14% of 230,402, lower in 8 of 10, from a command of 3,000 requests; ten earlier
+    rounds of each on a busier machine gave 29% and 18%; one profiled build from an empty
+    target directory took about eleven minutes against about four for one ordinary build);
+    platform (rustc's `-Cprofile-generate` and `-Cprofile-use` and the `llvm-tools`
+    component's `llvm-profdata`; Cargo reads rustflags from the environment or from its
+    configuration and never both, and builds a crate again, one from the registry included,
+    when the file `-Cprofile-use` names is replaced; a process that returns from `main` or
+    calls `exit` writes its profile and one that a signal ends does not); reasoned (a
+    separate target directory is the only place an instrumented build cannot be mistaken for
+    the release; a refusal before the first build costs nothing, where a dropped linker flag
+    or a missing tool found after it costs a build); bet (an app has, or will write, a command
+    that reaches the routes its readers do, which the build cannot check: a command that sent
+    the copy nothing leaves a profile of the app starting and stopping; and the app listens on
+    `PORT` as `corten dev` already asks of it); value (fast and proven fast, with mistakes
+    failing early and one way to build a release, and the option kept off every app that does
+    not ask for it, README Values).
+
+    Revisit when: Cargo can add a flag to the ones its configuration sets, or builds with a
+    profile itself, so the refusal or the steps go; the standard library can ask a child
+    process to stop, or an app on Windows needs the option; an app's release needs a Cargo
+    argument not on the list (a cross build, a custom profile); or an app measures a profile from its own command
+    gaining nothing over the ordinary build.
+
+    Last checked: 2026-11-19, the rounds above at `b032155e2` (the earlier ones on the sources
+    of `70544a54a`) with rustc and Cargo 1.99.1 in `rust:1-bookworm`, the catalog app
+    (`bench/catalog/corten`) with its default features on one CPU under `wrk` with 64
+    connections; 2026-11-19, Cargo 1.99.1: a build given `-Cprofile-use` compiled a registry
+    crate again after the file at the same path was replaced, an ordinary build after a
+    profiled one compiled nothing and put the binary without the profile back in
+    `target/release`, an empty `RUSTFLAGS` left the configuration's flags out, and a file
+    named by `include` had its `rustflags` read; 2026-11-19, rustc 1.99.1: an instrumented
+    server ended by `SIGTERM`'s default action left no profile file, and the same server
+    leaving through `exit` on that signal left one; 2026-11-20, the list of Cargo arguments
+    ([#1731 corten build --profile-from passes no Cargo arguments, so an app whose release needs features, a package, a target or the lock cannot use it: decide what corten build passes on](https://github.com/corten-run/corten/issues/1731)),
+    a profiled build of a two-binary package given `--no-default-features --features=given -p
+    --locked --bin` and an empty `-F` on Cargo 1.100.0, selecting a workspace member that is not
+    the default one: each build was given exactly them, as written and in order (a `cargo` on
+    the `PATH` recorded each argument), and the test fails when the release build is not.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -6945,14 +7168,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
    after a first `<table>`; an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>`
    ..) after a first `<col>`; and after a first other table part, a `<table>` at the top level or
    in a later element, and a `<form>` there that holds an element, with an element HTML's
-   wherever it lands in or around it ([Choice 54](#choice-html-parse-refusals)). The rest depend
-   on what the patch began with or where the view is written (a `<p>` and a `<tr>` after it are
-   kept after a first `<tr>`, and an `<svg>` keeps a `<form>` of fields after a `<tr>`), so for
-   them, where a component or an expression writes the first element, and where one is written
-   between the two elements (it may leave an element open), a debug build refuses such a patch, as
-   `html!` writes it, when it sends it, naming the element, but a release build sends it as drawn
-   and the browser loses the part, so a mix that only some data draws is found only by a debug
-   render that draws it
+   wherever it lands in or around it ([Choice 54](#choice-html-parse-refusals)). When a concrete
+   `html!` is sent whole, a code-generating build also refuses literal losses that depend on
+   what came first (a `<tr>` after a first `<p>`). Where the compiler does not see the loss, for
+   example when a component or an expression writes an element or when one leaves an element open
+   between two literals, a debug build refuses the patch as drawn when it sends it, naming the
+   element. A release build sends those unchecked shapes, so a mix that only some data draws is
+   found only by a debug render that draws it
    ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
    That check refuses a patch from an area's handler that begins with a `<col>` even where the page
    already has the area's stylesheet, whose link Corten writes after the patch's elements and the
@@ -7027,7 +7249,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
    A value borrowed from one the view owns is computed inside the markup:
    `html! { let shown = saved.as_deref().unwrap_or(typed); <input value={shown}> }`.
 9. <a id="limit-stylesheet-support"></a>Component stylesheets support plain CSS with nesting.
-   The supported block at-rules are listed below; their names match ASCII case-insensitively:
+   At-rule names match ASCII case-insensitively in both blocks and statements.
+   The supported block at-rules are listed below:
 
 | At-rules | Processing |
 |---|---|
@@ -7040,8 +7263,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
 
    Raw bodies still compact trivia, and references to registered custom
    properties are renamed there too. Their nested block at-rules are copied raw (for example
-   `@styleset` and `@top-left`), not independently checked against this list. The statement parser recognizes
-   lowercase `@layer` (copied) and `@charset` (discarded: the generated stylesheet is UTF-8).
+   `@styleset` and `@top-left`), not independently checked against this list. The statement parser
+   copies `@layer` without changing the name's case, and discards `@charset` in any case
+   (the generated stylesheet is UTF-8).
    `@import` is refused because it loads a stylesheet the component does not own;
    `@custom-media` is refused because tokens define breakpoints. Unrecognized rules such as
    `@namespace` and `@document` are refused outside raw bodies; put them in the app's global
@@ -7271,6 +7495,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     does not explicitly accept a non-identity coding and sends no `If-None-Match` gets no tag:
     for a client like `curl` or a benchmark, the hash would cost about a third of the render for
     nothing. A CDN that fetches pages without asking for a coding gets no tag to revalidate them.
+    What counts is the header as it reaches the app: behind a proxy that takes `Accept-Encoding`
+    off, a browser that holds no tag is never sent one (one that still holds a tag names it, and
+    is answered when the proxy passes `If-None-Match` on too;
+    [deploying](guide/deploy.md#response-compression)).
     With `compress`, only explicitly named codings Corten can send count.
     Without it, any named non-identity coding with a positive weight counts, as does a positive
     `*` (it allows unlisted codings, RFC 9110 section 12.5.3). An absent or empty

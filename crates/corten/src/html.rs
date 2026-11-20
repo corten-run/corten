@@ -2171,6 +2171,43 @@ mod tests {
         }
     }
 
+    /// Hold the actual `html!` expansions and their whole-patch verdicts to the browser vectors.
+    #[cfg(feature = "json")]
+    #[test]
+    fn a_whole_patch_s_literal_top_level_follows_the_browser_vectors() {
+        use crate::prelude::Id;
+        #[derive(Id)]
+        struct AId;
+        #[derive(Id)]
+        struct BId;
+        #[derive(Id)]
+        struct CId;
+        #[derive(Id)]
+        struct HId;
+        #[derive(Id)]
+        struct RId;
+        #[derive(Id)]
+        struct TId;
+        fn render_patch(view: impl crate::view::Patch) -> String {
+            view.to_html()
+        }
+
+        let vectors: serde_json::Value = serde_json::from_str(include_str!("patch-parsing.json")).unwrap();
+        let cases = vectors["cases"].as_array().unwrap();
+        for (markup, _, verdict, html) in corten_macros::__whole_patch_cases!(render) {
+            let case = cases.iter().find(|case| case["html"] == html.as_str()).unwrap_or_else(|| panic!("no case {html}"));
+            let as_written = serde_json::Value::from(written(&html));
+            let differs = case["parsed"] != as_written
+                || case["parsedIn"].as_object().is_some_and(|engines| engines.values().any(|parsed| *parsed != as_written));
+            assert_eq!(verdict.is_some(), differs, "{markup}: {verdict:?} against {case}");
+            let problem = patch_parse_problem(&html);
+            match case["lost"].as_str() {
+                Some(want) => assert!(problem.is_some_and(|why| why.contains(want)), "{html}: {want}"),
+                None => assert_eq!(problem, None, "{html}"),
+            }
+        }
+    }
+
     /// The lists `html!`'s refusal reads a patch's top level and foreign content by are this check's:
     /// `corten-macros` has no dependency to share them through. (Skipped outside the repository.)
     #[test]
@@ -2183,6 +2220,7 @@ mod tests {
             source[start..end].split('"').skip(1).step_by(2).map(str::to_owned).collect()
         };
         assert_eq!(list("TEMPLATE_HEAD"), super::HEAD_TAGS);
+        assert_eq!(list("DECIDING_HEAD"), super::DECIDING_HEAD);
         assert_eq!(list("TABLE_PARTS"), super::TABLE_PARTS);
         assert_eq!(list("SVG_HTML_POINTS"), super::SVG_HTML_POINTS);
         assert_eq!(list("MATH_HTML_POINTS"), super::MATH_HTML_POINTS);

@@ -18,6 +18,17 @@ arbitrary error properties are saved. Identity diagnostics distinguish PID, star
 and process-name changes while retaining the same full identity assertion. Repeated
 failures do not grow a diagnostic log.
 
+For pinned executables, a closing bookend distinguishes a capture reference
+failure (`executable-recheck-reference`) from a different device/inode
+(`executable-recheck-inode`), changed size or mtime on the same inode
+(`executable-recheck-size-or-mtime`), and ctime-only change
+(`executable-recheck-ctime`). The labels retain no values and do not identify
+the process, prove an exec or exit, or show that bytes were unchanged. Each
+mismatch rejects the census. Only a catalog interval can establish an executable
+successor as described below. A failed closing procfs stat during a catalog
+rename is `executable-recheck-renamed`; otherwise it retains the
+`executable-recheck` operation and the existing process-read rules.
+
 If a catalog interval fails while reading the command's process census, its
 failure entry includes `catalogCensus`. `entryGapMs` is the signed wall-clock
 time from the last admitted sample timestamp to entry into the interval callback.
@@ -35,7 +46,9 @@ To exercise the catalog build path without renting a benchmark host, the
 catalog build and checks both data sources on a fresh hosted Linux runner.
 It runs on manual dispatch or changes to the probe itself, not on main pushes.
 Read the command outcome, host sample counts and failed-census timings in the
-Actions log. The job does not upload files from the build or results directory.
+Actions log. The first and last failures can also report an allowlisted process
+or executable recheck operation; other operation names print as `unknown`.
+The job does not upload files from the build or results directory.
 An interrupted build is a failed diagnostic, not a zero-throughput app.
 There are no timed requests, other contenders or official-round results.
 
@@ -83,6 +96,23 @@ Process-read ENOENT/ESRCH is a consistency candidate, not proof that a PID exite
 It can recover only through a new complete snapshot. A still-listed PID whose
 executable remains unreadable exhausts the budget and blocks proof. Permission,
 I/O, non-process read failures and PID/start-tick changes still fail immediately.
+
+A catalog child can replace its image via exec between the two executable
+reads. A different device/inode at the closing read alone is not enough to
+retry. The immediately preceding admitted sample must bind the same PID,
+start ticks and cgroup to the opening executable, and its pinned descriptor
+must still match every identity field. Discard the entire failed attempt.
+One fresh, complete census within the original deadline must pin and recheck
+the exact closing identity (device, inode, size, mtime and ctime) for that same
+process in the same cgroup. No further retry is allowed if this census fails.
+PID and start-tick changes fail before the executable comparison. When only
+the process name differs at that point, the collector must still check the
+executable: a stable image permits the ordinary name retry, a different inode
+requires the paired proof above, and an unreadable closing image blocks the run.
+Both admitted images must still seal to their exact digests at finish.
+Unseen old images, same-inode metadata changes and unproven successors remain
+blocked. This is sampled image replacement, not a trace of exec syscalls or
+an explanation of the original r21 interruption.
 
 Retries use the time left until the previous sample's existing one-second limit,
 capped at one second for an initial observation, rather than an arbitrary attempt
@@ -219,7 +249,10 @@ separate accounting-only block for a coherent 1,909 ms gap.
 The catalog controls charge a first-sighting full executable read against the
 remaining window, prove that pinned reads preserve identity and exact digests
 through terminal cleanup, and keep a persistently unreadable listed member
-blocked even with an empty terminal.
+blocked even with an empty terminal. Closing-bookend controls distinguish the
+changed identity fields after a process-read retry. They verify rollback,
+unchanged proof for later accepted samples, and that neither a later sample
+nor terminal emptiness clears the fault.
 
 Pending-capture controls use real owned file descriptors with synthetic
 membership and Docker reads. They check descriptor bounds, earlier accepted
@@ -228,6 +261,10 @@ uses the actual inherited-descriptor digest helper; Windows emulates only that
 subprocess. These controls do not establish actual Docker/native qualification.
 
 The delegated Linux tests use real child PIDs and cgroups. Fault-injection cases exercise
+both a real shell exec at the catalog closing read and a chmod of the same
+running inode, without substituting procfs stat results. The former requires
+both image digests in replay; the latter must not seal the mutated descriptor.
+Other cases exercise
 repeated interval errors, deadline exhaustion, strict process-name bookends,
 unknown-code sanitization, recovery that remains blocked, and a final sample failure
 that cannot claim an empty scope. Native descendant churn must retain all eight observed children and

@@ -130,7 +130,7 @@ unbounded search across runtimes, compilers or framework internals.
 
 | Contender | Supported lean configuration |
 |---|---|
-| Corten | No optional response compression or handler/header/send timers; normal page stages and error logs remain. |
+| Corten | No optional response compression or handler/header/send timers; normal page stages and error logs remain. The timed requests accept no coding and name no tag, so their pages carry no `ETag`. Only lean runs of commits from `2704dba9e`, which turned compression off for this recipe, to the one before `f93b94358`, which made a build without compression decide a tag as one with it does, hashed one for each page. |
 | Axum + Maud | Lean router with document headers on the catalog page, without the rest of the matched production middleware. |
 | ASP.NET Razor | Minimum request/response data rates unset; native Kestrel header/keepalive timers remain at their defaults after infinite timers caused early connection closure in Linux checks. Razor rendering, source failures and logging remain. |
 | Express | Production EJS view cache; no ETag generation or HTTP header/request/keepalive timers; fresh response rendering remains. |
@@ -510,6 +510,12 @@ only containers and the network with this invocation's ownership label are remov
 runner does not create cloud machines or operate the fullstack/nightly state. The CI
 `Catalog Contract` workflow builds each framework and runs both sources, but does not publish
 performance numbers.
+
+The runner creates the shared upstream container with `--pull=missing`. Docker reuses
+the pinned Node image for the requested platform or downloads it within the ten-minute
+preparation deadline. The round folder retains the create output in `prepare-upstream.log`.
+Starting that same container has a separate 30-second deadline, followed by the
+20-second health check. The runner reports preparation and startup failures separately.
 
 The runner uses a version-matched Playwright container for browser checks. Removing its owned
 container also removes detached browser processes after a timeout or interruption. To exercise

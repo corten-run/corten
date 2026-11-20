@@ -61,7 +61,7 @@ if mode == "process-exit-during-read":
     for name, final, ticks, flags in [("zombie", "Z", 50, 0), ("exiting", "R", 50, 4),
                                       ("live", "S", 50, 0), ("reused", "Z", 51, 4)]:
         stats = iter([row("R", 50), row(final, ticks, flags), row(final, ticks, flags)])
-        def read_text(path):
+        def read_text(path, **kwargs):
             return next(stats) if path.name == "stat" else "0::/system.slice/test.scope\n"
         with mock.object(pathlib.Path, "read_text", read_text), mock.object(pathlib.Path, "read_bytes", return_value=b""), \
                 mock.object(pathlib.Path, "stat", side_effect=FileNotFoundError()):
@@ -141,7 +141,7 @@ class Path:
             return cg.endswith(".scope") or any(p["cgroup"] == "0::" + cg + "\n" for p in rows.values())
         return self.value in data or self.value in folders
 
-    def read_text(self):
+    def read_text(self, **kwargs):
         assert self.name == "cgroup.events"
         cg = self.value[len("/sys/fs/cgroup"):-len("/cgroup.events")]
         if cg in remove_on_read:
@@ -265,7 +265,7 @@ class Child:
         rows.pop(self.pid)
         if mode == "disconnect":
             raise scope["subprocess"].TimeoutExpired("synthetic-disconnect", timeout)
-        return 0
+        return current.get("code", 0)
 
 
 def run(args, **kwargs):
@@ -391,7 +391,7 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
             invocation = request["invocation"]
             identifier = invocation["id"]
             payload = step["payload"].encode()
-            current.update({"pack": step.get("pack"), "query": "expected" in step})
+            current.update({"pack": step.get("pack"), "query": "expected" in step, "code": step["code"]})
             if current["query"]:
                 argument["expected"] = step["expected"]
         invocations.append(invocation)
@@ -410,7 +410,7 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
             if sequence == 0:
                 arguments.append(source.encode().hex())
             with patch.object(sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO((raw if channel == "ssh" else b"") + payload))):
-                assert scope["main"](arguments) == 0
+                assert scope["main"](arguments) == current.get("code", 0)
         except scope["subprocess"].TimeoutExpired:
             pass
         except AssertionError as error:

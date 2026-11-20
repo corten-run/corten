@@ -1,0 +1,1 @@
+- Report a fixed reason when the grouped benchmark launcher cannot validate its installed Git HEAD, without exposing raw Git diagnostics or changing evidence validation.

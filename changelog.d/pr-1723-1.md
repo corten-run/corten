@@ -1,0 +1,1 @@
+- Record why Corten keeps its fixed request stages without per-group flags and clarify when a page GET gets an ETag.

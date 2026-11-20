@@ -238,16 +238,23 @@ const hash = (source) => createHash("sha256").update(source).digest("hex");
 export const validationFailure = () => new Error("native campaign validation unavailable or invalid; evidence/host preserved");
 const text = (bytes) => new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 const gitEnvironment = () => ({ ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1", GIT_TERMINAL_PROMPT: "0" });
+const headFailure = (reason) => new Error(`Git HEAD validation failed: ${reason}`);
 function head(root, readGit = spawnSync) {
-  const result = readGit("git", ["--no-replace-objects", "-C", root, "rev-parse", "--verify", "HEAD^{commit}"], {
-    encoding: "utf8", timeout: 5000, maxBuffer: 1024, windowsHide: true, shell: false,
-    env: gitEnvironment(),
-  });
-  if (result.status !== 0 || result.error || !/^[a-f0-9]{40}\s*$/.test(result.stdout ?? "")) throw validationFailure();
+  let result;
+  try {
+    result = readGit("git", ["--no-replace-objects", "-C", root, "rev-parse", "--verify", "HEAD^{commit}"], {
+      encoding: "utf8", timeout: 5000, maxBuffer: 1024, windowsHide: true, shell: false,
+      env: gitEnvironment(),
+    });
+  } catch { throw headFailure("process error"); }
+  if (result.error) throw headFailure(result.error.code === "ETIMEDOUT" ? "timed out" : "process error");
+  if (result.status !== 0) throw headFailure("unsuccessful exit");
+  if (!/^[a-f0-9]{40}\s*$/.test(result.stdout ?? "")) throw headFailure("malformed output");
   return result.stdout.trim();
 }
 // Evidence may name a source identity, never select executable code. Default
 // replay accepts only this installed controller's commit, captured on import.
+// Only this import exposes the fixed HEAD diagnostic; captureValidation masks it.
 const installedCommit = head(checkout);
 
 function dependency(root, path, sha256, limit) {

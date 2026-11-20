@@ -41,7 +41,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+      # The CLI's profile-build tests merge a profile with the toolchain's llvm-profdata (llvm-tools).
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt,llvm-tools && rustup default stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo run -q -p corten-cli -- fmt --check crates examples bench
@@ -102,8 +103,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      # The CLI integration tests run `corten check` (Clippy and rustfmt); the kit tests use rustfmt too.
-      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+      # The CLI integration tests run `corten check` (Clippy and rustfmt) and a profile build
+      # (llvm-tools); the kit tests use rustfmt too.
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt,llvm-tools && rustup default stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --release --workspace --all-features
 

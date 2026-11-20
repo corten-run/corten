@@ -64,7 +64,7 @@ fn help_does_not_make_an_unknown_command_valid() {
 
 #[test]
 fn help_names_a_command_as_its_own_help_does() {
-    for command in [["check"].as_slice(), &["ui"], &["ui", "add"], &["help"]] {
+    for command in [["check"].as_slice(), &["build"], &["ui"], &["ui", "add"], &["help"]] {
         let out = Command::new(env!("CARGO_BIN_EXE_corten")).arg("help").args(command).output().unwrap();
         let stdout = String::from_utf8(out.stdout).unwrap();
         assert!(out.status.success(), "help {}", command.join(" "));
@@ -101,6 +101,34 @@ fn a_repeated_option_is_refused_and_writes_nothing() {
     assert!(!out.status.success());
     assert!(String::from_utf8(out.stderr).unwrap().contains("--name is given more than once"));
     assert!(!changed, "a refused new wrote files");
+}
+
+/// `corten build` reads its arguments with its own grammar before help: an argument it refuses
+/// is refused, though a `-h` the command after `--profile-from` was given comes later, and a
+/// `-h` that command was given is never `corten build`'s.
+#[test]
+fn build_refuses_a_bad_argument_before_a_later_help() {
+    let root = std::env::temp_dir().join(format!("corten-build-help-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for (args, says) in [
+        (&["-p", "shop", "--profile-form", "sh", "-h"][..], "not \"--profile-form\""),
+        (&["--bin", "--profile-from", "sh", "-h"], "--bin needs a value"),
+        (&["--", "--help"], "not \"--\""),
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_corten")).arg("build").args(args).current_dir(&root).output().unwrap();
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(!out.status.success(), "build {}", args.join(" "));
+        assert!(stderr.contains(says), "build {}: {stderr}", args.join(" "));
+        assert!(!String::from_utf8(out.stdout).unwrap().contains("Usage:"), "build {}", args.join(" "));
+    }
+    for args in [&["--help"][..], &["--locked", "-p", "shop", "-h"], &["--bin", "--help"]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_corten")).arg("build").args(args).current_dir(&root).output().unwrap();
+        assert!(out.status.success(), "build {}", args.join(" "));
+        assert!(String::from_utf8(out.stdout).unwrap().starts_with("Usage:\n  corten build "), "build {}", args.join(" "));
+    }
+    let changed = std::fs::read_dir(&root).unwrap().next().is_some();
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(!changed, "a refused or help build wrote files");
 }
 
 #[test]

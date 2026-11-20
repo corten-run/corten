@@ -2,6 +2,9 @@
 // Run only inside an explicitly prepared owned delegated test unit. This test
 // never creates/configures a unit, changes limits or adopts an existing cgroup.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -10,9 +13,101 @@ import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { beginLifetime, inspectLifetime, processIdentity } from "./host-lifetime.mjs";
+import { executableIdentity } from "./participant-executables.mjs";
 import { supervise } from "./process.mjs";
 let unit;
 if (process.platform === "linux") unit = /\/corten-bench-groups-(r[1-9]\d*)-[a-f0-9]{16}\.service\/supervisor\n?$/.exec(readFileSync("/proc/self/cgroup", "utf8"));
+for (const change of ["exec", "exec with rename", "chmod"]) test(`catalog executable bookends around real ${change}`, {
+  skip: !unit && "requires Linux in an explicitly owned delegated benchmark test unit", timeout: 15000,
+}, async (t) => {
+  const temporary = mkdtempSync(join(tmpdir(), "isolated-kernel-exec-")), directory = join(temporary, "command-host");
+  const old = join(temporary, "shell"), next = fs.realpathSync("/bin/cat");
+  const campaign = `${unit[1]}-0000000000000008`, binding = { request: { group: "catalog-page", round: "observer-exec", commit: "a".repeat(40) } };
+  fs.copyFileSync("/bin/bash", old); fs.chmodSync(old, 0o500);
+  const invocation = { executable: old, argv: ["--noprofile", "--norc", "-c", 'echo ready; read -r line || exit 0; exec "$1"', "shell", next], shell: false };
+  const child = spawn(old, invocation.argv, { stdio: ["pipe", "pipe", "inherit"], timeout: 8000, killSignal: "SIGKILL" });
+  const closed = once(child, "close");
+  const pid = child.pid, at = `/proc/${pid}`, pause = new Int32Array(new SharedArrayBuffer(4));
+  const pin = fs.openSync(old, "r"), initial = executableIdentity(pin);
+  let tick, observer, finished = false;
+  t.mock.method(globalThis, "setInterval", (cb) => { tick = cb; return 1; });
+  try {
+    const [ready] = await Promise.race([once(child.stdout, "data"), closed]); assert.equal(String(ready), "ready\n");
+    const before = processIdentity(readFileSync(`${at}/stat`, "utf8"));
+    observer = await beginLifetime({ campaign, binding, invocation, directory, command: 7, pid }); await observer.attach(pid);
+    // Both images must be real, and the old image must already occur in an
+    // admitted sample. Exec either just after the opening stat (so comm
+    // changes too) or just before the closing executable stat.
+    const early = change === "exec with rename", original = fs.statSync; let reads = 0, changed = false;
+    const hook = t.mock.method(fs, "statSync", function (path, ...args) {
+      const captured = early ? original.call(this, path, ...args) : null;
+      if (path === `${at}/exe` && ++reads === (early ? 1 : 2)) {
+        if (change !== "chmod") {
+          child.stdin.write("go\n");
+          const until = performance.now() + 500;
+          while (fs.readlinkSync(path) !== next || (early && readFileSync(`${at}/comm`, "utf8").trim() === before.comm)) {
+            assert.ok(performance.now() < until, "owned child did not exec before the fixture deadline");
+            Atomics.wait(pause, 0, 0, 1);
+          }
+        } else fs.chmodSync(old, 0o700);
+        changed = true;
+      }
+      return early ? captured : original.call(this, path, ...args); // Never substitute a stat result.
+    });
+    syncBuiltinESMExports();
+    try { tick(); } finally { hook.mock.restore(); syncBuiltinESMExports(); }
+    await observer.drain();
+    assert.equal(changed, true);
+    const after = processIdentity(readFileSync(`${at}/stat`, "utf8"));
+    assert.equal(after.pid, before.pid); assert.equal(after.startTicks, before.startTicks);
+    const pinned = executableIdentity(pin);
+    if (change !== "chmod") {
+      if (early) {
+        assert.notEqual(after.comm, before.comm);
+        assert.equal(reads, 4, "both censuses must actually read both executable bookends");
+      }
+      assert.deepEqual(pinned, initial);
+      assert.equal(fs.readlinkSync(`${at}/exe`), next);
+      tick(); await observer.drain(); // An independent stable census of the new image.
+    } else {
+      assert.notEqual(pinned.ctimeNs, initial.ctimeNs);
+      assert.deepEqual({ ...pinned, ctimeNs: initial.ctimeNs }, initial);
+    }
+    child.stdin.end(); const [code, signal] = await closed;
+    assert.deepEqual([code, signal], [0, null]);
+    const result = { terminal: true, code, signal, cancelled: false, forced: false, success: true, error: null };
+    finished = true; await observer.finish(result);
+    const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
+    const detail = JSON.stringify(terminal.observerFailures);
+    assert.equal(terminal.empty, true, detail);
+    const inspect = () => inspectLifetime(binding, invocation, directory, { campaign, command: 7, pid, result });
+    if (change !== "chmod") {
+      assert.equal(terminal.observerFailures.count, 0, detail);
+      const proof = inspect();
+      assert.equal(proof.status, "verified"); assert.equal(proof.cleanupComplete, true);
+      const digest = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
+      const oldDigest = digest(old), nextDigest = digest(next); assert.notEqual(oldDigest, nextDigest);
+      assert.deepEqual(proof.samples.map((s) => s.processes.map((p) => {
+        const identity = processIdentity(p.stat);
+        assert.equal(identity.pid, pid); assert.equal(identity.startTicks, before.startTicks);
+        return p.executableSha256;
+      })), [[], [oldDigest], [nextDigest], [nextDigest], []]);
+    } else {
+      assert.equal(terminal.observerFailures.first.operation, "executable-recheck-ctime", detail);
+      assert.equal(terminal.observerFailures.first.catalogCensus.attempts, 1);
+      assert.equal(terminal.observerError, "host-executable-proof-incomplete");
+      assert.equal(existsSync(join(directory, "executables.json")), false);
+      assert.throws(inspect); // The earlier accepted descriptor was itself mutated.
+    }
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await closed;
+    if (!finished) observer?.dispose();
+    fs.closeSync(pin);
+    assert.ok(resolve(temporary).startsWith(resolve(tmpdir()) + sep)); rmSync(temporary, { recursive: true });
+  }
+});
+
 test("actual delegated cgroup observes the gated Node child, accounting and positive empty terminal state", {
   skip: !unit && "requires Linux in an explicitly owned delegated benchmark test unit", timeout: 15000,
 }, async (t) => {

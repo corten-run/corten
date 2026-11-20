@@ -20,6 +20,7 @@ Choice in the same pull request.
    dependencies there; it must build for native and agent clients.
 2. Server feed (replay, live streams, followers): `crates/corten-feed`.
 3. Pages, request modes, patches, handlers, the runtime, `App` defaults: `crates/corten`.
+   Put new crate-level `corten` tests in the area's file under `crates/corten/src/tests/`.
    Markup is `html!` and `#[component]`, links are `#[derive(Route)]` structs, behavior is a
    `#[component(js)]` (plain `export function`s with JSDoc in the script next to it, called from
    its markup: `let save = refs();`, `ref={save}`, `on:click={js::enable(save)}`) and text is
@@ -69,8 +70,9 @@ Choice in the same pull request.
    the containers afterwards. All must pass.
 2. Measure a change to rendering, the runtime or the request path with the number that can see
    it, as [CONTRIBUTING.md](CONTRIBUTING.md#pull-requests) (item 2) describes.
-3. Update the guide that describes a changed behavior, and add a [changelog fragment](CONTRIBUTING.md#pull-requests)
-   in `changelog.d/`, not a line under Unreleased in `CHANGELOG.md`.
+3. Update the guide that describes a changed behavior. Add a short, linked app-author note in
+   `changelog.d/` following the [pull request rules](CONTRIBUTING.md#pull-requests), not a line
+   under Unreleased in `CHANGELOG.md`.
 4. Have the change reviewed as [CONTRIBUTING.md](CONTRIBUTING.md#review) describes: start a new
    agent that did not write it, and give it the diff, `README.md` (Values), `docs/design.md` and
    CONTRIBUTING.md (Review), not your reasoning or summary. Fix each finding or say why it

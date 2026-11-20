@@ -121,9 +121,9 @@ const fail = (app, source, stage, error) => {
   log(`${app ?? "suite"} ${source ?? ""} ${stage} FAILED: ${error.message ?? error}`);
   save();
 };
-const owned = async (args, name) => {
+const owned = async (args, name, opts) => {
   active.add(name);
-  await docker([args[0], "--name", name, "--label", `${label}=${runId}`, ...args.slice(1)]);
+  await docker([args[0], "--name", name, "--label", `${label}=${runId}`, ...args.slice(1)], opts);
   return name;
 };
 async function remove(name) {
@@ -268,6 +268,7 @@ async function load(name, target, phase, seconds, raw) {
   } finally { await remove(container); }
 }
 
+let suiteStage = "suite";
 try {
   save();
   summary.commit = await command("git", ["rev-parse", "HEAD"]);
@@ -307,8 +308,12 @@ try {
   }
   await docker(["network", "create", "--label", `${label}=${runId}`, network]);
   summary.networkCreated = true;
-  await owned(["run", "-d", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
-    "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, ...(group ? workerCommand : ["node", "/bench/catalog/upstream.mjs"])], upstreamName);
+  suiteStage = "upstream preparation";
+  await owned(["create", "--pull=missing", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
+    "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, ...(group ? workerCommand : ["node", "/bench/catalog/upstream.mjs"])], upstreamName,
+    { timeout: 10 * 60 * 1000, file: join(folder, "prepare-upstream.log"), capture: false });
+  suiteStage = "upstream startup";
+  await docker(["start", upstreamName]);
   const upstreamImageId = (await inspect(upstreamName)).Image;
   const upstreamImageInfo = JSON.parse(await docker(["image", "inspect", upstreamImageId]))[0];
   assert.equal(upstreamImageInfo.Id, upstreamImageId);
@@ -321,6 +326,7 @@ try {
     if (Date.now() > upstreamDeadline) throw new Error("catalog upstream did not start");
     await sleep(100);
   }
+  suiteStage = "suite";
   const version = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).devDependencies["@playwright/test"];
   assert.match(version, /^\d+\.\d+\.\d+$/, "Playwright must have a pinned image-compatible version");
   const checkerImage = `mcr.microsoft.com/playwright:v${version}-noble`;
@@ -467,7 +473,7 @@ try {
   summary.complete = summary.checksPassed && summary.failures.length === 0 && !(summary.targetFailures?.length);
   if (group && summary.checksPassed && !options.checkOnly) summary.attemptComplete = summary.failures.length === 0
     && Object.values(summary.apps).every((entry) => Object.values(entry.runs).every((runs) => runs.length === options.passes && runs.every((r) => r.complete)));
-} catch (e) { fail(null, null, "suite", e); }
+} catch (e) { fail(null, null, suiteStage, e); }
 finally {
   if (group && summary.tools?.upstream) {
     try {

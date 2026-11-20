@@ -5,14 +5,14 @@ import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertFleetCensus, ownedDroplet, reservation, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
+import { assertFleetCensus, bootstrapWorkspaceScript, ownedDroplet, reservation, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash } from "./cloud-local.mjs";
 import { campaignOutcome, controllerFailure, controllerState, full, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
-import { failedNativeArchive, failedNativeObservation, failedNativeScript, setupEvidence, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript,
+import { failedNativeArchive, failedNativeObservation, failedNativeScript, setupEvidence, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript,
   verifyFailedNativeCustody, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { controlCheckpoint } from "./cloud-transport.mjs";
@@ -327,13 +327,27 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     verifyRetirementRecord(bytes, state.retirement.kind);
   };
   const requireUnusedBootstrapCustody = () => {
-    assert.ok(unusedBootstrapApproval && unusedBootstrap(state), "exact approved unused bootstrap required");
+    const settled = settledBootstrap(state, local);
+    assert.ok(unusedBootstrapApproval && (settled || unusedBootstrap(state)), "exact approved unused bootstrap required");
     assert.equal(digest(regular(statePath, 1024 * 1024)), unusedBootstrapApproval.reservationSha256, "locked unused bootstrap reservation changed");
     const present = (path) => lstatSync(path, { throwIfNoEntry: false });
     assert.ok(!present(join(base, ".groups-launch.lock")) && (!state.group || !present(join(dirname(base), ".fleet-operation.lock"))),
       "original launch custody remains; preserve locks and host");
-    assert.ok(readdirSync(local).every((name) => ["state.json", "operation.lock", "known_hosts", "unused-host.json"].includes(name)
+    const names = ["state.json", "operation.lock", "known_hosts", "unused-host.json"];
+    if (settled) {
+      assert.equal(fileHash(join(local, "known_hosts"), 1024 * 1024), unusedBootstrapApproval.knownHostsSha256, "saved host key changed");
+      const uploaded = Math.ceil((state.control.ledger.length - 2) / 2), entries = Object.entries(remoteFiles(state));
+      // The launcher saves the next file before its provider read and SFTP dispatch.
+      const staged = state.control.ledger.length % 2 === 0 ? uploaded + 1 : uploaded;
+      for (const [i, [name, content]] of entries.slice(0, staged).entries()) {
+        const path = join(local, name);
+        if (i < uploaded || present(path)) assert.equal(fileHash(path, 1024 * 1024), digest(content), "local bootstrap upload changed");
+        names.push(name);
+      }
+    }
+    assert.ok(readdirSync(local).every((name) => names.includes(name)
       || /^unused-host\.interrupted-[a-f0-9]{64}\.json$/.test(name)), "unexpected local bootstrap custody; preserve host");
+    return settled;
   };
   const retire = async (kind, evidence, finishedAtMs) => {
     const pinned = options.unusedBootstrapKnownHosts !== undefined;
@@ -520,7 +534,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           "completed create and owned host differ; preserve reservation without provisioning");
           await waitForSsh();
           assert.equal((await ssh("true", 30000, true)).status, 0, "SSH unavailable; never retry or relaunch");
-          await ssh("mkdir -m 700 /bench && touch /bench/run.log");
+          await ssh(bootstrapWorkspaceScript(state, { launch: true }));
           for (const [name, content] of Object.entries(remoteFiles(state))) {
             durable(join(local, name), content); await scp(join(local, name), `root@${state.ip}:/bench/${name}`);
             await ssh(`printf '%s  %s\\n' '${digest(content)}' '/bench/${name}' | sha256sum --check --status`);
@@ -554,7 +568,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     async collect() {
       assert.ok(options.collect, "collect options required");
       if (options.unusedBootstrapKnownHosts !== undefined) return locked(async () => {
-        requireUnusedBootstrapCustody();
+        if (requireUnusedBootstrapCustody())
+          assert.equal((await execute("git", ["rev-parse", "HEAD"])).stdout.trim(), state.commit, "settled uploads require the measured checkout");
         if (state.status === "preparing") return retireUnused();
         verifyRetirement(); await confirmDeleted();
         state.destroyedAt ??= new Date().toISOString(); save(); return 1;

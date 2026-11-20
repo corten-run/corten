@@ -10,7 +10,7 @@ import { host as catalogHost } from "../catalog/droplet-contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
 import { accountId, archive, commit, context, harness, metadata, syntheticInspection } from "./cloud-fixtures.mjs";
 import { campaignOutcome, controllerState, parseDropletArgs } from "./cloud-options.mjs";
-import { remoteFiles } from "./cloud-remote.mjs";
+import { bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { digest } from "./cloud-local.mjs";
 import { guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
 
@@ -181,9 +181,9 @@ test("group launch permits exact siblings but reserves only this group's complet
   await assert.rejects(h.task({}, options).launch()); assert.equal(h.creates, 1);
 });
 
-test("a terminal later group cannot be saved as running admission and remains collectable", async (t) => {
+test("ingress verification failure stays outside admission and retires only with terminal custody", async (t) => {
   const { h, options, fleet } = configured(t);
-  options.group = groupNames[1]; h.flags.active = false;
+  options.group = groupNames[1]; h.flags.active = true; h.flags.bootstrapPending = 1;
   // Replay the real guardian against the in-memory kernel, including the
   // actual controller requests and the original exit archive's custody bytes.
   const kernel = spawn(process.platform === "win32" ? "python" : "python3",
@@ -198,7 +198,7 @@ test("a terminal later group cannot be saved as running admission and remains co
   const run = async (binary, args, timeout, allowFail, expiry, control) => {
     if (!control) return h.run(binary, args, timeout, allowFail);
     const s = h.saved(), script = args.at(-1), request = control.request;
-    const exitArchive = request.epoch === "bootstrap" && script.startsWith("systemctl show");
+    const exitArchive = request.epoch === "bootstrap" && script === bootstrapReadScript;
     // Re-running pack.sh extends remote custody even though the exit archive
     // is immutable. A second pack here must fail the custody comparison.
     const pack = exitArchive || script === "timeout 600 /bin/bash /bench/pack.sh";
@@ -206,23 +206,41 @@ test("a terminal later group cannot be saved as running admission and remains co
     const expected = query && { sequence: request.sequence, requests: s.control.ledger.slice(0, -1).map((r) => r.request),
       binding: { round: s.round, commit, token, helperSha256: guardianSha256 },
       queryArgv: ["/usr/bin/python3", "-", s.id, s.unit, JSON.stringify(Object.fromEntries(Object.entries(remoteFiles(s)).map(([k, v]) => [k, digest(v)]))), "1"] };
+    const result = query ? null : await h.run(binary, args, timeout, allowFail);
+    if (exitArchive) {
+      assert.equal(h.flags.active, true);
+      assert.equal(s.status, "running"); assert.equal(s.preBootstrapTerminal, undefined);
+      assert.equal(result.status, 3); assert.equal(h.deletes, 0);
+      h.flags.active = false;
+    }
     kernel.stdin.write(JSON.stringify({ request, payload: binary === "ssh" ? `set -euo pipefail\n${script}\n` : "synthetic SFTP",
-      pack, ...(query ? { expected } : {}) }) + "\n");
+      pack, code: result?.status ?? 0, ...(query ? { expected } : {}) }) + "\n");
     const line = await lines.next(); assert.equal(line.done, false, stderr);
     const reply = JSON.parse(line.value);
-    if (exitArchive) h.setArchive(archive([...metadata(), { name: "control/" },
+    if (exitArchive) h.setArchive(archive([...metadata().slice(1),
+      { name: "run.log", body: "benchmark job failed: stage=ssh-ingress-verification line=129 exit=1\n" }, { name: "control/" },
       ...Object.entries(reply.custody).map(([k, v]) => ({ name: "control/" + k, body: Buffer.from(v, "hex") }))]));
     if (query) return { status: 0, stdout: JSON.stringify({ schema: "benchmark-failed-setup-host/v2", hostId: s.id, unit: s.unit,
       setupFailed: true, exitCode: 1, observedAtMs: Date.now(), control: reply.proof }) };
-    return h.run(binary, args, timeout, allowFail);
+    return result;
   };
-  await assert.rejects(h.task({ run }, options).launch(), /group ended before running admission/);
+  await assert.rejects(h.task({ run }, options).launch(), /ended before common bootstrap admission/);
   assert.equal(h.saved().status, "starting"); assert.equal(h.saved().group, groupNames[1]);
+  assert.ok(h.saved().preBootstrapTerminal); assert.equal(h.saved().bootstrapReady, undefined);
+  assert.deepEqual(h.saved().control.sealed, []); assert.equal(h.saved().control.monitor.phase, "pending");
+  assert.equal(h.saved().control.ledger.at(-2).code, 3);
   assert.equal(h.creates, 1); assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
+  h.flags.active = true;
+  await assert.rejects(h.task({ run }).collect(), /startup unit no longer identically terminal/);
+  h.flags.active = false; h.flags.wrongUnit = true;
+  await assert.rejects(h.task({ run }).collect());
+  h.flags.wrongUnit = false;
+  assert.equal(h.deletes, 0); assert.equal(h.saved().archiveSha256, undefined);
   assert.equal(await h.task({ run }).collect(), 1);
   const s = h.saved();
   assert.equal(s.status, "retired"); assert.equal(s.retirement.kind, "setup-failed"); assert.ok(s.destroyedAt);
   assert.ok(s.archiveSha256 && s.evidenceSha256); assert.equal(s.validation, undefined); assert.equal(s.collectedAt, undefined);
+  assert.match(readFileSync(join(h.local, s.evidence, "run.log"), "utf8"), /stage=ssh-ingress-verification/);
   assert.equal(await h.task({ run }).collect(), 1); assert.equal(h.inspections, 0);
   assert.equal(h.saved().fullGroupQualified, false);
   assert.equal(h.creates, 1); assert.equal(h.deletes, 1);

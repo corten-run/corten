@@ -1212,11 +1212,31 @@ mod tests {
     #[test]
     fn staged_page_future_sizes() {
         // Heap payloads of the real stage and typed handler boxes, with no app middleware or
-        // layout reads. Keep headroom for debug/release, features and compiler layout changes.
-        // If a bound fails, run this test in both profiles and remeasure the staged catalog
-        // request before raising it: the fixture guards Corten's overhead, not every app's.
-        const STAGE_FUTURE_LIMIT: usize = 3584;
-        const HANDLER_FUTURE_LIMIT: usize = 1024;
+        // layout reads. What made the stage future large was the request held again in each
+        // stage, so each future is held within the size of one request, above and below, of
+        // what its build profile measured.
+        //
+        // Measured on x86_64-unknown-linux-gnu with rustc 1.100.0: 3,008 bytes for the stage
+        // future in a debug build (all features, default features and none) and 2,280 in a
+        // release one (all features and default features), 760 for the handler's in each, with
+        // a request of 240. The stage future holds the request's page snapshot
+        // (`page::RequestPage`: its mode and credentials, and in a debug build room for an
+        // `Option<FormCheck>`, which this GET leaves empty), read once before dispatch.
+        //
+        // The sizes are the compiler's layout, so the test can fail in three ways:
+        // - a future grew by a request or more after a change to the stages or the handler:
+        //   something that size is held again across the stages after it. Run this test in
+        //   both profiles and remeasure the staged catalog request before moving a
+        //   measurement: the fixture guards Corten's overhead, not every app's;
+        // - a future shrank by a request or more. That leaves room for a second copy before
+        //   the test fails, so measure both profiles and lower the measurements. (Nearer than
+        //   that, one copy can still pass until the measurement is lowered.)
+        // - another toolchain moved the layout that far with no such change. Measure both
+        //   profiles again and move the measurements and the versions above with them.
+        const REQUEST: usize = std::mem::size_of::<http::Request<Body>>();
+        // The stage future and the handler future, in bytes.
+        const MEASURED: (usize, usize) = if cfg!(debug_assertions) { (3008, 760) } else { (2280, 760) };
+        let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
 
         let router = App::new(pages::router()).router();
         let Inner::Routes(dispatch) = &router.inner else { panic!("expected a router with no outer layer") };
@@ -1229,8 +1249,19 @@ mod tests {
 
         let stage_size = std::mem::size_of_val(stage.as_ref().get_ref());
         let handler_size = std::mem::size_of_val(handler.as_ref().get_ref());
-        eprintln!("stage future: {stage_size} bytes; handler future: {handler_size} bytes");
-        assert!(stage_size < STAGE_FUTURE_LIMIT, "stage future: {stage_size} bytes (limit {STAGE_FUTURE_LIMIT})");
-        assert!(handler_size < HANDLER_FUTURE_LIMIT, "handler future: {handler_size} bytes (limit {HANDLER_FUTURE_LIMIT})");
+        eprintln!("stage future: {stage_size} bytes; handler future: {handler_size} bytes; request: {REQUEST} bytes");
+        for (name, size, measured) in [("stage", stage_size, MEASURED.0), ("handler", handler_size, MEASURED.1)] {
+            assert!(
+                size < measured + REQUEST,
+                "{name} future: {size} bytes in a {profile} build, a request ({REQUEST} bytes) or more over the \
+                 {measured} measured: something that size is held again across the stages, or another rustc \
+                 moved the layout. See this test's comment before moving a measurement"
+            );
+            assert!(
+                size + REQUEST > measured,
+                "{name} future: {size} bytes in a {profile} build, a request ({REQUEST} bytes) or more under the \
+                 {measured} measured: measure both profiles and lower the measurements, as this test's comment says"
+            );
+        }
     }
 }

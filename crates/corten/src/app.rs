@@ -13,12 +13,12 @@ use crate::{
     handler::Request,
     listener::Listener,
     middleware::Middleware,
-    page::{self, default_error_page, error_page_fn, Asked, Credentials, ErrorPageFn, Failure, Shared},
+    page::{self, default_error_page, error_page_fn, Asked, ErrorPageFn, Failure, RequestPage, Shared},
     pwa::Pwa,
     response::Response,
     route::{Methods, Prefix, Route as TypedRoute, Routes},
     router::{get, Route, Router, Table},
-    security::{Applied, Csp, NonceSlot, Policy},
+    security::{Applied, Csp, NonceSlot, Origin, Policy},
     signal::{self, Watch},
     sse::Event,
     task::{Finishing, Running, Task},
@@ -1690,7 +1690,9 @@ where
 /// (rustls, native-tls) stays the app's, and so does its configuration: ALPN offers `http/1.1`,
 /// what Corten speaks. A step whose future borrows from what it captures clones it first:
 /// `move |tcp| { let acceptor = acceptor.clone(); async move { acceptor.accept(tcp).await } }`.
-/// The step's error is not read: the connection closes.
+/// The step's error is not read: the connection closes. The IO's flush must complete only once
+/// the bytes it holds have been written (tokio-rustls's does): the header timeout counts from the
+/// first flush that completes after an answer's body has been taken.
 pub async fn serve_wrapped<L, W, F, Io, E, M>(listeners: Vec<L>, wrap: W, app: App<M>) -> std::io::Result<()>
 where
     L: Listener,
@@ -2487,9 +2489,11 @@ impl<S: Steps> Layer<S> {
     /// headers last.
     async fn secure(&self, mut pending: Inbound<'_>, route: Route, accepts_coding: bool, scope: Option<&Scope>) -> Response {
         let req = pending.get();
+        let headers = req.headers();
+        let mut origin = Origin::new(headers);
         // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
         // page, no caller lookup.
-        if !self.policy.answers(req) {
+        if !self.policy.answers(req.uri(), || origin.host()) {
             let mut res = crate::security::misdirected();
             self.policy.headers(&mut res, None, &self.policy.csp);
             res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
@@ -2511,47 +2515,58 @@ impl<S: Steps> Layer<S> {
         let body_limit = scope.body_limit;
         // The middleware of the area or API the request is in, where one has some.
         let steps = self.steps.scope(scope);
+        let cors = mount.filter(|mount| !mount.origins().is_empty()).and_then(|mount| mount.allowed_origin(origin.value()));
         if let Some(mount) = mount {
-            if let Some(mut res) = mount.preflight(req.method(), req.headers()) {
+            if let Some(mut res) = mount.preflight(req.method(), headers, cors) {
                 self.policy.headers(&mut res, None, csp);
                 res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
                 pending.discard();
                 return res;
             }
         }
-        // A debug build holds a write's redirect to the page's `form-action`, as a browser does.
-        #[cfg(debug_assertions)]
-        if mount.is_none() {
-            if let Some(check) = self.policy.form_check(req.method(), req.uri(), req.headers()) {
-                req.extensions_mut().insert(check);
-            }
-        }
+        let mut page = RequestPage::read(headers, mount.is_none());
+        let (mode, fetched) = page.mode;
+        let credentials = cache::Credentials::read(headers);
         // A page's nonce is made only if its HTML asks for one; an API route never has one.
         let nonce = mount.is_none().then(|| NonceSlot::new(shell, csp.script_loads));
-        if let Some(nonce) = &nonce {
-            req.extensions_mut().insert(nonce.clone());
-        }
-        let origins = mount.map_or(&[][..], |mount| mount.origins());
-        if let Some(refused) = self.policy.refuse(req.method(), req.headers(), origins) {
-            let swap = page::Mode::of(req.headers()).swaps();
+        if let Some(refused) = self.policy.refuse(req.method(), &mut origin, cors.is_some() && !credentials.has_cookie()) {
             let mut refused = match mount {
                 Some(mount) => crate::api::json_failure(refused, false, mount.errors.as_ref()).await,
-                None => match self.cross_site(req) {
-                    Some((asked, watch)) => {
-                        let page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
-                        signal::follow(page, watch, self.zoned())
-                    }
-                    None => refused,
-                },
+                None if page.refusal_wants_html(headers) => {
+                    page.credentials = credentials.for_error_page(headers);
+                    let watch = Watch(self.signal(&credentials, crate::extract::BODY_LIMIT));
+                    let asked = Asked::new(req, &self.shared, &mut page, nonce.as_ref(), &watch.0);
+                    let page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
+                    signal::follow(page, watch, self.zoned())
+                }
+                None => refused,
             };
             self.policy.headers(&mut refused, nonce.as_ref(), csp);
             if mount.is_none() {
-                self.policy.document(&mut refused, csp, swap);
+                self.policy.document(&mut refused, csp, mode.swaps());
             }
             refused.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
             pending.discard();
             return refused;
         }
+        let personal = if mount.is_none() && mode != Mode::Data {
+            page.credentials = credentials.for_error_page(headers);
+            // A debug build holds a write's redirect to the page's `form-action`, as a browser does.
+            #[cfg(debug_assertions)]
+            {
+                page.form_check = self.policy.form_check(req, &mut origin, mode == Mode::Action);
+            }
+            credentials.personal(|| page.credentials.authorization.is_some())
+        } else {
+            credentials.personal(|| headers.contains_key(header::AUTHORIZATION))
+        };
+        let has = if !own && mount.is_none() { cache::request_tags(req.method(), headers, accepts_coding) } else { None };
+        let watch = Watch(self.signal(&credentials, body_limit));
+        let cors = cors.cloned();
+        if let Some(nonce) = &nonce {
+            req.extensions_mut().insert(nonce.clone());
+        }
+        req.extensions_mut().insert(watch.0.clone());
         // Every path under an API's prefix is its own: a parameter or a catch-all of a route
         // outside it (a page's `/{*rest}`, or the API around it's `/api/{id}` for `/api/items`)
         // does not answer it. The request meets everything a route of the API would, and the API's
@@ -2567,29 +2582,17 @@ impl<S: Steps> Layer<S> {
             // It is an unknown URL of the API's, for middleware that reads the route too.
             req.extensions_mut().remove::<crate::router::MatchedPath>();
         }
-        let cors = mount.and_then(|mount| mount.allowed_origin(req.headers()));
-        let credentials = cache::credentials(req.headers());
-        // Skip the hash for a GET that accepts no coding and names no tag. A HEAD needs a
-        // validator so a cache cannot freshen a stale, untagged GET by matching its length alone
-        // (RFC 9111 section 4.3.5).
-        let tagged = !own
-            && mount.is_none()
-            && match *req.method() {
-                http::Method::GET => accepts_coding || req.headers().contains_key(header::IF_NONE_MATCH),
-                http::Method::HEAD => true,
-                _ => false,
-            };
-        let has: Vec<http::HeaderValue> = match tagged {
-            true => req.headers().get_all(header::IF_NONE_MATCH).iter().cloned().collect(),
-            false => Vec::new(),
-        };
         let path = self.shared.dev.then(|| req.uri().path().to_string());
         // A debug build times the runtime's hover prefetch, so a page that grew slow is named
         // before someone has to measure every screen. It is timed until it is dropped, so a
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
         #[cfg(debug_assertions)]
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
-        let (mut res, caller, (mode, fetched)) = self.run(pending, route, mount, deadline, body_limit, steps).await;
+        let next = Next { steps: &self.steps, scope: steps, route };
+        // The signal ends when this future is dropped, then when the response is dropped.
+        let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
+        let caller = watch.0.is_personal();
+        let mut res = signal::follow(res, watch, self.zoned());
         #[cfg(debug_assertions)]
         if let Some(prefetched) = &mut prefetched {
             prefetched.answered = true;
@@ -2606,7 +2609,7 @@ impl<S: Steps> Layer<S> {
         }
         let nonced = nonce.as_ref().is_some_and(|slot| slot.taken().is_some());
         let seen = Seen {
-            credentials,
+            credentials: personal,
             caller,
             // A page route answers several forms at one URL; only the full document may be shared,
             // and not as the runtime fetched it (`corten: page`), whose redirect differs (#1034).
@@ -2618,31 +2621,15 @@ impl<S: Steps> Layer<S> {
         // are, and anything that does not gets the default.
         cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
         // A body with this request's nonce differs every time, so its tag would never match.
-        if tagged && !nonced {
-            res = cache::tag(res, &has).await;
+        if !nonced {
+            if let Some(has) = has {
+                res = cache::tag(res, &has).await;
+            }
         }
         if let Some(mount) = mount {
             mount.cors(cors, &mut res);
         }
         res
-    }
-
-    /// A write another site sent, to a page route: the request for the error page when a browser
-    /// sent it ([`Failure::CrossSite`]), with the signal that ends with its answer; otherwise the
-    /// status line answers it.
-    fn cross_site(&self, req: &mut Request) -> Option<(Asked, Watch)> {
-        let (mode, fetched) = page::Mode::asked(req.headers());
-        let browser = matches!(mode, Mode::Navigation | Mode::Action)
-            || (mode == Mode::Document
-                && req.headers().get(header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("text/html")));
-        if !browser {
-            return None;
-        }
-        // Refused before `run` gives the request its signal: the error page reads the app's
-        // state (its static files, head tags, import map, the visitor's zone) from it.
-        let watch = Watch(self.signal(req.headers(), crate::extract::BODY_LIMIT));
-        req.extensions_mut().insert(watch.0.clone());
-        Some((Asked::new(req, &self.shared, Credentials::of(req.headers()), (mode, fetched)), watch))
     }
 
     /// Whether a streamed answer's fragments are written in the visitor's zone
@@ -2657,37 +2644,14 @@ impl<S: Steps> Layer<S> {
     /// A request's signal in this app: the app's state, and the zone the browser reported when
     /// the app learns its visitors' zones (`req.zone()`; with `zoned_dates` the page and a live
     /// part's fragments are written in it, none for a `Public` answer, `Signal::zone`).
-    fn signal(&self, headers: &http::HeaderMap, body_limit: usize) -> Signal {
+    fn signal(&self, credentials: &cache::Credentials<'_>, body_limit: usize) -> Signal {
         #[cfg(feature = "zones")]
         if self.shared.client_zone {
-            return Signal::for_app_in(self.shared.clone(), crate::client::ZoneName::of(headers), body_limit);
+            return Signal::for_app_in(self.shared.clone(), crate::client::ZoneName::of(credentials.cookies()), body_limit);
         }
         #[cfg(not(feature = "zones"))]
-        let _ = headers;
+        let _ = credentials;
         Signal::for_app(self.shared.clone(), body_limit)
-    }
-
-    /// The response, whether anything read who is asking, and the request's mode with whether the
-    /// runtime sent it ([`page::Mode::asked`]).
-    async fn run<'a>(
-        &'a self,
-        mut pending: Inbound<'_>,
-        route: Option<Route>,
-        api: Option<&Mount>,
-        deadline: Option<Duration>,
-        body_limit: usize,
-        scope: S::Scope<'a>,
-    ) -> (Response, bool, (Mode, bool)) {
-        // Dropped with this future if the client leaves first; then the response's. The zone the
-        // browser reported is read once, here.
-        let req = pending.get();
-        let watch = Watch(self.signal(req.headers(), body_limit));
-        req.extensions_mut().insert(watch.0.clone());
-        let mode = page::Mode::asked(req.headers());
-        let next = Next { steps: &self.steps, scope, route };
-        let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, api, mode).await;
-        let personal = watch.0.is_personal();
-        (signal::follow(res, watch, self.zoned()), personal, mode)
     }
 }
 

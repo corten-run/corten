@@ -342,14 +342,34 @@ content hash, then requires a new fresh host probe before writing the current
 receipt and intent. It never overwrites unknown evidence, treats an old observation
 as current permission or repeats a saved deletion intent.
 
-For [#1618 Benchmark r21: first catalog SSH setup has no completion receipt and leaves an unused droplet outside ordinary recovery](https://github.com/corten-run/corten/issues/1618),
-use the child collector's opt-in `--collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE`.
-It accepts only `preparing` with a bound host, a pending unregistered monitor and no seal.
-The ledger must be empty (including after readiness exhaustion) or contain only the
-unacknowledged sequence-zero, 30-second bootstrap SSH `true` request. Ordinary
-`--collect` refuses these cases before sending SSH. The pinned probe never adds,
-acknowledges or retries a ledger request. A settled SSH refusal leaves the reservation
-unchanged, so the operator can try the read-only proof again when SSH is available.
+Use the child collector's opt-in `--collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE`
+for a bound `preparing` host with a pending unregistered monitor and no seal. Preview and approve
+the exact pinned collection action with the same flag and absolute state root.
+
+```sh
+node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE_ROOT --collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE --print-approval
+node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE_ROOT --collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE --approve-reviewed-merged-ready REVIEWED_EXACT_HASH
+```
+
+- Before provisioning, the ledger must be empty (including after readiness exhaustion) or
+  contain only the unacknowledged sequence-zero, 30-second bootstrap SSH `true` request
+  ([#1618 Benchmark r21: first catalog SSH setup has no completion receipt and leaves an unused droplet outside ordinary recovery](https://github.com/corten-run/corten/issues/1618)).
+- After an interrupted upload, this path applies only to reservations launched from a commit
+  that includes this recovery. Use that exact measured checkout and the original state
+  directory; a different checkout refuses before provider access, even if it is newer.
+  Only the successful, locally terminal prefix of the fixed no-op, directory setup and
+  upload/checksum sequence is eligible; it must include an upload and stop before unit
+  installation. The original saved host-key bytes must match the independently verified
+  key file, and the local uploaded files and any next staged file must match the measured source.
+  The same fresh host probe requires the exact never-started unit, the expected uploaded bytes
+  and an empty log, and every original registered session and watcher drained with no foreign
+  actor. It binds the matching receipt digests to the unused retirement record
+  ([#1744 Benchmark r21: an unused catalog host with six settled bootstrap entries is outside ordinary retirement](https://github.com/corten-run/corten/issues/1744)).
+
+Ordinary `--collect` refuses these pending-bootstrap cases before sending SSH. The pinned probe
+never adds, acknowledges or retries a ledger request or starts a unit. A settled SSH refusal
+leaves the reservation unchanged. Once a delete intent exists, preview and approve the new
+state for exact-ID absence confirmation only; never replay DELETE.
 
 The original local controller, provider worker, SSH and their descendants must be
 affirmatively accounted for and gone. No elapsed timeout, absent PID or saved state
@@ -372,19 +392,19 @@ bytes, old measured commit and new controller commit. Supplying the exact approv
 attests to both operator checks above; it is not a way to clear retained locks.
 
 Execution rechecks the saved account, host and IP and requires a **fresh** pinned SSH
-unused proof, also proving no `/bench`, unit file, guardian storage, control watcher
-or benchmark process. Systemd must report an exact zero monotonic start timestamp;
-the formatted wall-clock timestamp is not used. It uses an observation-only command without installing a
-guardian. The pinned DELETE deadline is 60 seconds from the local start of the
+unused proof. In the pre-provisioning case it additionally requires absence of `/bench`,
+the unit file, guardian storage, and control watchers. Systemd must report an exact
+zero monotonic start timestamp; the formatted wall-clock timestamp is not used.
+The observation-only command never installs a guardian. The pinned DELETE deadline is 60 seconds from the local start of the
 SSH proof, including response delivery and provider preflight. Expiry before intent
 does not consume the intent; expiry after intent still forbids another DELETE.
 Ambiguous, active or foreign custody is preserved. As with other unused
 retirement, confirm deletion with an exact-ID 404; after a recorded intent a new
 approval can only verify the saved receipt and check absence. The original fleet
-intent and all sibling admissions stay unchanged. The repaired child controller must
-be clean and merged, and its source must descend from the measured commit if different.
-This exact exception does not use the native verifier or let ordinary collection or
-audit run from a mismatched checkout.
+intent and all sibling admissions stay unchanged. The child controller must be clean
+and merged. Only the pre-provisioning exception allows a different controller commit,
+and it must descend from the measured commit. Neither exception lets ordinary
+collection or audit run from a mismatched checkout.
 
 If the common setup itself ran and failed before native entry, collection first
 preserves the immutable terminal archive and its raw nonzero exit. A separate
@@ -413,6 +433,17 @@ If an SSH or SFTP watcher raises an exception, its archived
 `control/helper.py`. Match the ID to the sealed ledger to find the failed check.
 This is diagnostic evidence, never a terminal watcher receipt. A missing receipt
 still prevents admission, even when the associated command exited successfully.
+During timing, the pinned watchdog signals the campaign directly on failure;
+the campaign aborts before optional logging. Look for `control fault:` in the
+archived `run.log`. A watchdog's `helperLine` points into the archived
+`control/helper.py`; a campaign-side lease failure names the failed check.
+For an SSH monitor failure, check `helperLine` in the local
+`monitor-local-closed.json`: it can arrive after the archive is sealed.
+Only the bounded line number is retained, not raw SSH stderr. A broken
+connection or failed storage can lose a diagnostic. Log order is not proof
+of causality, and a disposal report can follow an earlier campaign error.
+The historical `control/stream-invalid.json` path is an empty, immutable
+revocation marker. None of these records proves a clean drain or qualifies a run.
 An intermediate process sample may catch a member just before it exits. When the
 scope switches from populated to empty during the inventory read, its sample
 retains both raw event observations and the member's identity. The watcher
@@ -753,7 +784,11 @@ their injected process promises; production keeps its existing bounded calls.
 The fixed default validator runs in a separate local worker, never downloaded
 code. `cloud-validation-snapshot.mjs` reads its fixed project-module closure from
 immutable Git blobs at the approved installed commit, with bounded no-lazy-fetch
-reads. The closure includes the observer's durable writer; transitive observer
+reads. If the import-time read of the installed Git HEAD fails, the launcher
+reports one fixed reason: `timed out`, `process error`, `unsuccessful exit`, or
+`malformed output`. It does not retry or report Git output, raw errors, or
+environment values. Replay and evidence validation failures remain generic.
+The closure includes the observer's durable writer; transitive observer
 imports use those captured bytes under the same deny-unlisted loader.
 The fixed TypeScript bundle and the semver library are captured once and checked
 against their pinned package-file hashes. Semver's exact tooling declaration and
@@ -954,7 +989,7 @@ This follows [Node's documented diagnostic controls](https://nodejs.org/docs/lat
 The worker's fixed provider action grammar supports only account lookup, complete bounded
 droplet census, one exact-host create, matching create-action polling and one exact-ID delete.
 The HTTPS origin is fixed, certificate verification is explicit, redirects are
-never followed and no HTTP error/network failure is retried. Census pagination
+never followed, and only the narrow account transport retry below is allowed. Census pagination
 must remain on the fixed endpoint, contain unique IDs and match its stable total;
 an incomplete census cannot prove absence. Create waits only through bounded
 read-only polling of its exact droplet/action identity, never a repeated POST.
@@ -990,13 +1025,19 @@ before releasing its operation lock, including early-return and error paths. For
 worker termination or uncertain shutdown retains the operation lock and any acquired
 root launch lock. The outer finalizer awaits that same settlement, not a new teardown
 after lock release. Ordinary confirmed shutdown releases the locks normally.
-The exact account command has one narrow terminal failure protocol, not a retry.
-After settled credential consumption, the private native request path observes
+After settled credential consumption, the exact account command's private native request path observes
 actual `ClientRequest`, any `IncomingMessage`, and assigned socket close events.
 All requests dispatched by that engine must have closed; `destroy()`, `end`, an
-HTTP failure or a diagnostic label alone is not proof. Closure spends the original
-command deadline, including credential consumption; cancellation, expiry, reverse
-time, unknown resources and any unresolved prior mutation refuse this disposition.
+HTTP failure or a diagnostic label alone is not proof. One native `ECONNRESET`
+before any response on `GET /v2/account` permits one read on a fresh connection,
+only after that closure proof and a cancellation checkpoint. Both attempts share
+the original command deadline, including credential consumption and closure, and
+use the same pinned token, HTTPS verification and response bounds. The controller
+still checks account identity and capacity where it did before. Cancellation,
+expiry, reverse time, unknown resources and unresolved prior mutations fail closed.
+The account command keeps one clock record across both connections; once a
+sample goes backwards, a later sample cannot make that command valid again.
+HTTP statuses, other errors and other commands cannot authorize this retry.
 Only a privately identified failed account read can produce the exact-key
 `cloud-provider-account-failed/v2` reply: `nonce`, `sequence`,
 `disposition: resources-closed`, and its closed `diagnostic`. Success and other
@@ -1005,8 +1046,8 @@ exact account command, its matching nonce/sequence, timely terminal proof and an
 observed exit0 without a signal before cached settlement may resolve. Terminal
 proof precedes expected disconnect/exit; an exit without proof, malformed or
 duplicate reply, forced close or cancellation stays uncertain.
-The original account operation still fails without an accepted identity, even
-with `allowFail`; this worker is terminal and cannot service another request.
+If the account command still fails, its terminal protocol does not accept an
+identity even with `allowFail`; this worker cannot service another request.
 An HTTP refusal and a worker lifetime failure are different outcomes, not different
 authorities. Only this proved orderly failed read can release normal lifecycle
 locks; a later explicitly approved collect must independently re-prove ownership
@@ -1021,15 +1062,16 @@ Unexpected HTTP responses use a `-http` code and optionally a numeric status fro
 that module's closed status table; unlisted statuses are omitted, not accepted or
 retried. Only those validated data fields cross the worker failure boundary or a
 permitted HTTP-failure result, never native exceptions, raw bodies or credentials.
-Classification survives cached teardown and failed create reconciliation; it is
+The public classification survives cached teardown and failed create reconciliation; it is
 diagnostic only and changes no action schema, ownership proof, retry, deadline,
 approval, uncertainty or lock-release rule. Missing/invalid diagnostics remain
 generic errors, not evidence about the provider's response.
 For native account-request failures, the optional closed `detail` is the rejection
 site: `internal-refusal`, `connect`, `send`, `request-error`, `response-error`,
 `response-aborted`, `response-status`, `body-limit`, `invalid-json`, `deadline` or
-`cancelled`. These labels inspect no native exception fields: `connect` does not
-prove DNS/TLS failure or that a connection was established. Details survive the
+`cancelled`. These labels do not identify native exception codes: `request-error`
+does not prove `ECONNRESET`, and `connect` does not prove DNS/TLS failure or that
+a connection was established. Details survive the
 existing private-worker IPC and cached finalizer diagnostic; the direct CLI renders
 only the closed stage, detail and allowed HTTP status. Unknown, extra or accessor diagnostic fields
 are not forwarded. Other phases and unclassified failures retain their coarse
@@ -1075,6 +1117,35 @@ The run log records which property it is querying and the observed state and
 main PID, so a busy manager can be distinguished from a stalled query.
 If it stays busy the group fails setup, without terminating anyone's work.
 The normal login inventory and registered-monitor checks still apply.
+
+On a newly allocated supervised dedicated group host, the controller's guarded
+workspace command captures the IPv4 peer of its authenticated OpenSSH
+connection (`SSH_CONNECTION`) in a private boot-local file. The systemd job
+does not inherit SSH environment variables. It reads the file and atomically
+installs a runtime-only nftables input table for TCP port 22. Other IPv4 sources
+and all IPv6 sources are dropped before sshd, without an sshd restart, a firewall
+service, or a forwarding or application-port rule. No rule is added to shared
+hosts or during collection. If `nft` is missing, the job installs the Ubuntu
+Noble package under a bounded deadline after the ordinary cloud-init,
+APT timer/service gate and package-list update. That package does not start or
+enable `nftables.service`.
+
+The job checks the live table against its private readback before writing
+bootstrap readiness. Install or verification failure exits before admission:
+the controller can collect under the existing setup-failed protocol after a
+positive terminal observation, not while the unit is live or unproven.
+The first guardian no-op, participant checks, cleanup gates and native
+measurement seal are unchanged. Existing foreign processes are not killed or
+excused. The recorded workspace command distinguishes earlier uploads for
+historical collection and retirement.
+
+The owner must keep the same public IPv4 egress through monitoring, artifact
+transfer and terminal cleanup; the normal reconnects use the same droplet public
+IPv4 and SSH port. An address is not a credential or a guardian registration:
+do not open a second SSH login, even from the same source address. Do not
+broaden the rule when a reconnect fails. It stays in place until the disposable
+host is removed. The Benchmark Evidence native Linux job exercises the exact
+generated scripts with a private sshd and nftables table in Linux namespaces.
 
 The generated job records a fixed preparation stage, source line and original
 exit code on command failure, never the failed command or an environment dump.

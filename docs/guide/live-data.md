@@ -50,7 +50,7 @@ chooses, so it is the same on every page only when it has no messages and no dat
 take `.zone(..)` ([Views](views.md), dates). For a 50-row table of 3,132 bytes on 300 open
 pages, a change costs 2.3 million instructions where rendering on each page took 7.6 million
 (callgrind, three runs each: 2.27 to 2.36 and 7.58 to 7.82; `what_a_change_costs_live_watch` in
-`crates/corten/src/tests.rs`); that counts each page's event, not its compression or its write
+[`tests/live.rs`](../../crates/corten/src/tests/live.rs)); that counts each page's event, not its compression or its write
 to the socket. The watchlist's last trade is one line, so it renders on each page.
 
 Another source (a database's change stream, a queue) does the same with `corten::live`: compare
