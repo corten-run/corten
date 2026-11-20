@@ -14,7 +14,7 @@ It needs Postgres and NATS with JetStream. From the repository root:
 
 ```sh
 docker network create feeds
-docker run -d --name feeds-pg --network feeds -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=feeds postgres:18-alpine
+docker run -d --name feeds-pg --network feeds -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=feeds postgres:19-alpine
 docker run -d --name feeds-nats --network feeds nats:2-alpine -js
 docker build -f examples/listings-feed/Dockerfile -t corten-listings-feed .
 docker run --rm --network feeds -p 3000:8080 -e DATABASE_URL=postgres://postgres:postgres@feeds-pg/feeds -e NATS_URL=nats://feeds-nats:4222 corten-listings-feed
