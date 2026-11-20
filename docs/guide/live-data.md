@@ -672,7 +672,7 @@ Behind nginx with more than one instance, give feed streams an `upstream` of the
 failed back in through one trial request and counts it as up only when that request ends, and a
 stream does not end. With one upstream for everything, a stream sent as the trial kept its
 instance out, and once the other instance was killed nginx answered every reconnect in that
-worker 502 itself (`no live upstreams`) for 8 s and more: in 1 of 10 runs at `e33484d44`, the
+worker 502 itself (`no live upstreams`) for 8 s and more: in 1 of 11 runs at `e33484d44`, the
 slowest clients took 17.3 s to reconnect and 60 of them loaded a new snapshot. In 6 runs at
 `389ec774d`, with the streams' own upstream, none got a 502 and the slowest took 1.3 to 1.6 s;
 the median went from 1.1 to 1.3 s, since half the streams first try the dead instance. A stopped
