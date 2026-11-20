@@ -55,11 +55,14 @@ forks() { grep -Fc 'Forked child ' "$work/sshd.log"; }
 foreign4
 foreign6
 test "$(forks)" -eq 2
+"$1" --input-type=module -e 'import {captureSshOwner} from "./bench/workloads/cloud-contract.mjs"; console.log("set -euo pipefail\n" + captureSshOwner)' > "$work/capture"
 "$1" --input-type=module -e 'import {installSshIngress} from "./bench/workloads/cloud-contract.mjs"; console.log("set -euo pipefail\n" + installSshIngress)' > "$work/install"
 "$1" --input-type=module -e 'import {verifySshIngress} from "./bench/workloads/cloud-contract.mjs"; console.log("set -euo pipefail\n" + verifySshIngress)' > "$work/verify"
+if env -u SSH_CONNECTION /bin/bash "$work/capture" 2>/dev/null; then exit 1; fi
 if env -u SSH_CONNECTION /bin/bash "$work/install" 2>/dev/null; then exit 1; fi
 test -z "$(/usr/sbin/nft list tables)"
-owner /bin/bash -s < "$work/install"
+owner /bin/bash -s < "$work/capture"
+env -u SSH_CONNECTION /bin/bash "$work/install"
 env -u SSH_CONNECTION /bin/bash "$work/verify"
 test "$(forks)" -eq 3
 for peer in foreign4 foreign6; do

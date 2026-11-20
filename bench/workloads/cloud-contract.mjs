@@ -379,31 +379,60 @@ while IFS= read -r member; do test "$member" = "$$"; done < "$parent/supervisor/
 `;
 }
 
-// Capture the authenticated peer during setup. Admission verifies a private,
-// boot-local snapshot of the kernel table; the job does not inherit SSH_CONNECTION.
+// The unit does not inherit SSH_CONNECTION. Only the guarded workspace SSH
+// captures its peer, in a private file on this boot.
+const sshIngressOwner = "/run/corten-bench-ssh-owner";
 const sshIngressSnapshot = "/run/corten-bench-ssh-ingress.nft";
-const listSshIngress = "/usr/sbin/nft --numeric --stateless --handle list table inet corten_bench_ssh";
+const nft = "timeout -k 5 15 /usr/sbin/nft";
+const listSshIngress = `${nft} --numeric --stateless --handle list table inet corten_bench_ssh`;
 
-export const installSshIngress = String.raw`test ! -e '${sshIngressSnapshot}'
-test ! -L '${sshIngressSnapshot}'
-peer=$(/usr/bin/python3 -I -c '
+export const captureSshOwner = String.raw`(umask 077; /usr/bin/python3 -I -c '
 import ipaddress, os
 peer, source_port, local, port = os.environ["SSH_CONNECTION"].split()
 assert source_port.isascii() and source_port.isdecimal() and 0 < int(source_port) <= 65535
 assert port == "22"
 ipaddress.IPv4Address(local)
-print(ipaddress.IPv4Address(peer))
+peer = str(ipaddress.IPv4Address(peer))
+with open("${sshIngressOwner}", "x", encoding="ascii") as owner:
+    owner.write(peer + "\n")
+')`;
+const workspace = "mkdir -m 700 /bench && touch /bench/run.log";
+const dedicatedWorkspace = `${workspace} && ${captureSshOwner}`;
+const dedicatedWorkspaceSha256 = createHash("sha256").update(`set -euo pipefail\n${dedicatedWorkspace}\n`).digest("hex");
+
+// Replay uses the exact recorded workspace request, not the date or version
+// of the inspecting controller. Historical uploaded job bytes stay the same.
+export function bootstrapWorkspaceScript(s, { launch = false } = {}) {
+  const row = s.control?.ledger[1];
+  return s.group && s.control?.monitor && (launch || (row?.localTerminal === true && row.code === 0
+    && row.request.sequence === 1 && row.request.epoch === "bootstrap" && !row.request.seal
+    && row.request.invocation.channel === "ssh" && row.request.invocation.deadlineMs === 60000
+    && row.request.invocation.requestSha256 === dedicatedWorkspaceSha256))
+    ? dedicatedWorkspace : workspace;
+}
+
+export const installSshIngress = String.raw`test ! -e '${sshIngressSnapshot}'
+test ! -L '${sshIngressSnapshot}'
+peer=$(/usr/bin/python3 -I -c '
+import ipaddress, os, stat
+fd = os.open("${sshIngressOwner}", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+with os.fdopen(fd, "rb") as owner:
+    info = os.fstat(owner.fileno())
+    assert stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o600
+    assert info.st_uid == 0 and info.st_nlink == 1 and 8 <= info.st_size <= 16
+    raw = owner.read(17)
+peer = str(ipaddress.IPv4Address(raw.decode("ascii").removesuffix("\n")))
+assert raw == (peer + "\n").encode("ascii")
+print(peer)
 ')
 # Noble's nftables package neither enables nor starts nftables.service.
 if ! test -x /usr/sbin/nft; then
-  timeout -k 5 120 cloud-init status --wait
-  timeout -k 5 90 apt-get -o Acquire::Retries=0 -o APT::Update::Error-Mode=any update -qq
   DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 timeout -k 5 90 apt-get \
     -o DPkg::Lock::Timeout=30 -o Acquire::Retries=0 install -y -qq --no-install-recommends --no-upgrade --no-remove nftables
 fi
 test -x /usr/sbin/nft
 # One atomic transaction. Do not replace an existing table or accept past other filters.
-/usr/sbin/nft -f - <<CORTEN_SSH_INGRESS
+${nft} -f - <<CORTEN_SSH_INGRESS
 create table inet corten_bench_ssh
 add chain inet corten_bench_ssh input { type filter hook input priority filter; policy accept; }
 add rule inet corten_bench_ssh input tcp dport 22 ip saddr $peer return
@@ -421,6 +450,7 @@ ${listSshIngress} | cmp -s -- '${sshIngressSnapshot}' -`;
 export function remoteFiles(s) {
   validateState(s, s.round);
   const loadLayout = savedLoadLayout(s);
+  const sshIngress = bootstrapWorkspaceScript(s) === dedicatedWorkspace;
   // Dedicated group runners are system services. Their root SSH sessions need
   // logind scopes, not a user service manager. Leave any existing session alone.
   const marker = s.group && s.control?.monitor ? `/run/corten-bench-control-${s.token}/binding.json` : null;
@@ -480,13 +510,15 @@ ${loginPolicy}# Fresh disposable hosts only: prevent timer and D-Bus firmware ac
 bootstrap_stage=firmware-mask
 systemctl mask --runtime --now fwupd.service fwupd-refresh.service fwupd-refresh.timer
 bootstrap_stage=package-services
-systemctl disable --now apt-daily.timer apt-daily-upgrade.timer || true
+${sshIngress ? "timeout -k 5 30 " : ""}systemctl disable --now apt-daily.timer apt-daily-upgrade.timer${sshIngress ? "" : " || true"}
 timeout 900 systemd-run --quiet --property=After=apt-daily.service --property=After=apt-daily-upgrade.service --wait /bin/true
 export DEBIAN_FRONTEND=noninteractive
 bootstrap_stage=package-prerequisites
 timeout 900 apt-get update -qq
 timeout 900 apt-get install -y -qq gnupg curl ca-certificates build-essential
-# https://git-scm.com/install/linux: Ubuntu's upstream stable Git PPA.
+${sshIngress ? `bootstrap_stage=ssh-ingress-install
+${installSshIngress}
+` : ""}# https://git-scm.com/install/linux: Ubuntu's upstream stable Git PPA.
 # Distribution Git may lack --no-lazy-fetch; never weaken immutable native queries.
 bootstrap_stage=git-install
 # Use the signed PPA directly; add-apt-repository's metadata API can truncate reads.
@@ -560,7 +592,9 @@ done
 # The entry derives all nine groups and their native settings from this measured source.
 # Popular/performance views reuse the same evidence; no second workload execution.
 unset BENCH_APPS BENCH_TIER BENCH_EDGE PROFILE
-${waitForIdleUserManager}bootstrap_stage=native-entry
+${waitForIdleUserManager}${sshIngress ? `bootstrap_stage=ssh-ingress-verification
+${verifySshIngress}
+` : ""}bootstrap_stage=native-entry
 node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign${s.group === undefined ? "" : ` --group ${s.group}`}${loadLayout ? ` --load-layout ${loadLayout}` : ""}
 `;
   return { "job.sh": job, "pack.sh": pack, [s.unit]: `[Unit]

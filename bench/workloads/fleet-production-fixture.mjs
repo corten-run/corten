@@ -1,6 +1,6 @@
 // Serialized into a captured production module by fleet-production.test.mjs.
 // Only external boundaries are synthetic. Never import this from a CLI module.
-export function syntheticDependencies(config, { fs, path, fork, providerTransport, bootstrapMarker, dedicatedBootstrapReadScript,
+export function syntheticDependencies(config, { fs, path, fork, providerTransport, bootstrapMarker, bootstrapReadScript, bootstrapWorkspaceScript,
   controlRegistration, EventEmitter, PassThrough, Writable, registration }) {
   const good = (stdout = "") => ({ status: 0, stdout, stderr: "" });
   const local = path.join(config.stateDir, "groups-r21");
@@ -33,16 +33,15 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     if (binary === "ssh") {
       const script = input.slice("set -euo pipefail\n".length, -1), saved = state();
       if (readinessProbe && ++readiness === 1 && config.mode === "ssh-late") return { ...good(), status: 255 };
-      if (script === dedicatedBootstrapReadScript) {
-        if (config.mode === "ingress-lost") return reply("", 1);
+      if (script === bootstrapReadScript) {
         const marker = bootstrapMarker(saved);
         if (config.mode === "marker") marker.commit = "b".repeat(40);
         record({ boundary: "bootstrap-marker", marker });
         return reply(`${JSON.stringify(marker)}\n`);
       }
       if (script.startsWith("systemctl show")) return reply(`Id=${saved.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${saved.unit}\nActiveState=active\nRestart=no\nMainPID=123\nExecMainCode=0\nExecMainStartTimestamp=Sun 2026-11-15 00:00:00 UTC\n`);
-      if (config.mode === "ingress-fail" && script.includes("create table inet corten_bench_ssh")) return reply("", 1);
-      if (script === "true" || script === "mkdir -m 700 /bench && touch /bench/run.log"
+      if (script === bootstrapWorkspaceScript(saved, { launch: true })) return reply("", config.mode === "owner-capture-fail" ? 1 : 0);
+      if (script === "true"
         || script.includes("sha256sum --check --status") || script.startsWith("bash -n /bench/job.sh")
         || script === ":" || script === `systemctl start ${saved.unit}`) return reply();
     }
@@ -87,7 +86,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
         if (binary !== fs.realpathSync(process.execPath) || argv[0] !== "--input-type=module" || argv[1] !== "-"
           || argv[2] !== path.join(config.repo, "bench/workloads/cloud-provider-worker.mjs")) throw new Error("fixed provider launch required");
         const child = fork(path.join(config.repo, "bench/workloads/fleet-provider-test-worker.mjs"),
-          [["overlap", "ssh-late", "ingress-fail", "ingress-lost"].includes(config.mode) ? "success" : config.mode, config.trace, config.hosts, config.stateDir, config.group, config.userId],
+          [["overlap", "ssh-late", "owner-capture-fail"].includes(config.mode) ? "success" : config.mode, config.trace, config.hosts, config.stateDir, config.group, config.userId],
           { ...options, execArgv: [], env: { ...options.env, NODE_OPTIONS: "--max-old-space-size=64 --max-semi-space-size=4" } });
         record({ boundary: "provider-child-start", pid: child.pid });
         const observe = (direction, message) => record({ boundary: "provider-ipc", direction,

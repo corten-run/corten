@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { digest, evidenceEnvelope, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
+import { bootstrapWorkspaceScript } from "./cloud-contract.mjs";
 import { quote } from "./cloud-transport.mjs";
 import { guardianSha256, guardianSource } from "./cloud-control-runtime.mjs";
 import { verifyControlSetupQuery } from "./cloud-control-session.mjs";
@@ -583,7 +584,7 @@ export function settledBootstrap(state, local) {
   const { ledger } = state.control;
   if (ledger.length < 3 || ledger.length > 8) return false;
   const ssh = (script, deadline = 60000) => ["ssh", deadline, digest("set -euo pipefail\n" + script + "\n")];
-  const expected = [ssh("true", 30000), ssh("mkdir -m 700 /bench && touch /bench/run.log")];
+  const expected = [ssh("true", 30000), ssh(bootstrapWorkspaceScript(state))];
   // Dispatch checks absolute SFTP operands. Replay also works on moved evidence,
   // where the combined script digest still binds every original request digest.
   for (const [name, content] of Object.entries(remoteFiles(state))) {

@@ -1118,21 +1118,26 @@ main PID, so a busy manager can be distinguished from a stalled query.
 If it stays busy the group fails setup, without terminating anyone's work.
 The normal login inventory and registered-monitor checks still apply.
 
-Before starting the unit on a newly allocated supervised dedicated group host,
-the controller's guarded installation shell uses the IPv4 peer of its own
-authenticated OpenSSH connection (`SSH_CONNECTION`). It atomically installs a
-runtime-only nftables input table for TCP port 22. Other IPv4 sources and all
-IPv6 sources are dropped before sshd, without an sshd restart, a firewall service,
-or a forwarding or application-port rule. No rule is added to shared hosts
-or during collection. If `nft` is missing, setup waits for cloud-init and
-installs the Ubuntu Noble package under bounded deadlines. That package does
-not start or enable `nftables.service`. Setup fails if it cannot install and
-read back the table. The guarded bootstrap-marker read requires the live
-table to match that private readback before admitting the monitor or sealing
-bootstrap. The systemd job does not inherit the SSH environment and native
-measurement waits for the seal. The earlier readiness probes and
-first guardian no-op, the listener/participant checks and the cleanup gates
-are unchanged. Existing foreign processes are not killed or excused.
+On a newly allocated supervised dedicated group host, the controller's guarded
+workspace command captures the IPv4 peer of its authenticated OpenSSH
+connection (`SSH_CONNECTION`) in a private boot-local file. The systemd job
+does not inherit SSH environment variables. It reads the file and atomically
+installs a runtime-only nftables input table for TCP port 22. Other IPv4 sources
+and all IPv6 sources are dropped before sshd, without an sshd restart, a firewall
+service, or a forwarding or application-port rule. No rule is added to shared
+hosts or during collection. If `nft` is missing, the job installs the Ubuntu
+Noble package under a bounded deadline after the ordinary cloud-init,
+APT timer/service gate and package-list update. That package does not start or
+enable `nftables.service`.
+
+The job checks the live table against its private readback before writing
+bootstrap readiness. Install or verification failure exits before admission:
+the controller can collect under the existing setup-failed protocol after a
+positive terminal observation, not while the unit is live or unproven.
+The first guardian no-op, participant checks, cleanup gates and native
+measurement seal are unchanged. Existing foreign processes are not killed or
+excused. The recorded workspace command distinguishes earlier uploads for
+historical collection and retirement.
 
 The owner must keep the same public IPv4 egress through monitoring, artifact
 transfer and terminal cleanup; the normal reconnects use the same droplet public

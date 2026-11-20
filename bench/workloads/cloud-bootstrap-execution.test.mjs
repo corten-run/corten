@@ -4,9 +4,11 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { fleetPlan, remoteFiles, reservation } from "./cloud-contract.mjs";
-import { guardianSha256 } from "./cloud-control-runtime.mjs";
+import { bootstrapWorkspaceScript, fleetPlan, remoteFiles, reservation } from "./cloud-contract.mjs";
+import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
+import { digest } from "./cloud-local.mjs";
 import { remoteFiles as productionFiles } from "./cloud-remote.mjs";
+import { settledBootstrap } from "./cloud-retirement.mjs";
 import { groupNames } from "./registry.mjs";
 
 const state = reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" });
@@ -130,6 +132,119 @@ const binding = "/run/corten-bench-control-" + dedicated.token + "/binding.json"
 const dropin = "/run/systemd/system/user@0.service.d/90-corten-benchmark.conf";
 const policy = "[Unit]\nConditionPathExists=!" + binding + "\n";
 const optOut = "unset BENCH_APPS BENCH_TIER BENCH_EDGE PROFILE\n";
+
+function ingressState() {
+  const saved = structuredClone(supervised);
+  const workspace = bootstrapWorkspaceScript(saved, { launch: true });
+  for (const [script, timeout] of [["true", 30000], [workspace, 60000]]) {
+    const request = controlRequest(saved, "ssh", [script], timeout, "bootstrap");
+    saved.control.ledger.push({ request, localTerminal: true, code: 0 });
+  }
+  return saved;
+}
+
+test("SSH ingress job replay requires the new, acknowledged dedicated workspace command", () => {
+  const saved = ingressState();
+  const script = productionFiles(saved)["job.sh"];
+  const stages = ["package-services", "package-prerequisites", "ssh-ingress-install", "ssh-ingress-verification",
+    "campaign-directory", "bootstrap-marker", "native-entry"].map((name) => script.lastIndexOf("bootstrap_stage=" + name + "\n"));
+  assert.ok(stages.every((position, i) => position > (stages[i - 1] ?? 0)), String(stages));
+  const historical = structuredClone(saved);
+  historical.control.ledger.pop();
+  historical.control.ledger.push({ request: controlRequest(historical, "ssh", [bootstrapWorkspaceScript(historical)], 60000, "bootstrap"),
+    localTerminal: true, code: 0 });
+  assert.equal(productionFiles(historical)["job.sh"], productionFiles(supervised)["job.sh"]);
+  assert.doesNotMatch(productionFiles(historical)["job.sh"], /ssh-ingress/);
+  for (const initial of [historical, saved]) {
+    const partial = { ...initial, id: "123", ip: "192.0.2.10", status: "preparing", createIntentAt: "2026-11-18T00:00:00.000Z" };
+    const jobHash = digest(productionFiles(partial)["job.sh"]);
+    const paths = [join(tmpdir(), "job.sh"), "root@192.0.2.10:/bench/job.sh"];
+    for (const [binary, args, deadline] of [
+      ["scp", paths, 15 * 60000],
+      ["ssh", [`printf '%s  %s\\n' '${jobHash}' '/bench/job.sh' | sha256sum --check --status`], 60000],
+    ]) partial.control.ledger.push({ request: controlRequest(partial, binary, args, deadline, "bootstrap"), code: 0, localTerminal: true });
+    assert.equal(settledBootstrap(partial, tmpdir()), true);
+    partial.control.ledger[1].request.invocation.requestSha256 = "f".repeat(64);
+    assert.equal(settledBootstrap(partial, tmpdir()), false);
+  }
+});
+
+test("SSH ingress missing-nft bootstrap waits for the APT list lock and refuses a failed gate", {
+  skip: process.platform !== "linux",
+}, (t) => {
+  const script = productionFiles(ingressState())["job.sh"];
+  const start = script.indexOf("bootstrap_stage=package-services\n");
+  const end = script.indexOf("bootstrap_stage=git-install\n", start);
+  assert.ok(start >= 0 && end > start);
+  // Run the generated stages, not the machine's package manager. Stub the
+  // owner reader (tested separately with real SSH) and boot-local paths.
+  const stages = script.slice(start, end)
+    .replaceAll("/usr/sbin/nft", "mock_nft")
+    .replace("/usr/bin/python3 -I -c", "mock_owner")
+    .replaceAll("/run/corten-bench-ssh-ingress.nft", "./snapshot");
+  const shims = String.raw`
+set -euo pipefail
+locked=1
+nft_available=0
+systemctl() {
+  [[ "$*" == 'disable --now apt-daily.timer apt-daily-upgrade.timer' ]]
+  printf '%s\n' timers-disabled
+}
+timeout() {
+  case "$*" in
+    '900 systemd-run '*|'900 apt-get '*) shift ;;
+    '-k 5 90 apt-get '*|'-k 5 30 systemctl '*|'-k 5 15 mock_nft '*) shift 3 ;;
+    *) exit 91 ;;
+  esac
+  "$@"
+}
+systemd-run() {
+  [[ "$*" == '--quiet --property=After=apt-daily.service --property=After=apt-daily-upgrade.service --wait /bin/true' ]]
+  [[ $locked == 1 ]]
+  printf '%s\n' apt-gate
+  if [[ $MODE == busy ]]; then return 124; fi
+  locked=0
+}
+apt-get() {
+  if [[ $locked == 1 ]]; then printf '%s\n' list-lock-contention >&2; return 100; fi
+  case "$*" in
+    'update -qq') printf '%s\n' update ;;
+    'install -y -qq gnupg curl ca-certificates build-essential') printf '%s\n' prerequisites ;;
+    *'install -y -qq --no-install-recommends --no-upgrade --no-remove nftables')
+      printf '%s\n' nft-package; nft_available=1 ;;
+    *) exit 92 ;;
+  esac
+}
+test() {
+  if [[ "$*" == '-x mock_nft' ]]; then [[ $nft_available == 1 ]]; else builtin test "$@"; fi
+}
+mock_owner() { printf '%s\n' 192.0.2.20; }
+mock_nft() {
+  [[ $nft_available == 1 ]]
+  case "$*" in
+    '-f -')
+      while IFS= read -r line; do printf '%s\n' "$line"; done > transaction
+      printf '%s\n' ingress-installed ;;
+    '--numeric --stateless --handle list table inet corten_bench_ssh') printf '%s\n' snapshot ;;
+    *) exit 93 ;;
+  esac
+}
+`;
+  for (const [mode, expected, calls] of [
+    ["drain", 0, ["timers-disabled", "apt-gate", "update", "prerequisites", "nft-package", "ingress-installed"]],
+    ["busy", 124, ["timers-disabled", "apt-gate"]],
+  ]) {
+    const root = mkdtempSync(join(tmpdir(), "corten-ingress-apt-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const result = spawnSync("/bin/bash", ["-c", shims + stages], {
+      cwd: root, env: { PATH: "", MODE: mode }, encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, expected, result.stderr);
+    assert.deepEqual(result.stdout.trimEnd().split("\n"), calls);
+    assert.equal(existsSync(join(root, "snapshot")), mode === "drain");
+  }
+});
 
 function rootManagerStages(script) {
   const stages = [...script.matchAll(/^bootstrap_stage=([a-z-]+)$/gm)];

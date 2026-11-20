@@ -8,7 +8,7 @@ import { controller } from "./droplet.mjs";
 import { reservation, selection, tags } from "./cloud-contract.mjs";
 import { digest } from "./cloud-local.mjs";
 import { descriptor } from "../json-api/contract.mjs";
-import { bootstrapMarker, bootstrapReadScript, dedicatedBootstrapReadScript } from "./cloud-remote.mjs";
+import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { selectedApps } from "./registry.mjs";
 import { registration as streamRegistration } from "./test-fixtures/control-stream-fixture.mjs";
 
@@ -120,7 +120,7 @@ export function harness(t, flags = {}) {
       }
       const script = args.at(-1);
       assert.ok(args.includes(`root@${JSON.parse(readFileSync(statePath)).ip}`));
-      if (script === bootstrapReadScript || script === dedicatedBootstrapReadScript) {
+      if (script === bootstrapReadScript) {
         if (flags.bootstrapError) return { ...good(), status: 1 };
         if (flags.bootstrapPending) { flags.bootstrapPending--; return { ...good(), status: 3 }; }
         return good(`${JSON.stringify(flags.bootstrapMarker ?? bootstrapMarker(JSON.parse(readFileSync(statePath))))}\n`);

@@ -90,6 +90,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 26
+      - name: Exercise dedicated SSH ingress bootstrap with simulated APT contention
+        run: node --test --test-name-pattern='SSH ingress' bench/workloads/cloud-bootstrap-execution.test.mjs
       - name: Exercise dedicated SSH ingress in private Linux namespaces
         run: |
           if [[ ! -x /usr/sbin/nft ]]; then
