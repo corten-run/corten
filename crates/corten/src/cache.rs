@@ -200,12 +200,11 @@ pub(crate) struct Seen {
 /// (for the zone-only exception or the visitor's zone) needs no second lookup.
 pub(crate) struct Credentials<'a> {
     cookies: header::GetAll<'a, HeaderValue>,
-    authorization: Option<&'a HeaderValue>,
 }
 
 impl<'a> Credentials<'a> {
     pub(crate) fn read(headers: &'a HeaderMap) -> Self {
-        Self { cookies: headers.get_all(header::COOKIE), authorization: headers.get(header::AUTHORIZATION) }
+        Self { cookies: headers.get_all(header::COOKIE) }
     }
 
     pub(crate) fn cookies(&self) -> header::ValueIter<'a, HeaderValue> {
@@ -217,13 +216,16 @@ impl<'a> Credentials<'a> {
     }
 
     /// The zone cookie by itself says nothing about who is asking.
-    pub(crate) fn personal(&self) -> bool {
+    pub(crate) fn personal(&self, authorized: impl FnOnce() -> bool) -> bool {
         let mut cookies = self.cookies();
-        self.authorization.is_some() || cookies.next().is_some_and(|cookie| !zone_only(cookie) || cookies.next().is_some())
+        cookies.next().is_some_and(|cookie| !zone_only(cookie) || cookies.next().is_some()) || authorized()
     }
 
-    pub(crate) fn for_error_page(&self) -> crate::page::Credentials {
-        crate::page::Credentials { cookie: self.cookies().next().cloned(), authorization: self.authorization.cloned() }
+    pub(crate) fn for_error_page(&self, headers: &HeaderMap) -> crate::page::Credentials {
+        crate::page::Credentials {
+            cookie: self.cookies().next().cloned(),
+            authorization: headers.get(header::AUTHORIZATION).cloned(),
+        }
     }
 }
 
@@ -580,6 +582,20 @@ fn private(text: &str) -> HeaderValue {
 mod tests {
     use super::*;
     use crate::response::IntoResponse;
+
+    #[test]
+    fn a_session_cookie_settles_the_cache_decision_without_authorization() {
+        let mut headers = HeaderMap::new();
+        assert!(!Credentials::read(&headers).personal(|| false));
+        assert!(Credentials::read(&headers).personal(|| true));
+        headers.insert(header::COOKIE, HeaderValue::from_static("corten-zone=America/Chicago"));
+        assert!(!Credentials::read(&headers).personal(|| false));
+        assert!(Credentials::read(&headers).personal(|| true));
+        headers.append(header::COOKIE, HeaderValue::from_static("session=abc"));
+        assert!(Credentials::read(&headers).personal(|| panic!("the extra cookie settles it")));
+        headers.insert(header::COOKIE, HeaderValue::from_static("session=abc"));
+        assert!(Credentials::read(&headers).personal(|| panic!("the session cookie settles it")));
+    }
 
     fn seen() -> Seen {
         Seen { credentials: false, caller: false, partial: false, nonce: false, dev: false }

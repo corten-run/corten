@@ -974,6 +974,8 @@ handler when there is none. The outer stages keep only what they need to finish 
 They read the incoming request's mode, credentials and cache validators before middleware. Those
 decisions and the error page's saved request are not changed by middleware edits. A `Req` taken
 by middleware or the handler reads the headers there, including edits by an earlier extractor.
+For an API or data request there is no HTML error snapshot: a session cookie can settle the cache
+decision without reading `Authorization`.
 
 Access logging (`App::access_log`) is outside this order, and outside `App::layer`: it sees the
 finished response, including refusals that never reached a middleware and an error page or

@@ -357,8 +357,8 @@ impl Policy {
 
     /// True when the app answers to the request's host: `localhost` or a name under it, an IP
     /// address, a name given to [`Policy::host`], or no host at all (HTTP/1.0; a test's request).
-    pub(crate) fn answers(&self, uri: &http::Uri, host: Option<&HeaderValue>) -> bool {
-        self.hosts.as_deref().is_none_or(|hosts| named(uri, || host, hosts))
+    pub(crate) fn answers<'a>(&self, uri: &http::Uri, host: impl FnOnce() -> Option<&'a HeaderValue>) -> bool {
+        self.hosts.as_deref().is_none_or(|hosts| named(uri, host, hosts))
     }
 
     /// The same check apart from the policy, for the routes that say `unstaged`.
@@ -1322,7 +1322,7 @@ impl Applied {
     /// from a link, and a script's own `fetch` is held to `connect-src`. Only the request's
     /// headers are kept; the page and its policy are worked out for a redirect to another address.
     #[cfg(debug_assertions)]
-    pub(crate) fn form_check(&self, req: &Request, origin: Origin<'_>, action: bool) -> Option<FormCheck> {
+    pub(crate) fn form_check(&self, req: &Request, origin: &mut Origin<'_>, action: bool) -> Option<FormCheck> {
         // A report-only policy stops nothing: the browser reports the redirect and follows it. A
         // form sends only GET and POST, and a GET form cannot be told from a link.
         if self.report_only || *req.method() != Method::POST {
@@ -1348,18 +1348,18 @@ impl Applied {
         Some(FormCheck {
             forms: self.forms.clone(),
             uri: req.uri().clone(),
-            host: origin.host.cloned(),
-            origin: origin.value.cloned(),
+            host: origin.host().cloned(),
+            origin: origin.value().cloned(),
             referer: headers.get(header::REFERER).cloned(),
-            site: origin.site.cloned(),
+            site: origin.site().cloned(),
             action,
         })
     }
 
     /// The 403 for a write another site sent. A mount's extra origins can send token-based writes,
     /// never a write using ambient cookies.
-    pub fn refuse(&self, method: &Method, origin: Origin<'_>, from_mount: bool) -> Option<Response> {
-        if !Origin::checks(method) || origin.permits(&self.allowed_origins, self.hsts) || from_mount {
+    pub fn refuse(&self, method: &Method, origin: &mut Origin<'_>, from_mount: bool) -> Option<Response> {
+        if !Origin::checks(method) || from_mount || origin.permits(&self.allowed_origins, self.hsts) {
             return None;
         }
         Some((StatusCode::FORBIDDEN, "Cross-site request refused.").into_response())
@@ -1549,32 +1549,47 @@ impl Policy {
 /// what a switch to a WebSocket is held to ([`crate::upgrade::Upgrade`]). `https_only`: the app
 /// is served only over HTTPS ([`Policy::hsts`]).
 pub(crate) fn write_allowed(allowed: &[String], https_only: bool, headers: &HeaderMap) -> bool {
-    Origin { value: headers.get(header::ORIGIN), site: headers.get("sec-fetch-site"), host: headers.get(header::HOST) }
-        .permits(allowed, https_only)
+    Origin::new(headers).permits(allowed, https_only)
 }
 
 /// The security checks' view of the original request. The host check, CORS and the debug form
-/// check can use the same values without looking up their names again.
-#[derive(Clone, Copy)]
+/// check can use the same values without looking up their names again, even when a header is absent.
 pub(crate) struct Origin<'a> {
-    pub value: Option<&'a HeaderValue>,
-    pub site: Option<&'a HeaderValue>,
-    pub host: Option<&'a HeaderValue>,
+    headers: &'a HeaderMap,
+    value: Option<Option<&'a HeaderValue>>,
+    site: Option<Option<&'a HeaderValue>>,
+    host: Option<Option<&'a HeaderValue>>,
 }
 
-impl Origin<'_> {
-    pub(crate) fn checks(method: &Method) -> bool {
+impl<'a> Origin<'a> {
+    pub(crate) fn new(headers: &'a HeaderMap) -> Self {
+        Self { headers, value: None, site: None, host: None }
+    }
+
+    pub(crate) fn value(&mut self) -> Option<&'a HeaderValue> {
+        *self.value.get_or_insert_with(|| self.headers.get(header::ORIGIN))
+    }
+
+    fn site(&mut self) -> Option<&'a HeaderValue> {
+        *self.site.get_or_insert_with(|| self.headers.get("sec-fetch-site"))
+    }
+
+    pub(crate) fn host(&mut self) -> Option<&'a HeaderValue> {
+        *self.host.get_or_insert_with(|| self.headers.get(header::HOST))
+    }
+
+    fn checks(method: &Method) -> bool {
         !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
     }
 
-    fn permits(self, allowed: &[String], https_only: bool) -> bool {
-        let origin = self.value.and_then(|v| v.to_str().ok()).map(|o| o.trim_end_matches('/').to_ascii_lowercase());
+    fn permits(&mut self, allowed: &[String], https_only: bool) -> bool {
+        let origin = self.value().and_then(|v| v.to_str().ok()).map(|o| o.trim_end_matches('/').to_ascii_lowercase());
         if let Some(origin) = &origin {
             if allowed.iter().any(|allowed| allowed == origin) {
                 return true;
             }
         }
-        match self.site.map(HeaderValue::as_bytes) {
+        match self.site().map(HeaderValue::as_bytes) {
             // `none`: the user started it (typed URL, bookmark); no other site can cause it.
             Some(b"same-origin" | b"none") => return true,
             Some(_) => return false,
@@ -1583,7 +1598,7 @@ impl Origin<'_> {
         match origin {
             None => true,
             Some(origin) if origin == "null" => false,
-            Some(origin) => origin_of_host(&origin, https_only, self.host),
+            Some(origin) => origin_of_host(&origin, https_only, self.host()),
         }
     }
 }
@@ -2247,6 +2262,16 @@ mod tests {
     }
 
     #[test]
+    fn the_host_check_only_reads_the_header_as_a_fallback() {
+        let absolute = "http://localhost/".parse().unwrap();
+        let relative = "/".parse().unwrap();
+        assert!(Policy::new().answers(&absolute, || panic!("the URI supplies the host")));
+        assert!(Policy::new().any_host().answers(&relative, || panic!("host checking is disabled")));
+        let header = HeaderValue::from_static("localhost");
+        assert!(Policy::new().answers(&relative, || Some(&header)));
+    }
+
+    #[test]
     #[should_panic(expected = "Policy::host takes a name")]
     fn a_host_with_a_port_is_a_startup_panic() {
         let _ = Policy::new().host("shop.example:443");
@@ -2282,6 +2307,23 @@ mod tests {
         assert_eq!(hash_source("x-a,x-b{display:contents}"), "'sha256-00iQbWJAoniMipHb+WLUVm3oMINcwW9byUcwNquEbzc='");
         assert_eq!(base64(b"ab"), "YWI=");
         assert_eq!(base64(b"a"), "YQ==");
+    }
+
+    #[test]
+    fn the_origin_check_reads_only_the_headers_needed_to_decide() {
+        let allowed = ["https://admin.example".to_string()];
+        let request = headers(&[("origin", "https://admin.example"), ("sec-fetch-site", "cross-site"), ("host", "localhost")]);
+        let mut origin = Origin::new(&request);
+        assert!(origin.permits(&allowed, false));
+        assert!(origin.site.is_none() && origin.host.is_none());
+        assert!(!origin.permits(&[], false));
+        assert!(origin.site.is_some() && origin.host.is_none());
+
+        let request = headers(&[("origin", "http://localhost"), ("host", "localhost")]);
+        let mut origin = Origin::new(&request);
+        assert!(origin.permits(&[], false));
+        assert_eq!(origin.site, Some(None), "an absent header is cached too");
+        assert!(origin.host.is_some());
     }
 
     #[test]

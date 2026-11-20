@@ -2485,10 +2485,10 @@ impl<S: Steps> Layer<S> {
     async fn secure(&self, mut pending: Inbound<'_>, route: Route, accepts_coding: bool, scope: Option<&Scope>) -> Response {
         let req = pending.get();
         let headers = req.headers();
-        let host = headers.get(header::HOST);
+        let mut origin = Origin::new(headers);
         // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
         // page, no caller lookup.
-        if !self.policy.answers(req.uri(), host) {
+        if !self.policy.answers(req.uri(), || origin.host()) {
             let mut res = crate::security::misdirected();
             self.policy.headers(&mut res, None, &self.policy.csp);
             res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
@@ -2510,14 +2510,7 @@ impl<S: Steps> Layer<S> {
         let body_limit = scope.body_limit;
         // The middleware of the area or API the request is in, where one has some.
         let steps = self.steps.scope(scope);
-        let writes = Origin::checks(req.method());
-        let cors_enabled = mount.is_some_and(|mount| !mount.origins().is_empty());
-        let origin = Origin {
-            host,
-            value: if writes || cors_enabled { headers.get(header::ORIGIN) } else { None },
-            site: if writes { headers.get("sec-fetch-site") } else { None },
-        };
-        let cors = mount.and_then(|mount| mount.allowed_origin(origin.value));
+        let cors = mount.filter(|mount| !mount.origins().is_empty()).and_then(|mount| mount.allowed_origin(origin.value()));
         if let Some(mount) = mount {
             if let Some(mut res) = mount.preflight(req.method(), headers, cors) {
                 self.policy.headers(&mut res, None, csp);
@@ -2529,20 +2522,13 @@ impl<S: Steps> Layer<S> {
         let mut page = RequestPage::read(headers, mount.is_none());
         let (mode, fetched) = page.mode;
         let credentials = cache::Credentials::read(headers);
-        if mount.is_none() && mode != Mode::Data {
-            page.credentials = credentials.for_error_page();
-            // A debug build holds a write's redirect to the page's `form-action`, as a browser does.
-            #[cfg(debug_assertions)]
-            {
-                page.form_check = self.policy.form_check(req, origin, mode == Mode::Action);
-            }
-        }
         // A page's nonce is made only if its HTML asks for one; an API route never has one.
         let nonce = mount.is_none().then(|| NonceSlot::new(shell, csp.script_loads));
-        if let Some(refused) = self.policy.refuse(req.method(), origin, cors.is_some() && !credentials.has_cookie()) {
+        if let Some(refused) = self.policy.refuse(req.method(), &mut origin, cors.is_some() && !credentials.has_cookie()) {
             let mut refused = match mount {
                 Some(mount) => crate::api::json_failure(refused, false, mount.errors.as_ref()).await,
                 None if page.refusal_wants_html(headers) => {
+                    page.credentials = credentials.for_error_page(headers);
                     let watch = Watch(self.signal(&credentials, crate::extract::BODY_LIMIT));
                     let asked = Asked::new(req, &self.shared, &mut page, nonce.as_ref(), &watch.0);
                     let page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
@@ -2558,8 +2544,18 @@ impl<S: Steps> Layer<S> {
             pending.discard();
             return refused;
         }
+        let personal = if mount.is_none() && mode != Mode::Data {
+            page.credentials = credentials.for_error_page(headers);
+            // A debug build holds a write's redirect to the page's `form-action`, as a browser does.
+            #[cfg(debug_assertions)]
+            {
+                page.form_check = self.policy.form_check(req, &mut origin, mode == Mode::Action);
+            }
+            credentials.personal(|| page.credentials.authorization.is_some())
+        } else {
+            credentials.personal(|| headers.contains_key(header::AUTHORIZATION))
+        };
         let has = if !own && mount.is_none() { cache::request_tags(req.method(), headers, accepts_coding) } else { None };
-        let personal = credentials.personal();
         let watch = Watch(self.signal(&credentials, body_limit));
         let cors = cors.cloned();
         if let Some(nonce) = &nonce {

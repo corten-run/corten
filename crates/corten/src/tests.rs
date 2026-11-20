@@ -10479,6 +10479,7 @@ async fn a_public_page_is_shared_only_when_nothing_makes_it_personal() {
         .router();
     assert_eq!(cache_control(&api, "/api/rates", &[("accept", "application/json")]).await, "public, max-age=60");
     assert_eq!(cache_control(&api, "/api/rates", &[("authorization", "Bearer t")]).await, "private, no-cache");
+    assert_eq!(cache_control(&api, "/api/rates", &[("cookie", "session=abc")]).await, "private, no-cache");
 }
 
 #[tokio::test]
