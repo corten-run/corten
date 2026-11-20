@@ -243,8 +243,14 @@ try {
       }
     };
 
-    const cdp = await pushContext.newCDPSession(pushPage);
-    const { targetInfo } = await cdp.send("Target.getTargetInfo");
+    const setUp = async (step, run) => {
+      const result = await withinFiveSeconds(run);
+      if (result === null) throw new Error(`Push setup: ${step} did not finish within five seconds`);
+      return result;
+    };
+
+    const cdp = await setUp("newCDPSession", () => pushContext.newCDPSession(pushPage));
+    const { targetInfo } = await setUp("Target.getTargetInfo", () => cdp.send("Target.getTargetInfo"));
     const ready = Promise.withResolvers();
     const onVersion = ({ versions }) => {
       const controlling = versions.find((v) => v.status === "activated" && v.scriptURL === scriptURL &&
@@ -252,21 +258,17 @@ try {
       if (controlling) ready.resolve(controlling.registrationId);
     };
     cdp.on("ServiceWorker.workerVersionUpdated", onVersion);
-    const registrationId = await withinFiveSeconds(async () => {
-      await cdp.send("ServiceWorker.enable");
-      return ready.promise;
-    }).finally(() => cdp.off("ServiceWorker.workerVersionUpdated", onVersion));
-    if (!registrationId) throw new Error("DevTools did not report the activated worker controlling the push page");
-
-    const setUp = async (step, run) => {
-      const result = await withinFiveSeconds(run);
-      if (result === null) throw new Error(`Push setup: ${step} did not finish within five seconds`);
-      return result;
-    };
+    let registrationId;
+    try {
+      await setUp("ServiceWorker.enable", () => cdp.send("ServiceWorker.enable"));
+      registrationId = await setUp("controlling worker lookup", () => ready.promise);
+    } finally {
+      cdp.off("ServiceWorker.workerVersionUpdated", onVersion);
+    }
 
     // Chromium's display event reports the title and body, but does not guarantee the
     // notification is listable. A getNotifications() read can delete an unlisted row. Instead,
-    // check the destination passed to showNotification and the event lifetime when it succeeds.
+    // check the destination passed to showNotification and the push's waitUntil promises.
     const isPushWorker = (worker) => worker.url() === scriptURL;
     const worker = await setUp("worker discovery", async () => pushContext.serviceWorkers().find(isPushWorker) ??
       pushContext.waitForEvent("serviceworker", { predicate: isPushWorker, timeout: 0 }));
@@ -281,25 +283,35 @@ try {
       ExtendableEvent.prototype.waitUntil = function (promise) {
         waitUntil.call(this, promise);
         if (!(this instanceof PushEvent)) return;
+        // Correlate by the payload's body, so this covers pushes with a JSON body, as both sends have.
         const body = this.data?.json()?.body;
         if (!lifetimes.has(body)) lifetimes.set(body, []);
         const lifetime = { settled: false };
+        const settle = (outcome) => {
+          lifetime.settled = true;
+          return outcome;
+        };
+        lifetime.outcome = Promise.resolve(promise).then(() => settle("fulfilled"), () => settle("rejected"));
         lifetimes.get(body).push(lifetime);
-        const settle = () => { lifetime.settled = true; };
-        Promise.resolve(promise).then(settle, settle);
       };
       const show = self.registration.showNotification.bind(self.registration);
       self.registration.showNotification = async (title, options) => {
         const body = options?.body;
-        const data = options?.data;
-        const destination = data != null && Object.getPrototypeOf(data) === Object.prototype
+        const member = options == null ? undefined : Object.getOwnPropertyDescriptor(options, "data");
+        const data = member?.enumerable && Object.hasOwn(member, "value") ? member.value : undefined;
+        const destination = typeof data === "object" && data !== null && Object.getPrototypeOf(data) === Object.prototype
           ? Object.getOwnPropertyDescriptor(data, "url") : undefined;
-        const plainData = destination !== undefined && !("get" in destination);
+        const url = destination?.enumerable && Object.hasOwn(destination, "value") && typeof destination.value === "string"
+          ? destination.value : undefined;
         await show(title, options);
-        const extended = lifetimes.get(body)?.some(({ settled }) => !settled) ?? false;
-        resultFor(body).resolve({ url: plainData ? destination.value : undefined, plainData, extended });
+        // A waitUntil promise of this push was pending when the notification was shown and then fulfilled; that does not prove it depended on the notification.
+        const pending = lifetimes.get(body)?.filter(({ settled }) => !settled) ?? [];
+        resultFor(body).resolve({ url, plainData: url !== undefined, outcomes: Promise.all(pending.map(({ outcome }) => outcome)) });
       };
-      return (body) => resultFor(body).promise;
+      return async (body) => {
+        const { url, plainData, outcomes } = await resultFor(body).promise;
+        return { url, plainData, lifetimes: await outcomes };
+      };
     }));
     await setUp("BackgroundService.startObserving", () => cdp.send("BackgroundService.startObserving", { service: "notifications" }));
     await setUp("BackgroundService.setRecording", () => cdp.send("BackgroundService.setRecording", { service: "notifications", shouldRecord: true }));
@@ -331,9 +343,10 @@ try {
       }
     };
     const first = await sendAndObserve({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" });
-    check("a push shows the titled notification within its event lifetime and passes the item destination to showNotification", first.title === "Price drop" && first.url === "/items/item_5" && first.extended === true, JSON.stringify(first));
+    const lifetimeFulfilled = ({ lifetimes }) => lifetimes?.length > 0 && lifetimes.every((outcome) => outcome === "fulfilled");
+    check("a push shows the titled notification while waitUntil is pending, then fulfills it, and passes the item destination to showNotification", first.title === "Price drop" && first.url === "/items/item_5" && lifetimeFulfilled(first), JSON.stringify(first));
     const odd = await sendAndObserve({ body: "Card Name 7 is back", url: 5 });
-    check("a push with no title and a url that is not text shows an untitled notification within its event lifetime and passes / to showNotification", odd.title === "" && odd.url === "/" && odd.extended === true, JSON.stringify(odd));
+    check("a push with no title and a url that is not text shows an untitled notification while waitUntil is pending, then fulfills it, and passes / to showNotification", odd.title === "" && odd.url === "/" && lifetimeFulfilled(odd), JSON.stringify(odd));
   } finally {
     await full.close();
   }
