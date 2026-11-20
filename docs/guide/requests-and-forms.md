@@ -1318,11 +1318,17 @@ apart); an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..)
 (taken apart), and a `<form>` there that holds an element, where an element HTML's wherever it
 lands is in or around it (a form holding a `<div>`, or one in a `<div>`, but not one in an `<svg>`
 or `<math>`, which is theirs and kept as written), whose content is moved
-out of it ([design Choice 54](../design.md#choice-html-parse-refusals)). Every other shape
-depends on what the patch began with or where the view is written, which a component's markup
-does not show: a `<p>` and then a `<tr>` lose the row on their own, but after a first `<tr>`
-both are kept, and an `<svg>` keeps a `<form>` of fields after a `<tr>` as written, so a
-component that writes them compiles. Like every `html!` refusal, these rest only on the markup
+out of it ([design Choice 54](../design.md#choice-html-parse-refusals)). Other shapes depend on
+what the patch began with: a `<p>` and then a `<tr>` lose the row on their own, but after a first
+`<tr>` both are kept. Passing the first shape directly to `action.patch`, `action.patch_with_status`,
+`req.patch_or`, `req.invalid`, or `form.draw` fails when a build generates code for that call.
+`cargo check` alone does not run this check. A build checks the send even inside a literal
+`if false`; it does not wait for a request to take that branch. The doc-hidden
+`__private::PatchShape` is no longer dyn-compatible; supported APIs, including `dyn Patch`,
+are unchanged. The check also names the lost element when one kind of literal table part makes
+the browser drop or wrap another. The markup itself still compiles where
+it can be part of a larger view. Components, borrowed patches, collections and `corten::live`
+fragments are checked as drawn in debug builds. Like every `html!` refusal, these rest only on the markup
 between the two elements: with output the markup does not show before the lost element's start
 tag (an expression, a component, or a `<script>` or `<style>` whose text holds a `<`, in the
 first element, between the two, or in a later element that holds the lost one, before it), the
@@ -1335,7 +1341,7 @@ links Corten adds after its elements): the request fails with a 500, or the stre
 the element lost and the one that came first. Chromium and WebKit also let a leading `<title>`,
 `<base>`, `<basefont>`, `<bgsound>` or `<noframes>` decide, as a page's body would, so a patch
 with one is read both ways. A debug-build test of the app that draws such a patch fails with the
-500 too. A release build sends the patch as drawn, so a mix only some data
+500 too. A release build sends shapes the compiler cannot see as drawn, so a mix only some data
 draws (a row in one branch of an `if`) is found only by a debug render that draws it. The check
 covers what a table's reading does to a patch as `html!` writes it, each element closed by its own
 end tag, not every way a browser's parse can differ from the markup. It reads what an `<svg>` or
