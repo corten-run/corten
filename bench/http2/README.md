@@ -466,10 +466,24 @@ The fixture also limits how far the result carries. It queues its next batch onl
 socket is not blocked, and any pending call, a flush included, marks it blocked, so every
 batch boundary is an interval with only a flush outstanding and no write that could clear
 the stall. A body that keeps producing would call `poll_write`, which rustls accepts while
-its 64 KiB `sendable_tls` limit has room, and that clears the stall. Shipping HTTP/1.1
-applies the same flush rule in `crates/corten/src/watch.rs`; whether it closes such a
-reader over TLS was not tested, and is the open question in
+its 64 KiB `sendable_tls` limit has room, and that clears the stall. When the probe ran,
+shipping HTTP/1.1 applied the same flush rule in `crates/corten/src/watch.rs`, and whether
+it closed such a reader over TLS was the open question in
 [#1742 A TLS flush that stays pending while a slow client reads steadily may trip send_timeout: test serve_wrapped over TLS with a steady reader](https://github.com/corten-run/corten/issues/1742).
+
+The probe and the rounds above are kept as they ran; the probe's watch still clears a stall
+only on a completed write. Shipping HTTP/1.1 no longer does: since
+[#1756 Start the send timeout's wait over each time the connection reports room, so a steady TLS reader is not cut](https://github.com/corten-run/corten/pull/1756),
+Corten's watch starts the wait over each time the connection reports room while a write,
+flush or close waits, so a flush that stays pending while its records drain is cut only when
+the connection goes a send timeout without reporting room. Over TLS that room comes in
+record-sized steps further apart than over plain HTTP: with 16 KiB buffers, a reader taking
+2 KiB every 125 ms was still cut over TLS at a 2 s send timeout in 5 of 5 rounds, where plain
+HTTP kept it past 30 s. The regression test is
+`a_flush_that_waits_while_its_bytes_go_out_is_held_only_to_the_send_timeout` in
+`crates/corten/src/tests/server.rs`. That change does not address the second cause, a
+receive window that reopens only in large steps, and the combined path's HTTP/2 watch
+still has to pass the acceptance below.
 
 A socket watch that closes a steadily reading client blocks shipping: the combined path
 does not qualify until the full combined suite, steady reader included, passes 10

@@ -296,8 +296,10 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
         Self::wait(io, watch, cx, clears, flowing, call)
     }
 
-    /// [`Watched::send`] once its call waits, or found the IO waiting: out of line, so a call that
-    /// goes through at once costs what it did before.
+    /// [`Watched::send`] once its call waits, or found the IO waiting: out of line, so the path of a
+    /// call that goes through at once stays small (it reads `clock.send` and `stalled` first, then
+    /// calls the IO). A wait costs more than it did: the first poll that waits polls the IO again,
+    /// and each one clones the watch's `Arc` and registers the task.
     #[cold]
     fn wait<T>(
         io: &mut I,

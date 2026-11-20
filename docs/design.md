@@ -1227,11 +1227,17 @@ rules something out.
        progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
        seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
        bytes a second, which would need a count of bytes and a window in the connection's writer, for
-       every connection; over TLS a write or a flush stays pending while the TLS library sends
-       what it holds, so the wait starts over each time the socket reports room, when a plain
-       socket's write would go through: without that, a client reading steadily but slower than
-       the server writes was cut over tokio-rustls through `serve_wrapped`, as the
-       [steady reader control](../bench/http2/README.md#steady-reader-control) had reasoned
+       every connection; the wait starts over each time the connection reports room, since over
+       TLS a write or a flush stays pending while the TLS library sends what it holds, where a
+       plain socket's write would go through: before that, with 16 KiB buffers, a client reading
+       4 KiB every 62 ms against a 700 ms timeout got its whole answer over plain HTTP in 5 of 5
+       rounds and was cut over tokio-rustls through `serve_wrapped` in 5 of 5, as the
+       [steady reader control](../bench/http2/README.md#steady-reader-control) had reasoned, and
+       after it got it over both in 5 of 5. Over TLS room still comes in larger steps further
+       apart, since the client takes whole records from its socket: one reading 2 KiB every
+       125 ms against 2 seconds was kept past 30 seconds over plain HTTP and cut over TLS within
+       9 in every round, 3 before the change and 5 after; and while the connection's task has
+       spent tokio's cooperative budget a report of room does not start the wait over
        ([#1742 A TLS flush that stays pending while a slow client reads steadily may trip send_timeout: test serve_wrapped over TLS with a steady reader](https://github.com/corten-run/corten/issues/1742)));
        a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a client that sends
        nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose
@@ -1728,7 +1734,11 @@ rules something out.
     whole answer in six rounds and was closed in one by the socket watch on a `flush` pending
     for 100 ms, a false close, so the combined evidence does not yet include a socket watch
     that leaves steady readers open; a TLS flush pending while records drain and a capped
-    receive window reopening only in large steps both fit, each reasoned, not measured);
+    receive window reopening only in large steps both fit, each reasoned, not measured on the
+    probe; the first has since been measured on shipping HTTP/1.1 over tokio-rustls, which cut
+    such a reader until the send timeout's wait started over at each report of room, and room
+    arriving there in record-sized steps still cuts a slower reader at a 2-second timeout
+    (Protocol, item 2 above));
     value (fast and proven fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
     which is why the dispatch suite comes first and an opt-in protocol must not silently
     weaken a security bound even though the no-proxy live app already fails).
@@ -1765,9 +1775,7 @@ rules something out.
     are known and accepted (Stands on): the one can be told which answers to retry and the other
     replaced by an alert built from access logs, so neither alone reopens it.
 
-    Last checked: 2026-11-20, the send timeout over tokio-rustls 0.26.6 through `serve_wrapped`, with
-    a steady reader, before (`4bf5b1e78`) and after the wait started over on each report of room
-    (#1742); 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`; 2026-11-06,
+    Last checked: 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`; 2026-11-06,
     the `original-uri` runs on `fa597483`; 2026-11-06, rustc 1.99.1's error for an argument no
     request fills, held by `crates/corten/tests/handler_message.rs` at `84d33d0b`; 2026-11-08,
     the prototype's runs (`prototypes/pipeline/results/round4.tsv` and `round4-socket.tsv`),
@@ -1804,7 +1812,12 @@ rules something out.
     and Callgrind rounds per mode; 2026-11-20, the probe's combined mode at `a8431b062`
     with getrandom 0.4.3 and r-efi 6.0.0 in its lockfile, three wire and Callgrind rounds,
     and one round of each isolated mode with the same dispositions; 2026-11-20, the steady
-    reader control at `ec476a9f6` on the same probe build, seven rounds with one false close.
+    reader control at `ec476a9f6` on the same probe build, seven rounds with one false close;
+    2026-11-20, the send timeout over tokio-rustls 0.26.6 through `serve_wrapped` against plain
+    HTTP, steady readers at three rates, before the wait started over on each report of room
+    (five rounds each at `4bf5b1e78`, and three of the 2-second case at `efdb1df36`, whose
+    crates are the same) and after (five rounds each at `ee411b38e`), recorded at the commit
+    that adds this entry.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a

@@ -1161,12 +1161,18 @@ impl<M: Middleware> App<M> {
     /// closes the connection: 60 seconds unless set, as nginx's `send_timeout`. A client that
     /// sends requests and stops reading their answers cannot hold its connection, and a live
     /// stream, a feed or a WebSocket to one ends (the route sees its write fail). It counts only
-    /// while a write waits, from when the connection last reported room: a download whose reader
-    /// keeps freeing room and a stream quiet between events are not cut, over TLS too, where a
-    /// write or a flush stays pending while the TLS library sends what it holds; a reader that
-    /// takes a little each minute can be, since the system reports room only once a good part of
-    /// the buffer is free. A TLS connection's last record, written as it closes, is held to it
-    /// too. `None` removes it, for a server that only
+    /// while a write waits, from when the connection last reported room: a stream quiet between
+    /// events is not cut, and a download is cut only when its reader goes that long without the
+    /// system reporting room, which it does once a good part of the buffer is free, so a reader
+    /// that takes a little each minute can be. Over TLS a write or a flush stays pending while the
+    /// TLS library sends what it holds, and its wait starts over at each report of room too, but
+    /// the client takes whole records, so room comes in larger steps further apart and a short
+    /// timeout can cut a slow reader that plain HTTP keeps: one taking 2 KiB every 125 ms (16 KiB
+    /// buffers) kept a plain connection open past 30 seconds with a 2-second timeout, and over
+    /// tokio-rustls was cut within 9. While the connection's task has spent tokio's cooperative
+    /// budget (a route reading a flood of input), a report of room does not start the wait over.
+    /// A TLS connection's last record, written as it closes, is held to it too. `None` removes
+    /// it, for a server that only
     /// a proxy which reads answers as they come reaches; with [`App::header_timeout`] also `None`,
     /// the clock and its per-request work are gone.
     pub fn send_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
@@ -1691,7 +1697,11 @@ where
 /// `move |tcp| { let acceptor = acceptor.clone(); async move { acceptor.accept(tcp).await } }`.
 /// The step's error is not read: the connection closes. The IO's flush must complete only once
 /// the bytes it holds have been written (tokio-rustls's does): the header timeout counts from the
-/// first flush that completes after an answer's body has been taken.
+/// first flush that completes after an answer's body has been taken. And while a write, a flush
+/// or a close waits, the IO must wake the waker it was given only when it can take more (as
+/// tokio's TCP stream and tokio-rustls do): [`App::send_timeout`] takes each such wake as the
+/// client making room and starts its wait over, so an IO that also woke it to read, or woke
+/// itself, could keep a client that has stopped reading open.
 pub async fn serve_wrapped<L, W, F, Io, E, M>(listeners: Vec<L>, wrap: W, app: App<M>) -> std::io::Result<()>
 where
     L: Listener,
