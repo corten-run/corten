@@ -15,8 +15,8 @@ import { beforeProvisioning, settlementControl } from "./test-fixtures/provider-
 
 const account = ["account", "get", "--output", "json", "--context", context];
 const raw = "SYNTHETIC_ONLY_CREDENTIAL_A";
-async function api(t, mode, h) {
-  const calls = [], responses = [], sockets = new Set(); let injected = false, armed = true;
+async function api(t, mode, h, accountFailure = () => !h || beforeProvisioning(h.local)) {
+  const calls = [], responses = [], sockets = new Set(); let firstFailure = -1, armed = true;
   const translate = h && syntheticProviderRequest(h);
   const server = createServer(async (req, res) => {
     assert.equal(req.headers.authorization, `Bearer ${raw}`);
@@ -26,11 +26,10 @@ async function api(t, mode, h) {
     res.writeHead = (status, ...rest) => { responses.push({ method, path, status }); return writeHead(status, ...rest); };
     if (mode === "refused-create" && method === "POST") { res.writeHead(503); res.end(raw); return; }
     const mutation = mode === "action" && path === "/v2/actions/456" || mode === "post" && method === "POST" || mode === "delete" && method === "DELETE";
-    const fail = armed && !injected && (mutation || path === "/v2/account" && (!h || beforeProvisioning(h.local)));
+    const fail = armed && (firstFailure === -1 || mode === "reset-repeat") && (mutation || path === "/v2/account" && accountFailure());
     if (fail && mode !== "success") {
-      injected = true;
-      if (["action", "post", "delete"].includes(mode)) { req.socket.destroy(); return; }
-      if (mode === "reset") { req.socket.destroy(); return; }
+      if (firstFailure === -1) firstFailure = calls.length - 1;
+      if (["action", "post", "delete", "reset", "reset-repeat", "refused-create"].includes(mode)) { req.socket.destroy(); return; }
       if (["hang", "cancel"].includes(mode)) return;
       if (mode === "aborted") { res.writeHead(200); res.flushHeaders(); res.write('{"account":'); setImmediate(() => res.destroy()); return; }
       res.writeHead(mode === "invalid-json" ? 200 : 503); res.end(raw); return;
@@ -42,7 +41,8 @@ async function api(t, mode, h) {
   server.on("connection", (socket) => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); });
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   t.after(async () => { server.closeAllConnections(); await new Promise((done) => server.close(done)); assert.equal(sockets.size, 0); });
-  return { port: server.address().port, calls, responses, arm(value) { armed = value; }, get injected() { return injected; } };
+  return { port: server.address().port, calls, responses, arm(value) { armed = value; },
+    get injected() { return firstFailure !== -1; }, get firstFailure() { return firstFailure; } };
 }
 function worker(t, api, { mode = "ordinary", receive = (value) => value, interrupted = () => false, onExit, createMode = "legacy" } = {}) {
   const root = mkdtempSync(join(tmpdir(), "account-settlement-test-")), output = join(root, "observed.json");
@@ -76,20 +76,33 @@ function failed(error, code, detail) {
 
 test("native account rejection requires request/response/socket close and typed terminal reply plus exit0", { timeout: 20000 }, async (t) => {
   for (const [mode, code, detail] of [["http503", "account-http"], ["invalid-json", "account-request", "invalid-json"],
-    ["reset", "account-request", "request-error"], ["aborted", "account-request", "response-aborted"]]) await t.test(mode, async (t) => {
+    ["reset-repeat", "account-request", "request-error"], ["aborted", "account-request", "response-aborted"]]) await t.test(mode, async (t) => {
     const a = await api(t, mode), w = worker(t, a);
+    const attempts = mode === "reset-repeat" ? 2 : 1;
     await assert.rejects(w.run(account, 5000), (error) => failed(error, code, detail));
     await w.run.close(); await w.run.close();
     assert.equal(w.child.exitCode, 0); assert.equal(w.child.signalCode, null);
-    assert.equal(w.state().consumes, 1); assert.equal(w.state().requests, 1); assert.equal(w.state().credentialExited, true);
-    assert.equal(w.state().requestClose, 1); assert.equal(w.state().socketClose, 1);
-    assert.equal(w.state().responseClose, mode === "reset" ? 0 : 1);
+    assert.equal(w.state().consumes, 1); assert.equal(w.state().requests, attempts); assert.equal(w.state().credentialExited, true);
+    assert.equal(w.state().requestClose, attempts); assert.equal(w.state().socketClose, attempts);
+    assert.equal(w.state().responseClose, mode === "reset-repeat" ? 0 : 1);
     const terminal = w.messages.find((value) => value.schema === "cloud-provider-account-failed/v2");
     assert.ok(terminal); assert.equal(terminal.disposition, "resources-closed");
-    assert.equal(a.calls.length, 1);
-    await assert.rejects(w.run(account)); assert.equal(w.state().requests, 1);
-    t.diagnostic(`native ${mode}: reqClose=${w.state().requestClose} resClose=${w.state().responseClose} socketClose=${w.state().socketClose}, exit0, one request, failed not accepted`);
+    assert.equal(a.calls.length, attempts);
+    await assert.rejects(w.run(account)); assert.equal(w.state().requests, attempts);
+    t.diagnostic(`native ${mode}: reqClose=${w.state().requestClose} resClose=${w.state().responseClose} socketClose=${w.state().socketClose}, exit0, ${attempts} attempt(s), failed not accepted`);
   });
+});
+
+test("one native account reset retries on the pinned credential before replying", { timeout: 10000 }, async (t) => {
+  const a = await api(t, "reset"), w = worker(t, a);
+  const result = await w.run(account, 5000);
+  assert.deepEqual(JSON.parse(result.stdout), { uuid: "synthetic-user-0001" });
+  await w.run.close();
+  assert.deepEqual(a.calls, Array.from({ length: 2 }, () => ({ method: "GET", path: "/v2/account" })));
+  assert.equal(w.state().consumes, 1);
+  assert.equal(w.state().requestClose, 2); assert.equal(w.state().socketClose, 2);
+  assert.equal(w.child.exitCode, 0);
+  assert.equal(w.messages.some((message) => message.schema === "cloud-provider-account-failed/v2"), false);
 });
 
 const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
@@ -101,6 +114,7 @@ test("native account settlement cannot erase preceding create ambiguity or autho
   await assert.rejects(w.run.close(), (error) => error.controlUncertain === true);
   assert.equal(w.messages.some((value) => value.schema === "cloud-provider-account-failed/v2"), false);
   assert.equal(a.calls.filter((v) => v.method === "POST").length, 1); assert.equal(w.state().consumes, 1);
+  assert.equal(a.calls.filter((v) => v.path === "/v2/account").length, 1);
   for (const [mode, args] of [["post", create], ["delete", ["compute", "droplet", "delete", "123", "--force", "--context", context]]]) await t.test(mode, async (t) => {
     const a = await api(t, mode); let forged = false;
     const w = worker(t, a, { receive(message) {
@@ -136,8 +150,9 @@ test("terminal reply ordering before disconnect and cancellation before exit are
 });
 
 test("native deadline, cancellation and unobserved resource close stay uncertain with no terminal proof", { timeout: 60000 }, async (t) => {
-  for (const mode of ["hang", "cancel", "unobserved-close", "engine-clock", "credential-hang"]) await t.test(mode, async (t) => {
-    const a = await api(t, mode); let cancel = false;
+  for (const mode of ["hang", "cancel", "unobserved-close", "engine-clock",
+    "reset-unobserved-close", "reset-engine-clock", "reset-expired", "reset-cancelled", "credential-hang"]) await t.test(mode, async (t) => {
+    const a = await api(t, mode.startsWith("reset-") ? "reset" : mode); let cancel = false;
     const w = worker(t, a, { mode, interrupted: () => cancel });
     if (mode !== "credential-hang") {
       a.arm(false); assert.equal((await w.run(account, 15000)).status, 0); a.arm(true);
@@ -151,6 +166,36 @@ test("native deadline, cancellation and unobserved resource close stay uncertain
     assert.equal(w.state().requests, mode === "credential-hang" ? 0 : 2); assert.equal(w.state().consumes, 1);
     if (mode === "credential-hang") assert.equal(w.state().credentialTimedOut, true);
   });
+});
+
+test("a reset after bootstrap sequence 5 does not replay provisioning", { timeout: 20000 }, async (t) => {
+  const h = harness(t, { active: true });
+  const remoteCalls = () => h.calls.filter(([bin]) => bin === "ssh" || bin === "scp").map((row) => JSON.stringify(row));
+  let settledRows, settledCalls, approval;
+  const a = await api(t, "reset", h, () => {
+    const { status, control } = h.saved();
+    if (status !== "preparing" || control.ledger.length !== 6 || !control.ledger.every((row) => row.localTerminal && row.code === 0)) return false;
+    settledRows = control.ledger; settledCalls = remoteCalls(); return true;
+  });
+  const workers = [];
+  const deps = { ...settlementControl(t, h), repo: h.repo, write(value) { approval = JSON.parse(value).approvalSha256; },
+    providerFactory({ createMode }) { const w = worker(t, a, { createMode }); workers.push(w); return w.run; } };
+  const args = ["r21", "--state-dir", h.base, "--detach", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
+  assert.equal(await productionMain([...args, "--print-approval"], deps), 3);
+  assert.equal(await productionMain([...args, "--approve-reviewed-merged-ready", approval], deps), 3);
+  assert.ok(a.injected); assert.equal(settledRows.at(-1).request.sequence, 5);
+  assert.deepEqual(a.calls.slice(a.firstFailure, a.firstFailure + 2), Array.from({ length: 2 }, () => ({ method: "GET", path: "/v2/account" })));
+  assert.equal(a.calls.filter((row) => row.method === "POST").length, 1);
+  assert.equal(a.calls.filter((row) => row.method === "DELETE").length, 0);
+  assert.equal(workers[1].state().consumes, 1); assert.equal(workers[1].child.exitCode, 0);
+  const saved = h.saved(), calls = remoteCalls();
+  assert.equal(saved.status, "running");
+  assert.deepEqual(saved.control.ledger.slice(0, 6), settledRows);
+  assert.equal(saved.control.ledger[6].request.invocation.channel, "sftp");
+  assert.equal(saved.control.ledger[6].code, 0);
+  for (const row of new Set(settledCalls))
+    assert.equal(calls.filter((call) => call === row).length, settledCalls.filter((call) => call === row).length);
+  assert.equal(h.calls.filter((row) => row[0] === "ssh" && row.at(-1).startsWith("systemctl start")).length, 1);
 });
 
 test("typed proof rejects wrong nonce/sequence/grammar/version and unexpected exit", { timeout: 60000 }, async (t) => {

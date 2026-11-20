@@ -19,8 +19,10 @@ const save = () => writeFileSync(output, JSON.stringify(observed)); save();
 const exit = process.exit.bind(process);
 if (["withhold-exit", "deadline-exit", "exit"].includes(mode)) process.exit = (code) => { if (code !== 0) exit(code); };
 if (mode === "exit2") process.exit = (code) => exit(code === 0 ? 2 : code);
+let lastReset;
 serveProviderWorker({
-  now: () => Date.now() - (mode === "engine-clock" && observed.requests >= 2 && observed.socketClose >= 2 ? 50000 : 0),
+  now: () => Date.now() + (observed.requests >= 2 && observed.socketClose >= 2
+    ? mode === "reset-expired" ? 50000 : ["engine-clock", "reset-engine-clock"].includes(mode) ? -50000 : 0 : 0),
   spawn(binary, args, options) {
     assert.equal(binary, "doctl"); assert.deepEqual(args.slice(0, 2), ["auth", "token"]);
     assert.ok(options.timeout > 0 && options.timeout <= 10000);
@@ -34,19 +36,35 @@ serveProviderWorker({
   connect(url, options, callback) {
     assert.equal(url.origin, "https://api.digitalocean.com");
     assert.equal(options.agent, false); assert.equal(options.rejectUnauthorized, true);
+    if (lastReset) {
+      assert.ok(lastReset.request && lastReset.socket, "retry must follow actual native close");
+      lastReset = undefined;
+    }
     observed.requests++; save();
     let status;
     const req = request({ ...options, hostname: "127.0.0.1", port: Number(port), path: url.pathname + url.search }, (res) => {
       status = res.statusCode;
       res.once("close", () => { observed.responseClose++; save(); }); callback(res);
     });
-    req.once("close", () => { observed.requestClose++; save(); });
-    req.once("socket", (socket) => socket.once("close", () => { observed.socketClose++; save(); }));
-    if (mode === "unobserved-close") {
+    const closed = { request: false, socket: false };
+    req.once("close", () => { closed.request = true; observed.requestClose++; save(); });
+    req.once("socket", (socket) => {
+      assert.equal(req.reusedSocket, false);
+      socket.once("close", () => {
+        closed.socket = true; observed.socketClose++; save();
+        if (mode === "reset-cancelled" && lastReset === closed) setImmediate(() => process.emit("SIGINT"));
+      });
+    });
+    req.once("error", (error) => {
+      if (url.pathname === "/v2/account" && error.code === "ECONNRESET") lastReset = closed;
+    });
+    if (mode === "unobserved-close" || mode === "reset-unobserved-close") {
       // Withhold the proof listener, not native closure: destruction alone must
       // not be sufficient. The counters above still record actual native events.
       const once = req.once.bind(req);
-      req.once = (event, listener) => once(event, event === "close" ? (...args) => { if (status !== 503) listener(...args); } : listener);
+      req.once = (event, listener) => once(event, event === "close" ? (...args) => {
+        if (status !== (mode === "unobserved-close" ? 503 : undefined)) listener(...args);
+      } : listener);
     }
     return req;
   },
