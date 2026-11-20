@@ -597,7 +597,9 @@ docker build --build-arg PROFILE_FROM=train.sh -t shop .
 sends it requests, and the image gets the binary built with what the copy recorded
 ([A profile-guided build](#a-profile-guided-build) has the script, the steps and what stops
 them). Without the argument the build is the ordinary one and fetches nothing more. A name that
-is no file in the app fails the build before it builds the app.
+is no file in the app fails the build before it builds the app. An app whose Dockerfile was
+written before it had the argument takes the `ARG` and the two build-stage `RUN`s from a new
+app's.
 
 What the argument asks of the app and its build, which the ordinary build does not:
 
