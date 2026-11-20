@@ -1233,8 +1233,8 @@ rules something out.
        4 KiB every 62 ms against a 700 ms timeout got its whole answer over plain HTTP in 5 of 5
        rounds and was cut over tokio-rustls through `serve_wrapped` in 5 of 5, as the
        [steady reader control](../bench/http2/README.md#steady-reader-control) had reasoned, and
-       after it got it over both in 5 of 5. Over TLS room still comes in larger steps further
-       apart, since the client takes whole records from its socket: one reading 2 KiB every
+       after it got it over both in 5 of 5. Over TLS room was still measured coming at less even
+       intervals than over plain HTTP, for a reason not yet measured: one reading 2 KiB every
        125 ms against 2 seconds was kept past 30 seconds over plain HTTP and cut over TLS within
        9 in every round, 3 before the change and 5 after; and while the connection's task has
        spent tokio's cooperative budget a report of room does not start the wait over
@@ -1737,7 +1737,7 @@ rules something out.
     receive window reopening only in large steps both fit, each reasoned, not measured on the
     probe; the first has since been measured on shipping HTTP/1.1 over tokio-rustls, which cut
     such a reader until the send timeout's wait started over at each report of room, and room
-    arriving there in record-sized steps still cuts a slower reader at a 2-second timeout
+    arriving there at less even intervals still cuts a slower reader at a 2-second timeout
     (Protocol, item 2 above));
     value (fast and proven fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
     which is why the dispatch suite comes first and an opt-in protocol must not silently

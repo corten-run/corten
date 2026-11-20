@@ -473,11 +473,12 @@ it closed such a reader over TLS was the open question in
 
 The probe and the rounds above are kept as they ran; the probe's watch still clears a stall
 only on a completed write. Shipping HTTP/1.1 no longer does: since
-[#1756 Start the send timeout's wait over each time the connection reports room, so a steady TLS reader is not cut](https://github.com/corten-run/corten/pull/1756),
+[#1756 Start the send timeout's wait over each time the connection reports room, so a TLS write still sending its bytes is not cut at one timeout](https://github.com/corten-run/corten/pull/1756),
 Corten's watch starts the wait over each time the connection reports room while a write,
 flush or close waits, so a flush that stays pending while its records drain is cut only when
-the connection goes a send timeout without reporting room. Over TLS that room comes in
-record-sized steps further apart than over plain HTTP: with 16 KiB buffers, a reader taking
+the connection goes a send timeout without reporting room. Over TLS that room was measured
+coming at less even intervals than over plain HTTP, for a reason not yet measured: with 16
+KiB buffers, a reader taking
 2 KiB every 125 ms was still cut over TLS at a 2 s send timeout in 5 of 5 rounds, where plain
 HTTP kept it past 30 s. The regression test is
 `a_flush_that_waits_while_its_bytes_go_out_is_held_only_to_the_send_timeout` in

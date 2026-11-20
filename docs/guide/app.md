@@ -66,8 +66,9 @@ between events is not cut, and a download is cut only when its reader goes that 
 system reporting room, which it does once a good part of the buffer is free, so a reader that
 takes a little each minute can be. Over TLS a write or a flush stays pending while the TLS library
 sends what it holds to a client reading slower than the server writes, and its wait starts over at
-each report of room too. But a TLS client takes whole records from its socket, so room comes in
-larger steps further apart, and a short timeout can cut a slow reader that plain HTTP keeps:
+each report of room too. But over TLS room was measured coming at less even intervals (gaps up to
+the whole timeout where plain HTTP's stayed near 1.5 seconds; why is not yet known), and a short
+timeout can cut a slow reader that plain HTTP keeps:
 measured with 16 KiB buffers, a reader taking 2 KiB every 125 ms kept a plain connection open past
 30 seconds with a 2-second `send_timeout` (5 of 5 tries) and was cut over tokio-rustls after 5 to
 8.5 seconds (5 of 5), while one taking 4 KiB every 62 ms got its whole download over both with

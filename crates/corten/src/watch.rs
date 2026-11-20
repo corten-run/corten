@@ -314,8 +314,10 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
         }
         // Before the IO can wake the watch, so its wake reaches the task. Another task may be
         // waiting on the same IO (a route that shares a switched connection behind a lock): if this
-        // call goes through, that task is woken below to register again, rather than lose the
-        // wake it is owed. Two calls that both wait are woken only the last, as tokio's own are.
+        // call goes through, its own registration is taken back and that task is woken below to
+        // register again, rather than lose the wake it is owed, and without leaving this task to
+        // be woken in turn when that one's call goes through. Two calls that both wait are woken
+        // only the last, as tokio's own are.
         let previous = watch.writer.take();
         watch.writer.register(cx.waker());
         let done = if tokio::task::coop::has_budget_remaining() {
@@ -338,6 +340,7 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
             Poll::Pending if watch.stalled.load(Relaxed) == STALLED => Err(stalled()),
             Poll::Pending => return Poll::Pending,
         };
+        watch.writer.take();
         if let Some(previous) = previous.filter(|previous| !previous.will_wake(cx.waker())) {
             previous.wake();
         }
@@ -550,6 +553,50 @@ mod tests {
         let written = tokio::time::timeout(Duration::from_secs(2), write).await;
         assert_eq!(written.expect("the waiting write is woken").unwrap().unwrap(), 1);
         reader.abort();
+    }
+
+    /// An IO whose writes wait and whose flushes go through at once.
+    struct Flushes;
+
+    impl AsyncWrite for Flushes {
+        fn poll_write(self: Pin<&mut Self>, _: &mut Context<'_>, _: &[u8]) -> Poll<io::Result<usize>> {
+            Poll::Pending
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// Counts its wakes.
+    struct Counted(std::sync::atomic::AtomicUsize);
+
+    impl std::task::Wake for Counted {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Two tasks on one connection that each flush when woken do not wake each other in turn:
+    /// a call that goes through wakes the task whose call waits, once, and takes its own
+    /// registration back, so that task's flush going through wakes nobody.
+    #[tokio::test]
+    async fn a_call_that_goes_through_wakes_the_waiting_task_once_and_is_not_woken_back() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let clock = Clock::start(None, Some(Duration::from_secs(30))).unwrap();
+        let mut io = Watched { io: Flushes, watch: Some(clock.watch()), _open: None };
+        let (one, two) = (Arc::new(Counted(0.into())), Arc::new(Counted(0.into())));
+        let (one_waker, two_waker) = (Waker::from(one.clone()), Waker::from(two.clone()));
+        // The first task's write waits, so the connection is stalled.
+        assert!(Pin::new(&mut io).poll_write(&mut Context::from_waker(&one_waker), b"x").is_pending());
+        // The second task's flush goes through: the first is woken to register again.
+        assert!(Pin::new(&mut io).poll_flush(&mut Context::from_waker(&two_waker)).is_ready());
+        assert_eq!((one.0.load(SeqCst), two.0.load(SeqCst)), (1, 0));
+        // Woken, the first task flushes too, and that wakes nobody.
+        assert!(Pin::new(&mut io).poll_flush(&mut Context::from_waker(&one_waker)).is_ready());
+        assert_eq!((one.0.load(SeqCst), two.0.load(SeqCst)), (1, 0));
     }
 
     #[test]
