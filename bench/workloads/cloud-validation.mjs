@@ -36,7 +36,7 @@ export function inspectCampaign(input, { inspect, interrupted = () => false, pre
     Promise.resolve(task.result).then((report) => {
       settled = true;
       if (stopping) { finishStop(); return; }
-      if (cancelled()) { stop(); return; }
+      if (cancelled() || performance.now() - started >= validationLimit) { stop(); return; }
       cleanup(); resolve(report);
     }, () => {
       settled = true;
