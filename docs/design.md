@@ -2798,8 +2798,11 @@ rules something out.
     does it and terser goes; or terser's output fails a smoke test in a supported engine that
     esbuild's alone passes.
 
-    Last checked: 2026-11-10, sizes on `21f9fab3` with esbuild 0.28.2 and terser 5.51.2, and the
-    smoke tests on `10cd394d` (and CI's on this change).
+    Last checked: 2026-11-20, terser 5.51.3 with esbuild 0.28.2 on `3efd3266d` builds all eight
+    files byte for byte as 5.51.2 does there (the same SHA-256 each), so the move changes no
+    shipped byte, and the build gives terser no input source map, so 5.51.3's source-map change
+    does not apply; 2026-11-10, sizes on `21f9fab3` with esbuild 0.28.2
+    and terser 5.51.2, and the smoke tests on `10cd394d` (and CI's on this change).
 
 36. <a id="choice-derived-row"></a>**A feed row's key is the field marked `#[row(id)]`, which `#[derive(Row)]` reads; the
     row's `Clone` and `Serialize` stay in its derive list.** The impl every row wrote by hand
