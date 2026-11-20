@@ -426,7 +426,8 @@ function report({ t0, events, first, committed, drainMs, writes, parts }) {
         syncs: { n: syncs.length, byInstanceAndReason: count(syncs, (s) => `${s[1]}:${s[2]}`), bySecond: count(syncs, (s) => Math.floor(s[0] / 1000)) },
         reconnects: results.reduce((s, c) => s + c.reconnects, 0),
         httpErrors: results.reduce((s, c) => s + c.httpErrors, 0),
-        // by status: a load balancer's own 502 ("no live upstreams") or an instance's answer
+        // by status, which alone does not say whether nginx or an instance answered: match it with
+        // run.mjs's load balancer counts
         httpErrorStatuses: results.reduce((s, c) => {
           for (const [k, v] of Object.entries(c.httpStatuses)) s[k] = (s[k] ?? 0) + v;
           return s;

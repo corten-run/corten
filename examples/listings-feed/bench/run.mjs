@@ -131,14 +131,14 @@ result.nginx = nginxVersion;
 // routes). A log that could not be read is recorded as such, not as zero.
 const lbRead = spawnSync("docker", ["logs", "fb-lb"], { encoding: "utf8" });
 if (lbRead.error || lbRead.status !== 0) {
-  result.loadBalancer = { unread: lbRead.error?.message ?? `docker logs exit ${lbRead.status}` };
+  result.loadBalancer = { unread: lbRead.error?.message ?? (lbRead.signal ? `docker logs signal ${lbRead.signal}` : `docker logs exit ${lbRead.status}`) };
 } else {
   const lbLog = `${lbRead.stdout}${lbRead.stderr}`.split("\n");
   const lbLines = (/** @type {RegExp} */ re) => lbLog.filter((l) => re.test(l)).length;
   result.loadBalancer = {
     disabledWarnings: lbLines(/upstream server temporarily disabled/),
     noLiveUpstreams: lbLines(/no live upstreams/),
-    streamConnectTimedOut: lbLines(/upstream timed out .* while connecting to upstream.*request: "GET \/feeds\/[^/ ]+\/live/),
+    streamConnectTimedOut: lbLines(/upstream timed out .* while connecting to upstream.*request: "GET \/feeds\/[^/ ]+\/live[? ]/),
     connectTimedOut: lbLines(/upstream timed out .* while connecting to upstream/),
   };
 }

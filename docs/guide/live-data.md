@@ -674,9 +674,10 @@ nginx lets a server that failed back in through one trial request every `fail_ti
 clears its failures only when a trial ends well, and a stream does not end. With one upstream for
 everything, an instance that had restarted could stay out of one nginx worker's upstream a trial
 at a time, and once the other instance was killed that worker answered reconnects 502 itself
-(`no live upstreams`, 406 times from one worker over 16 s while the restarted instance was up):
-in 1 of 11 runs at `e33484d44`, the slowest Node clients took 17.3 s to reconnect, their tries
-at 1, 2, 4 and 8 s each answered with an error, and 60 of them loaded a new snapshot. In 6 runs
+(`no live upstreams`, 406 lines from one worker over 16 s while the restarted instance was up).
+In 1 of 11 runs at `e33484d44`, of the Node clients whose stream was cut, the 237 that resumed
+with a patch took up to 17.3 s, as long as four failed tries on the 1, 2, 4 and 8 s backoff take,
+and 60 more fell past the replay window and loaded a new snapshot (not timed). In 6 runs
 at `389ec774d`, with the streams' own upstream, no Node client got an HTTP error, the slowest
 took 1.3 to 1.6 s, and the median of the runs' medians went from 1.1 to 1.25 s: about half of
 the reconnects after a kill first try the killed instance (150 to 152 stream connects timed out
@@ -684,13 +685,15 @@ a run). Every client caught up in every run, some through a snapshot.
 
 `max_fails=0` turns off only the passive exclusion: nginx still sends a new stream to a dead or
 starting instance and moves it to the next one after a connect error or timeout, under
-`proxy_next_upstream`, before any byte is sent to the browser. A killed container's address does
-not refuse a connection, it does not answer, so the benchmark's streams use a 250 ms
-`proxy_connect_timeout`, chosen for its local network; size yours for your own. It does not move
-a stream that has already opened, or bound an instance that accepts and does not answer
-(`proxy_read_timeout` does that). Where the load balancer can check readiness or drain an
-instance before it stops, prefer that, and keep idle upstream connections shorter than the app's
-header timeout as [Deploy](deploy.md) says.
+`proxy_next_upstream`, while another server and a try (`proxy_next_upstream_tries`) are left and
+before any byte is sent to the browser. A killed container's address often does not refuse a
+connection, it does not answer, so the benchmark's streams use a 250 ms
+`proxy_connect_timeout`, chosen for its local network; size yours for your own. That bounds only
+the connect: it does not move a stream that has already opened, or bound an instance that accepts
+and does not answer (`proxy_read_timeout` does, 1 hour in the sample). Where the load balancer can
+check readiness or drain an instance before it stops, prefer that. nginx keeps idle upstream
+connections by default, so keep them shorter than the app's header timeout as [Deploy](deploy.md)
+says.
 
 The runtime checks the envelope of what it is sent: a snapshot's `epoch`, `seq` and `rows`, and a
 patch's `seq` and each change's `op` and `id` (and an upsert's `value`). An answer that is not a
