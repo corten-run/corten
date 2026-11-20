@@ -6907,6 +6907,76 @@ rules something out.
     read at `54f7ca9d`, with the repin that needed a new arm recorded in
     [#1397 Each new Failure variant breaks every app whose error page matches Failure without a `_` arm: decide whether Failure is `#[non_exhaustive]`](https://github.com/corten-run/corten/issues/1397).
 
+68. <a id="choice-profile-build"></a>**A profile-guided release is an option of `corten build`, which runs
+    the app while a command the app names sends it requests.** `corten build --profile-from
+    <command>` runs the toolchain's four steps: an instrumented build, that copy of the app at
+    work, `llvm-profdata merge`, and the release build with the merged profile
+    ([deploying](guide/deploy.md#a-profile-guided-build)). `corten build` alone is the build it
+    was. The command is the app's because what it sends decides the gain, and it does nothing
+    but send: `corten build` starts the copy on a free port it gives the command in `PORT`,
+    waits for it to listen, and stops it with `SIGTERM` when the command ends, so that the copy
+    writes its profile. The copy is started without `HOST`, so it listens on this machine
+    only, where the build and the command look for it. Starting, waiting and stopping are where a script goes wrong without a
+    word (a copy killed, not waited for, or left running writes no profile or a stale one), so
+    they are in the command once and not in each app's script. The instrumented copy has a
+    target directory of its own, so `target/release` never holds a binary that writes a
+    profile, and a step that fails leaves the last release standing. What can be told is wrong
+    without building is refused before the first build: a toolchain without `llvm-profdata`, a
+    system that cannot ask the copy to stop, a command that is not there, another profiled
+    build in the same target directory, and a Cargo configuration that may set flags the profile's flag, which has to
+    go in the environment, would replace. A command that fails,
+    a copy that exits early or does not listen, a profile not written, and a package that
+    builds two binaries each stop the build after the copy and before the release.
+    The standard library the `corten` command is held to can kill a child but not ask it to
+    stop, so the command has the shell send `SIGTERM`, and the option is Unix only: Windows
+    has no command that sends another process a Ctrl-C.
+    Not chosen: the steps left to the guide, which each app then copies with their traps (the
+    profiles the build's own macros write, a profile left from an earlier run, the
+    configuration's flags dropped, the copy killed); a command that starts and stops the copy
+    itself, which moves the same traps into every app's script; the steps in the starter's
+    Dockerfile behind a build argument, which gives a build outside the image nothing and has
+    the image's build run the app and its load; a profile by default, since a build cannot know
+    an app's requests and the second build and the run are minutes; reading Cargo's
+    configuration as Cargo does to keep its flags, which takes a TOML parser the command does
+    not have; and an `llvm-profdata` found on the `PATH`, which may read another LLVM's format.
+
+    Stands on: measured (the catalog app built by the option took 30,730 fewer cycles a request
+    than its ordinary build on the catalog page at the median of 10 alternated rounds, 21% of
+    the ordinary build's 143,443, lower in all 10, and 32,516 fewer where it compressed each
+    answer, 14% of 230,402, lower in 8 of 10, from a command of 3,000 requests; ten earlier
+    rounds of each on a busier machine gave 29% and 18%; one profiled build from an empty
+    target directory took about eleven minutes against about four for one ordinary build);
+    platform (rustc's `-Cprofile-generate` and `-Cprofile-use` and the `llvm-tools`
+    component's `llvm-profdata`; Cargo reads rustflags from the environment or from its
+    configuration and never both, and builds a crate again, one from the registry included,
+    when the file `-Cprofile-use` names is replaced; a process that returns from `main` or
+    calls `exit` writes its profile and one that a signal ends does not); reasoned (a
+    separate target directory is the only place an instrumented build cannot be mistaken for
+    the release; a refusal before the first build costs nothing, where a dropped linker flag
+    or a missing tool found after it costs a build); bet (an app has, or will write, a command
+    that reaches the routes its readers do, which the build cannot check: a command that sent
+    the copy nothing leaves a profile of the app starting and stopping; and the app listens on
+    `PORT` as `corten dev` already asks of it); value (fast and proven fast, with mistakes
+    failing early and one way to build a release, and the option kept off every app that does
+    not ask for it, README Values).
+
+    Revisit when: Cargo can add a flag to the ones its configuration sets, or builds with a
+    profile itself, so the refusal or the steps go; the standard library can ask a child
+    process to stop, or an app on Windows needs the option; an app's release takes Cargo
+    arguments `corten build` does not pass; or an app measures a profile from its own command
+    gaining nothing over the ordinary build.
+
+    Last checked: 2026-11-19, the rounds above at `b032155e2` (the earlier ones on the sources
+    of `70544a54a`) with rustc and Cargo 1.99.1 in `rust:1-bookworm`, the catalog app
+    (`bench/catalog/corten`) with its default features on one CPU under `wrk` with 64
+    connections; 2026-11-19, Cargo 1.99.1: a build given `-Cprofile-use` compiled a registry
+    crate again after the file at the same path was replaced, an ordinary build after a
+    profiled one compiled nothing and put the binary without the profile back in
+    `target/release`, an empty `RUSTFLAGS` left the configuration's flags out, and a file
+    named by `include` had its `rustflags` read; 2026-11-19, rustc 1.99.1: an instrumented
+    server ended by `SIGTERM`'s default action left no profile file, and the same server
+    leaving through `exit` on that signal left one.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

@@ -299,34 +299,78 @@ not for speed.
 ## A profile-guided build
 
 A release build can be given a profile of the app at work, which the compiler uses to lay out
-and inline the code its requests run. Corten adds nothing to it and needs nothing for it; the
-flags and tools are the toolchain's.
+and inline the code its requests run. `corten build --profile-from <command>` builds an
+instrumented copy of the app, runs it while `<command>` sends it requests, and builds
+`target/release` with the profile the copy wrote.
 
 ```sh
-rustup component add llvm-tools
-RUSTFLAGS="-Cprofile-generate=/tmp/profile-build" cargo build --release --locked
-rm -rf /tmp/profile
-LLVM_PROFILE_FILE="/tmp/profile/%m-%p.profraw" ./target/release/shop
-# send it requests like the ones it will serve, then stop it (SIGTERM or Ctrl-C)
-"$(rustc --print sysroot)/lib/rustlib/$(rustc --print host-tuple)/bin/llvm-profdata" \
-    merge -o /tmp/app.profdata /tmp/profile
-RUSTFLAGS="-Cprofile-use=/tmp/app.profdata" cargo build --release --locked
+rustup component add llvm-tools     # once: the toolchain's llvm-profdata merges the profile
+corten build --profile-from sh train.sh
 ```
 
-The first build is for the training run only. It writes its profile as the process exits, which
-a Corten app does on `SIGTERM` and Ctrl-C (Shutdown, in [The app](app.md#the-app)); the run here
-was stopped with `SIGTERM`. `LLVM_PROFILE_FILE` puts the app's profile in a directory of its
-own, emptied first: the macros and build scripts that run during the first build are built the
-same way and write theirs to the directory the flag names (18 files here), and a profile left
-from an earlier release would be merged with this one. The rustc book's own steps keep the flag
-from the macros and build scripts another way, by passing `--target` with the host's tuple to
-both builds, which puts the binary under `target/<tuple>/release`, not where the starter's
-Dockerfile copies it from; that way was not run here. Each of the two builds compiles every
-crate again, since the flags changed, and `RUSTFLAGS` in the environment replaces the
-`build.rustflags` and every `target.<..>.rustflags` of a `.cargo/config.toml`, so an app that
-sets a linker or a CPU there repeats those flags in both. The Dockerfile `corten new` writes
-does one release build; where the training run and the profile go in an image's build is not
-worked out here.
+The command is the app's own, since only the app knows what its requests are. It sends the copy
+requests like the ones the app will serve, at `127.0.0.1` on the port `PORT` names:
+
+```sh
+#!/bin/sh
+# train.sh
+set -e
+for i in $(seq 500); do
+    curl -fs -o /dev/null -H 'Accept-Encoding: gzip, deflate, br, zstd' "http://127.0.0.1:$PORT/"
+done
+```
+
+`corten build` starts the copy in the app's directory with the environment it was given, less
+`HOST` so that it listens on this machine only, on a port nothing else has, and runs the command
+once the copy accepts a connection. When the command ends it stops the copy with `SIGTERM` and waits for it: the copy
+writes its profile as it exits, which a Corten app does on `SIGTERM` (Shutdown, in
+[The app](app.md#the-app)), and a copy that is killed writes none. A command that fails stops
+the build, and so does a copy that exits early, does not listen within a minute, is still
+running a minute after `SIGTERM` (it is killed then), or leaves no profile; `curl -f` fails this command on an answer that is not a success, so a profile of error
+pages is not taken for one of the app. The build cannot tell a command that sent the copy
+nothing, or sent its requests to another port, from one that did its work: the profile is then
+of the app starting and stopping, and the release is built with it all the same. What the command sends is the part that decides the gain:
+in the measurements below a profile did not have to come from the load it was measured with,
+only from requests that reach the same routes, and one that barely reached them gained about
+half as much.
+
+The four steps are the toolchain's own, and Corten adds nothing to the binary:
+
+1. `cargo build --release` with `-Cprofile-generate`, into a target directory of its own under
+   `target/corten-profile`. So `target/release` never holds a binary that writes a profile, and a
+   step that fails leaves the last release as it was. The copy is kept: the next profiled build
+   compiles only what changed in it. A package that builds more than one binary is refused
+   here, since a profile is of one program. Apps that share a target directory (a workspace's)
+   share `target/corten-profile` too, so a profiled build is refused while another runs there.
+2. The copy, run with `LLVM_PROFILE_FILE` naming a directory of this run's own, after what
+   earlier runs left is removed. The macros and build scripts that ran during the first build
+   were built the same way and wrote profiles too, and a profile left from an earlier run
+   would be merged with this one.
+3. `llvm-profdata merge`, with the tool from the toolchain's `llvm-tools` component, which
+   reads what its rustc writes; one on the `PATH` may be another LLVM's. A toolchain without
+   the component is refused before the first build, with the `rustup` line above.
+4. `cargo build --release` with `-Cprofile-use`. Every crate compiles again, since the flag
+   changed, and again whenever a new profile replaces the file. Cargo keeps the ordinary
+   build's crates beside these, so a plain `corten build` afterwards compiles nothing and puts
+   the binary without the profile back in `target/release`.
+
+The two flags reach Cargo in the environment, after any `RUSTFLAGS` already there. Cargo takes
+its flags from the environment or from its configuration, never both, so flags that a
+`.cargo/config.toml` sets (`build.rustflags`, a `target.<..>.rustflags`: a linker, a CPU) would
+be left out of both builds without a word. The command refuses that before it builds, naming
+the file or variable: give it the flags the build needs in `RUSTFLAGS`, and both builds keep
+them. It reads those files as text, not as Cargo does, so it also refuses one that sets flags
+for another target or includes another file; an empty `RUSTFLAGS` says the build wants none.
+
+The option needs a Unix system, since it stops the copy with a signal; on Windows it is refused
+before it builds, and a Linux container builds the release the Dockerfile's way. That
+Dockerfile, as `corten new` writes it, does one release build with no profile, in the image:
+a binary built here is not the one the image runs, and where the command and what it sends go
+in an image's build is not worked out here. A `corten build` that is itself stopped by a signal
+(a cancelled job, `timeout`) leaves the copy running, as `corten dev` leaves the app. For a
+build the option refuses or does not cover (a second binary, Windows, Cargo arguments such as
+features), the same steps by hand are in the rustc book's
+[profile-guided optimization](https://doc.rust-lang.org/rustc/profile-guided-optimization.html).
 
 Measured on the lean catalog app (`bench/catalog/corten`) at `7685c7f24` with rustc 1.99.1 in
 `rust:1-bookworm`, on a desktop under Docker with other work running. That app is not the
@@ -336,7 +380,8 @@ only in the profile served the same catalog page load and answered the same byte
 one CPU, `wrk` with 64 connections on three others in the same container. Cycles are user and
 kernel together, a request, by `perf stat` on the app's process, over 12 rounds in which the
 builds took turns in the same order; instructions are one connection under callgrind (1,300
-requests less 300), one run a build.
+requests less 300), one run a build. These five were built with the toolchain's steps by hand,
+before `corten build` had the option.
 
 | Profile taken from | Cycles a request, median | Range | Instructions a request |
 |---|---|---|---|
@@ -355,11 +400,36 @@ lower in 7 (11,965 lower to 16,117 higher): these rounds do not tell either from
 app and this load a profile did not have to come from the load it was measured with, only from
 requests that reach the same route; a profile that barely reached it gained about half as much.
 
-Not measured: an app as the starter builds and runs it (the default features, its release
-profile, jemalloc, a deadline and timeouts), another app or page, a profile taken from an
-earlier version of the app or with another rustc, a profile used on another kind of CPU than it
-was taken on, the size of the binary, and the time the two builds and the training run add to a
-release. Nor the time a reader waits: no latency was kept, and the pages a second the same
+The option itself, measured at `b032155e2` with the same rustc, container and load: the catalog
+app with its default features (`compress` on), built by `corten build` and by
+`corten build --profile-from` with a command that asked for the catalog page 3,000 times, each
+on a new connection, accepting a browser's codings. Over 10 rounds in which the two builds took
+turns:
+
+| Load | `corten build`, cycles a request, median (range) | With `--profile-from` | Difference in the same round, median | Rounds it was lower |
+|---|---|---|---|---|
+| the catalog page, accepting no coding | 143,443 (132,553 to 152,283) | 105,464 (98,222 to 123,785) | 30,730 fewer, 21% of the ordinary build's median | 10 of 10 |
+| the same page, accepting a browser's codings, so each answer is compressed | 230,402 (208,981 to 242,264) | 192,597 (174,045 to 237,618) | 32,516 fewer, 14% | 8 of 10 |
+
+Ten rounds of each load an hour and a half earlier, with the machine busier and a binary the
+option built from the sources of `70544a54a` (the same two builds; what changed since is how
+the copy is started and stopped and what is refused), gave 45,676 fewer on the page (29%:
+107,713 against 155,368) and 50,251 fewer with each answer compressed (18%: 233,162 against
+286,487), lower in all 10 rounds of each. So on this app the option took 21% to 29% of the
+cycles off the page and 14% to 18% where each answer is compressed, and two runs on one desktop
+do not place it closer than that.
+
+From an empty target directory the ordinary build took about four minutes and the profiled one
+about eleven, the 3,000 requests included: one build each, on the busier machine. Two later
+profiled builds that had nothing to compile in the instrumented copy took about five minutes
+and, with the machine quieter, about two and a half. The binaries are 6,154,312 bytes and
+5,869,496, the merged profile 2.8 MB, and the target directory about 250 MB after the ordinary
+build against about 580 MB with the instrumented copy beside the release.
+
+Not measured: an app as the starter builds and runs it (its release profile, jemalloc, a
+deadline and timeouts), another app or page, a profile taken from an earlier version of the app
+or with another rustc, and a profile used on another kind of CPU than it was taken on. Nor the
+time a reader waits: no latency was kept, and the pages a second the same
 rounds counted (64 connections against one CPU) say little, 17,567 at the median without a
 profile (11,578 to 18,678), 21,504, 21,228 and 22,610 with the first three and 17,727 with the
 JSON API's, whose cycles were 13% lower.

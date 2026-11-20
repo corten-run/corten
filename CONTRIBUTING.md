@@ -63,7 +63,7 @@ type-check the browser benchmark's view apps with the repository's pinned
 compiler: `node node_modules/typescript7/bin/tsc -p bench/browser/jsconfig.json`.
 The bare `npx tsc` command may select the benchmark harness's classic 5.9.3 compiler instead.
 
-- Rust (stable; the supported floor is 1.89). On Windows the tests run in Docker, because the host cannot link `windows-sys`.
+- Rust (stable; the supported floor is 1.89), with the `clippy`, `rustfmt` and `llvm-tools` components (`rustup component add llvm-tools`: the `corten` command's tests run a profile-guided build, which merges its profile with the toolchain's `llvm-profdata`). On Windows the tests run in Docker, because the host cannot link `windows-sys`.
 - Node (use the framework CI version in [`.node-version`](.node-version)), for the runtime's
   type check, its minified build and the browser smoke tests: `npm ci`, then
   `npx playwright install chromium firefox webkit` (the core and `corten-ui` smoke tests run
@@ -155,7 +155,7 @@ the check names a commit, run
 
 ```powershell
 $checkout = Split-Path -Leaf $PWD
-docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-trixie sh -c "rustup component add clippy rustfmt >/dev/null 2>&1; cargo fmt --all --check && cargo run -q -p corten-cli -- fmt --check crates examples bench && cargo clippy --workspace --all-features --all-targets -- -D warnings && cargo test --workspace --all-features && cargo test --release --workspace --all-features"
+docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-trixie sh -c "rustup component add clippy rustfmt llvm-tools >/dev/null 2>&1; cargo fmt --all --check && cargo run -q -p corten-cli -- fmt --check crates examples bench && cargo clippy --workspace --all-features --all-targets -- -D warnings && cargo test --workspace --all-features && cargo test --release --workspace --all-features"
 docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry --tmpfs /usr/local/cargo/registry/src:exec -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-trixie sh -c "rustup component add clippy rustfmt >/dev/null 2>&1; cargo test -p corten-run --no-default-features && cargo check -p corten-run --no-default-features --features json --all-targets && cargo check -p corten-run --no-default-features --features agent,feed && cargo build -q -p corten-cli && /target/debug/corten new /tmp/app --corten-path /src/crates/corten && cd /tmp/app && /target/debug/corten check --no-script-types && /target/debug/corten ui init && /target/debug/corten ui add --all && /target/debug/corten check --no-script-types && cd /src && CARGO_TARGET_DIR=/tmp/publish cargo publish --workspace --dry-run --locked --allow-dirty"
 docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-msrv-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1.89-trixie cargo check --locked --workspace --all-features --all-targets
 npm run check

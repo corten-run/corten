@@ -1,0 +1,1 @@
+- **Breaking:** `corten build` refuses an argument it does not take. Before, it ignored every argument and built, so `corten build --release` or a misspelled flag passed as an ordinary build; a script that passes one now fails and says which.
