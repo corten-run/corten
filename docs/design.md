@@ -5161,14 +5161,14 @@ rules something out.
     one; 2026-11-17, each refusal's facts read again against `html/nesting.rs` and
     the parser after a third review found refusals of kept markup across a component, an
     expression and a foreign root's unseen namespace, and the kept shapes
-    (`parsesAsHtmlMeans` in `scripts/smoke.mjs`: one per nesting kind across a boundary written
+    (`parsesAsHtmlMeans` in `scripts/smoke/patch-parsing.mjs`: one per nesting kind across a boundary written
     by `raw`, a form pair in a template written by `raw` in a document's `<main>`, anchors across
     a `<foreignObject>` and a `<template>` written by `raw`, and the anchors of a `<math>` in an
     `<svg>` and of an `<svg>` in a `<math>`) parsed in Chromium 156, Firefox 157 and WebKit 27.2,
     each of which kept every one as written; 2026-11-16, the HTML standard's "in body" start-tag rules, scope boundaries,
     special elements and active-formatting markers, read against `html/nesting.rs` in this
     change based on `f5f2132aa`, and each of its refusal rules, for every tag the rule names
-    (`refusedNesting` in `scripts/smoke.mjs`), parsed in Chromium 156, Firefox 157 and
+    (`refusedNesting` in `scripts/smoke/patch-parsing.mjs`), parsed in Chromium 156, Firefox 157 and
     WebKit 27.2, each of which moved or dropped the inner element, while keeping the template
     and foreign-content cases, and again after review that the form pointer is the only rule that
     depends on ancestors outside the markup (template contents do not use it); 2026-11-15, the
@@ -5180,7 +5180,7 @@ rules something out.
     `crates/corten-macros/src/html.rs` on `6575d4d8c` and again on this round's change, as its
     tests and the examples of `html!` hold the parse and the refusals to. The MathML and
     SVG-breakout claims rest on that dated read of the standard, and on what the engines below do
-    with it: `scripts/smoke.mjs` (`parsesAsHtmlMeans`, in every engine the watchlist smoke runs)
+    with it: `scripts/smoke/patch-parsing.mjs` (`parsesAsHtmlMeans`, in every engine the watchlist smoke runs)
     loads, written by hand as `html!` writes them (it is not rendered by `html!`), the shapes
     `html!`'s examples hold: a `<title>` in an `<mi>`'s `<mglyph>` and `<malignmark>`, a `<div>`
     in an `<mtext>`, an `<svg>` straight in a `<math>` (MathML's), an `<annotation-xml>` with an

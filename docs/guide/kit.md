@@ -302,7 +302,7 @@ JavaScript and under the CSP, with no `style=`, and the labels they show (Previo
 legend) are the app's, in its language.
 
 Every component is in use in the [ui-gallery](../../examples/ui-gallery) example, built from the
-kit's own files, and its browser test (`examples/ui-gallery/smoke.mjs`) runs them in Chromium,
+kit's own files, and its [browser tests](../../examples/ui-gallery/smoke/) run them in Chromium,
 Firefox and WebKit, with and without JavaScript. The [seller-desk](../../examples/seller-desk)
 example is an app styled with the kit: five components copied and unedited, and the theme's tokens
 set to the app's palette and radius in light and dark.
