@@ -2823,8 +2823,11 @@ rules something out.
     does it and terser goes; or terser's output fails a smoke test in a supported engine that
     esbuild's alone passes.
 
-    Last checked: 2026-11-10, sizes on `21f9fab3` with esbuild 0.28.2 and terser 5.51.2, and the
-    smoke tests on `10cd394d` (and CI's on this change).
+    Last checked: 2026-11-20, terser 5.51.3 with esbuild 0.28.2 on `3efd3266d` builds all eight
+    files byte for byte as 5.51.2 does there (the same SHA-256 each), so the move changes no
+    shipped byte, and the build gives terser no input source map, so 5.51.3's source-map change
+    does not apply; 2026-11-10, sizes on `21f9fab3` with esbuild 0.28.2
+    and terser 5.51.2, and the smoke tests on `10cd394d` (and CI's on this change).
 
 36. <a id="choice-derived-row"></a>**A feed row's key is the field marked `#[row(id)]`, which `#[derive(Row)]` reads; the
     row's `Clone` and `Serialize` stay in its derive list.** The impl every row wrote by hand
@@ -6536,7 +6539,13 @@ rules something out.
     reclaims unanswered publish registrations without a healthy-path regression
     ([nats-io/nats.rs #1641 Prune abandoned requests from the multiplexer](https://github.com/nats-io/nats.rs/pull/1641)).
 
-    Last checked: 2026-11-19, async-nats 0.53.0's reply map and subscription cleanup,
+    Last checked: 2026-11-20, the `corten-cluster` integration tests at `4225a2837` on
+    PostgreSQL 19.0 and NATS 2.15.3 with async-nats 0.53.0 and SQLx 0.8.6: 36 passed, the opt-in
+    TLS and capped-subscription tests among them returning early without their brokers, and the
+    four `#[ignore]`d benchmarks not run. A generated 1,024-byte key was inserted into both
+    `corten_feeds` and `corten_outbox`, both types of size refusals reloaded followers, and a
+    follower recovered after a broker disconnect;
+    2026-11-19, async-nats 0.53.0's reply map and subscription cleanup,
     real JetStream retries with publish acknowledgements suppressed and then restored, a full
     batch on a 64-reply subscription, recovery after a partial timeout with a three-subscription
     broker limit and a 64-reply queue, and the relay throughput, follower latency and

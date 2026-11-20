@@ -198,7 +198,7 @@ docker run -d --name corten-auction-room -p 18486:8080 -e HOUSE_KEY=smoke-house 
 node examples/auction-room/smoke.mjs http://localhost:18486 smoke-house
 docker rm -f corten-auction-room
 docker network create feeds
-docker run -d --name feeds-pg --network feeds -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=feeds postgres:18-alpine
+docker run -d --name feeds-pg --network feeds -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=feeds postgres:19-alpine
 docker run -d --name feeds-nats --network feeds nats:2-alpine -js
 docker build -f examples/listings-feed/Dockerfile -t corten-listings-feed .
 docker run -d --name corten-listings-feed --network feeds -p 18485:8080 -e DATABASE_URL=postgres://postgres:postgres@feeds-pg/feeds -e NATS_URL=nats://feeds-nats:4222 corten-listings-feed
@@ -308,7 +308,7 @@ set, and are skipped otherwise (`$checkout` as in [Checks](#checks)):
 ```powershell
 $checkout = Split-Path -Leaf $PWD
 docker network create corten-test
-docker run -d --name corten-test-pg --network corten-test -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=feeds postgres:18-alpine
+docker run -d --name corten-test-pg --network corten-test -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=feeds postgres:19-alpine
 docker run -d --name corten-test-nats --network corten-test nats:2-alpine -js
 docker run --rm --network corten-test -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -e CORTEN_TEST_DATABASE_URL=postgres://postgres:postgres@corten-test-pg/feeds -e CORTEN_TEST_NATS_URL=nats://corten-test-nats:4222 -w /src rust:1-trixie cargo test -p corten-cluster -- --test-threads=1
 docker rm -f -v corten-test-pg corten-test-nats

@@ -54,7 +54,9 @@ function instance(name, ip, letter) {
 for (const c of containers) docker("rm", "-f", "-v", c);
 docker("network", "rm", "feedbench");
 docker("network", "create", "--subnet", "10.77.77.0/24", "feedbench");
-docker("run", "-d", "--name", "fb-pg", ...net, "--ip", "10.77.77.10", "-e", "POSTGRES_PASSWORD=postgres", "-e", "POSTGRES_DB=feeds", "postgres:16-alpine");
+// PostgreSQL 19 since 2026-11-20; failover-r1 and -r2 ran postgres:16-alpine, so compare across that
+// change as a changed input.
+docker("run", "-d", "--name", "fb-pg", ...net, "--ip", "10.77.77.10", "-e", "POSTGRES_PASSWORD=postgres", "-e", "POSTGRES_DB=feeds", "postgres:19-alpine");
 docker("run", "-d", "--name", "fb-nats", ...net, "--ip", "10.77.77.11", "nats:2-alpine", "-js");
 await until("postgres", () => spawnSync("docker", ["exec", "fb-pg", "pg_isready", "-U", "postgres", "-d", "feeds"]).status === 0);
 // a starts first, so it is almost always the active relay when it is killed; each kill records
