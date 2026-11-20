@@ -529,6 +529,13 @@ logger: it cannot see the host check, a later error page or a `304`.
 
 ## Benchmark Hosts
 
+Before allocating a benchmark host, use the **Benchmark Evidence** workflow on
+the merged source. If its replay checks passed but the push skipped native Linux,
+run the workflow on `main` with `native_only=true`. Otherwise a manual run
+with the default inputs runs the whole evidence suite. Verify the run's commit
+and the successful jobs before counting them. Neither mode starts a droplet or
+produces framework timings.
+
 The grouped benchmark's [disposable-host preparation](../../bench/workloads/CLOUD.md#evidence-and-cleanup)
 holds firmware-update services outside the measurement boundary before baseline.
 Its cleanup check retains all process observations and exempts only kernel threads
