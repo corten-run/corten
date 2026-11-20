@@ -114,6 +114,16 @@ test("account retry refuses a clock rollback at request start before a second co
   assert.equal(w.messages.some((message) => message.schema === "cloud-provider-account-failed/v2"), false);
 });
 
+test("account clock rollback at the first handoff or retry timer cannot send the request", async (t) => {
+  for (const [mode, connects, gets] of [["first-handoff-rollback", 0, 0], ["retry-timer-rollback", 2, 1]]) await t.test(mode, async (t) => {
+    const a = await api(t, "reset"), w = worker(t, a, { mode });
+    await assert.rejects(w.run(account, 5000), (error) => error.controlUncertain === true);
+    await assert.rejects(w.run.close(), (error) => error.controlUncertain === true);
+    assert.equal(w.state().requests, connects); assert.equal(a.calls.length, gets);
+    assert.equal(w.messages.some((message) => message.schema === "cloud-provider-account-failed/v2"), false);
+  });
+});
+
 const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
   "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", "--context", context];
 test("native account settlement cannot erase preceding create ambiguity or authorize other command replies", { timeout: 15000 }, async (t) => {

@@ -1015,6 +1015,8 @@ the original command deadline, including credential consumption and closure, and
 use the same pinned token, HTTPS verification and response bounds. The controller
 still checks account identity and capacity where it did before. Cancellation,
 expiry, reverse time, unknown resources and unresolved prior mutations fail closed.
+The account command keeps one clock record across both connections; once a
+sample goes backwards, a later sample cannot make that command valid again.
 HTTP statuses, other errors and other commands cannot authorize this retry.
 Only a privately identified failed account read can produce the exact-key
 `cloud-provider-account-failed/v2` reply: `nonce`, `sequence`,

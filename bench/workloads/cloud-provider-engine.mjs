@@ -53,17 +53,28 @@ function privateDiagnostics() {
     throw new Error("provider diagnostics must be disabled");
 }
 
-function restRequest({ method, path, credential, body, timeout, accountDeadline = Infinity, accountNotBefore = -Infinity, interrupted = () => false, deleteProofExpiresAtMs }, connect, resources) {
+// One clock for an account command, including credential consumption, native
+// callbacks, any retry and final settlement. A later sample cannot undo a rollback.
+function accountClock(clock) {
+  let latest = -Infinity;
+  return () => {
+    const current = clock();
+    latest = Number.isFinite(current) && current >= latest ? current : NaN;
+    return latest;
+  };
+}
+
+function restRequest({ method, path, credential, body, timeout, accountDeadline = Infinity, now = Date.now, interrupted = () => false, deleteProofExpiresAtMs }, connect, resources) {
   return new Promise((resolve, reject) => {
     let settled = false, informationSeen = false, req, timer, cancellation, failureDetail = "internal-refusal";
     const account = method === "GET" && path === "/v2/account";
-    const started = Date.now(), expires = Math.min(started + timeout, accountDeadline);
-    if (account && !(started >= accountNotBefore)) {
+    const started = now(), expires = Math.min(started + timeout, accountDeadline);
+    if (account && !(started < expires)) {
       reject(stopped(true, { code: "account-request", detail: "deadline" })); return;
     }
     let lastTime = started, outcome;
     const inTime = () => {
-      const current = Date.now(), valid = current >= lastTime && current < expires;
+      const current = now(), valid = current >= lastTime && current < expires;
       lastTime = current; return valid;
     };
     const record = { requestClosed: false, socketClosed: false, socketSeen: false, responseClosed: false, responseSeen: false, native: false };
@@ -160,7 +171,9 @@ function restRequest({ method, path, credential, body, timeout, accountDeadline 
       req.on("error", (error) => finish("request-error", undefined,
         account && !outcome && record.native && !record.responseSeen && !informationSeen && Error.isError(error)
           && Object.getOwnPropertyDescriptor(error, "code")?.value === "ECONNRESET"));
-      const remaining = Math.max(1, expires - Date.now());
+      const timerStart = now();
+      if (account && !(timerStart < expires)) { finish("deadline"); return; }
+      const remaining = Math.max(1, expires - timerStart);
       timer = setTimeout(() => finish("deadline"), deleteProofExpiresAtMs === undefined ? remaining
         : Math.min(remaining, Math.max(1, deleteProofExpiresAtMs - Date.now())));
       cancellation = setInterval(() => {
@@ -192,7 +205,7 @@ function restRequest({ method, path, credential, body, timeout, accountDeadline 
 // Production calls this only inside the clean credential worker. Dependency
 // injection is for synthetic controls, never an IPC/CLI option.
 export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsRequest,
-  request, interrupted = () => false, sleep = delay, now = Date.now, createMode = null } = {}) {
+  request, interrupted = () => false, sleep = delay, now: clock = Date.now, createMode = null } = {}) {
   const host = providerCreateHost(createMode);
   const env = controlEnvironment("doctl");
   const resources = { live: new Set(), notify: new Set() };
@@ -208,10 +221,10 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       // outward diagnostic can authorize a retry or stand in for native close.
       try { await controlCheckpoint(interrupted); }
       catch { throw stopped(true, providerFailure(error)); }
-      const current = now();
+      const current = options.now();
       if (!(current >= proof.at && current < options.accountDeadline))
         throw stopped(true, providerFailure(error));
-      return nativeRequest({ ...options, accountNotBefore: current, timeout: Math.ceil(options.accountDeadline - current) });
+      return nativeRequest({ ...options, timeout: Math.ceil(options.accountDeadline - current) });
     }
   }
   let credential, context;
@@ -237,6 +250,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     finally { if (Buffer.isBuffer(result?.stdout)) result.stdout.fill(0); if (Buffer.isBuffer(result?.stderr)) result.stderr.fill(0); }
   };
   return async (args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs) => {
+    const now = args?.[0] === "account" ? accountClock(clock) : clock;
     const started = now(), deadline = started + timeout;
     assert.ok(Array.isArray(args) && args.at(-2) === "--context", "saved provider context required");
     if (args[2] === "create") assert.ok(host && args[7] === host.region, "provider create placement differs from authorized mode");
@@ -265,7 +279,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         assert.ok(phase === "delete" && current < deleteProofExpiresAtMs && deleteProofExpiresAtMs - current <= 60000, "current retirement proof expired");
       }
       try { response = await request({ method, path, body, credential, timeout: remaining, interrupted,
-        ...(phase === "account" ? { accountDeadline: deadline } : {}),
+        ...(phase === "account" ? { accountDeadline: deadline, now } : {}),
         ...(deleteProofExpiresAtMs === undefined ? {} : { deleteProofExpiresAtMs }) }); }
       catch (error) {
         const diagnostic = phase === "account" ? providerFailure(error) : undefined;

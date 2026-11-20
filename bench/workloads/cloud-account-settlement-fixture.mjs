@@ -20,8 +20,16 @@ const exit = process.exit.bind(process);
 if (["withhold-exit", "deadline-exit", "exit"].includes(mode)) process.exit = (code) => { if (code !== 0) exit(code); };
 if (mode === "exit2") process.exit = (code) => exit(code === 0 ? 2 : code);
 let lastReset, retryClockSet = false;
+function rewindNextSample() {
+  const clock = Date.now, checkpoint = clock();
+  Date.now = () => { Date.now = clock; return checkpoint - 100; };
+  return checkpoint;
+}
 serveProviderWorker({
   now: () => {
+    if (mode === "first-handoff-rollback" && !retryClockSet && observed.credentialExited) {
+      retryClockSet = true; return rewindNextSample();
+    }
     if (mode === "retry-start-rollback" && !retryClockSet && lastReset?.request && lastReset.socket) {
       retryClockSet = true;
       const clock = Date.now, checkpoint = clock() + 1;
@@ -79,6 +87,7 @@ serveProviderWorker({
         if (status !== (mode === "unobserved-close" ? 503 : undefined)) listener(...args);
       } : listener);
     }
+    if (mode === "retry-timer-rollback" && observed.requests === 2) rewindNextSample();
     return req;
   },
 });
