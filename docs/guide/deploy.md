@@ -300,8 +300,9 @@ not for speed.
 
 A release build can be given a profile of the app at work, which the compiler uses to lay out
 and inline the code its requests run. `corten build --profile-from <command>` builds an
-instrumented copy of the app, runs it while `<command>` sends it requests, and builds
-`target/release` with the profile the copy wrote.
+instrumented copy of the app, runs it while `<command>` sends it requests, and builds the
+release (in `target/release`, unless Cargo's configuration puts it elsewhere) with the profile
+the copy wrote.
 
 ```sh
 rustup component add llvm-tools     # once: the toolchain's llvm-profdata merges the profile
@@ -320,7 +321,28 @@ for i in $(seq 500); do
 done
 ```
 
-`corten build` starts the copy in the app's directory with the environment it was given, less
+Cargo arguments the release needs go before `--profile-from`, and both builds get them in the
+same order, so the profile is of the binary the release is:
+
+```sh
+corten build --no-default-features --features=lean --locked --bin shop --profile-from sh train.sh
+```
+
+`corten build` passes on `--features` (`-F`), `--all-features`, `--no-default-features`,
+`--locked`, `--package` (`-p`) and `--bin`, with or without a profile, as they are written
+(`--features=lean`, `-Flean` and an empty `--features ""` included), and refuses any other
+argument before it builds. Everything after `--profile-from` is the command and its own
+arguments. `--target`, `--target-dir` and `--profile` are refused, since each moves the release
+from Cargo's default `target/release`, and the profiled build's copy has to run on the machine
+that builds it. Corten does not check Cargo's configuration for these: a target or target
+directory set there (`build.target`, `build.target-dir`) is still Cargo's to apply, and the copy
+it builds has to run on this machine.
+
+`corten build` starts the copy, and runs the command, in the directory it was started in. With
+`-p` at a workspace's root, that is the root, not the member's directory, so the command's path
+and the app's own relative paths are from there:
+`corten build -p shop --profile-from sh shop/train.sh`. The copy gets the environment
+`corten build` was given, less
 `HOST` so that it listens on this machine only, on a port nothing else has, and runs the command
 once the copy accepts a connection. When the command ends it stops the copy with `SIGTERM` and waits for it: the copy
 writes its profile as it exits, which a Corten app does on `SIGTERM` (Shutdown, in
@@ -339,8 +361,8 @@ The four steps are the toolchain's own, and Corten adds nothing to the binary:
 1. `cargo build --release` with `-Cprofile-generate`, into a target directory of its own under
    `target/corten-profile`. So `target/release` never holds a binary that writes a profile, and a
    step that fails leaves the last release as it was. The copy is kept: the next profiled build
-   compiles only what changed in it. A package that builds more than one binary is refused
-   here, since a profile is of one program. Apps that share a target directory (a workspace's)
+   compiles only what changed in it. A build that makes more than one binary is refused
+   here, since a profile is of one program: `--bin` names the one. Apps that share a target directory (a workspace's)
    share `target/corten-profile` too, so a profiled build is refused while another runs there.
 2. The copy, run with `LLVM_PROFILE_FILE` naming a directory of this run's own, after what
    earlier runs left is removed. The macros and build scripts that ran during the first build
@@ -350,9 +372,10 @@ The four steps are the toolchain's own, and Corten adds nothing to the binary:
    reads what its rustc writes; one on the `PATH` may be another LLVM's. A toolchain without
    the component is refused before the first build, with the `rustup` line above.
 4. `cargo build --release` with `-Cprofile-use`. Every crate compiles again, since the flag
-   changed, and again whenever a new profile replaces the file. Cargo keeps the ordinary
-   build's crates beside these, so a plain `corten build` afterwards compiles nothing and puts
-   the binary without the profile back in `target/release`.
+   changed, and again whenever a new profile replaces the file. Cargo keeps an ordinary
+   build's crates beside these, so a `corten build` afterwards with the same Cargo arguments and
+   no `--profile-from` can reuse an ordinary build already made, if nothing has changed since,
+   and puts the binary without the profile back in the release directory.
 
 The two flags reach Cargo in the environment, after any `RUSTFLAGS` already there. Cargo takes
 its flags from the environment or from its configuration, never both, so flags that a
@@ -368,8 +391,8 @@ Dockerfile, as `corten new` writes it, does one release build with no profile, i
 a binary built here is not the one the image runs, and where the command and what it sends go
 in an image's build is not worked out here. A `corten build` that is itself stopped by a signal
 (a cancelled job, `timeout`) leaves the copy running, as `corten dev` leaves the app. For a
-build the option refuses or does not cover (a second binary, Windows, Cargo arguments such as
-features), the same steps by hand are in the rustc book's
+build the option refuses or does not cover (Windows, a cross build, a Cargo argument not on
+its list), the same steps by hand are in the rustc book's
 [profile-guided optimization](https://doc.rust-lang.org/rustc/profile-guided-optimization.html).
 
 Measured on the lean catalog app (`bench/catalog/corten`) at `7685c7f24` with rustc 1.99.1 in
