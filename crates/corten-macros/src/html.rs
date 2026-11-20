@@ -93,6 +93,10 @@ const KEYWORDS: &[&str] = &[
 ];
 
 pub fn expand(input: TokenStream) -> TokenStream {
+    expand_with_loss(input, |_| {})
+}
+
+fn expand_with_loss(input: TokenStream, record_loss: impl FnOnce(&str)) -> TokenStream {
     let (inside, input) = inside_marker(input);
     // A view written as another view's prop renders inside it, so it borrows what it uses (see
     // `borrowing`); any other owns it, since it may be returned.
@@ -177,6 +181,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 let mut slots = Slots::default();
                 let mut shape = gen.top_nodes(&nodes, &mut slots);
                 if let Some(why) = lost_if_whole(&nodes) {
+                    record_loss(&why);
                     shape = q(
                         "{
                             struct __CortenLostIfWhole<S>(S);
@@ -214,6 +219,32 @@ pub fn expand(input: TokenStream) -> TokenStream {
         }
         Err((span, message)) => compile_error(span, &message),
     }
+}
+
+/// Project the test fixture into Rust. The browser-vector test also renders the exact expansion
+/// that supplied the verdict to find its recorded parse.
+pub(super) fn whole_patch_cases(render: bool) -> TokenStream {
+    use crate::json::Value;
+    let Value::Array(cases) = crate::json::parse(include_str!("whole-patch-cases.json")).unwrap() else { unreachable!() };
+    let option = |text: Option<&str>| match text {
+        Some(text) => q("Some(__A0)", &[literal(text)]),
+        None => q("None", &[]),
+    };
+    let mut rows = TokenStream::new();
+    for case in cases {
+        let Value::Array(fields) = case else { unreachable!() };
+        let [Value::String(markup), expected] = fields.as_slice() else { unreachable!() };
+        let expected = match expected {
+            Value::String(text) => Some(text.as_str()),
+            Value::Null => None,
+            _ => unreachable!(),
+        };
+        let mut actual = None;
+        let view = expand_with_loss(markup.parse().expect("literal patch markup"), |why| actual = Some(why.to_owned()));
+        let rendered = if render { q("render_patch(__A0)", &[view]) } else { q("()", &[]) };
+        rows.extend(q("(__A0, __A1, __A2, __A3),", &[literal(markup), option(expected), option(actual.as_deref()), rendered]));
+    }
+    q("[__A0]", &[rows])
 }
 
 /// One or more `let`s and then one component, nothing else.
@@ -3590,25 +3621,8 @@ mod tests {
                 assert_eq!(why, None, "{head}");
             }
         }
-        for (first, later, change) in [
-            ("tr", "tbody", "is dropped"),
-            ("tr", "td", "is put in a <tr> the browser adds"),
-            ("td", "tr", "is dropped"),
-            ("tbody", "tr", "is put in a <tbody> the browser adds"),
-            ("caption", "td", "is put in a <tbody> and a <tr> the browser adds"),
-            ("colgroup", "col", "is put in a <colgroup> the browser adds"),
-            ("col", "link", "is dropped"),
-        ] {
-            let nodes = [leaf(first), leaf(later)];
-            assert_eq!(lost(&nodes), None);
-            let why = lost_if_whole(&nodes).expect("lost in a whole patch");
-            assert!(why.contains(&format!("the <{later}> {change} when this whole patch begins with <{first}>")), "{why}");
-        }
         let unknown = || Node::Expr(TokenStream::new());
         for nodes in [
-            vec![leaf("tr"), leaf("p"), leaf("tr")],
-            vec![leaf("td"), leaf("th"), leaf("p")],
-            vec![leaf("col"), leaf("col"), leaf("template")],
             vec![leaf("p"), leaf("table"), leaf("form")],
             vec![unknown(), leaf("p"), leaf("tr")],
             vec![leaf("p"), unknown(), leaf("tr")],

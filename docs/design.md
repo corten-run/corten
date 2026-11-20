@@ -4816,10 +4816,12 @@ rules something out.
     `<title>`, `<base>`, `<basefont>`, `<bgsound>` or `<noframes>`: the standard and Firefox read
     it as a head's, and Chromium and WebKit let it choose body rules. A zero-sized return shape
     carries the diagnostic as a lazy constant. `Action::patch_with_status` and `FormPatch::draw`
-    evaluate it when Rust generates code for a concrete view; `cargo check` does not. The sealed
-    method adds no bound to `Patch` callers and does not enter the `dyn Patch` vtable. A component,
-    reference, optional patch or collection can be part of a larger composition and supplies no
-    verdict. `corten::live` already takes rendered fragments. The debug check still reads every
+    evaluate it when Rust generates code for a concrete view; `cargo check` does not. Even a
+    send inside a literal `if false` is checked, independent of which branch a request takes.
+    The doc-hidden `__private::PatchShape` lost dyn compatibility. No supported API changed:
+    the sealed method adds no bound to `Patch` callers and does not enter the `dyn Patch` vtable.
+    A component, reference, optional patch or collection can be part of a larger composition and
+    supplies no verdict. `corten::live` already takes rendered fragments. The debug check still reads every
     patch sent, reports a loss with a 500 (or panics for a live fragment), and is where losses
     involving unseen output or top-level blocks are found ([Limit 2](#limit-whole-element-patches)).
 
@@ -5024,8 +5026,9 @@ rules something out.
     template" insertion mode's head tags and table start tags, and what the table insertion
     modes do with the tags after them, which `TEMPLATE_HEAD` and `TABLE_PARTS` copy, held equal to
     the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there,
-    which also holds both copies of `DECIDING_HEAD` equal; the literal whole-patch losses and
-    kept shapes are checked against the browser vectors there;
+    which also holds both copies of `DECIDING_HEAD` equal; the macro and browser-vector tests
+    use the same literal whole-patch cases and compare the macro's actual verdict with the
+    recorded parses of its output;
     the tokenizer's script data, RAWTEXT and data states, in which an appropriate end tag ends a
     `<script>` or `<style>` whatever the markup around it says, `<!--` and `<script` carry a
     script past one, and in foreign content `<` may start a tag and `&` a character reference;

@@ -1322,8 +1322,11 @@ out of it ([design Choice 54](../design.md#choice-html-parse-refusals)). Other s
 what the patch began with: a `<p>` and then a `<tr>` lose the row on their own, but after a first
 `<tr>` both are kept. Passing the first shape directly to `action.patch`, `action.patch_with_status`,
 `req.patch_or`, `req.invalid`, or `form.draw` fails when a build generates code for that call.
-`cargo check` alone does not run this check. It also names the lost element when one kind of
-literal table part makes the browser drop or wrap another. The markup itself still compiles where
+`cargo check` alone does not run this check. A build checks the send even inside a literal
+`if false`; it does not wait for a request to take that branch. The doc-hidden
+`__private::PatchShape` is no longer dyn-compatible; supported APIs, including `dyn Patch`,
+are unchanged. The check also names the lost element when one kind of literal table part makes
+the browser drop or wrap another. The markup itself still compiles where
 it can be part of a larger view. Components, borrowed patches, collections and `corten::live`
 fragments are checked as drawn in debug builds. Like every `html!` refusal, these rest only on the markup
 between the two elements: with output the markup does not show before the lost element's start
