@@ -100,8 +100,9 @@ I/O, non-process read failures and PID/start-tick changes still fail immediately
 A catalog child can replace its image via exec between the two executable
 reads. A different device/inode at the closing read alone is not enough to
 retry. The immediately preceding admitted sample must bind the same PID,
-start ticks and cgroup to the opening executable, and its pinned descriptor
-must still match every identity field. Discard the entire failed attempt.
+start ticks and cgroup to the opening executable, or bind its parent as
+described below. The pinned descriptor must still match every identity field.
+Discard the entire failed attempt.
 One fresh, complete census within the original deadline must pin and recheck
 the exact closing identity (device, inode, size, mtime and ctime) for that same
 process in the same cgroup. No further retry is allowed if this census fails.
@@ -110,6 +111,15 @@ the process name differs at that point, the collector must still check the
 executable: a stable image permits the ordinary name retry, a different inode
 requires the paired proof above, and an unreadable closing image blocks the run.
 Both admitted images must still seal to their exact digests at finish.
+For a child PID absent from the preceding sample, its opening and closing
+process records must name the same parent. The preceding sample must contain
+that parent in the same cgroup on the child's exact opening image. The fresh
+census must find the same parent (PID, start ticks, cgroup and image) and the
+same child on the expected new image, still naming that parent at both reads.
+This uses the parent's already-admitted descriptor and digest; the failed
+census adds no accounting or process records. Matching an unrelated process's
+image is not sufficient.
+
 Unseen old images, same-inode metadata changes and unproven successors remain
 blocked. This is sampled image replacement, not a trace of exec syscalls or
 an explanation of the original r21 interruption.
