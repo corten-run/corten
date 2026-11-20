@@ -150,9 +150,13 @@ test("nested capture rollback preserves accepted descriptors and rejects prematu
 
 test("a catalog executable recheck rejects an inconsistent reference before stat", (t) => {
   const f = pendingFixture(t), accepted = f.pending.capture(4242), operations = [];
+  const stats = fs.statSync.mock;
+  assert.ok(stats.calls.some(({ arguments: [path] }) => path === "/proc/4242/exe"));
+  stats.resetCalls();
   assert.throws(() => f.pending.recheck(4242, { ...accepted, executableRef: "0".repeat(64) }, (operation, action) => {
     operations.push(operation); return action();
   }), { code: "ERR_ASSERTION" });
+  assert.equal(stats.callCount(), 0, "reference mismatch must not stat the executable again");
   assert.deepEqual(operations, ["executable-recheck-reference"]);
 });
 
