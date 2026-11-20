@@ -3,8 +3,9 @@
 //! - `corten new <dir>` writes a working app (page, form, handler script, test, Dockerfile).
 //! - `corten dev` builds and runs the app, rebuilds and restarts it when a file changes (a failed
 //!   build keeps the running server), and open pages reload by themselves.
-//! - `corten build` builds the release binary, with `--profile-from` laid out by a profile of
-//!   the app at work, passing a closed list of Cargo's arguments on. `corten check` runs format, a check that every
+//! - `corten build` runs Cargo's release build, with `--profile-from` laid out by a profile of
+//!   the app at work, passing a closed list of Cargo's arguments on.
+//! - `corten check` runs format, a check that every
 //!   styled component is listed, lint, a build of every target and tests, then a type check of
 //!   the app's scripts (with TypeScript's `tsc`, which it needs unless told
 //!   `--no-script-types`).
