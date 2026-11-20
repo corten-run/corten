@@ -199,7 +199,7 @@ substitute for checking the public outputs.
    [supported TypeScript](docs/guide/getting-started.md#install-and-create-an-app) and no skips.
    Then build the app's image with a profile, with the script from
    [A profile-guided build](docs/guide/deploy.md#a-profile-guided-build) saved in the app as
-   `train.sh`: `docker build --build-arg PROFILE_FROM=train.sh .`. This is the one place the
+   `train.sh`: `docker build --progress=plain --build-arg PROFILE_FROM=train.sh .`. This is the one place the
    Dockerfile's install line runs as written, since it names the release just published: the
    build fails if that release's `corten build` has no `--profile-from`, and its output names
    the four steps of a profiled build when it has.

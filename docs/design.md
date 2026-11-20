@@ -1227,11 +1227,25 @@ rules something out.
        progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
        seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
        bytes a second, which would need a count of bytes and a window in the connection's writer, for
-       every connection; whether over TLS a flush that stays pending while a slow client reads
-       steadily trips it is reasoned in the
-       [steady reader control](../bench/http2/README.md#steady-reader-control), not measured, and
-       open in
-       [#1742 A TLS flush that stays pending while a slow client reads steadily may trip send_timeout: test serve_wrapped over TLS with a steady reader](https://github.com/corten-run/corten/issues/1742));
+       every connection; the wait starts over each time the connection reports room, since over
+       TLS a write or a flush stays pending while the TLS library sends what it holds, where a
+       plain socket's write would go through: before that, with 16 KiB buffers, a client reading
+       4 KiB every 62 ms against a 700 ms timeout got its whole answer over plain HTTP in 5 of 5
+       rounds and was cut over tokio-rustls through `serve_wrapped` in 5 of 5, as the
+       [steady reader control](../bench/http2/README.md#steady-reader-control) had reasoned, and
+       after it got it over both in 5 of 5. A slower reader is still cut where it takes bytes
+       from its socket in bursts: a tokio-rustls client reading 2 KiB every 125 ms against
+       2 seconds was cut within 9 seconds in every round (3 before the change, 5 after), its
+       socket reads coming as whole 16 KiB records; in 2 traced rounds the server's socket
+       reported room about a second apart twice and then not for the last 1.8 or 2 seconds
+       before the cut, where plain HTTP's came every 1.5 seconds. The same rate read evenly from
+       the socket was kept past 30 seconds over TLS and plain HTTP alike, and plain readers in
+       bursts (16 KiB a second, `curl --limit-rate 16K`) were cut, so the reading pattern decides
+       it, not TLS
+       ([#1757 send_timeout cuts a slow reader that takes bytes from its socket in bursts, over TLS and plain HTTP alike](https://github.com/corten-run/corten/issues/1757));
+       and while the connection's task has spent tokio's cooperative budget a report of room
+       does not start the wait over
+       ([#1742 A TLS flush that stays pending while a slow client reads steadily may trip send_timeout: test serve_wrapped over TLS with a steady reader](https://github.com/corten-run/corten/issues/1742)));
        a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a client that sends
        nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose
        waits, in all, pass that idle time plus a second for every 240 bytes that came (Kestrel's
@@ -1727,7 +1741,11 @@ rules something out.
     whole answer in six rounds and was closed in one by the socket watch on a `flush` pending
     for 100 ms, a false close, so the combined evidence does not yet include a socket watch
     that leaves steady readers open; a TLS flush pending while records drain and a capped
-    receive window reopening only in large steps both fit, each reasoned, not measured);
+    receive window reopening only in large steps both fit, each reasoned, not measured on the
+    probe; the first has since been measured on shipping HTTP/1.1 over tokio-rustls, which cut
+    such a reader until the send timeout's wait started over at each report of room, and a
+    slower reader that takes its bytes in bursts is still cut at a 2-second timeout
+    (Protocol, item 2 above));
     value (fast and proven fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
     which is why the dispatch suite comes first and an opt-in protocol must not silently
     weaken a security bound even though the no-proxy live app already fails).
@@ -1801,7 +1819,16 @@ rules something out.
     and Callgrind rounds per mode; 2026-11-20, the probe's combined mode at `a8431b062`
     with getrandom 0.4.3 and r-efi 6.0.0 in its lockfile, three wire and Callgrind rounds,
     and one round of each isolated mode with the same dispositions; 2026-11-20, the steady
-    reader control at `ec476a9f6` on the same probe build, seven rounds with one false close.
+    reader control at `ec476a9f6` on the same probe build, seven rounds with one false close;
+    2026-11-20, the send timeout over tokio-rustls 0.26.6 through `serve_wrapped` against plain
+    HTTP, steady readers at three rates, before the wait started over on each report of room
+    (five rounds each at `4bf5b1e78`, and three of the 2-second case at `efdb1df36`, whose
+    crates are the same) and after (five rounds each at `ee411b38e`), recorded at the commit
+    that adds this entry, and the gaps between the socket's reports of room traced in two of
+    the 2-second case's rounds each, plain and TLS, at `ee411b38e`; 2026-11-20, the 2-second
+    case at `5596df8b5` with the reading pattern varied, five rounds each: even 2 KiB reads
+    every 125 ms from the socket over TLS and plain kept, tokio-rustls cut, 16 KiB a second
+    over plain cut, `curl --limit-rate 16K` (7.88.1) over plain and TLS cut.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -6494,8 +6521,9 @@ rules something out.
 
 65. <a id="choice-locked-check"></a>**Checking and shipping use the lock; local builds update it.**
     `corten check` uses `--locked` on the full Cargo metadata it already reads, before formatting
-    or compiling, and on lint, build and tests. The starter Dockerfile and the examples' also
-    build with `--locked`, all but card-market's, which changes with its paired benchmark recipe
+    or compiling, and on lint, build and tests. The starter Dockerfile and every example's also
+    build with `--locked` (the starter's build with a profile too, and its install of the
+    `corten` command, [Choice 69](#choice-profile-image)), and so does card-market's timed benchmark recipe, its download too
     ([#1584 card-market's image and its paired bench recipe still build without --locked](https://github.com/corten-run/corten/issues/1584)). A missing or stale lock is an error, not a successful check that silently
     repairs the dependency graph and leaves CI's committed graph unchecked. Cargo finds the
     workspace-root lock even from a member, including a library. The CLI does not require a
@@ -6527,7 +6555,12 @@ rules something out.
     each with no step between, on the change after `dd4baf7a4`; 2026-11-17, Cargo 1.99.1 on a
     new member of a workspace whose lock held `itoa` 1.0.0: `cargo generate-lockfile` moved it to
     1.0.19, `cargo update --workspace` kept 1.0.0, and for a standalone app with no lock the two
-    wrote identical locks.
+    wrote identical locks; 2026-11-20, each image's one build read as a locked release build by
+    `scripts/images.test.mjs`, and card-market's timed recipe as a locked fetch and build by
+    `bench/fullstack/builds.test.mjs`, at `d8832da25`; 2026-11-20, the starter's image read by
+    the same test as two `RUN`s in one shape, the install of the `corten` command and the
+    build with a profile or without, each of the three Cargo commands locked, at `99c6ccc85`
+    merged with `4225a2837`.
 
 66. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in document mode or an action
     that prefers it; a patch does not fill a layout read.** A `data-patch` write that answers with its

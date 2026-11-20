@@ -128,7 +128,7 @@ pub fn run(command: &[String], cargo: &[String]) -> Result<(), String> {
         return Err(format!("cargo build --release {}failed", cargo.iter().map(|arg| format!("{arg} ")).collect::<String>()));
     }
     println!(
-        "\ncorten: built the release binary in target/release with a profile of the app under {shown}. The static files are compiled into it. An image built from the Dockerfile builds its own binary, without this profile; a Dockerfile that declares PROFILE_FROM takes one of its own (docker build --build-arg PROFILE_FROM=<script>)."
+        "\ncorten: built the release binary in target/release with a profile of the app under {shown}. The static files are compiled into it. An image's build makes its own binary, which has a profile only when that build runs this command: a Dockerfile that declares PROFILE_FROM does, given docker build --build-arg PROFILE_FROM=<script>."
     );
     Ok(())
 }

@@ -90,7 +90,22 @@ function sameProcess(record, identity, cgroup) {
   const observed = processIdentity(record.stat);
   return observed.pid === identity.pid && observed.startTicks === identity.startTicks;
 }
-function snapshotOnce(path, executables, pending, previousProcesses, allowSuccessor) {
+// Field 4 follows the closing parenthesis of comm (which can itself contain ')').
+function parentPid(stat) {
+  const match = /^\d+ \(.*\) [A-Za-z] (\d+) /.exec(stat);
+  assert.ok(match); return Number(match[1]);
+}
+function forkAnchor(previous, stat, closingStat, identity, cgroup, ref) {
+  const ppid = parentPid(stat);
+  if (ppid === identity.pid || parentPid(closingStat) !== ppid ||
+    previous.some((p) => processIdentity(p.stat).pid === identity.pid)) return null;
+  const parent = previous.find((p) => p.cgroup === cgroup && p.executableRef === ref &&
+    processIdentity(p.stat).pid === ppid);
+  if (!parent) return null;
+  const anchor = processIdentity(parent.stat);
+  return BigInt(anchor.startTicks) <= BigInt(identity.startTicks) ? { identity: anchor, ref } : null;
+}
+function snapshotOnce(path, executables, pending, previousProcesses, allowSuccessor, successor) {
   const groups = scopeGroups(path), processes = [];
   const before = observing("snapshot-membership", () => membership(groups));
   for (const group of groups) {
@@ -104,7 +119,12 @@ function snapshotOnce(path, executables, pending, previousProcesses, allowSucces
       const cgroup = observing("process-cgroup", () => readFileSync(`${at}/cgroup`, "utf8"));
       observing("process-membership", () => assert.equal(groupPath(cgroup), current));
       const type = observing("process-cmdline", () => readFileSync(`${at}/cmdline`).toString().split("\0").find((s) => /^--type=(renderer|utility|zygote|gpu-process)$/.test(s)) ?? null);
-      const rechecked = observing("process-stat-recheck", () => processIdentity(readFileSync(`${at}/stat`, "utf8")));
+      const closingStat = observing("process-stat-recheck", () => readFileSync(`${at}/stat`, "utf8"));
+      const rechecked = observing("process-stat-recheck", () => processIdentity(closingStat));
+      if (successor?.parent && identity.pid === successor.identity.pid) observing("executable-recheck-successor", () => {
+        assert.equal(parentPid(stat), successor.parent.identity.pid);
+        assert.equal(parentPid(closingStat), successor.parent.identity.pid);
+      });
       const recheckOperation = rechecked.pid !== identity.pid ? "process-pid-changed"
         : rechecked.startTicks !== identity.startTicks ? "process-start-changed" : "process-name-recheck";
       // A catalog rename is retryable as name churn only after proving the
@@ -114,16 +134,16 @@ function snapshotOnce(path, executables, pending, previousProcesses, allowSucces
       if (pending) {
         try { observing(catalogRename ? "executable-recheck-renamed" : "executable-recheck", () => pending.recheck(identity.pid, executable, observing)); }
         catch (error) {
-          // Only an already admitted image of this very process can anchor a
-          // successor. Never retain or promote a failed attempt's captures.
+          // Anchor both images to accepted evidence; never promote this failed census.
           if (allowSuccessor && previousProcesses && observationOperations.get(error) === "executable-recheck-inode"
             && error.code === "ERR_ASSERTION" && error.expected === executable.executableIdentity
-            && String(identity.pid) === pid && previousProcesses.some((p) =>
-              p.executableRef === executable.executableRef && sameProcess(p, identity, cgroup))) {
-            observing("executable-recheck-pin", () => pending.checkPinned(executable));
-            // The actual operand of the closing identity assertion is the
-            // complete stat tuple, not merely the differing inode number.
-            executableSuccessors.set(error, { identity, cgroup, ref: executableReference(error.actual) });
+            && String(identity.pid) === pid) {
+            const admitted = previousProcesses.some((p) => p.executableRef === executable.executableRef && sameProcess(p, identity, cgroup));
+            const parent = admitted ? null : forkAnchor(previousProcesses, stat, closingStat, identity, cgroup, executable.executableRef);
+            if (admitted || parent) {
+              observing("executable-recheck-pin", () => pending.checkPinned(executable));
+              executableSuccessors.set(error, { identity, cgroup, ref: executableReference(error.actual), parent });
+            }
           }
           throw error;
         }
@@ -149,9 +169,12 @@ function snapshot(path, executables, pending, lastSampleAt = null, timing, previ
     attempts++;
     try {
       const attempt = () => {
-        const observed = snapshotOnce(path, executables, pending, previousProcesses, timing && !successor);
-        if (successor) observing("executable-recheck-successor", () => assert.ok(observed.processes.some((p) =>
-          p.executableRef === successor.ref && sameProcess(p, successor.identity, successor.cgroup))));
+        const observed = snapshotOnce(path, executables, pending, previousProcesses, timing && !successor, successor);
+        if (successor) observing("executable-recheck-successor", () => {
+          assert.ok(observed.processes.some((p) => p.executableRef === successor.ref && sameProcess(p, successor.identity, successor.cgroup)));
+          if (successor.parent) assert.ok(observed.processes.some((p) =>
+            p.executableRef === successor.parent.ref && sameProcess(p, successor.parent.identity, successor.cgroup)));
+        });
         if (race && performance.now() > deadline) throw race;
         return observed;
       };

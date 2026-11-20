@@ -2,7 +2,7 @@
 FROM rust:1-trixie AS build
 WORKDIR /src
 # `docker build --build-arg PROFILE_FROM=train.sh .` builds the release with a profile of the app
-# at work: `corten build --profile-from sh train.sh` runs a copy of the app in this build while
+# at work: `corten build --profile-from`, in the second RUN, runs a copy of the app in this build while
 # the app's script sends it requests, and gives the release build what the copy recorded
 # (https://github.com/corten-run/corten/blob/main/docs/guide/deploy.md#a-profile-in-the-image).
 # The copy starts with what a build has, so not beside a database or another service. Without the
@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/var/cache/cargo \
     if [ -n "$PROFILE_FROM" ]; then rustup component add llvm-tools \
     && CARGO_HOME=/var/cache/cargo cargo install corten-cli --version {{version}} --locked --root /usr/local \
     && if ! corten help build | grep -q -e --profile-from; then \
-    echo "corten-cli {{version}} has no --profile-from, so PROFILE_FROM would build without a profile: install the corten this app builds against in the line above" >&2; exit 1; fi; fi
+    echo "corten-cli {{version}} has no --profile-from, so PROFILE_FROM would build without a profile: name a corten-cli release that has it where this Dockerfile installs one" >&2; exit 1; fi; fi
 COPY . .
 # zstd (corten's `compress`) is linked to this build image's libzstd instead of compiled from its
 # C sources, the slowest crate in a clean build, so the server needs libzstd.so.1 where it runs:

@@ -108,6 +108,120 @@ for (const change of ["exec", "exec with rename", "chmod"]) test(`catalog execut
   }
 });
 
+test("catalog retries a real fork and exec when only the parent image was previously sampled", {
+  skip: !unit && "requires Linux in an explicitly owned delegated benchmark test unit", timeout: 15000,
+}, async (t) => {
+  const next = fs.realpathSync("/bin/cat");
+  const temporary = mkdtempSync(join(tmpdir(), "isolated-kernel-fork-")), directory = join(temporary, "command-host");
+  const old = join(temporary, "shell");
+  const campaign = `${unit[1]}-0000000000000009`, binding = { request: { group: "catalog-page", round: "observer-fork", commit: "a".repeat(40) } };
+  // The background subshell forks without exec. Its stdin is a separate gate
+  // that also keeps cat alive after exec, while the original shell reaps it.
+  const script = [
+    "printf 'ready\\n'; read -r fork || exit 0",
+    '(printf "child %s\\n" "$BASHPID"; read -r go || exit 0; exec "$1") <&3 3<&- &',
+    'wait "$!"',
+  ].join("\n");
+  const invocation = { executable: old, argv: ["--noprofile", "--norc", "-c", script, "shell", next], shell: false };
+  let tick, leader, closed, gate, pin, observer, scope, finishing = false;
+  t.mock.method(globalThis, "setInterval", (cb) => { tick = cb; return 1; });
+  try {
+    fs.copyFileSync("/bin/bash", old); fs.chmodSync(old, 0o500);
+    pin = fs.openSync(old, "r");
+    const initial = executableIdentity(pin);
+    leader = spawn(old, invocation.argv, {
+      env: { LANG: "C", PATH: "/usr/bin:/bin" }, stdio: ["pipe", "pipe", "inherit", "pipe"], timeout: 8000, killSignal: "SIGKILL",
+    });
+    closed = once(leader, "close"); gate = leader.stdio[3];
+    const [ready] = await Promise.race([once(leader.stdout, "data"), closed]); assert.equal(String(ready), "ready\n");
+    const pid = leader.pid, command = 8, parentAt = `/proc/${pid}`;
+    const parentIdentity = processIdentity(readFileSync(`${parentAt}/stat`, "utf8"));
+    observer = await beginLifetime({ campaign, binding, invocation, directory, command, pid });
+    scope = `/sys/fs/cgroup${JSON.parse(readFileSync(join(directory, "binding.json"))).path}`;
+    await observer.attach(pid);
+
+    const announcement = Promise.race([once(leader.stdout, "data"), closed]);
+    leader.stdin.end("fork\n");
+    const [line] = await announcement, match = /^child (\d+)\n$/.exec(String(line));
+    assert.ok(match, `forked child did not announce readiness: ${line}`);
+    const childPid = Number(match[1]), at = `/proc/${childPid}`, exe = `${at}/exe`;
+    assert.notEqual(childPid, pid);
+    const before = readFileSync(`${at}/stat`, "utf8"), childIdentity = processIdentity(before);
+    assert.match(before, new RegExp(`^${childPid} \\(.*\\) [A-Za-z] ${pid} `));
+    assert.equal(fs.readlinkSync(exe), old);
+
+    const pause = new Int32Array(new SharedArrayBuffer(4)), accounting = [], inodes = [];
+    const read = fs.readFileSync, stat = fs.statSync;
+    const account = t.mock.method(fs, "readFileSync", function (path, ...args) {
+      const value = read.call(this, path, ...args);
+      if (path === `${scope}/cpu.stat`) accounting.push(value);
+      return value;
+    });
+    const bookend = t.mock.method(fs, "statSync", function (path, ...args) {
+      const value = stat.call(this, path, ...args);
+      if (path === exe) {
+        inodes.push([String(value.dev), String(value.ino)]);
+        if (inodes.length === 1) {
+          // Return the real opening stat, but let exec complete before the
+          // collector reads the child's closing process and image bookends.
+          gate.write("go\n");
+          const until = performance.now() + 500;
+          while (fs.readlinkSync(exe) !== next || readFileSync(`${at}/comm`, "utf8").trim() === childIdentity.comm) {
+            assert.ok(performance.now() < until, "forked child did not exec before the fixture deadline");
+            Atomics.wait(pause, 0, 0, 1);
+          }
+        }
+      }
+      return value;
+    });
+    syncBuiltinESMExports();
+    try { tick(); } finally { bookend.mock.restore(); account.mock.restore(); syncBuiltinESMExports(); }
+    await observer.drain();
+    const successor = fs.statSync(exe, { bigint: true }), after = processIdentity(readFileSync(`${at}/stat`, "utf8"));
+    assert.equal(after.pid, childPid); assert.equal(after.startTicks, childIdentity.startTicks);
+    assert.notEqual(after.comm, childIdentity.comm);
+    assert.deepEqual(processIdentity(readFileSync(`${parentAt}/stat`, "utf8")), parentIdentity);
+    assert.equal(fs.readlinkSync(`${parentAt}/exe`), old);
+    assert.deepEqual(executableIdentity(pin), initial);
+
+    gate.end(); const [code, signal] = await closed;
+    assert.deepEqual([code, signal], [0, null]);
+    const result = { terminal: true, code, signal, cancelled: false, forced: false, success: true, error: null };
+    finishing = true; await observer.finish(result);
+    const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
+    assert.equal(terminal.observerError, null, JSON.stringify(terminal.observerFailures));
+    assert.equal(terminal.observerFailures.count, 0);
+    const proof = inspectLifetime(binding, invocation, directory, { campaign, command, pid, result });
+    assert.equal(proof.status, "verified", JSON.stringify(proof.checks)); assert.equal(proof.cleanupComplete, true);
+    assert.equal(existsSync(scope), false);
+    const oldInode = [initial.dev, initial.ino], newInode = [String(successor.dev), String(successor.ino)];
+    assert.notDeepEqual(oldInode, newInode);
+    assert.deepEqual(inodes, [oldInode, newInode, newInode, newInode]);
+    assert.equal(accounting.length, 2, "one fresh accounting census after the discarded attempt");
+    assert.equal(proof.samples[2].groups[0].files["cpu.stat"], accounting[1]);
+    const digest = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
+    const parent = { ...parentIdentity, sha256: digest(old) }, child = { ...after, sha256: digest(next) };
+    assert.notEqual(parent.sha256, child.sha256);
+    assert.deepEqual(proof.samples.map((sample) => sample.processes.map((p) => ({
+      ...processIdentity(p.stat), sha256: p.executableSha256,
+    })).sort((a, b) => a.pid - b.pid)), [[], [parent], [parent, child].sort((a, b) => a.pid - b.pid), []]);
+  } finally {
+    try {
+      if (leader && !leader.stdin.writableEnded) leader.stdin.end();
+      if (gate && !gate.writableEnded) gate.end();
+      if (closed) await closed;
+      if (observer && !finishing) { observer.dispose(); await observer.pendingStorage; }
+      if (scope && existsSync(scope)) {
+        assert.match(readFileSync(`${scope}/cgroup.events`, "utf8"), /^populated 0$/m);
+        fs.rmdirSync(scope);
+      }
+    } finally {
+      if (pin !== undefined) fs.closeSync(pin);
+      assert.ok(resolve(temporary).startsWith(resolve(tmpdir()) + sep)); rmSync(temporary, { recursive: true });
+    }
+  }
+});
+
 test("actual delegated cgroup observes the gated Node child, accounting and positive empty terminal state", {
   skip: !unit && "requires Linux in an explicitly owned delegated benchmark test unit", timeout: 15000,
 }, async (t) => {

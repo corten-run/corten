@@ -71,6 +71,9 @@ fn help_names_a_command_as_its_own_help_does() {
         assert!(stdout.starts_with(&format!("Usage:\n  corten {}", command.join(" "))), "{stdout}");
         assert!(!stdout.contains("corten new "), "help {} printed every command", command.join(" "));
         assert!(out.stderr.is_empty());
+        // The Dockerfile `corten new` writes refuses a `corten` whose `help build` does not name
+        // the option (template/Dockerfile), so this command's must.
+        assert!(command != ["build"] || stdout.contains("--profile-from"), "{stdout}");
     }
     for flag in ["--help", "-h"] {
         let out = Command::new(env!("CARGO_BIN_EXE_corten")).args(["help", flag]).output().unwrap();

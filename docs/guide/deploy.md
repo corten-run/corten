@@ -616,7 +616,7 @@ What the argument asks of the app and its build, which the ordinary build does n
   and the build fails saying which. Such an app's image keeps the ordinary build:
   `corten build --profile-from` builds a profiled binary where those services are, and putting
   that binary in an image is not something this Dockerfile does. A secret given as a build
-  argument stays in the image's history, so an app that needs one to start is not given it
+  argument is kept in the build's record, so an app that needs one to start is not given it
   that way.
 - The script's tools are in the build stage. `rust:1-trixie` has `curl`; anything else the
   script runs is installed there first. A script checked out with Windows line endings fails
@@ -636,11 +636,13 @@ What the argument asks of the app and its build, which the ordinary build does n
   builds with its own, and `corten build` refuses a toolchain without the component, naming
   it; that file's `components` is where rustup takes it from. Not tried in an image build.
 - The build takes longer, and the app's target cache holds the instrumented copy beside the
-  release. The starter's own image, one build each on a desktop with a lint run beside it:
+  release. The starter's own image at `f909c0d2d`, its install line pointed at that checkout
+  since no release has the option yet, so the 45 seconds are not an install from crates.io;
+  one build each on a desktop with a lint run beside it:
   69 seconds the ordinary way, and 188 with `PROFILE_FROM` in the same target cache
   afterwards, of which 45 fetched `llvm-tools` and built the `corten` command and 138 were the
   build step (63 the ordinary way), the script's 500 requests included. A build with
-  `PROFILE_FROM` after a change to one file took 121 seconds, with the first `RUN` reused: a
+  `PROFILE_FROM` after a change to one file, at `99c6ccc85`, took 121 seconds, with the first `RUN` reused: a
   new profile compiles every crate again, where the ordinary build compiles the app's own.
 
 The gain measured on the starter's own app is with the other measurements in
