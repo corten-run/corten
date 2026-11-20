@@ -10,6 +10,7 @@ const observeMs = 500;
 const DATA = 0, HEADERS = 1, RESET = 3, SETTINGS = 4, PING = 6, GOAWAY = 7, WINDOW = 8, CONTINUATION = 9;
 const END = 1, END_HEADERS = 4;
 const fragment = '<p id="event">a fixed fragment for the transport comparison</p>';
+const socketAnswerBytes = 32 * 1024 * 255; // The probe's SOCKET_CHUNKS of SOCKET_CHUNK bytes.
 
 function frame(type, flags, stream, payload = Buffer.alloc(0)) {
   const header = Buffer.alloc(9);
@@ -126,6 +127,31 @@ async function requireClosure(c, timing, start, late, hasOld) {
 async function idlePartial(c, timing, id, start = performance.now()) {
   const late = partial(c, id);
   await requireClosure(c, timing, start, late, () => c.find(HEADERS, id));
+}
+
+// Both socket cases share the fixture: a capped receive buffer, a quiet sibling so idle
+// cannot close the connection, and h2 credit for the whole answer.
+async function socketFixture(c, t) {
+  const rmem = await readFile('/proc/sys/net/ipv4/tcp_rmem', 'utf8').catch(() => null);
+  t.receiveBufferMax = rmem === null ? null : Number(rmem.trim().split(/\s+/)[2]);
+  assert(t.receiveBufferMax !== null && t.receiveBufferMax <= 128 * 1024, 'fixture caps the TCP receive buffer at 128 KiB');
+  await open(c, 1, '/quiet'); // Idle must not be able to close this connection.
+  assert(c.credit(0, 16 * 1024 * 1024), 'connection has credit for the entire socket fixture');
+}
+// Ask the probe, over a fresh connection, whether the socket write watch expired.
+async function socketReport(t) {
+  const report = await connect(65535, performance.now());
+  try {
+    assert(report.request(1, '/socket-report'));
+    await ended(report, 1);
+    const [op, pending, waited, sinceRequest] = report.data(1).toString().split(' ');
+    t.socketOperation = op || null;
+    t.pendingBuffers = pending === undefined ? null : Number(pending);
+    t.socketWaitMs = waited === undefined ? null : Number(waited);
+    t.socketExpiredMs = sinceRequest === undefined ? null : Number(sinceRequest);
+  } finally {
+    report.socket.destroy();
+  }
 }
 
 async function idleAfterPage(c, t, at, next) {
@@ -302,13 +328,9 @@ const combined = [
       await idleAfterPage(c, t, await page(c, 1), 3);
     }]),
   ['paused TCP reader stalls after h2 consumes DATA', 16 * 1024 * 1024, async (c, t) => {
-    // Uncapped, Linux sometimes let a paused reader's receive buffer grow to several
-    // MiB and the stall came after 500 ms. The fixture caps it for this network namespace.
-    const rmem = await readFile('/proc/sys/net/ipv4/tcp_rmem', 'utf8').catch(() => null);
-    t.receiveBufferMax = rmem === null ? null : Number(rmem.trim().split(/\s+/)[2]);
-    assert(t.receiveBufferMax !== null && t.receiveBufferMax <= 128 * 1024, 'fixture caps the TCP receive buffer at 128 KiB');
-    await open(c, 1, '/quiet'); // Idle must not be able to close this connection.
-    assert(c.credit(0, 16 * 1024 * 1024), 'connection has credit for the entire socket fixture');
+    // Uncapped, a sampled paused reader's receive buffer grew past 600 KiB, and in some
+    // runs no socket timeout came within 500 ms. The fixture caps it for this network namespace.
+    await socketFixture(c, t);
     c.socket.pause();
     const at = performance.now();
     assert(c.request(3, '/socket-stall'));
@@ -317,18 +339,10 @@ const combined = [
 
     // Read the deadline report before resuming the blocked reader. Its own
     // close event cannot tell when the server first gave up on its write.
-    const report = await connect(65535, performance.now());
     let resumed;
     try {
-      assert(report.request(1, '/socket-report'));
-      await ended(report, 1);
-      const [op, pending, waited, sinceRequest] = report.data(1).toString().split(' ');
-      t.socketOperation = op || null;
-      t.pendingBuffers = pending === undefined ? null : Number(pending);
-      t.socketWaitMs = waited === undefined ? null : Number(waited);
-      t.socketExpiredMs = sinceRequest === undefined ? null : Number(sinceRequest);
+      await socketReport(t);
     } finally {
-      report.socket.destroy();
       resumed = performance.now();
       c.socket.resume();
     }
@@ -340,6 +354,52 @@ const combined = [
     assert.equal(t.pendingBuffers, 0, 'h2 had consumed all outstanding DATA buffers');
     assert(t.socketWaitMs >= timeoutMs && t.socketExpiredMs <= observeMs, 'socket wait expired within the send bound');
     assert(t.receivedBytes > 0 && !c.end(3) && !c.find(RESET, 3), 'only a prefix of the response reached the TCP reader');
+  }],
+  ['steady slow TCP reader receives the whole answer', 16 * 1024 * 1024, async (c, t) => {
+    // Control for the paused reader: same fixture, but the client reads about 16 KiB
+    // every 20 ms, far longer than the bound in total. Closing it would be a false close.
+    const stepMs = 20, stepBytes = 16 * 1024;
+    await socketFixture(c, t);
+    c.socket.pause();
+    let allowance = 0, lastTick, lastRead;
+    t.maxTickGapMs = 0;
+    t.maxReadGapMs = 0;
+    const count = bytes => {
+      const now = performance.now();
+      if (lastRead !== undefined) t.maxReadGapMs = Math.max(t.maxReadGapMs, round(now - lastRead));
+      lastRead = now;
+      allowance -= bytes.length;
+      if (allowance <= 0) c.socket.pause();
+    };
+    c.socket.on('data', count);
+    const at = performance.now();
+    const tick = setInterval(() => {
+      const now = performance.now();
+      t.maxTickGapMs = Math.max(t.maxTickGapMs, round(now - (lastTick ?? at)));
+      lastTick = now;
+      allowance = stepBytes;
+      c.socket.resume();
+    }, stepMs);
+    try {
+      assert(c.request(3, '/socket-stall'));
+      await waitUntil(() => c.end(3), at + 60000, () => c.closedAt !== undefined);
+    } finally {
+      clearInterval(tick);
+      c.socket.off('data', count);
+      c.socket.resume();
+    }
+    const end = c.end(3);
+    t.receivedBytes = c.data(3).length;
+    t.completedMs = end ? round(end.at - at) : null;
+    t.closedMs = c.closedAt === undefined ? null : round(c.closedAt - at);
+    t.bytesPerSecond = Math.round(t.receivedBytes / (((end?.at ?? c.closedAt ?? performance.now()) - at) / 1000));
+    t.aliveAfter = c.alive();
+    await socketReport(t);
+    assert(t.maxTickGapMs < timeoutMs, 'every read came well within the bound');
+    assert(end && t.receivedBytes === socketAnswerBytes && !c.find(RESET, 3), 'whole answer reached the steady reader');
+    assert(t.completedMs > timeoutMs, 'reading took longer than the bound in total');
+    assert(t.aliveAfter, 'connection stayed open');
+    assert.equal(t.socketOperation, null, 'socket write watch did not expire');
   }],
 ];
 
