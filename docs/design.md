@@ -6780,12 +6780,13 @@ rules something out.
     was. The command is the app's because what it sends decides the gain, and it does nothing
     but send: `corten build` starts the copy on a free port it gives the command in `PORT`,
     waits for it to listen, and stops it with `SIGTERM` when the command ends, so that the copy
-    writes its profile. Starting, waiting and stopping are where a script goes wrong without a
+    writes its profile. The copy is started without `HOST`, so it listens on this machine
+    only, where the build and the command look for it. Starting, waiting and stopping are where a script goes wrong without a
     word (a copy killed, not waited for, or left running writes no profile or a stale one), so
     they are in the command once and not in each app's script. The instrumented copy has a
     target directory of its own, so `target/release` never holds a binary that writes a
-    profile, and a step that fails leaves the last release standing. What would go wrong
-    without a word is refused before the first build: a toolchain without `llvm-profdata`, a
+    profile, and a step that fails leaves the last release standing. What can be told is wrong
+    without building is refused before the first build: a toolchain without `llvm-profdata`, a
     system that cannot ask the copy to stop, a command that is not there, another profiled
     build in the same target directory, and a Cargo configuration that may set flags the profile's flag, which has to
     go in the environment, would replace. A command that fails,

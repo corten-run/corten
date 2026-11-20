@@ -75,12 +75,18 @@ impl Fixture {
 
     /// `corten build <args>` in the program's directory, with a target directory of its own
     /// and none of the flags of whoever runs the tests: an empty `RUSTFLAGS` has Cargo read
-    /// none from a configuration file either.
+    /// none from a configuration file either. Cargo says what it compiles, which a test reads.
     fn build(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_corten"));
         command.arg("build").args(args).current_dir(&self.0).env("CARGO_TARGET_DIR", self.0.join("target"));
-        command.env_remove("CARGO_ENCODED_RUSTFLAGS").env("RUSTFLAGS", "");
+        command.env_remove("CARGO_ENCODED_RUSTFLAGS").env("RUSTFLAGS", "").env("CARGO_TERM_QUIET", "false");
         command
+    }
+
+    /// The directories under `run`, one for each profiled build whose profile is still there.
+    fn runs(&self) -> Vec<PathBuf> {
+        let run = self.0.join("target").join("corten-profile").join("run");
+        std::fs::read_dir(run).unwrap().map(|entry| entry.unwrap().path()).collect()
     }
 
     fn release(&self) -> PathBuf {
@@ -144,12 +150,14 @@ fn the_release_is_built_with_the_profile_the_app_wrote_while_the_command_ran() {
     let copy = fixture.0.join("target").join("corten-profile").join("target").join("release").join("profiled");
     assert!(instrumented(&copy));
 
-    // A second profiled build compiles the release again with the profile that replaced the
-    // first, and has nothing to compile in the copy.
+    // A second profiled build has nothing to compile in the copy, and compiles the release
+    // again with the profile that replaced the first.
     let again = fixture.build(&NOTES_ITS_PORT).output().unwrap();
     let said = text(&again);
     assert!(again.status.success(), "{said}");
-    assert_eq!(said.matches("Compiling profiled").count(), 1, "{said}");
+    let (copy, release) = said.split_once("the release build, with the profile").expect("the step's line");
+    assert_eq!(copy.matches("Compiling profiled").count(), 0, "{said}");
+    assert_eq!(release.matches("Compiling profiled").count(), 1, "{said}");
 }
 
 #[test]
@@ -164,10 +172,22 @@ fn a_command_or_an_app_that_fails_stops_the_build_and_leaves_the_release() {
     assert!(text(&output).contains("so no profile was taken; target/release is as it was"), "{}", text(&output));
     assert!(!fixture.app_runs(), "the instrumented app was left running after its command failed");
 
+    // A command that is there and cannot be started: its interpreter is not.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let script = fixture.0.join("train.sh");
+        std::fs::write(&script, "#!/no/such/interpreter\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let output = fixture.build(&["--profile-from", "./train.sh"]).output().unwrap();
+        assert!(!output.status.success());
+        assert!(text(&output).contains("could not run ./train.sh"), "{}", text(&output));
+        assert!(!fixture.app_runs(), "the instrumented app was left running after its command could not start");
+    }
+
     // An app that exits while its command runs has a profile of part of the run. The command
-    // waits for the app to say it is leaving, and then for it to have left.
-    let stops_the_app =
-        "rm -f stopped.txt; kill -TERM \"$(cat pid.txt)\"; until [ -f stopped.txt ]; do sleep 0.05; done; sleep 0.5";
+    // waits (ten seconds at most) for the app to say it is leaving, and then half a second,
+    // a margin for it to have left: the build cannot see a zombie from the command.
+    let stops_the_app = "rm -f stopped.txt; kill -TERM \"$(cat pid.txt)\"; n=0; until [ -f stopped.txt ] || [ $n -ge 100 ]; do sleep 0.1; n=$((n+1)); done; sleep 0.5";
     let output = fixture.build(&["--profile-from", "sh", "-c", stops_the_app]).output().unwrap();
     assert!(!output.status.success());
     assert!(text(&output).contains("exited while the command ran"), "{}", text(&output));
@@ -188,12 +208,17 @@ fn an_app_that_writes_no_profile_is_not_given_the_one_an_earlier_run_left() {
     let first = fixture.build(&NOTES_ITS_PORT).output().unwrap();
     assert!(first.status.success(), "{}", text(&first));
     let merged = std::fs::read(fixture.profile()).unwrap();
-    let left = fixture.0.join("target").join("corten-profile").join("run");
-    assert_eq!(std::fs::read_dir(&left).unwrap().count(), 1, "the first run's profile is still there");
+    // The first run's profile is still there, in a directory of that run's own.
+    let runs = fixture.runs();
+    let [first_run] = &runs[..] else { panic!("one run: {runs:?}") };
+    let profiles = std::fs::read_dir(first_run).unwrap().map(|entry| entry.unwrap().path());
+    assert_eq!(profiles.filter(|file| file.extension().is_some_and(|ext| ext == "profraw")).count(), 1);
 
     let second = fixture.build(&NOTES_ITS_PORT).env("FIXTURE_QUITS_WITHOUT_A_PROFILE", "1").output().unwrap();
     assert!(!second.status.success(), "{}", text(&second));
     assert!(text(&second).contains("the app exited without writing a profile"), "{}", text(&second));
+    // The earlier run's was removed, not left for a later build to find under the same id.
+    assert!(!first_run.exists(), "the first run's profile was left");
     assert_eq!(std::fs::read(fixture.profile()).unwrap(), merged, "a profile was merged from the earlier run's file");
 }
 

@@ -42,7 +42,7 @@ pub fn run(command: &[String]) -> Result<(), String> {
     if !root.join("Cargo.toml").is_file() {
         return Err("run corten build in the app's directory (where Cargo.toml is)".into());
     }
-    there(&command[0])?;
+    there(&command[0], std::env::var_os("PATH"))?;
     let profdata = profdata(&root)?;
     let flags = base_flags(std::env::var_os("CARGO_ENCODED_RUSTFLAGS"), std::env::var_os("RUSTFLAGS"), || {
         Ok(set_elsewhere(&root, std::env::vars_os().map(|(name, _)| name), cargo_home()?))
@@ -66,8 +66,9 @@ pub fn run(command: &[String]) -> Result<(), String> {
     .map_err(|error| format!("the instrumented build: {error}; target/release is as it was"))?;
     let app = the_one_binary(built)?;
     // The macros and build scripts of that build were instrumented too and wrote here as they
-    // ran. The app's own profile goes to a directory of its own, emptied of an earlier run's:
-    // a file left there would be merged as this run's.
+    // ran. The app's own profile goes to a directory of its own, and what earlier runs left is
+    // removed: where the process id repeats (a build in a container), a file left in this
+    // run's directory would be merged as this run's.
     emptied(&written_by_build)?;
     emptied(&runs)?;
 
@@ -133,13 +134,14 @@ fn step(name: &str) {
 }
 
 /// Refuses a command that is not there before the first build, not after it. A name with a
-/// `/` is a path; any other is looked for on the `PATH`, as it is when it is run.
-fn there(command: &str) -> Result<(), String> {
+/// `/` is a path; any other is looked for on `path` (the environment's `PATH`), as it is when
+/// it is run. A file that is there and cannot be run is found when it is started.
+fn there(command: &str, path: Option<OsString>) -> Result<(), String> {
     let found = if command.contains('/') {
         Path::new(command).is_file()
     } else {
         // Without a PATH the system searches a default one, which this does not know.
-        std::env::var_os("PATH").is_none_or(|path| std::env::split_paths(&path).any(|dir| dir.join(command).is_file()))
+        path.is_none_or(|path| std::env::split_paths(&path).any(|dir| dir.join(command).is_file()))
     };
     if found { Ok(()) } else { Err(format!("--profile-from: there is no command {command:?} to run")) }
 }
@@ -339,7 +341,8 @@ fn target_directory(root: &Path) -> Result<PathBuf, String> {
     if !out.status.success() {
         return Err(format!("cargo metadata failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
-    crate::json::parse(&String::from_utf8_lossy(&out.stdout))?
+    crate::json::parse(&String::from_utf8_lossy(&out.stdout))
+        .map_err(|error| format!("cargo metadata: {error}"))?
         .get("target_directory")
         .and_then(crate::json::Value::as_str)
         .map(PathBuf::from)
@@ -443,9 +446,9 @@ fn profiles(dir: &Path) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use super::{base_flags, may_set_rustflags, set_elsewhere, the_one_binary, with};
     #[cfg(unix)]
-    use super::emptied;
-    use super::{base_flags, may_set_rustflags, set_elsewhere, the_one_binary, there, with};
+    use super::{emptied, there};
     use std::{
         ffi::OsString,
         path::{Path, PathBuf},
@@ -530,11 +533,34 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_command_that_is_not_there_is_refused() {
-        assert!(there("/no/such/command").is_err());
-        assert!(there("no-such-command-anywhere").is_err_and(|error| error.contains("no-such-command-anywhere")));
-        #[cfg(unix)]
-        assert_eq!(there("sh"), Ok(()));
+        let base = std::env::temp_dir().join(format!("corten-profile-there-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (bin, other) = (base.join("bin"), base.join("other"));
+        std::fs::create_dir_all(bin.join("a-directory")).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(bin.join("train"), "").unwrap();
+        let path = || Some(std::env::join_paths([&other, &bin]).unwrap());
+        let results = [
+            // A name is looked for in each directory of the PATH, and a directory is not a command.
+            there("train", path()),
+            there("trian", path()),
+            there("a-directory", path()),
+            // A name with a slash is a path, whatever the PATH holds.
+            there(bin.join("train").to_str().unwrap(), Some(OsString::new())),
+            there(bin.join("trian").to_str().unwrap(), path()),
+            // Without a PATH the system has its own, so nothing is refused.
+            there("trian", None),
+        ];
+        let _ = std::fs::remove_dir_all(&base);
+        let refused = Err("--profile-from: there is no command \"trian\" to run".to_string());
+        assert_eq!(results[0], Ok(()));
+        assert_eq!(results[1], refused);
+        assert!(results[2].is_err());
+        assert_eq!(results[3], Ok(()));
+        assert!(results[4].is_err());
+        assert_eq!(results[5], Ok(()));
     }
 
     #[test]

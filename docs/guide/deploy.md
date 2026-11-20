@@ -308,7 +308,7 @@ corten build --profile-from sh train.sh
 ```
 
 The command is the app's own, since only the app knows what its requests are. It sends the copy
-requests like the ones the app will serve, on the port `PORT` names:
+requests like the ones the app will serve, at `127.0.0.1` on the port `PORT` names:
 
 ```sh
 #!/bin/sh
@@ -341,9 +341,10 @@ The four steps are the toolchain's own, and Corten adds nothing to the binary:
    compiles only what changed in it. A package that builds more than one binary is refused
    here, since a profile is of one program. Apps that share a target directory (a workspace's)
    share `target/corten-profile` too, so a profiled build is refused while another runs there.
-2. The copy, run with `LLVM_PROFILE_FILE` naming a directory of its own, emptied first. The
-   macros and build scripts that ran during the first build were built the same way and wrote
-   profiles too, and a profile left from an earlier run would be merged with this one.
+2. The copy, run with `LLVM_PROFILE_FILE` naming a directory of this run's own, after what
+   earlier runs left is removed. The macros and build scripts that ran during the first build
+   were built the same way and wrote profiles too, and a profile left from an earlier run
+   would be merged with this one.
 3. `llvm-profdata merge`, with the tool from the toolchain's `llvm-tools` component, which
    reads what its rustc writes; one on the `PATH` may be another LLVM's. A toolchain without
    the component is refused before the first build, with the `rustup` line above.
