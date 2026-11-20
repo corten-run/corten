@@ -6804,23 +6804,25 @@ rules something out.
     configuration as Cargo does to keep its flags, which takes a TOML parser the command does
     not have; and an `llvm-profdata` found on the `PATH`, which may read another LLVM's format.
 
-    Stands on: measured (the catalog app built by the option took 29% fewer cycles a
-    request than its ordinary build on the catalog page, 107,713 against 155,368 at the median
-    of 10 alternated rounds, and 18% fewer where it compressed each answer, 233,162 against
-    286,487, lower in all 10 rounds of each, from a command of 3,000 requests; the profiled
-    build took about eleven minutes from an empty target directory against about four);
+    Stands on: measured (the catalog app built by the option took 30,730 fewer cycles a request
+    than its ordinary build on the catalog page at the median of 10 alternated rounds, 21% of
+    the ordinary build's 143,443, lower in all 10, and 32,516 fewer where it compressed each
+    answer, 14% of 230,402, lower in 8 of 10, from a command of 3,000 requests; ten earlier
+    rounds of each on a busier machine gave 29% and 18%; one profiled build from an empty
+    target directory took about eleven minutes against about four for one ordinary build);
     platform (rustc's `-Cprofile-generate` and `-Cprofile-use` and the `llvm-tools`
-    component's `llvm-profdata`; Cargo reads rustflags
-    from the environment or from its configuration and never both, and builds a crate again,
-    one from the registry included, when the file `-Cprofile-use` names is replaced; a process
-    that returns from `main` writes its profile and one that is killed does not); reasoned (a
+    component's `llvm-profdata`; Cargo reads rustflags from the environment or from its
+    configuration and never both, and builds a crate again, one from the registry included,
+    when the file `-Cprofile-use` names is replaced; a process that returns from `main` or
+    calls `exit` writes its profile and one that a signal ends does not); reasoned (a
     separate target directory is the only place an instrumented build cannot be mistaken for
     the release; a refusal before the first build costs nothing, where a dropped linker flag
     or a missing tool found after it costs a build); bet (an app has, or will write, a command
     that reaches the routes its readers do, which the build cannot check: a command that sent
     the copy nothing leaves a profile of the app starting and stopping; and the app listens on
-    `PORT` as `corten dev` already asks of it); value (fast and proven fast, with mistakes failing early and one way to build a
-    release, and the option kept off every app that does not ask for it, README Values).
+    `PORT` as `corten dev` already asks of it); value (fast and proven fast, with mistakes
+    failing early and one way to build a release, and the option kept off every app that does
+    not ask for it, README Values).
 
     Revisit when: Cargo can add a flag to the ones its configuration sets, or builds with a
     profile itself, so the refusal or the steps go; the standard library can ask a child
@@ -6828,14 +6830,16 @@ rules something out.
     arguments `corten build` does not pass; or an app measures a profile from its own command
     gaining nothing over the ordinary build.
 
-    Last checked: 2026-11-19, the rounds above at `70544a54a` with rustc and Cargo 1.99.1 in
-    `rust:1-bookworm`, the catalog app (`bench/catalog/corten`) with its default features on
-    one CPU under `wrk` with 64 connections; 2026-11-19, Cargo 1.99.1: a build given
-    `-Cprofile-use` compiled a registry crate again after the file at the same path was
-    replaced, an ordinary build after a profiled one compiled nothing and put the
-    binary without the profile back in `target/release`, an empty `RUSTFLAGS`
-    left the configuration's flags out, and a file named by `include` had its `rustflags`
-    read.
+    Last checked: 2026-11-19, the rounds above at `b032155e2` (the earlier ones on the sources
+    of `70544a54a`) with rustc and Cargo 1.99.1 in `rust:1-bookworm`, the catalog app
+    (`bench/catalog/corten`) with its default features on one CPU under `wrk` with 64
+    connections; 2026-11-19, Cargo 1.99.1: a build given `-Cprofile-use` compiled a registry
+    crate again after the file at the same path was replaced, an ordinary build after a
+    profiled one compiled nothing and put the binary without the profile back in
+    `target/release`, an empty `RUSTFLAGS` left the configuration's flags out, and a file
+    named by `include` had its `rustflags` read; 2026-11-19, rustc 1.99.1: an instrumented
+    server ended by `SIGTERM`'s default action left no profile file, and the same server
+    leaving through `exit` on that signal left one.
 
 ## Rules
 

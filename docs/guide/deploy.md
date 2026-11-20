@@ -398,23 +398,31 @@ lower in 7 (11,965 lower to 16,117 higher): these rounds do not tell either from
 app and this load a profile did not have to come from the load it was measured with, only from
 requests that reach the same route; a profile that barely reached it gained about half as much.
 
-The option itself, measured at `70544a54a` with the same rustc, container and load: the catalog
+The option itself, measured at `b032155e2` with the same rustc, container and load: the catalog
 app with its default features (`compress` on), built by `corten build` and by
 `corten build --profile-from` with a command that asked for the catalog page 3,000 times, each
 on a new connection, accepting a browser's codings. Over 10 rounds in which the two builds took
 turns:
 
-| Load | `corten build`, cycles a request, median (range) | With `--profile-from` | Difference in the same round, median |
-|---|---|---|---|
-| the catalog page, accepting no coding | 155,368 (150,138 to 168,583) | 107,713 (100,153 to 112,414) | 45,676 fewer, 29% |
-| the same page, accepting a browser's codings, so each answer is compressed | 286,487 (248,638 to 309,077) | 233,162 (213,827 to 246,866) | 50,251 fewer, 18% |
+| Load | `corten build`, cycles a request, median (range) | With `--profile-from` | Difference in the same round, median | Rounds it was lower |
+|---|---|---|---|---|
+| the catalog page, accepting no coding | 143,443 (132,553 to 152,283) | 105,464 (98,222 to 123,785) | 30,730 fewer, 21% of the ordinary build's median | 10 of 10 |
+| the same page, accepting a browser's codings, so each answer is compressed | 230,402 (208,981 to 242,264) | 192,597 (174,045 to 237,618) | 32,516 fewer, 14% | 8 of 10 |
 
-The profiled build was lower in all 10 rounds of each. From an empty target directory the
-ordinary build took about four minutes and the profiled one about eleven, the 3,000 requests
-included; a later profiled build that had nothing to compile in the instrumented copy took
-about five. The binaries are 6,154,312 bytes and 5,871,128, the merged profile 2.8 MB, and the
-target directory about 250 MB after the ordinary build against about 580 MB with the
-instrumented copy beside the release.
+Ten rounds of each load an hour and a half earlier, with the machine busier and a binary the
+option built from the sources of `70544a54a` (the same two builds; what changed since is how
+the copy is started and stopped and what is refused), gave 45,676 fewer on the page (29%:
+107,713 against 155,368) and 50,251 fewer with each answer compressed (18%: 233,162 against
+286,487), lower in all 10 rounds of each. So on this app the option took 21% to 29% of the
+cycles off the page and 14% to 18% where each answer is compressed, and two runs on one desktop
+do not place it closer than that.
+
+From an empty target directory the ordinary build took about four minutes and the profiled one
+about eleven, the 3,000 requests included: one build each, on the busier machine. Two later
+profiled builds that had nothing to compile in the instrumented copy took about five minutes
+and, with the machine quieter, about two and a half. The binaries are 6,154,312 bytes and
+5,869,496, the merged profile 2.8 MB, and the target directory about 250 MB after the ordinary
+build against about 580 MB with the instrumented copy beside the release.
 
 Not measured: an app as the starter builds and runs it (its release profile, jemalloc, a
 deadline and timeouts), another app or page, a profile taken from an earlier version of the app
