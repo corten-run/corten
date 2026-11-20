@@ -25,7 +25,8 @@ failure (`executable-recheck-reference`) from a different device/inode
 (`executable-recheck-ctime`). The labels retain no values and do not identify
 the process, prove an exec or exit, or show that bytes were unchanged. Each
 mismatch rejects the census. Only a catalog interval can establish an executable
-successor as described below. A failed procfs stat retains the
+successor as described below. A failed closing procfs stat during a catalog
+rename is `executable-recheck-renamed`; otherwise it retains the
 `executable-recheck` operation and the existing process-read rules.
 
 If a catalog interval fails while reading the command's process census, its
@@ -45,7 +46,9 @@ To exercise the catalog build path without renting a benchmark host, the
 catalog build and checks both data sources on a fresh hosted Linux runner.
 It runs on manual dispatch or changes to the probe itself, not on main pushes.
 Read the command outcome, host sample counts and failed-census timings in the
-Actions log. The job does not upload files from the build or results directory.
+Actions log. The first and last failures can also report an allowlisted process
+or executable recheck operation; other operation names print as `unknown`.
+The job does not upload files from the build or results directory.
 An interrupted build is a failed diagnostic, not a zero-throughput app.
 There are no timed requests, other contenders or official-round results.
 
@@ -102,6 +105,10 @@ must still match every identity field. Discard the entire failed attempt.
 One fresh, complete census within the original deadline must pin and recheck
 the exact closing identity (device, inode, size, mtime and ctime) for that same
 process in the same cgroup. No further retry is allowed if this census fails.
+PID and start-tick changes fail before the executable comparison. When only
+the process name differs at that point, the collector must still check the
+executable: a stable image permits the ordinary name retry, a different inode
+requires the paired proof above, and an unreadable closing image blocks the run.
 Both admitted images must still seal to their exact digests at finish.
 Unseen old images, same-inode metadata changes and unproven successors remain
 blocked. This is sampled image replacement, not a trace of exec syscalls or

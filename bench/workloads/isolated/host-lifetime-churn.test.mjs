@@ -521,6 +521,45 @@ for (const prior of ["mutated", "other-process"]) test(`catalog executable succe
   }
 });
 
+for (const scenario of ["admitted", "unseen", "successor-gone", "name-only", "unreadable", "pid-changed", "start-changed"]) {
+  test(`catalog simultaneous name and executable bookends: ${scenario}`, async (t) => {
+    const f = await fixture(t, [], false, undefined, 0, true);
+    const pid = scenario === "unseen" ? 5000 : 4242;
+    if (pid === 5000) f.members.push(pid);
+    let renamed = false, openings = 0, firstExeStats = 0;
+    f.override = (path) => {
+      if (path === `/sys/fs/cgroup${f.scope}/cpu.stat`) openings++;
+      if (path === `/proc/${pid}/cmdline` && !renamed) {
+        renamed = true;
+        if (scenario !== "name-only") f.nextPid = pid;
+        if (scenario === "successor-gone") f.members = [];
+      }
+      if (path === `/proc/${pid}/stat` && renamed) return stat(scenario === "pid-changed" ? pid + 1 : pid,
+        "new-name", scenario === "start-changed" ? 1234 : pid * 10);
+    };
+    f.executableStat = (path) => {
+      if (path === `/proc/${pid}/exe` && openings === 1 && ++firstExeStats === 2 && scenario === "unreadable") throw missing();
+    };
+    await f.tick();
+    const accepted = scenario === "name-only" || scenario === "admitted", hard = ["pid-changed", "start-changed"].includes(scenario);
+    const replay = await f.finish(); assert.equal(replay.status, accepted ? "verified" : "blocked");
+    assert.equal(firstExeStats, hard ? 1 : 2, "check PID/start before executable; check executable before retrying a rename");
+    assert.equal(openings, accepted || scenario === "successor-gone" ? 2 : 1);
+    if (accepted) {
+      const rows = replay.samples.flatMap((s) => s.processes);
+      assert.deepEqual(rows.map((p) => processIdentity(p.stat).comm), ["node", "new-name"]);
+      assert.deepEqual(rows.map((p) => p.executableSha256),
+        ["original executable", scenario === "name-only" ? "original executable" : "next executable"].map((s) => createHash("sha256").update(s).digest("hex")));
+    } else {
+      assert.equal(f.terminal.observerFailures.first.operation, {
+        unseen: "executable-recheck-inode", "successor-gone": "executable-recheck-successor",
+        unreadable: "executable-recheck-renamed", "pid-changed": "process-pid-changed", "start-changed": "process-start-changed",
+      }[scenario]);
+      assert.equal(f.proof().executables.length, 1);
+    }
+  });
+}
+
 test("a rejected pre-admission sample keeps prior accepted executable proof and releases only new captures", async (t) => {
   const f = await fixture(t, [], true), [acceptedFD] = f.held;
   assert.equal(f.held.size, 1);

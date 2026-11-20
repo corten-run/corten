@@ -17,7 +17,7 @@ import { executableIdentity } from "./participant-executables.mjs";
 import { supervise } from "./process.mjs";
 let unit;
 if (process.platform === "linux") unit = /\/corten-bench-groups-(r[1-9]\d*)-[a-f0-9]{16}\.service\/supervisor\n?$/.exec(readFileSync("/proc/self/cgroup", "utf8"));
-for (const change of ["exec", "chmod"]) test(`catalog executable bookends around real ${change}`, {
+for (const change of ["exec", "exec with rename", "chmod"]) test(`catalog executable bookends around real ${change}`, {
   skip: !unit && "requires Linux in an explicitly owned delegated benchmark test unit", timeout: 15000,
 }, async (t) => {
   const temporary = mkdtempSync(join(tmpdir(), "isolated-kernel-exec-")), directory = join(temporary, "command-host");
@@ -36,21 +36,23 @@ for (const change of ["exec", "chmod"]) test(`catalog executable bookends around
     const before = processIdentity(readFileSync(`${at}/stat`, "utf8"));
     observer = await beginLifetime({ campaign, binding, invocation, directory, command: 7, pid }); await observer.attach(pid);
     // Both images must be real, and the old image must already occur in an
-    // admitted sample. Schedule the action at the closing stat, not at capture.
-    const original = fs.statSync; let reads = 0, changed = false;
+    // admitted sample. Exec either just after the opening stat (so comm
+    // changes too) or just before the closing executable stat.
+    const early = change === "exec with rename", original = fs.statSync; let reads = 0, changed = false;
     const hook = t.mock.method(fs, "statSync", function (path, ...args) {
-      if (path === `${at}/exe` && ++reads === 2) {
-        if (change === "exec") {
+      const captured = early ? original.call(this, path, ...args) : null;
+      if (path === `${at}/exe` && ++reads === (early ? 1 : 2)) {
+        if (change !== "chmod") {
           child.stdin.write("go\n");
           const until = performance.now() + 500;
-          while (fs.readlinkSync(path) !== next) {
+          while (fs.readlinkSync(path) !== next || (early && readFileSync(`${at}/comm`, "utf8").trim() === before.comm)) {
             assert.ok(performance.now() < until, "owned child did not exec before the fixture deadline");
             Atomics.wait(pause, 0, 0, 1);
           }
         } else fs.chmodSync(old, 0o700);
         changed = true;
       }
-      return original.call(this, path, ...args); // Never substitute a stat result.
+      return early ? captured : original.call(this, path, ...args); // Never substitute a stat result.
     });
     syncBuiltinESMExports();
     try { tick(); } finally { hook.mock.restore(); syncBuiltinESMExports(); }
@@ -59,7 +61,11 @@ for (const change of ["exec", "chmod"]) test(`catalog executable bookends around
     const after = processIdentity(readFileSync(`${at}/stat`, "utf8"));
     assert.equal(after.pid, before.pid); assert.equal(after.startTicks, before.startTicks);
     const pinned = executableIdentity(pin);
-    if (change === "exec") {
+    if (change !== "chmod") {
+      if (early) {
+        assert.notEqual(after.comm, before.comm);
+        assert.equal(reads, 4, "both censuses must actually read both executable bookends");
+      }
       assert.deepEqual(pinned, initial);
       assert.equal(fs.readlinkSync(`${at}/exe`), next);
       tick(); await observer.drain(); // An independent stable census of the new image.
@@ -75,7 +81,7 @@ for (const change of ["exec", "chmod"]) test(`catalog executable bookends around
     const detail = JSON.stringify(terminal.observerFailures);
     assert.equal(terminal.empty, true, detail);
     const inspect = () => inspectLifetime(binding, invocation, directory, { campaign, command: 7, pid, result });
-    if (change === "exec") {
+    if (change !== "chmod") {
       assert.equal(terminal.observerFailures.count, 0, detail);
       const proof = inspect();
       assert.equal(proof.status, "verified"); assert.equal(proof.cleanupComplete, true);
