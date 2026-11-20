@@ -294,6 +294,8 @@ try {
         lifetime.outcome = Promise.resolve(promise).then(() => settle("fulfilled"), () => settle("rejected"));
         lifetimes.get(body).push(lifetime);
       };
+      // Installed after the worker started, so it sees a handler that looks up
+      // registration.showNotification when a push arrives (as sw-push.js does), not one bound at startup.
       const show = self.registration.showNotification.bind(self.registration);
       self.registration.showNotification = async (title, options) => {
         const body = options?.body;
@@ -304,13 +306,15 @@ try {
         const url = destination?.enumerable && Object.hasOwn(destination, "value") && typeof destination.value === "string"
           ? destination.value : undefined;
         await show(title, options);
-        // A waitUntil promise of this push was pending when the notification was shown and then fulfilled; that does not prove it depended on the notification.
-        const pending = lifetimes.get(body)?.filter(({ settled }) => !settled) ?? [];
-        resultFor(body).resolve({ url, plainData: url !== undefined, outcomes: Promise.all(pending.map(({ outcome }) => outcome)) });
+        // A waitUntil promise of this push was pending when the notification was shown, and every
+        // one the push passed fulfilled; that does not prove a promise depended on the notification.
+        const all = lifetimes.get(body) ?? [];
+        const pending = all.filter(({ settled }) => !settled).length;
+        resultFor(body).resolve({ url, plainData: url !== undefined, pending, outcomes: Promise.all(all.map(({ outcome }) => outcome)) });
       };
       return async (body) => {
-        const { url, plainData, outcomes } = await resultFor(body).promise;
-        return { url, plainData, lifetimes: await outcomes };
+        const { url, plainData, pending, outcomes } = await resultFor(body).promise;
+        return { url, plainData, pending, lifetimes: await outcomes };
       };
     }));
     await setUp("BackgroundService.startObserving", () => cdp.send("BackgroundService.startObserving", { service: "notifications" }));
@@ -343,7 +347,7 @@ try {
       }
     };
     const first = await sendAndObserve({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" });
-    const lifetimeFulfilled = ({ lifetimes }) => lifetimes?.length > 0 && lifetimes.every((outcome) => outcome === "fulfilled");
+    const lifetimeFulfilled = ({ pending, lifetimes }) => pending > 0 && lifetimes.every((outcome) => outcome === "fulfilled");
     check("a push shows the titled notification while waitUntil is pending, then fulfills it, and passes the item destination to showNotification", first.title === "Price drop" && first.url === "/items/item_5" && lifetimeFulfilled(first), JSON.stringify(first));
     const odd = await sendAndObserve({ body: "Card Name 7 is back", url: 5 });
     check("a push with no title and a url that is not text shows an untitled notification while waitUntil is pending, then fulfills it, and passes / to showNotification", odd.title === "" && odd.url === "/" && lifetimeFulfilled(odd), JSON.stringify(odd));
