@@ -14,25 +14,33 @@
 //! ([`Kept`], which [`crate::cache::tag`] and `compress::finish` read).
 //!
 //! What makes this safe is checked when the app compiles: a `Public` handler takes only inputs
-//! that cannot tell who is asking ([`crate::answer::Anonymous`]). The request must show nothing
-//! else the page could differ by: no cookie but the time zone's (a `Public` page is written in
-//! UTC), no `Authorization`, no caller read by a middleware, no `corten` header, JSON not asked
-//! for first, no notice sent back, no body, and the URL the router matched (a middleware that
-//! changed it since leaves the request to the handler). The key is the `Host`, the path and
-//! query, and `Accept-Language` when the page's `Vary` names it: a page for `/items?page=2` is
-//! not the one for `/items`, and a write to one does not drop the other. The headers are compared
-//! as they were sent, so `fr` and `fr-FR` each have a copy. An answer is kept only when it is a `200`
-//! of a known size with a lifetime, sets no cookie, drew no nonce and no value made for this
-//! request alone, and varies on nothing but what the key covers.
+//! that cannot tell who is asking ([`crate::answer::Anonymous`]), and a page is kept only when
+//! each of them is one of Corten's own whose reading of a page's request the key covers
+//! (`Anonymous::KEYED`). An extractor of the app's own may read another header and still not
+//! tell who asks, so a page whose handler takes one is made for every request. The request must
+//! show nothing else the page could differ by: no cookie but the time zone's (a `Public` page is
+//! written in UTC), no `Authorization`, no caller read by a middleware, no `corten` header, JSON
+//! not asked for first, no notice sent back, no body, and the URL the router matched (a
+//! middleware that changed it since leaves the request to the handler). The key is the `Host`,
+//! the path and query, and `Accept-Language` when the page's `Vary` names it or a message was
+//! read in the language it asks for: a page for `/items?page=2` is not the one for `/items`. The
+//! headers are compared as they were sent, so `fr` and `fr-FR` each have a copy. An answer is
+//! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
+//! and no value made for this request alone, and varies on nothing but what the key covers.
 //!
-//! A successful write to a URL, or one that redirects to it, drops what is kept for it (RFC 9111
-//! section 4.4). Nothing else does before the lifetime ends: the lifetime is how stale the app
-//! said the page may be. Off under `corten dev`. The bound is [`crate::App::kept_answers`].
+//! A write that did not fail drops what is kept at its path, whatever the query (a named post is
+//! `?do=name` at its page's path), and at the path of a place on this site it redirects to (RFC
+//! 9111 section 4.4); a page whose handler was reading while the write went through is not kept.
+//! Nothing else drops a page before its lifetime ends: the lifetime is how stale the app said
+//! the page may be. Off under `corten dev`. The bound is [`crate::App::kept_answers`], and
+//! counts each page's bytes, its headers, its key and the compressed forms made for it.
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, DefaultHasher, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock, PoisonError, RwLock, Weak};
+#[cfg(feature = "compress")]
+use std::sync::Weak;
+use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -59,6 +67,9 @@ const OVERHEAD: usize = 256;
 /// An entry's size once it is no longer kept: nothing made for it counts from then on.
 const GONE: usize = usize::MAX;
 
+/// The counts of writes, one for the paths whose hash names it.
+const WRITES: usize = 256;
+
 /// The app's kept answers, at most `bound` bytes of them.
 pub(crate) struct Answers(Arc<Store>);
 
@@ -66,7 +77,46 @@ struct Store {
     bound: usize,
     /// The bytes kept: every entry's size, with what was made for it since it was kept.
     bytes: AtomicUsize,
+    /// The writes that did not fail, counted by path ([`Written`]): a page stands only while the
+    /// count is the one its request found before its handler ran. So a write drops every page at
+    /// its path, whatever its query, and a page whose handler was reading while the write was
+    /// made is not kept, without a lock or a search.
+    written: [AtomicUsize; WRITES],
     inner: RwLock<Inner>,
+}
+
+/// A path's count of writes, as a request found it.
+#[derive(Clone, Copy)]
+struct Written {
+    count: usize,
+    was: usize,
+}
+
+impl Written {
+    /// The count for `at` (a path, with or without a query) as it is now. Two paths may share
+    /// one, and then a write to either drops the other's pages early.
+    fn of(store: &Store, at: &str) -> Self {
+        let path = at.split(['?', '#']).next().unwrap_or(at);
+        // FNV-1a: a few bytes, read once for a request that missed.
+        let hash =
+            path.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3));
+        let count = (hash >> 32) as usize % WRITES;
+        Written { count, was: store.written[count].load(Ordering::Acquire) }
+    }
+
+    /// No write to the path since.
+    fn stands(self, store: &Store) -> bool {
+        store.written[self.count].load(Ordering::Acquire) == self.was
+    }
+}
+
+/// Where an entry is kept.
+struct Place {
+    /// In the clock's slots.
+    slot: usize,
+    /// The store, to count what is made for the entry later and make room for that.
+    #[cfg(feature = "compress")]
+    store: Weak<Store>,
 }
 
 #[derive(Default)]
@@ -83,7 +133,8 @@ struct Inner {
 /// One kept answer, as its handler gave it.
 pub(crate) struct Entry {
     at: Box<str>,
-    slot: usize,
+    place: Place,
+    written: Written,
     host: Option<HeaderValue>,
     /// The `Accept-Language` it was asked with, when its `Vary` names the header.
     language: Option<Option<HeaderValue>>,
@@ -102,8 +153,6 @@ pub(crate) struct Entry {
     used: AtomicBool,
     /// What it counts for in the store's bytes, or [`GONE`].
     size: AtomicUsize,
-    /// Where it is kept, to count what is made for it later and make room for that.
-    store: Weak<Store>,
 }
 
 /// On a response whose body is a kept answer's: the stages after the handler find the body's
@@ -167,7 +216,7 @@ impl Entry {
     /// they take the store past its bound, as keeping a page does.
     #[cfg(feature = "compress")]
     fn grew(&self, more: usize) {
-        let Some(store) = self.store.upgrade() else { return };
+        let Some(store) = self.place.store.upgrade() else { return };
         // Added first and taken back if it is gone, so the total never falls below what the
         // entries count for.
         store.bytes.fetch_add(more, Ordering::AcqRel);
@@ -193,8 +242,9 @@ impl Entry {
         now.saturating_duration_since(self.made).as_secs()
     }
 
-    fn fresh(&self, now: Instant) -> bool {
-        self.age(now) < self.lifetime
+    /// Within its lifetime, with no write to its path since its handler read.
+    fn stands(&self, store: &Store, now: Instant) -> bool {
+        self.age(now) < self.lifetime && self.written.stands(store)
     }
 
     fn is_for(&self, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> bool {
@@ -205,9 +255,10 @@ impl Entry {
 impl Store {
     /// Takes `entry` out of its slot and its URL's copies, and its size out of the bytes kept.
     fn drop_entry(&self, inner: &mut Inner, entry: &Arc<Entry>) {
-        if inner.slots.get(entry.slot).and_then(Option::as_ref).is_some_and(|held| Arc::ptr_eq(held, entry)) {
-            inner.slots[entry.slot] = None;
-            inner.free.push(entry.slot);
+        let slot = entry.place.slot;
+        if inner.slots.get(slot).and_then(Option::as_ref).is_some_and(|held| Arc::ptr_eq(held, entry)) {
+            inner.slots[slot] = None;
+            inner.free.push(slot);
         }
         if let Some(copies) = inner.at.get_mut(&entry.at) {
             copies.retain(|copy| !Arc::ptr_eq(copy, entry));
@@ -221,8 +272,9 @@ impl Store {
         }
     }
 
-    /// Drops entries until the bound holds: one past its lifetime, or not used since the hand
-    /// last passed it, as the hand comes to it. Never `kept`, the one room is made for.
+    /// Drops entries until the bound holds: one that no longer stands (past its lifetime, or
+    /// written to since), or not used since the hand last passed it, as the hand comes to it.
+    /// Never `kept`, the one room is made for.
     fn make_room(&self, inner: &mut Inner, kept: &Entry) {
         let now = Instant::now();
         // Twice around: the first pass clears every mark, so the second finds one to drop.
@@ -234,7 +286,7 @@ impl Store {
             if std::ptr::eq(&*entry, kept) {
                 continue;
             }
-            if entry.fresh(now) && entry.used.swap(false, Ordering::Relaxed) {
+            if entry.stands(self, now) && entry.used.swap(false, Ordering::Relaxed) {
                 continue;
             }
             self.drop_entry(inner, &entry);
@@ -245,7 +297,10 @@ impl Store {
 impl Answers {
     /// Room for `bound` bytes of answers; none for a bound of 0.
     pub(crate) fn new(bound: usize) -> Option<Self> {
-        (bound > 0).then(|| Answers(Arc::new(Store { bound, bytes: AtomicUsize::new(0), inner: RwLock::default() })))
+        (bound > 0).then(|| {
+            let written = [const { AtomicUsize::new(0) }; WRITES];
+            Answers(Arc::new(Store { bound, bytes: AtomicUsize::new(0), written, inner: RwLock::default() }))
+        })
     }
 
     /// The bytes kept now.
@@ -254,16 +309,15 @@ impl Answers {
         self.0.bytes.load(Ordering::Acquire)
     }
 
-    /// The answer kept for a request, while its lifetime lasts, with its age in seconds.
+    /// The answer kept for a request, while it stands, with its age in seconds.
     fn find(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Option<(Arc<Entry>, u64)> {
         let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
         let entry = inner.at.get(at)?.iter().find(|entry| entry.is_for(host, language))?;
         let age = entry.age(Instant::now());
-        if age >= entry.lifetime {
+        if age >= entry.lifetime || !entry.written.stands(&self.0) {
             return None;
         }
-        // Written only when it changes, so a page many requests read does not pass its line
-        // between their cores.
+        // Stored only when it changes: a page read often is marked once for each pass of the hand.
         if !entry.used.load(Ordering::Relaxed) {
             entry.used.store(true, Ordering::Relaxed);
         }
@@ -271,11 +325,15 @@ impl Answers {
     }
 
     /// Keeps `entry`, in the place of the copy it stands for, and makes room for it.
-    fn keep(&self, make: impl FnOnce(usize, Weak<Store>) -> Entry) -> Arc<Entry> {
+    fn keep(&self, make: impl FnOnce(Place) -> Entry) -> Arc<Entry> {
         let store = &*self.0;
         let mut inner = store.inner.write().unwrap_or_else(PoisonError::into_inner);
         let slot = inner.free.pop().unwrap_or(inner.slots.len());
-        let entry = Arc::new(make(slot, Arc::downgrade(&self.0)));
+        let entry = Arc::new(make(Place {
+            slot,
+            #[cfg(feature = "compress")]
+            store: Arc::downgrade(&self.0),
+        }));
         let copies = inner.at.get(&entry.at).map(Vec::as_slice).unwrap_or_default();
         // The copy this one stands for: asked the same way. With none, the oldest of a full set.
         let replaced = copies
@@ -296,21 +354,16 @@ impl Answers {
         entry
     }
 
-    /// Drops what is kept for `at` (a path and query), every copy: a write changed it.
-    pub(crate) fn forget(&self, at: &str) {
-        let store = &*self.0;
-        if !store.inner.read().unwrap_or_else(PoisonError::into_inner).at.contains_key(at) {
-            return;
-        }
-        let mut inner = store.inner.write().unwrap_or_else(PoisonError::into_inner);
-        for entry in inner.at.get(at).cloned().unwrap_or_default() {
-            store.drop_entry(&mut inner, &entry);
-        }
+    /// Counts a write to `at`'s path, so no page kept for it stands: every query's (a named
+    /// post is `?do=name` at its page's path) and one whose handler has yet to answer.
+    fn forget(&self, at: &str) {
+        let written = Written::of(&self.0, at);
+        self.0.written[written.count].fetch_add(1, Ordering::AcqRel);
     }
 
     /// After an answer to a request that may have changed what a URL shows (an unsafe method
-    /// that did not fail): drops what is kept for the request's URL and for a place on this site
-    /// its answer redirects to (RFC 9111 section 4.4).
+    /// that did not fail): drops what is kept for the request's path and for a place on this
+    /// site its answer redirects to (RFC 9111 section 4.4).
     pub(crate) fn wrote(&self, at: &str, res: &Response) {
         if res.status().is_client_error() || res.status().is_server_error() {
             return;
@@ -320,7 +373,7 @@ impl Answers {
             let to = res.headers().get(name).and_then(|to| to.to_str().ok());
             // A path on this site: another site's page is not kept here.
             if let Some(to) = to.filter(|to| to.starts_with('/') && !to.starts_with("//")) {
-                self.forget(to.split('#').next().unwrap_or(to));
+                self.forget(to);
             }
         }
     }
@@ -399,9 +452,13 @@ impl<'a> Asked<'a> {
         Some(res)
     }
 
-    /// What keeping the handler's answer needs of the request, once no kept one stood for it.
+    /// What keeping the handler's answer needs of the request, once no kept one stood for it:
+    /// taken before the handler runs, so the answer's age counts its making and a write made
+    /// meanwhile is seen.
     pub(crate) fn missed(&self, req: &Request) -> Missed {
         Missed {
+            asked: Instant::now(),
+            written: Written::of(&self.answers.0, self.at),
             shared: req.extensions().get::<crate::Signal>().and_then(crate::Signal::shared).cloned(),
             signal: req.extensions().get::<crate::Signal>().cloned(),
             nonce: req.extensions().get::<crate::security::NonceSlot>().cloned(),
@@ -414,6 +471,8 @@ impl<'a> Asked<'a> {
 
 /// A request no kept answer stood for, whose handler's answer is kept if it may be.
 pub(crate) struct Missed {
+    asked: Instant,
+    written: Written,
     shared: Option<Arc<crate::page::Shared>>,
     signal: Option<crate::Signal>,
     nonce: Option<crate::security::NonceSlot>,
@@ -429,6 +488,9 @@ impl Missed {
         let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else { return res };
         // Whether the page varies on `Accept-Language`, or on something the key does not cover.
         let Some(language) = varies(res.headers()) else { return res };
+        // A page in the language the request asked for, in an app whose answers do not say so
+        // (messages read with no `App::messages`): one copy for each `Accept-Language` too.
+        let language = language || self.signal.as_ref().is_some_and(crate::Signal::asked_language);
         let style = res.extensions().get::<crate::security::StyleBlock>().cloned();
         // Only what is put back on a kept answer: a mark this does not know is not replayed.
         let known = 2 + usize::from(style.is_some());
@@ -441,27 +503,37 @@ impl Missed {
             || res.headers().contains_key(header::ETAG)
             || self.nonce.as_ref().is_some_and(|slot| slot.taken().is_some())
             || self.signal.as_ref().is_none_or(crate::Signal::is_personal)
+            // A write to the path while the handler read: the page may show what was there before.
+            || !self.written.stands(&answers.0)
         {
             return res;
         }
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
         let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + 32).sum();
-        let size = self.at.len() + head + OVERHEAD + length as usize;
+        // The URL is held twice, by the entry and by the map.
+        let key = self.at.len() * 2
+            + self.host.as_ref().map_or(0, HeaderValue::len)
+            + self.language.as_ref().filter(|_| language).map_or(0, HeaderValue::len);
+        let size = key + head + OVERHEAD + length as usize;
         if length == 0 || size > answers.0.bound / SHARE {
             return res;
         }
         let (mut parts, body) = res.into_parts();
-        // Exact size: one held `Bytes`, which comes back as it is.
+        // Exact size: one held `Bytes`.
         let Ok(body) = crate::body::to_bytes(body, usize::MAX).await else {
             return Response::from_parts(parts, Body::empty());
         };
-        let Missed { at, host, language: asked, .. } = self;
-        let entry = answers.keep(|slot, store| Entry {
+        // A copy of its own length: a page's buffer is sized for the last page rendered, and the
+        // bytes made from it hold all of that for as long as they are kept.
+        let body = Bytes::copy_from_slice(&body);
+        let Missed { at, host, language: asked, asked: made, written, .. } = self;
+        let entry = answers.keep(|place| Entry {
             at,
-            slot,
+            place,
+            written,
             host,
             language: language.then_some(asked),
-            made: Instant::now(),
+            made,
             lifetime,
             head: parts.headers.clone(),
             cache,
@@ -472,7 +544,6 @@ impl Missed {
             coded: Default::default(),
             used: AtomicBool::new(false),
             size: AtomicUsize::new(size),
-            store,
         });
         // This answer's tag and compression are the kept one's first.
         parts.extensions.insert(Kept(entry));
@@ -501,11 +572,14 @@ fn varies(headers: &HeaderMap) -> Option<bool> {
 mod tests {
     use super::*;
 
-    fn entry(at: &str, host: Option<&'static str>, lifetime: u64, body: usize) -> impl FnOnce(usize, Weak<Store>) -> Entry {
+    /// An answer for `at` whose request found the path's writes as they are now.
+    fn entry(answers: &Answers, at: &str, host: Option<&'static str>, lifetime: u64, body: usize) -> impl FnOnce(Place) -> Entry {
+        let written = Written::of(&answers.0, at);
         let at: Box<str> = at.into();
-        move |slot, store| Entry {
+        move |place| Entry {
             at,
-            slot,
+            place,
+            written,
             host: host.map(HeaderValue::from_static),
             language: None,
             made: Instant::now(),
@@ -519,7 +593,6 @@ mod tests {
             coded: Default::default(),
             used: AtomicBool::new(false),
             size: AtomicUsize::new(body + OVERHEAD),
-            store,
         }
     }
 
@@ -531,12 +604,12 @@ mod tests {
         let size = 1000 + OVERHEAD;
         let answers = Answers::new(size * 3).expect("a bound");
         for at in ["/a", "/b", "/c"] {
-            answers.keep(entry(at, None, 60, 1000));
+            answers.keep(entry(&answers, at, None, 60, 1000));
         }
         assert_eq!(answers.bytes(), size * 3);
         // `/a` and `/c` are read; `/b` is not.
         assert!(answers.find("/a", None, None).is_some() && answers.find("/c", None, None).is_some());
-        answers.keep(entry("/d", None, 60, 1000));
+        answers.keep(entry(&answers, "/d", None, 60, 1000));
         assert_eq!(answers.bytes(), size * 3, "one went for the new one");
         assert!(answers.find("/b", None, None).is_none(), "the one not read");
         for at in ["/a", "/c", "/d"] {
@@ -545,46 +618,56 @@ mod tests {
         // One past its lifetime is never given, and goes when the hand comes to it: before one
         // that was read since.
         let answers = Answers::new(size * 2).expect("a bound");
-        answers.keep(entry("/old", None, 0, 1000));
-        answers.keep(entry("/b", None, 60, 1000));
+        answers.keep(entry(&answers, "/old", None, 0, 1000));
+        answers.keep(entry(&answers, "/b", None, 60, 1000));
         assert!(answers.find("/old", None, None).is_none(), "past its lifetime: never given");
         assert!(answers.find("/b", None, None).is_some());
-        answers.keep(entry("/c", None, 60, 1000));
+        answers.keep(entry(&answers, "/c", None, 60, 1000));
         assert!(answers.find("/b", None, None).is_some() && answers.find("/c", None, None).is_some());
         assert_eq!(answers.bytes(), size * 2);
     }
 
     /// A URL's answer is one copy for each `Host` it was asked with, a new one in the place of the
-    /// one it stands for, and a write drops them all.
+    /// one it stands for. A write that did not fail drops every page at its path and at the path
+    /// it redirects to, whatever their queries, and one whose handler read before it.
     #[test]
-    fn a_url_has_a_copy_for_each_host_and_a_write_drops_them() {
+    fn a_url_has_a_copy_for_each_host_and_a_write_drops_its_path_s() {
         let answers = Answers::new(1 << 20).expect("a bound");
         let (a, b) = (HeaderValue::from_static("a.example"), HeaderValue::from_static("b.example"));
-        answers.keep(entry("/p", Some("a.example"), 60, 10));
+        answers.keep(entry(&answers, "/p", Some("a.example"), 60, 10));
         assert!(answers.find("/p", Some(&a), None).is_some());
         assert!(answers.find("/p", Some(&b), None).is_none() && answers.find("/p", None, None).is_none());
-        answers.keep(entry("/p", Some("b.example"), 60, 10));
-        answers.keep(entry("/p", Some("a.example"), 60, 20));
+        answers.keep(entry(&answers, "/p", Some("b.example"), 60, 10));
+        answers.keep(entry(&answers, "/p", Some("a.example"), 60, 20));
         assert_eq!(answers.bytes(), 30 + OVERHEAD * 2, "the second for a.example took the first's place");
         assert_eq!(answers.find("/p", Some(&a), None).expect("kept").0.body.len(), 20);
         // More hosts than a URL keeps copies for: the oldest goes.
         for n in 0..COPIES {
             let host: &'static str = Box::leak(format!("h{n}.example").into_boxed_str());
-            answers.keep(entry("/p", Some(host), 60, 10));
+            answers.keep(entry(&answers, "/p", Some(host), 60, 10));
         }
         assert!(answers.find("/p", Some(&b), None).is_none() && answers.find("/p", Some(&a), None).is_none());
         assert_eq!(answers.bytes(), (10 + OVERHEAD) * COPIES);
+        let last = HeaderValue::from_static("h7.example");
         let mut res = Response::new(Body::empty());
         *res.status_mut() = StatusCode::NOT_FOUND;
         answers.wrote("/p", &res);
-        assert_eq!(answers.bytes(), (10 + OVERHEAD) * COPIES, "a write that failed changed nothing");
+        assert!(answers.find("/p", Some(&last), None).is_some(), "a write that failed changed nothing");
         *res.status_mut() = StatusCode::SEE_OTHER;
         res.headers_mut().insert(header::LOCATION, HeaderValue::from_static("/q?x=1#top"));
-        answers.keep(entry("/q?x=1", None, 60, 10));
-        answers.keep(entry("/other", None, 60, 10));
-        answers.wrote("/p", &res);
-        assert_eq!(answers.bytes(), 10 + OVERHEAD, "the URL written and the one it redirects to");
+        answers.keep(entry(&answers, "/q?x=2", None, 60, 10));
+        answers.keep(entry(&answers, "/other", None, 60, 10));
+        // A page whose handler is reading while the write is made.
+        let read_before = entry(&answers, "/q", None, 60, 10);
+        // A named post: `?do=save` at its page's path.
+        answers.wrote("/p?do=save", &res);
+        assert!(answers.find("/p", Some(&last), None).is_none(), "the path written, whatever the query");
+        assert!(answers.find("/q?x=2", None, None).is_none(), "and the path it redirects to");
+        answers.keep(read_before);
+        assert!(answers.find("/q", None, None).is_none(), "what was read before the write does not stand");
         assert!(answers.find("/other", None, None).is_some());
+        answers.keep(entry(&answers, "/p", Some("h7.example"), 60, 10));
+        assert!(answers.find("/p", Some(&last), None).is_some(), "made after the write, it stands");
         assert!(Answers::new(0).is_none(), "no bound, none kept");
     }
 
@@ -612,7 +695,7 @@ mod tests {
     #[test]
     fn a_kept_answer_s_hash_and_coded_bytes_are_made_once() {
         let answers = Answers::new(1 << 20).expect("a bound");
-        let kept = answers.keep(entry("/p", None, 60, 2000));
+        let kept = answers.keep(entry(&answers, "/p", None, 60, 2000));
         let mut extensions = http::Extensions::new();
         extensions.insert(Kept(kept.clone()));
         let key = std::hash::RandomState::new();
@@ -641,10 +724,11 @@ mod tests {
             Kept::coded(&extensions, &other, Coding::Gzip, encode);
             Kept::coded(&http::Extensions::new(), &kept.body, Coding::Gzip, encode);
             assert_eq!((made.get(), answers.bytes()), (3, before + 5), "not the kept answer's");
-            answers.forget("/p");
-            assert_eq!(answers.bytes(), 0);
+            // Another answer takes its place.
+            answers.keep(entry(&answers, "/p", None, 60, 10));
+            assert_eq!(answers.bytes(), 10 + OVERHEAD);
             Kept::coded(&extensions, &kept.body, Coding::Brotli, encode);
-            assert_eq!((made.get(), answers.bytes()), (4, 0), "no longer kept: nothing is counted for it");
+            assert_eq!((made.get(), answers.bytes()), (4, 10 + OVERHEAD), "no longer kept: nothing is counted for it");
         }
     }
 
@@ -656,8 +740,8 @@ mod tests {
         use crate::compress::Coding;
         let size = 1000 + OVERHEAD;
         let answers = Answers::new(size * 2 + 100).expect("a bound");
-        let first = answers.keep(entry("/a", None, 60, 1000));
-        let second = answers.keep(entry("/b", None, 60, 1000));
+        let first = answers.keep(entry(&answers, "/a", None, 60, 1000));
+        let second = answers.keep(entry(&answers, "/b", None, 60, 1000));
         assert_eq!(answers.bytes(), size * 2);
         let mut extensions = http::Extensions::new();
         extensions.insert(Kept(second.clone()));

@@ -2405,17 +2405,42 @@ impl Unshared for AnyInputs {}
     label = "`{Self}` may tell who is asking",
     note = "return a private answer, or implement `corten::answer::Anonymous` for an extractor of the app's own that never reads who is asking"
 )]
-pub trait Anonymous {}
+pub trait Anonymous {
+    /// Whether all it reads of a page's request is what the app keeps a `Public` page by
+    /// (`crate::kept`): the URL, the `Host` and the language asked for. Not so for an extractor
+    /// of the app's own, which may read another header and still not tell who is asking, so a
+    /// page whose handler takes one is made for every request.
+    #[doc(hidden)]
+    const KEYED: bool = false;
+}
 
-impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R> {}
-impl<T> Anonymous for crate::Form<T> {}
+impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R> {
+    const KEYED: bool = true;
+}
+impl<T> Anonymous for crate::Form<T> {
+    const KEYED: bool = true;
+}
+impl<T> Anonymous for State<T> {
+    const KEYED: bool = true;
+}
+impl Anonymous for Req {
+    const KEYED: bool = true;
+}
+impl Anonymous for Signal {
+    const KEYED: bool = true;
+}
+impl Anonymous for Method {
+    const KEYED: bool = true;
+}
+impl Anonymous for Uri {
+    const KEYED: bool = true;
+}
+impl<T: Anonymous> Anonymous for Option<T> {
+    const KEYED: bool = T::KEYED;
+}
+// What these read is not in the key (a body, where a stream stopped): a page whose handler takes
+// one is not kept.
 impl<T> Anonymous for crate::form::Upload<T> {}
-impl<T> Anonymous for State<T> {}
-impl<T: Anonymous> Anonymous for Option<T> {}
-impl Anonymous for Req {}
-impl Anonymous for Signal {}
-impl Anonymous for Method {}
-impl Anonymous for Uri {}
 impl Anonymous for crate::LiveSince {}
 #[cfg(feature = "json")]
 impl<T> Anonymous for crate::Json<T> {}
@@ -2424,7 +2449,10 @@ impl Anonymous for corten_feed::Since {}
 
 /// Every argument is [`Anonymous`].
 #[doc(hidden)]
-pub trait AllAnonymous {}
+pub trait AllAnonymous {
+    /// Every argument is one the kept page's key covers ([`Anonymous::KEYED`]).
+    const KEYED: bool;
+}
 
 /// An input a route that says `unstaged` may take: its URL. No stage runs there, so nothing gives
 /// the request its signal, its nonce or who is asking, and an extractor that reads one of those
@@ -2456,10 +2484,13 @@ impl AllUnstaged for () {}
 pub trait Accepts<Args> {
     /// The answer is the same for everyone ([`Public`], the only one with [`AnonymousInputs`]).
     const SHARED: bool = false;
+    /// And all its handler reads of a page's request is what the app keeps the page by.
+    const KEYED: bool = false;
 }
 impl<A> Accepts<A> for AnyInputs {}
 impl<A: AllAnonymous> Accepts<A> for AnonymousInputs {
     const SHARED: bool = true;
+    const KEYED: bool = A::KEYED;
 }
 
 /// A handler's arguments and result, by the shapes Corten's `Handler` uses.
@@ -2478,7 +2509,9 @@ where
     type Out = Fut::Output;
 }
 
-impl AllAnonymous for () {}
+impl AllAnonymous for () {
+    const KEYED: bool = true;
+}
 
 /// For one arity, `Holds<T, At<N>>` with `T` at each position `N` in turn: the arguments before it
 /// keep their names, the one at it is `T`, the rest keep theirs.
@@ -2503,7 +2536,9 @@ macro_rules! arities {
             type Out = Fut::Output;
         }
 
-        impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {}
+        impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {
+            const KEYED: bool = true $(&& $ty::KEYED)*;
+        }
         impl<$($ty: Unstaged,)*> AllUnstaged for ($($ty,)*) {}
 
         holds!([] [$($ty)*] [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15]);
@@ -2559,11 +2594,13 @@ pub struct Endpoint<H, O> {
     pub(crate) answer: PhantomData<fn() -> O>,
     /// The answer is [`Public`] (its inputs are [`AnonymousInputs`]).
     pub(crate) shared: bool,
+    /// And each input is one the kept page's key covers ([`Anonymous::KEYED`]).
+    pub(crate) keyed: bool,
 }
 
 impl<H: Clone, O> Clone for Endpoint<H, O> {
     fn clone(&self) -> Self {
-        Endpoint { handler: self.handler.clone(), answer: PhantomData, shared: self.shared }
+        Endpoint { handler: self.handler.clone(), answer: PhantomData, shared: self.shared, keyed: self.keyed }
     }
 }
 
@@ -2593,7 +2630,7 @@ where
     const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
 
     fn keeps(&self) -> bool {
-        self.shared && O::PAGE
+        self.shared && self.keyed && O::PAGE
     }
 
     #[inline]

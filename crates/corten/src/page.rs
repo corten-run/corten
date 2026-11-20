@@ -1561,7 +1561,11 @@ impl Req {
             },
             None => match self.signal.locale() {
                 Some(index) => M::from_index(index),
-                None => M::negotiate(self.accept_language()),
+                None => {
+                    // No answer of this app says it varies on the header: a kept page is told.
+                    self.signal.ask_language();
+                    M::negotiate(self.accept_language())
+                }
             },
         }
     }

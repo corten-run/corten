@@ -952,12 +952,15 @@ impl<M: Middleware> App<M> {
     /// has `.shared(..)`, else `max_age`), with an `Age`. Every stage still runs for it, the
     /// app's middleware too; what it saves is the handler, the render, the tag's hash and the
     /// compression. So a `Public` page's handler does not run for every request, and what it
-    /// reads may be that old when a visitor sees it, as it already may be behind a CDN.
+    /// reads may be that old when a visitor sees it, as it already may be behind a CDN. A page
+    /// whose handler takes an extractor of the app's own is not kept: it may read a header the
+    /// kept page's key does not cover.
     ///
     /// Past the bound, a page not read since the last time room was made goes first, and one
-    /// larger than an eighth of the bound is not kept. A write to a page's URL that does not
-    /// fail, or one that redirects to it, drops its kept answer. None is kept under `corten dev`.
-    /// The bytes counted are each page's headers, its body and each compressed form made of it.
+    /// larger than an eighth of the bound is not kept. A write to a page's path that does not
+    /// fail, or one that redirects to it, drops what is kept there. None is kept under
+    /// `corten dev`. The bytes counted are each page's key, its headers, its body and each
+    /// compressed form made of it.
     pub fn kept_answers(mut self, bytes: usize) -> Self {
         self.kept = bytes;
         self

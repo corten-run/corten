@@ -114,6 +114,9 @@ struct Inner {
     callers: AtomicU64,
     /// The app's error page is answering it.
     error_page: AtomicBool,
+    /// A message was read in the language `Accept-Language` asks for where no answer says it
+    /// varies on the header: an app with no [`crate::App::messages`].
+    asked_language: AtomicBool,
     /// Its answer is `Public`, the same for everyone: written as for a visitor whose zone is not
     /// known, its live part's fragments too.
     #[cfg(feature = "zones")]
@@ -577,6 +580,16 @@ impl Signal {
     }
 
     /// True when something read who is asking.
+    /// A message was read in the language the request's `Accept-Language` asks for, in an app
+    /// whose answers do not say they vary on it.
+    pub(crate) fn ask_language(&self) {
+        self.0.asked_language.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn asked_language(&self) -> bool {
+        self.0.asked_language.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn is_personal(&self) -> bool {
         self.0.personal.load(Ordering::Relaxed)
     }

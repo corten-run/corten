@@ -412,7 +412,8 @@ pub(crate) struct Unrepeatable;
 
 /// A page's `200` to a `GET` or `HEAD` with a weak `ETag` from its body and its `corten-*`
 /// headers, or `304 Not Modified` in its place when the request's `If-None-Match` (`has`, each
-/// line) names that tag. The tag is made from what this request rendered, so a `304` says the
+/// line) names that tag. The tag is made from the answer this request would be sent (rendered
+/// for it, or the kept page given in its place, `crate::kept`), so a `304` says the
 /// client's copy is what it would get now, whoever is asking. The runtime's headers count because
 /// a cache keeps a stored header the `304` does not send (RFC 9111 4.3.4): a copy that came with a
 /// notice or a place to go must not be reused for an answer without one. Weak, since the body is
