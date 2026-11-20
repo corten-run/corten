@@ -1765,7 +1765,9 @@ rules something out.
     are known and accepted (Stands on): the one can be told which answers to retry and the other
     replaced by an alert built from access logs, so neither alone reopens it.
 
-    Last checked: 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`; 2026-11-06,
+    Last checked: 2026-11-20, the send timeout over tokio-rustls 0.26.6 through `serve_wrapped`, with
+    a steady reader, before (`4bf5b1e78`) and after the wait started over on each report of room
+    (#1742); 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`; 2026-11-06,
     the `original-uri` runs on `fa597483`; 2026-11-06, rustc 1.99.1's error for an argument no
     request fills, held by `crates/corten/tests/handler_message.rs` at `84d33d0b`; 2026-11-08,
     the prototype's runs (`prototypes/pipeline/results/round4.tsv` and `round4-socket.tsv`),
