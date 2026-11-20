@@ -137,11 +137,7 @@ impl Mode {
             Some(b"page") => Some(Mode::Document),
             _ => None,
         };
-        let accept = if runtime.is_none() || (check_html && runtime == Some(Mode::Document)) {
-            headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()).unwrap_or("")
-        } else {
-            ""
-        };
+        let accept = if runtime.is_none() { accept(headers) } else { "" };
         // Browsers never put JSON first for a navigation.
         let mode = runtime.unwrap_or_else(|| {
             if crate::api::media_type(accept.split(',').next().unwrap_or("")) == crate::api::JSON {
@@ -152,6 +148,11 @@ impl Mode {
         });
         ((mode, runtime.is_some()), check_html && mode == Mode::Document && accept.contains("text/html"))
     }
+}
+
+#[inline]
+fn accept(headers: &HeaderMap) -> &str {
+    headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()).unwrap_or("")
 }
 
 /// A write the runtime sent (`mode`, `method`) that answers its own page whole: one whose runtime
@@ -844,6 +845,12 @@ impl RequestPage {
             #[cfg(debug_assertions)]
             form_check: None,
         }
+    }
+
+    pub(crate) fn refusal_wants_html(&self, headers: &HeaderMap) -> bool {
+        let (mode, fetched) = self.mode;
+        // Unlike an ordinary failure, a refused whole-page fetch needs to ask for HTML.
+        mode.swaps() || self.accepts_html || (fetched && accept(headers).contains("text/html"))
     }
 }
 

@@ -2258,7 +2258,8 @@ rules something out.
     features and compiler layout changes; remeasure before raising one.
 
     Last checked: 2026-11-19, the header lookup and extension counts before (`aa0f0c7e1`) and
-    after sharing the reads, from 1,300 less 300 catalog GETs on one connection per run;
+    after sharing the reads (measured tree recorded at `f1765bbe2`), from one short/long pair
+    per build: 1,300 less 300 catalog GETs, on one connection per run;
     2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
     (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its

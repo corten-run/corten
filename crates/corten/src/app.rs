@@ -2542,7 +2542,7 @@ impl<S: Steps> Layer<S> {
         if let Some(refused) = self.policy.refuse(req.method(), origin, cors.is_some() && !credentials.has_cookie()) {
             let mut refused = match mount {
                 Some(mount) => crate::api::json_failure(refused, false, mount.errors.as_ref()).await,
-                None if mode.swaps() || page.accepts_html => {
+                None if page.refusal_wants_html(headers) => {
                     let watch = Watch(self.signal(&credentials, crate::extract::BODY_LIMIT));
                     let asked = Asked::new(req, &self.shared, &mut page, nonce.as_ref(), &watch.0);
                     let page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
