@@ -1,5 +1,6 @@
 // Browser smoke test of the production pieces, against the card-market example (API or fixture mode).
 // Usage: node examples/card-market/smoke.mjs [http://localhost:18410]
+import { randomUUID } from "node:crypto";
 import { chromium, firefox, webkit } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { stall } from "../../scripts/stall.mjs";
@@ -214,63 +215,103 @@ try {
   // Push: the app's worker script (Pwa::import_script) handles a push sent through DevTools, in
   // full Chromium (channel "chromium"): the headless shell denies notifications however they are
   // granted, so its worker's showNotification fails. The app's message, and one of another shape
-  // (no title, a url that is not text) shown untitled and opening / (#1039).
+  // (no title, a url that is not text) shown untitled with / as the stored destination (#1039).
   const full = await chromium.launch({ headless: true, channel: "chromium" });
   try {
     const pushContext = await full.newContext();
     await pushContext.grantPermissions(["notifications"], { origin: base });
     const pushPage = await pushContext.newPage();
     await pushPage.goto(base + "/");
-    await pushPage.waitForFunction(async (scope) => {
-      const reg = await navigator.serviceWorker.getRegistration();
-      return Notification.permission === "granted" && reg?.scope === scope &&
-        reg.active?.state === "activated" && reg.active === navigator.serviceWorker.controller;
-    }, `${base}/`, { timeout: 10000 });
+    const scriptURL = `${base}/service-worker.js`;
+    await pushPage.waitForFunction((url) => {
+      const worker = navigator.serviceWorker.controller;
+      return Notification.permission === "granted" && worker?.state === "activated" && worker.scriptURL === url;
+    }, scriptURL, { timeout: 10000 });
+
+    // A timeout bounds the whole operation, not just the wait between DevTools calls.
+    const withinFiveSeconds = async (run) => {
+      const deadline = performance.now() + 5000;
+      let timer;
+      try {
+        const result = await Promise.race([
+          new Promise((resolve) => (timer = setTimeout(() => resolve(null), 5000))),
+          run(),
+        ]);
+        return performance.now() < deadline ? result : null;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
     const cdp = await pushContext.newCDPSession(pushPage);
     const { targetInfo } = await cdp.send("Target.getTargetInfo");
-    const versions = new Map();
-    cdp.on("ServiceWorker.workerVersionUpdated", ({ versions: updates }) => {
-      for (const v of updates) versions.set(v.versionId, v);
-    });
-    await cdp.send("ServiceWorker.enable");
-    const controlling = () => [...versions.values()].find((v) => v.status === "activated" &&
-      v.scriptURL === `${base}/service-worker.js` && v.controlledClients?.includes(targetInfo.targetId));
-    for (let i = 0; i < 50 && !controlling(); i += 1) await pushPage.waitForTimeout(100);
-    const registrationId = controlling()?.registrationId;
+    const ready = Promise.withResolvers();
+    const onVersion = ({ versions }) => {
+      const controlling = versions.find((v) => v.status === "activated" && v.scriptURL === scriptURL &&
+        v.controlledClients?.includes(targetInfo.targetId));
+      if (controlling) ready.resolve(controlling.registrationId);
+    };
+    cdp.on("ServiceWorker.workerVersionUpdated", onVersion);
+    const registrationId = await withinFiveSeconds(async () => {
+      await cdp.send("ServiceWorker.enable");
+      return ready.promise;
+    }).finally(() => cdp.off("ServiceWorker.workerVersionUpdated", onVersion));
     if (!registrationId) throw new Error("DevTools did not report the activated worker controlling the push page");
 
-    // Do not read getNotifications() while Chromium is still displaying the notification. Its
-    // read can delete a new database row as obsolete if the display bridge has not listed it yet.
-    // DevTools logs the display after the browser hands it to the bridge. It omits notification
-    // data, so still read the real notification to check both its title and its click URL.
-    const displayed = new Set();
-    cdp.on("BackgroundService.backgroundServiceEventReceived", ({ backgroundServiceEvent: e }) => {
-      if (e.service === "notifications" && e.eventName === "Notification displayed" && e.serviceWorkerRegistrationId === registrationId) {
-        displayed.add(e.eventMetadata.find(({ key }) => key === "Body")?.value);
-      }
+    // Chromium's display event reports the title and body, but does not guarantee the
+    // notification is listable. A getNotifications() read can delete an unlisted row. Instead,
+    // observe the data passed to the real showNotification call, and report it only on success.
+    const isPushWorker = (worker) => worker.url() === scriptURL;
+    const worker = pushContext.serviceWorkers().find(isPushWorker) ??
+      await pushContext.waitForEvent("serviceworker", { predicate: isPushWorker, timeout: 5000 });
+    const readDestination = await worker.evaluateHandle(() => {
+      const results = new Map();
+      const resultFor = (body) => {
+        if (!results.has(body)) results.set(body, Promise.withResolvers());
+        return results.get(body);
+      };
+      const show = self.registration.showNotification.bind(self.registration);
+      self.registration.showNotification = async (title, options) => {
+        const body = options?.body;
+        const url = structuredClone(options?.data)?.url;
+        await show(title, options);
+        resultFor(body).resolve({ url });
+      };
+      return (body) => resultFor(body).promise;
     });
     await cdp.send("BackgroundService.startObserving", { service: "notifications" });
     await cdp.send("BackgroundService.setRecording", { service: "notifications", shouldRecord: true });
 
     /** @param {{ title?: string, body: string, url: unknown }} message */
-    const sendAndRead = async (message) => {
-      await cdp.send("ServiceWorker.deliverPushMessage", { origin: base, registrationId, data: JSON.stringify(message) });
-      for (const until = Date.now() + 5000; Date.now() < until; await pushPage.waitForTimeout(100)) {
-        if (!displayed.has(message.body)) continue;
-        const found = await pushPage.evaluate(async (body) => {
-          const reg = await navigator.serviceWorker.getRegistration();
-          if (!reg?.active || reg.active !== navigator.serviceWorker.controller) throw new Error("push worker lost control of the page");
-          const n = (await reg.getNotifications()).find((n) => n.body === body);
-          return n ? { title: n.title, url: n.data?.url } : null;
-        }, message.body);
-        if (found) return found;
+    const sendAndObserve = async (message) => {
+      const body = `${message.body} (${randomUUID()})`;
+      const display = Promise.withResolvers();
+      let displayed = false;
+      const onDisplay = ({ backgroundServiceEvent: e }) => {
+        if (e.service !== "notifications" || e.eventName !== "Notification displayed" || e.serviceWorkerRegistrationId !== registrationId) return;
+        if (e.eventMetadata.find(({ key }) => key === "Body")?.value !== body) return;
+        displayed = true;
+        display.resolve(e.eventMetadata.find(({ key }) => key === "Title")?.value);
+      };
+      cdp.on("BackgroundService.backgroundServiceEventReceived", onDisplay);
+      try {
+        const shown = await withinFiveSeconds(async () => {
+          const [title, { url }] = await Promise.all([
+            display.promise,
+            readDestination.evaluate((read, body) => read(body), body),
+            cdp.send("ServiceWorker.deliverPushMessage", { origin: base, registrationId, data: JSON.stringify({ ...message, body }) }),
+          ]);
+          return { title, url };
+        });
+        return shown ?? { missed: 1, displayed };
+      } finally {
+        cdp.off("BackgroundService.backgroundServiceEventReceived", onDisplay);
       }
-      return { missed: 1, displayed: displayed.has(message.body) };
     };
-    const first = await sendAndRead({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" });
-    check("a push message shows a notification", first.title === "Price drop" && first.url === "/items/item_5", JSON.stringify(first));
-    const odd = await sendAndRead({ body: "Card Name 7 is back", url: 5 });
-    check("a push message with no title and a url that is not text shows untitled and opens /", odd.title === "" && odd.url === "/", JSON.stringify(odd));
+    const first = await sendAndObserve({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" });
+    check("a push message shows a notification with the stored item destination", first.title === "Price drop" && first.url === "/items/item_5", JSON.stringify(first));
+    const odd = await sendAndObserve({ body: "Card Name 7 is back", url: 5 });
+    check("a push message with no title and a url that is not text shows untitled with / as the stored destination", odd.title === "" && odd.url === "/", JSON.stringify(odd));
   } finally {
     await full.close();
   }
