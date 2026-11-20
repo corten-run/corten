@@ -42,7 +42,9 @@ not remove that requirement.
 
 `App::header_timeout` (30 seconds unless set) bounds what comes before a request: a client that
 opens connections and sends its head slowly, or never finishes it, cannot hold them (an idle
-keep-alive connection closes after it too). A connection that switches, with a `101` (a
+keep-alive connection closes after it too). It counts from when an answer's last bytes have gone
+to the socket, not from when the handler returned, so a long download its client reads steadily is
+not cut by it. A connection that switches, with a `101` (a
 WebSocket) or a `2xx` to `CONNECT` (a tunnel), is the route's from then on: the header timeout
 no longer applies and `App::send_timeout` bounds only its writes that wait, so one on which
 neither side sends stays open until the route ends it, and idle limits there are the route's

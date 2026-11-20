@@ -1,14 +1,14 @@
 //! [`crate::App::header_timeout`]: how long a connection may wait for a request's head, and
 //! [`crate::App::send_timeout`]: how long a write may wait for the client to take more of an
 //! answer. Each connection has a [`Watch`]: busy from when hyper hands over a request's head until
-//! its answer's body is dropped, otherwise the time it went idle; and the time a write found the
-//! socket full, until one goes through. One thread per server ticks a coarse clock a few times a
-//! second and expires the connections idle or stalled past their timeout; the connection's next
-//! read or write then fails and hyper closes it. hyper's own header timer was measured
-//! first: about 900 instructions a keep-alive request with a coarse timer of Corten's (1,400 with
-//! tokio's), since it sets up a sleep for every head and reads once more to start it. This costs
-//! about 300 (callgrind, keep-alive requests over TCP), which Corten's accept loop saved against
-//! `axum::serve` when it was measured.
+//! its answer's last bytes have gone to the socket, otherwise the time it went idle; and the time a
+//! write found the socket full, until one goes through. One thread per server ticks a coarse clock
+//! a few times a second and expires the connections idle or stalled past their timeout; the
+//! connection's next read or write then fails and hyper closes it. hyper's own header timer was
+//! measured first: about 900 instructions a keep-alive request with a coarse timer of Corten's
+//! (1,400 with tokio's), since it sets up a sleep for every head and reads once more to start it.
+//! This costs about 300 (callgrind, keep-alive requests over TCP), which Corten's accept loop saved
+//! against `axum::serve` when it was measured.
 
 use crate::body::Body;
 use bytes::Bytes;
@@ -30,6 +30,9 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 const BUSY: u64 = u64::MAX;
 /// A connection idle past the timeout.
 const EXPIRED: u64 = u64::MAX - 1;
+/// A connection whose answer's body hyper has taken whole, with bytes of it perhaps still to send:
+/// idle from the next flush that completes ([`Watch::flushed`]), not from now.
+const DRAINING: u64 = u64::MAX - 2;
 /// A timeout that is not set.
 const NEVER: u64 = u64::MAX;
 /// A connection whose writes are going through (`Watch::stalled`).
@@ -102,7 +105,7 @@ impl Clock {
             let Some(watch) = watch.upgrade() else { return false };
             let since = watch.since.load(Relaxed);
             // A head that arrives meanwhile makes it busy, and the exchange fails.
-            if since < EXPIRED
+            if since < DRAINING
                 && now.saturating_sub(since) >= self.timeout
                 && watch.since.compare_exchange(since, EXPIRED, Relaxed, Relaxed).is_ok()
             {
@@ -124,7 +127,7 @@ impl Clock {
 
 /// One connection's state for its [`Clock`].
 pub(crate) struct Watch {
-    /// [`BUSY`], [`EXPIRED`], or the time the connection went idle.
+    /// [`BUSY`], [`DRAINING`], [`EXPIRED`], or the time the connection went idle.
     since: AtomicU64,
     /// How many heads have arrived, so an answer finished after the next head arrived does not
     /// mark the connection idle. Only the connection's task writes it.
@@ -148,9 +151,21 @@ impl Watch {
         head
     }
 
-    /// The answer to `head` is done: idle from now, unless another head has arrived since.
+    /// hyper has taken the answer to `head` whole: idle once it has been sent ([`Watch::flushed`]),
+    /// unless another head has arrived since. hyper takes a body's last chunk before writing it, and
+    /// a whole body (a `Vec`, a file read into memory) at once, so the header timeout counted from
+    /// here would close a download its client is still reading (#1746).
     fn idle(&self, head: u64) {
         if self.heads.load(Relaxed) == head {
+            self.since.store(DRAINING, Relaxed);
+        }
+    }
+
+    /// A flush went through: hyper flushes the IO only once its own buffer is empty, so an answer it
+    /// had taken whole has now gone to the socket (and over TLS, out of the TLS library's buffer).
+    /// The connection is idle from now.
+    fn flushed(&self) {
+        if self.since.load(Relaxed) == DRAINING {
             self.since.store(self.clock.now.load(Relaxed), Relaxed);
         }
     }
@@ -279,7 +294,11 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
         let Some(watch) = &this.watch else {
             return Pin::new(&mut this.io).poll_flush(cx);
         };
-        watch.sent(Pin::new(&mut this.io).poll_flush(cx), false, cx)
+        let flushed = Pin::new(&mut this.io).poll_flush(cx);
+        if let Poll::Ready(Ok(())) = flushed {
+            watch.flushed();
+        }
+        watch.sent(flushed, false, cx)
     }
 
     /// Watched too: over TLS, closing writes a last record, which waits on the client as any
@@ -293,7 +312,8 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
     }
 }
 
-/// A request's answer, whose body marks its connection idle when hyper has done with it. A
+/// A request's answer, whose body marks its connection as sending its last bytes when hyper has
+/// taken it, idle once they are flushed ([`Watch::idle`]). A
 /// switched connection (a 101, or a 2xx to `CONNECT`: a tunnel) stays busy: it is the route's
 /// from then on.
 pub(crate) struct Answer<F> {
@@ -409,6 +429,10 @@ mod tests {
         watch.idle(first);
         assert!(!watch.expired(), "a busy connection does not expire, nor go idle on an earlier answer");
         watch.idle(second);
+        // Handed over but perhaps not yet sent: no expiry, however long that takes (#1746).
+        std::thread::sleep(Duration::from_millis(150));
+        assert!(!watch.expired(), "an answer still going out does not expire");
+        watch.flushed();
         // Idle from the clock's last tick, which a starved clock thread makes older than now: the
         // promise is a timeout from that time, to within a tick, not from this call.
         let idle_at = watch.since.load(Relaxed);
