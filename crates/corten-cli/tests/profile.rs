@@ -120,7 +120,7 @@ fn text(output: &Output) -> String {
 }
 
 /// Whether `binary` was built to write a profile: the file name pattern it would write to is in it.
-fn instrumented(binary: &Path) -> bool {
+fn instrumented_binary(binary: &Path) -> bool {
     let bytes = std::fs::read(binary).unwrap();
     bytes.windows(b".profraw".len()).any(|window| window == b".profraw")
 }
@@ -148,9 +148,9 @@ fn the_release_is_built_with_the_profile_the_app_wrote_while_the_command_ran() {
     let built_from = std::fs::read_to_string(fixture.release().with_extension("d")).unwrap();
     assert!(built_from.contains("app.profdata"), "the release was not built from the profile: {built_from}");
     // The copy that writes a profile is the one under corten-profile, never the release.
-    assert!(!instrumented(&fixture.release()), "target/release writes a profile");
+    assert!(!instrumented_binary(&fixture.release()), "target/release writes a profile");
     let copy = fixture.0.join("target").join("corten-profile").join("target").join("release").join("profiled");
-    assert!(instrumented(&copy));
+    assert!(instrumented_binary(&copy));
 
     // A second profiled build has nothing to compile in the copy, and compiles the release
     // again with the profile that replaced the first.
@@ -250,7 +250,7 @@ fn flags_the_configuration_sets_refuse_the_build_and_flags_given_in_the_environm
 
     let output = fixture.build(&NOTES_ITS_PORT).env("RUSTFLAGS", "--cfg given").output().unwrap();
     assert!(output.status.success(), "{}", text(&output));
-    assert!(!instrumented(&fixture.release()));
+    assert!(!instrumented_binary(&fixture.release()));
 }
 
 #[test]
@@ -287,67 +287,82 @@ fn a_package_with_two_binaries_is_refused_and_neither_is_run() {
 }
 
 /// The Cargo arguments given before `--profile-from` reach both builds, as written and in their
-/// order: the program compiles only with a feature its defaults leave off, `--bin` names it beside
-/// a second binary, and a `cargo` first on the `PATH` records what each build was given.
+/// order. The app is a workspace member that is not the default one (the root package does not
+/// compile), it compiles only with a feature its defaults leave off, `--bin` names it beside a
+/// second binary, and a `cargo` first on the `PATH` records each argument each build was given.
 #[test]
 fn cargo_arguments_before_the_command_reach_both_builds() {
     use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new("args");
-    let manifest = "[package]\nname = \"profiled\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"plain\"]\nplain = []\ngiven = []\n\n[workspace]\n";
-    std::fs::write(fixture.0.join("Cargo.toml"), manifest).unwrap();
+    let root = "[package]\nname = \"profiled\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\nmembers = [\"app\"]\n";
+    std::fs::write(fixture.0.join("Cargo.toml"), root).unwrap();
+    std::fs::write(fixture.0.join("src/main.rs"), "compile_error!(\"the default member was built\");\n").unwrap();
+    let app = fixture.0.join("app");
+    std::fs::create_dir_all(app.join("src/bin")).unwrap();
+    let manifest = "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"plain\"]\nplain = []\ngiven = []\n";
+    std::fs::write(app.join("Cargo.toml"), manifest).unwrap();
     let needs_feature = format!(
         "#[cfg(any(not(feature = \"given\"), feature = \"plain\"))]\ncompile_error!(\"the arguments were dropped\");\n{MAIN}"
     );
-    std::fs::write(fixture.0.join("src/main.rs"), needs_feature).unwrap();
-    std::fs::create_dir_all(fixture.0.join("src/bin")).unwrap();
-    std::fs::write(fixture.0.join("src/bin/worker.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(app.join("src/main.rs"), needs_feature).unwrap();
+    std::fs::write(app.join("src/bin/worker.rs"), "fn main() {}\n").unwrap();
 
     // A lock, which `--locked` needs.
     let locked = Command::new(env!("CARGO")).arg("generate-lockfile").current_dir(&fixture.0).output().unwrap();
     assert!(locked.status.success(), "{}", text(&locked));
+    // Each argument in brackets, so their boundaries (an empty one's included) are kept.
     let bin = fixture.0.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let cargo = bin.join("cargo");
-    let log = fixture.0.join("cargo-args.txt");
-    let script = format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n", log.display(), env!("CARGO"));
+    let script = "#!/bin/sh\n{ for arg in \"$@\"; do printf '[%s]' \"$arg\"; done; printf '\\n'; } >> \"$ARGS_LOG\"\nexec \"$REAL_CARGO\" \"$@\"\n";
     std::fs::write(&cargo, script).unwrap();
     std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-    let given = "--no-default-features --features=given -p profiled --locked --bin profiled";
-    let builds = || -> Vec<String> {
+    let log = fixture.0.join("cargo-args.txt");
+    let mut path = std::ffi::OsString::from(&bin);
+    path.push(":");
+    path.push(std::env::var_os("PATH").unwrap());
+    let builds = || -> Vec<Vec<String>> {
         let logged = std::fs::read_to_string(&log).unwrap_or_default();
-        let builds = logged.lines().filter(|line| line.starts_with("build ")).map(str::to_string).collect();
         let _ = std::fs::remove_file(&log);
-        builds
+        let args =
+            |line: &str| line.strip_prefix('[')?.strip_suffix(']').map(|line| line.split("][").map(str::to_string).collect());
+        logged.lines().filter_map(args).filter(|args: &Vec<String>| args[0] == "build").collect()
+    };
+    let given = ["--no-default-features", "--features=given", "-F", "", "-p", "app", "--locked", "--bin", "app"];
+    let release: Vec<String> = ["build", "--release"].iter().chain(&given).map(|arg| arg.to_string()).collect();
+    let run = |args: &[&str]| {
+        let mut build = fixture.build(args);
+        build.env("PATH", &path).env("ARGS_LOG", &log).env("REAL_CARGO", env!("CARGO"));
+        build.output().unwrap()
     };
 
-    let mut args: Vec<&str> = given.split(' ').collect();
+    let mut args = given.to_vec();
     args.extend(NOTES_ITS_PORT);
-    let output = fixture.build(&args).env("PATH", &path).output().unwrap();
+    let output = run(&args);
     let said = text(&output);
     assert!(output.status.success(), "{said}");
-    let profiled = builds();
-    assert_eq!(profiled.len(), 2, "{profiled:?}");
-    for build in &profiled {
-        assert!(
-            build.starts_with(&format!("build --release {given} ")) || *build == format!("build --release {given}"),
-            "{build}"
-        );
-    }
+    let copy = fixture.0.join("target").join("corten-profile").join("target");
+    let instrumented = [
+        &release[..],
+        &["--message-format=json-render-diagnostics".to_string(), "--target-dir".into(), copy.display().to_string()],
+    ]
+    .concat();
+    assert_eq!(builds(), [instrumented, release.clone()]);
     assert!(said.contains("of the 1 profile file(s) the app wrote"), "{said}");
-    let built_from = std::fs::read_to_string(fixture.release().with_extension("d")).unwrap();
+    let released = fixture.0.join("target").join("release").join("app");
+    let built_from = std::fs::read_to_string(released.with_extension("d")).unwrap();
     assert!(built_from.contains("app.profdata"), "the release was not built from the profile: {built_from}");
+    assert!(instrumented_binary(&copy.join("release").join("app")) && !instrumented_binary(&released));
     let worker = fixture.0.join("target").join("release").join("worker");
     assert!(!worker.exists(), "--bin did not reach the release build");
 
     // And the build without a profile.
-    std::fs::remove_file(fixture.release()).unwrap();
-    let plain = fixture.build(&args[..7]).env("PATH", &path).output().unwrap();
+    std::fs::remove_file(&released).unwrap();
+    let plain = run(&given);
     assert!(plain.status.success(), "{}", text(&plain));
-    assert!(fixture.release().is_file() && !worker.exists());
-    assert_eq!(builds(), [format!("build --release {given}")]);
+    assert!(released.is_file() && !worker.exists());
+    assert_eq!(builds(), [release]);
 }
-
 #[test]
 fn a_second_profiled_build_in_the_target_directory_is_refused_before_it_builds() {
     let fixture = Fixture::new("locked");

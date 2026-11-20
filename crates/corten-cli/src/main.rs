@@ -182,24 +182,18 @@ fn command_help(args: &[String]) -> Option<String> {
 /// `ui add --port --help` asks for help). No command reads `--` as the end of its options, so
 /// neither does this: the command would still read a flag after it.
 fn asks_help(command: &str, args: &[String]) -> bool {
+    if command == "build" {
+        return build_asks_help(args);
+    }
     let takes_value: &[&str] = match command {
         "new" => &["--name", "--corten-path"],
         "dev" => &["--port"],
-        "build" => &["--features", "-F", "--package", "-p", "--bin"],
         _ => &[],
     };
-    let mut args = args.iter().peekable();
+    let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => return true,
-            // Everything after it is the command it names, a `--help` of that command's included.
-            "--profile-from" if command == "build" => return false,
-            // `corten build` refuses a value that reads as a flag (`build_flags`), so such a token
-            // is read as the flag it is: `--bin --profile-from sh -h` is refused for its missing
-            // value, not taken for help.
-            option if command == "build" && takes_value.contains(&option) => {
-                args.next_if(|value| !value.starts_with('-'));
-            }
             option if takes_value.contains(&option) => {
                 args.next();
             }
@@ -207,6 +201,45 @@ fn asks_help(command: &str, args: &[String]) -> bool {
         }
     }
     false
+}
+
+/// [`asks_help`] for `corten build`, read with [`build_flags`]'s grammar: help stands before
+/// `--profile-from` (everything after it is the command's) in a flag position, or as the
+/// missing value of an option (`--bin --help`). A token `build_flags` would refuse ends the
+/// scan, so `--profile-form sh -h` and `--bin --profile-from sh -h` are refused for what is
+/// wrong with them, not taken for help the command after them was given.
+fn build_asks_help(args: &[String]) -> bool {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" | "-h" => return true,
+            "--profile-from" => return false,
+            _ => match cargo_arg(arg) {
+                Some((_, true, false)) => match args.next().map(String::as_str) {
+                    Some("--help" | "-h") => return true,
+                    Some(value) if !value.starts_with('-') => {}
+                    _ => return false,
+                },
+                Some(_) => {}
+                None => return false,
+            },
+        }
+    }
+    false
+}
+
+/// The [`CARGO_ARGS`] entry `arg` is: its name, whether it takes a value, and whether the value
+/// is in the same token (after `=`, or joined to a short flag).
+fn cargo_arg(arg: &str) -> Option<(&'static str, bool, bool)> {
+    CARGO_ARGS.iter().find_map(|&(name, value)| {
+        let rest = arg.strip_prefix(name)?;
+        match rest {
+            "" => Some((name, value, false)),
+            _ if value && rest.starts_with('=') => Some((name, value, true)),
+            _ if value && !name.starts_with("--") => Some((name, value, true)),
+            _ => None,
+        }
+    })
 }
 
 /// The Cargo arguments `corten build` passes on to each build it runs, and whether each takes a
@@ -250,17 +283,7 @@ fn build_flags(args: &[String]) -> Result<Build<'_>, String> {
             }
             return Ok(Build { cargo, profile_from: Some(command) });
         }
-        // The flag, and whether its value is in the same token: after `=`, or after a short flag.
-        let known = CARGO_ARGS.iter().find_map(|&(name, value)| {
-            let rest = arg.strip_prefix(name)?;
-            match rest {
-                "" => Some((name, value, false)),
-                _ if value && rest.starts_with('=') => Some((name, value, true)),
-                _ if value && !name.starts_with("--") => Some((name, value, true)),
-                _ => None,
-            }
-        });
-        match known {
+        match cargo_arg(arg) {
             Some((_, false, _)) | Some((_, true, true)) => cargo.push(arg.clone()),
             Some((name, true, false)) => match args.get(at) {
                 Some(value) if !value.starts_with('-') => {
@@ -406,6 +429,10 @@ mod tests {
         assert!(asks_help("build", &args(&["--locked", "--help"])));
         assert!(!asks_help("build", &args(&["--bin", "--profile-from", "sh", "-h"])));
         assert!(!asks_help("build", &args(&["--features", "", "--profile-from", "sh", "-h"])));
+        // A token build refuses ends the scan: a misspelled flag, a missing value.
+        assert!(!asks_help("build", &args(&["-p", "shop", "--profile-form", "sh", "-h"])));
+        assert!(!asks_help("build", &args(&["--bin", "--locked", "-h"])));
+        assert!(asks_help("build", &args(&["-Fa", "--locked", "-p", "shop", "-h"])));
     }
 
     #[test]

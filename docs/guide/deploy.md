@@ -331,16 +331,17 @@ corten build --no-default-features --features=lean --locked --bin shop --profile
 `--locked`, `--package` (`-p`) and `--bin`, with or without a profile, as they are written
 (`--features=lean`, `-Flean` and an empty `--features ""` included), and refuses any other
 argument before it builds. Everything after `--profile-from` is the command and its own
-arguments. `--target`, `--target-dir` and `--profile` are refused: they put the release
-somewhere other than `target/release`, and the profiled build's copy has to run on the machine
-that builds it. A target set in Cargo's configuration (`build.target`, `CARGO_BUILD_TARGET`) is
-not read, so a cross build set up there is found only when the copy fails to start.
+arguments. `--target`, `--target-dir` and `--profile` are refused, since each moves the release
+from Cargo's default `target/release`, and the profiled build's copy has to run on the machine
+that builds it. Corten does not check Cargo's configuration for these: a target or target
+directory set there (`build.target`, `build.target-dir`) is still Cargo's to apply, and a copy
+built for another machine fails at its build or when it is started.
 
-The copy and the command run in the directory `corten build` was started in. With `-p` at a
-workspace's root, that is the root, not the member's directory, so the command's path and the
-app's own relative paths are from there: `corten build -p shop --profile-from sh shop/train.sh`.
-
-`corten build` starts the copy in the app's directory with the environment it was given, less
+`corten build` starts the copy, and runs the command, in the directory it was started in. With
+`-p` at a workspace's root, that is the root, not the member's directory, so the command's path
+and the app's own relative paths are from there:
+`corten build -p shop --profile-from sh shop/train.sh`. The copy gets the environment
+`corten build` was given, less
 `HOST` so that it listens on this machine only, on a port nothing else has, and runs the command
 once the copy accepts a connection. When the command ends it stops the copy with `SIGTERM` and waits for it: the copy
 writes its profile as it exits, which a Corten app does on `SIGTERM` (Shutdown, in
@@ -371,8 +372,9 @@ The four steps are the toolchain's own, and Corten adds nothing to the binary:
    the component is refused before the first build, with the `rustup` line above.
 4. `cargo build --release` with `-Cprofile-use`. Every crate compiles again, since the flag
    changed, and again whenever a new profile replaces the file. Cargo keeps the ordinary
-   build's crates beside these, so a plain `corten build` afterwards compiles nothing and puts
-   the binary without the profile back in `target/release`.
+   build's crates beside these, so a `corten build` afterwards with the same Cargo arguments and
+   no `--profile-from` compiles nothing and puts the binary without the profile back in
+   `target/release`.
 
 The two flags reach Cargo in the environment, after any `RUSTFLAGS` already there. Cargo takes
 its flags from the environment or from its configuration, never both, so flags that a
