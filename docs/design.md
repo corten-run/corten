@@ -6494,8 +6494,8 @@ rules something out.
 
 65. <a id="choice-locked-check"></a>**Checking and shipping use the lock; local builds update it.**
     `corten check` uses `--locked` on the full Cargo metadata it already reads, before formatting
-    or compiling, and on lint, build and tests. The starter Dockerfile and the examples' also
-    build with `--locked`, all but card-market's, which changes with its paired benchmark recipe
+    or compiling, and on lint, build and tests. The starter Dockerfile and every example's also
+    build with `--locked`, and so does card-market's timed benchmark recipe, its download too
     ([#1584 card-market's image and its paired bench recipe still build without --locked](https://github.com/corten-run/corten/issues/1584)). A missing or stale lock is an error, not a successful check that silently
     repairs the dependency graph and leaves CI's committed graph unchecked. Cargo finds the
     workspace-root lock even from a member, including a library. The CLI does not require a

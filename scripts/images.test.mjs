@@ -8,6 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { dockerfileOf, recipes } from "../bench/fullstack/builds.mjs";
 
 const root = new URL("../", import.meta.url);
 const TEMPLATE = "crates/corten-cli/template/Dockerfile";
@@ -65,15 +66,101 @@ test("every example has an image, and each is checked", () => {
   for (const file of files) assert.ok(existsSync(new URL(file, root)), `${file} is missing`);
 });
 
+/** The commands a `RUN` line runs, each as its words with quotes taken off: the exec form's array,
+ * or the shell form split at `&&`, `||`, `;` and `|`, without the instruction's own `--` options,
+ * redirections, and the `NAME=value` assignments before a command. A word that still holds a `$`
+ * is an expansion this reading cannot follow. */
+function commands(/** @type {string} */ line) {
+  let rest = line.replace(/^RUN\s+/i, "");
+  while (/^--\S+\s/.test(rest)) rest = rest.replace(/^--\S+\s+/, "");
+  if (rest.startsWith("[")) return [JSON.parse(rest)];
+  /** @type {string[][]} */
+  const found = [[]];
+  let word = "";
+  let quoted = false;
+  let redirect = false;
+  const end = () => {
+    if (word || quoted) {
+      if (redirect) redirect = false;
+      else found[found.length - 1].push(word);
+    }
+    word = "";
+    quoted = false;
+  };
+  for (let i = 0; i < rest.length; i++) {
+    const c = rest[i];
+    if (c === "'" || c === '"') {
+      const close = rest.indexOf(c, i + 1);
+      assert.ok(close > i, `unclosed quote in ${line}`);
+      word += rest.slice(i + 1, close);
+      quoted = true;
+      i = close;
+    } else if (c === "\\") word += rest[++i] ?? "";
+    else if (/\s/.test(c)) end();
+    else if ("&|;".includes(c)) {
+      end();
+      if (rest[i + 1] === c) i++;
+      found.push([]);
+    } else if ("<>".includes(c)) {
+      end();
+      if (rest[i + 1] === c || rest[i + 1] === "&") i++;
+      redirect = true;
+    } else word += c;
+  }
+  end();
+  return found.map((words) => words.slice(words.findIndex((w) => !/^\w+=/.test(w)))).filter((words) => words.length > 0 && !/^\w+=/.test(words[0]));
+}
+
+/** Why a Dockerfile's `cargo` commands are not all locked builds, or nothing when they are: each
+ * `cargo` names its subcommand in plain words, and each `cargo build` has `--locked`. */
+function unlocked(/** @type {string} */ text) {
+  const cargo = instructions(text)
+    .filter((line) => /^RUN\s/i.test(line))
+    .flatMap(commands)
+    .filter((words) => words[0] === "cargo" || words[0].endsWith("/cargo"));
+  if (!cargo.some((words) => words[1] === "build")) return "runs no cargo build";
+  for (const words of cargo) {
+    if (words.length < 2 || words[1].includes("$")) return `names cargo's subcommand by an expansion: ${words.join(" ")}`;
+    if (words[1] === "build" && !words.includes("--locked")) return `builds without --locked: ${words.join(" ")}`;
+  }
+  return undefined;
+}
+
+test("the locked-build reading follows the shell's words, not text that looks like them", () => {
+  const run = (/** @type {string} */ line) => unlocked(`FROM rust\nRUN ${line}\n`);
+  for (const ok of [
+    "cargo build --release --locked -p app",
+    "--mount=type=cache,target=/t find . -exec touch {} + && CARGO_HOME=/c cargo build --release '--locked' && cp a b",
+    "cargo fetch && cargo build --locked > build.log 2>&1",
+    '["cargo", "build", "--release", "--locked"]',
+    "cargo \\\n build --locked",
+  ])
+    assert.equal(run(ok), undefined, ok);
+  for (const bad of [
+    "cargo build --release",
+    "cargo build --locked && cargo build --release -p other",
+    "cargo build --locked; action=build; cargo \"$action\" --release",
+    'cargo build --release > "build --locked output.log"',
+    '["cargo", "build", "--release"]',
+    "echo cargo build --locked",
+  ])
+    assert.notEqual(run(bad), undefined, bad);
+});
+
 // An image builds the versions the lock names, which `corten check` ran, and fails when the lock is
 // missing or stale instead of repairing it inside the build (#1579, #1584).
 test("every image's cargo build is --locked", () => {
-  for (const file of files) {
-    const builds = instructions(source(file))
-      .filter((line) => /^RUN\s/i.test(line))
-      .flatMap((line) => [...line.matchAll(/cargo build\b[^&;|]*/g)].map((found) => found[0].trim()));
-    assert.ok(builds.length > 0, `${file} runs no cargo build`);
-    for (const build of builds) assert.match(build, /\s--locked(\s|$)/, `${file}: ${build}`);
+  for (const file of files) assert.equal(unlocked(source(file)), undefined, file);
+});
+
+// The timed build benchmark runs an image's commands from its recipe, its download first (`deps`).
+// A recipe whose build is locked downloads locked too, or the download could repair the lock
+// before the build would refuse it (#1584).
+test("a bench recipe that builds locked fetches locked", () => {
+  const locked = Object.entries(recipes).filter(([, recipe]) => /\bcargo build\b.*--locked\b/.test(recipe.build ?? ""));
+  assert.ok(locked.some(([name]) => dockerfileOf(name) === STAND_IN), "card-market's recipe builds locked");
+  for (const [name, recipe] of locked) {
+    if (/\bcargo fetch\b/.test(recipe.deps ?? "")) assert.match(recipe.deps ?? "", /\s--locked(\s|$)/, name);
   }
 });
 
