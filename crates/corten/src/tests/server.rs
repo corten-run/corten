@@ -377,6 +377,200 @@ async fn an_answer_waits_for_its_client_only_as_long_as_the_app_allows() {
     server.await.unwrap().unwrap();
 }
 
+/// A stand-in for a TLS stream, as tokio-rustls's acts: it takes up to [`Held::ROOM`] bytes of
+/// the answer and moves them to the socket as the client makes room, but its write stays pending
+/// until it has room for more, and its flush until everything it holds has gone. It notes, for
+/// its connection (by the client's port), how long each flush that waited took, and when it was
+/// dropped and whether a flush was waiting then.
+struct Held {
+    tcp: tokio::net::TcpStream,
+    held: Vec<u8>,
+    flushing: Option<std::time::Instant>,
+    port: u16,
+    seen: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<u16, HeldFlushes>>>,
+}
+
+#[derive(Default)]
+struct HeldFlushes {
+    /// How long each flush that waited took, in order.
+    waited: Vec<Duration>,
+    /// When the connection was dropped, and whether a flush was waiting then.
+    dropped: Option<(std::time::Instant, bool)>,
+}
+
+impl Held {
+    const ROOM: usize = 256 << 10;
+
+    /// Moves what it holds to the socket while the socket takes it.
+    fn send(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        use tokio::io::AsyncWrite;
+        while !self.held.is_empty() {
+            match std::task::ready!(std::pin::Pin::new(&mut self.tcp).poll_write(cx, &self.held))? {
+                0 => return std::task::Poll::Ready(Err(std::io::ErrorKind::WriteZero.into())),
+                sent => drop(self.held.drain(..sent)),
+            }
+        }
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+impl tokio::io::AsyncRead for Held {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().tcp).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for Held {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        use std::task::Poll;
+        let this = self.get_mut();
+        loop {
+            // What it has room for goes in first, then out as far as the socket takes it.
+            let took = buf.len().min(Held::ROOM - this.held.len());
+            this.held.extend_from_slice(&buf[..took]);
+            return match this.send(cx) {
+                Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+                Poll::Pending if took == 0 => Poll::Pending,
+                Poll::Ready(Ok(())) if took == 0 && !buf.is_empty() => continue,
+                _ => Poll::Ready(Ok(took)),
+            };
+        }
+    }
+
+    fn poll_flush(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let sent = this.send(cx);
+        if sent.is_pending() {
+            this.flushing.get_or_insert_with(std::time::Instant::now);
+            return sent;
+        }
+        if let Some(since) = this.flushing.take() {
+            this.seen.lock().unwrap().entry(this.port).or_default().waited.push(since.elapsed());
+        }
+        std::task::ready!(sent)?;
+        std::pin::Pin::new(&mut this.tcp).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        std::task::ready!(this.send(cx))?;
+        std::pin::Pin::new(&mut this.tcp).poll_shutdown(cx)
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        let dropped = (std::time::Instant::now(), self.flushing.is_some());
+        self.seen.lock().unwrap().entry(self.port).or_default().dropped = Some(dropped);
+    }
+}
+
+/// `App::send_timeout` over `corten::serve_wrapped`, with an IO that holds part of the answer as
+/// a TLS stream does ([`Held`]): a client reading steadily but slower than the server writes
+/// keeps its connection past several send timeouts while its own last flush waits on it for longer
+/// than one, and gets the whole answer; a client that stops reading during that flush is still
+/// closed within twice the send timeout of the stop, while that flush waits (#1742).
+#[tokio::test]
+async fn a_flush_that_waits_while_its_bytes_go_out_is_held_only_to_the_send_timeout() {
+    use std::time::Instant;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const BODY: usize = 768 << 10;
+    const CHUNK: usize = 8 << 10;
+    const PACE: Duration = Duration::from_millis(25);
+    // When the client that stops does: by then the server has handed the whole body to `Held`,
+    // which holds more than the socket buffers, so its flush is what waits.
+    const STOP: usize = 560 << 10;
+    let send = Duration::from_millis(400);
+    let byte = |at: usize| (at % 251) as u8;
+    let routes = Table::new().route("/big", get(move || async move { (0..BODY).map(byte).collect::<Vec<u8>>() }));
+    // Small buffers both sides, so the client's pace is what the server sees.
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.set_send_buffer_size(16 << 10).unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let listener = socket.listen(16).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let step = {
+        let seen = seen.clone();
+        move |tcp: tokio::net::TcpStream| {
+            let port = tcp.peer_addr().unwrap().port();
+            let held = Held { tcp, held: Vec::new(), flushing: None, port, seen: seen.clone() };
+            std::future::ready(Ok::<_, std::convert::Infallible>((held, ())))
+        }
+    };
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(routes)).send_timeout(send);
+    let server = tokio::spawn(crate::app::run(vec![listener], step, app, async {
+        let _ = stopped.await;
+    }));
+    // Asks for `/big` and reads `CHUNK` every `PACE` until it has `until` bytes, the connection
+    // ends or no byte comes for 5 s. Returns the answer's bytes (head included) and what ended it.
+    let read = |until: usize| async move {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.set_recv_buffer_size(16 << 10).unwrap();
+        let mut stream = socket.connect(addr).await.unwrap();
+        stream.write_all(b"GET /big HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+        let (mut got, mut buf) = (Vec::new(), vec![0u8; CHUNK]);
+        let ended = loop {
+            if got.len() >= until {
+                break String::new();
+            }
+            match tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf)).await {
+                Err(_) => break "no byte for 5 s".to_string(),
+                Ok(Ok(0)) => break "closed".to_string(),
+                Ok(Err(error)) => break format!("failed: {error}"),
+                Ok(Ok(read)) => got.extend_from_slice(&buf[..read]),
+            }
+            tokio::time::sleep(PACE).await;
+        };
+        (stream, got, ended)
+    };
+    let steady = async {
+        let started = Instant::now();
+        let (stream, got, ended) = read(usize::MAX).await;
+        let port = stream.local_addr().unwrap().port();
+        let took = started.elapsed();
+        let head = got.windows(4).position(|w| w == b"\r\n\r\n").expect("an answer's head") + 4;
+        let body = &got[head..];
+        assert!(body.len() == BODY, "the steady reader got {} of {BODY} body bytes in {took:?}: {ended}", body.len());
+        assert!(body.iter().enumerate().all(|(at, &b)| b == byte(at)), "the body arrived as it was sent");
+        assert!(took > 4 * send, "over several send timeouts: {took:?}");
+        port
+    };
+    let stops = async {
+        let (mut stream, got, ended) = read(STOP).await;
+        let stopped = Instant::now();
+        assert!(ended.is_empty(), "the reader that stops read {} bytes before it stopped: {ended}", got.len());
+        // It reads nothing for well past the timeout, then takes what is left: the server closed
+        // it by then, before sending the rest.
+        tokio::time::sleep(4 * send).await;
+        let mut rest = Vec::new();
+        let drained = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut rest)).await;
+        assert!(drained.is_ok(), "a reader that stops is closed");
+        assert!(got.len() + rest.len() < BODY, "before the rest is sent: {} bytes", got.len() + rest.len());
+        (stream.local_addr().unwrap().port(), stopped)
+    };
+    let (steady, (stops, stopped)) = tokio::join!(steady, stops);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+    let seen = std::mem::take(&mut *seen.lock().unwrap());
+    let last = seen[&steady].waited.last().copied().unwrap_or_default();
+    let (dropped, waiting) = seen[&stops].dropped.expect("the stopped reader's connection was dropped");
+    let closed = dropped.saturating_duration_since(stopped);
+    eprintln!("steady reader's flushes waited {:?}; stopped reader closed {closed:?} after the stop", seen[&steady].waited);
+    assert!(last > send, "the steady reader's own last flush waited longer than the send timeout: {last:?}");
+    assert!(waiting, "the client that stopped was closed while a flush waited");
+    assert!(closed <= 2 * send, "the client that stopped was closed within twice the send timeout: {closed:?}");
+}
+
 /// Shutdown gives connections the longer of the grace and the longest deadline: a request in
 /// progress past the grace, within its deadline, is answered in full, and an answer its client has
 /// stopped reading is closed then, with no send timeout to close it before (#858).

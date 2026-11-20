@@ -56,8 +56,9 @@ memchr = "2.4"
 # Float digits for views and JSON, several times faster than `core::fmt`. Corten's own in the
 # default build, with no crates of its own; serde_json shares it when feature `json` is on.
 zmij = "1"
-# `macros` for `tokio::select!` in the accept loop and shutdown.
-tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "signal", "sync", "time"] }
+# `macros` for `tokio::select!` in the accept loop and shutdown. 1.44 for `task::coop`, which the
+# send timeout reads so a wake from the task's budget does not count as a client making room.
+tokio = { version = "1.44", default-features = false, features = ["macros", "net", "rt", "signal", "sync", "time"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 # Always on for `Form` and `Query`; `json` adds the derive.
 serde = { version = "1", default-features = false, features = ["std"] }
