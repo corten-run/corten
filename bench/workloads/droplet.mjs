@@ -624,7 +624,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           }
           const unitSha256 = digest(remoteFiles(state)[state.unit]);
           idleScript = pack => idleArchiveScript(state, registration.host.bootId, unitSha256, { pack });
-          inspectUnit = async () => sealedUnit((await ssh(unitQuery(state) + " --all --property=Job --property=SubState --property=ControlPID")).stdout, state);
+          inspectUnit = async () => {
+            const result = await ssh(unitQuery(state) + " --all --property=Job --property=SubState --property=ControlPID", 60000, true);
+            assert.ok(result.status === 0 && !result.error, "unit query refused");
+            return sealedUnit(result.stdout, state);
+          };
         }
         const remoteHash = async (pack = false) => {
           // A settled refusal (e.g. a queued job) is not a lost SSH command.

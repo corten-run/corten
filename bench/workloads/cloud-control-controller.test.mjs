@@ -142,6 +142,24 @@ test("terminal monitor and archived native campaign must agree before deletion",
   }
 });
 
+test("settled unit-query failure records the exit and permits a fresh collection; missing acknowledgement does not", async t => {
+  for (const lost of [false, true]) {
+    const h = harness(t, { active: true }); await h.launch().launch(); h.flags.active = false;
+    const path = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(path));
+    closed.closedAtMs -= 31000; closed.recoverAfterMs -= 31000; writeFileSync(path, JSON.stringify(closed));
+    await assert.rejects(h.task({ run(...args) {
+      if (args[0] !== "ssh") return h.run(...args);
+      assert.match(args[1].at(-1), /systemctl show/);
+      if (lost) throw Object.assign(new Error("guardian result missing"), { controlTreeUncertain: true });
+      return { status: 9, stdout: "", stderr: "" };
+    } }).collect());
+    const row = h.saved().control.ledger.at(-1);
+    assert.equal(row.localTerminal, !lost); assert.equal(row.code, lost ? undefined : 9); assert.equal(h.deletes, 0);
+    if (lost) assert.ok(existsSync(join(h.local, "operation.lock")));
+    else { assert.equal(await h.task().collect(), 1); assert.equal(h.deletes, 1); }
+  }
+});
+
 test("expired systemd history collects the sealed exit archive once, even after a lost DELETE acknowledgement", async (t) => {
   const h = harness(t, { active: true, reportStatus: "verified" }); await h.launch().launch();
   const path = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(path));
