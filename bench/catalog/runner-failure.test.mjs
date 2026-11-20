@@ -10,7 +10,7 @@ import { upstreamImage } from "./raw.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
 
-for (const [index, mode] of ["cached", "absent", "wrong platform", "daemon error", "registry error", "start error"].entries()) {
+for (const [index, mode] of ["cached", "absent", "wrong platform", "daemon error", "registry error", "start error", "prepare timeout"].entries()) {
   test(`runner upstream image: ${mode}`, () => run(mode, index));
 }
 
@@ -36,7 +36,11 @@ const localPlatform = mode === 'wrong platform' ? 'linux/arm64' : ['absent', 're
 const deadlines = [], setTimer = globalThis.setTimeout;
 let upstreamCommand;
 globalThis.setTimeout = (callback, ms, ...args) => {
-  if (upstreamCommand) { deadlines.push([upstreamCommand, ms]); upstreamCommand = undefined; }
+  if (upstreamCommand) {
+    deadlines.push([upstreamCommand, ms]);
+    if (upstreamCommand === 'create' && mode === 'prepare timeout') ms = 100;
+    upstreamCommand = undefined;
+  }
   return setTimer(callback, ms, ...args);
 };
 process.on('exit', () => fs.writeFileSync(${JSON.stringify(timers)}, JSON.stringify(deadlines)));
@@ -54,6 +58,10 @@ cp.spawn = (binary, args, options) => {
   if (!['docker', 'git'].includes(binary)) return spawn(binary, args, options);
   const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => {};
   if (binary === 'docker' && ['create', 'start', 'run'].includes(args[0]) && args.includes(runId + '-upstream')) upstreamCommand = args[0];
+  if (upstreamCommand === 'create' && mode === 'prepare timeout') {
+    containers.set(runId + '-upstream', {}); // The daemon created it, but its client stalls.
+    return spawn(process.execPath, ['-e', 'setTimeout(() => console.log("uninterrupted client exit"), 5000)'], options);
+  }
   queueMicrotask(() => {
     let output = '', error = '', code = 0;
     if (binary === 'git') {
@@ -105,7 +113,7 @@ syncBuiltinESMExports();
     });
     assert.equal(result.status, 1, result.stderr);
     const summary = JSON.parse(readFileSync(join(folder, "summary.json"), "utf8"));
-    const createFailed = mode === "daemon error" || mode === "registry error";
+    const createFailed = ["daemon error", "registry error", "prepare timeout"].includes(mode);
     assert.deepEqual(JSON.parse(readFileSync(timers, "utf8")), createFailed ? [["create", 600000]] : [["create", 600000], ["start", 30000]]);
     const preparation = readFileSync(join(folder, "prepare-upstream.log"), "utf8");
     assert.equal(summary.complete, false);
@@ -115,9 +123,11 @@ syncBuiltinESMExports();
     if (createFailed || mode === "start error") {
       assert.equal(summary.failures.length, 1);
       assert.equal(summary.failures[0].stage, createFailed ? "upstream preparation" : "upstream startup");
-      const nativeError = { "daemon error": /daemon lost the create response/, "registry error": /registry denied the pinned image pull/, "start error": /failed to start upstream process/ }[mode];
+      const nativeError = { "daemon error": /daemon lost the create response/, "registry error": /registry denied the pinned image pull/,
+        "prepare timeout": /timeout after 600000 ms/, "start error": /failed to start upstream process/ }[mode];
       assert.match(summary.failures[0].error, nativeError);
-      if (createFailed) assert.match(preparation, nativeError);
+      if (mode === "prepare timeout") assert.doesNotMatch(preparation, /uninterrupted client exit/);
+      if (createFailed && mode !== "prepare timeout") assert.match(preparation, nativeError);
       assert.equal(summary.tools, undefined);
       return;
     }
