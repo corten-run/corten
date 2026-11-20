@@ -63,6 +63,8 @@ publication. Coordinate disclosure with the fixed release so users know what to 
    each group. It moves any inline Unreleased entries after them without reordering and keeps the
    pending-notes link under `## Unreleased`. It moves the previous release section unchanged to
    `CHANGELOG.X.Y.Z.md` beside `CHANGELOG.md` and adds its link under `## Release archive`.
+   If archive creation succeeded but the index is unchanged after a failure, rerun the same
+   command. It reuses byte-identical archives and refuses to overwrite a differing archive.
    Review the changelog diff and include the archive and fragment deletions in the preparation
    pull request. Repoint links that named the moved headings in `CHANGELOG.md`; `npm run check`
    checks anchors in both the current changelog and archives. Check the new section contains

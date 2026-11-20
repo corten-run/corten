@@ -139,6 +139,26 @@ test("changelog anchors follow headings, duplicate suffixes and explicit HTML an
   ]);
 });
 
+test("changelog heading slugs keep literal code and remove emphasis markup", () => {
+  const archive = "CHANGELOG.0.2.0.md";
+  const paths = presentIn(["README.md", archive]);
+  const headings = [
+    "### Use `foo_bar_baz`",
+    "### _x_ and *y* with plain_name",
+    "### [Read](guide.md) `` Vec<T> `inner` ``!",
+  ].join("\n");
+  const anchorsFor = () => scan(archive, headings, paths).anchors;
+  const links = [
+    "[code](CHANGELOG.0.2.0.md#use-foo_bar_baz)",
+    "[wrong](CHANGELOG.0.2.0.md#use-foobarbaz)",
+    "[emphasis](CHANGELOG.0.2.0.md#x-and-y-with-plain_name)",
+    "[literal](CHANGELOG.0.2.0.md#read-vect-inner)",
+  ].join("\n");
+  assert.deepEqual(scan("README.md", links, paths, anchorsFor).problems, [
+    "README.md:2: a link to CHANGELOG.0.2.0.md#use-foobarbaz, but CHANGELOG.0.2.0.md has no #use-foobarbaz anchor",
+  ]);
+});
+
 test("a backtick with no partner in its paragraph is text, and hides no link after it", () => {
   const text = ["1. A stray ` here", "2. [x](m1.md)", "3. [y](m2.md)", "", "# A heading with ` open", "[z](m3.md)", "Path `C:\\` then [w](m4.md)"].join("\n");
   assert.deepEqual(found("README.md", text).problems, [

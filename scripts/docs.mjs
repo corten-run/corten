@@ -149,10 +149,7 @@ export function scan(file, text, present, anchorsFor) {
     const heading = /^#{1,6}(\s|$)/.test(body);
     if (heading && inChangelog) {
       // GitHub lowercases heading text, drops punctuation and suffixes duplicate IDs.
-      const slug = body.replace(/^#+\s*/, "").replace(/\s+#+\s*$/, "").trim()
-        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/<[^>]+>/g, "")
-        .replace(/(\*{1,3}|_{1,3})(?=\S)(.+?)(?<=\S)\1/g, "$2")
-        .toLowerCase().replace(/[^\p{L}\p{M}\p{N}_ -]/gu, "").replaceAll(" ", "-");
+      const slug = headingSlug(body.replace(/^#+\s*/, "").replace(/\s+#+\s*$/, ""));
       let id = slug;
       for (let i = 1; headingIds.has(id); i++) id = `${slug}-${i}`;
       headingIds.add(id);
@@ -183,19 +180,33 @@ const attribute = /\s+([a-z_:][a-z\d_.:-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\
 // An open tag on one line, its attributes captured.
 const tag = `<[a-z][a-z\\d-]*((?:${attribute})*)\\s*/?>`;
 
+/** @param {string} heading */
+function headingSlug(heading) {
+  /** @type {string[]} */
+  const literals = [];
+  const prose = outsideCode(heading, (text) => `\0${literals.push(text) - 1}\0`);
+  return prose.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/<[^>]+>/g, "")
+    // Stars are dropped as punctuation below; only underscores that mark emphasis are dropped.
+    .replace(/(?<![\p{L}\p{M}\p{N}_])(_{1,3})(?![\s_])(.+?)(?<![\s_])\1(?![\p{L}\p{M}\p{N}_])/gu, "$2")
+    .replace(/\0(\d+)\0/g, (_, i) => literals[Number(i)])
+    .trim().toLowerCase().replace(/[^\p{L}\p{M}\p{N}_ -]/gu, "").replaceAll(" ", "-");
+}
+
 /**
  * `text` (a paragraph's lines, joined by `\n`) with its inline code and its comments that close
  * on their line blanked and its escapes removed, line breaks kept, read from the left so whichever
  * of a tag, a comment and a code span starts first wins. A code span is a backtick run and the
  * next run of the same length, with any backslash inside it its own character; a run with no such
  * partner is text. Outside code, `\\` and the punctuation after it are removed, so an escaped
- * bracket or backtick is no link and no span.
- * @param {string} text
+ * bracket or backtick is no link and no span. For headings, render code and escapes as literal
+ * text via the callback instead, and omit comments without padding them.
+ * @param {string} text @param {(value: string) => string} [literal]
  */
-export function outsideCode(text) {
+export function outsideCode(text, literal) {
   let out = "";
   for (let i = 0; i < text.length; ) {
     if (text[i] === "\\" && /[!-/:-@[-`{-~]/.test(text[i + 1] ?? "")) {
+      if (literal) out += literal(text[i + 1]);
       i += 2;
       continue;
     }
@@ -217,7 +228,7 @@ export function outsideCode(text) {
       const end = shut !== -1 ? shut : text.indexOf("-->", i + 4);
       const eol = text.indexOf("\n", i);
       if (end !== -1 && (eol === -1 || end < eol)) {
-        out += " ".repeat(end + 3 - i);
+        if (!literal) out += " ".repeat(end + 3 - i);
         i = end + 3;
         continue;
       }
@@ -236,7 +247,12 @@ export function outsideCode(text) {
       i += open.length;
       continue;
     }
-    out += text.slice(i, close.index + close[0].length).replace(/[^\n]/g, " ");
+    if (literal) {
+      const code = text.slice(i + open.length, close.index).replaceAll("\n", " ");
+      out += literal(/^ .* $/.test(code) && /[^ ]/.test(code) ? code.slice(1, -1) : code);
+    } else {
+      out += text.slice(i, close.index + close[0].length).replace(/[^\n]/g, " ");
+    }
     i = close.index + close[0].length;
   }
   return out;

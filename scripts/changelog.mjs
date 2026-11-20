@@ -18,9 +18,9 @@ const entity = /&(?:#(?:x[\da-f]+|\d+)|[a-z][a-z\d]*);/i;
 export function visibleLength(lines, label) {
   let length = lines.length - 1; // A space between wrapped lines.
   for (const line of lines) {
-    const prose = line.trim().replace(codeSpan, (span, ticks) => {
+    const prose = line.replace(/^[ \t]+| +$/g, "").replace(codeSpan, (span, ticks) => {
       const code = span.slice(ticks.length, -ticks.length);
-      if (!code.trim()) return span;
+      if (!/[^ ]/.test(code)) return span;
       length += [...(/^ .* $/.test(code) ? code.slice(1, -1) : code)].length;
       return "\0";
     }).replace(inlineLink, (link, text, url, offset, source) => {
@@ -33,7 +33,7 @@ export function visibleLength(lines, label) {
       throw new Error(`${label}: use only single-line [label](https://host/path) links; put literal Markdown syntax in code spans`);
     }
     if (/^(?:#{1,6}(?: |$)|[-+*](?: |$)|\d{1,9}[.)](?: |$)|~{3,})/.test(prose) ||
-      /^(?:=+|(?:[-*_] *){3,}|\|? *:?-+:? *(?:\| *:?-+:? *)*\|?)$/.test(prose.trimEnd())) {
+      /^(?:=+|(?:[-*_] *){3,}|\|? *:?-+:? *(?:\| *:?-+:? *)*\|?)$/.test(prose)) {
       throw new Error(`${label}: expected one paragraph of note text, not nested Markdown blocks`);
     }
     length += [...prose.replaceAll("\0", "")].length;
@@ -63,11 +63,11 @@ function readFragments(dir) {
       throw new Error(`${label}: ${error.message}`);
     }
     const [first, ...rest] = text.split(/\r?\n/);
-    const bullet = /^-( {1,4})(\S.*)$/.exec(first);
+    const bullet = /^-( {1,4})([^ \t].*)$/.exec(first);
     const indent = " ".repeat(bullet ? 1 + bullet[1].length : 0);
     if (!bullet || /^-(?: *-){2,} *$/.test(first) ||
       [first, ...rest].some((line) => /[\x00-\x1f\x7f]/.test(line)) ||
-      rest.some((line) => !line.startsWith(indent) || !line.trim())) {
+      rest.some((line) => !line.startsWith(indent) || !/[^ \t]/.test(line))) {
       throw new Error(`${label}: expected one '- ' bullet with visible text and space-indented continuation lines, with no blank lines`);
     }
     const length = visibleLength([bullet[2], ...rest], label);
@@ -166,12 +166,21 @@ function main() {
     // Reject invalid UTF-8 rather than silently changing bytes when moving a published section.
     const changelog = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readFileSync(path));
     const { archives, updated } = render(changelog, fragments, version, date);
-    for (const name of [archiveName(version), ...archives.map((entry) => entry.name)]) {
-      if (lstatSync(join(root, name), { throwIfNoEntry: false })) {
-        throw new Error(`${name} already exists; refusing to reuse an archived release version`);
-      }
+    const newArchive = archiveName(version);
+    if (lstatSync(join(root, newArchive), { throwIfNoEntry: false })) {
+      throw new Error(`${newArchive} already exists; refusing to reuse an archived release version`);
     }
-    for (const { name, content } of archives) writeFileSync(join(root, name), content, { flag: "wx" });
+    // A failed index write can leave a complete archive. Reuse its bytes without rewriting it.
+    const missing = archives.filter(({ name, content }) => {
+      const archivePath = join(root, name);
+      const existing = lstatSync(archivePath, { throwIfNoEntry: false });
+      if (!existing) return true;
+      if (!existing.isFile() || !readFileSync(archivePath).equals(Buffer.from(content))) {
+        throw new Error(`${name} already exists and differs from the archive to write; refusing to overwrite it`);
+      }
+      return false;
+    });
+    for (const { name, content } of missing) writeFileSync(join(root, name), content, { flag: "wx" });
     writeFileSync(path, updated);
     for (const fragment of fragments) unlinkSync(fragment.path);
     console.log(`changelog: ${fragments.length} fragment(s) released in ${version}`);

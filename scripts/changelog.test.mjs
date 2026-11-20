@@ -20,6 +20,11 @@ function checkout(t, changelog = prefix + previous) {
   const file = join(root, "CHANGELOG.md");
   const dir = join(root, "changelog.d");
   writeFileSync(file, changelog);
+  const run = (args, nodeArgs = []) => {
+    const result = spawnSync(process.execPath, [...nodeArgs, script, ...args], { cwd: root, encoding: "utf8" });
+    if (result.error) throw result.error;
+    return result;
+  };
   return {
     dir,
     write: (name, text) => {
@@ -30,11 +35,8 @@ function checkout(t, changelog = prefix + previous) {
       mkdirSync(dir, { recursive: true });
       copyFileSync(new URL("../changelog.d/README.md", import.meta.url), join(dir, "README.md"));
     },
-    run: (...args) => {
-      const result = spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8" });
-      if (result.error) throw result.error;
-      return result;
-    },
+    run: (...args) => run(args),
+    runWithImport: (source, ...args) => run(args, ["--import", "data:text/javascript," + encodeURIComponent(source)]),
     read: () => readFileSync(file, "utf8"),
     readArchive: (version) => readFileSync(join(root, `CHANGELOG.${version}.md`)),
     writeArchive: (version, bytes) => writeFileSync(join(root, `CHANGELOG.${version}.md`), bytes),
@@ -141,16 +143,51 @@ test("release moves existing sections byte-for-byte and keeps earlier archive li
   assert.equal(tree.run("--check-release").status, 0);
 });
 
-test("release does not overwrite an archive or reuse its version", (t) => {
-  const tree = checkout(t, prefix + previous);
+test("release retries after writing an archive but failing to write the index", (t) => {
+  const tree = checkout(t);
   const note = "- Keep this pending entry.\n";
   tree.write("pr-12-1.md", note);
-  for (const version of ["0.2.0", "0.3.0"]) {
-    tree.writeArchive(version, "Existing archive.");
+  const args = ["release", "0.3.0", "2026-11-19"];
+  const withBlockedWrite = (name) => tree.runWithImport(`
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    import { basename } from "node:path";
+    const write = fs.writeFileSync;
+    fs.writeFileSync = (path, ...args) => {
+      if (basename(path) === ${JSON.stringify(name)}) throw new Error("injected write failure: " + basename(path));
+      return write(path, ...args);
+    };
+    syncBuiltinESMExports();
+  `, ...args);
+  const failed = withBlockedWrite("CHANGELOG.md");
+  assert.equal(failed.status, 1, failed.stderr);
+  assert.match(failed.stderr, /injected write failure: CHANGELOG\.md/);
+  assert.deepEqual(tree.readArchive("0.2.0"), Buffer.from(previous));
+  assert.equal(tree.read(), prefix + previous);
+  assert.equal(readFileSync(join(tree.dir, "pr-12-1.md"), "utf8"), note);
+
+  const retried = withBlockedWrite("CHANGELOG.0.2.0.md");
+  assert.equal(retried.status, 0, retried.stderr);
+  assert.deepEqual(tree.readArchive("0.2.0"), Buffer.from(previous));
+  assert.equal(tree.read(), prefix + "## 0.3.0 (2026-11-19)\n\n" + note + "\n" + archiveIndex("0.2.0"));
+  assert.deepEqual(readdirSync(tree.dir), []);
+  assert.equal(tree.run("--check-release").status, 0);
+});
+
+test("release does not overwrite an archive or reuse its version", (t) => {
+  const note = "- Keep this pending entry.\n";
+  for (const [version, error] of [
+    ["0.2.0", /CHANGELOG\.0\.2\.0\.md already exists and differs/],
+    ["0.3.0", /CHANGELOG\.0\.3\.0\.md already exists; refusing to reuse/],
+  ]) {
+    const tree = checkout(t);
+    tree.write("pr-12-1.md", note);
+    const bytes = Buffer.from(previous.replace("\n", "\r\n"));
+    tree.writeArchive(version, bytes);
     const result = tree.run("release", "0.3.0", "2026-11-19");
     assert.equal(result.status, 1);
-    assert.ok(result.stderr.includes(`CHANGELOG.${version}.md already exists`), result.stderr);
-    assert.equal(tree.readArchive(version).toString(), "Existing archive.");
+    assert.match(result.stderr, error);
+    assert.deepEqual(tree.readArchive(version), bytes);
     assert.equal(tree.read(), prefix + previous);
     assert.equal(readFileSync(join(tree.dir, "pr-12-1.md"), "utf8"), note);
   }
@@ -222,7 +259,7 @@ test("check caps visible text at 400 Unicode code points, not Markdown link dest
   const tree = checkout(t);
   const name = "pr-12-1.md";
   const path = "https://example.com/" + "x".repeat(500);
-  const note = "-    " + "\u{1F600}".repeat(389) + "  \r\n     [link](" + path + ") and `x`";
+  const note = "-    " + "\u{1F600}".repeat(389) + "  \r\n     [link](" + path + ") and ` x `";
   tree.write(name, note + "\r\n");
   assert.equal(tree.run("--check").status, 0); // 389 + wrap + 'link and x'.
   tree.write(name, note + ".");
@@ -237,6 +274,18 @@ test("check caps visible text at 400 Unicode code points, not Markdown link dest
   const literal = tree.run("--check");
   assert.equal(literal.status, 1, "a URL printed inside a code span is visible");
   assert.match(literal.stderr, /visible characters.*400-character limit/);
+});
+
+test("check counts a nonbreaking space after Markdown indentation", (t) => {
+  const tree = checkout(t);
+  const name = "pr-12-1.md";
+  const note = (n) => "- " + "x".repeat(n) + "\n  \u00A0y\n";
+  tree.write(name, note(397));
+  assert.equal(tree.run("--check").status, 0);
+  tree.write(name, note(398));
+  const rejected = tree.run("--check");
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /pr-12-1\.md: 401 visible characters.*400-character limit/);
 });
 
 test("check rejects unsupported link forms, including links split across lines", (t) => {

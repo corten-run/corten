@@ -428,8 +428,10 @@ establish a general ranking.
    backslashes, URLs, and link examples inside code spans. Do not use raw HTML, character
    references, images, or reference links or definitions. `npm run check` validates this format.
    It caps an entry at 400 visible characters: count Unicode code points, including spaces and
-   emphasis marks, but not the bullet, indentation, trailing whitespace, code-span delimiters,
-   or link syntax and destinations. Each line wrap counts as one space.
+   emphasis marks, but not the bullet, Markdown indentation (ASCII spaces and tabs), trailing
+   ASCII spaces, code-span delimiters, or link syntax and destinations. Each line wrap counts as
+   one space. Count code-span contents after Markdown removes a matching pair of leading and
+   trailing ASCII padding spaces from a span that is not all spaces.
 4. Commit messages say what changed and why, in plain sentences.
 5. The description says what changed and why, the checks run and their results, and the
    measurements from 2. It merges after its [review](#review).
