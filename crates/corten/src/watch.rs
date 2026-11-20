@@ -367,18 +367,20 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
                     watch.writing.store(false, Relaxed);
                     watch.stalled.store(FLOWING, Relaxed);
                 } else if !watch.writing.load(Relaxed) {
-                    // A flush or a close that went through with no write waiting ends the stall it
-                    // started, so a later wait starts its own (#1762). Not one the clock has
-                    // expired, which fails the next call that waits.
-                    let stalled = watch.stalled.load(Relaxed);
-                    if stalled != STALLED {
-                        let _ = watch.stalled.compare_exchange(stalled, FLOWING, Relaxed, Relaxed);
-                    }
+                    // A flush or a close that went through with no write waiting ends the stall
+                    // it started, even one the clock had expired (it found room after all), so a
+                    // later wait starts its own (#1762).
+                    watch.stalled.store(FLOWING, Relaxed);
                 }
                 done
             }
             // Expired before the registration: its wake may have been missed.
-            Poll::Pending if watch.stalled.load(Relaxed) == STALLED => Err(stalled()),
+            Poll::Pending if watch.stalled.load(Relaxed) == STALLED => {
+                if clears {
+                    watch.writing.store(false, Relaxed);
+                }
+                Err(stalled())
+            }
             Poll::Pending => {
                 if clears {
                     watch.writing.store(true, Relaxed);
@@ -667,29 +669,46 @@ mod tests {
         }
     }
 
-    /// A flush that waited and then went through leaves no stall behind it: a write that waits
-    /// after the connection sat idle longer than the send timeout gets a whole send timeout of its
-    /// own, not the flush's old start (#1762).
-    #[tokio::test]
-    async fn a_write_that_waits_after_a_flush_went_through_and_the_connection_sat_idle_gets_its_own_send_timeout() {
+    /// A flush that waited and then went through leaves no stall behind it, even when the clock
+    /// had expired it meanwhile (`expire`): a write that waits after the connection sat idle
+    /// longer than the send timeout gets a whole send timeout of its own, not the flush's (#1762).
+    async fn a_write_after_a_flush_that_waited_gets_its_own_send_timeout(expire: bool) {
         let send = Duration::from_millis(200);
-        // The clock expires a wait to within a tick, a tenth of the timeout.
-        let tick = send / 10;
         let clock = Clock::start(None, Some(send)).unwrap();
+        let watch = clock.watch();
         // A call that waits is polled twice (`Watched::wait` polls it again with the watch's waker).
-        let mut io = Watched { io: FlushesLate(2), watch: Some(clock.watch()), _open: None };
+        let mut io = Watched { io: FlushesLate(2), watch: Some(watch.clone()), _open: None };
         let waker = Waker::noop();
         let mut cx = Context::from_waker(waker);
         assert!(Pin::new(&mut io).poll_flush(&mut cx).is_pending());
+        if expire {
+            let started = Instant::now();
+            while watch.stalled.load(Relaxed) != STALLED {
+                assert!(started.elapsed() < send * 10, "the flush's wait expires");
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
         assert!(matches!(Pin::new(&mut io).poll_flush(&mut cx), Poll::Ready(Ok(()))));
         // Idle, past the send timeout.
         tokio::time::sleep(send * 4).await;
-        let waited = Instant::now();
         assert!(Pin::new(&mut io).poll_write(&mut cx, b"x").is_pending(), "the write was failed at once");
-        // It still fails once its own send timeout has passed.
+        // It still fails once its own send timeout has passed, counted in the clock's time from the
+        // start this write set (one past it), which a starved clock thread makes older than now.
+        let started = watch.stalled.load(Relaxed) - 1;
         let error = std::future::poll_fn(|cx| Pin::new(&mut io).poll_write(cx, b"x")).await.unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        assert!(waited.elapsed() >= send - tick, "failed after {:?}", waited.elapsed());
+        let failed = clock.base.elapsed().as_millis() as u64;
+        assert!(failed - started >= send.as_millis() as u64, "failed {} ms after its start", failed - started);
+    }
+
+    #[tokio::test]
+    async fn a_write_that_waits_after_a_flush_went_through_and_the_connection_sat_idle_gets_its_own_send_timeout() {
+        a_write_after_a_flush_that_waited_gets_its_own_send_timeout(false).await;
+    }
+
+    #[tokio::test]
+    async fn a_write_that_waits_after_an_expired_flush_went_through_gets_its_own_send_timeout() {
+        a_write_after_a_flush_that_waited_gets_its_own_send_timeout(true).await;
     }
 
     /// A write waits while another task's flushes go through over and over, as on a switched
