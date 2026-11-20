@@ -1227,8 +1227,13 @@ rules something out.
        progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
        seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
        bytes a second, which would need a count of bytes and a window in the connection's writer, for
-       every connection); a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a
-       client that sends nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose
+       every connection; whether over TLS a flush that stays pending while a slow client reads
+       steadily trips it is reasoned in the
+       [steady reader control](../bench/http2/README.md#steady-reader-control), not measured, and
+       open in
+       [#1742 A TLS flush that stays pending while a slow client reads steadily may trip send_timeout: test serve_wrapped over TLS with a steady reader](https://github.com/corten-run/corten/issues/1742));
+       a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a client that sends
+       nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose
        waits, in all, pass that idle time plus a second for every 240 bytes that came (Kestrel's
        minimum body rate, the idle time being how far behind it a client may fall), counting only the
        time spent waiting for the client, since one byte resets an idle time alone and a long upload's
@@ -1313,8 +1318,16 @@ rules something out.
        not a general send guarantee: h2 can consume the buffer into its encoder before
        TLS flush, so the socket write watch still matters.
 
-       Keep HTTP/1.1 in `serve` and HTTP/2 at the proxy. The passing idle and send candidates
-       ran in separate transports, not together on one opt-in path with the socket watch.
+       Keep HTTP/1.1 in `serve` and HTTP/2 at the proxy. The probe's
+       [combined mode](../bench/http2/README.md#combined-results) has since run the h2 count,
+       the buffer tracker and a socket write watch like `Watched` on one connection path with
+       no frame parser. The 17 original combined controls passed in every round, including a
+       paused TCP reader that only the socket watch closed, with h2 holding no DATA buffers. The
+       steady reader control, the 18th, failed 1 of 7 rounds with a false close by the socket
+       watch, so the combined evidence is not complete; the remaining probe work stays in
+       [#1686 HTTP/2 in corten::serve: show the idle and send bounds together with the socket watch on one opt-in path](https://github.com/corten-run/corten/issues/1686).
+       Even complete, it is a probe, not `serve`: nothing ships before the checks that Revisit
+       when lists.
        Do not add a second frame parser or treat closing the whole connection as a substitute
        for detecting the stall.
        The auto builder's missing HTTP/1 `max_header_size` setter is also a prototype
@@ -1327,10 +1340,10 @@ rules something out.
        the no-proxy live app already fails at the fourth tab, and an opt-in feature would
        leave the default unchanged. The reason to defer is that a feature must not silently
        weaken a security bound. Keep the proxy requirement (option 2) until the connection-level
-       design (option 1) can demonstrate both bounds. One stream per page (option 3) still
-       exhausts the cross-tab cap and adds a custom format where HTTP/2 is standard, against
-       [Rule 10](#rule-standard-formats). HTTP/3 remains out: `quinn` and an unstable `h3`,
-       TLS tied to QUIC, and no need for it merely to remove this connection cap.
+       design (option 1) holds both bounds on an opt-in `serve` path. One stream per page
+       (option 3) still exhausts the cross-tab cap and adds a custom format where HTTP/2 is
+       standard, against [Rule 10](#rule-standard-formats). HTTP/3 remains out: `quinn` and an
+       unstable `h3`, TLS tied to QUIC, and no need for it merely to remove this connection cap.
     3. Vocabulary: one module, `corten::http`: the `http` crate's types (`StatusCode`,
        `HeaderMap`, `Uri`), which hyper, HTTP clients and HTTP/3 libraries share, and what Corten
        builds on them: `Body` (and `BodyDataStream`), `Request` and `Response` over it, `Bytes`,
@@ -1699,8 +1712,23 @@ rules something out.
     alone did not; the passing candidates were tested separately, with
     [Callgrind medians](../bench/http2/README.md#follow-up-cost) off to on of 25,940 to 26,721
     instructions per page for the direct h2 count and 5,043 to 5,696 per event for buffer
-    tracking); value (fast and proven
-    fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
+    tracking); measured ([combined probe](../bench/http2/README.md#combined-results) at
+    `a8431b062`, three rounds at 100 ms in one Linux container with the paused reader's
+    receive buffer capped at 128 KiB: all 17 combined cases passed, every stall closed in
+    105.6 to 116.4 ms and the socket watch expired 154 to 165 ms after its request; uncapped,
+    two of six rounds missed only the socket case, one with no socket timeout reported
+    within the 500 ms window and one with no socket timeout at all, and a sampled uncapped
+    run's receive buffer grew to 632,943 bytes (about 618 KiB) with the watch firing after a
+    103 ms wait, 514 ms after the request; Callgrind medians off to on of 26,142 to 27,939
+    instructions per page and 4,179 to 5,115 per event, three rounds each, not against
+    HTTP/1.1); measured ([steady reader control](../bench/http2/README.md#steady-reader-control)
+    at `ec476a9f6`, seven rounds of the combined suite at 100 ms with the cap: the 17 earlier
+    cases passed every time, but a client reading at least 16 KiB every 20 ms received the
+    whole answer in six rounds and was closed in one by the socket watch on a `flush` pending
+    for 100 ms, a false close, so the combined evidence does not yet include a socket watch
+    that leaves steady readers open; a TLS flush pending while records drain and a capped
+    receive window reopening only in large steps both fit, each reasoned, not measured);
+    value (fast and proven fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
     which is why the dispatch suite comes first and an opt-in protocol must not silently
     weaken a security bound even though the no-proxy live app already fails).
 
@@ -1711,15 +1739,23 @@ rules something out.
     active-stream count exposed through Hyper reopens the idle design, and a per-stream send-wait
     signal covering queued data after the body ends reopens the send design. The
     [isolated controls](../bench/http2/README.md#follow-up-acceptance) qualify each detector
-    with the other disabled. Reopen the proxy decision when a parser-free opt-in path
-    demonstrates both bounds with the socket watch, using separate combined-path controls
-    with expectations for both watches enabled, including final buffered data, sibling
-    progress, reset and cancellation. An upstream header-block timeout
+    with the other disabled. The probe's combined mode held both bounds with the socket watch
+    under the 17 original [combined controls](../bench/http2/README.md#combined-results) in
+    every round, but the steady reader control failed 1 of 7 rounds, so that evidence is not
+    complete; the full combined suite, steady reader included, passing 10 consecutive rounds
+    with zero failures stays in
+    [#1686 HTTP/2 in corten::serve: show the idle and send bounds together with the socket watch on one opt-in path](https://github.com/corten-run/corten/issues/1686).
+    Reopen the proxy decision when an opt-in path in `serve` passes that suite to the same
+    bar and the shipping checks below
+    ([#1739 HTTP/2 in corten::serve: an opt-in path that passes the combined bounds suite and the shipping checks](https://github.com/corten-run/corten/issues/1739)).
+    A combined case failing on a rerun reopens the combined evidence in Stands on, not the
+    proxy decision. An upstream header-block timeout
     ([hyperium/h2 #928 Proposal: enable an HTTP/2 header-block read timeout](https://github.com/hyperium/h2/issues/928))
     reopens the header half only. The historical open-sibling case is a control, not a demand
-    for a stronger header guarantee. Shipping still needs shutdown, reset-flood and resource
-    checks, decoded head limits, explicit h2 Upgrade refusal and HTTP/1 WebSocket fallback,
-    and full three-engine TLS smoke.
+    for a stronger header guarantee. Shipping still needs shutdown with open streams,
+    reset-flood and resource checks, decoded head limits, explicit h2 Upgrade refusal and
+    HTTP/1 WebSocket fallback, full three-engine TLS smoke, and the enabled path's cost
+    against HTTP/1.1.
     HTTP/3 also waits for a stable `h3` and a need beyond this cap. A new protocol stays below
     the vocabulary in 3 and leaves 4 to 7 as they are.
     The `501` itself (migration step 1) is reopened when a named client or tool is reported
@@ -1760,7 +1796,10 @@ rules something out.
     against Corten's `Answered` at `e927c2463`, then exercised in the
     [standalone TLS probe](../bench/http2/README.md#follow-up-results); 2026-11-19,
     the same probe rerun with bytes 1.12.1 and smallvec 1.16.5 in its lockfile, three wire
-    and Callgrind rounds per mode.
+    and Callgrind rounds per mode; 2026-11-20, the probe's combined mode at `a8431b062`
+    with getrandom 0.4.3 and r-efi 6.0.0 in its lockfile, three wire and Callgrind rounds,
+    and one round of each isolated mode with the same dispositions; 2026-11-20, the steady
+    reader control at `ec476a9f6` on the same probe build, seven rounds with one false close.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a

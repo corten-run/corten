@@ -1,0 +1,51 @@
+{"round":1,"mode":"combined","check":"no first request","configuredTimeoutMs":100,"closedMs":144.9,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":502.3}
+{"round":1,"mode":"combined","check":"incomplete first request","configuredTimeoutMs":100,"closedMs":111.5,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":501.5}
+{"round":1,"mode":"combined","check":"idle partial head after END_STREAM","configuredTimeoutMs":100,"closedMs":103.4,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":520.9}
+{"round":1,"mode":"combined","check":"idle after last overlapping answer","configuredTimeoutMs":100,"betweenEndsMs":201.7,"closedMs":105.8,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":899}
+{"round":1,"mode":"combined","check":"reset with open sibling, then idle","configuredTimeoutMs":100,"siblingOpenMs":500,"closedMs":108.1,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":1061.1}
+{"round":1,"mode":"combined","check":"cancel pending handler, then idle","configuredTimeoutMs":100,"closedMs":112.6,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":710.3}
+{"round":1,"mode":"combined","check":"partial head beside open sibling","configuredTimeoutMs":100,"siblingOpenMs":500.7,"latePageMs":501.3,"pass":true,"elapsedMs":517.2}
+{"round":1,"mode":"combined","check":"queued final answer exceeds send bound while busy","configuredTimeoutMs":100,"closedMs":110.5,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":512.1}
+{"round":1,"mode":"combined","check":"zero stream window","configuredTimeoutMs":100,"closedMs":108.8,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":513.2}
+{"round":1,"mode":"combined","check":"final chunk with buffered tail","configuredTimeoutMs":100,"closedMs":111.9,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":512.5}
+{"round":1,"mode":"combined","check":"stalled tail beside progressing sibling","configuredTimeoutMs":100,"closedMs":109.1,"lateWritten":false,"lateResponse":false,"siblingWrites":4,"lastSiblingMs":89.2,"pass":true,"elapsedMs":515.7}
+{"round":1,"mode":"combined","check":"quiet producer","configuredTimeoutMs":100,"survivedMs":501.7,"siblingPageMs":503.3,"pass":true,"elapsedMs":517.8}
+{"round":1,"mode":"combined","check":"normal response returns to idle","configuredTimeoutMs":100,"closedMs":108.8,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":508}
+{"round":1,"mode":"combined","check":"credit recovers before the bound","configuredTimeoutMs":100,"creditMs":38.9,"completedMs":39.4,"reusedMs":243,"pass":true,"elapsedMs":255.1}
+{"round":1,"mode":"combined","check":"incremental credit for one final chunk","configuredTimeoutMs":100,"completedMs":202.9,"pass":true,"elapsedMs":221.2}
+{"round":1,"mode":"combined","check":"reset discards a queued tail","configuredTimeoutMs":100,"reusedMs":505.4,"pass":true,"elapsedMs":521}
+{"round":1,"mode":"combined","check":"paused TCP reader stalls after h2 consumes DATA","configuredTimeoutMs":100,"receiveBufferMax":131072,"pausedMs":504.1,"socketOperation":"flush","pendingBuffers":0,"socketWaitMs":104,"socketExpiredMs":165,"closedAfterResumeMs":25.5,"receivedBytes":269280,"pass":true,"elapsedMs":575.9}
+{"round":2,"mode":"combined","check":"no first request","configuredTimeoutMs":100,"closedMs":134.8,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":501.7}
+{"round":2,"mode":"combined","check":"incomplete first request","configuredTimeoutMs":100,"closedMs":108.4,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":501.3}
+{"round":2,"mode":"combined","check":"idle partial head after END_STREAM","configuredTimeoutMs":100,"closedMs":108.7,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":513.3}
+{"round":2,"mode":"combined","check":"idle after last overlapping answer","configuredTimeoutMs":100,"betweenEndsMs":221.1,"closedMs":106.6,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":897.2}
+{"round":2,"mode":"combined","check":"reset with open sibling, then idle","configuredTimeoutMs":100,"siblingOpenMs":500,"closedMs":101.3,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":1030.6}
+{"round":2,"mode":"combined","check":"cancel pending handler, then idle","configuredTimeoutMs":100,"closedMs":108.7,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":709.2}
+{"round":2,"mode":"combined","check":"partial head beside open sibling","configuredTimeoutMs":100,"siblingOpenMs":500.4,"latePageMs":500.9,"pass":true,"elapsedMs":516.3}
+{"round":2,"mode":"combined","check":"queued final answer exceeds send bound while busy","configuredTimeoutMs":100,"closedMs":105.6,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":518.4}
+{"round":2,"mode":"combined","check":"zero stream window","configuredTimeoutMs":100,"closedMs":109.5,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":510.4}
+{"round":2,"mode":"combined","check":"final chunk with buffered tail","configuredTimeoutMs":100,"closedMs":109.8,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":509.3}
+{"round":2,"mode":"combined","check":"stalled tail beside progressing sibling","configuredTimeoutMs":100,"closedMs":110.1,"lateWritten":false,"lateResponse":false,"siblingWrites":5,"lastSiblingMs":107.3,"pass":true,"elapsedMs":507.6}
+{"round":2,"mode":"combined","check":"quiet producer","configuredTimeoutMs":100,"survivedMs":500.2,"siblingPageMs":500.9,"pass":true,"elapsedMs":512.1}
+{"round":2,"mode":"combined","check":"normal response returns to idle","configuredTimeoutMs":100,"closedMs":109.6,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":508}
+{"round":2,"mode":"combined","check":"credit recovers before the bound","configuredTimeoutMs":100,"creditMs":37.2,"completedMs":37.8,"reusedMs":240.3,"pass":true,"elapsedMs":252.7}
+{"round":2,"mode":"combined","check":"incremental credit for one final chunk","configuredTimeoutMs":100,"completedMs":199,"pass":true,"elapsedMs":213.6}
+{"round":2,"mode":"combined","check":"reset discards a queued tail","configuredTimeoutMs":100,"reusedMs":502.3,"pass":true,"elapsedMs":520.9}
+{"round":2,"mode":"combined","check":"paused TCP reader stalls after h2 consumes DATA","configuredTimeoutMs":100,"receiveBufferMax":131072,"pausedMs":500.4,"socketOperation":"flush","pendingBuffers":0,"socketWaitMs":101,"socketExpiredMs":163,"closedAfterResumeMs":8.5,"receivedBytes":269280,"pass":true,"elapsedMs":543.4}
+{"round":3,"mode":"combined","check":"no first request","configuredTimeoutMs":100,"closedMs":120.2,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":501.7}
+{"round":3,"mode":"combined","check":"incomplete first request","configuredTimeoutMs":100,"closedMs":109.6,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":501.5}
+{"round":3,"mode":"combined","check":"idle partial head after END_STREAM","configuredTimeoutMs":100,"closedMs":108.4,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":510.1}
+{"round":3,"mode":"combined","check":"idle after last overlapping answer","configuredTimeoutMs":100,"betweenEndsMs":219.3,"closedMs":106.7,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":891.7}
+{"round":3,"mode":"combined","check":"reset with open sibling, then idle","configuredTimeoutMs":100,"siblingOpenMs":500,"closedMs":112.4,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":1017}
+{"round":3,"mode":"combined","check":"cancel pending handler, then idle","configuredTimeoutMs":100,"closedMs":110.2,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":708.2}
+{"round":3,"mode":"combined","check":"partial head beside open sibling","configuredTimeoutMs":100,"siblingOpenMs":502.5,"latePageMs":503.1,"pass":true,"elapsedMs":514.7}
+{"round":3,"mode":"combined","check":"queued final answer exceeds send bound while busy","configuredTimeoutMs":100,"closedMs":108.8,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":510}
+{"round":3,"mode":"combined","check":"zero stream window","configuredTimeoutMs":100,"closedMs":115.5,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":509.4}
+{"round":3,"mode":"combined","check":"final chunk with buffered tail","configuredTimeoutMs":100,"closedMs":109.4,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":510}
+{"round":3,"mode":"combined","check":"stalled tail beside progressing sibling","configuredTimeoutMs":100,"closedMs":116.4,"lateWritten":false,"lateResponse":false,"siblingWrites":4,"lastSiblingMs":87.2,"pass":true,"elapsedMs":511}
+{"round":3,"mode":"combined","check":"quiet producer","configuredTimeoutMs":100,"survivedMs":502.4,"siblingPageMs":507.1,"pass":true,"elapsedMs":523.5}
+{"round":3,"mode":"combined","check":"normal response returns to idle","configuredTimeoutMs":100,"closedMs":107.7,"lateWritten":false,"lateResponse":false,"pass":true,"elapsedMs":510.5}
+{"round":3,"mode":"combined","check":"credit recovers before the bound","configuredTimeoutMs":100,"creditMs":37.8,"completedMs":38.7,"reusedMs":242.8,"pass":true,"elapsedMs":261.3}
+{"round":3,"mode":"combined","check":"incremental credit for one final chunk","configuredTimeoutMs":100,"completedMs":192.8,"pass":true,"elapsedMs":214.7}
+{"round":3,"mode":"combined","check":"reset discards a queued tail","configuredTimeoutMs":100,"reusedMs":501.5,"pass":true,"elapsedMs":520.3}
+{"round":3,"mode":"combined","check":"paused TCP reader stalls after h2 consumes DATA","configuredTimeoutMs":100,"receiveBufferMax":131072,"pausedMs":500.3,"socketOperation":"flush","pendingBuffers":0,"socketWaitMs":100,"socketExpiredMs":154,"closedAfterResumeMs":6.3,"receivedBytes":232560,"pass":true,"elapsedMs":533.5}
