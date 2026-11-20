@@ -15,6 +15,7 @@ const fields = ["cgroup.procs", "cgroup.events", "cpu.stat", "cpu.max", "cpuset.
 const root = "/sys/fs/cgroup";
 const sampleIntervalMs = 100, maximumSampleGapMs = 1000;
 const observationOperations = new WeakMap();
+const executableSuccessors = new WeakMap();
 function observing(operation, action) {
   try { return action(); }
   catch (error) {
@@ -84,7 +85,12 @@ function membership(groups) {
     assert.match(pid, /^[1-9]\d*$/); assert.ok(!seen.has(pid)); seen.add(pid); return pid;
   }).sort()]).sort(([a], [b]) => a.localeCompare(b));
 }
-function snapshotOnce(path, executables, pending) {
+function sameProcess(record, identity, cgroup) {
+  if (record.cgroup !== cgroup) return false;
+  const observed = processIdentity(record.stat);
+  return observed.pid === identity.pid && observed.startTicks === identity.startTicks;
+}
+function snapshotOnce(path, executables, pending, previousProcesses) {
   const groups = scopeGroups(path), processes = [];
   const before = observing("snapshot-membership", () => membership(groups));
   for (const group of groups) {
@@ -102,8 +108,23 @@ function snapshotOnce(path, executables, pending) {
       const recheckOperation = rechecked.pid !== identity.pid ? "process-pid-changed"
         : rechecked.startTicks !== identity.startTicks ? "process-start-changed" : "process-name-recheck";
       observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
-      if (pending) observing("executable-recheck", () => pending.recheck(identity.pid, executable, observing));
-      else observing("executable-recheck", () => assert.equal(executableHash(at, executables), executable.executableSha256));
+      if (pending) {
+        try { observing("executable-recheck", () => pending.recheck(identity.pid, executable, observing)); }
+        catch (error) {
+          // Only an already admitted image of this very process can anchor a
+          // successor. Never retain or promote a failed attempt's captures.
+          if (previousProcesses && observationOperations.get(error) === "executable-recheck-inode"
+            && error.code === "ERR_ASSERTION" && error.expected === executable.executableIdentity
+            && String(identity.pid) === pid && previousProcesses.some((p) =>
+              p.executableRef === executable.executableRef && sameProcess(p, identity, cgroup))) {
+            observing("executable-recheck-pin", () => pending.checkPinned(executable));
+            // The actual operand of the closing identity assertion is the
+            // complete stat tuple, not merely the differing inode number.
+            executableSuccessors.set(error, { identity, cgroup, ref: executableReference(error.actual) });
+          }
+          throw error;
+        }
+      } else observing("executable-recheck", () => assert.equal(executableHash(at, executables), executable.executableSha256));
       processes.push({ stat, cgroup, ...executable, type }); // No environment or arbitrary arguments.
     }
   }
@@ -114,17 +135,19 @@ function snapshotOnce(path, executables, pending) {
 const retryPause = new Int32Array(new SharedArrayBuffer(4));
 const processReads = new Set(["process-stat", "executable-link", "executable-stat", "executable-hash", "executable-capture",
   "process-cgroup", "process-cmdline", "process-stat-recheck", "executable-recheck"]);
-function snapshot(path, executables, pending, lastSampleAt = null, timing) {
+function snapshot(path, executables, pending, lastSampleAt = null, timing, previousProcesses) {
   // Spend only the time left in the existing continuity window. A monotonic
   // deadline also bounds retries when the wall clock moves backwards.
   const remaining = lastSampleAt === null ? maximumSampleGapMs : maximumSampleGapMs - (Date.now() - lastSampleAt);
   const started = performance.now(), deadline = started + Math.max(0, Math.min(maximumSampleGapMs, remaining));
-  let race, attempts = 0;
+  let race, successor, attempts = 0;
   for (;;) {
     attempts++;
     try {
       const attempt = () => {
-        const observed = snapshotOnce(path, executables, pending);
+        const observed = snapshotOnce(path, executables, pending, successor ? null : previousProcesses);
+        if (successor) observing("executable-recheck-successor", () => assert.ok(observed.processes.some((p) =>
+          p.executableRef === successor.ref && sameProcess(p, successor.identity, successor.cgroup))));
         if (race && performance.now() > deadline) throw race;
         return observed;
       };
@@ -136,11 +159,12 @@ function snapshot(path, executables, pending, lastSampleAt = null, timing) {
       // success still requires a fresh, complete census and every bookend.
       const missing = ["ENOENT", "ESRCH"].includes(error.code) && processReads.has(operation);
       const ended = performance.now(), left = deadline - ended;
-      if ((!changed && !missing) || left <= 0) {
+      const next = executableSuccessors.get(error);
+      if (successor || (!changed && !missing && !next) || left <= 0) {
         if (timing) Object.assign(timing, { censusMs: Math.round(ended - started), attempts });
         throw error;
       }
-      race = error;
+      race = error; successor = next;
       Atomics.wait(retryPause, 0, 0, Math.min(1, left));
     }
   }
@@ -259,7 +283,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   pending = browser || binding.request.group === "catalog-page" ? participantExecutables() : null;
   let samples = 0, observerError = null, attached = false, faultNotified = false;
   const observerFailures = { count: 0, first: null, last: null };
-  let sampleOperation, lastSampleAt = null;
+  let sampleOperation, lastSampleAt = null, previousCatalogProcesses;
   function notifyFault() {
     if (faultNotified) return;
     faultNotified = true;
@@ -287,7 +311,8 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   function collectSample(timing) {
     sampleOperation = "snapshot";
     if (writer.error) throw writer.error;
-    const observed = snapshot(path, executables, pending, lastSampleAt, timing), initial = [], keys = new Set();
+    const observed = snapshot(path, executables, pending, lastSampleAt, timing, timing && previousCatalogProcesses), initial = [], keys = new Set();
+    const processes = observed.processes;
     // Keep initial raw PID/start/executable/type observations once. Every live
     // sample independently re-reads those identities and records their references;
     // rapidly changing stat CPU fields are accounted by raw cgroup cpu.stat.
@@ -301,6 +326,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     if (browser) observed.docker = browserDocker(excluded, executables, pending);
     sampleOperation = "sample-write";
     writer.enqueue(initial, serial(observed));
+    if (binding.request.group === "catalog-page") previousCatalogProcesses = processes;
     samples++; lastSampleAt = observed.at;
     return observed;
   }

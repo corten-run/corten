@@ -83,6 +83,11 @@ export function participantExecutables() {
         : "executable-recheck-ctime";
       observing(operation, () => assert.deepEqual(actual, expected));
     },
+    checkPinned(evidence) {
+      const entry = entries.get(evidence.executableRef);
+      assert.ok(entry);
+      assert.deepEqual(executableIdentity(entry.fd), evidence.executableIdentity);
+    },
     finish() {
       assert.equal(closed, false); assert.equal(transactions.length, 0); closed = true;
       const values = [...entries].map(([ref, { identity }]) => ({ ref, identity }));

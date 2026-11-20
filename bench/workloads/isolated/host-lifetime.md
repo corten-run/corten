@@ -23,8 +23,9 @@ failure (`executable-recheck-reference`) from a different device/inode
 (`executable-recheck-inode`), changed size or mtime on the same inode
 (`executable-recheck-size-or-mtime`), and ctime-only change
 (`executable-recheck-ctime`). The labels retain no values and do not identify
-the process, prove an exec or exit, or show that bytes were unchanged. All these
-assertions still fail immediately. A failed procfs stat retains the
+the process, prove an exec or exit, or show that bytes were unchanged. Each
+mismatch rejects the census. Only a catalog interval can establish an executable
+successor as described below. A failed procfs stat retains the
 `executable-recheck` operation and the existing process-read rules.
 
 If a catalog interval fails while reading the command's process census, its
@@ -92,6 +93,19 @@ Process-read ENOENT/ESRCH is a consistency candidate, not proof that a PID exite
 It can recover only through a new complete snapshot. A still-listed PID whose
 executable remains unreadable exhausts the budget and blocks proof. Permission,
 I/O, non-process read failures and PID/start-tick changes still fail immediately.
+
+A catalog child can replace its image via exec between the two executable
+reads. A different device/inode at the closing read alone is not enough to
+retry. The immediately preceding admitted sample must bind the same PID,
+start ticks and cgroup to the opening executable, and its pinned descriptor
+must still match every identity field. Discard the entire failed attempt.
+One fresh, complete census within the original deadline must pin and recheck
+the exact closing identity (device, inode, size, mtime and ctime) for that same
+process in the same cgroup. No further retry is allowed if this census fails.
+Both admitted images must still seal to their exact digests at finish.
+Unseen old images, same-inode metadata changes and unproven successors remain
+blocked. This is sampled image replacement, not a trace of exec syscalls or
+an explanation of the original r21 interruption.
 
 Retries use the time left until the previous sample's existing one-second limit,
 capped at one second for an initial observation, rather than an arbitrary attempt
@@ -240,6 +254,10 @@ uses the actual inherited-descriptor digest helper; Windows emulates only that
 subprocess. These controls do not establish actual Docker/native qualification.
 
 The delegated Linux tests use real child PIDs and cgroups. Fault-injection cases exercise
+both a real shell exec at the catalog closing read and a chmod of the same
+running inode, without substituting procfs stat results. The former requires
+both image digests in replay; the latter must not seal the mutated descriptor.
+Other cases exercise
 repeated interval errors, deadline exhaustion, strict process-name bookends,
 unknown-code sanitization, recovery that remains blocked, and a final sample failure
 that cannot claim an empty scope. Native descendant churn must retain all eight observed children and
