@@ -47,9 +47,10 @@ export function sealedUnit(output, s) {
 
 // The registered guardian supplies the shell on stdin (not argv). An unrelated
 // host process working in /bench, including one outside the unit, blocks cleanup.
-export function idleArchiveScript(s, bootId, unitSha256, { pack = false } = {}) {
+export function idleArchiveScript(s, bootId, unitSha256, { pack = false, stamp } = {}) {
   full(bootId, /[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/, "registered boot required");
   full(unitSha256, /[a-f0-9]{64}/, "unit bytes required");
+  if (stamp !== undefined) full(stamp, /[a-f0-9]{64}/, "hashed archive identity required");
   return `test "$(hostname)" = '${s.name}'
 test "$(cat /proc/sys/kernel/random/boot_id)" = '${bootId}'
 test "$(curl --noproxy '*' --fail --silent --max-time 3 http://169.254.169.254/metadata/v1/id)" = '${s.id}'
@@ -90,5 +91,14 @@ test -f /bench/results.tgz
 test ! -L /bench/results.tgz
 test "$(stat -c '%h' /bench/results.tgz)" = 1
 test "$(stat -c '%s' /bench/results.tgz)" -le ${archiveLimit}
-sha256sum /bench/results.tgz`;
+# Bind the digest to the inode, size, nanosecond mtime/ctime and link count.
+stamp() { LC_ALL=C TZ=UTC stat -c '%d:%i:%f:%h:%s:%y:%z' "$@" | sha256sum; }
+${stamp === undefined ? `before=$(stamp /bench/results.tgz)
+exec 3</bench/results.tgz
+test "$(stamp -L /proc/self/fd/3)" = "$before"
+sum=$(sha256sum <&3)
+test "$(stamp -L /proc/self/fd/3)" = "$before"
+test "$(stamp /bench/results.tgz)" = "$before"
+printf '%s  /bench/results.tgz\\n' "\${sum%% *}"
+printf '%s\\n' "$before"` : `test "$(stamp /bench/results.tgz)" = '${stamp}  -'`}`;
 }

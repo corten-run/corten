@@ -5,7 +5,7 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
-import { controllerState, full, parseDropletArgs, providerFailure } from "./cloud-options.mjs";
+import { controllerState, full, parseDropletArgs, providerFailure, unsentDelete } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, validateLaunchFleet } from "./cloud-contract.mjs";
@@ -152,12 +152,16 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   };
   try {
   const run = async (...args) => {
-    await controlCheckpoint(interrupted);
+    const fencedDelete = args[0] === "doctl" && args[1][2] === "delete" && args[3] && args[4] !== undefined;
+    try { await controlCheckpoint(interrupted); } catch (error) {
+      if (fencedDelete) return unsentDelete; // This invocation never reached the provider.
+      throw error;
+    }
     let result, failure;
     try { result = args[0] === "doctl" ? await providerRun(...args.slice(1)) : await processRun(...args); } catch (error) { failure = error; }
     // The controller performs this post-command checkpoint after taking the
     // registered handle. Throwing here would orphan a live SSH stream.
-    if (args[5]?.stream && result?.monitor) return result;
+    if (args[5]?.stream && result?.monitor || fencedDelete && result?.deleteNotDispatched === true) return result;
     try { await controlCheckpoint(interrupted); }
     catch (error) { if (!failure?.controlTreeUncertain && !failure?.controlUncertain) throw error; }
     if (failure) throw failure;

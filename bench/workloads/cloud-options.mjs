@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
 import { roundName, savedLoadLayout, selection, terminalUnit, validateState } from "./cloud-contract.mjs";
 
+// A disposition of one fenced DELETE, not a diagnostic or permission to retry.
+export const unsentDelete = Object.freeze({ status: 1, stdout: "", stderr: "", deleteNotDispatched: true });
 const providerCodes = ["provider-command", "provider-credential", "provider-output",
   "account-request", "account-http", "get-request", "get-http", "get-response", "list-request", "list-http", "list-response",
   "list-response-shape", "list-response-total", "list-response-id", "list-response-duplicate",

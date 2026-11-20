@@ -325,7 +325,7 @@ test("a finished child can be collected with its own approval while a sibling ke
       const idle = options.input.includes("CORTEN_IDLE");
       assert.ok(idle || options.input.includes("systemctl show " + state.unit));
       const id = saved().control.ledger.at(-1).request.invocation.id;
-      return { ...result(idle ? `${state.archiveSha256}  /bench/results.tgz\n`
+      return { ...result(idle && !options.input.includes("systemctl show") ? `${state.archiveSha256}  /bench/results.tgz\n${digest("archive stat")}  -\n`
         : `Id=${state.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${state.unit}\nRestart=no\nActiveState=inactive\nMainPID=0\nControlPID=0\nJob=\nSubState=dead\nExecMainCode=0\nExecMainStartTimestamp=\n`),
         stderr: `CORTEN_CONTROL ${id} ${"d".repeat(64)}\nCORTEN_RESULT ${id} 0\n` };
     }, providerFactory: () => Object.assign(async (args, timeout) => {

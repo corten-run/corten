@@ -204,10 +204,21 @@ acknowledged start, registered terminal monitor and native seal prove the run
 started and finished. An inactive, dead unit with no retained start time or
 exit type does not prove that by itself. The collector checks the expected unit
 and boot, no queued job, PID, populated service cgroup, running container or
-benchmark process, then downloads the existing exit archive without running
-`pack.sh`. Local native replay must agree with the monitor. The collector
-rechecks the archive and idle host before recording its ordinary delete intent;
-after intent it only reconciles absence. A live, never-started, unsupervised
+benchmark process, then downloads the existing exit archive without repacking.
+Only ordinary collection with positive systemd exit history may run `pack.sh`
+when the archive entry is definitely absent. Expired history and pinned r21
+recovery always require the original exit archive. Local native replay must
+agree with the monitor. The collector rehashes the archive, then checks the
+same inode and timestamps, idle host and unit in a fresh 60-second window.
+Account and ownership reads precede that final observation. An acknowledged
+nonzero unit query records its exit and stops without deleting; a missing
+guardian acknowledgement retains uncertain custody.
+
+The controller persists delete intent before dispatch. Only positive proof
+that this very DELETE was never sent clears that intent for a separately
+approved collection; HTTP errors, timeouts after send, lost replies and
+crashes with an intent permit absence reconciliation only. There is no
+automatic retry. A live, never-started, unsupervised
 or invalid-monitor run cannot use this proof. Target failures remain results,
 not successful timings or a publishable baseline.
 

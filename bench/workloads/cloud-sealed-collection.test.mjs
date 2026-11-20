@@ -37,17 +37,21 @@ test("idle proof checks current work and hashes an existing archive without pack
   for (const dir of ["proc/1", "cg", "system"]) mkdirSync(join(temp, dir), { recursive: true });
   write("boot", boot); write("proc/1/cmdline", "init"); write("cg/cgroup.events", "populated 0\n");
   write("system/" + s.unit, "unit"); write("results.tgz", "exit archive");
-  const script = (pack) => idleArchiveScript(s, boot, digest("unit"), { pack }).replaceAll("/etc/systemd/system", temp + "/system")
+  const script = (pack, stamp) => idleArchiveScript(s, boot, digest("unit"), { pack, stamp }).replaceAll("/etc/systemd/system", temp + "/system")
     .replace("timeout 600 /bin/bash /bench/pack.sh", `echo packed >> '${temp}/packs'; echo reconstructed > '${temp}/results.tgz'`)
     .replace("/proc/sys/kernel/random/boot_id", temp + "/boot").replace("Path('/proc')", `Path('${temp}/proc')`)
     .replace("/sys/fs/cgroup/system.slice/" + s.unit, temp + "/cg").replaceAll("/bench/results.tgz", temp + "/results.tgz")
     .replaceAll("/run/docker.sock", temp + "/absent-docker").replaceAll("/run/containerd/containerd.sock", temp + "/absent-containerd");
-  const probe = (jobs = "", pack = false) => spawnSync("bash", ["-s"], { input: `set -euo pipefail
+  const probe = (jobs = "", pack = false, stamp) => spawnSync("bash", ["-s"], { input: `set -euo pipefail
 hostname() { echo '${s.name}'; }
 curl() { echo '${s.id}'; }
 systemctl() { echo '${jobs}'; }
-${script(pack)}`, encoding: "utf8", timeout: 5000 });
+${script(pack, stamp)}`, encoding: "utf8", timeout: 5000 });
   const yes = probe(); assert.equal(yes.status, 0, yes.stderr); assert.ok(yes.stdout.startsWith(digest("exit archive")));
+  const stamp = yes.stdout.split("\n")[1].slice(0, 64); assert.match(stamp, /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(script(false, stamp), /sha256sum <&3|sha256sum .*results\.tgz/);
+  assert.equal(probe("", false, stamp).status, 0);
+  write("results.tgz", "same length!"); assert.notEqual(probe("", false, stamp).status, 0);
   assert.notEqual(probe("pending").status, 0);
   write("cg/cgroup.events", "populated 1\n"); assert.notEqual(probe().status, 0); write("cg/cgroup.events", "populated 0\n");
   write("proc/1/cmdline", "/bin/bash\0/bench/job.sh"); assert.notEqual(probe().status, 0); write("proc/1/cmdline", "init");

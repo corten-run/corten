@@ -95,7 +95,8 @@ export function serveProviderWorker(dependencies = {}) {
         result = await run(message.args, message.timeout, message.allowFail, message.deleteProofExpiresAtMs);
         // Never serialize exceptions, provider error bodies or native stderr.
         const diagnostic = result.status === 1 ? providerFailure(result) : undefined;
-        result = { status: result.status, stdout: result.stdout, stderr: "", ...(diagnostic ? { providerDiagnostic: diagnostic } : {}) };
+        result = { status: result.status, stdout: result.stdout, stderr: "", ...(diagnostic ? { providerDiagnostic: diagnostic } : {}),
+          ...(result.deleteNotDispatched === true ? { deleteNotDispatched: true } : {}) };
       }
       ok = true;
     } catch (error) {

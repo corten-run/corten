@@ -78,9 +78,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     if (phase === "closed") preserveOperationLock = alreadyUncertain;
   };
   async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs, remaining, registration) {
+    const prepareDelete = typeof deleteProofExpiresAtMs === "function" ? deleteProofExpiresAtMs : undefined;
     if (deleteProofExpiresAtMs !== undefined) {
       assert.equal(binary, "doctl"); assert.equal(args[2], "delete");
-      assert.ok(Number.isSafeInteger(deleteProofExpiresAtMs));
+      assert.ok(prepareDelete || Number.isSafeInteger(deleteProofExpiresAtMs));
     }
     const invoke = async (argv, permittedFailure = false, expiry) => {
       check();
@@ -90,6 +91,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       }
       let r;
       const limit = remaining ? Math.min(timeout, remaining()) : timeout;
+      if (prepareDelete && expiry !== undefined) {
+        assert.ok(!state.deletionIntentAt);
+        state.deletionIntentAt = new Date().toISOString(); save();
+      }
       try { r = await run(binary, argv, limit, permittedFailure, expiry, registration); }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
       if (registration?.stream && r.monitor) {
@@ -99,6 +104,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         await controlCheckpoint(interrupted);
       }
       if (r.controlTreeUncertain || r.controlUncertain) { preserveOperationLock = true; throw new Error("control uncertain; preserve locks"); }
+      if (prepareDelete && expiry !== undefined && r.status === 1 && r.deleteNotDispatched === true) {
+        // The worker positively acknowledged that its request was never sent.
+        // A missing result, timeout, HTTP error or lost acknowledgement cannot clear intent.
+        boundary(); delete state.deletionIntentAt; writeState(state); assert.fail("DELETE not dispatched; fresh collection approval required");
+      }
       check();
       if (remaining) remaining();
       if (!permittedFailure) assert.ok(!r.error && r.status === 0, "control process failed; host preserved");
@@ -111,7 +121,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.equal(providerAccount(value), state.provider.accountId, "provider account identity changed; preserve uncertainty");
     };
     await account();
-    const result = await invoke(scoped(args), allowFail, deleteProofExpiresAtMs);
+    const expiry = prepareDelete ? await prepareDelete() : deleteProofExpiresAtMs;
+    const result = await invoke(scoped(args), allowFail, expiry);
+    if (prepareDelete) assert.ok(result.status === 0 && !result.error, "delete outcome uncertain; preserve intent");
     await account(); // A changed context cannot supply absence/deletion authority.
     return result;
   }
@@ -171,10 +183,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       registration = controlRegistration(intent);
     }
     const hostOptions = pinnedKey ? [...pinnedHostOptions(join(local, "known_hosts")), ...sshLimits] : sshOptions;
+    const startedAtMs = Date.now();
     const result = await execute(binary, [...hostOptions, ...args], timeout, allowFail, undefined, undefined, registration);
     if (intent) { const row = state.control.ledger.at(-1); row.localTerminal = true; row.code = result.status; save(); }
     if (pinnedKey) assert.equal(fileHash(join(local, "known_hosts")), pinnedKey, "native host keys changed during transport");
-    return result;
+    return { ...result, startedAtMs };
   };
   const ssh = (script, timeout = 60000, allowFail = false) => transport("ssh", [`root@${state.ip}`, script], timeout, allowFail);
   const scp = (from, to) => transport("scp", ["-q", from, to], 15 * 60000);
@@ -614,6 +627,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         }
         const sealed = state.control?.monitor?.phase === "closed";
         let inspectUnit = unit, idleScript, unitState;
+        const query = unitQuery(state) + " --all --property=Job --property=SubState --property=ControlPID";
         if (sealed) {
           assert.ok(!existsSync(join(base, ".groups-launch.lock")), "child launch custody still held");
           const { sealedMonitor } = await import("./cloud-control-stream.mjs");
@@ -622,22 +636,22 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             assert.equal(terminal.campaign, recoveryApproval.campaign); assert.equal(terminal.sealSha256, recoveryApproval.sealSha256);
           }
           const unitSha256 = digest(remoteFiles(state)[state.unit]);
-          idleScript = pack => idleArchiveScript(state, registration.host.bootId, unitSha256, { pack });
+          idleScript = (pack, stamp) => idleArchiveScript(state, registration.host.bootId, unitSha256, { pack, stamp });
           inspectUnit = async () => {
-            const result = await ssh(unitQuery(state) + " --all --property=Job --property=SubState --property=ControlPID", 60000, true);
+            const result = await ssh(query, 60000, true);
             assert.ok(result.status === 0 && !result.error, "unit query refused");
             return sealedUnit(result.stdout, state);
           };
         }
         const remoteHash = async (pack = false) => {
           // A settled refusal (e.g. a queued job) is not a lost SSH command.
-          const result = await ssh(idleScript?.(pack) ?? "sha256sum /bench/results.tgz", pack ? 11 * 60000 : 60000, sealed);
+          const result = await ssh(idleScript?.(pack) ?? "sha256sum /bench/results.tgz", sealed ? 15 * 60000 : 60000, sealed);
           assert.ok(result.status === 0 && !result.error, "terminal archive or idle-host proof unavailable");
           const line = result.stdout;
-          full(line, /[a-f0-9]{64}  \/bench\/results\.tgz\n/, "invalid remote archive hash");
+          full(line, sealed ? /[a-f0-9]{64}  \/bench\/results\.tgz\n[a-f0-9]{64}  -\n/ : /[a-f0-9]{64}  \/bench\/results\.tgz\n/, "invalid remote archive hash");
           const hash = line.slice(0, 64);
           if (options.r21MeasuredCheckout) assert.equal(hash, options.exitArchiveSha256, "not the reviewed exit archive");
-          return hash;
+          return { hash, stamp: sealed ? line.split("\n")[1].slice(0, 64) : undefined };
         };
         if (unusedCandidate) assert.ok(neverProvisioned(state), "unused allocation changed; preserve host");
         assert.ok(!(state.status === "preparing" && state.control?.monitor?.phase === "pending"
@@ -673,7 +687,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           if (!sealed) await ssh(setupCandidate ? `if test -e /bench/results.tgz || test -L /bench/results.tgz; then
 test -f /bench/results.tgz && test ! -L /bench/results.tgz && test "$(stat -c '%s' -- /bench/results.tgz)" -le ${archiveLimit}
 else ${pack}; fi` : pack, 11 * 60000);
-          const hash = await remoteHash(unitState === "terminal" && !options.r21MeasuredCheckout), download = `${archive}.download`;
+          const { hash } = await remoteHash(unitState === "terminal" && !options.r21MeasuredCheckout), download = `${archive}.download`;
           // Reserve the destination before SCP, so a crash cannot make it look retryable.
           durable(download, ""); await scp(`root@${state.ip}:/bench/results.tgz`, download);
           // Re-write through a synced exclusive file; never replace unexplained evidence.
@@ -701,12 +715,20 @@ else ${pack}; fi` : pack, 11 * 60000);
         }
         state.collectedAt ??= new Date().toISOString(); state.status = "collected"; save();
         verifyArchive(); await validateEvidence();
-        const expires = sealed ? Date.now() + 60000 : undefined;
-        if (sealed) assert.equal(await remoteHash(), state.archiveSha256, "exit archive changed");
-        assert.ok(await inspectUnit(), "unit became active; preserve host"); await own(); check();
-        if (sealed) assert.ok(Date.now() < expires, "idle proof expired");
-        state.deletionIntentAt = new Date().toISOString(); save();
-        await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, expires);
+        const deletion = ["compute", "droplet", "delete", state.id, "--force"];
+        if (sealed) {
+          const { hash, stamp } = await remoteHash(); assert.equal(hash, state.archiveSha256, "exit archive changed");
+          // Account check, then transport's exact ownership check, then one short
+          // SSH fence. The hash and provider reads are outside its freshness budget.
+          await execute("doctl", deletion, 120000, true, async () => {
+            const proof = await ssh(idleScript(false, stamp) + "\n" + query, 60000, true);
+            assert.ok(proof.status === 0 && !proof.error && sealedUnit(proof.stdout, state), "idle archive or terminal unit changed");
+            return proof.startedAtMs + 60000;
+          });
+        } else {
+          assert.ok(await inspectUnit(), "unit became active; preserve host"); await own(); check();
+          state.deletionIntentAt = new Date().toISOString(); save(); await execute("doctl", deletion, 120000);
+        }
         await confirmDeleted();
         verifyArchive(); await validateEvidence(); state.destroyedAt = new Date().toISOString(); save(); return deletedCode();
       }, failedMonitorRecovery);
