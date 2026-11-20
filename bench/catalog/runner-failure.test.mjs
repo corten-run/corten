@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -10,7 +10,7 @@ import { upstreamImage } from "./raw.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
 
-for (const [index, mode] of ["cached", "absent", "inspect error", "pull error"].entries()) {
+for (const [index, mode] of ["cached", "absent", "wrong platform", "daemon error", "registry error", "start error"].entries()) {
   test(`runner upstream image: ${mode}`, () => run(mode, index));
 }
 
@@ -19,6 +19,7 @@ function run(mode, index) {
   const folder = join(here, "results", round);
   const scratch = mkdtempSync(join(tmpdir(), "catalog-runner-errors-"));
   const hook = join(scratch, "docker.mjs");
+  const timers = join(scratch, "upstream-timers.json");
   // Exercise the real runner's artifacts, gating and cleanup with external commands
   // and readiness replaced. No fake negative receipt makes the browser assertion pass.
   writeFileSync(hook, `
@@ -31,7 +32,14 @@ import { records } from ${JSON.stringify(pathToFileURL(join(here, "fixtures.mjs"
 const spawn = cp.spawn, read = fs.readFileSync, containers = new Map();
 const imageId = 'sha256:' + 'a'.repeat(64);
 const upstreamImage = ${JSON.stringify(upstreamImage)}, mode = ${JSON.stringify(mode)};
-let cached = mode === 'cached', upstreamInspected = false;
+const localPlatform = mode === 'wrong platform' ? 'linux/arm64' : ['absent', 'registry error'].includes(mode) ? null : 'linux/amd64';
+const deadlines = [], setTimer = globalThis.setTimeout;
+let upstreamCommand;
+globalThis.setTimeout = (callback, ms, ...args) => {
+  if (upstreamCommand) { deadlines.push([upstreamCommand, ms]); upstreamCommand = undefined; }
+  return setTimer(callback, ms, ...args);
+};
+process.on('exit', () => fs.writeFileSync(${JSON.stringify(timers)}, JSON.stringify(deadlines)));
 let network, runId;
 fs.readFileSync = (path, ...args) => String(path).replaceAll('\\\\', '/').endsWith('/bench/catalog/fixtures/catalog.json') ? Buffer.from(JSON.stringify(records())) : read(path, ...args);
 globalThis.fetch = async () => ({ status: 200, ok: true, text: async () => '{}', arrayBuffer: async () => new ArrayBuffer(0) });
@@ -45,7 +53,8 @@ const info = name => {
 cp.spawn = (binary, args, options) => {
   if (!['docker', 'git'].includes(binary)) return spawn(binary, args, options);
   const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => {};
-  const finish = () => {
+  if (binary === 'docker' && ['create', 'start', 'run'].includes(args[0]) && args.includes(runId + '-upstream')) upstreamCommand = args[0];
+  queueMicrotask(() => {
     let output = '', error = '', code = 0;
     if (binary === 'git') {
       if (args[0] === 'rev-parse') output = 'b'.repeat(40);
@@ -53,16 +62,7 @@ cp.spawn = (binary, args, options) => {
     } else if (args[0] === 'version') output = 'test';
     else if (args[0] === 'image' && args[1] === 'inspect') {
       output = JSON.stringify([{ Id: imageId, Size: 1, Config: { Entrypoint: null, Cmd: [] } }]);
-      if (args[2] === upstreamImage) {
-        upstreamInspected = true;
-        if (!cached) {
-          output = '[]'; code = 1;
-          error = mode === 'inspect error' ? 'permission denied connecting to Docker daemon' : 'Error response from daemon: No such image: ' + upstreamImage;
-        }
-      }
-    } else if (args[0] === 'pull' && args[1] === upstreamImage && upstreamInspected && !cached) {
-      if (mode === 'absent') { cached = true; output = 'pinned image acquired'; }
-      else { code = 1; error = 'registry denied the pinned image pull'; }
+      if (args[2] === upstreamImage) { code = 1; error = 'unexpected separate image lookup'; }
     } else if (args[0] === 'network') {
       if (args[1] === 'create') { network = args.at(-1); runId = network.slice(0, -4); }
       else if (args[1] === 'ls') output = network ? network : '';
@@ -70,13 +70,23 @@ cp.spawn = (binary, args, options) => {
       else if (args[1] === 'rm') network = null;
     } else if (['run', 'create'].includes(args[0])) {
       const name = args[args.indexOf('--name') + 1];
-      if (name.endsWith('-upstream') && (!upstreamInspected || !cached || !args.includes(upstreamImage) || !args.includes('--pull=never'))) {
-        code = 1; error = 'upstream must start with the prepared pin and no implicit pull';
-      } else {
-        containers.set(name, { source: args.find(a => a.startsWith('CATALOG_SOURCE='))?.split('=')[1] }); output = name;
+      containers.set(name, { source: args.find(a => a.startsWith('CATALOG_SOURCE='))?.split('=')[1] }); output = name;
+      if (name.endsWith('-upstream')) {
+        const platform = args.includes('--platform') ? args[args.indexOf('--platform') + 1] : process.env.DOCKER_DEFAULT_PLATFORM;
+        if (args[0] !== 'create' || !args.includes('--pull=missing') || !args.includes(upstreamImage)
+            || args[args.indexOf('--network') + 1] !== network || !args.includes('run.corten.catalog=' + runId)) {
+          code = 1; error = 'expected owned platform-aware create of the pinned upstream';
+        } else if (mode === 'daemon error') {
+          code = 1; error = 'daemon lost the create response'; // Created, but not acknowledged.
+        } else if (localPlatform !== platform) {
+          if (mode === 'registry error') { containers.delete(name); code = 1; error = 'registry denied the pinned image pull'; }
+          else error = 'pulled pin for ' + platform;
+        }
       }
     } else if (args[0] === 'inspect') output = JSON.stringify([info(args[1])]);
-    else if (args[0] === 'start') { code = 1; error = 'AssertionError: desktop-light js=false record_1: article styles at 0'; }
+    else if (args[0] === 'start' && args[1] === runId + '-upstream' && containers.has(args[1])) {
+      if (mode === 'start error') { code = 1; error = 'failed to start upstream process'; }
+    } else if (args[0] === 'start') { code = 1; error = 'AssertionError: desktop-light js=false record_1: article styles at 0'; }
     else if (args[0] === 'logs') { if (containers.get(args[1]).source === 'fixture') error = 'open /fixtures/catalog.json: permission denied'; }
     else if (args[0] === 'ps') {
       const filter = args[args.indexOf('--filter') + 1];
@@ -84,35 +94,35 @@ cp.spawn = (binary, args, options) => {
     } else if (args[0] === 'rm') containers.delete(args.at(-1));
     else throw Error('unhandled fake Docker command: ' + args.join(' '));
     child.stdout.end(output); child.stderr.end(error); child.exitCode = code; child.signalCode = null; child.emit('close', code, null);
-  };
-  if (args[0] === 'pull') setTimeout(finish, 20);
-  else queueMicrotask(finish);
+  });
   return child;
 };
 syncBuiltinESMExports();
 `);
   try {
     const result = spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, join(here, "run.mjs"), round, "--apps", "gin", "--check-only"], {
-      cwd: repo, encoding: "utf8", windowsHide: true, timeout: 15000,
+      cwd: repo, encoding: "utf8", windowsHide: true, timeout: 15000, env: { ...process.env, DOCKER_DEFAULT_PLATFORM: "linux/amd64" },
     });
     assert.equal(result.status, 1, result.stderr);
     const summary = JSON.parse(readFileSync(join(folder, "summary.json"), "utf8"));
-    const pullLog = join(folder, "pull-upstream.log");
-    assert.equal(existsSync(pullLog), mode === "absent" || mode === "pull error");
+    const createFailed = mode === "daemon error" || mode === "registry error";
+    assert.deepEqual(JSON.parse(readFileSync(timers, "utf8")), createFailed ? [["create", 600000]] : [["create", 600000], ["start", 30000]]);
+    const preparation = readFileSync(join(folder, "prepare-upstream.log"), "utf8");
     assert.equal(summary.complete, false);
     assert.deepEqual(summary.apps.gin.checks, {}); assert.deepEqual(summary.apps.gin.runs, {});
     assert.deepEqual(summary.cleanupFailures, []);
     assert.deepEqual(JSON.parse(readFileSync(join(folder, "cleanup.json"), "utf8")), { runId: summary.runId, containers: [], networks: [] });
-    if (mode === "inspect error" || mode === "pull error") {
+    if (createFailed || mode === "start error") {
       assert.equal(summary.failures.length, 1);
-      assert.equal(summary.failures[0].stage, "upstream image");
-      assert.match(summary.failures[0].error, mode === "inspect error" ? /permission denied connecting to Docker daemon/ : /registry denied the pinned image pull/);
-      if (mode === "pull error") assert.match(readFileSync(pullLog, "utf8"), /registry denied the pinned image pull/);
+      assert.equal(summary.failures[0].stage, createFailed ? "upstream preparation" : "upstream startup");
+      const nativeError = { "daemon error": /daemon lost the create response/, "registry error": /registry denied the pinned image pull/, "start error": /failed to start upstream process/ }[mode];
+      assert.match(summary.failures[0].error, nativeError);
+      if (createFailed) assert.match(preparation, nativeError);
       assert.equal(summary.tools, undefined);
-      assert.equal(summary.networkCreated, undefined);
       return;
     }
-    if (mode === "absent") assert.match(readFileSync(pullLog, "utf8"), /pinned image acquired/);
+    if (mode === "cached") assert.doesNotMatch(preparation, /pulled pin/);
+    else assert.match(preparation, /pulled pin for linux\/amd64/);
     assert.equal(summary.tools.upstream.image, upstreamImage);
     const failure = (source) => {
       const found = summary.failures.find((f) => f.app === "gin" && f.source === source && f.stage === "checks");

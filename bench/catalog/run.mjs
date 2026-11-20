@@ -106,9 +106,7 @@ async function command(binary, args, { timeout = 30000, file, capture = true, cl
     const { code, signal } = await new Promise((resolve, reject) => { child.on("error", reject); child.on("close", (code, signal) => resolve({ code, signal })); });
     if (ioError) throw ioError;
     if (code !== 0 || killed || (interrupted && !cleanup)) {
-      const diagnostic = output.diagnostic();
-      const failure = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${diagnostic}`);
-      failure.diagnostic = diagnostic;
+      const failure = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${output.diagnostic()}`);
       failure.exit = { code, signal, expired: killed, interrupted: interrupted && !cleanup }; throw failure;
     }
     return output.result();
@@ -123,9 +121,9 @@ const fail = (app, source, stage, error) => {
   log(`${app ?? "suite"} ${source ?? ""} ${stage} FAILED: ${error.message ?? error}`);
   save();
 };
-const owned = async (args, name) => {
+const owned = async (args, name, opts) => {
   active.add(name);
-  await docker([args[0], "--name", name, "--label", `${label}=${runId}`, ...args.slice(1)]);
+  await docker([args[0], "--name", name, "--label", `${label}=${runId}`, ...args.slice(1)], opts);
   return name;
 };
 async function remove(name) {
@@ -308,21 +306,14 @@ try {
     } catch (e) { fail(app, null, "build/image", e); }
     save();
   }
-  suiteStage = "upstream image";
-  try { await docker(["image", "inspect", nodeImage], { capture: false }); }
-  catch (e) {
-    // Docker image inspect also exits 1 for daemon errors; only a missing pin warrants a pull.
-    const { code, signal, expired, interrupted } = e.exit ?? {};
-    if (code !== 1 || signal !== null || expired || interrupted
-        || e.diagnostic.trim() !== `Error response from daemon: No such image: ${nodeImage}`) throw e;
-    log(`pulling catalog upstream ${nodeImage}`);
-    await docker(["pull", nodeImage], { timeout: 10 * 60 * 1000, file: join(folder, "pull-upstream.log"), capture: false });
-  }
-  suiteStage = "suite";
   await docker(["network", "create", "--label", `${label}=${runId}`, network]);
   summary.networkCreated = true;
-  await owned(["run", "-d", "--pull=never", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
-    "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, ...(group ? workerCommand : ["node", "/bench/catalog/upstream.mjs"])], upstreamName);
+  suiteStage = "upstream preparation";
+  await owned(["create", "--pull=missing", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
+    "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, ...(group ? workerCommand : ["node", "/bench/catalog/upstream.mjs"])], upstreamName,
+    { timeout: 10 * 60 * 1000, file: join(folder, "prepare-upstream.log"), capture: false });
+  suiteStage = "upstream startup";
+  await docker(["start", upstreamName]);
   const upstreamImageId = (await inspect(upstreamName)).Image;
   const upstreamImageInfo = JSON.parse(await docker(["image", "inspect", upstreamImageId]))[0];
   assert.equal(upstreamImageInfo.Id, upstreamImageId);
@@ -335,6 +326,7 @@ try {
     if (Date.now() > upstreamDeadline) throw new Error("catalog upstream did not start");
     await sleep(100);
   }
+  suiteStage = "suite";
   const version = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")).devDependencies["@playwright/test"];
   assert.match(version, /^\d+\.\d+\.\d+$/, "Playwright must have a pinned image-compatible version");
   const checkerImage = `mcr.microsoft.com/playwright:v${version}-noble`;
