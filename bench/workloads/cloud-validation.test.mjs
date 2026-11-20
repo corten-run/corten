@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import childProcess, { spawnSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
@@ -16,6 +17,61 @@ function git(root, ...args) {
   assert.equal(result.status, 0, "synthetic local Git operation failed"); return result.stdout.trim();
 }
 const sharedDependencies = resolve(checkout, git(checkout, "rev-parse", "--git-common-dir"), "..", "node_modules");
+
+const syntheticHead = "c".repeat(40);
+const privateGitData = "synthetic private Git detail";
+for (const [name, result, reason] of [
+  ["timeout", { status: null, error: Object.assign(new Error(privateGitData), { code: "ETIMEDOUT" }) }, "timed out"],
+  ["spawn", { status: null, error: Object.assign(new Error(privateGitData), { code: "ENOENT" }) }, "process error"],
+  ["spawn-throws", new Error(privateGitData), "process error"],
+  ["nonzero", { status: 128, stdout: syntheticHead + "\n" }, "unsuccessful exit"],
+  ["signal", { status: null, signal: "SIGTERM" }, "unsuccessful exit"],
+  ["malformed", { status: 0, stdout: syntheticHead + "\n" + privateGitData }, "malformed output"],
+  ["valid", { status: 0, stdout: syntheticHead + "\r\n" }, null],
+]) {
+  test(`installed Git HEAD initialization: ${name}`, async (t) => {
+    const spawn = t.mock.method(childProcess, "spawnSync", () => {
+      if (result instanceof Error) throw result;
+      return { stdout: privateGitData, stderr: privateGitData, ...result };
+    });
+    syncBuiltinESMExports();
+    const url = new URL(`./cloud-validation-snapshot.mjs?head=${name}`, import.meta.url);
+    let initialized;
+    try {
+      if (reason === null) initialized = await import(url.href);
+      else await assert.rejects(import(url.href), (error) => {
+        assert.equal(error.message, `Git HEAD validation failed: ${reason}`);
+        assert.equal(error.cause, undefined);
+        return true;
+      });
+      assert.equal(spawn.mock.callCount(), 1, "one Git read, no retry");
+      const [command, args, options] = spawn.mock.calls[0].arguments;
+      assert.equal(command, "git");
+      assert.deepEqual(args, ["--no-replace-objects", "-C", realpathSync(checkout), "rev-parse", "--verify", "HEAD^{commit}"]);
+      assert.equal(options.timeout, 5000);
+      assert.equal(options.maxBuffer, 1024);
+      assert.equal(options.shell, false);
+    } finally {
+      spawn.mock.restore();
+      syncBuiltinESMExports();
+    }
+    if (initialized) {
+      const generic = { message: "native campaign validation unavailable or invalid; evidence/host preserved" };
+      const reads = [];
+      const readGit = (_command, args) => {
+        reads.push(args[3]);
+        return { status: 128, stderr: privateGitData };
+      };
+      assert.throws(() => initialized.captureValidation("b".repeat(40), { readGit }), generic);
+      assert.deepEqual(reads, []);
+      assert.throws(() => initialized.captureValidation(syntheticHead, { readGit }), generic);
+      assert.deepEqual(reads, ["cat-file"], "use the initialized HEAD without a second rev-parse");
+      assert.throws(() => initialized.captureValidation(syntheticHead, { root: dirname(checkout), readGit }), generic);
+      assert.deepEqual(reads, ["cat-file", "rev-parse"], "downstream HEAD failures stay generic");
+    }
+  });
+}
+
 function removeDependencyLink(repo) {
   const link = join(repo, "node_modules/typescript");
   assert.ok(lstatSync(link).isSymbolicLink());

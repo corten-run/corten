@@ -764,7 +764,11 @@ their injected process promises; production keeps its existing bounded calls.
 The fixed default validator runs in a separate local worker, never downloaded
 code. `cloud-validation-snapshot.mjs` reads its fixed project-module closure from
 immutable Git blobs at the approved installed commit, with bounded no-lazy-fetch
-reads. The closure includes the observer's durable writer; transitive observer
+reads. If the import-time read of the installed Git HEAD fails, the launcher
+reports one fixed reason: `timed out`, `process error`, `unsuccessful exit`, or
+`malformed output`. It does not retry or report Git output, raw errors, or
+environment values. Replay and evidence validation failures remain generic.
+The closure includes the observer's durable writer; transitive observer
 imports use those captured bytes under the same deny-unlisted loader.
 The fixed TypeScript bundle and the semver library are captured once and checked
 against their pinned package-file hashes. Semver's exact tooling declaration and
