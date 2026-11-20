@@ -65,6 +65,18 @@ test("every example has an image, and each is checked", () => {
   for (const file of files) assert.ok(existsSync(new URL(file, root)), `${file} is missing`);
 });
 
+// An image builds the versions the lock names, which `corten check` ran, and fails when the lock is
+// missing or stale instead of repairing it inside the build (#1579, #1584).
+test("every image's cargo build is --locked", () => {
+  for (const file of files) {
+    const builds = instructions(source(file))
+      .filter((line) => /^RUN\s/i.test(line))
+      .flatMap((line) => [...line.matchAll(/cargo build\b[^&;|]*/g)].map((found) => found[0].trim()));
+    assert.ok(builds.length > 0, `${file} runs no cargo build`);
+    for (const build of builds) assert.match(build, /\s--locked(\s|$)/, `${file}: ${build}`);
+  }
+});
+
 test("card-market's run stage is the template's, so its smoke checks the template's image", () => {
   const copy = (/** @type {string} */ line) => line.replace(/^COPY --from=build \S+/i, "COPY --from=build <server>");
   const read = (/** @type {string} */ file) => lastStage(readFileSync(new URL(file, root), "utf8")).map(copy);
