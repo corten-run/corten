@@ -1243,8 +1243,8 @@ rules something out.
        bursts (16 KiB a second, `curl --limit-rate 16K`) were cut, so the reading pattern decides
        it, not TLS
        ([#1757 send_timeout cuts a slow reader that takes bytes from its socket in bursts, over TLS and plain HTTP alike](https://github.com/corten-run/corten/issues/1757));
-       and while the connection's task has
-       spent tokio's cooperative budget a report of room does not start the wait over
+       and while the connection's task has spent tokio's cooperative budget a report of room
+       does not start the wait over
        ([#1742 A TLS flush that stays pending while a slow client reads steadily may trip send_timeout: test serve_wrapped over TLS with a steady reader](https://github.com/corten-run/corten/issues/1742)));
        a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a client that sends
        nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose

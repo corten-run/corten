@@ -657,7 +657,7 @@ mod tests {
 
     /// One task whose write waits and whose flush then goes through, with the clock expiring the
     /// write while the flush has taken `writer` (`steps` puts the expiry's wake into the flush):
-    /// the task is still woken, so its write fails at the send timeout instead of waiting on.
+    /// how many times the task is woken.
     fn the_expirys_wake_reaches_a_waiting_write(steps: impl FnMut(&Watch, u8) + 'static) -> usize {
         use std::sync::atomic::Ordering::SeqCst;
         let clock = Clock::start(None, Some(Duration::from_secs(30))).unwrap();
@@ -673,6 +673,21 @@ mod tests {
         STEP.with(|step| *step.borrow_mut() = None);
         assert!(flushed.is_ready());
         task.0.load(SeqCst)
+    }
+
+    /// A wake that finds a call waiting wakes it and is not counted: only a wake that found `writer`
+    /// empty is, after its take, so a call that took `writer` before it cannot read it already counted.
+    #[tokio::test]
+    async fn a_wake_that_finds_a_waiting_call_wakes_it_and_is_not_counted() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let clock = Clock::start(None, Some(Duration::from_secs(30))).unwrap();
+        let watch = clock.watch();
+        let mut io = Watched { io: Flushes, watch: Some(watch.clone()), _open: None };
+        let task = Arc::new(Counted(0.into()));
+        let waker = Waker::from(task.clone());
+        assert!(Pin::new(&mut io).poll_write(&mut Context::from_waker(&waker), b"x").is_pending());
+        watch.wake_writer();
+        assert_eq!((task.0.load(SeqCst), watch.wakes.load(SeqCst)), (1, 0));
     }
 
     #[tokio::test]
