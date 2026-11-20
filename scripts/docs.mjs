@@ -3,15 +3,17 @@
 // `corten ui add` row was, at a marker inside the row's text). The house rule this leans on: every
 // table row ends with `|`. Fenced code is not read, so a guide can show a conflict. A paragraph
 // cut at a marker inside its text is not caught: the text can name a marker (an issue's title).
-// Indentation is not measured: indented code (four spaces, outside a list) is read as text, and a
-// bare fence line indented or quoted inside fenced code closes it; the guides fence their code
-// unindented.
+// Outside changelogs, indentation is not measured: indented code is read as text, and a bare
+// fence line indented or quoted inside fenced code closes it; the guides fence their code unindented.
 //
 // And for a link to a file or folder the repository does not have (bench/browser's README linked
 // the view app's code to a file that never existed): an inline link (`[text](target)`,
 // `![alt](target)`, spaces around the target allowed) and, inside an HTML tag that closes on its
 // line (a `>` in a quoted value does not close it), a `src`, `srcset` or `href` (the README's
-// logo). Not read for links: a URL (`https:`, `//host`), the anchor and query of a target, inline
+// logo). For links to the root or per-version changelog, also check the fragment against its
+// supported ATX headings and explicit HTML anchors; skip unknown IDs if any heading is unverifiable.
+// Not read for other links: a URL (`https:`, `//host`),
+// the anchor and query of a target, inline
 // code (a span may wrap onto the paragraph's next lines, and a backslash in it is its own
 // character; a backtick run with no partner in its paragraph is text, as Markdown shows it, and a
 // heading, list item, HTML line, table row or blank line ends the paragraph), an escaped bracket or
@@ -29,20 +31,40 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
+/** @param {string} file */
+export const isChangelog = (file) => /^CHANGELOG(?:\.\d+\.\d+\.\d+)?\.md$/.test(file);
+
+/** @typedef {{ ids: Set<string>, unsupported: boolean }} AnchorIndex */
+
+/** @param {string} part */
+function decoded(part) {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return part;
+  }
+}
+
 /**
  * The problems in the Markdown file `file` (its path from the repository's root) whose text is
  * `text`, where `present` has every file and folder of the repository (`.` the root), and how
  * many table rows and relative links it read.
  * @param {string} file @param {string} text @param {Set<string>} present
- * @returns {{ problems: string[], rows: number, links: number }}
+ * @param {(file: string) => AnchorIndex} [anchorsFor]
  */
-export function scan(file, text, present) {
+export function scan(file, text, present, anchorsFor) {
   /** @type {string[]} */
   const problems = [];
   let rows = 0;
   let links = 0;
+  const inChangelog = isChangelog(file);
+  /** @type {AnchorIndex} */
+  const anchors = { ids: new Set(), unsupported: false };
+  const headingIds = new Set();
   /** The open fence's character and length, or null outside one. @type {{ char: string, length: number } | null} */
   let fence = null;
+  let indentedCode = false;
+  let listIndent = 0;
   // Inside an HTML comment that started a line, and where it started.
   let comment = false;
   let commentAt = "";
@@ -52,22 +74,43 @@ export function scan(file, text, present) {
   const read = () => {
     const lines = outsideCode(paragraph.map((p) => p.body).join("\n")).split("\n");
     paragraph.forEach(({ at }, n) => {
-      for (const path of targetsIn(lines[n])) {
-        links += 1;
-        let to = path;
-        try {
-          to = decodeURIComponent(path);
-        } catch {}
+      for (const target of targetsIn(lines[n])) {
+        // Check links to the current branch; historical tags, commits and other repos are not this tree.
+        const onMain = /^https:\/\/github\.com\/corten-run\/corten\/blob\/main\//i.exec(target);
+        const external = /^[a-z][a-z\d+.-]*:/i.test(target) || target.startsWith("//");
+        if (external && !onMain) continue;
+        const tail = onMain ? target.slice(onMain[0].length) : target;
+        const path = tail.split(/[#?]/)[0];
+        const hash = tail.indexOf("#");
+        const anchor = hash === -1 ? "" : decoded(tail.slice(hash + 1));
+        let to = decoded(path);
         // GitHub reads a target starting with `/` from the repository's root.
-        to = posix.normalize(to.startsWith("/") ? to.slice(1) || "." : posix.join(posix.dirname(file), to));
-        to = to === "/" ? "." : to.replace(/\/$/, "");
+        to = !path ? file : posix.normalize(to.startsWith("/") || onMain
+          ? to.replace(/^\//, "") || "." : posix.join(posix.dirname(file), to)).replace(/\/$/, "");
+        if ((external || !path) && !(anchor && isChangelog(to))) continue;
+        links += 1;
         if (!present.has(to)) problems.push(`${at}: a link to ${path}, which the repository does not have`);
+        else if (anchor && isChangelog(to) && anchorsFor) {
+          const index = anchorsFor(to);
+          if (!index.ids.has(anchor) && !index.unsupported) {
+            problems.push(`${at}: a link to ${target}, but ${to} has no #${anchor} anchor`);
+          }
+        }
+      }
+      if (inChangelog) {
+        for (const [, attributes] of lines[n].matchAll(new RegExp(tag, "gi"))) {
+          for (const [, name, double, single, bare] of attributes.matchAll(new RegExp(attribute, "gi"))) {
+            const value = double ?? single ?? bare;
+            if (value && /^(?:id|name)$/i.test(name)) anchors.ids.add(value);
+          }
+        }
       }
     });
     paragraph = [];
   };
-  text.split(/\r?\n/).forEach((line, i) => {
+  text.split(/\r?\n/).forEach((line, i, lines) => {
     const at = `${file}:${i + 1}`;
+    const indent = inChangelog ? (/^ */.exec(line)?.[0].length ?? 0) : 0;
     // A block quote's `>`s and a list item's marker come before a fence or a row.
     const body = line.replace(/^(\s*>)*\s*/, "");
     // A fence opens with three or more of one character and closes on a bare fence of that
@@ -84,10 +127,23 @@ export function scan(file, text, present) {
     if (fence) {
       // A closing fence is bare: no list marker before it, nothing after it.
       const close = /^(`{3,}|~{3,})\s*$/.exec(body);
-      if (close && close[1][0] === fence.char && close[1].length >= fence.length) fence = null;
+      if (indent < listIndent + 4 && close && close[1][0] === fence.char && close[1].length >= fence.length) fence = null;
       return;
     }
-    if (mark && !(mark[1][0] === "`" && mark[2].includes("`"))) {
+    if (inChangelog && body) {
+      if (indent < listIndent) listIndent = 0;
+      // A blank line can separate blocks in a list item without ending the item.
+      if (!listIndent && indent >= 4 && (indentedCode || !lines[i - 1]?.trim())) {
+        read();
+        indentedCode = true;
+        return;
+      }
+      indentedCode = false;
+      const item = /^ {0,3}(?:[-*+]|\d{1,9}[.)]) {1,4}(?=\S)/.exec(line);
+      if (item) listIndent = item[0].length;
+    }
+    const tooIndented = !listIndent && indent >= 4;
+    if (!tooIndented && mark && !(mark[1][0] === "`" && mark[2].includes("`"))) {
       read();
       fence = { char: mark[1][0], length: mark[1].length };
       return;
@@ -112,7 +168,17 @@ export function scan(file, text, present) {
     // A table row and a heading are lines of their own, and a line that starts a block (a list
     // item, HTML) starts a new paragraph, so a code span never runs into or out of one.
     const tableRow = body.startsWith("|");
-    const heading = /^#{1,6}(\s|$)/.test(body);
+    const heading = !tooIndented && /^#{1,6}(\s|$)/.test(body);
+    if (heading && inChangelog) {
+      const slug = headingSlug(body.replace(/^#+\s*/, "").replace(/\s+#+\s*$/, ""));
+      if (slug === undefined) anchors.unsupported = true;
+      else {
+        let id = slug;
+        for (let i = 1; headingIds.has(id); i++) id = `${slug}-${i}`;
+        headingIds.add(id);
+        anchors.ids.add(id);
+      }
+    }
     if (!body.trim() || tableRow || heading || /^(([-*+]|\d{1,9}[.)])(\s|$)|<[a-z/!?])/i.test(body)) read();
     if (body.trim()) paragraph.push({ at, body });
     if (tableRow || heading) read();
@@ -129,7 +195,7 @@ export function scan(file, text, present) {
   if (fence) problems.push(`${file}: a fence (${fence.char.repeat(fence.length)}) that never closes`);
   // GitHub hides the rest of the file, links and all.
   if (comment) problems.push(`${commentAt}: an HTML comment that never closes`);
-  return { problems, rows, links };
+  return { problems, rows, links, anchors };
 }
 
 // An attribute as CommonMark reads inline HTML: its name, then its value double-quoted,
@@ -138,19 +204,33 @@ const attribute = /\s+([a-z_:][a-z\d_.:-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\
 // An open tag on one line, its attributes captured.
 const tag = `<[a-z][a-z\\d-]*((?:${attribute})*)\\s*/?>`;
 
+/** @param {string} heading */
+function headingSlug(heading) {
+  /** @type {string[]} */
+  const literals = [];
+  const prose = outsideCode(heading, (text) => `\0${literals.push(text) - 1}\0`);
+  // Slug plain text, code spans and escaped punctuation only. Links, entities, HTML and
+  // emphasis can change the rendered text; an underscore inside an identifier is literal.
+  if (/[[\]<>&*~`]|(?<![\p{L}\p{M}\p{N}_])_|_(?![\p{L}\p{M}\p{N}_])/u.test(prose)) return undefined;
+  return prose.replace(/\0(\d+)\0/g, (_, i) => literals[Number(i)])
+    .trim().toLowerCase().replace(/[^\p{L}\p{M}\p{N}_ -]/gu, "").replaceAll(" ", "-");
+}
+
 /**
  * `text` (a paragraph's lines, joined by `\n`) with its inline code and its comments that close
  * on their line blanked and its escapes removed, line breaks kept, read from the left so whichever
  * of a tag, a comment and a code span starts first wins. A code span is a backtick run and the
  * next run of the same length, with any backslash inside it its own character; a run with no such
  * partner is text. Outside code, `\\` and the punctuation after it are removed, so an escaped
- * bracket or backtick is no link and no span.
- * @param {string} text
+ * bracket or backtick is no link and no span. For headings, render code and escapes as literal
+ * text via the callback instead, and omit comments without padding them.
+ * @param {string} text @param {(value: string) => string} [literal]
  */
-export function outsideCode(text) {
+export function outsideCode(text, literal) {
   let out = "";
   for (let i = 0; i < text.length; ) {
     if (text[i] === "\\" && /[!-/:-@[-`{-~]/.test(text[i + 1] ?? "")) {
+      if (literal) out += literal(text[i + 1]);
       i += 2;
       continue;
     }
@@ -172,7 +252,7 @@ export function outsideCode(text) {
       const end = shut !== -1 ? shut : text.indexOf("-->", i + 4);
       const eol = text.indexOf("\n", i);
       if (end !== -1 && (eol === -1 || end < eol)) {
-        out += " ".repeat(end + 3 - i);
+        if (!literal) out += " ".repeat(end + 3 - i);
         i = end + 3;
         continue;
       }
@@ -191,7 +271,12 @@ export function outsideCode(text) {
       i += open.length;
       continue;
     }
-    out += text.slice(i, close.index + close[0].length).replace(/[^\n]/g, " ");
+    if (literal) {
+      const code = text.slice(i + open.length, close.index).replaceAll("\n", " ");
+      out += literal(/^ .* $/.test(code) && /[^ ]/.test(code) ? code.slice(1, -1) : code);
+    } else {
+      out += text.slice(i, close.index + close[0].length).replace(/[^\n]/g, " ");
+    }
     i = close.index + close[0].length;
   }
   return out;
@@ -201,8 +286,7 @@ export function outsideCode(text) {
  * The relative targets of one line's prose: an inline link's or image's (`[text](target)`, spaces
  * around it allowed, `<..>` holding one with spaces) and, inside an HTML tag that closes on the
  * line (a `>` in a quoted value does not close it), a `src`, `srcset` or `href` value, quoted
- * either way or not at all. A URL, an anchor alone and an empty target are left out, and the
- * anchor and query are cut off.
+ * either way or not at all.
  * @param {string} prose
  */
 function targetsIn(prose) {
@@ -218,7 +302,7 @@ function targetsIn(prose) {
       else if (lower === "src" || lower === "href") targets.push(value);
     }
   }
-  return targets.map((t) => t.split(/[#?]/)[0]).filter((path) => path && !/^[a-z][a-z\d+.-]*:/i.test(path) && !path.startsWith("//"));
+  return targets;
 }
 
 /** Every path of `paths` (files, from the root) and every folder above one, and `.`. @param {string[]} paths */
@@ -237,6 +321,18 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const files = [...new Set(git(["ls-files", "-z", "--", "*.md"]))];
   // Every file a commit would hold: tracked, or new and not ignored.
   const present = presentIn(git(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]));
+  /** @type {Map<string, AnchorIndex>} */
+  const changelogAnchors = new Map();
+  const anchorsFor = (/** @type {string} */ file) => {
+    let anchors = changelogAnchors.get(file);
+    if (!anchors) {
+      const path = join(root, file);
+      anchors = existsSync(path) ? scan(file, readFileSync(path, "utf8"), present).anchors
+        : { ids: new Set(), unsupported: false };
+      changelogAnchors.set(file, anchors);
+    }
+    return anchors;
+  };
   /** @type {string[]} */
   const problems = [];
   let rows = 0;
@@ -244,7 +340,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   for (const file of files) {
     // A tracked file deleted in the working tree but not staged is still listed.
     if (!existsSync(join(root, file))) continue;
-    const found = scan(file, readFileSync(join(root, file), "utf8"), present);
+    const found = scan(file, readFileSync(join(root, file), "utf8"), present, anchorsFor);
     problems.push(...found.problems);
     rows += found.rows;
     links += found.links;

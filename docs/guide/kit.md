@@ -130,8 +130,8 @@ kit's `var()` line when merging and declaring the token at its own value instead
 kit's theme lacks comes with the kit's light and dark lines; one an app's own theme lacks, by
 name, to give as a reference to one of the app's colors so it follows its dark theme too.
 A theme keeps its own values when the kit later changes a default: no command reports it.
-Upcoming changes to defaults are in the [pending changelog entries](../../changelog.d/);
-published changes are in [CHANGELOG.md](../../CHANGELOG.md).
+Upcoming changes to defaults are in the [pending changelog entries](../../changelog.d/).
+Start at [CHANGELOG.md](../../CHANGELOG.md) for published changes, including links to archived releases.
 
 A focused field's ring is a box shadow, which forced colors (Windows High Contrast) does not
 paint, so each text control and menu item also has a transparent outline that forced colors
@@ -302,7 +302,7 @@ JavaScript and under the CSP, with no `style=`, and the labels they show (Previo
 legend) are the app's, in its language.
 
 Every component is in use in the [ui-gallery](../../examples/ui-gallery) example, built from the
-kit's own files, and its browser test (`examples/ui-gallery/smoke.mjs`) runs them in Chromium,
+kit's own files, and its [browser tests](../../examples/ui-gallery/smoke/) run them in Chromium,
 Firefox and WebKit, with and without JavaScript. The [seller-desk](../../examples/seller-desk)
 example is an app styled with the kit: five components copied and unedited, and the theme's tokens
 set to the app's palette and radius in light and dark.

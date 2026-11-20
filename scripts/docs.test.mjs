@@ -114,6 +114,92 @@ test("a target is the repository's own spelling: its case, %-escapes, query and 
   ]);
 });
 
+test("changelog anchors follow headings, duplicate suffixes and explicit HTML anchors", () => {
+  const archive = "CHANGELOG.0.2.0.md";
+  const paths = presentIn(["CHANGELOG.md", archive, "docs/guide/kit.md"]);
+  const sections = scan(archive, [
+    "## 0.2.0 (2026-11-11)", "### Breaking changes", "### Breaking changes",
+    "### Use `App` and Café", '<a id="upgrade"></a>', "```markdown", "    ```", "# Not a heading", "```",
+  ].join("\n"), paths).anchors;
+  const anchorsFor = (/** @type {string} */ file) => file === archive ? sections
+    : { ids: new Set(["unreleased"]), unsupported: false };
+  const text = [
+    "[old](../../CHANGELOG.0.2.0.md#breaking-changes-1) [up](/CHANGELOG.0.2.0.md#upgrade)",
+    "[new](../../CHANGELOG.md#unreleased) [version](/CHANGELOG.0.2.0.md#020-2026-11-11)",
+    "[Unicode](https://github.com/corten-run/corten/blob/main/CHANGELOG.0.2.0.md#use-app-and-caf%C3%A9)",
+    "[moved](/CHANGELOG.md#breaking-changes) [code](/CHANGELOG.0.2.0.md#not-a-heading)",
+    "[other repo](https://github.com/nats-io/nats.rs/blob/main/CHANGELOG.md#breaking-changes)",
+    "[historic tag](https://github.com/corten-run/corten/blob/v0.2.0/CHANGELOG.md#breaking-changes)",
+  ].join("\n");
+  assert.deepEqual(scan("docs/guide/kit.md", text, paths, anchorsFor).problems, [
+    "docs/guide/kit.md:4: a link to /CHANGELOG.md#breaking-changes, but CHANGELOG.md has no #breaking-changes anchor",
+    "docs/guide/kit.md:4: a link to /CHANGELOG.0.2.0.md#not-a-heading, but CHANGELOG.0.2.0.md has no #not-a-heading anchor",
+  ]);
+  assert.deepEqual(scan(archive, "[self](#breaking-changes) [bad](#absent)", paths, anchorsFor).problems, [
+    "CHANGELOG.0.2.0.md:1: a link to #absent, but CHANGELOG.0.2.0.md has no #absent anchor",
+  ]);
+});
+
+test("changelog heading slugs keep literal code and identifier underscores", () => {
+  const archive = "CHANGELOG.0.2.0.md";
+  const paths = presentIn(["README.md", archive]);
+  const headings = [
+    "### Use `foo_bar_baz`",
+    "### x and y with plain_name",
+    "### Read `` Vec<T> `inner` ``!",
+  ].join("\n");
+  const anchorsFor = () => scan(archive, headings, paths).anchors;
+  const links = [
+    "[code](CHANGELOG.0.2.0.md#use-foo_bar_baz)",
+    "[wrong](CHANGELOG.0.2.0.md#use-foobarbaz)",
+    "[prose](CHANGELOG.0.2.0.md#x-and-y-with-plain_name)",
+    "[literal](CHANGELOG.0.2.0.md#read-vect-inner)",
+  ].join("\n");
+  assert.deepEqual(scan("README.md", links, paths, anchorsFor).problems, [
+    "README.md:2: a link to CHANGELOG.0.2.0.md#use-foobarbaz, but CHANGELOG.0.2.0.md has no #use-foobarbaz anchor",
+  ]);
+});
+
+test("unverifiable changelog headings do not hide later supported anchors or fail links", () => {
+  const archive = "CHANGELOG.0.2.0.md";
+  const paths = presentIn(["README.md", archive]);
+  for (const [heading, slug] of [
+    ["### Ampersand &amp; names", "ampersand--names"],
+    ["### Use [CLI](https://example.org/a(b)c)", "use-cli"],
+    ["### Use <strong>CLI</strong>", "use-cli"],
+    ["### Use **the _CLI_**", "use-the-cli"],
+  ]) {
+    const index = scan(archive, [
+      "### Earlier heading", heading, '<a id="explicit"></a>', "### Unique plain heading", "### Earlier heading",
+    ].join("\n"), paths).anchors;
+    assert.equal(index.unsupported, true, heading);
+    assert.deepEqual(index.ids, new Set(["earlier-heading", "explicit", "unique-plain-heading", "earlier-heading-1"]), heading);
+    const link = (/** @type {string} */ id) => "[section](" + archive + "#" + id + ")";
+    assert.equal(index.ids.has(slug), false, heading);
+    const text = [link(slug), link("unique-plain-heading"), link("missing")].join("\n");
+    assert.deepEqual(scan("README.md", text, paths, () => index).problems, [], heading);
+  }
+});
+
+test("changelog anchors ignore indented code but keep headings in list continuations", () => {
+  const archive = "CHANGELOG.0.2.0.md";
+  const paths = presentIn([archive]);
+  const headings = [
+    "    ### At the start", "", "    ### Still code &amp; not a heading",
+    "### A plain heading", "", "    ### Only an example", "    ```",
+    "10. An item", "", "    ### A list heading", "", "### Back at top level", "", "    ### Not in the list",
+  ].join("\n");
+  const index = scan(archive, headings, paths);
+  assert.deepEqual(index.problems, []);
+  const links = "[start](#at-the-start) [example](#only-an-example) [list](#a-list-heading) [outside](#not-in-the-list) [missing](#missing)";
+  assert.deepEqual(scan(archive, links, paths, () => index.anchors).problems, [
+    "CHANGELOG.0.2.0.md:1: a link to #at-the-start, but CHANGELOG.0.2.0.md has no #at-the-start anchor",
+    "CHANGELOG.0.2.0.md:1: a link to #only-an-example, but CHANGELOG.0.2.0.md has no #only-an-example anchor",
+    "CHANGELOG.0.2.0.md:1: a link to #not-in-the-list, but CHANGELOG.0.2.0.md has no #not-in-the-list anchor",
+    "CHANGELOG.0.2.0.md:1: a link to #missing, but CHANGELOG.0.2.0.md has no #missing anchor",
+  ]);
+});
+
 test("a backtick with no partner in its paragraph is text, and hides no link after it", () => {
   const text = ["1. A stray ` here", "2. [x](m1.md)", "3. [y](m2.md)", "", "# A heading with ` open", "[z](m3.md)", "Path `C:\\` then [w](m4.md)"].join("\n");
   assert.deepEqual(found("README.md", text).problems, [

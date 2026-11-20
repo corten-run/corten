@@ -14,6 +14,10 @@ const workflow = parse(readFileSync(new URL(".github/workflows/benchmark-evidenc
 test("Evidence scopes the full diff on pull requests and main without fail-open CI", () => {
   assert.deepEqual(workflow.on.push, { branches: ["main"] });
   assert.equal(workflow.on.pull_request, null);
+  assert.equal(workflow.on.workflow_call, null);
+  const manual = workflow.on.workflow_dispatch.inputs.native_only;
+  assert.equal(manual.type, "boolean");
+  assert.equal(manual.default, false);
   assert.deepEqual(workflow.permissions, { contents: "read" });
   const scope = workflow.jobs.scope;
   assert.equal(scope.if, undefined);
@@ -29,7 +33,7 @@ test("Evidence scopes the full diff on pull requests and main without fail-open 
   assert.equal(job.strategy["fail-fast"], false);
   assert.equal(job["continue-on-error"], undefined);
   assert.equal(job.needs, "scope");
-  assert.equal(job.if, "needs.scope.outputs.run == 'true'");
+  assert.equal(job.if, "needs.scope.outputs.run == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.native_only)");
   const step = job.steps.find((step) => step.env?.SUITE);
   assert.equal(step.if, undefined);
   assert.equal(step["continue-on-error"], undefined);

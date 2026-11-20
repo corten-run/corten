@@ -42,10 +42,13 @@ not remove that requirement.
 
 `App::header_timeout` (30 seconds unless set) bounds what comes before a request: a client that
 opens connections and sends its head slowly, or never finishes it, cannot hold them (an idle
-keep-alive connection closes after it too). A connection that switches, with a `101` (a
-WebSocket) or a `2xx` to `CONNECT` (a tunnel), is the route's from then on: the header timeout
-no longer applies and `App::send_timeout` bounds only its writes that wait, so one on which
-neither side sends stays open until the route ends it, and idle limits there are the route's
+keep-alive connection closes after it too). It counts from when an answer's last bytes have been
+handed to the socket (the system may still hold some of them to send), not from when the server
+took the answer's last part, so a long download its client reads steadily is not cut by it. A
+connection that switches, with a `101` (a WebSocket) or a `2xx` to `CONNECT` (a tunnel), is the
+route's from then on: the header timeout no longer applies and `App::send_timeout` bounds only
+its writes that wait, so one on which neither side sends stays open until the route ends it, and
+idle limits there are the route's
 ([design Limit 13](../design.md#limit-protocol-switch)). It counts against `App::max_connections`
 while it is open, so a route that accepts them ends idle ones (closing one that has sent no frame
 for a set time, and pinging one that only listens so its pongs count) and bounds how many it
@@ -55,7 +58,9 @@ second, so a connection closes within a tenth of the timeout of it (at most a se
 every listener. `App::send_timeout` (60 seconds unless set, nginx's `send_timeout`) bounds what
 comes after: a write that finds the connection's send buffer full may wait that long for room,
 or the connection closes, so a client that sends requests and stops reading cannot hold its
-connection, and a live stream, a feed or a WebSocket to one ends rather than waiting on it. It
+connection, and a live stream, a feed or a WebSocket to one ends rather than waiting on it. With
+`None`, such a client holds its connection until shutdown, whether its answer is a stream or a
+whole body: the header timeout does not start until the answer has been sent. It
 counts only while a write waits: a download whose reader keeps freeing room and a stream quiet
 between events are not cut, though a reader that takes a little each minute can be, since the
 system reports room only once a good part of the buffer is free. A TLS connection's last record,
@@ -819,7 +824,7 @@ open stream holds one, and a page with a few live elements open in a few tabs us
 `serve_wrapped` facing browsers directly is for an app without live streams; an app with them
 puts a proxy or CDN in front even though it could end TLS itself (why Corten does not speak
 HTTP/2 itself: [design Limit 14](../design.md#limit-http1)).
-This requirement has an operational cost: a second server and nine proxy-specific concerns
+This requirement has an operational cost: a second server and ten proxy-specific concerns
 in the deployment guide (the other three rows concern optional caching, health and HTTPS).
 The [HTTP/2 prototype](../../bench/http2/README.md) allowed eight live tabs but missed a send
 timeout and, by inspection, never returned its h2 watch to idle. Its partial-header probe kept
@@ -964,13 +969,21 @@ before it (a route that says `unstaged` goes through none;
    the error page starts the layout reads not started yet and waits for them, here, outside 5: a
    middleware sees neither the error page nor that wait.
 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak `ETag` on
-   the answer to a `GET` or `HEAD` (outside an API and Corten's own paths), and
-   `304 Not Modified` in place of the body when the client already has it
+   an eligible answer to a `GET` or `HEAD` (outside an API and Corten's own paths). A `GET` must
+   send `If-None-Match` or explicitly accept a non-identity coding to get a tag: with the `compress`
+   feature, only a coding Corten can send, named with a positive weight, counts; without it, any
+   named non-identity coding with a positive weight counts, and so does a positive `*`.
+   `304 Not Modified` replaces the body when the client's tag matches
    ([design Limit 21](../design.md#limit-etag)), then compression. A middleware sees the `200` with the
    whole body, also when the client gets the `304`.
 
 Corten's stages hold the request once and hand it to the first middleware, or straight to the
 handler when there is none. The outer stages keep only what they need to finish the response.
+They read the incoming request's mode, credentials and cache validators before middleware. Those
+decisions and the error page's saved request are not changed by middleware edits. A `Req` taken
+by middleware or the handler reads the headers there, including edits by an earlier extractor.
+For an API or data request there is no HTML error snapshot: a session cookie can settle the cache
+decision without reading `Authorization`.
 
 Access logging (`App::access_log`) is outside this order, and outside `App::layer`: it sees the
 finished response, including refusals that never reached a middleware and an error page or
@@ -1470,7 +1483,9 @@ tag costs about 3 instructions a byte of a page (2.5 of a file), and a `304` sav
 and the body. A `GET` that does not explicitly accept a non-identity coding and sends no
 `If-None-Match` (a benchmark, `curl`) is not sent a tag: the hash would cost about a third of the
 render. A CDN that fetches pages without asking for a coding therefore gets no tag to revalidate
-them. With `compress`, only explicitly named codings Corten can send count; without it, any
+them, and a proxy in front of the app must pass the browser's `Accept-Encoding` on
+([deploying](deploy.md#response-compression)). With `compress`, only explicitly named codings
+Corten can send count; without it, any
 non-identity coding or `*` with a positive weight counts. In both builds, an otherwise taggable
 `HEAD` gets an `ETag` regardless of coding, so a shared cache does not freshen an untagged `GET`
 just because the lengths match ([RFC 9111 section 4.3.5](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.5)).

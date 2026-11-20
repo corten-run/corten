@@ -72,11 +72,21 @@ export function participantExecutables() {
         return { executableRef: ref, executableIdentity: identity };
       } finally { if (!retained) closeSync(fd); }
     },
-    recheck(pid, evidence) {
+    recheck(pid, evidence, observing) {
       assert.equal(closed, false);
-      assert.equal(evidence.executableRef, executableReference(evidence.executableIdentity));
+      const expected = evidence.executableIdentity;
+      observing("executable-recheck-reference", () => assert.equal(evidence.executableRef, executableReference(expected)));
       const info = statSync(`/proc/${pid}/exe`, { bigint: true });
-      assert.deepEqual(Object.fromEntries(keys.map((key) => [key, String(info[key])])), evidence.executableIdentity);
+      const actual = Object.fromEntries(keys.map((key) => [key, String(info[key])]));
+      const operation = actual.dev !== expected.dev || actual.ino !== expected.ino ? "executable-recheck-inode"
+        : actual.size !== expected.size || actual.mtimeNs !== expected.mtimeNs ? "executable-recheck-size-or-mtime"
+        : "executable-recheck-ctime";
+      observing(operation, () => assert.deepEqual(actual, expected));
+    },
+    checkPinned(evidence) {
+      const entry = entries.get(evidence.executableRef);
+      assert.ok(entry);
+      assert.deepEqual(executableIdentity(entry.fd), evidence.executableIdentity);
     },
     finish() {
       assert.equal(closed, false); assert.equal(transactions.length, 0); closed = true;

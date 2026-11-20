@@ -270,15 +270,23 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
         let at; while ((at = buffer.indexOf(10)) >= 0) { assert.ok(at <= streamLimits.frameBytes); accept(JSON.parse(buffer.subarray(0, at))); buffer = buffer.subarray(at + 1); }
       } catch { fail(); }
     });
-    let stderr = 0; child.stderr.on("data", (data) => { stderr += data.length; if (stderr > 8192) fail(); });
+    let stderr = Buffer.alloc(0), excess = false;
+    child.stderr.on("data", (data) => {
+      if (excess) return;
+      if (stderr.length + data.length > 8192) { excess = true; stderr = Buffer.alloc(0); fail(); }
+      else stderr = Buffer.concat([stderr, data]);
+    });
     child.once("close", (code, signal) => {
       const late = settled;
       clearInterval(timer); clearTimeout(timer); settled = true;
       try {
         if (file) { closeSync(file.fd); file = undefined; }
         const closedAtMs = Date.now();
+        const reported = Array.from(stderr.toString("latin1").matchAll(/^CORTEN_MONITOR_FAULT ([0-9a-f]{32}) ([1-9][0-9]{0,4})\n/gm));
+        const helperLine = code !== 0 && registration && reported.length === 1 && reported[0][1] === expected.id ? Number(reported[0][2]) : null;
         durable(join(local, "monitor-local-closed.json"), JSON.stringify({ id: expected.id, binding: expected.binding,
-          code, signal, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs }));
+          code, signal, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs,
+          ...(helperLine !== null ? { helperLine } : {}) }));
         if (late) return; // Uncertain result and closed journal stand; only add the actual local observation.
         if (!terminal || closing || code !== 0 || signal !== null || buffer.length) {
           revoke(); append({ kind: "local-closed", code, signal, remoteTerminal: false });

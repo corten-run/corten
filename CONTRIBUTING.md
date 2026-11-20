@@ -11,6 +11,7 @@ its tests pass; the [review](#review) decides whether it should land.
 ```text
 crates/
   corten/            The framework on hyper: App, Req, html!, components, the runtime (js/corten.js)
+                     Put new crate-level tests in the area's file under crates/corten/src/tests/.
   corten-macros/     html!, #[component], #[event], script!, messages!, tokens!, derives (Fields, Route), on proc_macro alone (no syn)
   corten-cli/        The corten command, standard library only
   corten-feed/       Live feeds: rows, numbered patches, replay, resume
@@ -228,6 +229,11 @@ runs the `npm-check` part and the native workload group apparatus, builds the Gi
 test-tools image from it. `firefox-feeds` and `webkit-gallery` use the base image directly,
 so they do not depend on Launchpad's Git PPA. The apparatus still runs as the checkout owner
 with the test-tools image's fingerprint-checked Git and immutable-source checks.
+
+Add new watchlist runtime checks to the matching area in [`scripts/smoke/`](scripts/smoke/),
+and new gallery checks to the matching widget or area in [`examples/ui-gallery/smoke/`](examples/ui-gallery/smoke/).
+The entry points order the areas, including those that share pages, routes, or listeners.
+
 A browser smoke that goes five minutes without finishing a check stops itself (`scripts/stall.mjs`),
 printing the last check it finished and, for the runtime's smoke, the requests still loading; give a
 new smoke script's `check` the same watchdog. Each smoke launches its browser through `steady` (`scripts/steady.mjs`), which
@@ -237,6 +243,18 @@ A resource the page loads can be aborted the same way, and the page's console li
 told of the error Chromium logs for it (the exact text
 `Failed to load resource: net::ERR_NETWORK_CHANGED`); a check that needed the resource still fails
 on its own, and what the runtime logs for a loss it recovers from is still seen.
+
+The watchlist and ui-gallery smokes gate the initial HTTP navigation on each new Linux WebKit
+page, including new tabs in an existing context. A fast `Cross-Origin-Opener-Policy: same-origin`
+response can otherwise start a process swap before WebKit handles the original process's
+provisional-load start, then that late start cancels the swap
+([WebKit bug 325840](https://bugs.webkit.org/show_bug.cgi?id=325840)). The one-shot request route
+lets the start reach the UI process before the request goes to the server. It keeps existing
+fixture routes and the real response. Playwright bypasses the HTTP cache while the route is
+installed. The gate waits at most five seconds each for route setup and cleanup, without retrying
+the navigation or extending its timeout. If setup or navigation already failed, cleanup cannot
+replace that error; after a successful navigation, failed cleanup fails the smoke. Remove the gate
+when Playwright's pinned WebKit includes the upstream fix.
 
 In Playwright 1.64.1, Firefox sometimes acknowledged a click tens of seconds late on a heavily
 loaded Windows machine, with no Corten on the page: a static form reproduces it, with or without
@@ -340,14 +358,35 @@ establish a general ranking.
    the runtime does.
 2. A change to rendering, the runtime or the request path is measured before and after, with
    the number that can see the change:
-   1. Work done in process (rendering, routing, serialization, middleware, a handler's own
-      code): instructions per request under callgrind (`valgrind --tool=callgrind`). Count a
-      test that sends 1,200 requests through the router in process with `oneshot` and one that
+   1. Work done in process (rendering, serialization, a handler's own code): instructions per
+      request under callgrind (`valgrind --tool=callgrind`). Count a test that sends 1,200
+      requests through the router in process with `oneshot` and one that
       sends 200: the difference over 1,000 leaves out startup and setup. Over a real socket,
       `bench/fullstack/count.mjs` counts with `perf stat`. A count barely moves with other load
       on the machine, so it shows a difference of a few percent that times on a laptop or
       Docker Desktop hide. Reading JSON: `read_cost` in `examples/card-market` reads the
       fixture's 500 item API responses once each, and its doc comment gives the command.
+
+      For work around the handler (routing, middleware and other stages, headers read or
+      written, future sizes, allocations or copies per request), give the instruction count
+      **and** cycles per request under equivalent load on a quiet Linux bench host.
+      For changes exercised by the catalog item page or item JSON, use
+      [`bench/fullstack/count.mjs`](bench/fullstack/count.mjs) with target `page` or `json` and
+      one repeat per invocation (`node bench/fullstack/count.mjs <round> 1 <app> <target>`).
+      Use a fresh round name each time and tag each build in turn with the image name the script
+      expects. Otherwise, measure the affected route with an equivalent under-load test; an
+      unaffected route does not count. Alternate the two release builds, verify the response bytes
+      and headers before measuring, and report any failed requests.
+
+      Compare the change in **user plus kernel cycles per request within each pair** against
+      the smallest worthwhile reduction, declared before running. Report the number of pairs,
+      best, median and range, and the per-pair changes. Report the user and kernel split and,
+      when adding or moving code, user L1 instruction-cache misses per request as diagnostics.
+      The counter records perf's running percentage and requires a reported 100% for every
+      counter it uses. Do not claim a CPU-cost win if either cycle count is missing or unusable
+      (`null`) in either build, or if the bound on the paired changes does not establish the
+      predeclared margin. Say what the run did not resolve. Retired instructions measure work,
+      not speed; fewer cycles per request show lower CPU cost, not lower request latency.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,
@@ -381,6 +420,9 @@ establish a general ranking.
    different positive integer suffix for each entry in the pull request. Before you have a PR
    number, use `branch-<unique-slug>-<entry>.md`. Pick a branch slug unique in this repository
    (lowercase letters, digits and hyphens; add the fork owner or another discriminator if needed).
+   Say what changed for an app author in one to three lines and link the issue or pull request.
+   Put measurements, reasoning and edge cases in the guide, pull request description or design
+   Choice, not in the entry.
    Each file holds one top-level `- ` bullet: one to four spaces after the hyphen, then a
    paragraph of visible text. Indent continuation lines with spaces to at least the start of the
    first line's text. No blank lines or nested blocks. Start the bullet's text with
@@ -391,6 +433,13 @@ establish a general ranking.
    Use emphasis and single-line code spans for prose; put literal brackets, angle brackets,
    backslashes, URLs, and link examples inside code spans. Do not use raw HTML, character
    references, images, or reference links or definitions. `npm run check` validates this format.
+   It caps entries at 400 visible characters only in `branch-*` files and in numbered fragments
+   for pull requests after [#1736 Keep changelog entries short and move released sections to their own files](https://github.com/corten-run/corten/pull/1736).
+   Count Unicode code points, including spaces and
+   emphasis marks, but not the bullet, Markdown indentation (ASCII spaces and tabs), trailing
+   ASCII spaces, code-span delimiters, or link syntax and destinations. Each line wrap counts as
+   one space. Count code-span contents after Markdown removes a matching pair of leading and
+   trailing ASCII padding spaces from a span that is not all spaces.
 4. Commit messages say what changed and why, in plain sentences.
 5. The description says what changed and why, the checks run and their results, and the
    measurements from 2. It merges after its [review](#review).

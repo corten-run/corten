@@ -499,22 +499,19 @@ impl Mount {
     }
 
     /// The request's `Origin` when it is one of this mount's, for the CORS headers.
-    pub fn allowed_origin(&self, headers: &HeaderMap) -> Option<HeaderValue> {
-        if self.origins.is_empty() {
-            return None;
-        }
-        let origin = headers.get(header::ORIGIN)?;
+    pub fn allowed_origin<'h>(&self, origin: Option<&'h HeaderValue>) -> Option<&'h HeaderValue> {
+        let origin = origin?;
         let text = origin.to_str().ok()?.trim_end_matches('/');
-        self.origins.iter().any(|o| o.eq_ignore_ascii_case(text)).then(|| origin.clone())
+        self.origins.iter().any(|o| o.eq_ignore_ascii_case(text)).then_some(origin)
     }
 
     /// The answer to a CORS preflight from one of this mount's origins.
-    pub fn preflight(&self, method: &Method, headers: &HeaderMap) -> Option<Response> {
+    pub fn preflight(&self, method: &Method, headers: &HeaderMap, origin: Option<&HeaderValue>) -> Option<Response> {
         if method != Method::OPTIONS {
             return None;
         }
         let asked = headers.get(header::ACCESS_CONTROL_REQUEST_METHOD)?.clone();
-        let origin = self.allowed_origin(headers)?;
+        let origin = origin?.clone();
         let mut res = StatusCode::NO_CONTENT.into_response();
         let out = res.headers_mut();
         out.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);

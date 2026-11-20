@@ -160,6 +160,17 @@ pub fn __css_syntax(input: TokenStream) -> TokenStream {
     }
 }
 
+/// Internal whole-patch regression cases for the macro and Corten's browser-vector test.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __whole_patch_cases(input: TokenStream) -> TokenStream {
+    match input.to_string().as_str() {
+        "" => html::whole_patch_cases(false),
+        "render" => html::whole_patch_cases(true),
+        _ => panic!("expected no argument or render"),
+    }
+}
+
 /// Field names of a form input struct as constants: `Input::FIELDS.email` is the
 /// `corten::form::FieldName` `"email"`, with serde's `rename` and `rename_all` applied. Templates
 /// print them for `name=` and handlers pass them to `Errors`, so a renamed or misspelled field is a
