@@ -521,7 +521,7 @@ for (const prior of ["mutated", "other-process"]) test(`catalog executable succe
   }
 });
 
-for (const scenario of ["stable", "wrong-parent", "reparented", "parent-exited", "parent-reused", "child-exited"]) {
+for (const scenario of ["stable", "wrong-parent", "reparented", "parent-exited", "parent-reused", "parent-exec", "child-exited"]) {
   test(`catalog checks a newly forked child's inherited executable: ${scenario}`, async (t) => {
     const f = await fixture(t, [], false, undefined, 0, true);
     const parent = 4242, child = 5000;
@@ -536,6 +536,7 @@ for (const scenario of ["stable", "wrong-parent", "reparented", "parent-exited",
       if (path === `/proc/${child}/cmdline` && !replaced) {
         f.nextPid = child;
         replaced = true;
+        if (scenario === "parent-exec") f.nextExecutable = true;
         if (scenario === "parent-exited") f.members = [child];
         if (scenario === "child-exited") f.members = [parent];
       }
