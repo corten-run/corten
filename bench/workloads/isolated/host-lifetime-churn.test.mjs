@@ -14,7 +14,7 @@ import { beginLifetime, captureBrowserParticipant, inspectBrowserParticipants, i
 import { participantExecutables } from "./participant-executables.mjs";
 
 const parent = "/system.slice/corten-bench-groups-r21-0123456789abcdef.service";
-const stat = (pid, name = "node", start = pid * 10) => `${pid} (${name}) S ${[1, ...Array(17).fill(0), start, 0].join(" ")}`;
+const stat = (pid, name = "node", start = pid * 10, ppid = 1) => `${pid} (${name}) S ${[ppid, ...Array(17).fill(0), start, 0].join(" ")}`;
 const missing = (code = "ENOENT") => Object.assign(new Error("PRIVATE_NOT_RETAINED"), { code });
 
 // Synthetic membership/Docker reads, real owned executable inodes/descriptors.
@@ -520,6 +520,38 @@ for (const prior of ["mutated", "other-process"]) test(`catalog executable succe
     assert.equal(f.proof().executables.length, 1);
   }
 });
+
+for (const scenario of ["stable", "wrong-parent", "reparented", "parent-exited", "parent-reused", "child-exited"]) {
+  test(`catalog checks a newly forked child's inherited executable: ${scenario}`, async (t) => {
+    const f = await fixture(t, [], false, undefined, 0, true);
+    const parent = 4242, child = 5000;
+    f.members.push(child);
+    let replaced = false;
+    f.override = (path) => {
+      if (path === `/proc/${child}/stat`) {
+        const ppid = scenario === "wrong-parent" || (scenario === "reparented" && replaced) ? 1 : parent;
+        return stat(child, replaced ? "docker" : "node", child * 10, ppid);
+      }
+      if (path === `/proc/${parent}/stat` && replaced && scenario === "parent-reused") return stat(parent, "node", 100);
+      if (path === `/proc/${child}/cmdline` && !replaced) {
+        f.nextPid = child;
+        replaced = true;
+        if (scenario === "parent-exited") f.members = [child];
+        if (scenario === "child-exited") f.members = [parent];
+      }
+    };
+    await f.tick();
+    const replay = await f.finish();
+    assert.equal(replaced, true);
+    assert.equal(replay.status, scenario === "stable" ? "verified" : "blocked");
+    if (scenario === "stable") {
+      assert.equal(f.terminal.observerFailures.count, 0);
+      assert.equal(f.proof().executables.length, 2);
+      assert.ok(replay.samples.some((s) => s.processes.some((p) => processIdentity(p.stat).pid === child &&
+        p.executableSha256 === createHash("sha256").update("next executable").digest("hex"))));
+    }
+  });
+}
 
 for (const scenario of ["admitted", "unseen", "successor-gone", "name-only", "unreadable", "pid-changed", "start-changed"]) {
   test(`catalog simultaneous name and executable bookends: ${scenario}`, async (t) => {
