@@ -106,7 +106,9 @@ async function command(binary, args, { timeout = 30000, file, capture = true, cl
     const { code, signal } = await new Promise((resolve, reject) => { child.on("error", reject); child.on("close", (code, signal) => resolve({ code, signal })); });
     if (ioError) throw ioError;
     if (code !== 0 || killed || (interrupted && !cleanup)) {
-      const failure = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${output.diagnostic()}`);
+      const diagnostic = output.diagnostic();
+      const failure = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${diagnostic}`);
+      failure.diagnostic = diagnostic;
       failure.exit = { code, signal, expired: killed, interrupted: interrupted && !cleanup }; throw failure;
     }
     return output.result();
@@ -268,6 +270,7 @@ async function load(name, target, phase, seconds, raw) {
   } finally { await remove(container); }
 }
 
+let suiteStage = "suite";
 try {
   save();
   summary.commit = await command("git", ["rev-parse", "HEAD"]);
@@ -305,9 +308,20 @@ try {
     } catch (e) { fail(app, null, "build/image", e); }
     save();
   }
+  suiteStage = "upstream image";
+  try { await docker(["image", "inspect", nodeImage], { capture: false }); }
+  catch (e) {
+    // Docker image inspect also exits 1 for daemon errors; only a missing pin warrants a pull.
+    const { code, signal, expired, interrupted } = e.exit ?? {};
+    if (code !== 1 || signal !== null || expired || interrupted
+        || e.diagnostic.trim() !== `Error response from daemon: No such image: ${nodeImage}`) throw e;
+    log(`pulling catalog upstream ${nodeImage}`);
+    await docker(["pull", nodeImage], { timeout: 10 * 60 * 1000, file: join(folder, "pull-upstream.log"), capture: false });
+  }
+  suiteStage = "suite";
   await docker(["network", "create", "--label", `${label}=${runId}`, network]);
   summary.networkCreated = true;
-  await owned(["run", "-d", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
+  await owned(["run", "-d", "--pull=never", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
     "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, ...(group ? workerCommand : ["node", "/bench/catalog/upstream.mjs"])], upstreamName);
   const upstreamImageId = (await inspect(upstreamName)).Image;
   const upstreamImageInfo = JSON.parse(await docker(["image", "inspect", upstreamImageId]))[0];
@@ -467,7 +481,7 @@ try {
   summary.complete = summary.checksPassed && summary.failures.length === 0 && !(summary.targetFailures?.length);
   if (group && summary.checksPassed && !options.checkOnly) summary.attemptComplete = summary.failures.length === 0
     && Object.values(summary.apps).every((entry) => Object.values(entry.runs).every((runs) => runs.length === options.passes && runs.every((r) => r.complete)));
-} catch (e) { fail(null, null, "suite", e); }
+} catch (e) { fail(null, null, suiteStage, e); }
 finally {
   if (group && summary.tools?.upstream) {
     try {

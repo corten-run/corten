@@ -511,6 +511,12 @@ runner does not create cloud machines or operate the fullstack/nightly state. Th
 `Catalog Contract` workflow builds each framework and runs both sources, but does not publish
 performance numbers.
 
+The shared upstream starts from its pinned Node image without an implicit download.
+If the image is absent locally, setup pulls that exact pin with a separate ten-minute
+deadline and retains `pull-upstream.log` in the round folder. An image inspection or
+pull failure is reported as upstream image setup, before the unchanged 30-second
+container command and 20-second health check deadlines.
+
 The runner uses a version-matched Playwright container for browser checks. Removing its owned
 container also removes detached browser processes after a timeout or interruption. To exercise
 that Linux cleanup regression locally, run `CATALOG_DOCKER_TESTS=1 node --test
