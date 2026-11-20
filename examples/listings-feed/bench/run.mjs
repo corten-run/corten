@@ -125,16 +125,23 @@ const nginxLine = !nginxProbe.error && nginxProbe.status === 0
 const nginxVersion = nginxLine
   ?? `unknown (nginx -v: ${nginxProbe.error?.message ?? (nginxProbe.signal ? `signal ${nginxProbe.signal}` : nginxProbe.status === 0 ? "no version line" : `exit ${nginxProbe.status}`)})`;
 result.nginx = nginxVersion;
-// What the load balancer logged (nginx.conf logs warnings): an instance left out after a request to
-// it failed, a request answered 502 at once because every instance was left out, and a connect to
-// an instance that timed out.
-const lbLog = logs("fb-lb").split("\n");
-const lbLines = (/** @type {RegExp} */ re) => lbLog.filter((l) => re.test(l)).length;
-result.loadBalancer = {
-  serverDisabled: lbLines(/upstream server temporarily disabled/),
-  noLiveUpstreams: lbLines(/no live upstreams/),
-  connectTimedOut: lbLines(/upstream timed out .* while connecting to upstream/),
-};
+// What the load balancer logged (nginx.conf logs warnings), as counts of log lines: warnings that
+// an instance was left out after a request to it failed, requests answered 502 at once because
+// every instance was left out, and connects to an instance that timed out (streams, and all
+// routes). A log that could not be read is recorded as such, not as zero.
+const lbRead = spawnSync("docker", ["logs", "fb-lb"], { encoding: "utf8" });
+if (lbRead.error || lbRead.status !== 0) {
+  result.loadBalancer = { unread: lbRead.error?.message ?? `docker logs exit ${lbRead.status}` };
+} else {
+  const lbLog = `${lbRead.stdout}${lbRead.stderr}`.split("\n");
+  const lbLines = (/** @type {RegExp} */ re) => lbLog.filter((l) => re.test(l)).length;
+  result.loadBalancer = {
+    disabledWarnings: lbLines(/upstream server temporarily disabled/),
+    noLiveUpstreams: lbLines(/no live upstreams/),
+    streamConnectTimedOut: lbLines(/upstream timed out .* while connecting to upstream.*request: "GET \/feeds\/[^/ ]+\/live/),
+    connectTimedOut: lbLines(/upstream timed out .* while connecting to upstream/),
+  };
+}
 result.stats = Object.fromEntries(["fb-a", "fb-b", "fb-pg", "fb-nats", "fb-lb"].map((c) => [c, docker("stats", "--no-stream", "--format", "{{.CPUPerc}} {{.MemUsage}}", c)]));
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, JSON.stringify(result, null, 1));
@@ -151,7 +158,8 @@ console.log(`commit -> client, within 5 s of a kill: ${line(l.commitToClient.wit
 console.log(`write -> client, steady: ${line(l.writeToClient.steady)}`);
 console.log(`write -> client, within 5 s of a kill: ${line(l.writeToClient.within5sOfKill)}`);
 console.log(`outages: ${result.outages.n} (${result.outages.resynced} resynced); reconnect ${line(result.outages.reconnectMs)}; silent ${line(result.outages.silentMs)}`);
-console.log(`load balancer: ${result.loadBalancer.serverDisabled} instances left out, ${result.loadBalancer.noLiveUpstreams} requests answered 502 with none left (no live upstreams), ${result.loadBalancer.connectTimedOut} connects timed out`);
+const lb = result.loadBalancer;
+console.log(lb.unread ? `load balancer: log not read (${lb.unread})` : `load balancer log: ${lb.disabledWarnings} warnings that an instance was left out, ${lb.noLiveUpstreams} requests answered 502 with none left (no live upstreams), ${lb.streamConnectTimedOut} stream connects timed out (${lb.connectTimedOut} on all routes)`);
 console.log(`relay takeover: ${result.relayTakeoverMs.map((r) => `${r.killed} ${r.wasLeader ? `${r.takeoverMs} ms` : "(not the relay)"}`).join(", ")}`);
 console.log(`browser: ${probe.patches} patches, ${probe.snapshots} snapshot(s) (${result.browser.resyncs} resyncs), last ${probe.last}/${committed}, lost ${result.browser.lost}, status ${probe.status}, errors ${pageErrors.length}`);
 console.log(`wrote ${out}`);

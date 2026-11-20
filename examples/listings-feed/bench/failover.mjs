@@ -4,8 +4,8 @@
 // CLIENTS subscribers (split over WORKERS threads, so the load generator is not the bottleneck)
 // follow feed s1 through the load balancer much as EventSource + corten.js do:
 // snapshot, then /live?since=cursor; on a dropped stream, reconnect after the server's `retry`
-// with Last-Event-ID; on an HTTP error, back off as the runtime does (1 s doubling to 30 s, and
-// 1 s again once a stream opens) and reconnect. They are a client of this file's own, not the
+// with Last-Event-ID; on an HTTP error, back off on the runtime's timer for that case (1 s
+// doubling to 30 s, and 1 s again once a stream opens) and reconnect. They are a client of this file's own, not the
 // runtime: a failed snapshot is retried on its own schedule (250 ms doubling to 5 s), and a gap in
 // seq is counted as lost rather than loading a snapshot, so they count what the server sends.
 // run.mjs keeps a Chromium page on subscribe() through the same run, and scripts/smoke.mjs
