@@ -144,10 +144,11 @@ test("settled upload recovery refuses changed local custody, wrong source, or in
       }
       return h.run(binary, args, timeout, allowFail, expiry);
     };
-    await assert.rejects(h.pinnedUnused({ run }).collect(), undefined, mode);
+    await assert.rejects(h.pinnedUnused({ run }).collect(), mode === "source" ? /require the measured checkout/ : undefined, mode);
     assert.equal(h.deletes, 0, mode);
     assert.deepEqual(readFileSync(h.statePath), before, mode);
     assert.equal(existsSync(join(h.local, "unused-host.json")), false, mode);
+    if (mode === "source") assert.deepEqual(h.calls.slice(start), [["git", "rev-parse", "HEAD"]]);
     assert.equal(h.calls.slice(start).filter(([binary]) => binary === "ssh").length, proofFailures ? 1 : 0, mode);
   }
 });

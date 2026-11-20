@@ -425,10 +425,11 @@ proved by saved Linux stat flags and matching PID/start identity. A new user-spa
 daemon or application process still fails cleanup; later observations cannot repair
 an old failed run. This is benchmark-host preparation, not app deployment advice.
 
-A benchmark allocation interrupted during pre-start file uploads can use
+A new benchmark allocation launched from a commit that includes
 [pinned unused-host recovery](../../bench/workloads/CLOUD.md#failed-allocation-retirement)
-only after the original local process tree and all registered remote sessions and watchers
-have drained. The result is retirement evidence, not a benchmark result.
+can use it after interrupted pre-start file uploads only from the same measured checkout,
+once the original local process tree and all registered remote sessions and watchers have
+drained. The result is retirement evidence, not a benchmark result.
 
 To build the Git-capable browser test image manually, run `npm ci` from the repository
 root and pass the image that matches the installed Playwright version, as CI does:

@@ -354,7 +354,9 @@ node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE
 - Before provisioning, the ledger must be empty (including after readiness exhaustion) or
   contain only the unacknowledged sequence-zero, 30-second bootstrap SSH `true` request
   ([#1618 Benchmark r21: first catalog SSH setup has no completion receipt and leaves an unused droplet outside ordinary recovery](https://github.com/corten-run/corten/issues/1618)).
-- After an interrupted upload, use the exact measured checkout and original state directory.
+- After an interrupted upload, this path applies only to reservations launched from a commit
+  that includes this recovery. Use that exact measured checkout and the original state
+  directory; a different checkout refuses before provider access, even if it is newer.
   Only the successful, locally terminal prefix of the fixed no-op, directory setup and
   upload/checksum sequence is eligible; it must include an upload and stop before unit
   installation. The original saved host-key bytes must match the independently verified
