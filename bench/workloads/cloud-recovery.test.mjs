@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { harness } from "./cloud-fixtures.mjs";
 import { digest } from "./cloud-local.mjs";
+import { productionPlan } from "./cloud-production.mjs";
 import { unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
 
 test("a reconciled allocation is recovery evidence, not successful create completion", async (t) => {
@@ -50,6 +51,105 @@ test("unused recovery never takes over an operation lock or ignores monitor evid
     await assert.rejects(h.pinnedUnused().collect());
     assert.equal(h.calls.length, calls); assert.equal(h.deletes, 0);
     assert.equal(readFileSync(join(h.local, name), "utf8"), "preserve");
+  }
+});
+
+async function stoppedUpload(t, flags) {
+  const h = harness(t, { missingUnit: true, ...flags });
+  h.flags.hook = (binary, args) => {
+    if (binary !== "doctl" || args[0] !== "account" || !existsSync(h.statePath)) return;
+    const state = h.saved();
+    if (state.control.ledger.length === 6 && state.control.ledger.every((r) => r.localTerminal))
+      throw new Error("synthetic settled account read failure before next upload");
+  };
+  await assert.rejects(h.launch().launch(), /account read failure/);
+  delete h.flags.hook;
+  assert.equal(h.saved().status, "preparing");
+  assert.deepEqual(h.saved().control.ledger.map((r) => r.request.invocation.channel), ["ssh", "ssh", "sftp", "ssh", "sftp", "ssh"]);
+  assert.equal(h.saved().control.monitor.phase, "pending");
+  assert.equal(h.calls.some((args) => args.at(-1).includes("systemctl start")), false);
+  assert.ok(existsSync(join(h.local, h.saved().unit)), "next local payload was staged before the account read");
+  writeFileSync(join(h.local, "known_hosts"), "synthetic operator-verified host key\n", { flag: "wx" });
+  return h;
+}
+
+test("settled bootstrap uploads retire only with fresh pinned drainage and never replay DELETE", async (t) => {
+  const h = await stoppedUpload(t, { deleteLost: true });
+  const ledger = h.saved().control.ledger;
+  await assert.rejects(h.task().collect(), /monitor not registered/);
+  const drainedReceipts = ledger.map((row) => digest(row.request.invocation.id));
+  const run = (binary, args, timeout, allowFail, expiry) => {
+    if (binary === "ssh") {
+      assert.ok(args.includes("StrictHostKeyChecking=yes"));
+      assert.ok(args.at(-1).includes("watcher_terminal"));
+      const saved = h.saved();
+      h.flags.unusedProof = { schema: "benchmark-unused-host/v1", hostId: saved.id, unit: saved.unit,
+        unused: true, observedAtMs: Date.now(), drainedReceipts };
+    }
+    if (binary === "doctl" && args[2] === "delete") {
+      assert.ok(expiry > Date.now() && expiry - Date.now() <= 60000);
+      assert.deepEqual(args.slice(0, 5), ["compute", "droplet", "delete", "123", "--force"]);
+      assert.deepEqual(JSON.parse(readFileSync(join(h.local, "unused-host.json"))).observation.drainedReceipts, drainedReceipts);
+    }
+    return h.run(binary, args, timeout, allowFail, expiry);
+  };
+  await assert.rejects(h.pinnedUnused({ run }).collect(), /deletion acknowledgement lost/);
+  assert.equal(h.deletes, 1); assert.ok(h.saved().deletionIntentAt);
+  assert.deepEqual(h.saved().control.ledger, ledger);
+  assert.equal(h.saved().archiveSha256, undefined);
+  const calls = h.calls.length;
+  assert.equal(await h.pinnedUnused({ run }).collect(), 1);
+  assert.equal(h.deletes, 1); assert.ok(h.saved().destroyedAt);
+  assert.equal(h.calls.slice(calls).some(([binary]) => binary === "ssh" || binary === "scp"), false);
+});
+
+test("settled upload approval binds the exact measured checkout, reservation, host and key", async (t) => {
+  const h = await stoppedUpload(t), s = h.saved(), key = join(h.local, "known_hosts");
+  const run = (binary, args, timeout = 60000, allowFail) => {
+    assert.equal(binary, "git");
+    return args[0] === "show" ? { status: 0, stdout: readFileSync(resolve(args[1].slice(41)), "utf8").replaceAll("\r\n", "\n") }
+      : h.run(binary, args, timeout, allowFail);
+  };
+  const plan = () => productionPlan({ round: "r21", stateDir: h.base, collect: true, unusedBootstrapKnownHosts: key }, { repo: h.repo, run });
+  const preview = await plan();
+  assert.deepEqual(preview.missing, []);
+  assert.equal(preview.subject.reservationSha256, digest(readFileSync(h.statePath)));
+  assert.deepEqual(preview.subject.recovery, { measuredCommit: s.commit, hostId: s.id, ip: s.ip,
+    knownHostsSha256: digest(readFileSync(key)), policy: "settled-uploads-unused-only-no-qualification" });
+  h.flags.wrongHead = true;
+  await assert.rejects(plan(), /require the measured checkout/);
+});
+
+test("settled upload recovery refuses changed local custody, wrong source, or incomplete fresh proof", async (t) => {
+  for (const mode of ["source", "unsettled", "sftp-digest", "missing-upload", "changed-staged", "extra", "key", "launch-lock",
+    "monitor", "wrong-host", "missing-drain", "duplicate-drain", "partial-drain"]) {
+    const h = await stoppedUpload(t);
+    if (mode === "source") h.flags.wrongHead = true;
+    if (mode === "unsettled") h.change((s) => { const row = s.control.ledger.at(-1); row.localTerminal = false; delete row.code; });
+    if (mode === "sftp-digest") h.change((s) => { s.control.ledger[2].request.invocation.requestSha256 = "0".repeat(64); });
+    if (mode === "missing-upload") unlinkSync(join(h.local, "job.sh"));
+    if (mode === "changed-staged") writeFileSync(join(h.local, h.saved().unit), "different");
+    if (mode === "extra") writeFileSync(join(h.local, "results.tgz"), "partial evidence");
+    if (mode === "key") writeFileSync(join(h.local, "known_hosts"), "different");
+    if (mode === "launch-lock") writeFileSync(join(h.base, ".groups-launch.lock"), "preserve custody");
+    if (mode === "monitor") writeFileSync(join(h.local, "monitor-journal.jsonl"), "preserve journal");
+    const saved = h.saved(), start = h.calls.length, before = readFileSync(h.statePath);
+    const proofFailures = ["wrong-host", "missing-drain", "duplicate-drain", "partial-drain"].includes(mode);
+    const run = (binary, args, timeout, allowFail, expiry) => {
+      if (binary === "ssh") {
+        const hashes = saved.control.ledger.map((row) => digest(row.request.invocation.id));
+        const drainedReceipts = mode === "duplicate-drain" ? hashes.fill(hashes[0]) : mode === "partial-drain" ? hashes.slice(1) : hashes;
+        h.flags.unusedProof = { schema: "benchmark-unused-host/v1", hostId: mode === "wrong-host" ? "124" : saved.id,
+          unit: saved.unit, unused: true, observedAtMs: Date.now(), ...(mode === "missing-drain" ? {} : { drainedReceipts }) };
+      }
+      return h.run(binary, args, timeout, allowFail, expiry);
+    };
+    await assert.rejects(h.pinnedUnused({ run }).collect(), mode === "source" ? /require the measured checkout/ : undefined, mode);
+    assert.equal(h.deletes, 0, mode);
+    assert.deepEqual(readFileSync(h.statePath), before, mode);
+    assert.equal(existsSync(join(h.local, "unused-host.json")), false, mode);
+    if (mode === "source") assert.deepEqual(h.calls.slice(start), [["git", "rev-parse", "HEAD"]]);
+    assert.equal(h.calls.slice(start).filter(([binary]) => binary === "ssh").length, proofFailures ? 1 : 0, mode);
   }
 });
 

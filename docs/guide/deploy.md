@@ -6,8 +6,8 @@ Corten speaks HTTP/1.1. HTTP/2 or HTTP/3 to browsers and a shared cache come fro
 in front of `corten::serve` ([design Limit 14](../design.md#limit-http1)), which usually ends TLS too (the app can,
 [`serve_wrapped`](app.md#your-own-listeners)). This page is what that proxy has to do
 for a Corten app, the nginx configuration it was checked with, the settings for two CDNs, the
-release profile an app builds with, how its image builds beside other apps', and what to know when
-monitoring it.
+release profile an app builds with, what a profile-guided build gained on one app, how its image builds
+beside other apps', and what to know when monitoring it.
 
 For live streams this is a requirement, not just a choice of where to end TLS: another server
 to configure, update and operate. Nine of the twelve rows below are proxy-specific concerns;
@@ -295,6 +295,74 @@ its clean build 361 s against 206 s. One codegen unit against sixteen costs abou
 process, builds about a third slower and makes the binary a fifth smaller. The workspace keeps it to match the benchmarks' other apps and the published numbers,
 not for speed.
 
+## A profile-guided build
+
+A release build can be given a profile of the app at work, which the compiler uses to lay out
+and inline the code its requests run. Corten adds nothing to it and needs nothing for it; the
+flags and tools are the toolchain's.
+
+```sh
+rustup component add llvm-tools
+RUSTFLAGS="-Cprofile-generate=/tmp/profile-build" cargo build --release --locked
+rm -rf /tmp/profile
+LLVM_PROFILE_FILE="/tmp/profile/%m-%p.profraw" ./target/release/shop
+# send it requests like the ones it will serve, then stop it (SIGTERM or Ctrl-C)
+"$(rustc --print sysroot)/lib/rustlib/$(rustc --print host-tuple)/bin/llvm-profdata" \
+    merge -o /tmp/app.profdata /tmp/profile
+RUSTFLAGS="-Cprofile-use=/tmp/app.profdata" cargo build --release --locked
+```
+
+The first build is for the training run only. It writes its profile as the process exits, which
+a Corten app does on `SIGTERM` and Ctrl-C (Shutdown, in [The app](app.md#the-app)); the run here
+was stopped with `SIGTERM`. `LLVM_PROFILE_FILE` puts the app's profile in a directory of its
+own, emptied first: the macros and build scripts that run during the first build are built the
+same way and write theirs to the directory the flag names (18 files here), and a profile left
+from an earlier release would be merged with this one. The rustc book's own steps keep the flag
+from the macros and build scripts another way, by passing `--target` with the host's tuple to
+both builds, which puts the binary under `target/<tuple>/release`, not where the starter's
+Dockerfile copies it from; that way was not run here. Each of the two builds compiles every
+crate again, since the flags changed, and `RUSTFLAGS` in the environment replaces the
+`build.rustflags` and every `target.<..>.rustflags` of a `.cargo/config.toml`, so an app that
+sets a linker or a CPU there repeats those flags in both. The Dockerfile `corten new` writes
+does one release build; where the training run and the profile go in an image's build is not
+worked out here.
+
+Measured on the lean catalog app (`bench/catalog/corten`) at `7685c7f24` with rustc 1.99.1 in
+`rust:1-bookworm`, on a desktop under Docker with other work running. That app is not the
+starter's: built with `--no-default-features` (no `compress`) and one codegen unit, run with
+`PROFILE=catalog-lean` (no deadline or timeouts), on glibc's allocator. Five builds that differ
+only in the profile served the same catalog page load and answered the same bytes: the app on
+one CPU, `wrk` with 64 connections on three others in the same container. Cycles are user and
+kernel together, a request, by `perf stat` on the app's process, over 12 rounds in which the
+builds took turns in the same order; instructions are one connection under callgrind (1,300
+requests less 300), one run a build.
+
+| Profile taken from | Cycles a request, median | Range | Instructions a request |
+|---|---|---|---|
+| none | 132,337 | 124,688 to 161,670 | 44,786 |
+| the measured load itself (15 seconds of it) | 99,755 | 86,659 to 115,794 | 37,207 |
+| the same page, 3,000 requests each on a new connection, asking for `text/html` and accepting a browser's codings | 98,882 | 86,496 to 114,087 | 36,621 |
+| a mix: that page, its JSON, the home page and a 404, 1,000 of each | 96,738 | 88,814 to 103,948 | 36,283 |
+| the JSON API, 3,000 requests, after the one page request that waits for the app to start | 114,522 | 103,714 to 125,277 | 40,480 |
+
+Each profiled build took fewer cycles than the build without one in all 12 rounds: by the
+medians a quarter fewer for the first three (25%, 25% and 27%) and 13% fewer for the profile of
+the JSON API, which had rendered one page. Paired by round against the profile of the measured
+load itself, the page asked another way was 918 cycles higher at the median and lower in 5 of
+the 12 rounds (single rounds from 9,892 lower to 7,132 higher), and the mix 5,727 lower and
+lower in 7 (11,965 lower to 16,117 higher): these rounds do not tell either from it. So on this
+app and this load a profile did not have to come from the load it was measured with, only from
+requests that reach the same route; a profile that barely reached it gained about half as much.
+
+Not measured: an app as the starter builds and runs it (the default features, its release
+profile, jemalloc, a deadline and timeouts), another app or page, a profile taken from an
+earlier version of the app or with another rustc, a profile used on another kind of CPU than it
+was taken on, the size of the binary, and the time the two builds and the training run add to a
+release. Nor the time a reader waits: no latency was kept, and the pages a second the same
+rounds counted (64 connections against one CPU) say little, 17,567 at the median without a
+profile (11,578 to 18,678), 21,504, 21,228 and 22,610 with the first three and 17,727 with the
+JSON API's, whose cycles were 13% lower.
+
 ## Response compression
 
 The starter enables `compress`: zstd, Brotli and gzip for responses compressed per request;
@@ -424,6 +492,12 @@ Its cleanup check retains all process observations and exempts only kernel threa
 proved by saved Linux stat flags and matching PID/start identity. A new user-space
 daemon or application process still fails cleanup; later observations cannot repair
 an old failed run. This is benchmark-host preparation, not app deployment advice.
+
+A new benchmark allocation launched from a commit that includes
+[pinned unused-host recovery](../../bench/workloads/CLOUD.md#failed-allocation-retirement)
+can use it after interrupted pre-start file uploads only from the same measured checkout,
+once the original local process tree and all registered remote sessions and watchers have
+drained. The result is retirement evidence, not a benchmark result.
 
 To build the Git-capable browser test image manually, run `npm ci` from the repository
 root and pass the image that matches the installed Playwright version, as CI does:

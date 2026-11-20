@@ -342,14 +342,34 @@ content hash, then requires a new fresh host probe before writing the current
 receipt and intent. It never overwrites unknown evidence, treats an old observation
 as current permission or repeats a saved deletion intent.
 
-For [#1618 Benchmark r21: first catalog SSH setup has no completion receipt and leaves an unused droplet outside ordinary recovery](https://github.com/corten-run/corten/issues/1618),
-use the child collector's opt-in `--collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE`.
-It accepts only `preparing` with a bound host, a pending unregistered monitor and no seal.
-The ledger must be empty (including after readiness exhaustion) or contain only the
-unacknowledged sequence-zero, 30-second bootstrap SSH `true` request. Ordinary
-`--collect` refuses these cases before sending SSH. The pinned probe never adds,
-acknowledges or retries a ledger request. A settled SSH refusal leaves the reservation
-unchanged, so the operator can try the read-only proof again when SSH is available.
+Use the child collector's opt-in `--collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE`
+for a bound `preparing` host with a pending unregistered monitor and no seal. Preview and approve
+the exact pinned collection action with the same flag and absolute state root.
+
+```sh
+node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE_ROOT --collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE --print-approval
+node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE_ROOT --collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE --approve-reviewed-merged-ready REVIEWED_EXACT_HASH
+```
+
+- Before provisioning, the ledger must be empty (including after readiness exhaustion) or
+  contain only the unacknowledged sequence-zero, 30-second bootstrap SSH `true` request
+  ([#1618 Benchmark r21: first catalog SSH setup has no completion receipt and leaves an unused droplet outside ordinary recovery](https://github.com/corten-run/corten/issues/1618)).
+- After an interrupted upload, this path applies only to reservations launched from a commit
+  that includes this recovery. Use that exact measured checkout and the original state
+  directory; a different checkout refuses before provider access, even if it is newer.
+  Only the successful, locally terminal prefix of the fixed no-op, directory setup and
+  upload/checksum sequence is eligible; it must include an upload and stop before unit
+  installation. The original saved host-key bytes must match the independently verified
+  key file, and the local uploaded files and any next staged file must match the measured source.
+  The same fresh host probe requires the exact never-started unit, the expected uploaded bytes
+  and an empty log, and every original registered session and watcher drained with no foreign
+  actor. It binds the matching receipt digests to the unused retirement record
+  ([#1744 Benchmark r21: an unused catalog host with six settled bootstrap entries is outside ordinary retirement](https://github.com/corten-run/corten/issues/1744)).
+
+Ordinary `--collect` refuses these pending-bootstrap cases before sending SSH. The pinned probe
+never adds, acknowledges or retries a ledger request or starts a unit. A settled SSH refusal
+leaves the reservation unchanged. Once a delete intent exists, preview and approve the new
+state for exact-ID absence confirmation only; never replay DELETE.
 
 The original local controller, provider worker, SSH and their descendants must be
 affirmatively accounted for and gone. No elapsed timeout, absent PID or saved state
@@ -372,19 +392,19 @@ bytes, old measured commit and new controller commit. Supplying the exact approv
 attests to both operator checks above; it is not a way to clear retained locks.
 
 Execution rechecks the saved account, host and IP and requires a **fresh** pinned SSH
-unused proof, also proving no `/bench`, unit file, guardian storage, control watcher
-or benchmark process. Systemd must report an exact zero monotonic start timestamp;
-the formatted wall-clock timestamp is not used. It uses an observation-only command without installing a
-guardian. The pinned DELETE deadline is 60 seconds from the local start of the
+unused proof. In the pre-provisioning case it additionally requires absence of `/bench`,
+the unit file, guardian storage, and control watchers. Systemd must report an exact
+zero monotonic start timestamp; the formatted wall-clock timestamp is not used.
+The observation-only command never installs a guardian. The pinned DELETE deadline is 60 seconds from the local start of the
 SSH proof, including response delivery and provider preflight. Expiry before intent
 does not consume the intent; expiry after intent still forbids another DELETE.
 Ambiguous, active or foreign custody is preserved. As with other unused
 retirement, confirm deletion with an exact-ID 404; after a recorded intent a new
 approval can only verify the saved receipt and check absence. The original fleet
-intent and all sibling admissions stay unchanged. The repaired child controller must
-be clean and merged, and its source must descend from the measured commit if different.
-This exact exception does not use the native verifier or let ordinary collection or
-audit run from a mismatched checkout.
+intent and all sibling admissions stay unchanged. The child controller must be clean
+and merged. Only the pre-provisioning exception allows a different controller commit,
+and it must descend from the measured commit. Neither exception lets ordinary
+collection or audit run from a mismatched checkout.
 
 If the common setup itself ran and failed before native entry, collection first
 preserves the immutable terminal archive and its raw nonzero exit. A separate
