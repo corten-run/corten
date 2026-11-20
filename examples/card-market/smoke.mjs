@@ -218,63 +218,59 @@ try {
   const full = await chromium.launch({ headless: true, channel: "chromium" });
   try {
     const pushContext = await full.newContext();
+    await pushContext.grantPermissions(["notifications"], { origin: base });
     const pushPage = await pushContext.newPage();
     await pushPage.goto(base + "/");
-    await pushPage.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 10000 }).catch(() => {});
-    await pushContext.grantPermissions(["notifications"], { origin: base });
+    await pushPage.waitForFunction(async (scope) => {
+      const reg = await navigator.serviceWorker.getRegistration();
+      return Notification.permission === "granted" && reg?.scope === scope &&
+        reg.active?.state === "activated" && reg.active === navigator.serviceWorker.controller;
+    }, `${base}/`, { timeout: 10000 });
     const cdp = await pushContext.newCDPSession(pushPage);
-    /** @type {string | null} */
-    let registrationId = null;
-    cdp.on("ServiceWorker.workerRegistrationUpdated", ({ registrations }) => {
-      for (const r of registrations) if (r.scopeURL === `${base}/` && !r.isDeleted) registrationId = r.registrationId;
+    const { targetInfo } = await cdp.send("Target.getTargetInfo");
+    const versions = new Map();
+    cdp.on("ServiceWorker.workerVersionUpdated", ({ versions: updates }) => {
+      for (const v of updates) versions.set(v.versionId, v);
     });
     await cdp.send("ServiceWorker.enable");
-    for (let i = 0; i < 50 && registrationId === null; i += 1) await pushPage.waitForTimeout(100);
-    /** The notifications the worker shows, read until one has `body` or 5 s pass. @param {string} body */
-    const shownWith = async (body) => {
+    const controlling = () => [...versions.values()].find((v) => v.status === "activated" &&
+      v.scriptURL === `${base}/service-worker.js` && v.controlledClients?.includes(targetInfo.targetId));
+    for (let i = 0; i < 50 && !controlling(); i += 1) await pushPage.waitForTimeout(100);
+    const registrationId = controlling()?.registrationId;
+    if (!registrationId) throw new Error("DevTools did not report the activated worker controlling the push page");
+
+    // Do not read getNotifications() while Chromium is still displaying the notification. Its
+    // read can delete a new database row as obsolete if the display bridge has not listed it yet.
+    // DevTools logs the display after the browser hands it to the bridge. It omits notification
+    // data, so still read the real notification to check both its title and its click URL.
+    const displayed = new Set();
+    cdp.on("BackgroundService.backgroundServiceEventReceived", ({ backgroundServiceEvent: e }) => {
+      if (e.service === "notifications" && e.eventName === "Notification displayed" && e.serviceWorkerRegistrationId === registrationId) {
+        displayed.add(e.eventMetadata.find(({ key }) => key === "Body")?.value);
+      }
+    });
+    await cdp.send("BackgroundService.startObserving", { service: "notifications" });
+    await cdp.send("BackgroundService.setRecording", { service: "notifications", shouldRecord: true });
+
+    /** @param {{ title?: string, body: string, url: unknown }} message */
+    const sendAndRead = async (message) => {
+      await cdp.send("ServiceWorker.deliverPushMessage", { origin: base, registrationId, data: JSON.stringify(message) });
       for (const until = Date.now() + 5000; Date.now() < until; await pushPage.waitForTimeout(100)) {
+        if (!displayed.has(message.body)) continue;
         const found = await pushPage.evaluate(async (body) => {
-          const n = (await (await navigator.serviceWorker.ready).getNotifications()).find((n) => n.body === body);
+          const reg = await navigator.serviceWorker.getRegistration();
+          if (!reg?.active || reg.active !== navigator.serviceWorker.controller) throw new Error("push worker lost control of the page");
+          const n = (await reg.getNotifications()).find((n) => n.body === body);
           return n ? { title: n.title, url: n.data?.url } : null;
-        }, body);
+        }, message.body);
         if (found) return found;
       }
-      return null;
+      return { missed: 1, displayed: displayed.has(message.body) };
     };
-    /**
-     * Sends `message` and reads the notifications until one has its body, sending it once more
-     * (when `tries` allows) if none does in 5 s. Under load Chromium now and then loses a
-     * notification the worker showed: its trace has the push dispatched and the handler's
-     * `waitUntil` settled (`DidHandlePushEvent` COMPLETED), and `getNotifications()` never lists it,
-     * even 30 s later (#1202: 20 of about 670 local runs, 15 of them the second push of the run;
-     * none shown late). What it saw is the detail: the notification and the send that showed it,
-     * or how many sends showed nothing.
-     * @param {{ title?: string, body: string, url: unknown }} message
-     * @param {number} tries
-     */
-    const sendUntilShown = async (message, tries) => {
-      if (registrationId === null) return null;
-      for (let attempt = 1; attempt <= tries; attempt += 1) {
-        await cdp.send("ServiceWorker.deliverPushMessage", { origin: base, registrationId, data: JSON.stringify(message) });
-        const found = await shownWith(message.body);
-        if (found) return { ...found, attempt };
-      }
-      return { missed: tries };
-    };
-    const first = await sendUntilShown({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" }, 2);
-    check("a push message shows a notification", first?.title === "Price drop" && first?.url === "/items/item_5", registrationId === null ? "no registration id" : JSON.stringify(first));
-    const odd = await sendUntilShown({ body: "Card Name 7 is back", url: 5 }, 2);
-    check("a push message with no title and a url that is not text shows untitled and opens /", odd?.title === "" && odd?.url === "/", JSON.stringify(odd));
-    // A second send is taken only from a loss as rare as Chromium's (about 1 push in 70 locally):
-    // after one, a new message must show on its first send, so a worker that drops every other
-    // push still fails here. One that drops pushes at random passes more often than a single send
-    // did (half of them: about 2 runs in 5, from 1 in 4), which the detail's `attempt` still shows. Chromium
-    // can lose this third push too (2 of 30 locally), so a run fails without cause about 1 time in
-    // 500 (a resend in 1 run in 35, then this loss), where it failed about 1 time in 35.
-    if (first?.attempt === 2 || odd?.attempt === 2) {
-      const after = await sendUntilShown({ title: "Back in stock", body: "Card Name 9 is back", url: "/items/item_9" }, 1);
-      check("after a push was sent twice, the next shows on its first send", after?.attempt === 1, JSON.stringify(after));
-    }
+    const first = await sendAndRead({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" });
+    check("a push message shows a notification", first.title === "Price drop" && first.url === "/items/item_5", JSON.stringify(first));
+    const odd = await sendAndRead({ body: "Card Name 7 is back", url: 5 });
+    check("a push message with no title and a url that is not text shows untitled and opens /", odd.title === "" && odd.url === "/", JSON.stringify(odd));
   } finally {
     await full.close();
   }
