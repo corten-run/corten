@@ -51,6 +51,7 @@ Choice in the same pull request.
 6. Every behavior the runtime has is covered by `scripts/smoke.mjs` against `examples/watchlist`
    (live reload under `corten dev` by `scripts/smoke-dev.mjs`), and production modules (security, assets, PWA, head tags, compression) by
    `examples/card-market/smoke.mjs`. Add the check with the behavior.
+   Put new crate-level `corten` tests in the area's file under `crates/corten/src/tests/`.
 7. Types across seams: never hand-write a type the server already defines. Handler calls are
    checked against each handler's JSDoc when the crate compiles; feed rows and typed events
    (`#[event]`) against the declarations `corten::types` generates (`examples/*/types/app.d.ts`,

@@ -32,6 +32,8 @@ bench/live/          One price feed pushed to many clients in the same framework
 bench/nodelay/       A burst of small live events through nginx, with and without TCP_NODELAY
 ```
 
+Put new crate-level `corten` tests in the area's file under `crates/corten/src/tests/`.
+
 Dependencies of `corten`: `hyper` and `hyper-util` (connections, including ones that switch
 protocols, HTTP/1.1 only), `http` (the HTTP types apps name as `corten::http`), `http-body`
 (the body trait hyper and its clients share), `bytes` (bodies and multipart pieces),

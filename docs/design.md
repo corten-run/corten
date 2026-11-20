@@ -1957,7 +1957,7 @@ rules something out.
     `caller = T` module, a path that reaches Corten's own, a method other than `get`,
     `prefetch`, `/health/live`, `/{*rest}`), at `f703d3f8`; 2026-11-10, IANA's HTTP
     Authentication Scheme Registry (no scheme for a session cookie) and the tests that a 401
-    keeps its challenge as JSON and on the error page (`crates/corten/src/tests.rs`), at
+    keeps its challenge as JSON and on the error page ([`tests/caller.rs`](../crates/corten/src/tests/caller.rs)), at
     `96e2c907`, the commit that adds them; 2026-11-10, the tests that a handler's own 401, the
     page swapped in and a middleware's refusal keep it, at `2d6b88d0`; 2026-11-10, those tests
     with a realm on every Bearer challenge and Basic through a handler and a middleware, the
@@ -2474,7 +2474,7 @@ rules something out.
     Stands on: platform (Playwright's WebKit on Windows holds back a flushed brotli event of more
     than 16 KiB and sends `deflate, gzip, br`, no zstd; its Linux build, which CI's smoke runs,
     takes no brotli at all, so the smoke there cannot see the holdback and the rule is held by
-    `compress.rs`'s and `tests.rs`'s tests; the 16 KiB edge matches libcurl's write size, the
+    `compress.rs`'s tests and [`tests/bodies.rs`](../crates/corten/src/tests/bodies.rs); the 16 KiB edge matches libcurl's write size, the
     Windows build's network stack, which suggests the holdback is that stack's, not measured;
     Chromium and Firefox send zstd, which arrives at once there; no WebKit that accepts zstd was
     tried, and Safari, whose network stack is not Playwright's and which caniuse lists as sending
@@ -4304,7 +4304,7 @@ rules something out.
     the handler's name, so the two checks cannot disagree on what answers a patch. The shape to
     write, and the one the message names, is `HtmlResult<Patches>`; as a compatibility detail, a
     handler returning `impl Answer<.., Kind = Patches>` passes both checks too (a test in
-    `tests.rs`), but rustc warns on it (`opaque_hidden_inferred_bound`: the `impl` does not
+    [`tests/patches.rs`](../crates/corten/src/tests/patches.rs)), but rustc warns on it (`opaque_hidden_inferred_bound`: the `impl` does not
     prove `Kind`'s bound, which only the hidden type's impl can), which fails an app that denies
     warnings. The mount's side of that can only be a `const`: stable Rust has no bound for
     "a route that is not a `PatchRoute`", so it is an inline `const { assert!(..) }` beside the
@@ -4335,7 +4335,7 @@ rules something out.
     not mounted: `ReadAgain::from(url::Status)` reads the path, and the other route's handler
     answers it; and a handler that writes `req.mode` (to `Mode::Document`, say) before
     `patch_or`, `invalid` or `invalid_with`, which then answer the mode it wrote, the page or
-    a redirect, as they do for any `HtmlResult` handler (a test in `tests.rs`). Writing
+    a redirect, as they do for any `HtmlResult` handler (a test in [`tests/patches.rs`](../crates/corten/src/tests/patches.rs)). Writing
     `req.mode` is the app's explicit override, and it stays one: a mode those three read but
     the handler cannot write would change what an ordinary `HtmlResult` handler that writes it
     gets, and splitting them by kind would add a concept for a case few apps write. The derive's
@@ -4391,7 +4391,7 @@ rules something out.
     are zero-sized `PhantomData`, so the response and every method's work are what they were, and
     the check is a `const` with nothing to run); measured (callgrind, release, instructions per
     request through a route's `patch_or` in process, 1,200 requests less 200 over 1,000, with the
-    `#[ignore]` test `what_a_patch_or_request_costs` in `crates/corten/src/tests.rs`, three
+    `#[ignore]` test `what_a_patch_or_request_costs` in [`tests/patches.rs`](../crates/corten/src/tests/patches.rs), three
     alternate runs of each build, the median and the range, on `0ff569c69` (before) and on
     `811324247` (after, a handler returning `HtmlResult` and one returning
     `HtmlResult<Patches>`): the patch (`Mode::Action`) 17,971.83 before (17,971.80 to
@@ -5736,7 +5736,7 @@ rules something out.
     through the request APIs);
     measured (callgrind, release, instructions per request through a route's `patch_or` in
     process, 1,200 requests less 200 over 1,000, with the `#[ignore]` test
-    `what_a_patch_or_request_costs` in `crates/corten/src/tests.rs`, alternate runs, the median
+    `what_a_patch_or_request_costs` in [`tests/patches.rs`](../crates/corten/src/tests/patches.rs), alternate runs, the median
     and the range: `55757d723` (before, six runs) against `55757d723` with only this change's
     `crates/corten/src/page.rs` (three runs), the patch (`Mode::Action`) 17,969.79 (17,969.76 to
     17,969.80) and 17,969.83 (17,969.83 to 17,969.87), the page (`Mode::Document`) 18,382.70
@@ -5744,14 +5744,14 @@ rules something out.
     instruction; the whole change (three runs), whose other files are tests, an example and
     documents, 17,974.49 (17,974.48 to 17,975.89) and 18,388.71 (18,388.59 to 18,388.78), about
     five and six more, which the build with `page.rs` alone does not show. Those come from the
-    tests: `55757d723` with only `crates/corten/src/tests.rs` as at `019058f59` (three runs,
+    tests: `55757d723` with only the then-unsplit test file as at `019058f59` (three runs,
     alternating with three of `55757d723` rebuilt) counts 17,975.85 (17,975.82 to 17,975.88)
     and 18,388.76 (18,388.73 to 18,388.76) against 17,969.86 (17,969.78 to 17,969.86) and
     18,382.79 (18,382.69 to 18,382.84), six more in each mode with no line of the request path
-    changed. `tests.rs` is `#[cfg(test)]`, compiled into the same test binary as the code it
+    changed. The `tests` module is `#[cfg(test)]`, compiled into the same test binary as the code it
     counts, and the release profile builds that binary as one codegen unit with thin LTO, so more
     tests in it can move what the optimizer inlines and lays out (reasoned; which functions moved
-    was not traced); an app's binary has no `tests.rs`.
+    was not traced); an app's binary does not include the test module.
     The counted page asks for no HTML, which in a release build reaches the
     same code, since the check and the method it clones are not compiled there);
     measured (the checked-construction comparison above, `abbdf9831` against `bbd9d7432`,
