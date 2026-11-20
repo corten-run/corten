@@ -156,7 +156,7 @@ stronger than today's watch, not a prerequisite for matching HTTP/1.1. A send-wa
 must cover DATA still queued after the body ends, not just credit awaited before the handoff.
 An opt-in `serve` design must preserve both connection bounds together without a second parser.
 
-[limits.mjs](limits.mjs) is the **isolated acceptance client**. It prints each case and its timing,
+[limits.mjs](limits.mjs) is the acceptance client. It prints each case and its timing,
 and exits nonzero if any case in the selected suite fails. The tag's older client is only a
 historical observation: it succeeds when the zero-window stall reproduces.
 
@@ -180,9 +180,14 @@ socket write watch enabled and with controls that expect their joint behavior. F
 a final tail stalled past the send deadline must close the connection even though it
 keeps the idle watch busy; after the last normal response completes, the connection must
 return to idle and close at the idle deadline, not remain reusable after 500 ms of inactivity.
+For credit recovery and reset, keep a quiet sibling open so the idle watch cannot hide
+a stale send timer. For socket backpressure, grant ample h2 credit and stop reading TCP
+with a quiet sibling open. Require the socket write watch to expire with no outstanding
+h2 buffers, and inspect the peer close after resuming reads.
 Before shipping, also run the full three-engine TLS runtime smoke,
 reset flood and resource checks, shutdown with open streams, decoded-head bounds and explicit
-h2 Upgrade refusal/HTTP/1 WebSocket fallback. Shipping Corten is unchanged.
+h2 Upgrade refusal/HTTP/1 WebSocket fallback, and measure the enabled path against HTTP/1.1.
+Shipping Corten is unchanged.
 
 ### Running the Follow-up
 
@@ -209,12 +214,37 @@ buffer drop). The probe defaults to loopback port 18590; on another loopback por
 `BIND` for the probe and `HTTP2_PORT` for the client. Delete the scratch certificate and
 key when done.
 
+For all three watches together, run the direct h2 probe and the client in one Linux
+network namespace, here one container, with the same TLS setup:
+
+```sh
+docker run --rm -d --name http2-combined --sysctl net.ipv4.tcp_rmem="4096 131072 131072" -v "$scratch:/probe" -v "$PWD/bench/http2:/bench:ro" node:24-bookworm sleep infinity
+docker exec -d -e TLS_CERT=/probe/cert.pem -e TLS_KEY=/probe/key.pem -e TIMEOUT_MS=100 -e SOCKET_SEND_BUFFER=16384 http2-combined /probe/http2-limit-probe combined
+docker exec http2-combined node /bench/limits.mjs combined
+docker rm -f http2-combined
+```
+
+Copy the release probe and the scratch certificate and key into `$scratch` first. The
+smaller send buffer and the 128 KiB receive-buffer cap are fixture setup, not new send
+bounds; the client fails the socket case unless it sees the cap. Without it, Linux
+sometimes let the paused reader's receive buffer grow to several MiB, so the socket
+timeout came after the 500 ms observation point ([Combined Results](#combined-results)).
+Run client and server on the same loopback interface, without a forwarding proxy that
+can read on the client's behalf. The socket fixture grants enough stream and connection
+credit for its whole response. It queues one batch of short DATA chunks at a time and
+stops producing when the TLS writer blocks. h2 copies the batch into its encoder before
+polling TLS. At socket timeout the probe records the operation, outstanding DATA buffer count,
+wait duration and time from the fixture request on a separate connection; the client
+reads this before it resumes the stalled socket. Run one acceptance client at a time.
+
 For overhead, use a fresh process for each 200 and 1,200 count, `TIMEOUT_MS=30000`,
 and the same Callgrind procedure as [Transport Counts](#transport-counts), below. Run
 `node bench/http2/load.mjs h2 <count> page` for `off` versus `service-idle` and
 `h2-off` versus `h2-idle`; use `events` for `off`, `body` and `buffer`. Each
 comparison is within one transport, not against shipping HTTP/1.1. The hyper `off`
 mode still uses the same body and buffer wrapper types but records no progress or timestamps.
+For the combined comparison, run both loads with `h2-off` and `combined` on the same
+release binary, without `SOCKET_SEND_BUFFER` or the receive-buffer cap.
 
 ### Follow-up Results
 
@@ -271,9 +301,8 @@ libraries, h2 only consumes a flow-controlled slice, so a remaining tail keeps i
 even if the body is gone. Consumption can mean copy into the HTTP/2 encoder, not TLS or
 socket progress; it does not replace Corten's socket write watch.
 
-The idle and send candidates passed in separate transport modes. No single opt-in path
-has demonstrated both bounds with the socket watch or the production qualification
-listed above.
+These runs exercised the idle and send candidates in separate transport modes.
+The combined probe has its own controls and results below.
 
 #### Follow-up Cost
 
@@ -295,6 +324,110 @@ Compared with the earlier lock, all seven medians are lower by 4 to 285 instruct
 unit (rounded). Each enabled median is still above its corresponding off median. The
 rerun does not isolate the cause of the shift. These are fixture costs, not an estimate of
 combined overhead, a network latency comparison, or a change to shipping Corten's request path.
+
+## Combined Results
+
+The `combined` mode runs direct h2 with its stream count as the idle watch, tracks DATA
+through `Buf::advance`, including after the response body ends, and wraps the
+post-handshake TLS stream as Corten wraps `Watched`. A pending write, vectored write,
+flush or shutdown starts a socket wait; a completed write clears it, but a flush or
+shutdown alone does not. The probe uses a per-stall timer on its single runtime thread
+instead of Corten's shared clock thread. All three watch the same connection, and there
+is no frame parser. The isolated modes keep their code paths.
+
+The locked build at `00d9e712c` needed a lockfile refresh: Corten now requires
+`getrandom` 0.4. The probe uses `getrandom` 0.4.3 (published 2026-06-17 UTC) and
+`r-efi` 6.0.0 (2026-02-03 UTC) and no longer needs the old WASI entries. No other
+lock entry changed. The crates.io index confirmed the checksums of all 75 registry
+entries and that each was published at least three days before the run.
+
+Measured on 2026-11-20 UTC with the Linux release probe built from `a8431b062`
+(Rust 1.99.1), probe and Node 24.22.3 client in one `node:24-bookworm` container
+on Docker Desktop, `TIMEOUT_MS=100`, the 128 KiB receive-buffer cap and the strict
+500 ms closure cutoff. Ranges are measured min to max over three rounds
+([observations](results/combined-wire.jsonl)); all 51 outcomes passed.
+
+| Combined case | Result |
+|---|---|
+| No first request | Pass, closed 120.2-144.9 ms after open |
+| Partial first request | Pass, closed 108.4-111.5 ms after open |
+| Partial head after a complete answer | Pass, closed 103.4-108.7 ms after the answer ended |
+| Last of two overlapping answers | Pass, closed 105.8-106.7 ms after the last end |
+| Reset with sibling open, then reset sibling | Pass, open for 500 ms with the sibling; closed 101.3-112.4 ms after the last reset |
+| Cancel before the handler answers | Pass, closed 108.7-112.6 ms after reset |
+| Partial head beside open `/quiet` | Pass, late answer at 500.9-503.1 ms |
+| Queued final answer (replaces the idle-only control) | Pass, send watch closed it 105.6-110.5 ms after its first byte while the stream kept idle busy |
+| Zero-window `/events?n=1` | Pass, closed 108.8-115.5 ms |
+| Final chunk buffered after first byte | Pass, closed 109.4-111.9 ms |
+| Same tail with progressing sibling | Pass, closed 109.1-116.4 ms; four or five sibling writes |
+| Quiet producer | Pass, still open 500.2-502.4 ms, sibling page at 500.9-507.1 ms |
+| Normal response returns to idle (replaces the send-only control) | Pass, closed 107.7-109.6 ms after the page ended |
+| Credit restored before the bound, `/quiet` open | Pass, completed 37.8-39.4 ms; reused at 240.3-243.0 ms |
+| Incremental credit for one final chunk | Pass, completed 192.8-202.9 ms |
+| Reset discards a queued tail, `/quiet` open | Pass, reused at 501.5-505.4 ms after reset |
+| Paused TCP reader after h2 consumed DATA | Pass, socket watch expired 154-165 ms after the request |
+
+Times start as in [Follow-up Results](#follow-up-results). No late frame revived a
+closed connection or delivered an old answer. In the socket case `/quiet` held the idle
+watch busy, so the socket watch closed the connection on its own. Each round
+reported a pending `flush` with zero outstanding h2 DATA buffers after a 100-104 ms wait.
+The client received 232,560-269,280 DATA bytes, with no END_STREAM or reset. The peer
+close arrived 6.3-25.5 ms after reads resumed.
+
+Six earlier rounds at the same build ran without the receive-buffer cap
+([observations](results/combined-wire-uncapped.jsonl); rounds 1-3 used the client
+before it selected the replaced idle control by name, with the same 17 cases in order).
+Rounds 1-4 passed every case. Rounds 5 and 6 failed only the socket case. In round 5 no
+socket timeout had been reported after 505.8 ms paused; the peer closed 31.1 ms after
+reads resumed with 771,120 bytes delivered. In round 6 there was no report, and no close
+within 500 ms of resuming, after 4,296,240 bytes. Of 18 single-case diagnostic runs
+without the cap, five failed the same way and one, the first after the probe started,
+failed earlier because `/quiet` had not started within 500 ms (not investigated). One
+socket sample of a failing run showed the paused client's receive buffer at 632,943 bytes,
+its queue still growing at 378 ms. With the cap, 20 diagnostic runs and the three
+rounds above all passed, expiring 154-192 ms after the request. The cap changes when the
+kernel stops accepting data, not the watch, its 100 ms bound or the 500 ms check.
+
+Three [preflight rounds](results/combined-wire-preflight.jsonl) at `4ea726f8c` used
+one 255-byte DATA chunk per TLS flush in the TCP fixture. All three missed the socket
+timeout: no report after 499.7-500.5 ms paused and no peer close within 500 ms of
+resuming. The client read 1,702,635-2,050,200 DATA bytes before giving up. A TCP queue
+sample showed reads had stopped but the receive queue was still filling. Round 3 also
+closed the stalled tail in 144.3 ms with only one observed sibling write, failing the
+repeated-progress check. The fixture now batches the short chunks to fill the TCP
+window sooner. Neither test's assertion nor its deadline was relaxed.
+
+The isolated suites still reproduce on this build: one round per mode, without the cap,
+client in the same container rather than on the host
+([observations](results/combined-isolated-wire.jsonl)). Direct h2 passed all eight idle
+cases; Hyper service counting failed only the queued final answer (closed at 106.3 ms);
+no detector failed the three send stalls, body polls/drop the two tails, and buffer
+tracking passed all eight. These are the dispositions in Follow-up Results.
+
+### Combined Cost
+
+Measured server instructions with Callgrind 3.19.0, three alternating paired rounds of
+`h2-off` against `combined` on the same release binary, on the procedure in
+[Follow-up Cost](#follow-up-cost) with the client in the container
+([counts](results/combined-costs.csv)).
+
+| Unit | `h2-off` median [min, max] | `combined` median [min, max] |
+|---|---:|---:|
+| instructions/page | 26,142 [26,141, 26,144] | 27,939 [27,928, 27,947] |
+| instructions/event | 4,179 [4,177, 4,185] | 5,115 [5,115, 5,116] |
+
+All three watches add 1,797 instructions per page (6.9%) and 936 per event (22.4%). The
+ranges do not overlap. This is the probe's cost on direct h2, not a production path or
+a comparison with HTTP/1.1. The `h2-off` median differs from Follow-up Cost's 25,940
+with a newer Corten, lockfile and client placement; the two sections are not compared.
+
+These runs show items 1 and 2 of
+[#1686 HTTP/2 in corten::serve: show the idle and send bounds together with the socket watch on one opt-in path](https://github.com/corten-run/corten/issues/1686):
+one parser-free path held both bounds with the socket watch, under controls written for all
+three. Shipping Corten is unchanged. Before an opt-in `serve` path ships, item 3
+remains: shutdown with open streams, reset-flood and resource bounds, decoded-header
+limits, explicit h2 Upgrade refusal with HTTP/1 WebSocket fallback, three-engine TLS
+smoke, and the enabled path's cost against HTTP/1.1.
 
 ## Reproduction
 
