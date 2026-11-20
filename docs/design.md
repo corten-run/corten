@@ -6452,7 +6452,12 @@ rules something out.
     reclaims unanswered publish registrations without a healthy-path regression
     ([nats-io/nats.rs #1641 Prune abandoned requests from the multiplexer](https://github.com/nats-io/nats.rs/pull/1641)).
 
-    Last checked: 2026-11-19, async-nats 0.53.0's reply map and subscription cleanup,
+    Last checked: 2026-11-20, the `corten-cluster` integration tests on PostgreSQL 19.0 and
+    NATS 2.15.3 with async-nats 0.53.0 and SQLx 0.8.6 (36 passed, the four `#[ignore]`d
+    benchmarks not run, nor the opt-in TLS and capped-subscription cases), including a
+    1,024-byte key in both indexed tables, both types of size refusals and follower recovery
+    after a broker disconnect, so the B-tree bound still holds on 19;
+    2026-11-19, async-nats 0.53.0's reply map and subscription cleanup,
     real JetStream retries with publish acknowledgements suppressed and then restored, a full
     batch on a 64-reply subscription, recovery after a partial timeout with a three-subscription
     broker limit and a 64-reply queue, and the relay throughput, follower latency and
