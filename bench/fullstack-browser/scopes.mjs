@@ -1,4 +1,4 @@
-import ts from "typescript";
+import ts from "../typescript.mjs";
 import { createHash, randomUUID } from "node:crypto";
 
 const hash = (source) => createHash("sha256").update(source).digest("hex");

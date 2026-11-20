@@ -157,8 +157,11 @@ hashes, complete selection, source/provenance and confirmed host deletion. Only
 the authoritative `verified` campaign can open it; valid failed or unsupported
 competitor outcomes are still retained under that contract. A synthetic inspector,
 bootstrap marker, status string or diagnostic receipt cannot substitute for native
-replay. The new approval binds the first evidence snapshot and every remaining
-child subject. Execution rechecks the snapshot under the fleet lock, consumes an
+replay. That replay reads this checkout's bench install: without it, the preview
+lists the first group as `replay-blocked`, missing
+`local bench install missing or differs: run npm --prefix bench ci`, returns 2
+and does not replay. The new approval binds the first evidence snapshot and every
+remaining child subject. Execution rechecks the snapshot under the fleet lock, consumes an
 exclusive remaining intent and rechecks before each child dispatch. Consumed or
 legacy launch intents cannot acquire this new admission authority.
 
@@ -265,7 +268,8 @@ node bench/workloads/fleet-verify.mjs ROUND --fleet-root ABSOLUTE_ROOT --commit 
 Missing, ambiguous or locked child state stays visible and never triggers another
 launch. Both successful and failed native inspections must match the host's exact
 reserved selection before campaign cleanup. Batch receipts are diagnostics, not proof.
-The read-only fleet verifier replays every saved native archive, rechecks its
+The read-only fleet verifier needs the same local `npm --prefix bench ci`; without it,
+it reports that hint as its `error` before reading any group. It replays every saved native archive, rechecks its
 immutable hashes and confirmed cleanup, and requires unique host identities for
 the entire roster. Its intrinsic `verified` status is not publication approval:
 `publishableBaseline` remains false until the separate review/results workflow
@@ -737,6 +741,17 @@ so collect/delivery must use that same integrated source commit, not a newer
 collector checkout. This compatibility limit must be revisited with the agreed
 intrinsic API, not misreported as failed native evidence after allocation.
 
+Native replay runs on the operator's checkout, never on the host: run
+`npm --prefix bench ci` there after `npm ci`, before a launch or collection. The
+host's job installs its own bench package, which collection does not read.
+Detach also lists `bench/package.json` or `bench/package-lock.json` when either is
+absent at the measured commit. Detach and ordinary collection previews list
+`local bench install missing or differs: run npm --prefix bench ci` when this
+checkout's `bench/node_modules/typescript/lib/typescript.js` is absent or is not
+the pinned 6.0.3 bytes, so neither allocates a host nor collects one it cannot
+validate. The plan repeated under the operation lock checks that list again before
+any provider access. Evidence-derived validation failures stay generic.
+
 ```text
 node bench/workloads/cloud-production.mjs rN --detach --commit SHA --ssh-key ID --account-id SCOPED_ACCOUNT_ID --context NAMED_CONTEXT --state-dir ABSOLUTE_LOCAL_ROOT --print-approval
 node bench/workloads/cloud-production.mjs rN --detach --commit SHA --ssh-key ID --account-id SCOPED_ACCOUNT_ID --context NAMED_CONTEXT --state-dir ABSOLUTE_LOCAL_ROOT --approve-reviewed-merged-ready EXACT_ACTION_SHA256
@@ -790,10 +805,13 @@ reports one fixed reason: `timed out`, `process error`, `unsuccessful exit`, or
 environment values. Replay and evidence validation failures remain generic.
 The closure includes the observer's durable writer; transitive observer
 imports use those captured bytes under the same deny-unlisted loader.
-The fixed TypeScript bundle and the semver library are captured once and checked
-against their pinned package-file hashes. Semver's exact tooling declaration and
-npm archive integrity must also match the installed commit's manifest and lock.
-Its extensionless CommonJS imports resolve only within the captured library;
+The fixed TypeScript bundle (the bench package's 6.0.3, `bench/package.json`) and the
+semver library are captured once and checked against their pinned package-file hashes.
+Each one's exact tooling declaration, resolved archive URL and npm archive integrity
+must also match the installed commit's manifests and locks: the root's for semver,
+`bench/package.json` and `bench/package-lock.json` for TypeScript. The harness
+loads TypeScript only through `bench/typescript.mjs`, itself a captured closure member.
+Semver's extensionless CommonJS imports resolve only within the captured library;
 the CLI, preload entry and unlisted files cannot execute. This adds no package
 resolver or filesystem fallback and retains the existing source-count limit.
 The nested worker executes captured entry bytes and installs a
@@ -894,7 +912,10 @@ campaign module. Immediately before entry the job exclusively creates
 `/bench/campaign` with mode 0700, under its 0077 umask and the entry's UID. Any
 existing directory, file or symlink fails instead of being reused, chmodded or
 removed. The native `begin()` requires this existing physical private root; it
-creates the durable reservation inside it. Each uploaded job/packer/unit is
+creates the durable reservation inside it. A launch saves `benchPackage: true`
+in its reservation and its job runs `npm --prefix bench ci` (the binding parser's
+classic TypeScript) after the root install; a state saved without it regenerates
+the job bytes it uploaded. Each uploaded job/packer/unit is
 SHA256-checked on the owned host before installation/start. The packer requires terminal metadata, keeps an existing
 regular archive instead of overwriting it, and publishes a fresh private GNU tar
 archive with exclusive hard-link creation; a collision does not replace evidence.

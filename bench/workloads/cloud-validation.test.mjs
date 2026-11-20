@@ -9,14 +9,15 @@ import { Worker } from "node:worker_threads";
 import test from "node:test";
 import { harness } from "./cloud-fixtures.mjs";
 import { inspectCampaign, validationLimit, validationStopLimit } from "./cloud-validation.mjs";
-import { captureValidation, validationPaths, validationTask, typescriptPath, semverIntegrity, semverSources } from "./cloud-validation-snapshot.mjs";
+import { captureValidation, localCompiler, validationPaths, validationTask, typescriptPath, semverIntegrity, semverSources } from "./cloud-validation-snapshot.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 function git(root, ...args) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", timeout: 5000, windowsHide: true });
   assert.equal(result.status, 0, "synthetic local Git operation failed"); return result.stdout.trim();
 }
-const sharedDependencies = resolve(checkout, git(checkout, "rev-parse", "--git-common-dir"), "..", "node_modules");
+// The bench package's classic compiler (npm --prefix bench ci), linked, never copied or altered.
+const classicCompiler = realpathSync(join(checkout, "bench/node_modules/typescript"));
 
 const syntheticHead = "c".repeat(40);
 const privateGitData = "synthetic private Git detail";
@@ -72,15 +73,24 @@ for (const [name, result, reason] of [
   });
 }
 
+function linkClassicCompiler(repo) {
+  mkdirSync(join(repo, "bench/node_modules"), { recursive: true });
+  symlinkSync(classicCompiler, join(repo, "bench/node_modules/typescript"), "junction");
+}
+
 function removeDependencyLink(repo) {
-  const link = join(repo, "node_modules/typescript");
+  const link = join(repo, "bench/node_modules/typescript");
   assert.ok(lstatSync(link).isSymbolicLink());
-  assert.equal(realpathSync(link), realpathSync(join(sharedDependencies, "typescript")));
+  assert.equal(realpathSync(link), classicCompiler);
   if (process.platform === "win32") rmdirSync(link);
   else unlinkSync(link);
 }
 
-async function fakeNative(t, source, { realGraph = false, unconfirmed = false } = {}) {
+const benchMetadata = ["bench/package.json", "bench/package-lock.json"];
+// The committed bench manifest and lock, as parsed objects an edit may change or delete.
+const benchFiles = () => Object.fromEntries(benchMetadata.map((path) => [path, JSON.parse(readFileSync(join(checkout, path), "utf8"))]));
+
+async function fakeNative(t, source, { realGraph = false, unconfirmed = false, bench = () => {} } = {}) {
   const h = harness(t), repo = join(h.temp, "validator"), root = join(repo, "bench/workloads");
   for (const path of validationPaths) {
     const target = join(repo, path); mkdirSync(dirname(target), { recursive: true });
@@ -102,10 +112,10 @@ async function fakeNative(t, source, { realGraph = false, unconfirmed = false } 
   }
   if (realGraph) for (const path of ["package.json", "bench/marketplace/labels.json"])
     copyFileSync(join(checkout, path), join(repo, path));
-  // The TypeScript link targets only the main install. Semver's small package is
+  // The TypeScript link targets only the bench install. Semver's small package is
   // copied so replacement controls cannot alter either source install.
+  linkClassicCompiler(repo);
   mkdirSync(join(repo, "node_modules"));
-  symlinkSync(realpathSync(join(sharedDependencies, "typescript")), join(repo, "node_modules/typescript"), "junction");
   cpSync(join(checkout, "node_modules/semver"), join(repo, "node_modules/semver"), { recursive: true });
   const manifest = JSON.parse(readFileSync(join(checkout, "package.json"), "utf8"));
   manifest.devDependencies.semver = "7.8.6";
@@ -115,9 +125,11 @@ async function fakeNative(t, source, { realGraph = false, unconfirmed = false } 
     integrity: "sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw==", dev: true };
   writeFileSync(join(repo, "package.json"), JSON.stringify(manifest));
   writeFileSync(join(repo, "package-lock.json"), JSON.stringify(lock));
+  const files = benchFiles(); bench(files);
+  for (const [path, value] of Object.entries(files)) writeFileSync(join(repo, path), JSON.stringify(value));
   if (source !== undefined) writeFileSync(join(root, "isolated/campaign-verify.mjs"), source);
   git(repo, "init", "--initial-branch=main");
-  git(repo, "add", "--", ...validationPaths, "bench/workloads/cloud-validation.mjs", "bench/workloads/cloud-validation-snapshot.mjs", "package.json", "package-lock.json");
+  git(repo, "add", "--", ...validationPaths, "bench/workloads/cloud-validation.mjs", "bench/workloads/cloud-validation-snapshot.mjs", "package.json", "package-lock.json", ...Object.keys(files));
   git(repo, "-c", "user.name=Synthetic validation test", "-c", "user.email=synthetic@example.invalid", "-c", "core.hooksPath=", "commit", "-qm", "Synthetic validation fixture");
   const approvedCommit = git(repo, "rev-parse", "HEAD");
   const native = await import(pathToFileURL(join(root, "cloud-validation.mjs")));
@@ -195,7 +207,7 @@ test("same-read snapshot survives replacement after capture and before real Work
   removeDependencyLink(h.repo);
   mkdirSync(dirname(join(h.repo, typescriptPath)), { recursive: true });
   writeFileSync(join(h.repo, typescriptPath), `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "unapproved dependency"); module.exports = {version:"forged"};`);
-  assert.deepEqual(await validationTask(h.input, { snapshot }).result, { synthetic: true, typescript: "5.9.3" });
+  assert.deepEqual(await validationTask(h.input, { snapshot }).result, { synthetic: true, typescript: "6.0.3" });
   assert.equal(existsSync(marker), false);
 });
 
@@ -212,8 +224,8 @@ test("pinned semver CommonJS graph evaluates captured extensionless dependencies
 
 function semverSnapshot(t, edit = () => {}) {
   const h = harness(t), commit = "a".repeat(40);
+  linkClassicCompiler(h.repo);
   mkdirSync(join(h.repo, "node_modules"));
-  symlinkSync(realpathSync(join(sharedDependencies, "typescript")), join(h.repo, "node_modules/typescript"), "junction");
   cpSync(join(checkout, "node_modules/semver"), join(h.repo, "node_modules/semver"), { recursive: true });
   const marker = join(h.repo, "unapproved-semver");
   const manifest = { devDependencies: { semver: "7.8.6" } };
@@ -222,10 +234,13 @@ function semverSnapshot(t, edit = () => {}) {
   const source = `import semver from "../../../node_modules/semver/index.js";
     export function validateCampaign() { return { stable: semver.satisfies("3.5.28", "^3.5.0"),
       prerelease: semver.satisfies("3.5.28-rc.1", "^3.5.0"), override: semver.satisfies("0.28.2", "^0.27.1") }; }`;
-  edit({ manifest, lock, repo: h.repo });
-  const paths = [...validationPaths, "package.json", "package-lock.json"];
+  const metadata = { "package.json": manifest, "package-lock.json": lock, ...benchFiles() };
+  edit({ manifest, lock, metadata, repo: h.repo });
+  const paths = [...validationPaths, "package.json", "package-lock.json", ...benchMetadata];
   const objects = paths.map((path) => {
-    const bytes = Buffer.from(path === "package.json" ? JSON.stringify(manifest) : path === "package-lock.json" ? JSON.stringify(lock)
+    // An edit that deletes a metadata file gets Git's batch answer for an absent object.
+    if (path in metadata && metadata[path] === undefined) return Buffer.from(`${commit}:${path} missing\n`);
+    const bytes = Buffer.from(path in metadata ? JSON.stringify(metadata[path])
       : path.endsWith("/isolated/campaign-verify.mjs") ? source : readFileSync(join(checkout, path)));
     return Buffer.concat([Buffer.from(`${createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex")} blob ${bytes.length}\n`), bytes, Buffer.from("\n")]);
   });
@@ -252,21 +267,25 @@ test("semver snapshot pins same-read library bytes before actual worker executio
   assert.throws(h.capture, /validation unavailable/);
 });
 
-test("only required catalog cgroup and recovery replay sources extend the worker source budget", { timeout: 15000 }, async (t) => {
-  const paths = validationPaths.filter((path) => path === "bench/catalog/cgroup.mjs" || /^bench\/hardening\/(?:dependency-recovery-|resource-sample\.mjs$)/.test(path));
+test("only required catalog cgroup, recovery replay and classic compiler entry sources extend the worker source budget", { timeout: 15000 }, async (t) => {
+  const paths = validationPaths.filter((path) => path === "bench/catalog/cgroup.mjs" || path === "bench/typescript.mjs"
+    || /^bench\/hardening\/(?:dependency-recovery-|resource-sample\.mjs$)/.test(path));
   assert.deepEqual(paths, [
     "bench/catalog/cgroup.mjs",
     "bench/hardening/dependency-recovery-capture.mjs",
     "bench/hardening/dependency-recovery-contract.mjs",
     "bench/hardening/resource-sample.mjs",
+    "bench/typescript.mjs",
   ]);
   const h = semverSnapshot(t), snapshot = h.capture();
   assert.equal(snapshot.sources.length - paths.length, 211);
   const task = validationTask(h.input, { snapshot, WorkerClass: class extends Worker {
     constructor(entry, options) {
-      // Inject below the exact parent manifest check to exercise the worker's own bound.
+      // Inject below the exact parent manifest check to exercise the worker's own bound. The
+      // replay never imports the compiler entry, so only its named slot, not a generic extra
+      // one, keeps an unused path in its place from fitting.
       options.workerData.sources = options.workerData.sources.map((row) =>
-        row.path === paths[0] ? { ...row, path: "bench/hardening/unlisted-control.mjs" } : row);
+        row.path === "bench/typescript.mjs" ? { ...row, path: "bench/hardening/unlisted-control.mjs" } : row);
       super(entry, options);
     }
   } });
@@ -283,6 +302,59 @@ test("semver snapshot rejects unpinned dependency declarations and absent captur
   const h = semverSnapshot(t), snapshot = h.capture();
   snapshot.sources = snapshot.sources.filter((row) => row.path !== "node_modules/semver/internal/re.js");
   assert.throws(() => validationTask(h.input, { snapshot }), /validation unavailable/);
+});
+
+// The pinned compiler bytes alone are not enough: the measured commit's bench manifest and
+// lock must declare and pin exactly that package, as the root's do for semver.
+const benchMetadataEdits = [
+  ["missing bench manifest", (files) => { files["bench/package.json"] = undefined; }],
+  ["missing bench lock", (files) => { files["bench/package-lock.json"] = undefined; }],
+  ["manifest range", (files) => { files["bench/package.json"].devDependencies.typescript = "^6.0.3"; }],
+  ["manifest without TypeScript", (files) => { delete files["bench/package.json"].devDependencies.typescript; }],
+  ["lock root declaration", (files) => { files["bench/package-lock.json"].packages[""].devDependencies.typescript = "6.0.2"; }],
+  ["lock version", (files) => { files["bench/package-lock.json"].packages["node_modules/typescript"].version = "6.0.2"; }],
+  ["lock integrity", (files) => { files["bench/package-lock.json"].packages["node_modules/typescript"].integrity = semverIntegrity; }],
+  ["lock resolved", (files) => { files["bench/package-lock.json"].packages["node_modules/typescript"].resolved = "https://registry.npmjs.org/typescript/-/typescript-7.0.2.tgz"; }],
+  ["lock without TypeScript", (files) => { delete files["bench/package-lock.json"].packages["node_modules/typescript"]; }],
+];
+
+test("bench metadata pins the captured compiler; missing or divergent metadata fails with the correct bytes installed", { timeout: 15000 }, async (t) => {
+  const pinned = semverSnapshot(t);
+  assert.equal(localCompiler(pinned.repo), true, "the correct pinned compiler is installed for every variant");
+  assert.equal(pinned.capture().sources.find((row) => row.path === typescriptPath).sha256, createHash("sha256").update(readFileSync(join(classicCompiler, "lib/typescript.js"))).digest("hex"));
+  for (const [name, change] of benchMetadataEdits) {
+    const h = semverSnapshot(t, ({ metadata }) => change(metadata));
+    assert.equal(localCompiler(h.repo), true, name);
+    assert.throws(h.capture, { message: "native campaign validation unavailable or invalid; evidence/host preserved" }, name);
+  }
+});
+
+test("real Git capture refuses a commit whose bench metadata is missing or divergent", { timeout: 30000 }, async (t) => {
+  for (const [name, change] of [benchMetadataEdits[0], benchMetadataEdits[1], benchMetadataEdits[6]]) {
+    const h = await fakeNative(t, 'export function validateCampaign() { return { synthetic: true }; }', { bench: (files) => {
+      change(files);
+      for (const path of benchMetadata) if (files[path] === undefined) delete files[path];
+    } });
+    assert.equal(localCompiler(h.repo), true, name);
+    await assert.rejects(h.inspect(h.input), { message: "native campaign validation unavailable or invalid; evidence/host preserved" }, name);
+    assert.throws(() => captureValidation(h.input.commit, { root: h.repo }), /validation unavailable/, name);
+  }
+});
+
+test("the local bench compiler check accepts only the pinned bytes at the bench path", (t) => {
+  const h = harness(t), root7 = realpathSync(join(checkout, "node_modules/typescript"));
+  const unlink = (link) => { assert.ok(lstatSync(link).isSymbolicLink()); if (process.platform === "win32") rmdirSync(link); else unlinkSync(link); };
+  assert.equal(localCompiler(h.repo), false, "nothing installed");
+  mkdirSync(join(h.repo, "node_modules"));
+  symlinkSync(root7, join(h.repo, "node_modules/typescript"), "junction");
+  assert.equal(localCompiler(h.repo), false, "root 7.0.2 only");
+  mkdirSync(join(h.repo, "bench/node_modules"), { recursive: true });
+  symlinkSync(root7, join(h.repo, "bench/node_modules/typescript"), "junction");
+  assert.equal(localCompiler(h.repo), false, "root compiler at the bench path");
+  unlink(join(h.repo, "bench/node_modules/typescript"));
+  linkClassicCompiler(h.repo);
+  assert.equal(localCompiler(h.repo), true, "pinned bench install");
+  removeDependencyLink(h.repo); unlink(join(h.repo, "node_modules/typescript"));
 });
 
 test("semver snapshot never falls back to an unlisted package file", { timeout: 15000 }, async (t) => {
@@ -382,7 +454,7 @@ test("complete fixed native graph and pinned TypeScript evaluate captured bytes 
       return { evidenceMode: "synthetic-import-control", modules: ${paths.length}, typescript: ts.version, statements: ast.statements.length };
     }`;
   const h = await fakeNative(t, source, { realGraph: true });
-  assert.deepEqual(await h.inspect(h.input), { evidenceMode: "synthetic-import-control", modules: paths.length, typescript: "5.9.3", statements: 1 });
+  assert.deepEqual(await h.inspect(h.input), { evidenceMode: "synthetic-import-control", modules: paths.length, typescript: "6.0.3", statements: 1 });
 });
 
 test("catalog timed replay uses exact captured source and missing or changed closure stays blocked", { timeout: 15000 }, async (t) => {

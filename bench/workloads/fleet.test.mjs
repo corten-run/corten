@@ -15,6 +15,7 @@ import { fleetPlan, reservation, savedLoadLayout, tags } from "./cloud-contract.
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { groupNames } from "./registry.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
@@ -565,6 +566,22 @@ test("synthetic inspection cannot be selected as admission's native authority", 
   assert.equal(p.children.length, 0);
 });
 
+test("remaining admission names a missing bench install before native replay of the first group", async (t) => {
+  const p = fixture(t); await p.remaining();
+  const verify = p.deps.verify; let replays = 0;
+  p.deps.verify = (...args) => { replays++; return verify(...args); };
+  p.deps.compiler = () => false;
+  assert.equal(await fleetMain([...p.args("--admit-remaining"), "--print-approval"], p.deps), 2);
+  const { subject, approvalSha256 } = p.output.at(-1);
+  assert.deepEqual(subject.jobs[0], { group: groupNames[0], outcome: "replay-blocked", missing: [localCompilerMissing] });
+  assert.equal(subject.firstGroup, undefined); assert.equal(replays, 0, "replay is not entered");
+  await assert.rejects(fleetMain([...p.args("--admit-remaining"), "--approve-reviewed-merged-ready", approvalSha256], p.deps), /fleet-integration-missing/);
+  assert.equal(replays, 0); assert.equal(p.children.length, 0); assert.ok(!existsSync(join(p.h.base, "remaining-intent.json")));
+  // Control: the same preview with the install present replays the first group.
+  p.deps.compiler = () => true;
+  assert.equal(await fleetMain([...p.args("--admit-remaining"), "--print-approval"], p.deps), 3);
+  assert.equal(replays, 1); assert.equal(p.output.at(-1).subject.jobs[0].outcome, "verified");
+});
 test("remaining intent is consumed before cancellation or uncertain child admission; it is never replayed", async (t) => {
   for (const uncertain of [false, true]) {
     const p = fixture(t); const approved = await p.remaining();

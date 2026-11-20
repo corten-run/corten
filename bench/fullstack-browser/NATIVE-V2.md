@@ -142,11 +142,12 @@ omit/substitute inputs. Replay never extracts saved tar. Archive bytes must be t
 actual Docker stdin; owner must bind image build command/log/ID to this digest.
 
 `captureTools(store,{browserExecutable})` resolves live local paths, never stores
-them, and returns `{schema:'native-browser-tools/v3',lock:ref,node:executable,browser:executable,
+them, and returns `{schema:'native-browser-tools/v4',lock:ref,benchLock:ref,node:executable,browser:executable,
 packages:[{name,version,archive:ref,files:[{path,body:ref}]}]}`. Exact fixed packages:
 `@playwright/test`, `playwright`, `playwright-core`, `typescript`. Each archive is
 found only in local npm cache, including npm's configured local cache (offline
-config query), SHA-512 checked against the root lock using `packageFiles`, and
+config query), SHA-512 checked using `packageFiles` against the root lock, or for
+`typescript` the bench package's lock (`bench/package-lock.json`), and
 compared byte-for-byte with the actual installed package tree. Missing cache or
 changed install throws, without fetching or accepting a hash-only substitute.
 
@@ -159,13 +160,14 @@ all bytes incrementally. Replay validates every ref/length before reading, consu
 every chunk in order, and checks the whole-file size and SHA-256 without concatenation.
 Identical chunks may deduplicate in storage, but every logical occurrence is hashed.
 The generic 256 MiB/blob, 1 GiB total and other storage caps above are unchanged.
-Old tools/v2 receipts are explicitly rejected: regenerate unpublished development
+Old tools/v2 and v3 receipts (v3 had no bench lock) are explicitly rejected: regenerate unpublished development
 evidence only, never rewrite historical benchmark evidence. Lock/package/source/
 build receipt formats are unchanged; no tool downgrade or hash-only substitute.
 
 `replayTools(reader,receipt)` consumes every archived/installed file and executable
-and returns `{node,browser,lockSha256}`. Owner MUST compare `lockSha256` with the
-canonical source receipt's package-lock.json before accepting tool source closure.
+and returns `{node,browser,lockSha256,benchLockSha256}`. Owner MUST compare `lockSha256` and
+`benchLockSha256` with the canonical source receipt's package-lock.json and
+bench/package-lock.json before accepting tool source closure.
 Windows/Linux fixed tool packages are covered; additional platform-only runtime
 packages and OS dynamic library authenticity are not silently certified here.
 Exact executable bytes are observations, not independent distribution approval.

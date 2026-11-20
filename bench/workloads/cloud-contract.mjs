@@ -155,6 +155,8 @@ export function validateState(s, round) {
     if (!historicalSelection(s.selection))
       assert.deepEqual(s.selection, selection(), "complete current registry selection differs");
   }
+  // Hosts launched since the bench package existed install it. Absent means the original job bytes.
+  if (s.benchPackage !== undefined) assert.equal(s.benchPackage, true, "bench package marker");
   date(s.createdAt);
   assert.ok(["reserved", "creating", "preparing", "starting", "running", "collected", "retired"].includes(s.status));
   if (["preparing", "starting", "running", "collected", "retired"].includes(s.status)) assert.ok(s.id && s.ip, "owned host identity missing");
@@ -552,7 +554,9 @@ bootstrap_stage=host-capacity
 test "$(nproc)" -ge ${loadLayout ? 16 : 8}
 bootstrap_stage=root-dependencies
 timeout 900 npm ci --no-audit --no-fund
-bootstrap_stage=browser-dependencies
+${s.benchPackage ? `bootstrap_stage=bench-dependencies
+timeout 900 npm --prefix bench ci --no-audit --no-fund
+` : ""}bootstrap_stage=browser-dependencies
 timeout 900 npm --prefix bench/browser ci --no-audit --no-fund
 bootstrap_stage=browser-install
 timeout 900 npx --no-install playwright install --with-deps chromium

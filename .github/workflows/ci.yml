@@ -53,14 +53,9 @@ jobs:
       # app need not, and `json` builds without `types` (the schemas and `RawValue`).
       - run: cargo check -p corten-run --no-default-features --features json --all-targets
       - run: cargo check -p corten-run --no-default-features --features agent,feed
-      # Checkout-backed apps use the typescript7 alias. Install the same compiler globally
-      # for the separate PATH check below, which temporarily removes that alias.
       - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
-      - run: |
-          npm install --global $(node -p "require('./package.json').devDependencies.typescript7.slice(4)")
-          tsc --version
       - run: npm ci
       - name: Minimum supported TypeScript checks the runtime and kit scripts
         run: |
@@ -71,25 +66,20 @@ jobs:
         run: cargo test -p corten-cli the_pinned_repository_compiler_checks_template_scripts -- --ignored --nocapture
       # No cargo build between the commands: corten new and corten ui add write the lock the
       # check requires, so this is the path a developer takes straight after creating the app.
+      # The app, outside the checkout, finds the pinned compiler on the PATH as an app finds a
+      # global one; the checkout itself finds it as node_modules/.bin/tsc.
       - name: corten new writes an app that passes corten check, and so does every kit component in it
+        shell: bash
         run: |
+          export PATH="$GITHUB_WORKSPACE/node_modules/.bin:$PATH"
+          version=$(node -p "require('./package.json').devDependencies.typescript")
           cargo build -q -p corten-cli
           target/debug/corten new "$RUNNER_TEMP/app" --corten-path crates/corten
           cd "$RUNNER_TEMP/app"
-          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check 2>&1 | tee "$RUNNER_TEMP/check.log"
+          grep -F "corten: script types: TypeScript $version (tsc)" "$RUNNER_TEMP/check.log"
           "$GITHUB_WORKSPACE/target/debug/corten" ui init && "$GITHUB_WORKSPACE/target/debug/corten" ui add --all
           CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check
-      - name: PATH compiler checks an app without the checkout alias
-        shell: bash
-        run: |
-          version=$(node -p "require('./package.json').devDependencies.typescript7.split('@').at(-1)")
-          alias="$GITHUB_WORKSPACE/node_modules/typescript7"
-          mv "$alias" "$RUNNER_TEMP/typescript7-alias"
-          trap 'mv "$RUNNER_TEMP/typescript7-alias" "$alias"' EXIT
-          "$GITHUB_WORKSPACE/target/debug/corten" new "$RUNNER_TEMP/path-app" --corten-path "$GITHUB_WORKSPACE/crates/corten"
-          cd "$RUNNER_TEMP/path-app"
-          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check 2>&1 | tee "$RUNNER_TEMP/path-check.log"
-          grep -F "corten: script types: TypeScript $version (tsc)" "$RUNNER_TEMP/path-check.log"
       # Every published crate still packages and builds on its own from the .crate files, in a
       # target of its own: cargo treats a registry crate as unchanged while its version is, so the
       # cached target could hand it an earlier build of corten-run 0.1.0.
@@ -188,7 +178,14 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            bench/package-lock.json
       - run: npm ci
+      # The benchmark harness's classic compiler API, which npm run check:workloads and
+      # check:groups:browser parse with (bench/package.json).
+      - run: npm --prefix bench ci
+        if: contains(env.PARTS, ' npm-check ')
       - name: npm run check
         if: contains(env.PARTS, ' npm-check ')
         run: |

@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript7/unstable/ast";
+import * as ts from "typescript/unstable/ast";
 import { parse, parseFiles } from "./typescript.mjs";
 
 /** What `text`, the file `file`, has that this check forbids, by line. @param {string} file @param {string} text @returns {string[]} */

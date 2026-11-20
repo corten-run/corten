@@ -1,4 +1,4 @@
-import ts from "typescript";
+import ts from "../typescript.mjs";
 import { createHash } from "node:crypto";
 import { createBindingArtifact, indexBindingArtifact, bindingHash, bindingFunctionLocation } from "./binding-artifact.mjs";
 import { checkBindingEffects } from "./binding-effects.mjs";

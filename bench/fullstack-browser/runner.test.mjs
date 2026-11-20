@@ -108,10 +108,13 @@ const req = (options = {}) => ({ method: () => "GET", headers: () => ({}), isNav
 const plan = createBrowserPlan({ records: records() });
 
 test("native host tool identities require complete canonical lock proof", () => {
-  const tools = { node: "a".repeat(64), browser: "b".repeat(64), lockSha256: "c".repeat(64) };
-  assert.deepEqual(nativeToolIdentities(tools, tools.lockSha256), tools);
-  for (const changed of [{ ...tools, lockSha256: undefined }, { ...tools, lockSha256: "d".repeat(64) }, { ...tools, node: null }])
-    assert.throws(() => nativeToolIdentities(changed, tools.lockSha256));
+  const tools = { node: "a".repeat(64), browser: "b".repeat(64), lockSha256: "c".repeat(64), benchLockSha256: "e".repeat(64) };
+  const { benchLockSha256, ...handoff } = tools;
+  assert.deepEqual(nativeToolIdentities(tools, tools.lockSha256, benchLockSha256), handoff);
+  for (const changed of [{ ...tools, lockSha256: undefined }, { ...tools, lockSha256: "d".repeat(64) }, { ...tools, node: null },
+    { ...tools, benchLockSha256: undefined }, { ...tools, benchLockSha256: "d".repeat(64) }])
+    assert.throws(() => nativeToolIdentities(changed, tools.lockSha256, benchLockSha256));
+  assert.throws(() => nativeToolIdentities(tools, tools.lockSha256, undefined));
 });
 
 test("native document origins distinguish identical URL body and Date without Playwright IDs", async () => {

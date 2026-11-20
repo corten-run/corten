@@ -12,7 +12,7 @@ import { BindingLinkObserver } from "./binding-links.mjs";
 import { discoverReactEndpoint } from "./bindings.mjs";
 import { checkBindingEffects } from "./binding-effects.mjs";
 import { records } from "../marketplace/fixtures.mjs";
-import ts from "typescript";
+import ts from "../typescript.mjs";
 import { createBindingArtifact, indexBindingArtifact, bindingHash } from "./binding-artifact.mjs";
 import { replayBindingProof } from "./bindings.mjs";
 import { emittedModules } from "./binding-modules.mjs";

@@ -60,7 +60,12 @@ jobs:
         with:
           node-version: 26
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            bench/package-lock.json
       - run: npm ci
+      # The harness's classic TypeScript compiler, whose locked archive the tool replay reads too.
+      - run: npm --prefix bench ci
       - name: Prepare the existing Git-capable Playwright test image
         run: |
           image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"

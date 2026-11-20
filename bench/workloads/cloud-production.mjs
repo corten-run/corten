@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { controller, publicError } from "./droplet.mjs";
+import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
 import { controllerState, full, parseDropletArgs, providerFailure } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
@@ -12,6 +12,7 @@ import { fleetCreateMode, validateLaunchFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { failedNativePolicy, failedNativeRoots, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
+import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -34,7 +35,8 @@ export function parseProductionArgs(args) {
   return { options: parseDropletArgs(core), approval, preview };
 }
 
-export async function productionPlan(options, { repo = checkout, run } = {}) {
+// compiler is a code-only synthetic TEST seam for the local bench install check.
+export async function productionPlan(options, { repo = checkout, run, compiler = localCompiler } = {}) {
   // All checks here are local/read-only. Missing integration stays visible, not imported.
   repo = realpathSync(repo);
   assert.ok(!/["$%\r\n\0]/.test(options.stateDir), "SSH config expansion in state path refused");
@@ -51,6 +53,11 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   const missing = [];
   for (const path of nativePaths)
     if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
+  // Seen before the reservation is saved: the launched job installs the bench package.
+  if (options.detach) for (const path of benchPackagePaths)
+    if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
+  // Native replay (ordinary collection, and so a launch's) reads this checkout's bench compiler.
+  if ((options.detach || options.collect && options.unusedBootstrapKnownHosts === undefined) && !compiler()) missing.push(localCompilerMissing);
   let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery;
   if (options.group !== undefined) {
     const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = validateLaunchFleet(JSON.parse(bytes));
@@ -102,7 +109,7 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
 }
 
-export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log } = {}) {
+export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log, compiler } = {}) {
   const { options, approval, preview } = parseProductionArgs(args);
   const processRun = shellTransport({ repo, spawn, streamSpawn });
   const createMode = options.detach ? options.group === undefined ? "legacy" : fleetCreateMode(options.group) : null;
@@ -139,7 +146,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     if (failure) throw failure;
     return result;
   };
-  const plan = await productionPlan(options, { repo, run });
+  const plan = await productionPlan(options, { repo, run, compiler });
   if (preview) {
     write(JSON.stringify({ action: plan.subject.action, controllerCommit: plan.subject.controllerCommit, round: options.round,
       ...(plan.subject.recovery ? { recovery: plan.subject.recovery, reservationSha256: plan.subject.reservationSha256 } : {}),
@@ -162,14 +169,16 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   stage = "remote-main-ancestry";
   await run("git", ["merge-base", "--is-ancestor", plan.subject.controllerCommit, remoteHead]);
   stage = "source-recheck";
-  const repeated = await productionPlan(options, { repo, run });
+  const repeated = await productionPlan(options, { repo, run, compiler });
   assert.equal(repeated.approvalSha256, approval, "source/state/delivery changed after approval");
   assert.deepEqual(repeated.missing, []);
   let entered = false;
   const authorizeLocked = async () => {
     assert.ok(!interrupted(), "cancelled before provider access");
-    const locked = await productionPlan(options, { repo, run });
+    const locked = await productionPlan(options, { repo, run, compiler });
     assert.equal(locked.approvalSha256, approval, "locked action changed after approval");
+    // The approval hash excludes missing inputs, such as a bench install removed since the recheck.
+    assert.deepEqual(locked.missing, [], "native campaign integration missing; do not allocate");
     return locked.subject;
   };
   const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration) => {
