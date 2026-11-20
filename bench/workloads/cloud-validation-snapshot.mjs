@@ -176,9 +176,10 @@ export const validationPaths = Object.freeze([
   "bench/workloads/run.mjs",
   "scripts/steady.mjs"
 ]);
-export const typescriptPath = "node_modules/typescript/lib/typescript.js";
-// typescript@5.9.3, verified against the package-lock SHA-512 npm archive.
-export const typescriptSha256 = "3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675";
+// The bench package's classic compiler (bench/package.json), not the root's TypeScript.
+export const typescriptPath = "bench/node_modules/typescript/lib/typescript.js";
+// typescript@6.0.3, verified against bench/package-lock.json's SHA-512 npm archive.
+export const typescriptSha256 = "569177652966bd528c319171c7dd22860dbf72bde116cbc4f644f1d02bb12e39";
 // semver@7.8.6 library closure, checked against the integrity-pinned npm archive.
 // The CLI and preload entry are not validator dependencies.
 export const semverIntegrity = "sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw==";

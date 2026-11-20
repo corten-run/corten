@@ -34,7 +34,9 @@ test("benchmark evidence supplies the installed, locked Playwright base explicit
   const steps = workflow.jobs.evidence.steps;
   const build = steps.findIndex((entry) => entry.run?.includes("test-tools.Dockerfile"));
   const install = steps.findIndex((entry) => entry.run === "npm ci");
-  assert.ok(install >= 0 && install < build);
+  // Tool replay also reads the bench package's locked classic TypeScript archive.
+  const bench = steps.findIndex((entry) => entry.run === "npm --prefix bench ci");
+  assert.ok(install >= 0 && bench > install && bench < build);
   assert.match(steps[build].run, /image="mcr\.microsoft\.com\/playwright:v\$\(node -p 'require\("@playwright\/test\/package\.json"\)\.version'\)-noble"/);
   assert.match(steps[build].run, /docker build --build-arg PLAYWRIGHT_IMAGE="\$image" -f bench\/workloads\/test-tools\.Dockerfile/);
 });

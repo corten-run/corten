@@ -10,7 +10,7 @@ publishing integration is present.
 ## Run
 
 Install the root tooling dependencies and Playwright Chromium using the repository's existing
-setup. Have `node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1` available locally. `--build` builds the approved native
+setup, and the bench package's TypeScript parser with `npm --prefix bench ci`. Have `node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1` available locally. `--build` builds the approved native
 marketplace images using their existing Dockerfiles; alternatively `--targets` selects
 already-built local images. Execution never implicitly pulls an application image.
 Each native app gets one CPU, 1 GiB memory and
@@ -114,7 +114,7 @@ and enclosing component ID before dispatch. It does not assume that `target_pric
 native state-property name. An absolute update URI is reduced to a pathname only when its
 origin matches the document. Next's custom React enhancement is discovered from the mounted
 form's real `onSubmit`, owning fiber props and containing component function before dispatch.
-`bindings.mjs` uses the already-installed TypeScript parser to resolve only a single supported
+`bindings.mjs` uses the bench package's installed TypeScript parser (`bench/package.json`) to resolve only a single supported
 native POST expression, without invoking that function or evaluating its source. Unresolved,
 shadowed, cross-origin or mismatched bindings remain failures. A sent POST is not used to invent
 a positive binding. Function text and sampled props alone do not prove imported helper effects.

@@ -16,7 +16,8 @@ function git(root, ...args) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", timeout: 5000, windowsHide: true });
   assert.equal(result.status, 0, "synthetic local Git operation failed"); return result.stdout.trim();
 }
-const sharedDependencies = resolve(checkout, git(checkout, "rev-parse", "--git-common-dir"), "..", "node_modules");
+// The bench package's classic compiler (npm --prefix bench ci), linked, never copied or altered.
+const classicCompiler = realpathSync(join(checkout, "bench/node_modules/typescript"));
 
 const syntheticHead = "c".repeat(40);
 const privateGitData = "synthetic private Git detail";
@@ -72,10 +73,15 @@ for (const [name, result, reason] of [
   });
 }
 
+function linkClassicCompiler(repo) {
+  mkdirSync(join(repo, "bench/node_modules"), { recursive: true });
+  symlinkSync(classicCompiler, join(repo, "bench/node_modules/typescript"), "junction");
+}
+
 function removeDependencyLink(repo) {
-  const link = join(repo, "node_modules/typescript");
+  const link = join(repo, "bench/node_modules/typescript");
   assert.ok(lstatSync(link).isSymbolicLink());
-  assert.equal(realpathSync(link), realpathSync(join(sharedDependencies, "typescript")));
+  assert.equal(realpathSync(link), classicCompiler);
   if (process.platform === "win32") rmdirSync(link);
   else unlinkSync(link);
 }
@@ -102,10 +108,10 @@ async function fakeNative(t, source, { realGraph = false, unconfirmed = false } 
   }
   if (realGraph) for (const path of ["package.json", "bench/marketplace/labels.json"])
     copyFileSync(join(checkout, path), join(repo, path));
-  // The TypeScript link targets only the main install. Semver's small package is
+  // The TypeScript link targets only the bench install. Semver's small package is
   // copied so replacement controls cannot alter either source install.
+  linkClassicCompiler(repo);
   mkdirSync(join(repo, "node_modules"));
-  symlinkSync(realpathSync(join(sharedDependencies, "typescript")), join(repo, "node_modules/typescript"), "junction");
   cpSync(join(checkout, "node_modules/semver"), join(repo, "node_modules/semver"), { recursive: true });
   const manifest = JSON.parse(readFileSync(join(checkout, "package.json"), "utf8"));
   manifest.devDependencies.semver = "7.8.6";
@@ -195,7 +201,7 @@ test("same-read snapshot survives replacement after capture and before real Work
   removeDependencyLink(h.repo);
   mkdirSync(dirname(join(h.repo, typescriptPath)), { recursive: true });
   writeFileSync(join(h.repo, typescriptPath), `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "unapproved dependency"); module.exports = {version:"forged"};`);
-  assert.deepEqual(await validationTask(h.input, { snapshot }).result, { synthetic: true, typescript: "5.9.3" });
+  assert.deepEqual(await validationTask(h.input, { snapshot }).result, { synthetic: true, typescript: "6.0.3" });
   assert.equal(existsSync(marker), false);
 });
 
@@ -212,8 +218,8 @@ test("pinned semver CommonJS graph evaluates captured extensionless dependencies
 
 function semverSnapshot(t, edit = () => {}) {
   const h = harness(t), commit = "a".repeat(40);
+  linkClassicCompiler(h.repo);
   mkdirSync(join(h.repo, "node_modules"));
-  symlinkSync(realpathSync(join(sharedDependencies, "typescript")), join(h.repo, "node_modules/typescript"), "junction");
   cpSync(join(checkout, "node_modules/semver"), join(h.repo, "node_modules/semver"), { recursive: true });
   const marker = join(h.repo, "unapproved-semver");
   const manifest = { devDependencies: { semver: "7.8.6" } };
@@ -382,7 +388,7 @@ test("complete fixed native graph and pinned TypeScript evaluate captured bytes 
       return { evidenceMode: "synthetic-import-control", modules: ${paths.length}, typescript: ts.version, statements: ast.statements.length };
     }`;
   const h = await fakeNative(t, source, { realGraph: true });
-  assert.deepEqual(await h.inspect(h.input), { evidenceMode: "synthetic-import-control", modules: paths.length, typescript: "5.9.3", statements: 1 });
+  assert.deepEqual(await h.inspect(h.input), { evidenceMode: "synthetic-import-control", modules: paths.length, typescript: "6.0.3", statements: 1 });
 });
 
 test("catalog timed replay uses exact captured source and missing or changed closure stays blocked", { timeout: 15000 }, async (t) => {

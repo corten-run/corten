@@ -255,7 +255,7 @@ function preparation(group) {
     ...(["fullstack-browser", "client-heavy", "live-delivery", "recoverable-live"].includes(group)
       ? ["matching Playwright Chromium and its host system dependencies"] : []),
     ...(group === "client-heavy" ? ["bench/browser npm ci", "Cargo-compatible Rust toolchain and native linker"] : []),
-    ...(group === "fullstack-browser" ? ["local digest-pinned Node 26 image from bench/fullstack-browser/run.mjs; free loopback port 8080 for native SvelteKit origin"] : [])],
+    ...(group === "fullstack-browser" ? ["bench npm ci (the binding parser's classic TypeScript compiler)", "local digest-pinned Node 26 image from bench/fullstack-browser/run.mjs; free loopback port 8080 for native SvelteKit origin"] : [])],
     fixtures: fixtures.map((name) => ({ executable: "node", argv: [`bench/${name}/fixtures.mjs`] })),
     environment: { refuseNonempty: ["BENCH_APPS", "BENCH_TIER", "BENCH_EDGE", "PROFILE"],
       toolIdentity: "record resolved native/tool image IDs, dependency locks and browser executable/version; tags alone are insufficient" } };

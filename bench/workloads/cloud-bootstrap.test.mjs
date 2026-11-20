@@ -23,9 +23,11 @@ test("bootstrap prepares the actual client dependency roots and Node 26 before t
   const job = remoteFiles(state)["job.sh"];
   assert.match(job, /nodesource.com\/setup_26\.x/);
   const root = job.indexOf("npm ci --no-audit --no-fund");
+  // The harness's classic compiler is the bench package's, not the root's.
+  const bench = job.indexOf("npm --prefix bench ci --no-audit --no-fund");
   const browser = job.indexOf("npm --prefix bench/browser ci --no-audit --no-fund");
   const entry = job.indexOf("node bench/workloads/isolated/campaign-entry.mjs");
-  assert.ok(root >= 0 && browser > root && entry > browser);
+  assert.ok(root >= 0 && bench > root && browser > bench && entry > browser);
   assert.ok(job.includes("node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1"));
   assert.ok(!job.includes("setup_24.x"));
   assert.ok(job.includes('node -e \'if (process.versions.node.split(".")[0] !== "26") process.exit(1)\''));

@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { API } from "typescript7/unstable/sync";
-import { version } from "typescript7";
+import { API } from "typescript/unstable/sync";
+import { version } from "typescript";
 
-console.log(`Navigation type probes: TypeScript ${version} (typescript7)`);
+console.log(`Navigation type probes: TypeScript ${version}`);
 
 // Compile in-memory mistakes inside the runtime: SOURCE is private, so a public
 // typing fixture cannot exercise the helper's own annotation without exporting it.

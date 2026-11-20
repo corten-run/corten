@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { closeSync, createReadStream, ftruncateSync, linkSync, mkdirSync, mkdtempSync, openSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, createReadStream, ftruncateSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,8 +36,9 @@ test("actual Playwright/TypeScript installed files, cache archives, lock and exe
   const ref = store.record("tools", tools); store.seal(); const reader = openEvidence(root);
   const result = replayTools(reader, reader.json(ref));
   const digest = async (file) => { const hash = createHash("sha256"); for await (const bytes of createReadStream(file)) hash.update(bytes); return hash.digest("hex"); };
-  assert.deepEqual(result, { node: await digest(process.execPath), browser: await digest(chromium.executablePath()), lockSha256: tools.lock.sha256 });
-  assert.equal(tools.schema, "native-browser-tools/v3");
+  assert.deepEqual(result, { node: await digest(process.execPath), browser: await digest(chromium.executablePath()), lockSha256: tools.lock.sha256,
+    benchLockSha256: tools.benchLock.sha256 });
+  assert.equal(tools.schema, "native-browser-tools/v4");
   for (const [value, file] of [[tools.node, process.execPath], [tools.browser, chromium.executablePath()]]) {
     assert.equal(value.bytes, statSync(file).size); assert.equal(value.chunks.length, Math.ceil(value.bytes / (16 * 1024 ** 2)));
   }
@@ -45,6 +46,8 @@ test("actual Playwright/TypeScript installed files, cache archives, lock and exe
     executableChunks: { node: tools.node.chunks.length, browser: tools.browser.chunks.length } }));
   assert.deepEqual(tools.packages.map((p) => p.name), ["@playwright/test", "playwright", "playwright-core", "typescript"]);
   assert.ok(tools.packages.at(-1).files.length > 100); reader.finish();
+  // The classic compiler comes from the bench package's lock, not the root's.
+  assert.equal(tools.packages.at(-1).version, JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")).packages["node_modules/typescript"].version);
   const v = structuredClone(tools); v.packages.at(-1).files.pop(); assert.throws(() => replayTools(reader, v));
   assert.throws(() => replayTools(reader, { ...tools, browserExecutable: "//saved/network/exe" }));
 });
@@ -166,9 +169,11 @@ test("saved executable mutation and unconsumed chunk cannot hide behind an evide
   assert.throws(() => replayExecutableBytes(reader, value)); assert.throws(() => reader.finish());
 });
 
-test("old v2 tools are rejected before byte replay and require unpublished development regeneration", () => {
+test("old v2 and v3 tools are rejected before byte replay and require unpublished development regeneration", () => {
   let reads = 0;
   assert.throws(() => replayTools({ read() { reads++; } }, { schema: "native-browser-tools/v2", lock: null, node: null, browser: null, packages: [] }),
-    /regenerate unpublished v2 development evidence/);
+    /regenerate unpublished v2\/v3 development evidence/);
+  assert.throws(() => replayTools({ read() { reads++; } }, { schema: "native-browser-tools/v3", lock: null, node: null, browser: null, packages: [] }),
+    /regenerate unpublished v2\/v3 development evidence/);
   assert.equal(reads, 0);
 });

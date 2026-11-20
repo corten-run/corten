@@ -552,6 +552,8 @@ bootstrap_stage=host-capacity
 test "$(nproc)" -ge ${loadLayout ? 16 : 8}
 bootstrap_stage=root-dependencies
 timeout 900 npm ci --no-audit --no-fund
+bootstrap_stage=bench-dependencies
+timeout 900 npm --prefix bench ci --no-audit --no-fund
 bootstrap_stage=browser-dependencies
 timeout 900 npm --prefix bench/browser ci --no-audit --no-fund
 bootstrap_stage=browser-install

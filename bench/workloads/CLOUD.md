@@ -790,8 +790,8 @@ reports one fixed reason: `timed out`, `process error`, `unsuccessful exit`, or
 environment values. Replay and evidence validation failures remain generic.
 The closure includes the observer's durable writer; transitive observer
 imports use those captured bytes under the same deny-unlisted loader.
-The fixed TypeScript bundle and the semver library are captured once and checked
-against their pinned package-file hashes. Semver's exact tooling declaration and
+The fixed TypeScript bundle (the bench package's 6.0.3, `bench/package.json`) and the
+semver library are captured once and checked against their pinned package-file hashes. Semver's exact tooling declaration and
 npm archive integrity must also match the installed commit's manifest and lock.
 Its extensionless CommonJS imports resolve only within the captured library;
 the CLI, preload entry and unlisted files cannot execute. This adds no package

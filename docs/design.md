@@ -216,11 +216,13 @@ rules something out.
    constructor set it and `undefined` is not accepted; TypeScript 5.8 added `erasableSyntaxOnly`.
    TypeScript 7.0.2 exports no stable parsing entry point: its root exports only `version` and
    `versionMajorMinor`, and its parser and AST entry points are all under `typescript/unstable/`.
-   The repository's AST checks import `typescript7/unstable/sync`, `typescript7/unstable/fs` and
-   `typescript7/unstable/ast`, with the dependency pinned exactly to `7.0.2` in `package.json`
-   and the lockfile as the `typescript7` npm alias, not a compatible-version range. The root
-   `typescript` 5.9.3 install remains only for `bench/**` consumers of the classic compiler API;
-   Corten's checks explicitly select the 7.0.2 alias, not npm's colliding `tsc` bin);
+   The repository's AST checks import `typescript/unstable/sync`, `typescript/unstable/fs` and
+   `typescript/unstable/ast`, with the root dependency pinned exactly to `7.0.2` in `package.json`
+   and the lockfile, not a compatible-version range, and `corten check` in a checkout finds it
+   as `node_modules/.bin/tsc`, as it finds an app's. The benchmark harness's consumers of the
+   classic compiler API (`createSourceFile`, `forEachChild`, `transpileModule`) in
+   `bench/fullstack-browser` and `bench/workloads` have their own package, `bench/package.json`,
+   pinned exactly to TypeScript 6.0.3, the newest release with that API);
    reasoned (with the check at the call, no declarations sit between markup and script to go stale;
    component behavior is exported functions, not classes; the runtime's one hand-written class,
    `<corten-live>`, sets only the fields it declares, and the classes it generates, one per view
@@ -229,9 +231,9 @@ rules something out.
    was read, and none's value is used as a type it is not; the unstable parser API lets
    `scripts/escapes.mjs` inspect JSDoc and `scripts/events.mjs` compare the compiler's DOM event
    maps with `crates/corten-macros/src/dom.rs` without a separate parser dependency.
-   A second compiler install preserves benchmark tooling's classic API without changing
-   `bench/**` or downgrading Corten's checks. The exact pin and negative parser fixtures bound this dependency, but
-   do not make the API stable); measured (deck-builder's and
+   The benchmark package's own install keeps the harness's classic API without holding Corten's
+   checks or the CLI's compiler lookup to an older compiler. The exact pin and negative parser
+   fixtures bound this dependency, but do not make the API stable); measured (deck-builder's and
    seller-desk's largest scripts and three small handlers, converted to TypeScript, surfaced no
    bug; esbuild 0.28.2's output (`--format=esm`), which stands in for either language since Corten
    serves esbuild's output for neither, with whitespace and comments removed was the same bytes,
@@ -256,10 +258,10 @@ rules something out.
    which they use); or a TypeScript release changes what the probes behind the measured premise
    show; or TypeScript ships a stable parsing API for these AST checks; or a TypeScript 7.x
    update changes the unstable sync, filesystem or AST APIs they use; or benchmark tooling moves
-   off the classic compiler API, so the root 5.9.3 compatibility install can be removed; or the
-   benchmark harness isolates its classic API dependency in its own package, removing the need
-   for Corten's alias; or the `@typescript/typescript-<platform>-<arch>/lib/lib.dom.d.ts` package
-   layout that `scripts/events.mjs` resolves through the alias changes; or the runtime or kit
+   off the classic compiler API, so `bench/package.json` can be removed; or a TypeScript release
+   newer than 6.0.3 still ships that API, for the benchmark package to move to; or the
+   `@typescript/typescript-<platform>-<arch>/lib/lib.dom.d.ts` package layout that
+   `scripts/events.mjs` resolves through the root compiler changes; or the runtime or kit
    needs a DOM type unavailable at the TypeScript 6.0 minimum (CI checks both 6.0.3 and 7.0.2),
    or TypeScript changes the checked-JavaScript inference differences at that minimum.
 
@@ -325,7 +327,21 @@ rules something out.
    The minimum comparison uses semantic-version precedence: 6.0.0 prereleases are below
    stable 6.0.0, while 6.0.1 and 7.0.0 prereleases are above it. The CLI's version-boundary
    regression was reproduced with 6.0.0-dev.20250801 and the boundary cases checked at
-   `f46913f75` and the change.
+   `f46913f75` and the change;
+   2026-11-20, at `cdd1525e0` and the change: the harness's classic API consumers moved to
+   `bench/package.json`, pinned exactly to TypeScript 6.0.3 (npm's newest 6.x, whose
+   `lib/typescript.d.ts` declares `createSourceFile`, `forEachChild` and `transpileModule`),
+   installed by `npm --prefix bench ci`, and the root `typescript` became 7.0.2, npm's `latest`
+   that day, so the checkout's compiler alias and the CLI's lookup for it were removed. Node's
+   resolver gives 6.0.3 for `typescript` from every importer under `bench/` and 7.0.2 from
+   `scripts/`. The cloud validator binds `bench/node_modules/typescript/lib/typescript.js` by path
+   and SHA-256, the bytes of the npm archive matching the bench lock's integrity. The browser
+   binding extraction with 5.9.3 (main's locked archive) and with 6.0.3 gave identical output on
+   the same inputs: the emitted scripts of two local production Next.js images (21 scripts each,
+   5,185 and 5,193 functions: inventory and locations, module registrations, React contracts and
+   their closures, free names, form handler discovery and URL resolution), and the 12,526 calls
+   the browser evidence tests made to the extractor's exported functions (2,593 inputs seen under
+   both, none with a different output, and 338 per run that carry per-run random values).
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in

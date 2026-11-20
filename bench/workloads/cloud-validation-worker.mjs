@@ -23,7 +23,7 @@ try {
   const approved = new Map(); let total = 0;
   for (const row of sources) {
     assert.deepEqual(Object.keys(row).sort(), ["path", "sha256", "source"]);
-    assert.ok(/^(?:(?:bench|scripts)\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.mjs|node_modules\/typescript\/lib\/typescript\.js|node_modules\/semver\/(?:[a-z-]+\/)*[a-z-]+\.js)$/.test(row.path));
+    assert.ok(/^(?:(?:bench|scripts)\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.mjs|bench\/node_modules\/typescript\/lib\/typescript\.js|node_modules\/semver\/(?:[a-z-]+\/)*[a-z-]+\.js)$/.test(row.path));
     if (!additionalSources.delete(row.path)) assert.ok(--remaining >= 0);
     assert.equal(typeof row.source, "string");
     total += Buffer.byteLength(row.source); assert.ok(total <= 24 * 1024 * 1024);
@@ -33,7 +33,7 @@ try {
   }
   const self = approved.get(new URL("bench/workloads/cloud-validation-worker.mjs", base).href);
   assert.equal(import.meta.url, "data:text/javascript;base64," + Buffer.from(self).toString("base64"));
-  const typescript = new URL("node_modules/typescript/lib/typescript.js", base).href;
+  const typescript = new URL("bench/node_modules/typescript/lib/typescript.js", base).href;
   const semver = new URL("node_modules/semver/", base).href;
   registerHooks({ resolve(specifier, context, nextResolve) {
     if (isBuiltin(specifier)) return nextResolve(specifier, context);
