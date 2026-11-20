@@ -1,6 +1,6 @@
 // Serialized into a captured production module by fleet-production.test.mjs.
 // Only external boundaries are synthetic. Never import this from a CLI module.
-export function syntheticDependencies(config, { fs, path, fork, providerTransport, bootstrapMarker, bootstrapReadScript,
+export function syntheticDependencies(config, { fs, path, fork, providerTransport, bootstrapMarker, dedicatedBootstrapReadScript,
   controlRegistration, EventEmitter, PassThrough, Writable, registration }) {
   const good = (stdout = "") => ({ status: 0, stdout, stderr: "" });
   const local = path.join(config.stateDir, "groups-r21");
@@ -20,7 +20,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
         input = input.slice(control.inputPrefix.length);
       }
       const id = request.invocation.id;
-      reply = (stdout = "") => ({ ...good(stdout), stderr: `CORTEN_CONTROL ${id} ${"d".repeat(64)}\nCORTEN_RESULT ${id} 0\n` });
+      reply = (stdout = "", status = 0) => ({ ...good(stdout), status, stderr: `CORTEN_CONTROL ${id} ${"d".repeat(64)}\nCORTEN_RESULT ${id} ${status}\n` });
     }
     record({ boundary: binary, argv, options: { cwd: options.cwd, shell: options.shell, windowsHide: options.windowsHide,
       timeout: options.timeout, maxBuffer: options.maxBuffer, input, stdio: options.stdio } });
@@ -33,13 +33,15 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     if (binary === "ssh") {
       const script = input.slice("set -euo pipefail\n".length, -1), saved = state();
       if (readinessProbe && ++readiness === 1 && config.mode === "ssh-late") return { ...good(), status: 255 };
-      if (script === bootstrapReadScript) {
+      if (script === dedicatedBootstrapReadScript) {
+        if (config.mode === "ingress-lost") return reply("", 1);
         const marker = bootstrapMarker(saved);
         if (config.mode === "marker") marker.commit = "b".repeat(40);
         record({ boundary: "bootstrap-marker", marker });
         return reply(`${JSON.stringify(marker)}\n`);
       }
       if (script.startsWith("systemctl show")) return reply(`Id=${saved.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${saved.unit}\nActiveState=active\nRestart=no\nMainPID=123\nExecMainCode=0\nExecMainStartTimestamp=Sun 2026-11-15 00:00:00 UTC\n`);
+      if (config.mode === "ingress-fail" && script.includes("create table inet corten_bench_ssh")) return reply("", 1);
       if (script === "true" || script === "mkdir -m 700 /bench && touch /bench/run.log"
         || script.includes("sha256sum --check --status") || script.startsWith("bash -n /bench/job.sh")
         || script === ":" || script === `systemctl start ${saved.unit}`) return reply();
@@ -85,7 +87,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
         if (binary !== fs.realpathSync(process.execPath) || argv[0] !== "--input-type=module" || argv[1] !== "-"
           || argv[2] !== path.join(config.repo, "bench/workloads/cloud-provider-worker.mjs")) throw new Error("fixed provider launch required");
         const child = fork(path.join(config.repo, "bench/workloads/fleet-provider-test-worker.mjs"),
-          [["overlap", "ssh-late"].includes(config.mode) ? "success" : config.mode, config.trace, config.hosts, config.stateDir, config.group, config.userId],
+          [["overlap", "ssh-late", "ingress-fail", "ingress-lost"].includes(config.mode) ? "success" : config.mode, config.trace, config.hosts, config.stateDir, config.group, config.userId],
           { ...options, execArgv: [], env: { ...options.env, NODE_OPTIONS: "--max-old-space-size=64 --max-semi-space-size=4" } });
         record({ boundary: "provider-child-start", pid: child.pid });
         const observe = (direction, message) => record({ boundary: "provider-ipc", direction,

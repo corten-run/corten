@@ -1,4 +1,4 @@
-import { remoteFiles as contractFiles, savedLoadLayout, validateState } from "./cloud-contract.mjs";
+import { remoteFiles as contractFiles, savedLoadLayout, validateState, verifySshIngress } from "./cloud-contract.mjs";
 import { quote } from "./cloud-transport.mjs";
 import { archiveLimit, expandedLimit } from "./cloud-local.mjs";
 import { custodyCommand, guardianSha256 } from "./cloud-control-runtime.mjs";
@@ -10,10 +10,12 @@ export function bootstrapMarker(state) {
     token: state.token, group: state.group ?? "all", ...(state.control ? { controlHelperSha256: guardianSha256 } : {}),
     ...(state.control?.monitor ? { monitorId: state.control.monitor.id } : {}) };
 }
-export const bootstrapReadScript = `if test ! -e /bench/bootstrap-ready.json; then exit 3; fi
+const requireBootstrapMarker = `if test ! -e /bench/bootstrap-ready.json; then exit 3; fi
 test -f /bench/bootstrap-ready.json && test ! -L /bench/bootstrap-ready.json
-test "$(stat -c '%s' -- /bench/bootstrap-ready.json)" -le 1024
-cat -- /bench/bootstrap-ready.json`;
+test "$(stat -c '%s' -- /bench/bootstrap-ready.json)" -le 1024`;
+const readBootstrapMarker = "cat -- /bench/bootstrap-ready.json";
+export const bootstrapReadScript = `${requireBootstrapMarker}\n${readBootstrapMarker}`;
+export const dedicatedBootstrapReadScript = `${requireBootstrapMarker}\n${verifySshIngress}\n${readBootstrapMarker}`;
 export function remoteFiles(state) {
   validateState(state, state.round);
   const files = contractFiles(state), commit = quote(state.commit), round = quote(state.round);

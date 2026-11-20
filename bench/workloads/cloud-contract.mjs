@@ -379,6 +379,44 @@ while IFS= read -r member; do test "$member" = "$$"; done < "$parent/supervisor/
 `;
 }
 
+// Capture the authenticated peer during setup. Admission verifies a private,
+// boot-local snapshot of the kernel table; the job does not inherit SSH_CONNECTION.
+const sshIngressSnapshot = "/run/corten-bench-ssh-ingress.nft";
+const listSshIngress = "/usr/sbin/nft --numeric --stateless --handle list table inet corten_bench_ssh";
+
+export const installSshIngress = String.raw`test ! -e '${sshIngressSnapshot}'
+test ! -L '${sshIngressSnapshot}'
+peer=$(/usr/bin/python3 -I -c '
+import ipaddress, os
+peer, source_port, local, port = os.environ["SSH_CONNECTION"].split()
+assert source_port.isascii() and source_port.isdecimal() and 0 < int(source_port) <= 65535
+assert port == "22"
+ipaddress.IPv4Address(local)
+print(ipaddress.IPv4Address(peer))
+')
+# Noble's nftables package neither enables nor starts nftables.service.
+if ! test -x /usr/sbin/nft; then
+  timeout -k 5 120 cloud-init status --wait
+  timeout -k 5 90 apt-get -o Acquire::Retries=0 -o APT::Update::Error-Mode=any update -qq
+  DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 timeout -k 5 90 apt-get \
+    -o DPkg::Lock::Timeout=30 -o Acquire::Retries=0 install -y -qq --no-install-recommends --no-upgrade --no-remove nftables
+fi
+test -x /usr/sbin/nft
+# One atomic transaction. Do not replace an existing table or accept past other filters.
+/usr/sbin/nft -f - <<CORTEN_SSH_INGRESS
+create table inet corten_bench_ssh
+add chain inet corten_bench_ssh input { type filter hook input priority filter; policy accept; }
+add rule inet corten_bench_ssh input tcp dport 22 ip saddr $peer return
+add rule inet corten_bench_ssh input tcp dport 22 drop
+CORTEN_SSH_INGRESS
+(umask 077; set -C; ${listSshIngress} > '${sshIngressSnapshot}')
+test -s '${sshIngressSnapshot}'`;
+
+export const verifySshIngress = String.raw`test -f '${sshIngressSnapshot}'
+test ! -L '${sshIngressSnapshot}'
+test -s '${sshIngressSnapshot}'
+${listSshIngress} | cmp -s -- '${sshIngressSnapshot}' -`;
+
 // Fixed source-bound entry point. No caller-provided command or adapter filtering.
 export function remoteFiles(s) {
   validateState(s, s.round);

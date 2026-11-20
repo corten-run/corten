@@ -1118,6 +1118,30 @@ main PID, so a busy manager can be distinguished from a stalled query.
 If it stays busy the group fails setup, without terminating anyone's work.
 The normal login inventory and registered-monitor checks still apply.
 
+Before starting the unit on a newly allocated supervised dedicated group host,
+the controller's guarded installation shell uses the IPv4 peer of its own
+authenticated OpenSSH connection (`SSH_CONNECTION`). It atomically installs a
+runtime-only nftables input table for TCP port 22. Other IPv4 sources and all
+IPv6 sources are dropped before sshd, without an sshd restart, a firewall service,
+or a forwarding or application-port rule. No rule is added to shared hosts
+or during collection. If `nft` is missing, setup waits for cloud-init and
+installs the Ubuntu Noble package under bounded deadlines. That package does
+not start or enable `nftables.service`. Setup fails if it cannot install and
+read back the table. The guarded bootstrap-marker read requires the live
+table to match that private readback before admitting the monitor or sealing
+bootstrap. The systemd job does not inherit the SSH environment and native
+measurement waits for the seal. The earlier readiness probes and
+first guardian no-op, the listener/participant checks and the cleanup gates
+are unchanged. Existing foreign processes are not killed or excused.
+
+The owner must keep the same public IPv4 egress through monitoring, artifact
+transfer and terminal cleanup; the normal reconnects use the same droplet public
+IPv4 and SSH port. An address is not a credential or a guardian registration:
+do not open a second SSH login, even from the same source address. Do not
+broaden the rule when a reconnect fails. It stays in place until the disposable
+host is removed. The Benchmark Evidence native Linux job exercises the exact
+generated scripts with a private sshd and nftables table in Linux namespaces.
+
 The generated job records a fixed preparation stage, source line and original
 exit code on command failure, never the failed command or an environment dump.
 The EXIT handler retains the original failure and packages the terminal logs.
