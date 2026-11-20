@@ -1378,6 +1378,22 @@ async fn the_app_refuses_cross_site_writes() {
     assert_eq!(router.oneshot(req("same-origin")).await.unwrap().status(), StatusCode::OK);
 }
 
+#[tokio::test]
+async fn a_refused_whole_page_fetch_gets_html_only_if_it_asks_for_it() {
+    let router = app(routes(), None);
+    for accept in ["text/html", "*/*"] {
+        let headers = [("sec-fetch-site", "cross-site"), ("corten", "page"), ("accept", accept)];
+        let (status, headers, body) = guarded(&router, "POST", "/", None, &headers).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        if accept == "text/html" {
+            assert!(headers["content-type"].to_str().unwrap().starts_with("text/html"), "{headers:?}");
+            assert!(body.contains("<h1>Not allowed</h1>"), "{body}");
+        } else {
+            assert_eq!(body, "Cross-site request refused.");
+        }
+    }
+}
+
 fn failing() -> Table {
     Table::new()
         .route("/", get(|| async { Err::<Response, _>(Error::new("database is down")) }))
@@ -1414,9 +1430,13 @@ async fn an_extractor_rejection_gets_the_error_page_in_a_browser_and_its_text_in
     assert!(body.contains("<title>Something went wrong</title>") && !body.contains("parse"), "{body}");
     let (_, headers, body) = call_with(app(routes(), None), "GET", "/n/abc", Some("nav"), None).await;
     assert_eq!(headers["corten-page"], "1", "a navigation swaps the error page in: {body}");
-    // The whole page after a write, which `fetch` asks for with `Accept: */*` (#1034).
-    let (_, headers, body) = call_with(app(routes(), None), "GET", "/n/abc", Some("page"), Some("*/*")).await;
-    assert!(body.contains("<title>Something went wrong</title>") && headers.contains_key("corten-shell"), "{body}");
+    // The whole page after a write (`fetch` sends `Accept: */*`): the explicit mode wins over Accept.
+    for accept in ["*/*", "application/json"] {
+        let (status, headers, body) = call_with(app(routes(), None), "GET", "/n/abc", Some("page"), Some(accept)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(headers.contains_key("corten-shell") && !headers.contains_key("corten-page"), "{headers:?}");
+        assert!(body.contains("<title>Something went wrong</title>"), "{body}");
+    }
     let (_, _, body) = call_with(App::new(Routes::from(routes())).dev(true).router(), "GET", "/n/abc", None, html).await;
     assert!(body.contains("<pre>Invalid URL"), "the default error page shows it: {body}");
     let (status, headers, body) = call_with(app(routes(), None), "GET", "/n/abc", None, Some("application/json")).await;
@@ -10476,6 +10496,10 @@ async fn a_public_page_is_shared_only_when_nothing_makes_it_personal() {
     // App::client_zone's cookie says where the visitor is, not who: alone, it shares as before.
     assert_eq!(cache_control(&router, "/", &[("cookie", "corten-zone=America/Chicago")]).await, "public, max-age=60");
     assert_eq!(cache_control(&router, "/", &[("cookie", "corten-zone=America/Chicago; session=abc")]).await, "private, no-cache");
+    assert_eq!(
+        cache_control(&router, "/", &[("cookie", "corten-zone=America/Chicago"), ("cookie", "session=abc")]).await,
+        "private, no-cache"
+    );
     let inline = App::new(Routes::from(Table::new().route("/", get(inline_page)))).router();
     assert_eq!(cache_control(&inline, "/", &[]).await, "private, no-cache", "the layout took the nonce");
 
@@ -10487,6 +10511,100 @@ async fn a_public_page_is_shared_only_when_nothing_makes_it_personal() {
         .router();
     assert_eq!(cache_control(&api, "/api/rates", &[("accept", "application/json")]).await, "public, max-age=60");
     assert_eq!(cache_control(&api, "/api/rates", &[("authorization", "Bearer t")]).await, "private, no-cache");
+    assert_eq!(cache_control(&api, "/api/rates", &[("cookie", "session=abc")]).await, "private, no-cache");
+}
+
+#[tokio::test]
+async fn cache_stages_keep_incoming_headers_while_the_handler_sees_middleware_edits() {
+    struct Rewrite;
+
+    impl crate::Middleware for Rewrite {
+        async fn call(&self, mut req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let headers = req.headers_mut();
+            headers.insert("corten", HeaderValue::from_static("nav"));
+            headers.remove(header::COOKIE);
+            headers.remove(header::IF_NONE_MATCH);
+            let mut res = next.run(req).await;
+            assert_eq!(res.status(), StatusCode::OK, "revalidation happens outside middleware");
+            res.headers_mut().insert("x-saw-answer", HeaderValue::from_static("yes"));
+            res
+        }
+    }
+
+    let routes = Table::new().route(
+        "/",
+        get(|req: Req, headers: http::HeaderMap| async move {
+            assert_eq!(req.mode, Mode::Navigation);
+            assert!(!headers.contains_key(header::COOKIE));
+            assert!(!headers.contains_key(header::IF_NONE_MATCH));
+            (Cache::public(std::time::Duration::from_secs(60)), "answer")
+        }),
+    );
+    let router = App::new(Routes::from(routes)).middleware(Rewrite).router();
+    let send = |req: http::request::Builder| router.clone().oneshot(req.body(Body::empty()).unwrap());
+    let first = send(Request::head("/")).await.unwrap();
+    assert_eq!(first.headers()[header::CACHE_CONTROL], "public, max-age=60", "the incoming mode was a document");
+    let tag = first.headers()[header::ETAG].clone();
+    let cached = send(Request::get("/").header(header::COOKIE, "session=abc").header(header::IF_NONE_MATCH, tag)).await.unwrap();
+    assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(cached.headers()[header::CACHE_CONTROL], "private, no-cache", "the incoming request carried a cookie");
+    assert_eq!(cached.headers()["x-saw-answer"], "yes");
+}
+
+#[tokio::test]
+async fn the_error_page_uses_incoming_headers_after_middleware_edits() {
+    struct Rewrite;
+
+    impl crate::Middleware for Rewrite {
+        async fn call(&self, mut req: Request, next: impl crate::middleware::Next) -> Response {
+            let headers = req.headers_mut();
+            headers.insert("corten", HeaderValue::from_static("nav"));
+            headers.insert(header::COOKIE, HeaderValue::from_static("viewer=grace"));
+            next.run(req).await
+        }
+    }
+
+    let routes = Table::new().route(
+        "/",
+        get(|req: Req, headers: http::HeaderMap| async move {
+            assert_eq!(req.mode, Mode::Navigation);
+            assert_eq!(headers[header::COOKIE], "viewer=grace");
+            assert_eq!(LOOKUPS.with(|n| n.get()), 0, "the error page makes the first caller lookup");
+            Err::<Response, _>(Error::status(StatusCode::NOT_FOUND))
+        }),
+    );
+    let router = App::new(Routes::from(routes)).middleware(Rewrite).error_page(test_error_page, ()).router();
+    LOOKUPS.with(|n| n.set(0));
+    let (status, headers, body) = guarded(&router, "GET", "/", None, &[("accept", "text/html"), ("cookie", "viewer=ada")]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(!headers.contains_key("corten-page") && body.contains("<html"), "the incoming mode was a document: {body}");
+    assert!(body.contains("Signed in as ada"), "the error page uses the incoming cookie: {body}");
+    assert_eq!(LOOKUPS.with(|n| n.get()), 1);
+}
+
+#[tokio::test]
+async fn req_reads_mode_after_an_earlier_extractor_changes_accept() {
+    struct Rewrite;
+
+    impl crate::extract::FromRequestParts<()> for Rewrite {
+        type Rejection = std::convert::Infallible;
+
+        async fn from_request_parts(parts: &mut http::request::Parts, _: &()) -> Result<Self, Self::Rejection> {
+            parts.headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+            Ok(Self)
+        }
+    }
+
+    let routes = Table::new().route(
+        "/",
+        get(|_: Rewrite, req: Req| async move {
+            assert_eq!(req.mode, Mode::Data);
+            "answer"
+        }),
+    );
+    let router = App::new(Routes::from(routes)).router();
+    let req = Request::get("/").header(header::ACCEPT, "text/html").body(Body::empty()).unwrap();
+    assert_eq!(router.oneshot(req).await.unwrap().status(), StatusCode::OK);
 }
 
 /// `App::client_zone` asks the runtime for the browser's time zone, and `Option<ClientZone>` reads

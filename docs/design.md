@@ -1985,6 +1985,14 @@ rules something out.
     the route. The compiler rejects a stage that reads it after hand-off. The late layout poller
     lives in the existing late-write box, so it neither enlarges the ordinary future nor adds
     a box to a late-eligible write.
+    The stages read the incoming request's mode, credentials, validators, and the host and
+    origin headers they need before dispatch. The error page and cache rule share those reads.
+    `Req` negotiates from the headers where it is taken: middleware and earlier extractors can
+    change them ([Choice 21](#choice-own-extractors)). Keeping those two views separate is what
+    lets a handler see an edit without letting it change the outer cache or same-origin decision.
+    `MatchedPath` and `Signal` remain independently available in the request's extensions;
+    the nonce slot is independent of either. The debug-only form redirect check is held by the
+    stages, not put in the request's extensions.
     An area's or an API's own steps (`Area::middleware`, `Api::middleware`) run right after the
     app's, for the requests at its prefix; they are boxed, since which run depends on the route, and
     an app with none pays nothing for them. What an area or API sets (its deadline, body limit, policy and middleware,
@@ -2241,7 +2249,13 @@ rules something out.
     showed nothing for one until a fix in December 2024, which was read, not run); bet (apps have an answer anyone may read whose cost the
     stages would make about 2.5 times as costly, beside pages that need them all; listings-feed's
     sequence route, which its failover benchmark reads, is the first use, and no app's in
-    production is yet); value
+    production is yet); measured (callgrind, x86-64 Linux release, `catalog-lean` identity GETs:
+    sharing the staged header reads reduced named request-map lookups from 17 to 14, kept three
+    response-map lookups and three request extension inserts, and reduced median instructions per
+    request from 43,274.3 (43,274.1 to 43,275.6) to 42,763.2 (42,762.1 to 42,770.4).
+    A mounted JSON GET with a session cookie kept six named request-map lookups, none for
+    `Authorization`, and went from 35,796.1 (35,794.0 to 35,797.9) to 35,650.6 (35,647.5 to
+    35,654.7) median instructions per request); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
     for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
@@ -2283,7 +2297,11 @@ rules something out.
     without app middleware or layout reads. The bounds leave room for build profiles,
     features and compiler layout changes; remeasure before raising one.
 
-    Last checked: 2026-10-29, the area middleware runs of
+    Last checked: 2026-11-19, the header lookup, extension and instruction counts before
+    (`aa0f0c7e1`) and after sharing the reads and restoring the short circuits (`76229a2fd`),
+    from three short/long pairs per build for each workload: 1,300 less 300 catalog GETs,
+    on one connection per run;
+    2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
     (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its
     own); 2026-11-09, the `unstaged` runs on this change against main `c65c10ec` and `stages = bare`
