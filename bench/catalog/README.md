@@ -511,6 +511,12 @@ runner does not create cloud machines or operate the fullstack/nightly state. Th
 `Catalog Contract` workflow builds each framework and runs both sources, but does not publish
 performance numbers.
 
+The runner creates the shared upstream container with `--pull=missing`. Docker reuses
+the pinned Node image for the requested platform or downloads it within the ten-minute
+preparation deadline. The round folder retains the create output in `prepare-upstream.log`.
+Starting that same container has a separate 30-second deadline, followed by the
+20-second health check. The runner reports preparation and startup failures separately.
+
 The runner uses a version-matched Playwright container for browser checks. Removing its owned
 container also removes detached browser processes after a timeout or interruption. To exercise
 that Linux cleanup regression locally, run `CATALOG_DOCKER_TESTS=1 node --test
