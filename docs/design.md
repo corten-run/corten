@@ -2331,10 +2331,14 @@ rules something out.
     matchit 0.9.2 pin changes, whose matching and conflict rules must be read again;
     or a derived route, or an area's or API's, may put text before a parameter, which
     `parse_path` and `route_shaped` refuse today; any of which the count must then follow.
-    Also revisit if `router::tests::staged_page_future_sizes` exceeds either boxed-future
-    budget on x86-64 Linux. It measures the real stages and typed handler for a small page
-    without app middleware or layout reads. The bounds leave room for build profiles,
-    features and compiler layout changes; remeasure before raising one.
+    Also revisit if `router::tests::staged_page_future_sizes` fails on x86-64 Linux because a
+    boxed future grew. It measures the real stages and typed handler for a small page without
+    app middleware or layout reads, and holds each boxed future within the size of one request
+    of what its build profile measured, so a stage that holds the request again across the
+    stages after it fails the test. A compiler that moves a future's layout by that much fails
+    it too, with no change to the stages, and so does a change that shrinks a future by that
+    much, which only lowers the measurement. Measure both profiles again before moving a
+    measurement.
 
     Last checked: 2026-11-19, the header lookup, extension and instruction counts before
     (`aa0f0c7e1`) and after sharing the reads and restoring the short circuits (`76229a2fd`),
