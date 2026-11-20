@@ -1214,9 +1214,10 @@ impl<M: Middleware> App<M> {
     /// A tower layer around the whole app, outside the router and every stage of
     /// [`crate::middleware`], for what must see the raw request first: a cap on body size, a limit
     /// per address, a trace span. It sees the request before its route is matched (so with no
-    /// [`crate::middleware::MatchedPath`]), and the route's answer with its body: the router sets
-    /// the answer's `Content-Length` and empties a `HEAD`'s body after every layer, so a layer may
-    /// change the body. It is made once, around the whole app, so what it keeps (a concurrency
+    /// [`crate::middleware::MatchedPath`]), and the route's answer with its body: the router
+    /// empties a `HEAD`'s body after every layer, keeping its length, and the server writes any
+    /// other answer's `Content-Length` from the body it is handed, so a layer may change the
+    /// body. It is made once, around the whole app, so what it keeps (a concurrency
     /// limit's count) is the app's, not a route's. Layers added later go outside earlier ones. A step inside Corten's order
     /// (after its checks, with the error page around it) is a [`Middleware`] ([`App::middleware`]). In an app
     /// whose areas or APIs set deadlines of their own, a request a layer holds or answers itself,
@@ -1279,7 +1280,9 @@ impl<M: Middleware> App<M> {
     /// [layers](App::layer) included. For serving it another way, and for a test that sends what
     /// [`App::test`]'s client does not (a live stream it reads as it comes); it starts none of the
     /// app's [tasks](App::task). A connection loop of the app's own gives each request the client's
-    /// address as a [`crate::PeerAddr`] in its extensions, which [`crate::ClientIp`] starts from.
+    /// address as a [`crate::PeerAddr`] in its extensions, which [`crate::ClientIp`] starts from,
+    /// and writes each answer's `Content-Length` from its body's `size_hint`, as hyper's HTTP/1
+    /// server does: the router sets the header only on a `HEAD`, whose body it drops.
     pub fn router(mut self) -> Router {
         let dev = self.dev.unwrap_or_else(|| std::env::var_os("CORTEN_DEV").is_some());
         let bounds = self.drain().each;

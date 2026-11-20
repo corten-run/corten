@@ -368,9 +368,23 @@ async fn head_is_get_without_the_body() {
         assert!(got.header("content-length").is_some(), "{path}: {:?}", got.headers);
         assert_eq!(head.header("content-length"), got.header("content-length"), "{path}");
         assert_eq!(head.header("content-type"), got.header("content-type"), "{path}");
+        said_once_and_not_chunked(&got, path);
+        said_once_and_not_chunked(&head, path);
+        assert_eq!(got.header("content-length"), Some(got.body.len().to_string().as_str()), "{path}");
     }
     let missing = send("HEAD", "/nowhere", &[("accept", "text/html")]).await;
     assert_eq!((missing.status, missing.body.as_str()), (404, ""));
+    // The error page says its length the same way, to a `GET` and to a `HEAD`.
+    let page = send("GET", "/nowhere", &[("accept", "text/html")]).await;
+    said_once_and_not_chunked(&page, "/nowhere");
+    assert_eq!(page.header("content-length"), Some(page.body.len().to_string().as_str()));
+    assert_eq!(missing.header("content-length"), page.header("content-length"));
+}
+
+/// The answer has one `Content-Length` and no `Transfer-Encoding`.
+fn said_once_and_not_chunked(answer: &Answer, path: &str) {
+    assert_eq!(answer.headers.iter().filter(|(name, _)| name == "content-length").count(), 1, "{path}: {:?}", answer.headers);
+    assert_eq!(answer.header("transfer-encoding"), None, "{path}");
 }
 
 #[tokio::test]

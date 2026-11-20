@@ -533,7 +533,10 @@ mod tests {
             });
             let res = access_call(access_app().layer(layer).router(), "GET", "/items/7", &[]).await;
             assert_eq!(res.status(), http::StatusCode::CREATED);
-            assert_eq!(res.headers()[http::header::CONTENT_LENGTH], "14");
+            // The server writes the length of the body the layer left: nothing inside the layer
+            // fixed one for the body it replaced.
+            assert!(!res.headers().contains_key(http::header::CONTENT_LENGTH));
+            assert_eq!(http_body::Body::size_hint(res.body()).exact(), Some(14));
             access_call(access_app().access_log(false).router(), "GET", "/items/7", &[]).await;
             access_call(crate::App::new(crate::Routes::new()).router(), "GET", "/missing", &[]).await;
         });

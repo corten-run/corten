@@ -1083,10 +1083,10 @@ async fn big_error_page(_: Failure, req: Req) -> HtmlResult {
 }
 
 /// A page's header map starts at the capacity 13 slots give (24), and with HSTS and compression the
-/// headers each case sends need no more: a compressed page (14 headers, with its `ETag`), the
-/// default error page (13, uncompressed), a compressed app error page (14, with `X-Robots-Tag`; each error page with the
-/// `Content-Length` the router sets)
-/// and a page with a header of the app's own (15). A map of 12 that grew once also ends at 24, so the starting
+/// headers each case holds need no more: a compressed page (13 headers, with its `ETag`), the
+/// default error page (12, uncompressed), a compressed app error page (13, with `X-Robots-Tag`)
+/// and a page with a header of the app's own (14); none holds a `Content-Length`, which the
+/// server writes into the head it sends. A map of 12 that grew once also ends at 24, so the starting
 /// capacity is what tells them apart.
 #[tokio::test]
 async fn a_page_s_header_map_holds_permissions_policy_without_growing() {
@@ -1136,10 +1136,10 @@ async fn a_page_s_header_map_holds_permissions_policy_without_growing() {
     let zipped = cfg!(feature = "compress");
     let less = usize::from(!zipped);
     for (case, path, own, big_error, names, compressed) in [
-        ("a compressed page", "/", false, false, 14 - less, zipped),
-        ("the default error page", "/nothing", false, false, 13, false),
-        ("a compressed app error page", "/nothing", false, true, 14 - less, zipped),
-        ("a page with the app's own header", "/", true, false, 15 - less, zipped),
+        ("a compressed page", "/", false, false, 13 - less, zipped),
+        ("the default error page", "/nothing", false, false, 12, false),
+        ("a compressed app error page", "/nothing", false, true, 13 - less, zipped),
+        ("a page with the app's own header", "/", true, false, 14 - less, zipped),
     ] {
         let (with, sent, count, encoded) = capacity(Policy::new(), path, own, big_error).await;
         let (without, not_sent, ..) = capacity(none(), path, own, big_error).await;

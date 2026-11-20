@@ -735,7 +735,8 @@ async fn a_page_head_has_a_validator_for_a_same_length_change() {
     changed.store(true, Ordering::Relaxed);
     let (head, body) = ask(http::Method::HEAD, None).await.unwrap().into_parts();
     assert_eq!(head.status, StatusCode::OK);
-    assert_eq!(head.headers[header::CONTENT_LENGTH], stored.headers[header::CONTENT_LENGTH]);
+    // The length the stored `GET` was sent with, which the server wrote from its body's size.
+    assert_eq!(head.headers[header::CONTENT_LENGTH], "<p>$10</p>".len().to_string());
     assert!(body.collect().await.unwrap().to_bytes().is_empty());
     // RFC 9111 section 4.3.5: equal lengths cannot freshen the stored GET if HEAD has a tag it lacks.
     let tag = head.headers.get(header::ETAG).expect("an untagged HEAD could freshen the old body");

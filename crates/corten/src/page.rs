@@ -4352,10 +4352,10 @@ pub(crate) fn html_response(status: StatusCode, body: String, kind: Option<Heade
     *res.status_mut() = status;
     let headers = res.headers_mut();
     // Room for the headers `App` adds too, so the map is allocated once: with HSTS a compressed
-    // page sends 14 (its `ETag` included), an app error page 13, and the default error page's 12
-    // still grow a map of 12 (its `Vary` is appended to a full one). 13 makes 24 slots, which
-    // hold a header of the app's own too. Measured: fewer instructions than 12 in every case, the
-    // ranges apart.
+    // page holds 13 (its `ETag` included), which a map of 12 would grow for, an app error page 13
+    // and the default error page 12. 13 makes 24 slots, which hold a header of the app's own too.
+    // Measured when each held one more, the `Content-Length` the server now writes: fewer
+    // instructions than 12 in every case, the ranges apart.
     headers.reserve(13);
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
     headers.insert(header::VARY, HeaderValue::from_static(VARY));

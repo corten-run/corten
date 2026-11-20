@@ -491,8 +491,9 @@ async fn a_middleware_reads_the_client_address() {
 }
 
 /// `App::layer` is made once, around the whole app; it sees the request before its route is
-/// matched, and may change the answer's body: the router sets its length, and empties a `HEAD`'s,
-/// after the layer.
+/// matched, and may change the answer's body: after the layer the router empties a `HEAD`'s and
+/// gives it that body's length, and leaves any other answer's length to the server, which writes
+/// it from the body it is handed.
 #[tokio::test]
 async fn an_app_layer_is_made_once_outside_the_router() {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -523,9 +524,116 @@ async fn an_app_layer_is_made_once_outside_the_router() {
     assert_eq!(made.load(Ordering::Relaxed), 1);
     let (status, headers, body) = call(router.clone(), "GET", None).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "changed by the layer"));
-    assert_eq!(headers["content-length"], "20");
+    assert!(!headers.contains_key("content-length"), "no length from inside the layer: {headers:?}");
     let (status, headers, body) = call(router, "HEAD", None).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, ""));
     assert_eq!(headers["content-length"], "20");
     assert!(!matched.load(Ordering::Relaxed), "a layer runs before the route is matched");
+}
+
+/// A `HEAD` is given no length where its `GET` has none. A `101` is among them, which a test over
+/// a socket cannot ask for: hyper hands the connection on after one.
+#[tokio::test]
+async fn a_head_says_no_length_where_its_get_has_none() {
+    let routes = Table::new()
+        .route("/", get(|| async { "hi" }))
+        .route("/switch", get(|| async { (StatusCode::SWITCHING_PROTOCOLS, "to") }))
+        .route("/done", get(|| async { (StatusCode::NO_CONTENT, "said") }))
+        .route("/same", get(|| async { StatusCode::NOT_MODIFIED }))
+        .route("/chunked", get(|| async { ([(header::TRANSFER_ENCODING, "chunked")], "in chunks") }));
+    let router = App::new(Routes::from(routes)).router();
+    let (_, headers, body) = call_with(router.clone(), "HEAD", "/", None, None).await;
+    assert_eq!((&headers["content-length"], body.as_str()), (&http::HeaderValue::from_static("2"), ""));
+    for (path, status) in [
+        ("/switch", StatusCode::SWITCHING_PROTOCOLS),
+        ("/done", StatusCode::NO_CONTENT),
+        ("/same", StatusCode::NOT_MODIFIED),
+        ("/chunked", StatusCode::OK),
+    ] {
+        let (answered, headers, body) = call_with(router.clone(), "HEAD", path, None, None).await;
+        assert_eq!(answered, status, "{path}");
+        assert!(!headers.contains_key("content-length") && body.is_empty(), "{path}: {headers:?}");
+    }
+}
+
+/// The server writes an answer's length from the body it is handed
+/// (docs/design.md#choice-axum-router): the body an app layer left, `content-length: 0` for an
+/// empty one, and none for a `204`, even one given a body. A `HEAD` carries the length its `GET`
+/// does, from the router, so none for a `204` or a `304` either. An answer that says
+/// `Transfer-Encoding` itself is sent chunked, with no length beside it or in its `HEAD`.
+#[tokio::test]
+async fn the_server_writes_an_answer_s_length_from_its_body() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let routes = Table::new()
+        .route("/", get(|| async { "hi" }))
+        .route("/empty", get(|| async { "" }))
+        .route("/done", get(|| async { StatusCode::NO_CONTENT }))
+        .route("/done/said", get(|| async { (StatusCode::NO_CONTENT, "said") }))
+        .route("/same", get(|| async { StatusCode::NOT_MODIFIED }))
+        .route("/chunked", get(|| async { ([(header::TRANSFER_ENCODING, "chunked")], "in chunks") }));
+    let app = App::new(Routes::from(routes)).layer(tower::util::MapResponseLayer::new(|res: crate::response::Response| {
+        use http_body::Body as _;
+        match res.body().size_hint().exact() {
+            Some(2) => res.map(|_| Body::from("changed by the layer")),
+            _ => res,
+        }
+    }));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let send = |request: String| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).await.unwrap();
+        answer.to_ascii_lowercase()
+    };
+    let ask = |method: &'static str, path: &'static str| {
+        send(format!("{method} {path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n"))
+    };
+    let lengths = |answer: &str| -> Vec<String> {
+        answer.split("\r\n").filter_map(|line| line.strip_prefix("content-length: ")).map(str::to_owned).collect()
+    };
+    let (got, head) = (ask("GET", "/").await, ask("HEAD", "/").await);
+    let (empty, empty_head) = (ask("GET", "/empty").await, ask("HEAD", "/empty").await);
+    let (done, done_head) = (ask("GET", "/done").await, ask("HEAD", "/done").await);
+    let (said, said_head) = (ask("GET", "/done/said").await, ask("HEAD", "/done/said").await);
+    let (same, same_head) = (ask("GET", "/same").await, ask("HEAD", "/same").await);
+    let (chunked, chunked_head) = (ask("GET", "/chunked").await, ask("HEAD", "/chunked").await);
+    let older = send("GET / HTTP/1.0\r\nhost: localhost\r\n\r\n".to_owned()).await;
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+
+    assert!(got.starts_with("http/1.1 200") && got.ends_with("\r\n\r\nchanged by the layer"), "{got}");
+    assert_eq!(lengths(&got), ["20"], "{got}");
+    assert!(head.starts_with("http/1.1 200") && head.ends_with("\r\n\r\n"), "{head}");
+    assert_eq!(lengths(&head), ["20"], "{head}");
+    assert!(empty.starts_with("http/1.1 200") && empty.ends_with("\r\n\r\n"), "{empty}");
+    assert_eq!(lengths(&empty), ["0"], "{empty}");
+    assert_eq!(lengths(&empty_head), ["0"], "{empty_head}");
+    // RFC 9110 section 8.6: no `Content-Length` in a `204`, whatever body it was given, nor in
+    // its `HEAD`.
+    for answer in [&done, &done_head, &said, &said_head] {
+        assert!(answer.starts_with("http/1.1 204") && answer.ends_with("\r\n\r\n"), "{answer}");
+        assert!(lengths(answer).is_empty(), "{answer}");
+    }
+    // Nor a length of zero in a `304`, whose length may only be its `200`'s.
+    for answer in [&same, &same_head] {
+        assert!(answer.starts_with("http/1.1 304") && answer.ends_with("\r\n\r\n"), "{answer}");
+        assert!(lengths(answer).is_empty(), "{answer}");
+    }
+    for answer in [&got, &head, &empty, &empty_head, &done, &done_head, &said, &said_head, &same, &same_head] {
+        assert!(!answer.contains("transfer-encoding"), "{answer}");
+    }
+    // RFC 9112 section 6.2: no `Content-Length` beside a `Transfer-Encoding`.
+    assert!(chunked.starts_with("http/1.1 200") && chunked.ends_with("\r\n\r\n9\r\nin chunks\r\n0\r\n\r\n"), "{chunked}");
+    assert!(chunked.contains("\r\ntransfer-encoding: chunked\r\n") && lengths(&chunked).is_empty(), "{chunked}");
+    assert!(chunked_head.starts_with("http/1.1 200") && chunked_head.ends_with("\r\n\r\n"), "{chunked_head}");
+    assert!(lengths(&chunked_head).is_empty(), "{chunked_head}");
+    // An HTTP/1.0 client, which reads no chunks, is told the length too.
+    assert!(older.contains(" 200 ") && older.ends_with("\r\n\r\nchanged by the layer"), "{older}");
+    assert_eq!(lengths(&older), ["20"], "{older}");
 }
