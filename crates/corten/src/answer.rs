@@ -2592,6 +2592,10 @@ where
 {
     const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
 
+    fn keeps(&self) -> bool {
+        self.shared && O::PAGE
+    }
+
     #[inline]
     fn call(self, mut req: Request, state: S) -> impl Future<Output = Response> + Send + 'static {
         // A whole document's layout reads (`crate::LayoutRead`) start as its page route is called,

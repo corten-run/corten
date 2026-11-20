@@ -50,10 +50,10 @@ pub(crate) const PREFER: HeaderName = HeaderName::from_static("prefer");
 pub(crate) const DRAWS_WHOLE: &str = "corten-draws=whole";
 pub(crate) const PAGE_HEADER: HeaderName = HeaderName::from_static("corten-page");
 pub(crate) const PATCH_HEADER: HeaderName = HeaderName::from_static("corten-patch");
-const LOCATION_HEADER: HeaderName = HeaderName::from_static("corten-location");
+pub(crate) const LOCATION_HEADER: HeaderName = HeaderName::from_static("corten-location");
 pub(crate) const SHELL_HEADER: HeaderName = HeaderName::from_static("corten-shell");
 /// A navigation's page with a notice: `m=<text>`, form-encoded, and `&d` when the page drew it.
-const NOTICE_HEADER: HeaderName = HeaderName::from_static("corten-notice");
+pub(crate) const NOTICE_HEADER: HeaderName = HeaderName::from_static("corten-notice");
 /// The cookie a redirect's notice rides in: `__Host-`, so no other site on the domain can set it.
 pub(crate) const NOTICE_COOKIE: &str = "__Host-corten-notice";
 /// The notice's cookie for a write from a plain `http://` origin that is not loopback (a LAN
@@ -1005,6 +1005,9 @@ pub(crate) struct Shared {
     /// The values only the layout shows ([`crate::App::layout_read`]), started for each request
     /// for a whole document.
     pub layout_reads: Box<[Arc<dyn crate::layout::Erased>]>,
+    /// The `Public` pages the app keeps to give again ([`crate::App::kept_answers`]); none under
+    /// `corten dev`, or with a bound of 0.
+    pub kept: Option<crate::kept::Answers>,
 }
 
 impl Shared {
@@ -1044,6 +1047,7 @@ impl Shared {
             pages: Box::default(),
             not_pages: Default::default(),
             layout_reads: Box::default(),
+            kept: None,
         }
     }
 }

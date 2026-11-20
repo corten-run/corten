@@ -113,6 +113,39 @@ impl Endpoint for Giving {
     }
 }
 
+/// A handler whose answer is a page that is the same for everyone (`Public`): a kept answer is
+/// given in its place, and the one it makes is kept ([`crate::kept`]). Its page is filled here,
+/// as [`crate::middleware`] would after it, so what is kept is the page as it leaves the route.
+struct Keeping {
+    inner: Route,
+}
+
+impl Endpoint for Keeping {
+    #[inline]
+    fn call(&self, req: Request) -> Answering {
+        // Any other request (a navigation, one with a cookie, a write) is the handler's as before.
+        let Some(asked) = crate::kept::Asked::of(&req) else { return self.inner.call(req) };
+        if let Some(kept) = asked.find() {
+            return Box::pin(std::future::ready(kept));
+        }
+        let missed = asked.missed(&req);
+        let here = req.extensions().get::<crate::layout::StartHere>().cloned();
+        let answer = self.inner.call(req);
+        Box::pin(async move {
+            let res = answer.await;
+            let res = match here {
+                Some(here) => here.fill(res).await,
+                None => res,
+            };
+            missed.keep(res).await
+        })
+    }
+
+    fn action_patches(&self) -> bool {
+        self.inner.action_patches()
+    }
+}
+
 /// A page's `POST` handler when it has named posts (`post(hold) = ..`): the one the `do` of the
 /// post's address names, or its plain `post` for a post that names none. Only the query is read,
 /// so the body, a multipart upload's too, is still the chosen handler's to read, under its limit.
@@ -239,7 +272,16 @@ impl<S> Clone for Slot<S> {
 
 impl<S: Clone + Send + Sync + 'static> Slot<S> {
     fn handler<H: Handler<T, S>, T: 'static>(handler: H) -> Self {
-        Slot::Unbound(Arc::new(move |state| Arc::new(Handled { handler: handler.clone(), state, types: PhantomData })))
+        // Known when the route is made, so no other route's requests ask.
+        let keeps = handler.keeps();
+        Slot::Unbound(Arc::new(move |state| {
+            let handled: Route = Arc::new(Handled { handler: handler.clone(), state, types: PhantomData });
+            if keeps {
+                Arc::new(Keeping { inner: handled })
+            } else {
+                handled
+            }
+        }))
     }
 
     fn bind<S2>(self, state: &S) -> Slot<S2> {
@@ -1053,6 +1095,11 @@ impl MatchedPath {
     /// The route's path as its routes write it, with its parameters' names (`/items/{id}`).
     pub fn as_str(&self) -> &str {
         &self.route
+    }
+
+    /// The request's path and query as they were when the router matched them.
+    pub(crate) fn matched(&self) -> &PathAndQuery {
+        &self.path
     }
 
     #[inline]

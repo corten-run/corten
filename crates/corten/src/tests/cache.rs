@@ -980,3 +980,379 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
         "the runtime: {headers:?}"
     );
 }
+
+// ---- The pages the app keeps (`crate::kept`) ----
+
+/// One request's answer, whole.
+async fn fetch(
+    router: &Router,
+    method: &str,
+    uri: &str,
+    headers: &[(&'static str, &str)],
+) -> (StatusCode, HeaderMap, bytes::Bytes) {
+    let mut req = Request::builder().method(method).uri(uri);
+    for (name, value) in headers {
+        req = req.header(*name, *value);
+    }
+    let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    let (parts, body) = res.into_parts();
+    (parts.status, parts.headers, body.collect().await.unwrap().to_bytes())
+}
+
+/// How many times a route's handler ran.
+#[derive(Clone, Default)]
+struct Runs(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Runs {
+    fn ran(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn count(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// A page for everyone for a minute at `/`, large enough to compress, whose handler counts its
+/// runs; writes to it that go through (`POST`) and that fail (`PUT`), and one elsewhere that
+/// redirects to it. The page's route is made as an app's are (`corten::get`), which is where an
+/// answer is known to be `Public`.
+fn kept_routes(runs: &Runs) -> Table {
+    let minute = Duration::from_secs(60);
+    let runs = runs.clone();
+    let page = move |req: Req| {
+        runs.ran();
+        async move {
+            let text = "kept ".repeat(400);
+            Public::new(minute, req.test_page_for("Kept", html! { <p>{text}</p> }))
+        }
+    };
+    Table::new()
+        .route(
+            "/",
+            crate::route::get(page)
+                .0
+                .post(|| async { StatusCode::NO_CONTENT })
+                .put(|| async { Err::<StatusCode, Error>(Error::status(StatusCode::BAD_REQUEST)) }),
+        )
+        .route("/saved", crate::router::post(|req: Req| async move { req.redirect::<ForOne>(&Root) }))
+}
+
+/// A `Public` page's whole document is made once for its lifetime: the next request that shows
+/// nothing about who asks gets the same answer with its age, and the handler does not run. A
+/// request the page could differ for is the handler's, and does not take the kept one's place.
+#[tokio::test]
+async fn a_public_page_is_kept_and_given_again_in_its_handler_s_place() {
+    let runs = Runs::default();
+    let router = App::new(Routes::from(kept_routes(&runs))).router();
+    let (status, first, body) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!((status, runs.count()), (StatusCode::OK, 1));
+    assert!(!first.contains_key(header::AGE), "the handler's own answer: {first:?}");
+    assert_eq!(first[header::CACHE_CONTROL], "public, max-age=60");
+
+    let (status, mut again, same) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!((status, runs.count()), (StatusCode::OK, 1), "the kept page, not the handler");
+    assert_eq!(again.remove(header::AGE).expect("a kept answer says how old it is"), "0");
+    assert_eq!(again, first, "every other header as the handler's answer had it");
+    assert_eq!(same, body);
+
+    // What the page could differ for, or is not the whole document: the handler answers.
+    let mut ran = 1;
+    for asked in [
+        ("cookie", "session=abc"),
+        ("cookie", "corten-zone=America/Chicago; session=abc"),
+        ("authorization", "Bearer t"),
+        ("corten", "nav"),
+        ("accept", "application/json"),
+        ("corten-notice", "saved"),
+        ("last-event-id", "4"),
+        ("content-length", "0"),
+    ] {
+        let (_, headers, _) = fetch(&router, "GET", "/", &[asked]).await;
+        ran += 1;
+        assert_eq!(runs.count(), ran, "{asked:?}");
+        assert!(!headers.contains_key(header::AGE), "{asked:?}");
+    }
+    let (_, headers, _) = fetch(&router, "HEAD", "/", &[]).await;
+    assert!(runs.count() == ran + 1 && !headers.contains_key(header::AGE), "a HEAD is the handler's");
+    // None of them took the kept page's place. A cookie that says only where the visitor is does
+    // not make the request someone's (a `Public` page is written in UTC), and a request's own
+    // `Cache-Control` does not make the app render again.
+    for asked in [
+        &[][..],
+        &[("cookie", "corten-zone=America/Chicago")],
+        &[("accept", "text/html,*/*;q=0.8")],
+        &[("cache-control", "no-cache")],
+    ] {
+        let (_, headers, same) = fetch(&router, "GET", "/", asked).await;
+        assert_eq!(runs.count(), ran + 1, "{asked:?}");
+        assert!(headers.contains_key(header::AGE) && same == body, "{asked:?}");
+    }
+    // Another query is another page.
+    fetch(&router, "GET", "/?page=2", &[]).await;
+    fetch(&router, "GET", "/?page=2", &[]).await;
+    assert_eq!(runs.count(), ran + 2);
+}
+
+/// A kept page stands where the handler does: every middleware runs for the request it answers,
+/// one that refuses still refuses, and each sees the `200` with the whole body, also when the
+/// client gets the `304`.
+#[tokio::test]
+async fn a_kept_page_still_passes_every_middleware() {
+    struct Numbered(Runs);
+
+    impl crate::Middleware for Numbered {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            self.0.ran();
+            let mut res = next.run(req).await;
+            assert_eq!(res.status(), StatusCode::OK, "revalidation happens outside middleware");
+            assert!(http_body::Body::size_hint(res.body()).exact().is_some_and(|size| size > 2000), "the whole body");
+            res.headers_mut().insert("x-request", HeaderValue::from(self.0.count()));
+            res
+        }
+    }
+
+    let (runs, requests) = (Runs::default(), Runs::default());
+    let router =
+        App::new(Routes::from(kept_routes(&runs))).middleware((Step("limit", true), Numbered(requests.clone()))).router();
+    // A coding asked for, so the page is tagged (`request_tags`).
+    let coded = [("accept-encoding", "gzip")];
+    let (_, first, body) = fetch(&router, "GET", "/", &coded).await;
+    let (_, second, same) = fetch(&router, "GET", "/", &coded).await;
+    assert_eq!((runs.count(), requests.count()), (1, 2), "one render, two requests through the middleware");
+    assert_eq!((first["x-request"].to_str().unwrap(), second["x-request"].to_str().unwrap()), ("1", "2"));
+    assert!(second.contains_key(header::AGE) && same == body);
+    let (status, _, _) = fetch(&router, "GET", "/", &[("x-flood", "1")]).await;
+    assert_eq!((status, runs.count()), (StatusCode::TOO_MANY_REQUESTS, 1), "a refusal is not passed by");
+    let tag = first[header::ETAG].to_str().unwrap();
+    assert_eq!(second[header::ETAG], tag, "the kept page has the handler's tag");
+    let (status, headers, none) = fetch(&router, "GET", "/", &[("if-none-match", tag)]).await;
+    assert_eq!((status, runs.count(), requests.count()), (StatusCode::NOT_MODIFIED, 1, 3));
+    assert!(none.is_empty() && headers["x-request"] == "3", "{headers:?}");
+}
+
+/// A kept page's tag and its bytes in every coding are those the handler's own answer has in an
+/// app that keeps none: only who makes them, and how often, differs.
+#[tokio::test]
+async fn a_kept_page_has_the_tag_and_the_coded_bytes_of_the_handler_s_answer() {
+    let (runs, each) = (Runs::default(), Runs::default());
+    let kept = App::new(Routes::from(kept_routes(&runs))).router();
+    let none = App::new(Routes::from(kept_routes(&each))).kept_answers(0).router();
+    for coding in ["zstd", "br", "gzip", "identity", "br", "zstd", "gzip"] {
+        let asked = [("accept-encoding", coding)];
+        let (_, made, body) = fetch(&none, "GET", "/", &asked).await;
+        let (_, mut given, same) = fetch(&kept, "GET", "/", &asked).await;
+        given.remove(header::AGE);
+        assert_eq!(given, made, "{coding}");
+        assert!(same == body, "{coding}: the same bytes");
+        #[cfg(feature = "compress")]
+        assert_eq!(given.get(header::CONTENT_ENCODING).map(|v| v.to_str().unwrap()), (coding != "identity").then_some(coding));
+        // A request that asks for no coding and names no tag gets none (`request_tags`).
+        assert_eq!(given.contains_key(header::ETAG), coding != "identity", "{coding}");
+        if let Some(tag) = given.get(header::ETAG) {
+            let asked = [("accept-encoding", coding), ("if-none-match", tag.to_str().unwrap())];
+            assert_eq!(fetch(&kept, "GET", "/", &asked).await.0, StatusCode::NOT_MODIFIED, "{coding}");
+        }
+    }
+    assert_eq!((runs.count(), each.count()), (1, 7), "one render for all of them");
+}
+
+/// A write that goes through drops what is kept for its URL and for the place it redirects to;
+/// one that fails changes nothing.
+#[tokio::test]
+async fn a_write_drops_the_page_kept_for_its_url() {
+    let runs = Runs::default();
+    let router = App::new(Routes::from(kept_routes(&runs))).router();
+    let same_origin = [("sec-fetch-site", "same-origin")];
+    let reads = |router: Router| async move {
+        fetch(&router, "GET", "/", &[]).await;
+        fetch(&router, "GET", "/", &[]).await;
+    };
+    reads(router.clone()).await;
+    assert_eq!(runs.count(), 1);
+    let (status, _, _) = fetch(&router, "PUT", "/", &same_origin).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    reads(router.clone()).await;
+    assert_eq!(runs.count(), 1, "a write that failed");
+    let (status, _, _) = fetch(&router, "POST", "/", &same_origin).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    reads(router.clone()).await;
+    assert_eq!(runs.count(), 2, "a write to the page's URL");
+    let (status, headers, _) = fetch(&router, "POST", "/saved", &same_origin).await;
+    assert_eq!((status, headers[header::LOCATION].to_str().unwrap()), (StatusCode::SEE_OTHER, "/"));
+    reads(router.clone()).await;
+    assert_eq!(runs.count(), 3, "a write that redirects to it");
+    // As the runtime's form submit is answered: the place is in `corten-location`.
+    let (_, headers, _) = fetch(&router, "POST", "/saved", &[("sec-fetch-site", "same-origin"), ("corten", "action")]).await;
+    assert_eq!(headers["corten-location"], "/", "{headers:?}");
+    reads(router.clone()).await;
+    assert_eq!(runs.count(), 4);
+}
+
+/// What is not kept: an answer that is not for everyone, sets a cookie, drew this request's
+/// nonce, failed, is not a page, has no lifetime or is too large for the bound; and nothing in an
+/// app that keeps none, or under `corten dev`.
+#[tokio::test]
+async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
+    use crate::route::get as typed;
+    let (minute, day) = (Duration::from_secs(60), Duration::from_secs(86_400));
+    let home = || html! { <p>"home"</p> };
+    let routes = move || {
+        Table::new()
+            .route("/", typed(move |req: Req| async move { Public::new(minute, req.test_page_for("Home", home())) }).0)
+            .route(
+                "/catalog",
+                typed(move |req: Req| async move { Public::new(minute, req.test_page_for("Catalog", home())).shared(day) }).0,
+            )
+            .route("/plain", typed(move |req: Req| async move { req.test_page("Plain", home()) }).0)
+            .route("/statement", typed(move |req: Req| async move { NoStore(req.test_page("Statement", home())) }).0)
+            .route(
+                "/cookies",
+                typed(move |req: Req| async move {
+                    let page = req.test_page_for("Home", home()).map(|mut page| {
+                        page.headers_mut().append(header::SET_COOKIE, SetCookie::new("a", "1").header());
+                        page
+                    });
+                    Public::new(minute, page)
+                })
+                .0,
+            )
+            .route("/inline", typed(inline_page).0)
+            .route(
+                "/gone",
+                typed(move |req: Req| async move {
+                    let page = req.test_page_for("Gone", home());
+                    Public::new(minute, page.and_then(|page| Err::<(), Error>(Error::not_found()).map(|()| page)))
+                })
+                .0,
+            )
+            .route("/now", typed(move |req: Req| async move { Public::new(Duration::ZERO, req.test_page_for("Now", home())) }).0)
+            .route("/moved", typed(move |req: Req| async move { Public::new(minute, req.redirect(&Root)) }).0)
+            .route("/text", typed(move || async move { Public::new(minute, "text") }).0)
+    };
+    let router = App::new(Routes::from(routes())).router();
+    let kept = |router: Router, uri: &'static str| async move {
+        fetch(&router, "GET", uri, &[]).await;
+        fetch(&router, "GET", uri, &[]).await.1.contains_key(header::AGE)
+    };
+    for (uri, why) in [
+        ("/plain", "not Public"),
+        ("/statement", "no-store"),
+        ("/cookies", "a Public page with a cookie written by hand"),
+        ("/inline", "this request's nonce"),
+        ("/gone", "an error page"),
+        ("/now", "no lifetime"),
+        ("/moved", "a redirect"),
+        ("/text", "not a page"),
+        ("/missing", "no route"),
+    ] {
+        assert!(!kept(router.clone(), uri).await, "{uri}: {why}");
+    }
+    for uri in ["/", "/catalog"] {
+        assert!(kept(router.clone(), uri).await, "{uri}");
+    }
+    assert!(!kept(App::new(Routes::from(routes())).kept_answers(0).router(), "/").await, "an app that keeps none");
+    assert!(!kept(App::new(Routes::from(routes())).dev(true).router(), "/").await, "under corten dev");
+    assert!(!kept(App::new(Routes::from(routes())).kept_answers(2048).router(), "/").await, "larger than its share of the bound");
+
+    // What a middleware did before the handler counts: a caller it read makes the answer that
+    // caller's, and a URI it changed is no longer the one the router matched the page by.
+    struct Reads;
+
+    impl crate::Middleware for Reads {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let (mut parts, body) = req.into_parts();
+            if parts.headers.contains_key("viewer") {
+                let _ = Caller::<Viewer>::find(&parts, &()).await;
+            }
+            if parts.headers.contains_key("x-rewrite") {
+                parts.uri = "/?seen=1".parse().unwrap();
+            }
+            next.run(Request::from_parts(parts, body)).await
+        }
+    }
+
+    let router = App::new(Routes::from(routes())).middleware(Reads).router();
+    for asked in [("viewer", "ada"), ("x-rewrite", "1")] {
+        fetch(&router, "GET", "/", &[asked]).await;
+        let (status, headers, _) = fetch(&router, "GET", "/", &[asked]).await;
+        assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{asked:?}: {headers:?}");
+    }
+    assert!(kept(router, "/").await, "and neither took a place a request without them finds");
+}
+
+/// A kept page is given until its lifetime ends, which `.shared(..)` sets for a shared cache and
+/// so for the app; then the handler runs again.
+#[tokio::test]
+async fn a_kept_page_lasts_its_lifetime() {
+    let runs = Runs::default();
+    let counted = runs.clone();
+    let brief = move |req: Req| {
+        counted.ran();
+        async move {
+            let page = req.test_page_for("Brief", html! { <p>"brief"</p> });
+            Public::new(Duration::from_secs(600), page).shared(Duration::from_secs(1))
+        }
+    };
+    let router = App::new(Routes::from(Table::new().route("/", crate::route::get(brief).0))).router();
+    let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=600, s-maxage=1");
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
+    assert!(runs.count() == 2 && !headers.contains_key(header::AGE), "past the shared lifetime: {headers:?}");
+}
+
+/// A page is kept for the `Host` it was asked with, and for the `Accept-Language` when the app
+/// has more than one language (its `Vary` names the header then).
+#[tokio::test]
+async fn a_kept_page_is_for_the_host_and_the_language_it_was_asked_in() {
+    crate::i18n::messages! { struct KeptMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    let runs = Runs::default();
+    let one = App::new(Routes::from(kept_routes(&runs))).router();
+    for (asked, ran) in [
+        (("host", "localhost"), 1),
+        (("host", "127.0.0.1"), 2),
+        (("host", "localhost"), 2),
+        (("accept-language", "fr"), 3),
+        (("accept-language", "de"), 3),
+    ] {
+        fetch(&one, "GET", "/", &[asked]).await;
+        assert_eq!(runs.count(), ran, "{asked:?}: one language, so the header is not read");
+    }
+
+    let runs = Runs::default();
+    let counted = runs.clone();
+    let page = move |req: Req| {
+        counted.ran();
+        async move {
+            let lang = req.lang();
+            Public::new(Duration::from_secs(60), req.test_page_for("Lang", html! { <p>"in "{lang}</p> }))
+        }
+    };
+    let two = App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).messages::<KeptMsg>().router();
+    for (asked, lang, ran) in [("fr", "fr", 1), ("en", "en", 2), ("fr", "fr", 2), ("en", "en", 2), ("fr-CA, en;q=0.5", "fr", 3)] {
+        let (_, headers, body) = fetch(&two, "GET", "/", &[("accept-language", asked)]).await;
+        assert_eq!(headers[header::VARY], "corten, accept, accept-language");
+        assert!(String::from_utf8_lossy(&body).contains(&format!("<p>in {lang}</p>")), "{asked}");
+        assert_eq!(runs.count(), ran, "{asked}");
+    }
+    let (_, _, body) = fetch(&two, "GET", "/", &[]).await;
+    assert!(String::from_utf8_lossy(&body).contains("<p>in en</p>") && runs.count() == 4, "none asked for is its own");
+}
+
+/// A page whose styles come from data has a style block its `Content-Security-Policy` allows by
+/// hash: the kept page is sent with the same policy, so the block still applies.
+#[tokio::test]
+async fn a_kept_page_keeps_the_hash_its_policy_allows_its_style_block_by() {
+    let page = |req: Req| async move {
+        Public::new(Duration::from_secs(60), req.test_page_for("Meters", html! { <TestMeter used={42.5} /> }))
+    };
+    let router = App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).components(&[TestMeter]).router();
+    let (_, first, body) = fetch(&router, "GET", "/", &[]).await;
+    let (_, again, same) = fetch(&router, "GET", "/", &[]).await;
+    let policy = first[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+    let styles = policy.split(';').find(|part| part.trim_start().starts_with("style-src")).expect("style-src");
+    assert!(styles.contains("'sha256-"), "the block's hash: {policy}");
+    assert!(again.contains_key(header::AGE) && same == body, "the kept page");
+    assert_eq!(again[header::CONTENT_SECURITY_POLICY], policy);
+}
