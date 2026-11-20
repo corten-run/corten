@@ -23,6 +23,9 @@ const docker = (...a) => {
   if (r.status !== 0 && !optional) throw new Error(`docker ${a.join(" ")}: ${r.stderr}`);
   return r.stdout.trim();
 };
+// nginx 1.31.9 since 2026-11-20; failover-r1 and -r2 ran nginx:1.27-alpine, so compare across
+// that change as a changed input. Each result records `nginx -v`.
+const nginxImage = "nginx:1.31.9-alpine@sha256:fb4658584bd9a916ffb6f6e365f97c25cfdb2923801f551ea08356e695f14ff7";
 const containers = ["fb-lb", "fb-a", "fb-b", "fb-nats", "fb-pg"];
 const net = ["--network", "feedbench"];
 const db = "postgres://postgres:postgres@10.77.77.10/feeds";
@@ -60,7 +63,7 @@ instance("fb-a", "10.77.77.21", "a");
 await until("a", () => /listening/.test(logs("fb-a")));
 instance("fb-b", "10.77.77.22", "b");
 await until("b", () => /listening/.test(logs("fb-b")));
-docker("run", "-d", "--name", "fb-lb", ...net, "--ip", "10.77.77.30", "-p", "18420:8080", "-v", `${join(here, "nginx.conf")}:/etc/nginx/nginx.conf:ro`, "nginx:1.27-alpine");
+docker("run", "-d", "--name", "fb-lb", ...net, "--ip", "10.77.77.30", "-p", "18420:8080", "-v", `${join(here, "nginx.conf")}:/etc/nginx/nginx.conf:ro`, nginxImage);
 await until("load balancer", async () => (await fetch("http://localhost:18420/health/ready").catch(() => null))?.ok);
 
 // A real browser on the seller's page (ListingTable, corten.js subscribe()), through the load
@@ -111,6 +114,15 @@ result.relayTakeoverMs = result.events
     const wasLeader = e.relay ?? activations.filter((a) => a.at < e.at).sort((x, y) => y.at - x.at)[0]?.c === e.name;
     return { killed: e.name, wasLeader, takeoverMs: wasLeader && next ? next.at - e.at : null };
   });
+// nginx -v writes its version line to stderr; a failed probe or one without that line is recorded as
+// unknown, not as a version.
+const nginxProbe = spawnSync("docker", ["exec", "fb-lb", "nginx", "-v"], { encoding: "utf8" });
+const nginxLine = !nginxProbe.error && nginxProbe.status === 0
+  ? (nginxProbe.stderr ?? "").split(/\r?\n/).find((line) => /^nginx version: nginx\/\d+(?:\.\d+)+$/.test(line))
+  : undefined;
+const nginxVersion = nginxLine
+  ?? `unknown (nginx -v: ${nginxProbe.error?.message ?? (nginxProbe.signal ? `signal ${nginxProbe.signal}` : nginxProbe.status === 0 ? "no version line" : `exit ${nginxProbe.status}`)})`;
+result.nginx = nginxVersion;
 result.stats = Object.fromEntries(["fb-a", "fb-b", "fb-pg", "fb-nats", "fb-lb"].map((c) => [c, docker("stats", "--no-stream", "--format", "{{.CPUPerc}} {{.MemUsage}}", c)]));
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, JSON.stringify(result, null, 1));
