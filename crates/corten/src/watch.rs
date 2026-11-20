@@ -373,9 +373,9 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
                     watch.held.store(false, Relaxed);
                     watch.stalled.store(FLOWING, Relaxed);
                 } else if !watch.held.load(Relaxed) {
-                    // A flush or a close that went through with no write or close holding the
-                    // stall ends the stall it started, even one the clock had expired (it found
-                    // room after all), so a later wait starts its own (#1762).
+                    // A flush, or a close that did not wait, that went through with no write or
+                    // close holding the stall ends the stall, even one the clock had expired (it
+                    // found room after all), so a later wait starts its own (#1762).
                     watch.stalled.store(FLOWING, Relaxed);
                 }
                 done
