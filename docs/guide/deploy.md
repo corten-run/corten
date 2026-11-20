@@ -602,8 +602,8 @@ path that leads out of the app runs the file it finds, as the build's user, whic
 the app's own build scripts.
 
 An app whose Dockerfile was written before it had the argument takes the `ARG` and the two
-build-stage `RUN`s from a new app's. Without them Docker says the argument was not used and
-builds the ordinary image.
+build-stage `RUN`s from a new app's. Without them the argument is read by nothing and the image
+is the ordinary one: Docker 29.9.3 built it without a word about the argument.
 
 The two builds are two lines of one `RUN`. A Cargo argument the app's release needs
 (`--features`, `--bin`) goes on both, before `--profile-from` on the second: on one alone,
