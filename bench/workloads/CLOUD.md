@@ -210,9 +210,11 @@ when the archive entry is definitely absent. Expired history and pinned r21
 recovery always require the original exit archive. Local native replay must
 agree with the monitor. The collector rehashes the archive, then checks the
 same inode and timestamps, idle host and unit in a fresh 60-second window.
-Account and ownership reads precede that final observation. An acknowledged
-nonzero unit query records its exit and stops without deleting; a missing
-guardian acknowledgement retains uncertain custody.
+Account and ownership reads precede that final observation. Immediately before
+writing delete intent the collector also checks that the local archive is still
+the same unchanged file it hashed. A unit query's acknowledged exit is recorded
+even on cancellation; a nonzero exit stops collection, and a missing guardian
+acknowledgement retains uncertain custody.
 
 The controller persists delete intent before dispatch. Only positive proof
 that this very DELETE was never sent clears that intent for a separately
@@ -227,7 +229,7 @@ closed child of the original staged fleet at a time. Keep the original fleet
 in place. Keep a separate clean checkout at the measured revision
 `4225a2837e04795c11c1b45b3d6af72b7eb5ddc3` with its original root `npm ci`.
 The successor reads that revision's validator, dependency bytes and native
-inputs, not its own compiler, and does not extend the replay deadline.
+inputs, not its own compiler. The successor allows 15 minutes per local replay.
 First independently verify the pre-existing exit archive's SHA-256.
 
 ```sh
@@ -240,9 +242,10 @@ after independent authorization replace `--print-approval` with
 `--approve-reviewed-merged-ready REVIEWED_EXACT_HASH`. Approval is neither
 transferable across children nor reusable after state changes. An unadmitted
 child cannot be recovered. The first group's admission replay, remaining
-launches and fleet verification still use the **measured checkout**. A replay
-timeout or mismatch before delete intent retains the host; do not substitute a
-remote report, change the measured state or retry a DELETE.
+launches and fleet verification still use the **measured checkout**, whose
+replay deadline remains 60 seconds. Collection alone does not establish
+admission. A replay timeout or mismatch before delete intent retains the host;
+do not substitute a remote report, change the measured state or retry a DELETE.
 
 Failed worker results and fleet receipts retain only the existing allowlisted
 `providerDiagnostic` code and optional HTTP status or code-specific finite detail,

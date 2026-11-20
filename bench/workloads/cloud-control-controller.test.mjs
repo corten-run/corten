@@ -1,6 +1,6 @@
 // Real controller with fake argv transport/provider responses. No host operations.
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { archive, harness, metadata } from "./cloud-fixtures.mjs";
@@ -212,6 +212,25 @@ test("expired history without a sealed start, or with a PID, pending job, foreig
   h.change(s => { s.control.ledger.find(r => r.request.invocation.requestSha256 === digest(`set -euo pipefail\nsystemctl start ${s.unit}\n`)).code = 1; });
   await assert.rejects(h.task().collect(), /acknowledged unit start/);
   assert.equal(h.deletes, 0);
+});
+
+for (const change of ["edit", "replace"]) test("local archive " + change + " during the final remote hash cannot spend delete intent", async t => {
+  const h = harness(t, { active: true }); await h.launch().launch();
+  const closed = JSON.parse(readFileSync(join(h.local, "monitor-local-closed.json")));
+  t.mock.timers.enable({ apis: ["Date"], now: closed.recoverAfterMs + 1 });
+  Object.assign(h.flags, { active: false, expired: true });
+  const path = join(h.local, "results.tgz");
+  let changed = false;
+  await assert.rejects(h.task({ run(...args) {
+    if (args[0] === "ssh" && args[1].at(-1).includes("sha256sum <&3") && h.saved().collectedAt) {
+      const bytes = readFileSync(path);
+      if (change === "edit") { bytes[0] ^= 1; writeFileSync(path, bytes); }
+      else { renameSync(path, path + ".original"); writeFileSync(path, bytes); }
+      changed = true;
+    }
+    return h.run(...args);
+  } }).collect(), /file changed while reading/);
+  assert.ok(changed); assert.equal(h.deletes, 0); assert.equal(h.saved().deletionIntentAt, undefined);
 });
 
 test("slow archive hash and account reads precede the short fence; only an unsent DELETE is retryable", async t => {

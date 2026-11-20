@@ -159,9 +159,9 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     }
     let result, failure;
     try { result = args[0] === "doctl" ? await providerRun(...args.slice(1)) : await processRun(...args); } catch (error) { failure = error; }
-    // The controller performs this post-command checkpoint after taking the
-    // registered handle. Throwing here would orphan a live SSH stream.
-    if (args[5]?.stream && result?.monitor || fencedDelete && result?.deleteNotDispatched === true) return result;
+    // Hand custody back before cancellation: take the stream handle, record
+    // the acknowledged command exit, or clear a positively unsent DELETE.
+    if (args[5]?.stream && result?.monitor || args[5]?.request && result || fencedDelete && result?.deleteNotDispatched === true) return result;
     try { await controlCheckpoint(interrupted); }
     catch (error) { if (!failure?.controlTreeUncertain && !failure?.controlUncertain) throw error; }
     if (failure) throw failure;

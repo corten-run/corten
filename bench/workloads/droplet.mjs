@@ -7,7 +7,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFleetCensus, bootstrapWorkspaceScript, ownedDroplet, reservation, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
-import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash } from "./cloud-local.mjs";
+import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash, withVerifiedArchive } from "./cloud-local.mjs";
 import { campaignOutcome, controllerFailure, controllerState, full, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
@@ -78,7 +78,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     if (phase === "closed") preserveOperationLock = alreadyUncertain;
   };
   async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs, remaining, registration) {
-    const prepareDelete = typeof deleteProofExpiresAtMs === "function" ? deleteProofExpiresAtMs : undefined;
+    const prepareDelete = typeof deleteProofExpiresAtMs === "object" ? deleteProofExpiresAtMs : undefined;
     if (deleteProofExpiresAtMs !== undefined) {
       assert.equal(binary, "doctl"); assert.equal(args[2], "delete");
       assert.ok(prepareDelete || Number.isSafeInteger(deleteProofExpiresAtMs));
@@ -93,6 +93,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       const limit = remaining ? Math.min(timeout, remaining()) : timeout;
       if (prepareDelete && expiry !== undefined) {
         assert.ok(!state.deletionIntentAt);
+        prepareDelete.unchanged();
         state.deletionIntentAt = new Date().toISOString(); save();
       }
       try { r = await run(binary, argv, limit, permittedFailure, expiry, registration); }
@@ -104,6 +105,15 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         await controlCheckpoint(interrupted);
       }
       if (r.controlTreeUncertain || r.controlUncertain) { preserveOperationLock = true; throw new Error("control uncertain; preserve locks"); }
+      if (registration?.request) {
+        // Cancellation stops the next command, not the receipt for this one.
+        const row = state.control.ledger.at(-1);
+        try {
+          boundary(); assert.equal(row.request, registration.request);
+          row.localTerminal = true; row.code = r.status; writeState(state);
+        } catch (error) { preserveOperationLock = true; throw error; }
+        await controlCheckpoint(interrupted);
+      }
       if (prepareDelete && expiry !== undefined && r.status === 1 && r.deleteNotDispatched === true) {
         // The worker positively acknowledged that its request was never sent.
         // A missing result, timeout, HTTP error or lost acknowledgement cannot clear intent.
@@ -121,7 +131,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.equal(providerAccount(value), state.provider.accountId, "provider account identity changed; preserve uncertainty");
     };
     await account();
-    const expiry = prepareDelete ? await prepareDelete() : deleteProofExpiresAtMs;
+    const expiry = prepareDelete ? await prepareDelete.expiresAt() : deleteProofExpiresAtMs;
     const result = await invoke(scoped(args), allowFail, expiry);
     if (prepareDelete) assert.ok(result.status === 0 && !result.error, "delete outcome uncertain; preserve intent");
     await account(); // A changed context cannot supply absence/deletion authority.
@@ -174,18 +184,17 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const pinnedKey = mixedRecovery ? mixedWait.knownHostsSha256 : options.r21MeasuredCheckout ? recoveryApproval.knownHostsSha256 : undefined;
     if (pinnedKey) assert.equal(fileHash(join(local, "known_hosts")), pinnedKey, "native host keys changed");
     if (existsSync(join(local, "known_hosts"))) regular(join(local, "known_hosts"), 1024 * 1024);
-    let registration, intent;
+    let registration;
     if (state.control) {
       assert.equal(state.control.helperSha256, guardianSha256, "control source changed; preserve host");
       assert.ok(!state.control.sealed.includes(controlEpoch), "control epoch already sealed");
-      intent = controlRequest(state, binary, args, timeout ?? 60000, controlEpoch, sealing);
+      const intent = controlRequest(state, binary, args, timeout ?? 60000, controlEpoch, sealing);
       state.control.ledger.push({ request: intent, localTerminal: false }); save();
       registration = controlRegistration(intent);
     }
     const hostOptions = pinnedKey ? [...pinnedHostOptions(join(local, "known_hosts")), ...sshLimits] : sshOptions;
     const startedAtMs = Date.now();
     const result = await execute(binary, [...hostOptions, ...args], timeout, allowFail, undefined, undefined, registration);
-    if (intent) { const row = state.control.ledger.at(-1); row.localTerminal = true; row.code = result.status; save(); }
     if (pinnedKey) assert.equal(fileHash(join(local, "known_hosts")), pinnedKey, "native host keys changed during transport");
     return { ...result, startedAtMs };
   };
@@ -714,21 +723,23 @@ else ${pack}; fi` : pack, 11 * 60000);
           save(); return 1; // Failed evidence custody only; keep original lock and require the existing explicit retirement gates.
         }
         state.collectedAt ??= new Date().toISOString(); state.status = "collected"; save();
-        verifyArchive(); await validateEvidence();
-        const deletion = ["compute", "droplet", "delete", state.id, "--force"];
-        if (sealed) {
-          const { hash, stamp } = await remoteHash(); assert.equal(hash, state.archiveSha256, "exit archive changed");
-          // Account check, then transport's exact ownership check, then one short
-          // SSH fence. The hash and provider reads are outside its freshness budget.
-          await execute("doctl", deletion, 120000, true, async () => {
-            const proof = await ssh(idleScript(false, stamp) + "\n" + query, 60000, true);
-            assert.ok(proof.status === 0 && !proof.error && sealedUnit(proof.stdout, state), "idle archive or terminal unit changed");
-            return proof.startedAtMs + 60000;
-          });
-        } else {
-          assert.ok(await inspectUnit(), "unit became active; preserve host"); await own(); check();
-          state.deletionIntentAt = new Date().toISOString(); save(); await execute("doctl", deletion, 120000);
-        }
+        await withVerifiedArchive(archive, state.archiveSha256, async unchanged => {
+          await validateEvidence();
+          const deletion = ["compute", "droplet", "delete", state.id, "--force"];
+          if (sealed) {
+            const { hash, stamp } = await remoteHash(); assert.equal(hash, state.archiveSha256, "exit archive changed");
+            // Account check, then transport's exact ownership check, then one short
+            // SSH fence. The hashes and provider reads are outside its freshness budget.
+            await execute("doctl", deletion, 120000, true, { unchanged, async expiresAt() {
+              const proof = await ssh(idleScript(false, stamp) + "\n" + query, 60000, true);
+              assert.ok(proof.status === 0 && !proof.error && sealedUnit(proof.stdout, state), "idle archive or terminal unit changed");
+              return proof.startedAtMs + 60000;
+            } });
+          } else {
+            assert.ok(await inspectUnit(), "unit became active; preserve host"); await own(); check(); unchanged();
+            state.deletionIntentAt = new Date().toISOString(); save(); await execute("doctl", deletion, 120000);
+          }
+        });
         await confirmDeleted();
         verifyArchive(); await validateEvidence(); state.destroyedAt = new Date().toISOString(); save(); return deletedCode();
       }, failedMonitorRecovery);
