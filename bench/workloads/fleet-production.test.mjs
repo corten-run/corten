@@ -30,6 +30,10 @@ function fixture(t, mode = "success") {
   const repo = path.join(h.temp, "captured"), trace = path.join(h.temp, "boundaries.jsonl"), hosts = path.join(h.temp, "provider.json");
   fs.mkdirSync(repo); fs.writeFileSync(trace, "");
   fs.mkdirSync(path.join(repo, "bench/workloads"), { recursive: true });
+  // The operator's local bench install (npm --prefix bench ci), which native replay and the
+  // launch and collection preflights read. Linked, never copied or altered.
+  fs.mkdirSync(path.join(repo, "bench/node_modules"));
+  fs.symlinkSync(fs.realpathSync("bench/node_modules/typescript"), path.join(repo, "bench/node_modules/typescript"), "junction");
   fs.copyFileSync(new URL("./fleet-provider-test-worker.mjs", import.meta.url), path.join(repo, "bench/workloads/fleet-provider-test-worker.mjs"));
   const sources = fleetWorkerPaths.map((file) => {
     const target = path.join(repo, file); fs.mkdirSync(path.dirname(target), { recursive: true });

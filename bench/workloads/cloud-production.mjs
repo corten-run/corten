@@ -109,7 +109,7 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
 }
 
-export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, compiler, sleep, interrupted = () => false, write = console.log } = {}) {
+export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log, compiler } = {}) {
   const { options, approval, preview } = parseProductionArgs(args);
   const processRun = shellTransport({ repo, spawn, streamSpawn });
   const createMode = options.detach ? options.group === undefined ? "legacy" : fleetCreateMode(options.group) : null;
