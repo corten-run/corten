@@ -244,17 +244,24 @@ test("count.mjs keeps instructions when optional perf events are unavailable", (
   });
 });
 
+function countSummary(count, failed = 0, checksFailed = 0) {
+  return { metrics: {
+    http_reqs: { count },
+    http_req_failed: { passes: failed },
+    checks: { fails: checksFailed },
+  } };
+}
+
 test("count.mjs records partial and missing optional coverage without reporting usable counts", async () => {
-  const counts = await measurePerfCounts((instructionsOnly) => {
+  const row = await measurePerfCounts((instructionsOnly) => {
     assert.equal(instructionsOnly, false);
     return { text: [
       fullInstructions,
       "5678,,cycles:u,app.scope,60000,8.00,",
       "1200,,cycles:k,app.scope,60000,100.00,",
       "87,,L1-icache-load-misses:u,app.scope,60000,,",
-    ].join("\n") };
+    ].join("\n"), summary: countSummary(10) };
   }, assert.fail);
-  const row = countRow(counts, 10, 0);
   assert.equal(row.userCyclesPerRequest, null);
   assert.equal(row.kernelCyclesPerRequest, 120);
   assert.equal(row.userL1iMissesPerRequest, null);
@@ -267,34 +274,55 @@ test("count.mjs records partial and missing optional coverage without reporting 
 test("count.mjs retries partial instruction coverage without optional events, then rejects if still partial", async () => {
   const partial = fullInstructions.replace("60000,100.00", "60000,12.50");
   const warnings = [];
-  const collect = (instructionsOnly) => ({ text: instructionsOnly ? fullInstructions : partial });
-  const row = countRow(await measurePerfCounts(collect, (message) => warnings.push(message)), 10, 0);
+  const collect = (instructionsOnly) => ({
+    text: instructionsOnly ? fullInstructions : partial,
+    summary: countSummary(instructionsOnly ? 10 : 20),
+  });
+  const row = await measurePerfCounts(collect, (message) => warnings.push(message));
+  assert.equal(row.requests, 10);
+  assert.equal(row.failed, 0);
   assert.equal(row.userPerRequest, 1235);
   assert.equal(row.perfRunningPct["instructions:u"], 100);
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /instructions:u: perf ran 12\.5% .*retrying with instructions only/);
   await assert.rejects(
-    measurePerfCounts(() => ({ text: partial }), () => {}),
+    measurePerfCounts(() => ({ text: partial, summary: countSummary(10) }), () => {}),
     /instructions-only perf failed: instructions:u: perf ran 12\.5%/,
   );
 });
 
+test("count.mjs does not retry away failures in the first load", async () => {
+  const partial = fullInstructions.replace("60000,100.00", "60000,12.50");
+  for (const [failed, checksFailed] of [[9, 9], [0, 2]]) {
+    const attempts = [];
+    await assert.rejects(measurePerfCounts((instructionsOnly) => {
+      attempts.push(instructionsOnly);
+      return {
+        text: instructionsOnly ? fullInstructions : partial,
+        summary: instructionsOnly ? countSummary(5000) : countSummary(5000, failed, checksFailed),
+      };
+    }, assert.fail), new RegExp(`${failed} HTTP request failures and ${checksFailed} failed status checks`));
+    assert.deepEqual(attempts, [false]);
+  }
+});
+
 test("count.mjs falls back to instructions when an optional event makes perf abort before any rows", async () => {
-  const attempts = [];
-  const warnings = [];
-  const counts = await measurePerfCounts((instructionsOnly) => {
-    attempts.push(instructionsOnly);
-    return instructionsOnly
-      ? { text: fullInstructions }
-      : { text: "", error: "event syntax error: L1-icache-load-misses:u" };
-  }, (message) => warnings.push(message));
-  assert.deepEqual(attempts, [false, true]);
-  assert.deepEqual(warnings, ["event syntax error: L1-icache-load-misses:u; retrying with instructions only"]);
-  const row = countRow(counts, 10, 0);
-  assert.equal(row.userPerRequest, 1235);
-  assert.equal(row.kernelPerRequest, 123);
-  assert.equal(row.userCyclesPerRequest, null);
-  assert.equal(row.perfDiagnostics["cycles:u"], "no perf row");
+  for (const summary of [undefined, countSummary(0)]) {
+    const attempts = [];
+    const warnings = [];
+    const row = await measurePerfCounts((instructionsOnly) => {
+      attempts.push(instructionsOnly);
+      return instructionsOnly
+        ? { text: fullInstructions, summary: countSummary(10) }
+        : { text: "", error: "event syntax error: L1-icache-load-misses:u", summary };
+    }, (message) => warnings.push(message));
+    assert.deepEqual(attempts, [false, true]);
+    assert.deepEqual(warnings, ["event syntax error: L1-icache-load-misses:u; retrying with instructions only"]);
+    assert.equal(row.userPerRequest, 1235);
+    assert.equal(row.kernelPerRequest, 123);
+    assert.equal(row.userCyclesPerRequest, null);
+    assert.equal(row.perfDiagnostics["cycles:u"], "no perf row");
+  }
 });
 
 test("the counter rejects an unknown target before starting the benchmark", () => {

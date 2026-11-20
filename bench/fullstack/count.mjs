@@ -2,18 +2,19 @@
 // ITERATIONS requests while one `perf stat` counts its user and kernel instructions and cycles,
 // and user L1 instruction-cache misses. All counts require a reported 100% running percentage.
 // Unusable optional counts are null with a diagnostic; if instructions are unusable with
-// optional events enabled, repeat the load with instructions only. Alternate one-repeat runs
-// of the builds on a quiet host to compare cycles, which are noisier than instructions.
+// optional events enabled, repeat with instructions only unless the first load had failures.
+// Alternate one-repeat runs of the builds on a quiet host to compare cycles, which are noisier
+// than instructions.
 // Needs Linux with hardware counters (`perf`, root, cgroup v2): a bench host, not Docker Desktop.
 // Usage: node count.mjs <round> [repeats=3] [apps=all] [targets=page,json] [fixture|api]
 //   api: items fetched from the item API (BENCH_API_CONTAINER), so the count includes fetching and
 //   parsing its ~55 KB response; results are keyed <app>/<target>/api.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs, tier } from "./apps.mjs";
-import { countRow, measurePerfCounts, perfCountArgs } from "./count-perf.mjs";
+import { measurePerfCounts, perfCountArgs } from "./count-perf.mjs";
 import { roundNameError } from "./round.mjs";
 import { k6Image, recordLoadTool } from "./load-tool.mjs";
 
@@ -73,7 +74,7 @@ async function counted(container, work, instructionsOnly) {
   const error = !stopped || (code !== 0 && signal !== "SIGINT")
     ? `perf did not count the full load: ${spawnError ?? (said.trim() || signal || `exit ${code}`)}`
     : null;
-  return { text, error };
+  return { text, error, ranLoad: ready };
 }
 
 // Before any load: the kernel this runs on, and `perf` counting an idle second on it, so a `perf`
@@ -129,16 +130,19 @@ for (const name of appsArg.split(",")) {
       k6(base, target, { MODE: "closed", VUS: "16", DURATION: "30s" }, `results/${round}/count-warmup.json`);
       const runs = [];
       for (let r = 0; r < Number(repeats); r += 1) {
-        const summary = `results/${round}/count-${name}-${target}${suffix.replace("/", "-")}-${r}.json`;
-        const counts = await measurePerfCounts(
-          (instructionsOnly) => counted(`fsw-${name}`, () => k6(base, target, { MODE: "iterations", VUS: "4", ITERATIONS: String(ITERATIONS) }, summary), instructionsOnly),
+        const stem = `results/${round}/count-${name}-${target}${suffix.replace("/", "-")}-${r}`;
+        const row = await measurePerfCounts(
+          async (instructionsOnly) => {
+            const summary = `${stem}${instructionsOnly ? "-instructions-only" : ""}.json`;
+            const summaryFile = join(here, summary);
+            rmSync(summaryFile, { force: true });
+            const perf = await counted(`fsw-${name}`, () => k6(base, target, { MODE: "iterations", VUS: "4", ITERATIONS: String(ITERATIONS) }, summary), instructionsOnly);
+            return { ...perf, summary: perf.ranLoad ? JSON.parse(readFileSync(summaryFile, "utf8")) : undefined };
+          },
           (message) => console.warn(name, target + suffix, message),
         );
-        const k = JSON.parse(readFileSync(join(here, summary), "utf8"));
-        const requests = k.metrics.http_reqs.count;
-        const failed = k.metrics.http_req_failed.passes ?? 0;
-        runs.push(countRow(counts, requests, failed));
-        console.log(name, target + suffix, JSON.stringify(runs.at(-1)));
+        runs.push(row);
+        console.log(name, target + suffix, JSON.stringify(row));
       }
       results[`${name}/${target}${suffix}`] = runs;
     } catch (e) {

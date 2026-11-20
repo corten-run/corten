@@ -40,21 +40,29 @@ function countError(entry) {
 
 export async function measurePerfCounts(collect, warn) {
   const attempt = async (instructionsOnly) => {
-    const { text, error } = await collect(instructionsOnly);
+    const { text, error, summary } = await collect(instructionsOnly);
     const counts = parsePerfCounts(text);
     const missing = Object.values(instructions).flatMap((event) => {
       const reason = countError(counts.get(event));
       return reason ? [`${event}: ${reason}`] : [];
     });
-    return { counts, error: error || missing.join("; ") };
+    const requests = summary?.metrics.http_reqs?.count ?? 0;
+    const failed = summary?.metrics.http_req_failed?.passes ?? 0;
+    const checksFailed = summary?.metrics.checks?.fails ?? 0;
+    const reason = error || missing.join("; ") || (requests ? null : "k6 made no requests");
+    return { counts, requests, failed, checksFailed, error: reason };
   };
   const full = await attempt(false);
-  if (!full.error) return full.counts;
+  if (!full.error) return countRow(full.counts, full.requests, full.failed);
+  // A retry can replace unusable counters, not failures observed under load.
+  if (full.failed || full.checksFailed) {
+    throw new Error(`first load had ${full.failed} HTTP request failures and ${full.checksFailed} failed status checks across ${full.requests} requests; not retrying (${full.error})`);
+  }
   // Drop optional events that may have prevented perf from starting or crowded out instructions.
   warn(`${full.error}; retrying with instructions only`);
   const required = await attempt(true);
   if (required.error) throw new Error(`instructions-only perf failed: ${required.error}`);
-  return required.counts;
+  return countRow(required.counts, required.requests, required.failed);
 }
 
 export function countRow(counts, requests, failed) {
