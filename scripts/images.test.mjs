@@ -8,7 +8,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { dockerfileOf, recipes } from "../bench/fullstack/builds.mjs";
 
 const root = new URL("../", import.meta.url);
 const TEMPLATE = "crates/corten-cli/template/Dockerfile";
@@ -66,85 +65,36 @@ test("every example has an image, and each is checked", () => {
   for (const file of files) assert.ok(existsSync(new URL(file, root)), `${file} is missing`);
 });
 
-/** The commands a `RUN` line runs, each as its words with quotes taken off: the exec form's array,
- * or the shell form split at `&&`, `||`, `;` and `|`, without the instruction's own `--` options,
- * redirections, and the `NAME=value` assignments before a command. A word that still holds a `$`
- * is an expansion this reading cannot follow. */
-function commands(/** @type {string} */ line) {
-  let rest = line.replace(/^RUN\s+/i, "");
-  while (/^--\S+\s/.test(rest)) rest = rest.replace(/^--\S+\s+/, "");
-  if (rest.startsWith("[")) return [JSON.parse(rest)];
-  /** @type {string[][]} */
-  const found = [[]];
-  let word = "";
-  let quoted = false;
-  let redirect = false;
-  const end = () => {
-    if (word || quoted) {
-      if (redirect) redirect = false;
-      else found[found.length - 1].push(word);
-    }
-    word = "";
-    quoted = false;
-  };
-  for (let i = 0; i < rest.length; i++) {
-    const c = rest[i];
-    if (c === "'" || c === '"') {
-      const close = rest.indexOf(c, i + 1);
-      assert.ok(close > i, `unclosed quote in ${line}`);
-      word += rest.slice(i + 1, close);
-      quoted = true;
-      i = close;
-    } else if (c === "\\") word += rest[++i] ?? "";
-    else if (/\s/.test(c)) end();
-    else if ("&|;".includes(c)) {
-      end();
-      if (rest[i + 1] === c) i++;
-      found.push([]);
-    } else if ("<>".includes(c)) {
-      end();
-      if (rest[i + 1] === c || rest[i + 1] === "&") i++;
-      redirect = true;
-    } else word += c;
-  }
-  end();
-  return found.map((words) => words.slice(words.findIndex((w) => !/^\w+=/.test(w)))).filter((words) => words.length > 0 && !/^\w+=/.test(words[0]));
-}
+/** The one `RUN` of an image that builds with Cargo, without its `--mount` options, as every image
+ * writes it: touch the sources, build the release locked (one package in the examples' workspace,
+ * with the template's own cargo home), and copy the binary out. Any other shape is refused, so a
+ * second build, a build behind a variable or a flag in a comment cannot slip past. */
+const BUILD =
+  /^find \. -name target -prune -o -type f -exec touch \{\} \+ && (?:CARGO_HOME=[\w/.-]+ )?cargo build --release --locked(?: -p [\w-]+)? && (?:mkdir -p \/out && )?cp target\/release\/[\w{}-]+ \/[\w/]+$/;
 
-/** Why a Dockerfile's `cargo` commands are not all locked builds, or nothing when they are: each
- * `cargo` names its subcommand in plain words, and each `cargo build` has `--locked`. */
+/** Why a Dockerfile does not build the way {@link BUILD} reads, or nothing when it does. */
 function unlocked(/** @type {string} */ text) {
-  const cargo = instructions(text)
-    .filter((line) => /^RUN\s/i.test(line))
-    .flatMap(commands)
-    .filter((words) => words[0] === "cargo" || words[0].endsWith("/cargo"));
-  if (!cargo.some((words) => words[1] === "build")) return "runs no cargo build";
-  for (const words of cargo) {
-    if (words.length < 2 || words[1].includes("$")) return `names cargo's subcommand by an expansion: ${words.join(" ")}`;
-    if (words[1] === "build" && !words.includes("--locked")) return `builds without --locked: ${words.join(" ")}`;
-  }
-  return undefined;
+  const runs = instructions(text)
+    .filter((line) => /^RUN\s/i.test(line) && /\bcargo\b/.test(line))
+    .map((line) => line.replace(/^RUN\s+/i, "").replace(/--mount=\S+\s+/g, "").replace(/\s+/g, " ").trim());
+  if (runs.length !== 1) return `has ${runs.length} RUN instructions that use cargo, not 1`;
+  return BUILD.test(runs[0]) ? undefined : `builds otherwise than its one locked release build: ${runs[0]}`;
 }
 
-test("the locked-build reading follows the shell's words, not text that looks like them", () => {
-  const run = (/** @type {string} */ line) => unlocked(`FROM rust\nRUN ${line}\n`);
-  for (const ok of [
-    "cargo build --release --locked -p app",
-    "--mount=type=cache,target=/t find . -exec touch {} + && CARGO_HOME=/c cargo build --release '--locked' && cp a b",
-    "cargo fetch && cargo build --locked > build.log 2>&1",
-    '["cargo", "build", "--release", "--locked"]',
-    "cargo \\\n build --locked",
-  ])
-    assert.equal(run(ok), undefined, ok);
+test("an image's build is read in its one shape", () => {
+  const image = (/** @type {string} */ ...runs) => unlocked(["FROM rust", ...runs.map((run) => `RUN ${run}`)].join("\n"));
+  const touch = "find . -name target -prune -o -type f -exec touch {} +";
+  const copy = "mkdir -p /out && cp target/release/app /out/server";
+  assert.equal(image(`--mount=type=cache,target=/t ${touch} \\\n    && cargo build --release --locked -p app && ${copy}`), undefined);
   for (const bad of [
-    "cargo build --release",
-    "cargo build --locked && cargo build --release -p other",
-    "cargo build --locked; action=build; cargo \"$action\" --release",
-    'cargo build --release > "build --locked output.log"',
-    '["cargo", "build", "--release"]',
-    "echo cargo build --locked",
+    [`${touch} && cargo build --release -p app && ${copy}`],
+    [`${touch} && cargo build --release -p app && ${copy} # --locked`],
+    [`${touch} && cargo build --release --locked -p app && cargo build --release -p other && ${copy}`],
+    [`${touch} && env CARGO_HOME=/c cargo build --release -p app && ${copy}`],
+    [`${touch} && cargo build --release --locked -p app && ${copy}`, "cargo build --release"],
+    ["echo build"],
   ])
-    assert.notEqual(run(bad), undefined, bad);
+    assert.notEqual(image(...bad), undefined, bad.join(" / "));
 });
 
 // An image builds the versions the lock names, which `corten check` ran, and fails when the lock is
@@ -153,15 +103,16 @@ test("every image's cargo build is --locked", () => {
   for (const file of files) assert.equal(unlocked(source(file)), undefined, file);
 });
 
-// The timed build benchmark runs an image's commands from its recipe, its download first (`deps`).
-// A recipe whose build is locked downloads locked too, or the download could repair the lock
-// before the build would refuse it (#1584).
-test("a bench recipe that builds locked fetches locked", () => {
-  const locked = Object.entries(recipes).filter(([, recipe]) => /\bcargo build\b.*--locked\b/.test(recipe.build ?? ""));
-  assert.ok(locked.some(([name]) => dockerfileOf(name) === STAND_IN), "card-market's recipe builds locked");
-  for (const [name, recipe] of locked) {
-    if (/\bcargo fetch\b/.test(recipe.deps ?? "")) assert.match(recipe.deps ?? "", /\s--locked(\s|$)/, name);
-  }
+// The timed build benchmark runs card-market's image's commands from its recipe, its download
+// first (`deps`), which must be locked too, or it could repair the lock before the build would
+// refuse it (#1584). Imported here alone, so the other image tests do not read the bench's settings.
+test("card-market's bench recipe fetches and builds locked, as its image does", async () => {
+  const { recipes, dockerfileOf } = await import("../bench/fullstack/builds.mjs");
+  const named = Object.entries(recipes).filter(([name]) => dockerfileOf(name) === STAND_IN);
+  assert.equal(named.length, 1, "one recipe builds card-market's image");
+  const [[, recipe]] = named;
+  assert.match(recipe.deps ?? "", /^cargo fetch --locked /);
+  assert.equal(recipe.build, "cargo build --release --locked -p card-market");
 });
 
 test("card-market's run stage is the template's, so its smoke checks the template's image", () => {
