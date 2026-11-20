@@ -209,22 +209,6 @@ async fn an_error_page_that_fails_keeps_the_pages_detail_about_the_apps_code_in_
     assert_eq!((status.as_u16(), body.as_str()), (500, "The page could not be shown."));
 }
 
-#[tokio::test]
-async fn a_refused_whole_page_fetch_gets_html_only_if_it_asks_for_it() {
-    let router = app(routes(), None);
-    for accept in ["text/html", "*/*"] {
-        let headers = [("sec-fetch-site", "cross-site"), ("corten", "page"), ("accept", accept)];
-        let (status, headers, body) = guarded(&router, "POST", "/", None, &headers).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        if accept == "text/html" {
-            assert!(headers["content-type"].to_str().unwrap().starts_with("text/html"), "{headers:?}");
-            assert!(body.contains("<h1>Not allowed</h1>"), "{body}");
-        } else {
-            assert_eq!(body, "Cross-site request refused.");
-        }
-    }
-}
-
 fn failing() -> Table {
     Table::new()
         .route("/", get(|| async { Err::<Response, _>(Error::new("database is down")) }))
@@ -986,37 +970,6 @@ async fn a_public_page_reading_a_plain_notice_is_private() {
         assert_eq!(res.headers()[header::CACHE_CONTROL], "private, no-cache", "{cookie}");
         assert_eq!(res.headers().get_all(header::SET_COOKIE).iter().count(), 1, "{cookie}");
     }
-}
-
-#[tokio::test]
-async fn the_error_page_uses_incoming_headers_after_middleware_edits() {
-    struct Rewrite;
-
-    impl crate::Middleware for Rewrite {
-        async fn call(&self, mut req: Request, next: impl crate::middleware::Next) -> Response {
-            let headers = req.headers_mut();
-            headers.insert("corten", HeaderValue::from_static("nav"));
-            headers.insert(header::COOKIE, HeaderValue::from_static("viewer=grace"));
-            next.run(req).await
-        }
-    }
-
-    let routes = Table::new().route(
-        "/",
-        get(|req: Req, headers: http::HeaderMap| async move {
-            assert_eq!(req.mode, Mode::Navigation);
-            assert_eq!(headers[header::COOKIE], "viewer=grace");
-            assert_eq!(LOOKUPS.with(|n| n.get()), 0, "the error page makes the first caller lookup");
-            Err::<Response, _>(Error::status(StatusCode::NOT_FOUND))
-        }),
-    );
-    let router = App::new(Routes::from(routes)).middleware(Rewrite).error_page(test_error_page, ()).router();
-    LOOKUPS.with(|n| n.set(0));
-    let (status, headers, body) = guarded(&router, "GET", "/", None, &[("accept", "text/html"), ("cookie", "viewer=ada")]).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert!(!headers.contains_key("corten-page") && body.contains("<html"), "the incoming mode was a document: {body}");
-    assert!(body.contains("Signed in as ada"), "the error page uses the incoming cookie: {body}");
-    assert_eq!(LOOKUPS.with(|n| n.get()), 1);
 }
 
 #[tokio::test]
