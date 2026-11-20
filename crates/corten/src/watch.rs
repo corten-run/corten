@@ -310,7 +310,11 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
         if flowing {
             watch.stalled.store(watch.clock.now.load(Relaxed) + 1, Relaxed);
         }
-        // Before the IO can wake the watch, so its wake reaches the task.
+        // Before the IO can wake the watch, so its wake reaches the task. Another task may be
+        // waiting on the same IO (a route that shares a switched connection behind a lock): if this
+        // call goes through, that task is woken below to register again, rather than lose the
+        // wake it is owed. Two calls that both wait are woken only the last, as tokio's own are.
+        let previous = watch.writer.take();
         watch.writer.register(cx.waker());
         let done = if tokio::task::coop::has_budget_remaining() {
             // A call that has just waited on the task's waker is polled again, so the IO holds the
@@ -321,17 +325,21 @@ impl<I: AsyncWrite + Unpin> Watched<I> {
         } else {
             call(Pin::new(io), cx)
         };
-        match done {
-            Poll::Ready(_) => {
+        let done = match done {
+            Poll::Ready(done) => {
                 if clears {
                     watch.stalled.store(FLOWING, Relaxed);
                 }
                 done
             }
             // Expired before the registration: its wake may have been missed.
-            Poll::Pending if watch.stalled.load(Relaxed) == STALLED => Poll::Ready(Err(stalled())),
-            Poll::Pending => Poll::Pending,
+            Poll::Pending if watch.stalled.load(Relaxed) == STALLED => Err(stalled()),
+            Poll::Pending => return Poll::Pending,
+        };
+        if let Some(previous) = previous.filter(|previous| !previous.will_wake(cx.waker())) {
+            previous.wake();
         }
+        Poll::Ready(done)
     }
 }
 
@@ -501,6 +509,45 @@ mod tests {
             }
         };
         assert_eq!(written.unwrap_err().kind(), io::ErrorKind::TimedOut);
+    }
+
+    /// Two tasks writing to one connection, as a route that shares a switched connection behind a
+    /// lock might: a flush that goes through while the other task's write waits does not take the
+    /// wake that write is owed when the client makes room.
+    #[tokio::test]
+    async fn a_call_that_goes_through_does_not_take_the_wake_of_another_tasks_write() {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+        use tokio::io::AsyncReadExt;
+        let clock = Clock::start(None, Some(Duration::from_secs(30))).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = tokio::net::TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+        let (tcp, _) = listener.accept().await.unwrap();
+        // The client reads nothing yet, so the socket fills.
+        while tcp.try_write(&[0; 64 << 10]).is_ok() {}
+        let io = Arc::new(Mutex::new(Watched { io: tcp, watch: Some(clock.watch()), _open: None }));
+        let waiting = Arc::new(AtomicBool::new(false));
+        let write = tokio::spawn({
+            let (io, waiting) = (io.clone(), waiting.clone());
+            std::future::poll_fn(move |cx| {
+                let written = Pin::new(&mut *io.lock().unwrap()).poll_write(cx, b"x");
+                waiting.store(written.is_pending(), SeqCst);
+                written
+            })
+        });
+        let started = Instant::now();
+        while !waiting.load(SeqCst) {
+            assert!(started.elapsed() < Duration::from_secs(2), "the write waits on the full socket");
+            tokio::task::yield_now().await;
+        }
+        std::future::poll_fn(|cx| Pin::new(&mut *io.lock().unwrap()).poll_flush(cx)).await.unwrap();
+        // The client makes room: the waiting write is woken and goes through.
+        let reader = tokio::spawn(async move {
+            let mut buf = vec![0; 64 << 10];
+            while client.read(&mut buf).await.is_ok_and(|read| read > 0) {}
+        });
+        let written = tokio::time::timeout(Duration::from_secs(2), write).await;
+        assert_eq!(written.expect("the waiting write is woken").unwrap().unwrap(), 1);
+        reader.abort();
     }
 
     #[test]

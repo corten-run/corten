@@ -379,19 +379,23 @@ async fn an_answer_waits_for_its_client_only_as_long_as_the_app_allows() {
 
 /// A stand-in for a TLS stream, as tokio-rustls's acts: it takes up to [`Held::ROOM`] bytes of
 /// the answer and moves them to the socket as the client makes room, but its write stays pending
-/// until it has room for more, and its flush until everything it holds has gone. It notes how
-/// long its longest flush waited and whether one was waiting when it was dropped.
+/// until it has room for more, and its flush until everything it holds has gone. It notes, for
+/// its connection (by the client's port), how long each flush that waited took, and when it was
+/// dropped and whether a flush was waiting then.
 struct Held {
     tcp: tokio::net::TcpStream,
     held: Vec<u8>,
     flushing: Option<std::time::Instant>,
-    seen: std::sync::Arc<std::sync::Mutex<HeldFlushes>>,
+    port: u16,
+    seen: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<u16, HeldFlushes>>>,
 }
 
 #[derive(Default)]
 struct HeldFlushes {
-    longest: Duration,
-    dropped_waiting: bool,
+    /// How long each flush that waited took, in order.
+    waited: Vec<Duration>,
+    /// When the connection was dropped, and whether a flush was waiting then.
+    dropped: Option<(std::time::Instant, bool)>,
 }
 
 impl Held {
@@ -449,8 +453,7 @@ impl tokio::io::AsyncWrite for Held {
             return sent;
         }
         if let Some(since) = this.flushing.take() {
-            let mut seen = this.seen.lock().unwrap();
-            seen.longest = seen.longest.max(since.elapsed());
+            this.seen.lock().unwrap().entry(this.port).or_default().waited.push(since.elapsed());
         }
         std::task::ready!(sent)?;
         std::pin::Pin::new(&mut this.tcp).poll_flush(cx)
@@ -465,19 +468,16 @@ impl tokio::io::AsyncWrite for Held {
 
 impl Drop for Held {
     fn drop(&mut self) {
-        if let Some(since) = self.flushing {
-            let mut seen = self.seen.lock().unwrap();
-            seen.longest = seen.longest.max(since.elapsed());
-            seen.dropped_waiting = true;
-        }
+        let dropped = (std::time::Instant::now(), self.flushing.is_some());
+        self.seen.lock().unwrap().entry(self.port).or_default().dropped = Some(dropped);
     }
 }
 
 /// `App::send_timeout` over `corten::serve_wrapped`, with an IO that holds part of the answer as
 /// a TLS stream does ([`Held`]): a client reading steadily but slower than the server writes
-/// keeps its connection past several send timeouts while the last flush waits on it for longer
+/// keeps its connection past several send timeouts while its own last flush waits on it for longer
 /// than one, and gets the whole answer; a client that stops reading during that flush is still
-/// closed at about the send timeout (#1742).
+/// closed within twice the send timeout of the stop, while that flush waits (#1742).
 #[tokio::test]
 async fn a_flush_that_waits_while_its_bytes_go_out_is_held_only_to_the_send_timeout() {
     use std::time::Instant;
@@ -497,11 +497,12 @@ async fn a_flush_that_waits_while_its_bytes_go_out_is_held_only_to_the_send_time
     socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let listener = socket.listen(16).unwrap();
     let addr = listener.local_addr().unwrap();
-    let seen = std::sync::Arc::new(std::sync::Mutex::new(HeldFlushes::default()));
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     let step = {
         let seen = seen.clone();
-        move |tcp| {
-            let held = Held { tcp, held: Vec::new(), flushing: None, seen: seen.clone() };
+        move |tcp: tokio::net::TcpStream| {
+            let port = tcp.peer_addr().unwrap().port();
+            let held = Held { tcp, held: Vec::new(), flushing: None, port, seen: seen.clone() };
             std::future::ready(Ok::<_, std::convert::Infallible>((held, ())))
         }
     };
@@ -534,16 +535,19 @@ async fn a_flush_that_waits_while_its_bytes_go_out_is_held_only_to_the_send_time
     };
     let steady = async {
         let started = Instant::now();
-        let (_stream, got, ended) = read(usize::MAX).await;
+        let (stream, got, ended) = read(usize::MAX).await;
+        let port = stream.local_addr().unwrap().port();
         let took = started.elapsed();
         let head = got.windows(4).position(|w| w == b"\r\n\r\n").expect("an answer's head") + 4;
         let body = &got[head..];
         assert!(body.len() == BODY, "the steady reader got {} of {BODY} body bytes in {took:?}: {ended}", body.len());
         assert!(body.iter().enumerate().all(|(at, &b)| b == byte(at)), "the body arrived as it was sent");
         assert!(took > 4 * send, "over several send timeouts: {took:?}");
+        port
     };
     let stops = async {
         let (mut stream, got, ended) = read(STOP).await;
+        let stopped = Instant::now();
         assert!(ended.is_empty(), "the reader that stops read {} bytes before it stopped: {ended}", got.len());
         // It reads nothing for well past the timeout, then takes what is left: the server closed
         // it by then, before sending the rest.
@@ -552,16 +556,19 @@ async fn a_flush_that_waits_while_its_bytes_go_out_is_held_only_to_the_send_time
         let drained = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut rest)).await;
         assert!(drained.is_ok(), "a reader that stops is closed");
         assert!(got.len() + rest.len() < BODY, "before the rest is sent: {} bytes", got.len() + rest.len());
+        (stream.local_addr().unwrap().port(), stopped)
     };
-    tokio::join!(steady, stops);
-    let (longest, dropped_waiting) = {
-        let seen = seen.lock().unwrap();
-        (seen.longest, seen.dropped_waiting)
-    };
-    assert!(longest > send, "a flush waited longer than the send timeout: {longest:?}");
-    assert!(dropped_waiting, "the client that stopped was closed while a flush waited");
+    let (steady, (stops, stopped)) = tokio::join!(steady, stops);
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
+    let seen = std::mem::take(&mut *seen.lock().unwrap());
+    let last = seen[&steady].waited.last().copied().unwrap_or_default();
+    let (dropped, waiting) = seen[&stops].dropped.expect("the stopped reader's connection was dropped");
+    let closed = dropped.saturating_duration_since(stopped);
+    eprintln!("steady reader's flushes waited {:?}; stopped reader closed {closed:?} after the stop", seen[&steady].waited);
+    assert!(last > send, "the steady reader's own last flush waited longer than the send timeout: {last:?}");
+    assert!(waiting, "the client that stopped was closed while a flush waited");
+    assert!(closed <= 2 * send, "the client that stopped was closed within twice the send timeout: {closed:?}");
 }
 /// Shutdown gives connections the longer of the grace and the longest deadline: a request in
 /// progress past the grace, within its deadline, is answered in full, and an answer its client has
