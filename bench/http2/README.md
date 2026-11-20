@@ -183,7 +183,9 @@ return to idle and close at the idle deadline, not remain reusable after 500 ms 
 For credit recovery and reset, keep a quiet sibling open so the idle watch cannot hide
 a stale send timer. For socket backpressure, grant ample h2 credit and stop reading TCP
 with a quiet sibling open. Require the socket write watch to expire with no outstanding
-h2 buffers, and inspect the peer close after resuming reads.
+h2 buffers, and inspect the peer close after resuming reads. As its control, read the same
+answer slowly but steadily, a little at intervals well within the bound and for much longer
+than the bound in total: that client must stay open and receive the whole answer.
 Before shipping, also run the full three-engine TLS runtime smoke,
 reset flood and resource checks, shutdown with open streams, decoded-head bounds and explicit
 h2 Upgrade refusal/HTTP/1 WebSocket fallback, and measure the enabled path against HTTP/1.1.
@@ -215,20 +217,25 @@ buffer drop). The probe defaults to loopback port 18590; on another loopback por
 key when done.
 
 For all three watches together, run the direct h2 probe and the client in one Linux
-network namespace, here one container, with the same TLS setup:
+network namespace, here one `node:24-bookworm` container, with the same TLS setup. The
+probe runs inside the container, so it must be a Linux release build whose glibc is no
+newer than the image's (Debian bookworm, 2.36), for example built in `rust:1-bookworm`.
+The host build above serves only on such a host. Copy that build into `$scratch` beside
+the certificate and key, and wait for the probe to listen before starting the client:
 
 ```sh
+cp "$probe" "$scratch/http2-limit-probe"
 docker run --rm -d --name http2-combined --sysctl net.ipv4.tcp_rmem="4096 131072 131072" -v "$scratch:/probe" -v "$PWD/bench/http2:/bench:ro" node:24-bookworm sleep infinity
-docker exec -d -e TLS_CERT=/probe/cert.pem -e TLS_KEY=/probe/key.pem -e TIMEOUT_MS=100 -e SOCKET_SEND_BUFFER=16384 http2-combined /probe/http2-limit-probe combined
+docker exec -d -e TLS_CERT=/probe/cert.pem -e TLS_KEY=/probe/key.pem -e TIMEOUT_MS=100 -e SOCKET_SEND_BUFFER=16384 http2-combined sh -c '/probe/http2-limit-probe combined > /probe/probe.log 2>&1'
+docker exec http2-combined timeout 10 sh -c 'until grep -qs "listening on" /probe/probe.log; do sleep 0.1; done'
 docker exec http2-combined node /bench/limits.mjs combined
 docker rm -f http2-combined
 ```
 
-Copy the release probe and the scratch certificate and key into `$scratch` first. The
-smaller send buffer and the 128 KiB receive-buffer cap are fixture setup, not new send
-bounds; the client fails the socket case unless it sees the cap. Without it, Linux
-sometimes let the paused reader's receive buffer grow to several MiB, so the socket
-timeout came after the 500 ms observation point ([Combined Results](#combined-results)).
+The smaller send buffer and the 128 KiB receive-buffer cap are fixture setup, not new send
+bounds; the client fails both socket cases unless it sees the cap. Without it, Linux grew a
+sampled paused reader's receive buffer to 632,943 bytes (about 618 KiB), and in some runs
+no socket timeout came within the 500 ms window ([Combined Results](#combined-results)).
 Run client and server on the same loopback interface, without a forwarding proxy that
 can read on the client's behalf. The socket fixture grants enough stream and connection
 credit for its whole response. It queues one batch of short DATA chunks at a time and
@@ -244,7 +251,10 @@ and the same Callgrind procedure as [Transport Counts](#transport-counts), below
 comparison is within one transport, not against shipping HTTP/1.1. The hyper `off`
 mode still uses the same body and buffer wrapper types but records no progress or timestamps.
 For the combined comparison, run both loads with `h2-off` and `combined` on the same
-release binary, without `SOCKET_SEND_BUFFER` or the receive-buffer cap.
+release binary, without `SOCKET_SEND_BUFFER` or the receive-buffer cap. `node:24-bookworm`
+has no Valgrind: start the container without the `--sysctl` option and install Debian's
+package in it first (`apt-get update && apt-get install -y valgrind`, 3.19.0 on bookworm),
+or use another bookworm image with Valgrind and Node 24.
 
 ### Follow-up Results
 
@@ -379,20 +389,28 @@ Six earlier rounds at the same build ran without the receive-buffer cap
 before it selected the replaced idle control by name, with the same 17 cases in order).
 Rounds 1-4 passed every case. Rounds 5 and 6 failed only the socket case. In round 5 no
 socket timeout had been reported after 505.8 ms paused; the peer closed 31.1 ms after
-reads resumed with 771,120 bytes delivered. In round 6 there was no report, and no close
-within 500 ms of resuming, after 4,296,240 bytes. Of 18 single-case diagnostic runs
-without the cap, five failed the same way and one, the first after the probe started,
-failed earlier because `/quiet` had not started within 500 ms (not investigated). One
-socket sample of a failing run showed the paused client's receive buffer at 632,943 bytes,
-its queue still growing at 378 ms. With the cap, 20 diagnostic runs and the three
-rounds above all passed, expiring 154-192 ms after the request. The cap changes when the
-kernel stops accepting data, not the watch, its 100 ms bound or the 500 ms check.
+reads resumed with 771,120 bytes delivered. In round 6 no socket timeout came at all:
+none was reported before reads resumed, and the peer did not close within 500 ms after.
+Its 4,296,240 bytes, like round 5's, include reading after the resume, so neither count
+is a receive-buffer size.
+
+Eight single-case [diagnostic runs](results/combined-socket-diag-uncapped.jsonl) of the
+paused reader, also uncapped and on the same build, sampled the client's socket with `ss`
+every 50 ms from the start of the case, just before the request (the file keeps each
+sample's receive queue, receive buffer and bytes received). Seven passed, the socket
+watch expiring 176-277 ms after the request. In the failing run (run 5) the receive
+buffer was 632,943 bytes (about 618 KiB); the queue reached 622,006 bytes at 378 ms and
+stayed there through the last sample at 553 ms. The socket watch did fire there, on a
+pending `flush` with no outstanding h2 buffers after a 103 ms wait, 514 ms after the
+request: 14 ms past the cutoff. The 100 ms bound held; only the stall started late, once
+the larger buffer had filled. The cap changes when the kernel stops accepting data, not
+the watch, its 100 ms bound or the 500 ms check.
 
 Three [preflight rounds](results/combined-wire-preflight.jsonl) at `4ea726f8c` used
 one 255-byte DATA chunk per TLS flush in the TCP fixture. All three missed the socket
 timeout: no report after 499.7-500.5 ms paused and no peer close within 500 ms of
-resuming. The client read 1,702,635-2,050,200 DATA bytes before giving up. A TCP queue
-sample showed reads had stopped but the receive queue was still filling. Round 3 also
+resuming. The client read 1,702,635-2,050,200 DATA bytes before giving up, including up
+to 500 ms of reading after the resume, so these are not receive-buffer sizes. Round 3 also
 closed the stalled tail in 144.3 ms with only one observed sibling write, failing the
 repeated-progress check. The fixture now batches the short chunks to fill the TCP
 window sooner. Neither test's assertion nor its deadline was relaxed.
@@ -403,6 +421,37 @@ client in the same container rather than on the host
 cases; Hyper service counting failed only the queued final answer (closed at 106.3 ms);
 no detector failed the three send stalls, body polls/drop the two tails, and buffer
 tracking passed all eight. These are the dispositions in Follow-up Results.
+
+### Steady Reader Control
+
+The suite's last case is the socket watch's control. It uses the paused reader's fixture
+(the receive-buffer cap, `/quiet` open, h2 credit for the whole answer), but the client
+resumes reading every 20 ms and pauses again once it has read at least 16 KiB. It must
+receive the whole 8,355,840-byte answer with END_STREAM, the connection must stay open,
+and the probe must report no socket timeout. Measured on 2026-11-20 UTC with the same probe
+build and container setup, `TIMEOUT_MS=100` and the cap, seven rounds of the whole
+18-case suite, each against a fresh probe process
+([observations](results/combined-wire-control.jsonl)). Round 0 was the first in a fresh
+container, run to try the new case; the case did not change after it. Rounds 1-3 were the
+planned three, and 4-6 were added to see whether round 0's failure recurred.
+
+The 17 earlier cases passed in all seven rounds (119 of 119); the paused reader's socket
+watch expired 150-166 ms after the request. The steady reader passed in rounds 1-6: it
+received the whole answer in 6,878-6,988 ms at an average of 1.20-1.21 MB/s, with at most
+21.1-39.9 ms between reads. **In round 0 it failed.** The socket watch expired on a
+pending `flush` with no outstanding h2 buffers after a 100 ms wait, 352 ms after the
+request, although the client had read at least every 20.7 ms. The client had received
+526,320 bytes and saw the close 443.7 ms after its request.
+
+That is a false close: the socket watch disconnected a client that kept reading, each time
+well within the bound. One failure in seven rounds is not a measured rate. By the
+tokio-rustls 0.26.6 source (reasoned, not measured), `poll_flush` stays pending until every
+buffered TLS record is written, and this watch, like Corten's, does not clear a stall when
+a flush completes, so one flush can stay pending across several steady reads. A socket
+watch that closes a steadily reading client blocks shipping: the combined path does not
+qualify until this control passes repeatedly. Shipping HTTP/1.1 applies the same flush
+rule in `crates/corten/src/watch.rs`; whether it closes such a reader over TLS was not
+tested.
 
 ### Combined Cost
 
@@ -418,16 +467,22 @@ Measured server instructions with Callgrind 3.19.0, three alternating paired rou
 
 All three watches add 1,797 instructions per page (6.9%) and 936 per event (22.4%). The
 ranges do not overlap. This is the probe's cost on direct h2, not a production path or
-a comparison with HTTP/1.1. The `h2-off` median differs from Follow-up Cost's 25,940
-with a newer Corten, lockfile and client placement; the two sections are not compared.
+a comparison with HTTP/1.1. The `h2-off` median differs from Follow-up Cost's 25,940.
+This pull request changed the `h2-off` code path itself (`h2_probe` is now generic, with a
+`fn` wrapper on every `send_data`, and `h2_reply` gained the `answer` block), and Corten,
+the lockfile and the client placement are newer; the two sections are not compared. These
+counts were taken before the steady reader control was added, which changed only the client.
 
 These runs show items 1 and 2 of
 [#1686 HTTP/2 in corten::serve: show the idle and send bounds together with the socket watch on one opt-in path](https://github.com/corten-run/corten/issues/1686):
 one parser-free path held both bounds with the socket watch, under controls written for all
-three. Shipping Corten is unchanged. Before an opt-in `serve` path ships, item 3
-remains: shutdown with open streams, reset-flood and resource bounds, decoded-header
-limits, explicit h2 Upgrade refusal with HTTP/1 WebSocket fallback, three-engine TLS
-smoke, and the enabled path's cost against HTTP/1.1.
+three. The steady reader control also found one false close by the socket watch, so the
+watch must pass that control repeatedly before an opt-in path ships. Shipping Corten is
+unchanged. The remaining shipping checks are tracked in
+[#1739 HTTP/2 in corten::serve: an opt-in path that passes the combined bounds suite and the shipping checks](https://github.com/corten-run/corten/issues/1739):
+shutdown with open streams, reset-flood and resource bounds, decoded-header limits,
+explicit h2 Upgrade refusal with HTTP/1 WebSocket fallback, three-engine TLS smoke, and
+the enabled path's cost against HTTP/1.1.
 
 ## Reproduction
 

@@ -1708,9 +1708,17 @@ rules something out.
     `a8431b062`, three rounds at 100 ms in one Linux container with the paused reader's
     receive buffer capped at 128 KiB: all 17 combined cases passed, every stall closed in
     105.6 to 116.4 ms and the socket watch expired 154 to 165 ms after its request; uncapped,
-    two of six rounds missed only the socket case, its timeout coming after 500 ms; Callgrind
-    medians off to on of 26,142 to 27,939 instructions per page and 4,179 to 5,115 per event,
-    three rounds each, not against HTTP/1.1); value (fast and proven
+    two of six rounds missed only the socket case, one with no socket timeout reported
+    within the 500 ms window and one with no socket timeout at all, and a sampled uncapped
+    run's receive buffer grew to 632,943 bytes (about 618 KiB) with the watch firing after a
+    103 ms wait, 514 ms after the request; Callgrind medians off to on of 26,142 to 27,939
+    instructions per page and 4,179 to 5,115 per event, three rounds each, not against
+    HTTP/1.1); measured ([steady reader control](../bench/http2/README.md#steady-reader-control)
+    at `ec476a9f6`, seven rounds of the combined suite at 100 ms with the cap: the 17 earlier
+    cases passed every time, but a client reading at least 16 KiB every 20 ms received the
+    whole answer in six rounds and was closed in one by the socket watch on a `flush` pending
+    for 100 ms, a false close, so the combined evidence does not yet include a socket watch
+    that leaves steady readers open); value (fast and proven
     fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
     which is why the dispatch suite comes first and an opt-in protocol must not silently
     weaken a security bound even though the no-proxy live app already fails).
@@ -1723,9 +1731,13 @@ rules something out.
     signal covering queued data after the body ends reopens the send design. The
     [isolated controls](../bench/http2/README.md#follow-up-acceptance) qualify each detector
     with the other disabled. The probe's combined mode has shown both bounds with the socket
-    watch under the [combined controls](../bench/http2/README.md#combined-results); reopen
-    the proxy decision when an opt-in path in `serve` passes that suite and the shipping
-    checks below, or when a combined case fails on a rerun. An upstream header-block timeout
+    watch under the [combined controls](../bench/http2/README.md#combined-results), apart
+    from the steady reader control's one false close; reopen the proxy decision when an
+    opt-in path in `serve` passes that suite, including that control repeatedly, and the
+    shipping checks below
+    ([#1739 HTTP/2 in corten::serve: an opt-in path that passes the combined bounds suite and the shipping checks](https://github.com/corten-run/corten/issues/1739)).
+    A combined case failing on a rerun reopens the combined evidence in Stands on, not the
+    proxy decision. An upstream header-block timeout
     ([hyperium/h2 #928 Proposal: enable an HTTP/2 header-block read timeout](https://github.com/hyperium/h2/issues/928))
     reopens the header half only. The historical open-sibling case is a control, not a demand
     for a stronger header guarantee. Shipping still needs shutdown with open streams,
@@ -1774,7 +1786,8 @@ rules something out.
     the same probe rerun with bytes 1.12.1 and smallvec 1.16.5 in its lockfile, three wire
     and Callgrind rounds per mode; 2026-11-20, the probe's combined mode at `a8431b062`
     with getrandom 0.4.3 and r-efi 6.0.0 in its lockfile, three wire and Callgrind rounds,
-    and one round of each isolated mode with the same dispositions.
+    and one round of each isolated mode with the same dispositions; 2026-11-20, the steady
+    reader control at `ec476a9f6` on the same probe build, seven rounds with one false close.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
