@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/catalog-observer-probe.yml
       - scripts/catalog-observer-probe.mjs
+      - scripts/catalog-observer-probe.test.mjs
 
 permissions:
   contents: read
@@ -27,6 +28,7 @@ jobs:
         with:
           node-version-file: .node-version
       - run: npm ci --no-audit --no-fund
+      - run: node --test scripts/catalog-observer-probe.test.mjs
       - run: node bench/catalog/fixtures.mjs
       - name: Observe the first Corten catalog build and both source checks
         shell: bash

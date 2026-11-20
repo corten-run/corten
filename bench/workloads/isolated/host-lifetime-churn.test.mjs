@@ -148,6 +148,18 @@ test("nested capture rollback preserves accepted descriptors and rejects prematu
   assert.equal(proof.executables[0].ref, accepted.executableRef); assert.equal(proof.executables[0].sha256, f.digest(4242));
 });
 
+test("a catalog executable recheck rejects an inconsistent reference before stat", (t) => {
+  const f = pendingFixture(t), accepted = f.pending.capture(4242), operations = [];
+  const stats = fs.statSync.mock;
+  assert.ok(stats.calls.some(({ arguments: [path] }) => path === "/proc/4242/exe"));
+  stats.resetCalls();
+  assert.throws(() => f.pending.recheck(4242, { ...accepted, executableRef: "0".repeat(64) }, (operation, action) => {
+    operations.push(operation); return action();
+  }), { code: "ERR_ASSERTION" });
+  assert.equal(stats.callCount(), 0, "reference mismatch must not stat the executable again");
+  assert.deepEqual(operations, ["executable-recheck-reference"]);
+});
+
 test("a rejected-only executable can subsequently be accepted with a live descriptor", (t) => {
   const f = pendingFixture(t); f.observe(); assert.equal(f.held.size, 2);
   const accepted = f.pending.transaction(() => f.pending.capture(5000));
@@ -227,6 +239,7 @@ async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs
     t.mock.method(fs, "closeSync", (fd) => { held.delete(fd); return original.closeSync(fd); });
     f.held = held;
     f.proof = () => JSON.parse(original.readFileSync(join(directory, "executables.json")));
+    f.mutateImage = (which) => original.writeFileSync(which === "old" ? executable : nextExecutable, "modified executable");
     f.hasTerminal = () => fs.existsSync(join(directory, "terminal.json"));
   }
   // Only the synthetic Linux platform needs this Windows directory-fsync shim.
@@ -272,8 +285,9 @@ async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs
     ? { isSymbolicLink: () => false } : original.lstatSync(path, ...args));
   t.mock.method(fs, "statSync", (path, ...args) => {
     if (!/^\/proc\/\d+\/exe$/.test(String(path)) || nativePids.includes(Number(String(path).split("/")[2]))) return original.statSync(path, ...args);
-    return deferred ? original.statSync(executableFor(path), ...args)
-      : { dev: 1, ino: 1, size: 10, mtimeMs: 1, ctimeMs: 1 };
+    if (!deferred) return { dev: 1, ino: 1, size: 10, mtimeMs: 1, ctimeMs: 1 };
+    const info = original.statSync(executableFor(path), ...args);
+    return f.executableStat?.(path, info) ?? info;
   });
   t.mock.method(fs, "readlinkSync", (path, ...args) => {
     if (/^\/proc\/\d+\/exe$/.test(String(path))) {
@@ -389,6 +403,162 @@ test("a listed catalog PID with an unreadable executable still blocks after an e
   assert.equal(f.terminal.observerFailures.first.code, "ENOENT");
   assert.equal(f.held.size, 0);
 });
+
+for (const [field, operation] of [
+  ["dev", "executable-recheck-inode"], ["ino", "executable-recheck-inode"],
+  ["size", "executable-recheck-size-or-mtime"], ["mtimeNs", "executable-recheck-size-or-mtime"],
+  ["ctimeNs", "executable-recheck-ctime"],
+]) test(`catalog executable recheck distinguishes ${field} and still fails closed`, async (t) => {
+  let faults = 0, reads = 0;
+  const f = await fixture(t, [], false, () => faults++, 0, true), [acceptedFD] = f.held;
+  f.clock += 100; f.members.push(5000); f.nextPid = 5000;
+  f.executableStat = (path, info) => {
+    if (path !== "/proc/5000/exe") return;
+    // The first attempt loses the executable at its closing bookend. The
+    // second gets a real comparison failure at the same step.
+    if (++reads === 2) throw missing();
+    if (reads === 4) return { ...info, [field]: info[field] + 1n };
+  };
+  await f.tick();
+  assert.equal(reads, 4); assert.equal(faults, 1); assert.equal(f.samples().length, 2);
+  assert.deepEqual([...f.held], [acceptedFD]);
+  f.executableStat = undefined;
+  await f.tick(); // A later complete sample cannot clear the first fault.
+  assert.equal(f.samples().length, 3); assert.equal(f.held.size, 2);
+  const replay = await f.finish();
+  assert.equal(replay.status, "blocked"); assert.equal(replay.checks.accounting, true);
+  assert.equal(replay.checks.empty, true); assert.equal(replay.checks.observer, false);
+  const { first, last, count } = f.terminal.observerFailures;
+  assert.equal(count, 1); assert.deepEqual(first, last);
+  assert.equal(first.phase, "interval"); assert.equal(first.code, "ERR_ASSERTION");
+  assert.equal(first.samples, 2);
+  assert.deepEqual(first.catalogCensus, { entryGapMs: 100, censusMs: 1, attempts: 2 });
+  assert.deepEqual(replay.identities.map((p) => [p.pid, p.executableSha256]), [
+    [4242, createHash("sha256").update("original executable").digest("hex")],
+    [5000, createHash("sha256").update("next executable").digest("hex")],
+  ]);
+  assert.equal(f.proof().executables.length, 2); assert.equal(f.held.size, 0);
+  assert.equal(first.operation, operation);
+});
+
+for (const [code, attempts] of [["EACCES", 1], ["ENOENT", 6]]) test(`a catalog executable recheck ${code} read still blocks`, async (t) => {
+  let faults = 0, reads = 0;
+  const f = await fixture(t, [], false, () => faults++, 0, true);
+  f.clock += 995;
+  f.executableStat = (path) => { if (path === "/proc/4242/exe" && ++reads % 2 === 0) throw missing(code); };
+  await f.tick();
+  assert.equal(reads, attempts * 2); assert.equal(faults, 1); assert.equal(f.samples().length, 2);
+  assert.equal((await f.finish()).status, "blocked");
+  const { first, count } = f.terminal.observerFailures;
+  assert.equal(count, 1); assert.equal(first.operation, "executable-recheck"); assert.equal(first.code, code);
+  assert.deepEqual(first.catalogCensus, { entryGapMs: 995, censusMs: attempts - 1, attempts });
+});
+
+for (const outcome of ["stable", "gone", "start-changed", "different-image", "successor-mutated", "late", "missing-read"]) {
+  test(`catalog admitted executable successor: ${outcome}`, async (t) => {
+    let faults = 0, switched = false, openings = 0;
+    const f = await fixture(t, [], false, () => faults++, 0, true);
+    f.clock += 100;
+    f.override = (path, operation) => {
+      if (path === `/sys/fs/cgroup${f.scope}/cpu.stat`) {
+        openings++;
+        if (openings === 2) {
+          if (outcome === "different-image") f.nextExecutable = false;
+          if (outcome === "successor-mutated") f.mutateImage("new");
+          if (outcome === "late") f.clock += 1000;
+        }
+      }
+      if (path === "/proc/4242/stat" && openings === 2 && outcome === "start-changed") return stat(4242, "node", 9999);
+      if (path === "/proc/4242/exe" && operation === "open" && openings === 2 && outcome === "missing-read") throw missing();
+      if (path === "/proc/4242/cmdline" && !switched) {
+        switched = true; f.nextExecutable = true;
+        if (outcome === "gone") f.members = [];
+      }
+    };
+    await f.tick();
+    assert.equal(openings, 2); assert.equal(faults, outcome === "stable" ? 0 : 1);
+    assert.equal(f.samples().length, outcome === "stable" ? 3 : 2);
+    const replay = await f.finish();
+    assert.equal(replay.status, outcome === "stable" ? "verified" : "blocked");
+    assert.equal(f.proof().executables.length, outcome === "stable" ? 2 : 1);
+    assert.equal(f.terminal.empty, true);
+    if (outcome === "stable") {
+      const digests = replay.samples.flatMap((s) => s.processes.map((p) => {
+        assert.deepEqual(processIdentity(p.stat), { pid: 4242, startTicks: "42420", comm: "node" });
+        return p.executableSha256;
+      }));
+      assert.deepEqual(digests, ["original executable", "next executable"].map((s) => createHash("sha256").update(s).digest("hex")));
+    } else {
+      const { first, count } = f.terminal.observerFailures;
+      assert.equal(count, 1); assert.equal(first.catalogCensus.attempts, 2);
+      assert.equal(first.operation, outcome === "missing-read" ? "executable-capture"
+        : outcome === "late" ? "executable-recheck-inode" : "executable-recheck-successor");
+    }
+  });
+}
+
+for (const prior of ["mutated", "other-process"]) test(`catalog executable successor rejects ${prior} prior evidence`, async (t) => {
+  let faults = 0, openings = 0;
+  const f = await fixture(t, [], false, () => faults++, 0, true);
+  const pid = prior === "mutated" ? 4242 : 5000;
+  if (pid === 5000) f.members.push(pid); // Only the leader has an admitted record, for the same old inode.
+  f.override = (path) => {
+    if (path === `/sys/fs/cgroup${f.scope}/cpu.stat`) openings++;
+    if (path === `/proc/${pid}/cmdline`) {
+      if (prior === "mutated") f.mutateImage("old");
+      f.nextPid = pid;
+    }
+  };
+  await f.tick(); assert.equal(faults, 1); assert.equal(openings, 1); assert.equal(f.samples().length, 2);
+  if (prior === "mutated") {
+    await assert.rejects(f.finish); // No digest can seal the old accepted descriptor.
+    assert.equal(f.terminal.observerFailures.first.operation, "executable-recheck-pin");
+    assert.equal(f.terminal.observerError, "host-executable-proof-incomplete");
+  } else {
+    assert.equal((await f.finish()).status, "blocked");
+    assert.equal(f.terminal.observerFailures.first.operation, "executable-recheck-inode");
+    assert.equal(f.proof().executables.length, 1);
+  }
+});
+
+for (const scenario of ["admitted", "unseen", "successor-gone", "name-only", "unreadable", "pid-changed", "start-changed"]) {
+  test(`catalog simultaneous name and executable bookends: ${scenario}`, async (t) => {
+    const f = await fixture(t, [], false, undefined, 0, true);
+    const pid = scenario === "unseen" ? 5000 : 4242;
+    if (pid === 5000) f.members.push(pid);
+    let renamed = false, openings = 0, firstExeStats = 0;
+    f.override = (path) => {
+      if (path === `/sys/fs/cgroup${f.scope}/cpu.stat`) openings++;
+      if (path === `/proc/${pid}/cmdline` && !renamed) {
+        renamed = true;
+        if (scenario !== "name-only") f.nextPid = pid;
+        if (scenario === "successor-gone") f.members = [];
+      }
+      if (path === `/proc/${pid}/stat` && renamed) return stat(scenario === "pid-changed" ? pid + 1 : pid,
+        "new-name", scenario === "start-changed" ? 1234 : pid * 10);
+    };
+    f.executableStat = (path) => {
+      if (path === `/proc/${pid}/exe` && openings === 1 && ++firstExeStats === 2 && scenario === "unreadable") throw missing();
+    };
+    await f.tick();
+    const accepted = scenario === "name-only" || scenario === "admitted", hard = ["pid-changed", "start-changed"].includes(scenario);
+    const replay = await f.finish(); assert.equal(replay.status, accepted ? "verified" : "blocked");
+    assert.equal(firstExeStats, hard ? 1 : 2, "check PID/start before executable; check executable before retrying a rename");
+    assert.equal(openings, accepted || scenario === "successor-gone" ? 2 : 1);
+    if (accepted) {
+      const rows = replay.samples.flatMap((s) => s.processes);
+      assert.deepEqual(rows.map((p) => processIdentity(p.stat).comm), ["node", "new-name"]);
+      assert.deepEqual(rows.map((p) => p.executableSha256),
+        ["original executable", scenario === "name-only" ? "original executable" : "next executable"].map((s) => createHash("sha256").update(s).digest("hex")));
+    } else {
+      assert.equal(f.terminal.observerFailures.first.operation, {
+        unseen: "executable-recheck-inode", "successor-gone": "executable-recheck-successor",
+        unreadable: "executable-recheck-renamed", "pid-changed": "process-pid-changed", "start-changed": "process-start-changed",
+      }[scenario]);
+      assert.equal(f.proof().executables.length, 1);
+    }
+  });
+}
 
 test("a rejected pre-admission sample keeps prior accepted executable proof and releases only new captures", async (t) => {
   const f = await fixture(t, [], true), [acceptedFD] = f.held;
