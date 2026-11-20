@@ -109,6 +109,7 @@ test("account retry refuses a clock rollback at request start before a second co
   const a = await api(t, "reset"), w = worker(t, a, { mode: "retry-start-rollback" });
   await assert.rejects(w.run(account, 5000), (error) => error.controlUncertain === true);
   await assert.rejects(w.run.close(), (error) => error.controlUncertain === true);
+  assert.equal(w.state().retryStartRewound, true);
   assert.equal(w.state().requests, 1); assert.equal(w.state().consumes, 1);
   assert.equal(a.calls.length, 1);
   assert.equal(w.messages.some((message) => message.schema === "cloud-provider-account-failed/v2"), false);

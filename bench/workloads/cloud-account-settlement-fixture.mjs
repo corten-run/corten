@@ -19,7 +19,7 @@ const save = () => writeFileSync(output, JSON.stringify(observed)); save();
 const exit = process.exit.bind(process);
 if (["withhold-exit", "deadline-exit", "exit"].includes(mode)) process.exit = (code) => { if (code !== 0) exit(code); };
 if (mode === "exit2") process.exit = (code) => exit(code === 0 ? 2 : code);
-let lastReset, retryClockSet = false;
+let lastReset, retryClockSet = false, closedSamples = 0;
 function rewindNextSample() {
   const clock = Date.now, checkpoint = clock();
   Date.now = () => { Date.now = clock; return checkpoint - 100; };
@@ -30,13 +30,16 @@ serveProviderWorker({
     if (mode === "first-handoff-rollback" && !retryClockSet && observed.credentialExited) {
       retryClockSet = true; return rewindNextSample();
     }
-    if (mode === "retry-start-rollback" && !retryClockSet && lastReset?.request && lastReset.socket) {
+    // The first post-close sample proves the original request closed; the
+    // second is the retry checkpoint. Rewind only the sample after that.
+    if (mode === "retry-start-rollback" && !retryClockSet && lastReset?.request && lastReset.socket && ++closedSamples === 2) {
       retryClockSet = true;
       const clock = Date.now, checkpoint = clock() + 1;
       // Only the first sample inside the retry goes backwards. A later
       // check before connect must not erase that observation.
       Date.now = () => {
         Date.now = () => Math.max(clock(), checkpoint);
+        observed.retryStartRewound = true; save();
         return checkpoint - 1;
       };
       return checkpoint;
