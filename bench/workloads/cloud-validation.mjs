@@ -1,7 +1,9 @@
 // Fixed local native inspection. Never import validator code from evidence.
 import { validationFailure as failure, validationTask } from "./cloud-validation-snapshot.mjs";
 
-export const validationLimit = 60000, validationStopLimit = 1000;
+// One physical scan of a full catalog archive can take more than a minute.
+// Bound the whole read-only replay separately from cancellation and shutdown.
+export const validationLimit = 15 * 60_000, validationStopLimit = 1000;
 
 export function inspectCampaign(input, { inspect, interrupted = () => false, preserveLock = () => {} } = {}) {
   const started = performance.now();
@@ -34,7 +36,7 @@ export function inspectCampaign(input, { inspect, interrupted = () => false, pre
     Promise.resolve(task.result).then((report) => {
       settled = true;
       if (stopping) { finishStop(); return; }
-      if (cancelled()) { stop(); return; }
+      if (cancelled() || performance.now() - started >= validationLimit) { stop(); return; }
       cleanup(); resolve(report);
     }, () => {
       settled = true;

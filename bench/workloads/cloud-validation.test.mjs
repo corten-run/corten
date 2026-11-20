@@ -498,6 +498,30 @@ test("native replay uses captured observer writer bytes rather than a replaced c
   assert.equal(existsSync(marker), false);
 });
 
+test("a complete campaign replay can finish after three minutes of evidence checks", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let finish;
+  const report = { status: "verified" };
+  const result = inspectCampaign({}, { inspect: () => new Promise((resolve) => { finish = resolve; }) });
+  t.mock.timers.tick(180_001);
+  finish(report);
+  assert.equal(await result, report);
+});
+
+test("a settled result arriving after the deadline cannot win against an overdue timer", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let now = 0, retained = false, finish;
+  t.mock.method(performance, "now", () => now);
+  const result = inspectCampaign({}, {
+    inspect: () => new Promise((resolve) => { finish = resolve; }),
+    preserveLock: () => { retained = true; },
+  });
+  now = validationLimit + 1; // Wall time elapsed, but the event loop has not run the timer.
+  finish({ status: "verified" });
+  await assert.rejects(result, /validation unavailable/);
+  assert.equal(retained, false, "a settled worker does not leave an uncertain lock");
+});
+
 test("snapshot setup consumes the existing validation deadline rather than extending it", { timeout: 5000 }, async (t) => {
   const clock = t.mock.method(performance, "now");
   clock.mock.mockImplementationOnce(() => 0, 0);
