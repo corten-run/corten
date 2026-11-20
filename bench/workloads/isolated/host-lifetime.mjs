@@ -102,7 +102,7 @@ function snapshotOnce(path, executables, pending) {
       const recheckOperation = rechecked.pid !== identity.pid ? "process-pid-changed"
         : rechecked.startTicks !== identity.startTicks ? "process-start-changed" : "process-name-recheck";
       observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
-      if (pending) observing("executable-recheck", () => pending.recheck(identity.pid, executable));
+      if (pending) observing("executable-recheck", () => pending.recheck(identity.pid, executable, observing));
       else observing("executable-recheck", () => assert.equal(executableHash(at, executables), executable.executableSha256));
       processes.push({ stat, cgroup, ...executable, type }); // No environment or arbitrary arguments.
     }

@@ -18,6 +18,15 @@ arbitrary error properties are saved. Identity diagnostics distinguish PID, star
 and process-name changes while retaining the same full identity assertion. Repeated
 failures do not grow a diagnostic log.
 
+For pinned executables, a closing bookend distinguishes a capture reference
+failure (`executable-recheck-reference`) from a different device/inode
+(`executable-recheck-inode`), changed size or mtime on the same inode
+(`executable-recheck-size-or-mtime`), and ctime-only change
+(`executable-recheck-ctime`). The labels retain no values and do not identify
+the process, prove an exec or exit, or show that bytes were unchanged. All these
+assertions still fail immediately. A failed procfs stat retains the
+`executable-recheck` operation and the existing process-read rules.
+
 If a catalog interval fails while reading the command's process census, its
 failure entry includes `catalogCensus`. `entryGapMs` is the signed wall-clock
 time from the last admitted sample timestamp to entry into the interval callback.
@@ -219,7 +228,10 @@ separate accounting-only block for a coherent 1,909 ms gap.
 The catalog controls charge a first-sighting full executable read against the
 remaining window, prove that pinned reads preserve identity and exact digests
 through terminal cleanup, and keep a persistently unreadable listed member
-blocked even with an empty terminal.
+blocked even with an empty terminal. Closing-bookend controls distinguish the
+changed identity fields after a process-read retry. They verify rollback,
+unchanged proof for later accepted samples, and that neither a later sample
+nor terminal emptiness clears the fault.
 
 Pending-capture controls use real owned file descriptors with synthetic
 membership and Docker reads. They check descriptor bounds, earlier accepted
