@@ -65,6 +65,52 @@ test("every example has an image, and each is checked", () => {
   for (const file of files) assert.ok(existsSync(new URL(file, root)), `${file} is missing`);
 });
 
+/** The one `RUN` of an image's build stages, without its leading `--mount` options, as every image
+ * writes it: touch the sources, build the release locked (one package in the examples' workspace,
+ * with the template's own cargo home), and copy the binary out. Any other `RUN` before the run
+ * stage, or another shape, is refused, so a second build, a build behind a variable or a flag in
+ * a comment cannot slip past. */
+const BUILD =
+  /^find \. -name target -prune -o -type f -exec touch \{\} \+ && (?:CARGO_HOME=[\w/.-]+ )?cargo build --release --locked(?: -p [\w-]+)? && (?:mkdir -p \/out && )?cp target\/release\/[\w{}-]+ \/[\w/]+$/;
+
+/** Why a Dockerfile does not build the way {@link BUILD} reads, or nothing when it does. */
+function unlocked(/** @type {string} */ text) {
+  const lines = instructions(text);
+  const runs = lines
+    .slice(0, lines.findLastIndex((line) => /^FROM\s/i.test(line)))
+    .filter((line) => /^RUN\s/i.test(line))
+    .map((line) => line.replace(/^RUN\s+((--mount=\S+)\s+)*/i, "").replace(/\s+/g, " ").trim());
+  if (runs.length !== 1) return `has ${runs.length} RUN instructions before its run stage, not 1`;
+  return BUILD.test(runs[0]) ? undefined : `builds otherwise than its one locked release build: ${runs[0]}`;
+}
+
+test("an image's build is read in its one shape", () => {
+  const image = (/** @type {string} */ ...runs) =>
+    unlocked(["FROM rust AS build", ...runs.map((run) => `RUN ${run}`), "FROM debian", "RUN echo cargo"].join("\n"));
+  const touch = "find . -name target -prune -o -type f -exec touch {} +";
+  const copy = "mkdir -p /out && cp target/release/app /out/server";
+  assert.equal(image(`--mount=type=cache,target=/t ${touch} \\\n    && cargo build --release --locked -p app && ${copy}`), undefined);
+  for (const bad of [
+    [`${touch} && cargo build --release -p app && ${copy}`],
+    [`${touch} && cargo build --release -p app && ${copy} # --locked`],
+    [`${touch} && cargo build --release --mount=type=cache,target=/t --locked -p app && ${copy}`],
+    [`${touch} && env CARGO_HOME=/c cargo build --release --locked -p app && ${copy}`],
+    ['sh -c "$BUILD"', `${touch} && cargo build --release --locked -p app && ${copy}`],
+    [`${touch} && cargo build --release --locked -p app && ${copy}`, `${touch} && cargo build --release --locked -p app && ${copy}`],
+    [`${touch} && cargo build --release --locked -p app && cargo build --release -p other && ${copy}`],
+    [`${touch} && env CARGO_HOME=/c cargo build --release -p app && ${copy}`],
+    [`${touch} && cargo build --release --locked -p app && ${copy}`, "cargo build --release"],
+    ["echo build"],
+  ])
+    assert.notEqual(image(...bad), undefined, bad.join(" / "));
+});
+
+// An image builds the versions the lock names, which `corten check` ran, and fails when the lock is
+// missing or stale instead of repairing it inside the build (#1579, #1584).
+test("every image's cargo build is --locked", () => {
+  for (const file of files) assert.equal(unlocked(source(file)), undefined, file);
+});
+
 test("card-market's run stage is the template's, so its smoke checks the template's image", () => {
   const copy = (/** @type {string} */ line) => line.replace(/^COPY --from=build \S+/i, "COPY --from=build <server>");
   const read = (/** @type {string} */ file) => lastStage(readFileSync(new URL(file, root), "utf8")).map(copy);

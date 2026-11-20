@@ -97,8 +97,8 @@ export const recipes = {
     env: { ZSTD_SYS_USE_PKG_CONFIG: "1" },
     // The workspace's lockfile names every example's dependencies, so this downloads more than
     // card-market builds; the build compiles only what card-market needs.
-    deps: `cargo fetch ${hostTarget}`,
-    build: "cargo build --release -p card-market",
+    deps: `cargo fetch --locked ${hostTarget}`,
+    build: "cargo build --release --locked -p card-market",
     dev: "cargo build -p card-market",
     check: "cargo check -p card-market --all-targets",
     test: "cargo test -p card-market --no-run",

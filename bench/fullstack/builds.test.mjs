@@ -308,6 +308,18 @@ test("only exact production pruning after a build is packaging, never a recipe s
   assert.ok(Object.values(recipes).every((r) => ![...parts(r.deps), ...parts(r.build ?? "")].some((command) => /^npm prune(?:\s|$)/.test(command))), "pruning must not enter timed dependencies or rebuilds");
 });
 
+// card-market's image builds locked (scripts/images.test.mjs), so its recipe downloads and builds
+// locked too: an unlocked download could repair the lock before the build would refuse it (#1584).
+// The equality test below leaves the download out, since it is this benchmark's own step.
+test("card-market's recipe fetches and builds locked, as its image does", () => {
+  const named = Object.keys(recipes).filter((name) => dockerfileOf(name) === "examples/card-market/Dockerfile");
+  assert.equal(named.length, 1, "one recipe builds card-market's image");
+  const recipe = recipes[named[0]];
+  assert.equal(typeof recipe.deps, "string");
+  assert.match(String(recipe.deps), /^cargo fetch --locked /);
+  assert.equal(recipe.build, "cargo build --release --locked -p card-market");
+});
+
 test("each recipe runs its Dockerfile's commands, from its image, in its directory", () => {
   for (const [name, r] of Object.entries(recipes)) {
     const stages = stagesOf(name);

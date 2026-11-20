@@ -21,7 +21,7 @@ ARG CARD_MARKET_SMOKE=
 RUN --mount=type=cache,id=corten-examples.registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=corten-examples.target,target=/src/target,sharing=locked \
     find . -name target -prune -o -type f -exec touch {} + \
-    && cargo build --release -p card-market && mkdir -p /out && cp target/release/card-market /out/server
+    && cargo build --release --locked -p card-market && mkdir -p /out && cp target/release/card-market /out/server
 
 FROM debian:trixie-slim
 # jemalloc, preloaded, with its background thread and a 64 KiB thread cache, gives back memory a

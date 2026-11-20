@@ -6521,8 +6521,8 @@ rules something out.
 
 65. <a id="choice-locked-check"></a>**Checking and shipping use the lock; local builds update it.**
     `corten check` uses `--locked` on the full Cargo metadata it already reads, before formatting
-    or compiling, and on lint, build and tests. The starter Dockerfile and the examples' also
-    build with `--locked`, all but card-market's, which changes with its paired benchmark recipe
+    or compiling, and on lint, build and tests. The starter Dockerfile and every example's also
+    build with `--locked`, and so does card-market's timed benchmark recipe, its download too
     ([#1584 card-market's image and its paired bench recipe still build without --locked](https://github.com/corten-run/corten/issues/1584)). A missing or stale lock is an error, not a successful check that silently
     repairs the dependency graph and leaves CI's committed graph unchecked. Cargo finds the
     workspace-root lock even from a member, including a library. The CLI does not require a
@@ -6554,7 +6554,9 @@ rules something out.
     each with no step between, on the change after `dd4baf7a4`; 2026-11-17, Cargo 1.99.1 on a
     new member of a workspace whose lock held `itoa` 1.0.0: `cargo generate-lockfile` moved it to
     1.0.19, `cargo update --workspace` kept 1.0.0, and for a standalone app with no lock the two
-    wrote identical locks.
+    wrote identical locks; 2026-11-20, each image's one build read as a locked release build by
+    `scripts/images.test.mjs`, and card-market's timed recipe as a locked fetch and build by
+    `bench/fullstack/builds.test.mjs`, at `d8832da25`.
 
 66. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in document mode or an action
     that prefers it; a patch does not fill a layout read.** A `data-patch` write that answers with its
