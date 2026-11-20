@@ -3240,7 +3240,7 @@ rules something out.
     gaps 0 and 1 ms, the `default`, `on` and `off` listeners, not a build without the line): in every
     `default` and `on` burst the first event came within 20 ms of the headers and no later event was
     over 20 ms late, and in all four busy `off` bursts the second event was 39.9 to 44.1 ms late
-    against when the app made it.
+    (its gap after the first event at the client less that gap at the app).
 
 42. <a id="choice-locale-same-language"></a>**A negotiated locale is RFC 4647 Lookup, then a step of
     Corten's own: a range Lookup matches to nothing takes the first listed locale of its
