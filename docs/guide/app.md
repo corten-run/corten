@@ -824,7 +824,7 @@ open stream holds one, and a page with a few live elements open in a few tabs us
 `serve_wrapped` facing browsers directly is for an app without live streams; an app with them
 puts a proxy or CDN in front even though it could end TLS itself (why Corten does not speak
 HTTP/2 itself: [design Limit 14](../design.md#limit-http1)).
-This requirement has an operational cost: a second server and nine proxy-specific concerns
+This requirement has an operational cost: a second server and ten proxy-specific concerns
 in the deployment guide (the other three rows concern optional caching, health and HTTPS).
 The [HTTP/2 prototype](../../bench/http2/README.md) allowed eight live tabs but missed a send
 timeout and, by inspection, never returned its h2 watch to idle. Its partial-header probe kept
@@ -1483,7 +1483,9 @@ tag costs about 3 instructions a byte of a page (2.5 of a file), and a `304` sav
 and the body. A `GET` that does not explicitly accept a non-identity coding and sends no
 `If-None-Match` (a benchmark, `curl`) is not sent a tag: the hash would cost about a third of the
 render. A CDN that fetches pages without asking for a coding therefore gets no tag to revalidate
-them. With `compress`, only explicitly named codings Corten can send count; without it, any
+them, and a proxy in front of the app must pass the browser's `Accept-Encoding` on
+([deploying](deploy.md#response-compression)). With `compress`, only explicitly named codings
+Corten can send count; without it, any
 non-identity coding or `*` with a positive weight counts. In both builds, an otherwise taggable
 `HEAD` gets an `ETag` regardless of coding, so a shared cache does not freshen an untagged `GET`
 just because the lengths match ([RFC 9111 section 4.3.5](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.5)).
