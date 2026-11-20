@@ -2,9 +2,10 @@
 //! [`crate::App::send_timeout`]: how long a write may wait for the client to take more of an
 //! answer. Each connection has a [`Watch`]: busy from when hyper hands over a request's head until
 //! its answer's last bytes have gone to the socket, otherwise the time it went idle; and the time a
-//! write found the socket full, until one goes through. One thread per server ticks a coarse clock
-//! a few times a second and expires the connections idle or stalled past their timeout; the
-//! connection's next read or write then fails and hyper closes it. hyper's own header timer was
+//! write found the socket full, or the socket last reported room while it waited, until one goes
+//! through. One thread per server ticks a coarse clock a few times a second and expires the
+//! connections idle or stalled past their timeout; the connection's next read or write then fails
+//! and hyper closes it. hyper's own header timer was
 //! measured first: about 900 instructions a keep-alive request with a coarse timer of Corten's
 //! (1,400 with tokio's), since it sets up a sleep for every head and reads once more to start it.
 //! This costs about 300 (callgrind, keep-alive requests over TCP), which Corten's accept loop saved
@@ -18,10 +19,10 @@ use std::{
     io,
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, Ordering::Relaxed},
+        atomic::{AtomicU64, Ordering::Relaxed, Ordering::SeqCst},
         Arc, Mutex, Weak,
     },
-    task::{Context, Poll},
+    task::{Context, Poll, Wake, Waker},
     time::{Duration, Instant},
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -91,6 +92,7 @@ impl Clock {
             waker: AtomicWaker::new(),
             stalled: AtomicU64::new(FLOWING),
             writer: AtomicWaker::new(),
+            wakes: AtomicU64::new(0),
             clock: self.clone(),
         });
         self.watches.lock().expect("never poisoned").push(Arc::downgrade(&watch));
@@ -119,7 +121,7 @@ impl Clock {
                 && now.saturating_sub(stalled - 1) >= self.send
                 && watch.stalled.compare_exchange(stalled, STALLED, Relaxed, Relaxed).is_ok()
             {
-                watch.writer.wake();
+                watch.wake_writer();
             }
             true
         });
@@ -134,10 +136,15 @@ pub(crate) struct Watch {
     /// mark the connection idle. Only the connection's task writes it.
     heads: AtomicU64,
     waker: AtomicWaker,
-    /// [`FLOWING`], [`STALLED`], or one past the time a write found the socket full.
+    /// [`FLOWING`], [`STALLED`], or one past the time a write found the socket full, or the IO
+    /// last reported room while it waited.
     stalled: AtomicU64,
-    /// The task whose write is waiting.
+    /// The task whose write, flush or close is waiting; empty while none is, and for a moment
+    /// while a call takes it to register its own ([`Watched::send`]).
     writer: AtomicWaker,
+    /// How many wakes ([`Watch::wake_writer`]) found `writer` empty, so a call that had taken it
+    /// can tell one came meanwhile.
+    wakes: AtomicU64,
     clock: Arc<Clock>,
 }
 
@@ -175,33 +182,43 @@ impl Watch {
         self.since.load(Relaxed) == EXPIRED
     }
 
-    /// A write's, a flush's or a close's outcome, for [`crate::App::send_timeout`]: one that waits
-    /// starts the stall, or fails once the clock has expired it, so a call is failed only while
-    /// the IO still has no room. A write that went through (or failed) clears it; a flush or a
-    /// close does not (`clears`), since a plain socket's flush is done at once whether anything
-    /// went or not, and a route on a switched connection could otherwise restart the clock with
-    /// flushes while its writes wait.
-    fn sent<T>(&self, written: Poll<io::Result<T>>, clears: bool, cx: &Context<'_>) -> Poll<io::Result<T>> {
-        if self.clock.send == NEVER {
-            return written;
+    /// Wakes the waiting call's task: the IO has room, or the clock has expired the wait. A wake
+    /// that finds `writer` empty is counted only then, after its take, so a call that had taken it
+    /// (and read the count before) sees the count change; and it wakes again, for a call that has
+    /// put its waker back since. Counted before the take, a wake could be counted before the call
+    /// read the count and still find `writer` empty, and be lost.
+    fn wake_writer(&self) {
+        match self.writer.take() {
+            Some(waker) => waker.wake(),
+            None => self.missed(),
         }
-        if written.is_ready() {
-            if clears && self.stalled.load(Relaxed) != FLOWING {
-                self.stalled.store(FLOWING, Relaxed);
-            }
-            return written;
+    }
+
+    /// The rest of a wake that found `writer` empty ([`Watch::wake_writer`]).
+    fn missed(&self) {
+        self.wakes.fetch_add(1, SeqCst);
+        self.writer.wake();
+    }
+}
+
+/// The IO's waker while a write, a flush or a close waits ([`Watched::send`]). The IO wakes it
+/// when it has room again, so the wait starts over from then, and wakes the connection's task.
+/// A TLS stream (tokio-rustls) moves the records it holds to the socket as the client makes room,
+/// but its write stays pending until it has room for more and its flush until all have gone: a
+/// client reading steadily but slower than the server writes would otherwise be cut at the send
+/// timeout while bytes are still going to it (#1742).
+impl Wake for Watch {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        let stalled = self.stalled.load(Relaxed);
+        // Not one that has gone through meanwhile, nor one the clock has expired.
+        if stalled != FLOWING && stalled != STALLED {
+            let _ = self.stalled.compare_exchange(stalled, self.clock.now.load(Relaxed) + 1, Relaxed, Relaxed);
         }
-        match self.stalled.load(Relaxed) {
-            STALLED => return Poll::Ready(Err(stalled())),
-            FLOWING => self.stalled.store(self.clock.now.load(Relaxed) + 1, Relaxed),
-            _ => {}
-        }
-        self.writer.register(cx.waker());
-        // Expired between the first look and the registration: its wake may have been missed.
-        if self.stalled.load(Relaxed) == STALLED {
-            return Poll::Ready(Err(stalled()));
-        }
-        Poll::Pending
+        self.wake_writer();
     }
 }
 
@@ -269,21 +286,123 @@ impl<I: AsyncRead + Unpin> AsyncRead for Watched<I> {
     }
 }
 
+impl<I: AsyncWrite + Unpin> Watched<I> {
+    /// A write, a flush or a close (`call`), for [`crate::App::send_timeout`]: one that waits
+    /// starts the stall, or fails once the clock has expired it, so a call is failed only while
+    /// the IO still has no room. While it waits the IO is polled with the watch's waker, so each
+    /// time the IO reports room the wait starts over ([`Watch`]'s `Wake`): a TLS stream's call
+    /// can stay pending while its bytes go out. A write that went through (or failed) clears it; a
+    /// flush or a close does not (`clears`), since a plain socket's flush is done at once whether
+    /// anything went or not, and a route on a switched connection could otherwise restart the
+    /// clock with flushes while its writes wait. Nor does a wake tokio's cooperative budget makes:
+    /// with the budget spent the IO is polled with the task's waker, or a client that floods a
+    /// route's reads could keep a write that never goes through waiting.
+    #[inline]
+    fn send<T>(
+        &mut self,
+        cx: &mut Context<'_>,
+        clears: bool,
+        mut call: impl FnMut(Pin<&mut I>, &mut Context<'_>) -> Poll<io::Result<T>>,
+    ) -> Poll<io::Result<T>> {
+        let Watched { io, watch, .. } = self;
+        let watch = match watch {
+            Some(watch) if watch.clock.send != NEVER => watch,
+            _ => return call(Pin::new(io), cx),
+        };
+        let flowing = watch.stalled.load(Relaxed) == FLOWING;
+        if flowing {
+            let done = call(Pin::new(io), cx);
+            if done.is_ready() {
+                return done;
+            }
+        }
+        Self::wait(io, watch, cx, clears, flowing, call)
+    }
+
+    /// [`Watched::send`] once its call waits, or found the IO waiting: out of line, so the path of a
+    /// call that goes through at once stays small (it reads `clock.send` and `stalled` first, then
+    /// calls the IO). A wait costs more than it did: the first poll that waits polls the IO again,
+    /// and each one clones the watch's `Arc` and registers the task.
+    #[cold]
+    fn wait<T>(
+        io: &mut I,
+        watch: &Arc<Watch>,
+        cx: &mut Context<'_>,
+        clears: bool,
+        flowing: bool,
+        mut call: impl FnMut(Pin<&mut I>, &mut Context<'_>) -> Poll<io::Result<T>>,
+    ) -> Poll<io::Result<T>> {
+        if flowing {
+            watch.stalled.store(watch.clock.now.load(Relaxed) + 1, Relaxed);
+        }
+        // Before the IO can wake the watch, so its wake reaches the task. A call already waiting
+        // (this task's own, or another's on a switched connection a route shares) is put back below
+        // if this one goes through, so the IO's next report of room still reaches it; another
+        // task's is also woken, in case the IO now holds this call's waker instead, and this
+        // task's is woken if a wake came while `writer` was empty. A finished call that displaced
+        // none leaves no registration, so two tasks that flush when woken do not wake each other
+        // in turn. Two calls that both wait are woken only the last, as tokio's own are.
+        at(0);
+        let wakes = watch.wakes.load(SeqCst);
+        let previous = watch.writer.take();
+        at(1);
+        watch.writer.register(cx.waker());
+        let done = if tokio::task::coop::has_budget_remaining() {
+            // A call that has just waited on the task's waker is polled again, so the IO holds the
+            // watch's instead.
+            call(Pin::new(io), &mut Context::from_waker(&Waker::from(watch.clone())))
+        } else if flowing {
+            Poll::Pending
+        } else {
+            call(Pin::new(io), cx)
+        };
+        let done = match done {
+            Poll::Ready(done) => {
+                if clears {
+                    watch.stalled.store(FLOWING, Relaxed);
+                }
+                done
+            }
+            // Expired before the registration: its wake may have been missed.
+            Poll::Pending if watch.stalled.load(Relaxed) == STALLED => Err(stalled()),
+            Poll::Pending => return Poll::Pending,
+        };
+        match previous {
+            Some(previous) => {
+                watch.writer.register(&previous);
+                if !previous.will_wake(cx.waker()) || watch.wakes.load(SeqCst) != wakes {
+                    previous.wake();
+                }
+            }
+            None => drop(watch.writer.take()),
+        }
+        at(2);
+        Poll::Ready(done)
+    }
+}
+
+/// Runs a test's step at `point` in [`Watched::wait`], so a test can put a wake between its steps:
+/// before it reads the count (0), between its take and its registration (1), and once it is done (2).
+#[cfg(test)]
+fn at(point: u8) {
+    tests::STEP.with(|step| {
+        if let Some(step) = step.borrow_mut().as_mut() {
+            step(point);
+        }
+    });
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn at(_: u8) {}
+
 impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        let Some(watch) = &this.watch else {
-            return Pin::new(&mut this.io).poll_write(cx, buf);
-        };
-        watch.sent(Pin::new(&mut this.io).poll_write(cx, buf), true, cx)
+        self.get_mut().send(cx, true, |io, cx| io.poll_write(cx, buf))
     }
 
     fn poll_write_vectored(self: Pin<&mut Self>, cx: &mut Context<'_>, bufs: &[io::IoSlice<'_>]) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        let Some(watch) = &this.watch else {
-            return Pin::new(&mut this.io).poll_write_vectored(cx, bufs);
-        };
-        watch.sent(Pin::new(&mut this.io).poll_write_vectored(cx, bufs), true, cx)
+        self.get_mut().send(cx, true, |io, cx| io.poll_write_vectored(cx, bufs))
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -292,24 +411,17 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
-        let Some(watch) = &this.watch else {
-            return Pin::new(&mut this.io).poll_flush(cx);
-        };
-        let flushed = Pin::new(&mut this.io).poll_flush(cx);
-        if let Poll::Ready(Ok(())) = flushed {
+        let flushed = this.send(cx, false, |io, cx| io.poll_flush(cx));
+        if let (Poll::Ready(Ok(())), Some(watch)) = (&flushed, &this.watch) {
             watch.flushed();
         }
-        watch.sent(flushed, false, cx)
+        flushed
     }
 
     /// Watched too: over TLS, closing writes a last record, which waits on the client as any
     /// write does.
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        let Some(watch) = &this.watch else {
-            return Pin::new(&mut this.io).poll_shutdown(cx);
-        };
-        watch.sent(Pin::new(&mut this.io).poll_shutdown(cx), false, cx)
+        self.get_mut().send(cx, false, |io, cx| io.poll_shutdown(cx))
     }
 }
 
@@ -378,6 +490,14 @@ impl Drop for Answered {
 mod tests {
     use super::*;
 
+    /// A test's step, given the point in [`Watched::wait`] it runs at.
+    type Step = Box<dyn FnMut(u8)>;
+
+    thread_local! {
+        /// The step [`at`] runs on this thread, if any.
+        pub(super) static STEP: std::cell::RefCell<Option<Step>> = const { std::cell::RefCell::new(None) };
+    }
+
     /// An IO no write or close gets through: a client that reads nothing.
     struct Stuck;
 
@@ -417,6 +537,213 @@ mod tests {
             let error = done.await.unwrap_or_else(|_| panic!("a {step} that waits is ended")).unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{step}");
         }
+    }
+
+    /// A wake from tokio's cooperative budget is not the IO making room: a write to a client that
+    /// reads nothing still fails at the send timeout when its task spends the budget before each
+    /// try, as a route reading a flood of requests from that client would.
+    #[tokio::test]
+    async fn a_write_that_waits_with_the_budget_spent_still_fails_after_the_send_timeout() {
+        let clock = Clock::start(None, Some(Duration::from_millis(40))).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let _client = tokio::net::TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+        let (tcp, _) = listener.accept().await.unwrap();
+        // The client reads nothing, so the socket fills.
+        while tcp.try_write(&[0; 64 << 10]).is_ok() {}
+        let mut io = Watched { io: tcp, watch: Some(clock.watch()), _open: None };
+        let (spend, mut budget) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let started = Instant::now();
+        let written = loop {
+            assert!(started.elapsed() < Duration::from_secs(2), "a write that waits is ended");
+            for _ in 0..200 {
+                spend.send(()).unwrap();
+            }
+            let written = std::future::poll_fn(|cx| {
+                // Each message received takes from the budget, until none is left.
+                while let Poll::Ready(Some(())) = budget.poll_recv(cx) {}
+                Poll::Ready(Pin::new(&mut io).poll_write(cx, b"x"))
+            })
+            .await;
+            match written {
+                Poll::Ready(written) => break written,
+                Poll::Pending => tokio::task::yield_now().await,
+            }
+        };
+        assert_eq!(written.unwrap_err().kind(), io::ErrorKind::TimedOut);
+    }
+
+    /// Two tasks writing to one connection, as a route that shares a switched connection behind a
+    /// lock might: a flush that goes through while the other task's write waits does not take the
+    /// wake that write is owed when the client makes room.
+    #[tokio::test]
+    async fn a_call_that_goes_through_does_not_take_the_wake_of_another_tasks_write() {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+        use tokio::io::AsyncReadExt;
+        let clock = Clock::start(None, Some(Duration::from_secs(30))).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = tokio::net::TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+        let (tcp, _) = listener.accept().await.unwrap();
+        // The client reads nothing yet, so the socket fills.
+        while tcp.try_write(&[0; 64 << 10]).is_ok() {}
+        let io = Arc::new(Mutex::new(Watched { io: tcp, watch: Some(clock.watch()), _open: None }));
+        let waiting = Arc::new(AtomicBool::new(false));
+        let write = tokio::spawn({
+            let (io, waiting) = (io.clone(), waiting.clone());
+            std::future::poll_fn(move |cx| {
+                let written = Pin::new(&mut *io.lock().unwrap()).poll_write(cx, b"x");
+                waiting.store(written.is_pending(), SeqCst);
+                written
+            })
+        });
+        let started = Instant::now();
+        while !waiting.load(SeqCst) {
+            assert!(started.elapsed() < Duration::from_secs(2), "the write waits on the full socket");
+            tokio::task::yield_now().await;
+        }
+        std::future::poll_fn(|cx| Pin::new(&mut *io.lock().unwrap()).poll_flush(cx)).await.unwrap();
+        // The client makes room: the waiting write is woken and goes through.
+        let reader = tokio::spawn(async move {
+            let mut buf = vec![0; 64 << 10];
+            while client.read(&mut buf).await.is_ok_and(|read| read > 0) {}
+        });
+        let written = tokio::time::timeout(Duration::from_secs(2), write).await;
+        assert_eq!(written.expect("the waiting write is woken").unwrap().unwrap(), 1);
+        reader.abort();
+    }
+
+    /// An IO whose writes wait and whose flushes go through at once.
+    struct Flushes;
+
+    impl AsyncWrite for Flushes {
+        fn poll_write(self: Pin<&mut Self>, _: &mut Context<'_>, _: &[u8]) -> Poll<io::Result<usize>> {
+            Poll::Pending
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// Counts its wakes.
+    struct Counted(std::sync::atomic::AtomicUsize);
+
+    impl std::task::Wake for Counted {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Two tasks on one connection that each flush when woken do not wake each other in turn:
+    /// a call that goes through wakes the task whose call waits, once, and takes its own
+    /// registration back, so that task's flush going through wakes nobody.
+    #[tokio::test]
+    async fn a_call_that_goes_through_wakes_the_waiting_task_once_and_is_not_woken_back() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let clock = Clock::start(None, Some(Duration::from_secs(30))).unwrap();
+        let mut io = Watched { io: Flushes, watch: Some(clock.watch()), _open: None };
+        let (one, two) = (Arc::new(Counted(0.into())), Arc::new(Counted(0.into())));
+        let (one_waker, two_waker) = (Waker::from(one.clone()), Waker::from(two.clone()));
+        // The first task's write waits, so the connection is stalled.
+        assert!(Pin::new(&mut io).poll_write(&mut Context::from_waker(&one_waker), b"x").is_pending());
+        // The second task's flush goes through: the first is woken to register again.
+        assert!(Pin::new(&mut io).poll_flush(&mut Context::from_waker(&two_waker)).is_ready());
+        assert_eq!((one.0.load(SeqCst), two.0.load(SeqCst)), (1, 0));
+        // Woken, the first task flushes too, and that wakes nobody.
+        assert!(Pin::new(&mut io).poll_flush(&mut Context::from_waker(&one_waker)).is_ready());
+        assert_eq!((one.0.load(SeqCst), two.0.load(SeqCst)), (1, 0));
+    }
+
+    /// One task whose write waits and whose flush then goes through, with the clock expiring the
+    /// write while the flush has taken `writer` (`steps` puts the expiry's wake into the flush):
+    /// how many times the task is woken.
+    fn the_expirys_wake_reaches_a_waiting_write(steps: impl FnMut(&Watch, u8) + 'static) -> usize {
+        use std::sync::atomic::Ordering::SeqCst;
+        let clock = Clock::start(None, Some(Duration::from_secs(30))).unwrap();
+        let watch = clock.watch();
+        let mut io = Watched { io: Flushes, watch: Some(watch.clone()), _open: None };
+        let task = Arc::new(Counted(0.into()));
+        let waker = Waker::from(task.clone());
+        let mut cx = Context::from_waker(&waker);
+        assert!(Pin::new(&mut io).poll_write(&mut cx, b"x").is_pending());
+        let mut steps = steps;
+        STEP.with(|step| *step.borrow_mut() = Some(Box::new(move |point| steps(&watch, point))));
+        let flushed = Pin::new(&mut io).poll_flush(&mut cx);
+        STEP.with(|step| *step.borrow_mut() = None);
+        assert!(flushed.is_ready());
+        task.0.load(SeqCst)
+    }
+
+    /// A wake that finds a call waiting wakes it and is not counted: only a wake that found `writer`
+    /// empty is, after its take, so a call that took `writer` before it cannot read it already counted.
+    #[tokio::test]
+    async fn a_wake_that_finds_a_waiting_call_wakes_it_and_is_not_counted() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let clock = Clock::start(None, Some(Duration::from_secs(30))).unwrap();
+        let watch = clock.watch();
+        let mut io = Watched { io: Flushes, watch: Some(watch.clone()), _open: None };
+        let task = Arc::new(Counted(0.into()));
+        let waker = Waker::from(task.clone());
+        assert!(Pin::new(&mut io).poll_write(&mut Context::from_waker(&waker), b"x").is_pending());
+        watch.wake_writer();
+        assert_eq!((task.0.load(SeqCst), watch.wakes.load(SeqCst)), (1, 0));
+    }
+
+    #[tokio::test]
+    async fn an_expiry_whose_wake_comes_while_a_call_has_taken_writer_still_wakes_the_task() {
+        let woken = the_expirys_wake_reaches_a_waiting_write(|watch, point| match point {
+            0 => watch.stalled.store(STALLED, Relaxed),
+            1 => watch.wake_writer(),
+            _ => {}
+        });
+        assert_eq!(woken, 1);
+    }
+
+    /// The expiry's wake takes `writer` while the call has it, finds it empty, and is counted and
+    /// wakes again only once the call is done: the second wake reaches the task.
+    #[tokio::test]
+    async fn an_expiry_whose_wake_finds_writer_empty_and_ends_after_the_call_still_wakes_the_task() {
+        let woken = the_expirys_wake_reaches_a_waiting_write(|watch, point| match point {
+            0 => watch.stalled.store(STALLED, Relaxed),
+            // `wake_writer`'s steps, split around the end of the call.
+            1 => assert!(watch.writer.take().is_none()),
+            2 => watch.missed(),
+            _ => {}
+        });
+        assert_eq!(woken, 1);
+    }
+
+    /// One task whose write waits and whose flush then goes through, as a route that writes and
+    /// flushes one stream from joined futures might: the flush leaves the write's registration
+    /// in place, so the client making room wakes the task.
+    #[tokio::test]
+    async fn a_call_that_goes_through_leaves_its_own_tasks_waiting_write_to_be_woken() {
+        use std::sync::atomic::Ordering::SeqCst;
+        use tokio::io::AsyncReadExt;
+        let clock = Clock::start(None, Some(Duration::from_secs(30))).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = tokio::net::TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+        let (tcp, _) = listener.accept().await.unwrap();
+        // The client reads nothing yet, so the socket fills.
+        while tcp.try_write(&[0; 64 << 10]).is_ok() {}
+        let mut io = Watched { io: tcp, watch: Some(clock.watch()), _open: None };
+        let task = Arc::new(Counted(0.into()));
+        let waker = Waker::from(task.clone());
+        let mut cx = Context::from_waker(&waker);
+        assert!(Pin::new(&mut io).poll_write(&mut cx, b"x").is_pending());
+        assert!(Pin::new(&mut io).poll_flush(&mut cx).is_ready());
+        // The client makes room.
+        let reader = tokio::spawn(async move {
+            let mut buf = vec![0; 64 << 10];
+            while client.read(&mut buf).await.is_ok_and(|read| read > 0) {}
+        });
+        let started = Instant::now();
+        while task.0.load(SeqCst) == 0 {
+            assert!(started.elapsed() < Duration::from_secs(2), "the waiting write is woken");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        reader.abort();
     }
 
     #[test]

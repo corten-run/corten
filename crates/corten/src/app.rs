@@ -1161,12 +1161,22 @@ impl<M: Middleware> App<M> {
     /// closes the connection: 60 seconds unless set, as nginx's `send_timeout`. A client that
     /// sends requests and stops reading their answers cannot hold its connection, and a live
     /// stream, a feed or a WebSocket to one ends (the route sees its write fail). It counts only
-    /// while a write waits: a download whose reader keeps freeing room and a stream quiet between
-    /// events are not cut, though a reader that takes a little each minute can be, since the
-    /// system reports room only once a good part of the buffer is free. A TLS connection's last
-    /// record, written as it closes, is held to it too. `None` removes it, for a server that only
-    /// a proxy which reads answers as they come reaches; with [`App::header_timeout`] also `None`,
-    /// the clock and its per-request work are gone.
+    /// while a write waits, from when the connection last reported room: a stream quiet between
+    /// events is not cut, and a download is cut only when its reader goes that long without the
+    /// system reporting room, which it does once a good part of the buffer is free, so a reader
+    /// that takes a little each minute can be. Over TLS a write or a flush stays pending while the
+    /// TLS library sends what it holds, and its wait starts over at each report of room too. What
+    /// decides how far apart the reports come is how the client takes bytes from its socket: one
+    /// that takes them in bursts (a TLS client reading whole records, `curl --limit-rate`) leaves
+    /// longer gaps than one that takes the same rate evenly, over TLS and plain HTTP alike, so a
+    /// short timeout can cut a slow reader that reads in bursts: with 16 KiB buffers and a
+    /// 2-second timeout, a tokio-rustls client taking 2 KiB every 125 ms was cut within 9 seconds,
+    /// and the same rate taken evenly from the socket was kept past 30, over TLS and plain HTTP.
+    /// While the connection's task has spent tokio's cooperative budget (a route reading a flood
+    /// of input), a report of room does not start the wait over. A TLS connection's last record,
+    /// written as it closes, is held to it too. `None` removes it, for a server that only a proxy
+    /// which reads answers as they come reaches; with [`App::header_timeout`] also `None`, the
+    /// clock and its per-request work are gone.
     pub fn send_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
         self.connections.send_timeout = timeout.into();
         self
@@ -1689,7 +1699,11 @@ where
 /// `move |tcp| { let acceptor = acceptor.clone(); async move { acceptor.accept(tcp).await } }`.
 /// The step's error is not read: the connection closes. The IO's flush must complete only once
 /// the bytes it holds have been written (tokio-rustls's does): the header timeout counts from the
-/// first flush that completes after an answer's body has been taken.
+/// first flush that completes after an answer's body has been taken. And while a write, a flush
+/// or a close waits, the IO must wake the waker it was given only when it can take more (as
+/// tokio's TCP stream and tokio-rustls do): [`App::send_timeout`] takes each such wake as the
+/// client making room and starts its wait over, so an IO that also woke it to read, or woke
+/// itself, could keep a client that has stopped reading open.
 pub async fn serve_wrapped<L, W, F, Io, E, M>(listeners: Vec<L>, wrap: W, app: App<M>) -> std::io::Result<()>
 where
     L: Listener,
