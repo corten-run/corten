@@ -1200,12 +1200,12 @@ mod tests {
         // stage, so each future is held within the size of one request, above and below, of
         // what its build profile measured.
         //
-        // Measured on x86_64-unknown-linux-gnu, the same with all features, default features and
-        // none: 3,008 bytes for the stage future in a debug build and 2,280 in a release one
-        // (rustc 1.100.0), 760 for the handler's in both, with a request of 240. The stage future
-        // holds the request's page snapshot (`page::RequestPage`: its mode and credentials, and in
-        // a debug build the form-action check, a `Uri` and four header values), read once before
-        // dispatch.
+        // Measured on x86_64-unknown-linux-gnu with rustc 1.100.0: 3,008 bytes for the stage
+        // future in a debug build (all features, default features and none) and 2,280 in a
+        // release one (all features and default features), 760 for the handler's in each, with
+        // a request of 240. The stage future holds the request's page snapshot
+        // (`page::RequestPage`: its mode and credentials, and in a debug build room for an
+        // `Option<FormCheck>`, which this GET leaves empty), read once before dispatch.
         //
         // The sizes are the compiler's layout, so the test can fail in three ways:
         // - a future grew by a request or more after a change to the stages or the handler:
