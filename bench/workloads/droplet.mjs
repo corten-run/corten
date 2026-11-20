@@ -16,7 +16,7 @@ import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, v
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, setupEvidence, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript,
   verifyFailedNativeCustody, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
-import { controlCheckpoint } from "./cloud-transport.mjs";
+import { controlCheckpoint, pinnedHostOptions } from "./cloud-transport.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export function command(binary, args, timeout = 60000, allowFail = false) {
@@ -170,7 +170,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       state.control.ledger.push({ request: intent, localTerminal: false }); save();
       registration = controlRegistration(intent);
     }
-    const result = await execute(binary, [...(pinnedKey ? ["-o", "StrictHostKeyChecking=yes"] : []), ...sshOptions, ...args], timeout, allowFail, undefined, undefined, registration);
+    const hostOptions = pinnedKey ? [...pinnedHostOptions(join(local, "known_hosts")), ...sshLimits] : sshOptions;
+    const result = await execute(binary, [...hostOptions, ...args], timeout, allowFail, undefined, undefined, registration);
     if (intent) { const row = state.control.ledger.at(-1); row.localTerminal = true; row.code = result.status; save(); }
     if (pinnedKey) assert.equal(fileHash(join(local, "known_hosts")), pinnedKey, "native host keys changed during transport");
     return result;
@@ -404,11 +405,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       try {
         durable(path, key);
         fileIdentity = lstatSync(path, { bigint: true });
-        const pinned = ["-o", "StrictHostKeyChecking=yes", "-o", "GlobalKnownHostsFile=none", "-o", "UpdateHostKeys=no",
-          "-o", `UserKnownHostsFile=${process.platform === "win32" ? path.replaceAll("\\", "/") : path}`];
         // Do not install a guardian or turn a missing acknowledgement into a receipt.
         startedAtMs = Date.now();
-        raw = (await execute("ssh", [...pinned, ...sshLimits, `root@${state.ip}`, script], 30000)).stdout;
+        raw = (await execute("ssh", [...pinnedHostOptions(path), ...sshLimits, `root@${state.ip}`, script], 30000)).stdout;
         assert.equal(digest(regular(path, 1024 * 1024)), knownHostsSha256, "private host-key snapshot changed");
       } finally {
         if (!preserveOperationLock) {

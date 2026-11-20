@@ -1,12 +1,26 @@
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { controlEnvironment, quote, shellTransport } from "./cloud-transport.mjs";
+import { controlEnvironment, pinnedHostOptions, quote, shellTransport } from "./cloud-transport.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { harness } from "./cloud-fixtures.mjs";
+
+test("pinned SSH and guardian SFTP pass only the approved host-key view to OpenSSH", () => {
+  const path = resolve("synthetic key file"), id = "a".repeat(32), host = "root@192.0.2.10", calls = [];
+  const run = shellTransport({ repo: resolve("."), spawn(binary, args) {
+    calls.push(binary); assert.deepEqual(args.slice(0, 2), ["-F", "none"]);
+    assert.deepEqual(args.filter(v => /^(StrictHostKeyChecking|GlobalKnownHostsFile|UpdateHostKeys|UserKnownHostsFile)=/i.test(v)),
+      ["StrictHostKeyChecking=yes", "GlobalKnownHostsFile=none", "UpdateHostKeys=no", `UserKnownHostsFile="${path.replaceAll("\\", "/")}"`]);
+    return { status: 0, stderr: `CORTEN_CONTROL ${id} ${"b".repeat(64)}\nCORTEN_RESULT ${id} 0\n` };
+  } });
+  const control = { request: { invocation: { id } }, command: "fixed guardian", inputPrefix: "" };
+  for (const [bin, pair] of [["ssh", [host, ":"]], ["scp", [host + ":/bench/results.tgz", resolve("synthetic archive")]]])
+    run(bin, [...pinnedHostOptions(path), ...pair], 60000, false, undefined, control);
+  assert.deepEqual(calls, ["ssh", "sftp"]);
+});
 
 test("a custom command launcher cannot fall back to native streaming SSH", () => {
   const run = shellTransport({ repo: resolve("."), spawn() { assert.fail("unexpected command"); } });
