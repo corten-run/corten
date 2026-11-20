@@ -6,13 +6,16 @@ WORKDIR /src
 # the app's script sends it requests, and gives the release build what the copy recorded
 # (https://github.com/corten-run/corten/blob/main/docs/guide/deploy.md#a-profile-in-the-image).
 # The copy starts with what a build has, so not beside a database or another service. Without the
-# argument this RUN does nothing and the build below is the ordinary one. The command is the
-# release `corten new` wrote this file with, installed outside cargo's home, which other apps'
-# builds share.
+# argument this RUN does nothing and the build below is the ordinary one. The `corten` command is
+# the release of the number `corten new` wrote this file with, installed into this layer: cargo's
+# home here is a cache, which is no part of the layer and which other apps' builds write. A
+# command without the option would build with no profile and no word, so that is refused here.
 ARG PROFILE_FROM=
 RUN --mount=type=cache,target=/var/cache/cargo \
     if [ -n "$PROFILE_FROM" ]; then rustup component add llvm-tools \
-    && CARGO_HOME=/var/cache/cargo cargo install corten-cli --version {{version}} --locked --root /usr/local; fi
+    && CARGO_HOME=/var/cache/cargo cargo install corten-cli --version {{version}} --locked --root /usr/local \
+    && if ! corten help build | grep -q -e --profile-from; then \
+    echo "corten-cli {{version}} has no --profile-from, so PROFILE_FROM would build without a profile: install the corten this app builds against in the line above" >&2; exit 1; fi; fi
 COPY . .
 # zstd (corten's `compress`) is linked to this build image's libzstd instead of compiled from its
 # C sources, the slowest crate in a clean build, so the server needs libzstd.so.1 where it runs:
@@ -29,7 +32,7 @@ RUN --mount=type=cache,target=/var/cache/cargo \
     --mount=type=cache,id={{name}}-target,target=/src/target,sharing=locked \
     find . -name target -prune -o -type f -exec touch {} + \
     && if [ -z "$PROFILE_FROM" ]; then CARGO_HOME=/var/cache/cargo cargo build --release --locked; \
-    elif [ -f "$PROFILE_FROM" ]; then CARGO_HOME=/var/cache/cargo corten build --locked --profile-from sh "$PROFILE_FROM"; \
+    elif [ -f "$PROFILE_FROM" ]; then CARGO_HOME=/var/cache/cargo corten build --locked --profile-from sh -- "$PROFILE_FROM"; \
     else echo "PROFILE_FROM=$PROFILE_FROM: the app has no such file" >&2; exit 1; fi \
     && cp target/release/{{name}} /server
 

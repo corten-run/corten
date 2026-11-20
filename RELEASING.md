@@ -197,6 +197,12 @@ substitute for checking the public outputs.
    release with `cargo update -p corten-run --precise X.Y.Z` and confirm `Cargo.lock` has the
    expected crates.io versions of the Corten packages it uses. Run `corten check` with
    [supported TypeScript](docs/guide/getting-started.md#install-and-create-an-app) and no skips.
+   Then build the app's image with a profile, with the script from
+   [A profile-guided build](docs/guide/deploy.md#a-profile-guided-build) saved in the app as
+   `train.sh`: `docker build --build-arg PROFILE_FROM=train.sh .`. This is the one place the
+   Dockerfile's install line runs as written, since it names the release just published: the
+   build fails if that release's `corten build` has no `--profile-from`, and its output names
+   the four steps of a profiled build when it has.
 4. Record the candidate SHA, run, version and verification results in the release-preparation
    pull request. Treat a missing or failing output as incomplete and use the recovery below.
 

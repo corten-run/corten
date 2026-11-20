@@ -120,18 +120,26 @@ test("the template caches cargo's whole home, with its lock, and builds with it"
 
 // A profile is asked for (docs/design.md#choice-profile-image): with no PROFILE_FROM the image's
 // build is the ordinary one, and neither the command nor llvm-tools is fetched. The command goes
-// outside cargo's home, since every app's build on the machine mounts that home and cargo runs a
-// program in its bin/ ahead of one on PATH. Both builds hold the lock.
+// into the layer, under /usr/local: cargo's home here is a cache mount, which is no part of a
+// layer, so a build that reused the layer on a builder without the cache would have no command.
+// A command without the option (0.2.0's `corten build` took no arguments and built without a
+// profile) is refused before the app is built. Both builds hold the lock.
 test("the template's build takes a profile only when PROFILE_FROM names the app's script", () => {
   const lines = instructions(source(TEMPLATE));
-  assert.ok(lines.includes("ARG PROFILE_FROM="), "PROFILE_FROM is empty unless the build is given it");
+  const run = (/** @type {string} */ line) => /^RUN\s/i.test(line);
+  // Declared in the build stage and before both of its RUNs: declared after one, that RUN reads
+  // it as empty, and the build is the ordinary one without a word.
+  const argument = lines.indexOf("ARG PROFILE_FROM=");
+  assert.ok(argument >= 0, "PROFILE_FROM is empty unless the build is given it");
+  assert.equal(lines.findIndex((line) => /^FROM\s/i.test(line)), 0);
+  assert.ok(argument < lines.findIndex(run), "PROFILE_FROM is declared before the RUNs that read it");
   // A joined continuation keeps the next line's indentation.
-  const [install, build] = lines.filter((line) => /^RUN\s/i.test(line)).map((line) => line.replace(/\s+/g, " "));
-  assert.match(install, /if \[ -n "\$PROFILE_FROM" \]; then rustup component add llvm-tools && .*cargo install corten-cli --version \{\{version\}\} --locked --root \/usr\/local; fi$/);
-  const first = lines.findIndex((line) => /^RUN\s/i.test(line));
-  assert.ok(first < lines.indexOf("COPY . ."), "the command is installed before the sources, so a changed source does not install it again");
+  const [install, build] = lines.filter(run).map((line) => line.replace(/\s+/g, " "));
+  assert.match(install, /if \[ -n "\$PROFILE_FROM" \]; then rustup component add llvm-tools && .*cargo install corten-cli --version \{\{version\}\} --locked --root \/usr\/local && /);
+  assert.match(install, /&& if ! corten help build \| grep -q -e --profile-from; then echo .* >&2; exit 1; fi; fi$/, "a command without the option fails the build");
+  assert.ok(lines.findIndex(run) < lines.indexOf("COPY . ."), "the command is installed before the sources, so a changed source does not install it again");
   assert.match(build, /if \[ -z "\$PROFILE_FROM" \]; then CARGO_HOME=\S+ cargo build --release --locked;/);
-  assert.match(build, /elif \[ -f "\$PROFILE_FROM" \]; then CARGO_HOME=\S+ corten build --locked --profile-from sh "\$PROFILE_FROM";/);
+  assert.match(build, /elif \[ -f "\$PROFILE_FROM" \]; then CARGO_HOME=\S+ corten build --locked --profile-from sh -- "\$PROFILE_FROM";/);
   assert.match(build, /else echo .* >&2; exit 1; fi && cp target\/release\/\{\{name\}\} \/server$/, "a script that is not there fails before a build");
 });
 

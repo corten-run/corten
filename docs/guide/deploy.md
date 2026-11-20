@@ -449,8 +449,8 @@ and, with the machine quieter, about two and a half. The binaries are 6,154,312 
 5,869,496, the merged profile 2.8 MB, and the target directory about 250 MB after the ordinary
 build against about 580 MB with the instrumented copy beside the release.
 
-The app `corten new` writes, built and run as its image builds and runs it, measured at
-`9fae8ff55`: built in `rust:1-trixie` (rustc 1.100.0) with the starter's release profile and
+The app `corten new` writes, measured at `9fae8ff55` from binaries its Dockerfile's commands
+built in its build image, run on its run image and not from an image `docker build` made: built in `rust:1-trixie` (rustc 1.100.0) with the starter's release profile and
 `compress`, by the Dockerfile's `cargo build --release --locked` and by
 `corten build --locked --profile-from sh train.sh` in its place, with the script above (500
 requests for the home page); run on `debian:trixie-slim` with jemalloc preloaded and the
@@ -591,15 +591,23 @@ The image's build takes a profile of the app at work when it is given the app's 
 docker build --build-arg PROFILE_FROM=train.sh -t shop .
 ```
 
-`PROFILE_FROM` names a file in the app. The build then runs
-`corten build --locked --profile-from sh train.sh` where it would run
+`PROFILE_FROM` is the script's path from the app's directory. The build then runs
+`corten build --locked --profile-from sh -- train.sh` where it would run
 `cargo build --release --locked`: a copy of the app runs in the build stage while the script
 sends it requests, and the image gets the binary built with what the copy recorded
 ([A profile-guided build](#a-profile-guided-build) has the script, the steps and what stops
-them). Without the argument the build is the ordinary one and fetches nothing more. A name that
-is no file in the app fails the build before it builds the app. An app whose Dockerfile was
-written before it had the argument takes the `ARG` and the two build-stage `RUN`s from a new
-app's.
+them). Without the argument the build runs what it ran before and fetches nothing more. A path
+that is no file fails the build before it builds the app. That is all the build checks of it: a
+path that leads out of the app runs the file it finds, as the build's user, which is root, like
+the app's own build scripts.
+
+An app whose Dockerfile was written before it had the argument takes the `ARG` and the two
+build-stage `RUN`s from a new app's. Without them Docker says the argument was not used and
+builds the ordinary image.
+
+The two builds are two lines of one `RUN`. A Cargo argument the app's release needs
+(`--features`, `--bin`) goes on both, before `--profile-from` on the second: on one alone,
+the image with a profile is built with other features than the image without.
 
 What the argument asks of the app and its build, which the ordinary build does not:
 
@@ -607,25 +615,38 @@ What the argument asks of the app and its build, which the ordinary build does n
   an app that connects to a database or another service as it starts exits, or does not listen,
   and the build fails saying which. Such an app's image keeps the ordinary build:
   `corten build --profile-from` builds a profiled binary where those services are, and putting
-  that binary in an image is not something this Dockerfile does.
+  that binary in an image is not something this Dockerfile does. A secret given as a build
+  argument stays in the image's history, so an app that needs one to start is not given it
+  that way.
 - The script's tools are in the build stage. `rust:1-trixie` has `curl`; anything else the
-  script runs is installed there first.
+  script runs is installed there first. A script checked out with Windows line endings fails
+  in `sh`.
 - The `corten` command and the toolchain's `llvm-tools` are fetched in the build, in a `RUN` of
-  their own before the sources are copied in, so a builder that keeps its layers fetches them
-  once and not after each change to the app. The command is the release `corten new` wrote the
-  Dockerfile with (`cargo install corten-cli --version <that release> --locked`), built from
-  source; when the app moves to another Corten release, change the version on that line with
-  it. It is installed under `/usr/local`, not in cargo's home, which every app's build on the
-  builder mounts.
+  their own before the sources are copied in, so a builder that has kept that layer does not
+  fetch them again after a change to the app. The command is the release with the number
+  `corten new` wrote the Dockerfile with
+  (`cargo install corten-cli --version <that release> --locked --root /usr/local`), built from
+  source into the layer: cargo's home in this build is a cache, which is no part of a layer.
+  When the app moves to another Corten release, change the version on that line with it. A
+  release without the option is refused there, before the app is built. 0.2.0 is one: its
+  `corten build` took no arguments and would build the ordinary binary without a word. A
+  `corten` built from a commit between releases writes the number of the release before it,
+  so its Dockerfile is refused this way until that line names a release that has the option.
+- `llvm-tools` is added to the build image's toolchain. An app with a `rust-toolchain.toml`
+  builds with its own, and `corten build` refuses a toolchain without the component, naming
+  it; that file's `components` is where rustup takes it from. Not tried in an image build.
 - The build takes longer, and the app's target cache holds the instrumented copy beside the
   release. The starter's own image, one build each on a desktop with a lint run beside it:
   69 seconds the ordinary way, and 188 with `PROFILE_FROM` in the same target cache
   afterwards, of which 45 fetched `llvm-tools` and built the `corten` command and 138 were the
-  build step (63 the ordinary way), the script's 500 requests included.
+  build step (63 the ordinary way), the script's 500 requests included. A build with
+  `PROFILE_FROM` after a change to one file took 121 seconds, with the first `RUN` reused: a
+  new profile compiles every crate again, where the ordinary build compiles the app's own.
 
-The gain on the starter's own app, built and run this way, is with the other measurements in
+The gain measured on the starter's own app is with the other measurements in
 [A profile-guided build](#a-profile-guided-build): 32% fewer cycles a request on its home page,
-and 22% fewer where each answer is compressed.
+and 22% fewer where each answer is compressed, from binaries these two commands built in this
+build image, run on the run stage's image.
 
 ## Monitoring
 
