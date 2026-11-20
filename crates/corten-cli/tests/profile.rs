@@ -286,10 +286,12 @@ fn a_package_with_two_binaries_is_refused_and_neither_is_run() {
     assert!(!fixture.release().exists(), "a release was built");
 }
 
-/// The Cargo arguments given before `--profile-from` reach both builds: the program compiles
-/// only with a feature its defaults leave off, and `--bin` names it beside a second binary.
+/// The Cargo arguments given before `--profile-from` reach both builds, as written and in their
+/// order: the program compiles only with a feature its defaults leave off, `--bin` names it beside
+/// a second binary, and a `cargo` first on the `PATH` records what each build was given.
 #[test]
 fn cargo_arguments_before_the_command_reach_both_builds() {
+    use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new("args");
     let manifest = "[package]\nname = \"profiled\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\ndefault = [\"plain\"]\nplain = []\ngiven = []\n\n[workspace]\n";
     std::fs::write(fixture.0.join("Cargo.toml"), manifest).unwrap();
@@ -300,11 +302,38 @@ fn cargo_arguments_before_the_command_reach_both_builds() {
     std::fs::create_dir_all(fixture.0.join("src/bin")).unwrap();
     std::fs::write(fixture.0.join("src/bin/worker.rs"), "fn main() {}\n").unwrap();
 
-    let mut args = vec!["--no-default-features", "--features=given", "--bin", "profiled"];
+    // A lock, which `--locked` needs.
+    let locked = Command::new(env!("CARGO")).arg("generate-lockfile").current_dir(&fixture.0).output().unwrap();
+    assert!(locked.status.success(), "{}", text(&locked));
+    let bin = fixture.0.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let cargo = bin.join("cargo");
+    let log = fixture.0.join("cargo-args.txt");
+    let script = format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n", log.display(), env!("CARGO"));
+    std::fs::write(&cargo, script).unwrap();
+    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let given = "--no-default-features --features=given -p profiled --locked --bin profiled";
+    let builds = || -> Vec<String> {
+        let logged = std::fs::read_to_string(&log).unwrap_or_default();
+        let builds = logged.lines().filter(|line| line.starts_with("build ")).map(str::to_string).collect();
+        let _ = std::fs::remove_file(&log);
+        builds
+    };
+
+    let mut args: Vec<&str> = given.split(' ').collect();
     args.extend(NOTES_ITS_PORT);
-    let output = fixture.build(&args).output().unwrap();
+    let output = fixture.build(&args).env("PATH", &path).output().unwrap();
     let said = text(&output);
     assert!(output.status.success(), "{said}");
+    let profiled = builds();
+    assert_eq!(profiled.len(), 2, "{profiled:?}");
+    for build in &profiled {
+        assert!(
+            build.starts_with(&format!("build --release {given} ")) || *build == format!("build --release {given}"),
+            "{build}"
+        );
+    }
     assert!(said.contains("of the 1 profile file(s) the app wrote"), "{said}");
     let built_from = std::fs::read_to_string(fixture.release().with_extension("d")).unwrap();
     assert!(built_from.contains("app.profdata"), "the release was not built from the profile: {built_from}");
@@ -313,9 +342,10 @@ fn cargo_arguments_before_the_command_reach_both_builds() {
 
     // And the build without a profile.
     std::fs::remove_file(fixture.release()).unwrap();
-    let plain = fixture.build(&args[..4]).output().unwrap();
+    let plain = fixture.build(&args[..7]).env("PATH", &path).output().unwrap();
     assert!(plain.status.success(), "{}", text(&plain));
     assert!(fixture.release().is_file() && !worker.exists());
+    assert_eq!(builds(), [format!("build --release {given}")]);
 }
 
 #[test]

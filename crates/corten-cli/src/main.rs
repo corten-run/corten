@@ -188,12 +188,18 @@ fn asks_help(command: &str, args: &[String]) -> bool {
         "build" => &["--features", "-F", "--package", "-p", "--bin"],
         _ => &[],
     };
-    let mut args = args.iter();
+    let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => return true,
             // Everything after it is the command it names, a `--help` of that command's included.
             "--profile-from" if command == "build" => return false,
+            // `corten build` refuses a value that reads as a flag (`build_flags`), so such a token
+            // is read as the flag it is: `--bin --profile-from sh -h` is refused for its missing
+            // value, not taken for help.
+            option if command == "build" && takes_value.contains(&option) => {
+                args.next_if(|value| !value.starts_with('-'));
+            }
             option if takes_value.contains(&option) => {
                 args.next();
             }
@@ -226,9 +232,11 @@ struct Build<'a> {
     profile_from: Option<&'a [String]>,
 }
 
-/// `corten build`'s flags: the [`CARGO_ARGS`] before `--profile-from` (`--features a` or
-/// `--features=a`), then the command after it. Anything else is refused, so a misspelled flag
-/// is not an ordinary build that looks profiled, and a value cannot be a flag, so
+/// `corten build`'s flags: the [`CARGO_ARGS`] before `--profile-from`, then the command after
+/// it. Each is passed to Cargo as it was written: a value after its flag (`--features a`), after
+/// `=` (`--features=a`, `-F=a`) or, for a short flag, joined to it (`-Fa`), empty included
+/// (`--features ""`, which a CI variable may be). Anything else is refused, so a misspelled flag
+/// is not an ordinary build that looks profiled, and a value cannot read as a flag, so
 /// `--bin --profile-from sh` does not take `--profile-from` for a binary's name.
 fn build_flags(args: &[String]) -> Result<Build<'_>, String> {
     let mut cargo = Vec::new();
@@ -242,28 +250,26 @@ fn build_flags(args: &[String]) -> Result<Build<'_>, String> {
             }
             return Ok(Build { cargo, profile_from: Some(command) });
         }
-        let (flag, joined) = match arg.split_once('=') {
-            Some((flag, value)) if flag.starts_with("--") => (flag, Some(value)),
-            _ => (arg.as_str(), None),
-        };
-        match (CARGO_ARGS.iter().find(|(name, _)| *name == flag), joined) {
-            (Some((_, false)), None) => cargo.push(flag.to_string()),
-            (Some((_, true)), joined) => {
-                let value = match joined {
-                    Some(value) => Some(value),
-                    None => args.get(at).map(|value| {
-                        at += 1;
-                        value.as_str()
-                    }),
-                };
-                match value {
-                    Some(value) if !value.is_empty() && !value.starts_with('-') => {
-                        cargo.extend([flag.to_string(), value.to_string()]);
-                    }
-                    _ => return Err(format!("{flag} needs a value")),
-                }
+        // The flag, and whether its value is in the same token: after `=`, or after a short flag.
+        let known = CARGO_ARGS.iter().find_map(|&(name, value)| {
+            let rest = arg.strip_prefix(name)?;
+            match rest {
+                "" => Some((name, value, false)),
+                _ if value && rest.starts_with('=') => Some((name, value, true)),
+                _ if value && !name.starts_with("--") => Some((name, value, true)),
+                _ => None,
             }
-            _ => {
+        });
+        match known {
+            Some((_, false, _)) | Some((_, true, true)) => cargo.push(arg.clone()),
+            Some((name, true, false)) => match args.get(at) {
+                Some(value) if !value.starts_with('-') => {
+                    at += 1;
+                    cargo.extend([arg.clone(), value.clone()]);
+                }
+                _ => return Err(format!("{name} needs a value")),
+            },
+            None => {
                 let list: Vec<&str> = CARGO_ARGS.iter().map(|(name, _)| *name).collect();
                 return Err(format!(
                     "corten build takes {} for Cargo, then --profile-from <command>; not {arg:?}",
@@ -394,9 +400,12 @@ mod tests {
         assert!(!asks_help("build", &args(&["--profile-from", "./train.sh", "--help"])));
         assert!(!asks_help("build", &args(&["--profile-from", "--help"])));
         assert!(asks_help("dev", &args(&["--profile-from", "--help"])));
-        // A Cargo argument's value is a value.
-        assert!(!asks_help("build", &args(&["--bin", "--help"])));
+        // A Cargo argument's value is a value, and one that reads as a flag is not.
+        assert!(asks_help("build", &args(&["--bin", "web", "-h"])));
+        assert!(asks_help("build", &args(&["--bin", "--help"])));
         assert!(asks_help("build", &args(&["--locked", "--help"])));
+        assert!(!asks_help("build", &args(&["--bin", "--profile-from", "sh", "-h"])));
+        assert!(!asks_help("build", &args(&["--features", "", "--profile-from", "sh", "-h"])));
     }
 
     #[test]
@@ -428,16 +437,23 @@ mod tests {
             "sh",
             "--locked",
         ]);
-        let cargo = args(&["--no-default-features", "--features", "a,b", "-F", "c", "--locked", "-p", "shop", "--bin", "web"]);
-        // An argument after the command's name is the command's.
+        // Passed as written, in order; an argument after the command's name is the command's.
+        let cargo = given[..9].to_vec();
         assert_eq!(build_flags(&given), Ok(Build { cargo: cargo.clone(), profile_from: Some(&given[10..]) }));
         assert_eq!(build_flags(&given[..9]), Ok(Build { cargo, profile_from: None }));
+        // Cargo's other spellings of a value, an empty one included.
+        for written in [&["-Fa"][..], &["-F=a"], &["-pshop"], &["--features="], &["--features", ""], &["--bin=web"]] {
+            let written = args(written);
+            assert_eq!(build_flags(&written), Ok(Build { cargo: written.clone(), profile_from: None }));
+        }
         // A value is not a flag, and not missing.
-        for refused in [&["--bin", "--profile-from", "sh"][..], &["--features"], &["--features="], &["-p", "-F", "a"]] {
+        for refused in [&["--bin", "--profile-from", "sh"][..], &["--features"], &["-p", "-F", "a"]] {
             assert!(build_flags(&args(refused)).is_err_and(|error| error.ends_with("needs a value")), "{refused:?}");
         }
         // What would move the build's output, or is not on the list, is refused.
-        for refused in [&["--target", "x86_64-unknown-linux-musl"][..], &["--target-dir", "t"], &["--locked=yes"], &["-Fa"]] {
+        for refused in
+            [&["--target", "x86_64-unknown-linux-musl"][..], &["--target-dir", "t"], &["--locked=yes"], &["--binary", "x"]]
+        {
             assert!(build_flags(&args(refused)).is_err_and(|error| error.starts_with("corten build takes")), "{refused:?}");
         }
     }

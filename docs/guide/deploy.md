@@ -328,11 +328,17 @@ corten build --no-default-features --features=lean --locked --bin shop --profile
 ```
 
 `corten build` passes on `--features` (`-F`), `--all-features`, `--no-default-features`,
-`--locked`, `--package` (`-p`) and `--bin`, with or without a profile, and refuses any other
+`--locked`, `--package` (`-p`) and `--bin`, with or without a profile, as they are written
+(`--features=lean`, `-Flean` and an empty `--features ""` included), and refuses any other
 argument before it builds. Everything after `--profile-from` is the command and its own
-arguments. `--target`, `--target-dir` and `--profile` are refused: they move the binary out of
-`target/release`, where the release is and where the steps below look for it, and a binary
-built for another target cannot run here to be profiled.
+arguments. `--target`, `--target-dir` and `--profile` are refused: they put the release
+somewhere other than `target/release`, and the profiled build's copy has to run on the machine
+that builds it. A target set in Cargo's configuration (`build.target`, `CARGO_BUILD_TARGET`) is
+not read, so a cross build set up there is found only when the copy fails to start.
+
+The copy and the command run in the directory `corten build` was started in. With `-p` at a
+workspace's root, that is the root, not the member's directory, so the command's path and the
+app's own relative paths are from there: `corten build -p shop --profile-from sh shop/train.sh`.
 
 `corten build` starts the copy in the app's directory with the environment it was given, less
 `HOST` so that it listens on this machine only, on a port nothing else has, and runs the command
