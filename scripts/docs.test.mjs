@@ -119,9 +119,10 @@ test("changelog anchors follow headings, duplicate suffixes and explicit HTML an
   const paths = presentIn(["CHANGELOG.md", archive, "docs/guide/kit.md"]);
   const sections = scan(archive, [
     "## 0.2.0 (2026-11-11)", "### Breaking changes", "### Breaking changes",
-    "### Use `App` and *Café*", '<a id="upgrade"></a>', "```markdown", "# Not a heading", "```",
+    "### Use `App` and Café", '<a id="upgrade"></a>', "```markdown", "# Not a heading", "```",
   ].join("\n"), paths).anchors;
-  const anchorsFor = (/** @type {string} */ file) => file === archive ? sections : new Set(["unreleased"]);
+  const anchorsFor = (/** @type {string} */ file) => file === archive ? sections
+    : { ids: new Set(["unreleased"]), unsupported: false };
   const text = [
     "[old](../../CHANGELOG.0.2.0.md#breaking-changes-1) [up](/CHANGELOG.0.2.0.md#upgrade)",
     "[new](../../CHANGELOG.md#unreleased) [version](/CHANGELOG.0.2.0.md#020-2026-11-11)",
@@ -139,24 +140,47 @@ test("changelog anchors follow headings, duplicate suffixes and explicit HTML an
   ]);
 });
 
-test("changelog heading slugs keep literal code and remove emphasis markup", () => {
+test("changelog heading slugs keep literal code and identifier underscores", () => {
   const archive = "CHANGELOG.0.2.0.md";
   const paths = presentIn(["README.md", archive]);
   const headings = [
     "### Use `foo_bar_baz`",
-    "### _x_ and *y* with plain_name",
-    "### [Read](guide.md) `` Vec<T> `inner` ``!",
+    "### x and y with plain_name",
+    "### Read `` Vec<T> `inner` ``!",
   ].join("\n");
   const anchorsFor = () => scan(archive, headings, paths).anchors;
   const links = [
     "[code](CHANGELOG.0.2.0.md#use-foo_bar_baz)",
     "[wrong](CHANGELOG.0.2.0.md#use-foobarbaz)",
-    "[emphasis](CHANGELOG.0.2.0.md#x-and-y-with-plain_name)",
+    "[prose](CHANGELOG.0.2.0.md#x-and-y-with-plain_name)",
     "[literal](CHANGELOG.0.2.0.md#read-vect-inner)",
   ].join("\n");
   assert.deepEqual(scan("README.md", links, paths, anchorsFor).problems, [
     "README.md:2: a link to CHANGELOG.0.2.0.md#use-foobarbaz, but CHANGELOG.0.2.0.md has no #use-foobarbaz anchor",
   ]);
+});
+
+test("links to unsupported changelog headings get a clear diagnostic", () => {
+  const archive = "CHANGELOG.0.2.0.md";
+  const paths = presentIn(["README.md", archive]);
+  for (const [heading, slug] of [
+    ["### Ampersand &amp; names", "ampersand--names"],
+    ["### Use [CLI](https://example.org/a(b)c)", "use-cli"],
+    ["### Use <strong>CLI</strong>", "use-cli"],
+    ["### Use **the _CLI_**", "use-the-cli"],
+  ]) {
+    const anchorsFor = () => scan(archive, [
+      "### Earlier heading", heading, '<a id="explicit"></a>', "### Earlier heading",
+    ].join("\n"), paths).anchors;
+    const link = (/** @type {string} */ id) => "[section](" + archive + "#" + id + ")";
+    const text = [link("earlier-heading"), link("explicit"), link(slug), link("earlier-heading-1")].join("\n");
+    assert.deepEqual(scan("README.md", text, paths, anchorsFor).problems, [
+      "README.md:3: a link to " + archive + "#" + slug + ", but " + archive +
+        " has an unsupported heading for anchor check; link to an explicit HTML anchor instead",
+      "README.md:4: a link to " + archive + "#earlier-heading-1, but " + archive +
+        " has an unsupported heading for anchor check; link to an explicit HTML anchor instead",
+    ], heading);
+  }
 });
 
 test("a backtick with no partner in its paragraph is text, and hides no link after it", () => {

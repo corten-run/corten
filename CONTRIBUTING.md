@@ -427,7 +427,9 @@ establish a general ranking.
    Use emphasis and single-line code spans for prose; put literal brackets, angle brackets,
    backslashes, URLs, and link examples inside code spans. Do not use raw HTML, character
    references, images, or reference links or definitions. `npm run check` validates this format.
-   It caps an entry at 400 visible characters: count Unicode code points, including spaces and
+   It caps entries at 400 visible characters only in `branch-*` files and in numbered fragments
+   for pull requests after [#1736 Keep changelog entries short and move released sections to their own files](https://github.com/corten-run/corten/pull/1736).
+   Count Unicode code points, including spaces and
    emphasis marks, but not the bullet, Markdown indentation (ASCII spaces and tabs), trailing
    ASCII spaces, code-span delimiters, or link syntax and destinations. Each line wrap counts as
    one space. Count code-span contents after Markdown removes a matching pair of leading and

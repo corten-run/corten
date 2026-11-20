@@ -12,7 +12,7 @@
 // `![alt](target)`, spaces around the target allowed) and, inside an HTML tag that closes on its
 // line (a `>` in a quoted value does not close it), a `src`, `srcset` or `href` (the README's
 // logo). For links to the root or per-version changelog, also check the fragment against its
-// ATX headings and explicit HTML anchors. Not read for other links: a URL (`https:`, `//host`),
+// supported ATX headings and explicit HTML anchors. Not read for other links: a URL (`https:`, `//host`),
 // the anchor and query of a target, inline
 // code (a span may wrap onto the paragraph's next lines, and a backslash in it is its own
 // character; a backtick run with no partner in its paragraph is text, as Markdown shows it, and a
@@ -34,6 +34,8 @@ import { fileURLToPath } from "node:url";
 /** @param {string} file */
 export const isChangelog = (file) => /^CHANGELOG(?:\.\d+\.\d+\.\d+)?\.md$/.test(file);
 
+/** @typedef {{ ids: Set<string>, unsupported: boolean }} AnchorIndex */
+
 /** @param {string} part */
 function decoded(part) {
   try {
@@ -48,7 +50,7 @@ function decoded(part) {
  * `text`, where `present` has every file and folder of the repository (`.` the root), and how
  * many table rows and relative links it read.
  * @param {string} file @param {string} text @param {Set<string>} present
- * @param {(file: string) => Set<string>} [anchorsFor]
+ * @param {(file: string) => AnchorIndex} [anchorsFor]
  */
 export function scan(file, text, present, anchorsFor) {
   /** @type {string[]} */
@@ -56,7 +58,8 @@ export function scan(file, text, present, anchorsFor) {
   let rows = 0;
   let links = 0;
   const inChangelog = isChangelog(file);
-  const anchors = new Set();
+  /** @type {AnchorIndex} */
+  const anchors = { ids: new Set(), unsupported: false };
   const headingIds = new Set();
   /** The open fence's character and length, or null outside one. @type {{ char: string, length: number } | null} */
   let fence = null;
@@ -85,15 +88,21 @@ export function scan(file, text, present, anchorsFor) {
         if ((external || !path) && !(anchor && isChangelog(to))) continue;
         links += 1;
         if (!present.has(to)) problems.push(`${at}: a link to ${path}, which the repository does not have`);
-        else if (anchor && isChangelog(to) && anchorsFor && !anchorsFor(to).has(anchor)) {
-          problems.push(`${at}: a link to ${target}, but ${to} has no #${anchor} anchor`);
+        else if (anchor && isChangelog(to) && anchorsFor) {
+          const index = anchorsFor(to);
+          if (!index.ids.has(anchor)) {
+            const reason = index.unsupported
+              ? "has an unsupported heading for anchor check; link to an explicit HTML anchor instead"
+              : `has no #${anchor} anchor`;
+            problems.push(`${at}: a link to ${target}, but ${to} ${reason}`);
+          }
         }
       }
       if (inChangelog) {
         for (const [, attributes] of lines[n].matchAll(new RegExp(tag, "gi"))) {
           for (const [, name, double, single, bare] of attributes.matchAll(new RegExp(attribute, "gi"))) {
             const value = double ?? single ?? bare;
-            if (value && /^(?:id|name)$/i.test(name)) anchors.add(value);
+            if (value && /^(?:id|name)$/i.test(name)) anchors.ids.add(value);
           }
         }
       }
@@ -147,13 +156,17 @@ export function scan(file, text, present, anchorsFor) {
     // item, HTML) starts a new paragraph, so a code span never runs into or out of one.
     const tableRow = body.startsWith("|");
     const heading = /^#{1,6}(\s|$)/.test(body);
-    if (heading && inChangelog) {
-      // GitHub lowercases heading text, drops punctuation and suffixes duplicate IDs.
+    if (heading && inChangelog && !anchors.unsupported) {
+      // An unknown slug can change duplicate suffixes below it. Keep earlier heading IDs and
+      // explicit HTML anchors, but do not guess any subsequent heading IDs.
       const slug = headingSlug(body.replace(/^#+\s*/, "").replace(/\s+#+\s*$/, ""));
-      let id = slug;
-      for (let i = 1; headingIds.has(id); i++) id = `${slug}-${i}`;
-      headingIds.add(id);
-      anchors.add(id);
+      if (slug === undefined) anchors.unsupported = true;
+      else {
+        let id = slug;
+        for (let i = 1; headingIds.has(id); i++) id = `${slug}-${i}`;
+        headingIds.add(id);
+        anchors.ids.add(id);
+      }
     }
     if (!body.trim() || tableRow || heading || /^(([-*+]|\d{1,9}[.)])(\s|$)|<[a-z/!?])/i.test(body)) read();
     if (body.trim()) paragraph.push({ at, body });
@@ -185,10 +198,10 @@ function headingSlug(heading) {
   /** @type {string[]} */
   const literals = [];
   const prose = outsideCode(heading, (text) => `\0${literals.push(text) - 1}\0`);
-  return prose.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/<[^>]+>/g, "")
-    // Stars are dropped as punctuation below; only underscores that mark emphasis are dropped.
-    .replace(/(?<![\p{L}\p{M}\p{N}_])(_{1,3})(?![\s_])(.+?)(?<![\s_])\1(?![\p{L}\p{M}\p{N}_])/gu, "$2")
-    .replace(/\0(\d+)\0/g, (_, i) => literals[Number(i)])
+  // Slug plain text, code spans and escaped punctuation only. Links, entities, HTML and
+  // emphasis can change the rendered text; an underscore inside an identifier is literal.
+  if (/[[\]<>&*~`]|(?<![\p{L}\p{M}\p{N}_])_|_(?![\p{L}\p{M}\p{N}_])/u.test(prose)) return undefined;
+  return prose.replace(/\0(\d+)\0/g, (_, i) => literals[Number(i)])
     .trim().toLowerCase().replace(/[^\p{L}\p{M}\p{N}_ -]/gu, "").replaceAll(" ", "-");
 }
 
@@ -297,13 +310,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const files = [...new Set(git(["ls-files", "-z", "--", "*.md"]))];
   // Every file a commit would hold: tracked, or new and not ignored.
   const present = presentIn(git(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]));
-  /** @type {Map<string, Set<string>>} */
+  /** @type {Map<string, AnchorIndex>} */
   const changelogAnchors = new Map();
   const anchorsFor = (/** @type {string} */ file) => {
     let anchors = changelogAnchors.get(file);
     if (!anchors) {
       const path = join(root, file);
-      anchors = existsSync(path) ? scan(file, readFileSync(path, "utf8"), present).anchors : new Set();
+      anchors = existsSync(path) ? scan(file, readFileSync(path, "utf8"), present).anchors
+        : { ids: new Set(), unsupported: false };
       changelogAnchors.set(file, anchors);
     }
     return anchors;

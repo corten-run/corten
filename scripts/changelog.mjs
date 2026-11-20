@@ -7,6 +7,7 @@ const pendingPointer = "Pending entries are in [changelog.d/](changelog.d/).";
 const archiveHeading = "Release archive";
 const versionNumber = /(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){2}/;
 const maxVisibleLength = 400;
+const lastUncappedPr = 1736;
 
 // A fragment is one paragraph, not arbitrary Markdown. Mask supported inline forms before
 // checking for anything that could introduce a different kind of link or a block.
@@ -20,8 +21,8 @@ export function visibleLength(lines, label) {
   for (const line of lines) {
     const prose = line.replace(/^[ \t]+| +$/g, "").replace(codeSpan, (span, ticks) => {
       const code = span.slice(ticks.length, -ticks.length);
-      if (!/[^ ]/.test(code)) return span;
-      length += [...(/^ .* $/.test(code) ? code.slice(1, -1) : code)].length;
+      const unpadded = /^ .* $/.test(code) && /[^ ]/.test(code) ? code.slice(1, -1) : code;
+      length += [...unpadded].length;
       return "\0";
     }).replace(inlineLink, (link, text, url, offset, source) => {
       if (source[offset - 1] === "!" || !text.trim() || bareLink.test(text) || entity.test(text) ||
@@ -52,7 +53,8 @@ function readFragments(dir) {
     .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   return files.map((file) => {
     const label = `changelog.d/${file.name}`;
-    if (!file.isFile() || !/^(?:pr-[1-9]\d*|branch-[a-z0-9]+(?:-[a-z0-9]+)*)-[1-9]\d*\.md$/.test(file.name)) {
+    const name = /^(?:pr-([1-9]\d*)|branch-[a-z0-9]+(?:-[a-z0-9]+)*)-[1-9]\d*\.md$/.exec(file.name);
+    if (!file.isFile() || !name) {
       throw new Error(`${label}: expected a file named pr-<number>-<entry>.md or branch-<unique-slug>-<entry>.md`);
     }
     const path = join(dir, file.name);
@@ -71,7 +73,7 @@ function readFragments(dir) {
       throw new Error(`${label}: expected one '- ' bullet with visible text and space-indented continuation lines, with no blank lines`);
     }
     const length = visibleLength([bullet[2], ...rest], label);
-    if (length > maxVisibleLength) {
+    if ((!name[1] || Number(name[1]) > lastUncappedPr) && length > maxVisibleLength) {
       throw new Error(`${label}: ${length} visible characters exceeds the ${maxVisibleLength}-character limit; keep the change and link, move details to the guide, PR or Choice`);
     }
     return { label, path, lines: [first, ...rest], breaking: bullet[2].startsWith("**Breaking:** ") };

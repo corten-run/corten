@@ -255,9 +255,32 @@ test("single-line absolute HTTPS links survive release unchanged", (t) => {
   assert.equal(tree.read(), prefix + "## 0.3.0 (2026-11-19)\n\n" + links + "\n" + archiveIndex("0.2.0"));
 });
 
+test("the visible length cap applies only to branch fragments and PRs after the cutoff", (t) => {
+  const tree = checkout(t);
+  const note = (length) => "- " + "x".repeat(length) + "\n";
+  tree.write("pr-1730-1.md", note(401));
+  tree.write("pr-1736-2.md", note(401));
+  tree.write("pr-1737-1.md", note(400));
+  const accepted = tree.run("--check");
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.match(accepted.stdout, /3 fragment\(s\) valid/);
+
+  for (const name of ["pr-1737-1.md", "branch-next-1.md"]) {
+    tree.write(name, note(401));
+    const rejected = tree.run("--check");
+    assert.equal(rejected.status, 1);
+    assert.ok(rejected.stderr.includes(name + ": 401 visible characters"), rejected.stderr);
+    tree.write(name, note(400));
+  }
+
+  const released = tree.run("release", "0.3.0", "2026-11-19");
+  assert.equal(released.status, 0, released.stderr);
+  assert.match(released.stdout, /4 fragment\(s\) released/);
+});
+
 test("check caps visible text at 400 Unicode code points, not Markdown link destinations", (t) => {
   const tree = checkout(t);
-  const name = "pr-12-1.md";
+  const name = "pr-1737-1.md";
   const path = "https://example.com/" + "x".repeat(500);
   const note = "-    " + "\u{1F600}".repeat(389) + "  \r\n     [link](" + path + ") and ` x `";
   tree.write(name, note + "\r\n");
@@ -266,7 +289,7 @@ test("check caps visible text at 400 Unicode code points, not Markdown link dest
   for (const args of [["--check"], ["release", "0.3.0", "2026-11-19"]]) {
     const result = tree.run(...args);
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /pr-12-1\.md: 401 visible characters.*400-character limit/);
+    assert.match(result.stderr, /pr-1737-1\.md: 401 visible characters.*400-character limit/);
   }
   assert.equal(tree.read(), prefix + previous);
 
@@ -278,14 +301,27 @@ test("check caps visible text at 400 Unicode code points, not Markdown link dest
 
 test("check counts a nonbreaking space after Markdown indentation", (t) => {
   const tree = checkout(t);
-  const name = "pr-12-1.md";
+  const name = "pr-1737-1.md";
   const note = (n) => "- " + "x".repeat(n) + "\n  \u00A0y\n";
   tree.write(name, note(397));
   assert.equal(tree.run("--check").status, 0);
   tree.write(name, note(398));
   const rejected = tree.run("--check");
   assert.equal(rejected.status, 1);
-  assert.match(rejected.stderr, /pr-12-1\.md: 401 visible characters.*400-character limit/);
+  assert.match(rejected.stderr, /pr-1737-1\.md: 401 visible characters.*400-character limit/);
+});
+
+test("check counts every space in an all-space code span", (t) => {
+  const tree = checkout(t);
+  const name = "pr-1737-1.md";
+  const note = (n) => "- " + "x".repeat(n) + " `   `\n";
+  tree.write(name, note(396));
+  const accepted = tree.run("--check");
+  assert.equal(accepted.status, 0, accepted.stderr);
+  tree.write(name, note(397));
+  const rejected = tree.run("--check");
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /pr-1737-1\.md: 401 visible characters.*400-character limit/);
 });
 
 test("check rejects unsupported link forms, including links split across lines", (t) => {
@@ -333,7 +369,6 @@ test("check and release reject malformed fragments without changing either file"
     "- <!-- No visible\n  note. -->\n",
     "- [guide]: https://corten.run/\n",
     "- [&#32;](https://corten.run/)\n",
-    "- ` `\n",
     "- A paragraph.\n  - A nested bullet.\n",
     "- # A heading instead of prose.\n",
     "- | Guide |\n  | --- |\n  | `[kit](../docs/guide/kit.md) | ` |\n",
