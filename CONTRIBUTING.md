@@ -228,6 +228,11 @@ runs the `npm-check` part and the native workload group apparatus, builds the Gi
 test-tools image from it. `firefox-feeds` and `webkit-gallery` use the base image directly,
 so they do not depend on Launchpad's Git PPA. The apparatus still runs as the checkout owner
 with the test-tools image's fingerprint-checked Git and immutable-source checks.
+
+Add new watchlist runtime checks to the matching area in [`scripts/smoke/`](scripts/smoke/),
+and new gallery checks to the matching widget or area in [`examples/ui-gallery/smoke/`](examples/ui-gallery/smoke/).
+The entry points order the areas, including those that share pages, routes, or listeners.
+
 A browser smoke that goes five minutes without finishing a check stops itself (`scripts/stall.mjs`),
 printing the last check it finished and, for the runtime's smoke, the requests still loading; give a
 new smoke script's `check` the same watchdog. Each smoke launches its browser through `steady` (`scripts/steady.mjs`), which
