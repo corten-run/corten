@@ -3072,65 +3072,36 @@ async fn a_page_a_full_store_did_not_keep_the_first_time_is_waited_for_the_next(
     assert_eq!(held.runs.count(), runs + 1);
 }
 
-/// In a full store, requests that miss a URL not asked for before together run its handler once:
-/// those that come to wait while it is made are its second request, so the page is kept and given
-/// to them.
+/// In a full store, the first request for a URL not asked for before is the handler's as with
+/// nothing kept, and no other waits for it. Those that miss the URL while it is made are its
+/// second request: the first of them makes the page and the others wait for that one, so the
+/// handler runs twice, the page is kept and the waiting requests are given it.
 #[tokio::test]
-async fn requests_that_miss_a_new_url_in_a_full_store_together_run_its_handler_once() {
-    let (held, watch) = (Held::default(), Watch::default());
-    let router = filled(&held, &watch).await;
-    let runs = held.runs.count();
-    held.hold.next(1);
-    let first = sent(&router, "GET", "/?n=together", &[]);
-    ran(&held.runs, runs + 1).await;
-    let others: Vec<_> = (0..3).map(|_| sent(&router, "GET", "/?n=together", &[])).collect();
-    watch.admitted(3).await;
-    assert_eq!(held.runs.count(), runs + 1, "one handler runs, and the others wait for it");
-    held.hold.release(1);
-    let (status, headers, body) = first.await.unwrap();
-    assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{headers:?}");
-    for other in others {
-        let (status, headers, same) = other.await.unwrap();
-        assert!(status == StatusCode::OK && headers.contains_key(header::AGE) && same == body, "{headers:?}");
-    }
-    let (_, headers, again) = fetch(&router, "GET", "/?n=together", &[]).await;
-    assert!(headers.contains_key(header::AGE) && again == body, "and kept: {headers:?}");
-    assert_eq!(held.runs.count(), runs + 1);
-}
-
-/// In a full store, the requests for a new URL that come once its first request's page was
-/// refused, none having waited for it, do not wait for that page: the first of them makes the
-/// page, as the URL's second request, which is kept, and the others wait for it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn requests_that_come_once_a_full_store_refused_a_new_url_s_page_wait_for_the_next() {
+async fn requests_that_miss_a_new_url_in_a_full_store_together_run_its_handler_twice_at_most() {
     let (held, watch) = (Held::default(), Watch::default());
     let router = filled(&held, &watch).await;
     let (runs, joined) = (held.runs.count(), watch.joined());
-    let mut stopped = watch.answers().stop_at(crate::kept::Stop::Refused);
-    let first = sent(&router, "GET", "/?n=late", &[]);
-    stopped.reached().await;
-    held.hold.next(1);
-    let others: Vec<_> = (0..2).map(|_| sent(&router, "GET", "/?n=late", &[])).collect();
-    // Each has run its handler or waits for another's.
-    let settled = async {
-        while watch.joined() - joined + held.runs.count() - runs < 3 {
-            tokio::task::yield_now().await;
-        }
-    };
-    tokio::time::timeout(Duration::from_secs(10), settled).await.expect("the requests came to their handlers");
-    stopped.go();
+    held.hold.next(2);
+    let first = sent(&router, "GET", "/?n=together", &[]);
+    ran(&held.runs, runs + 1).await;
+    assert_eq!(watch.answers().making(), 0, "the first is made for no other request");
+    let others: Vec<_> = (0..3).map(|_| sent(&router, "GET", "/?n=together", &[])).collect();
+    ran(&held.runs, runs + 2).await;
+    watch.admitted(joined + 2).await;
+    assert_eq!(held.runs.count(), runs + 2, "the second makes the page, and the others wait for it");
+    held.hold.release(2);
     let (status, headers, body) = first.await.unwrap();
     assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{headers:?}");
-    held.hold.release(1);
     let mut given = 0;
     for other in others {
         let (status, headers, same) = other.await.unwrap();
         assert!(status == StatusCode::OK && same == body, "{headers:?}");
         given += usize::from(headers.contains_key(header::AGE));
     }
-    assert_eq!((held.runs.count() - runs, given), (2, 1), "one made the page again, and the other was given it");
-    let (_, headers, again) = fetch(&router, "GET", "/?n=late", &[]).await;
+    assert_eq!(given, 2, "the two that waited were given the second's page");
+    let (_, headers, again) = fetch(&router, "GET", "/?n=together", &[]).await;
     assert!(headers.contains_key(header::AGE) && again == body, "and kept: {headers:?}");
+    assert_eq!(held.runs.count(), runs + 2);
 }
 
 /// Requests that miss a page whose lifetime ended together run its handler once.

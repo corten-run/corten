@@ -8,8 +8,7 @@
 //!
 //! While the store has room every such answer is kept. Once it is full, keeping an answer may
 //! drop another page, so an answer is kept then only when its URL was asked for before, as far
-//! back as the marks that say so go ([`Store::asked`]), or again while it was made (below): a
-//! crawler's first walk over more URLs
+//! back as the marks that say so go ([`Store::asked`]): a crawler's first walk over more URLs
 //! than the bound has room for, or searches no one repeats, are answered by the handler without
 //! a copy into the store, and all but the few whose mark is another's take no room from the
 //! pages that are asked for again.
@@ -78,12 +77,12 @@
 //! write to its path or until it is kept (by that request or another meanwhile), so the requests
 //! that meet in that time each run the handler at once, as they would with nothing kept; that is
 //! best effort, as only the latest [`NOT_KEPT`] are remembered. A request waits no longer than
-//! its own deadline, which drops its wait as it would its handler. In a full store the first request for a URL not asked for before
-//! makes the page for the others as any first request does, and a request that comes to wait for
-//! it is the URL's second: the page is kept then, and given to them. With none waiting it is not
-//! kept, and not remembered as not kept, so the next requests for it, which the store keeps it
-//! for, wait for one another. Whether one waits is settled once its page is made, in one step with
-//! the end of the wait for it, so a request that comes after makes the page itself.
+//! its own deadline, which drops its wait as it would its handler. In a full store the first
+//! request for a URL not asked for before is the handler's as with nothing kept: it leaves its
+//! mark and nothing more, and no other request waits for it. Those that come while it is made
+//! find the mark, so they are the URL's second request: the first of them makes the page and the
+//! others wait for that one, so a new URL's handler runs at most twice for requests that miss it
+//! together.
 
 use std::collections::{hash_map, HashMap, VecDeque};
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher, RandomState};
@@ -216,9 +215,6 @@ pub(crate) enum Stop {
     Missed,
     /// Its handler answered with a page that may be kept, which is not kept yet.
     Keep,
-    /// In a full store, the first request for a URL not asked for before had its page refused by
-    /// the store, none having waited for it.
-    Refused,
 }
 
 /// A request held at a [`Stop`]: the test waits for it to come there, then lets it go on.
@@ -991,19 +987,18 @@ impl<'a> Asked<'a> {
     /// handler runs, so the answer's age counts its making and a write made meanwhile is seen; and
     /// a request after a write makes the page again rather than wait for one read before it.
     ///
-    /// In a full store, a URL not asked for before is kept only when another request asks for it
-    /// while it is made: keeping its answer would drop a page for one no one is known to ask for
-    /// again. Such a request still makes the page the others wait for, so the requests that miss
-    /// a new URL together run its handler once. It pays for that as any miss does (the table and
-    /// the second look) and for the checks of its answer that come before its headers are read
-    /// ([`Missed::keep`]), not for the copy. With no page made that others may wait for (the
-    /// table is full, or the page was not kept a moment ago), it is the handler's ([`Miss::Pass`]),
-    /// and nothing here is paid for it but the mark it leaves.
+    /// In a full store, a URL not asked for before is the handler's ([`Miss::Pass`]): keeping its
+    /// answer would drop a page for one no one is known to ask for again, so nothing here is paid
+    /// for it but the mark it leaves, and no other request waits for it. One that comes while it
+    /// is made finds the mark, and is the URL's second request, which makes the page for the
+    /// others as any first request with room does.
     pub(crate) fn missed(&self, req: &Request) -> Miss {
         #[cfg(test)]
         self.answers.0.stop(Stop::Missed);
         let store = &self.answers.0;
-        let stored = !store.full() || store.asked(self.host, self.at);
+        if store.full() && !store.asked(self.host, self.at) {
+            return Miss::Pass;
+        }
         let asked = Instant::now();
         let written = Written::of(store, self.at);
         let key = store.flights.key(self.at, self.host, self.language, written.was);
@@ -1012,48 +1007,38 @@ impl<'a> Asked<'a> {
         // first look and then (by the request it would wait for, or for every language by
         // another) is given at once, and the page is not made again.
         let leading = match admitted {
-            Admitted::Alone if !stored => return Miss::Pass,
-            Admitted::Alone => return Miss::Make(self.missing(req, asked, written, None, Some(key), true)),
+            Admitted::Alone => return Miss::Make(self.missing(req, asked, written, None, Some(key))),
             Admitted::Joins(waiting) => {
                 if let Some(kept) = self.find() {
                     return Miss::Kept(kept);
                 }
                 #[cfg(test)]
                 store.joined.fetch_add(1, Ordering::AcqRel);
-                return Miss::Wait(Making { waiting, stored });
+                return Miss::Wait(Making(waiting));
             }
-            Admitted::Leads => Leading { store: store.clone(), key, written, answered: false, ended: false },
+            Admitted::Leads => Leading { store: store.clone(), key, written, answered: false },
         };
         if let Some(kept) = self.find() {
             // The requests that came to wait for this one look again, and are given it too.
             drop(leading);
             return Miss::Kept(kept);
         }
-        Miss::Make(self.missing(req, asked, written, Some(leading), None, stored))
+        Miss::Make(self.missing(req, asked, written, Some(leading), None))
     }
 
-    /// After waiting for another request (`after`) whose page was not kept for this one: what
-    /// keeping its own handler's answer needs of it, which no other request waits for.
-    pub(crate) fn missed_again(&self, req: &Request, after: Making) -> Missed {
+    /// After waiting for another request whose page was not kept for this one: what keeping its
+    /// own handler's answer needs of it, which no other request waits for.
+    pub(crate) fn missed_again(&self, req: &Request) -> Missed {
         let (store, asked) = (&self.answers.0, Instant::now());
         let written = Written::of(store, self.at);
         let key = store.flights.key(self.at, self.host, self.language, written.was);
-        self.missing(req, asked, written, None, Some(key), after.stored)
+        self.missing(req, asked, written, None, Some(key))
     }
 
-    fn missing(
-        &self,
-        req: &Request,
-        asked: Instant,
-        written: Written,
-        leading: Option<Leading>,
-        alone: Option<u64>,
-        stored: bool,
-    ) -> Missed {
+    fn missing(&self, req: &Request, asked: Instant, written: Written, leading: Option<Leading>, alone: Option<u64>) -> Missed {
         Missed {
             asked,
             written,
-            stored,
             signal: req.extensions().get::<crate::Signal>().cloned(),
             nonce: req.extensions().get::<crate::security::NonceSlot>().cloned(),
             at: self.at.into(),
@@ -1075,26 +1060,21 @@ pub(crate) enum Miss {
     Make(Missed),
     /// Wait for the request making the page.
     Wait(Making),
-    /// Be the handler's as any other request: in a full store, a URL not asked for before, with
-    /// no page being made for it that others may wait for.
+    /// Be the handler's as any other request: in a full store, a URL not asked for before.
     Pass,
 }
 
 /// The page another request is making for the same copy: a request waits for it, then is given
 /// the page if it was kept for it ([`Asked::find`]), else runs its own handler
 /// ([`Asked::missed_again`]).
-pub(crate) struct Making {
-    waiting: Arc<Semaphore>,
-    /// Whether the store keeps the page this request makes, if it makes its own ([`Missed`]).
-    stored: bool,
-}
+pub(crate) struct Making(Arc<Semaphore>);
 
 impl Making {
     /// Ends when the request making the page has been answered, or dropped (its client left,
     /// its deadline passed, its handler panicked). Dropped itself, the wait leaves nothing behind.
-    pub(crate) async fn ended(&self) {
+    pub(crate) async fn ended(self) {
         // No permit is ever added: the request making the page closes it.
-        let _ = self.waiting.acquire().await;
+        let _ = self.0.acquire().await;
     }
 }
 
@@ -1106,33 +1086,12 @@ struct Leading {
     written: Written,
     /// Answered with a page that is not kept (one that failed, or was drawn for this request).
     answered: bool,
-    /// No longer being made for any other ([`Leading::waited`]).
-    ended: bool,
-}
-
-impl Leading {
-    /// Whether another request has come to wait for the page. Where none has, the page is no longer
-    /// made for any, in the same step under the table's lock: a request that comes after finds none
-    /// being made, and makes the page itself, and nothing is remembered of this one.
-    fn waited(&mut self) -> bool {
-        let mut table = self.store.flights.table();
-        if matches!(table.at.get(&self.key), Some(Flight::Making { waiting: Some(_), .. })) {
-            return true;
-        }
-        // None waits, so none is woken.
-        table.ended(self.key, None);
-        self.ended = true;
-        false
-    }
 }
 
 impl Drop for Leading {
     /// Answered or dropped: the requests waiting for it look again. A page answered and not kept,
     /// with no write to its path since its handler read, is remembered as not kept.
     fn drop(&mut self) {
-        if self.ended {
-            return;
-        }
         let not_kept = (self.answered && self.written.stands(&self.store)).then(Instant::now);
         let waiting = self.store.flights.table().ended(self.key, not_kept);
         if let Some(waiting) = waiting {
@@ -1150,10 +1109,6 @@ pub(crate) struct Missed {
     at: Box<str>,
     host: Option<HeaderValue>,
     language: Option<HeaderValue>,
-    /// Whether the store keeps the page: it has room, or the URL was asked for before
-    /// ([`Store::asked`]). Where not, the page is kept only when another request has come to wait
-    /// for it, which is the URL's second request.
-    stored: bool,
     /// Where the others asking for the same copy wait for its page.
     leading: Option<Leading>,
     /// The page's key in [`Flights`] for a request that makes it with none waiting: once kept,
@@ -1172,17 +1127,6 @@ impl Missed {
         let shared = self.signal.as_ref().and_then(crate::Signal::shared);
         let Some(answers) = shared.and_then(|shared| shared.kept.as_ref()) else { return res };
         let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else { return res };
-        // A URL not asked for before, in a full store, that no other request asked for while it
-        // was made: refused by the store alone, decided as soon as the answer is a page with a
-        // lifetime, before the rest of it is read. Not remembered as not kept, so the requests that
-        // miss it next, which the store keeps it for, wait for one another as for any page; and one
-        // that comes from here on makes it itself rather than wait for this one. (An error is
-        // remembered, as for any page.)
-        if !self.stored && res.status() == StatusCode::OK && !self.leading.as_mut().is_some_and(Leading::waited) {
-            #[cfg(test)]
-            answers.0.stop(Stop::Refused);
-            return res;
-        }
         // Whether the page varies on `Accept-Language` (`App::messages`, or a locale negotiated
         // from it), or on something the key does not cover.
         let Some(mut language) = varies(res.headers()) else { return res };
