@@ -73,19 +73,56 @@ test("all current groups replay individually; hardware/hash references and faile
   assert.equal(treeHash(p.h.base), before, "inspection must be read-only");
 });
 
-test("shared group replay is read-only under caller custody; final verification still refuses the root lock", async (t) => {
+test("shared group replay is read-only under caller custody; fleet verification reports a live root as busy", async (t) => {
   const p = fixture(t), j = p.seed(groupNames[0]);
-  writeFileSync(join(p.h.base, ".fleet-operation.lock"), "SYNTHETIC-caller-custody");
+  writeFileSync(join(p.h.base, ".fleet-operation.lock"), JSON.stringify({ pid: process.pid, approvalSha256: "a".repeat(64) }));
   const before = treeHash(p.h.base), fleet = readFleet(p.h.base, "r21");
   const proof = await verifyCollectedGroup(fleet, groupNames[0], { inspect: p.inspect });
   assert.equal(proof.row.outcome, "verified"); assert.equal(proof.evidenceMode, "synthetic-inspection");
   assert.equal(treeHash(p.h.base), before);
   const final = await p.verify(); assert.equal(final.status, "incomplete");
-  assert.equal(final.error, "fleet-evidence-changed-or-duplicated");
+  assert.equal(final.error, "fleet-operation-busy"); assert.equal(final.fleetLock, "busy");
+  assert.deepEqual(final.groups, []); assert.equal(p.calls.length, 1);
   writeFileSync(join(p.h.base, groupNames[0], ".groups-launch.lock"), "SYNTHETIC-unsettled");
   assert.throws(() => recheckCollectedGroup(fleet, proof.snapshot));
   assert.equal(readFileSync(j.path, "utf8"), JSON.stringify(j.state));
 });
+
+test("a root lock acquired during verification is busy, not changed evidence", async (t) => {
+  const p = fixture(t); p.seed(groupNames[0]);
+  const bytes = JSON.stringify({ pid: process.pid, approvalSha256: "b".repeat(64) }), path = join(p.h.base, ".fleet-operation.lock");
+  const final = await p.verify({ inspect: async (input) => {
+    writeFileSync(path, bytes, { flag: "wx" });
+    return p.inspect(input);
+  } });
+  assert.equal(final.status, "incomplete"); assert.equal(final.error, "fleet-operation-busy");
+  assert.equal(final.fleetLock, "busy"); assert.deepEqual(final.groups, []);
+  assert.equal(readFileSync(path, "utf8"), bytes);
+});
+
+for (const change of ["manifest", "duplicate"]) {
+  test(`a root lock transition with ${change} evidence reports both diagnostics`, async (t) => {
+    const p = fixture(t), first = p.seed(groupNames[0]);
+    if (change === "duplicate") {
+      const second = p.seed(groupNames[1]); second.state.id = first.state.id; second.save();
+    }
+    const path = join(p.h.base, ".fleet-operation.lock");
+    const bytes = JSON.stringify({ pid: process.pid, approvalSha256: "b".repeat(64) });
+    const result = await p.verify({ inspect: async (input) => {
+      if (p.calls.length === 0) {
+        writeFileSync(path, bytes, { flag: "wx" });
+        if (change === "manifest") appendFileSync(p.manifestPath, "\n");
+      }
+      return p.inspect(input);
+    } });
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.fleetLock, "busy");
+    assert.equal(result.error, "fleet-operation-busy");
+    assert.equal(result.evidenceError, "fleet-evidence-changed-or-duplicated");
+    assert.deepEqual(result.groups, []);
+    assert.equal(readFileSync(path, "utf8"), bytes);
+  });
+}
 
 test("missing, live, busy, recoverable and cleanup-pending groups keep a partial fleet incomplete", async (t) => {
   const p = fixture(t);

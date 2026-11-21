@@ -7228,7 +7228,7 @@ rules something out.
     an extractor of the app's own cannot claim it); a page whose handler takes another is made
     for every request. What those inputs read of the whole document's `GET` is the key:
     the `Host`, the path and the query, and the `Accept-Language` when the page's `Vary` names
-    it or a message was read in the language it asks for. The header is compared as it was
+    it (`App::messages`, or a locale negotiated from it, named in `Vary` once the handler's answer is finished and before it is kept, however late the read). The header is compared as it was
     sent, as a CDN compares it ([Choice 22](#choice-locale-in-url)), with at most eight copies
     for a URL, a new one in the place of one not read since it was kept or since room was last
     made. The request must be at the URL the router matched (a route's parameters are read
@@ -7464,15 +7464,38 @@ rules something out.
     kept, about 6 in 100 at that bound's 8,192 marks. So a URL asked for once in a full store
     costs 9,070 instructions fewer, and one asked for twice 38,767 more where main still had
     its page for the second, and 9,627 fewer where main had dropped it.
-    In cycles, the same two builds each started once on one CPU and loaded in turn for three
-    seconds by `wrk` with 64 connections, 30 alternated pairs, on a machine that ran other
-    work throughout, so the sizes are rough and the signs are what they show: a stream of
-    new URLs, which fills the store at once, took 153,735 cycles a request against 187,085
-    at the medians, 17.0% fewer within a pair at the median and fewer in all 30, with 15.1%
-    the one-sided 95% bound; against the store off (`kept_answers(0)`) it took 6.4% more,
-    more in 23 of 30; a kept page took 0.5% fewer, fewer in 15 of 30, from 13.0% fewer to
-    16.1% more; and each new URL asked for twice, the spread where the rule loses, took 8.1%
-    more, more in 25 of 30.
+    In cycles, on a cloud host with eight dedicated CPUs that ran nothing else of its own
+    (idle but for the test, with no stolen time, though an eighth of the turns, half of
+    them in one start, cost up to 45% more than their build's median, both builds alike,
+    which the pairs carry), the same two builds were each started four times on one CPU
+    and loaded in turn for three seconds by `wrk` with 64 connections on two others, ten
+    alternated pairs a start: a stream of new URLs, which fills the store at once, took
+    72,301 cycles a request against 87,109 at the medians, 17.1% fewer within a pair at the
+    median, fewer in 39 of 40 and 16.6% to 17.5% fewer by start; against the store off
+    (`kept_answers(0)`) it took 5.2% more, more in 37 of 40 and 3.8% to 7.3% more by
+    start; and each new URL asked for twice, the spread where the rule loses, took 11.2%
+    more, more in all 40 and 8.6% to 13.1% more by start. A kept page took 0.9% more at
+    the median of the 40, with its instructions the same at the median, and by start 2.5%
+    and 1.5% more, 0.8% and 0.1% fewer. In three starts of ten pairs each, an earlier build
+    of each side (`95816e954` with the rule, `39d99b051` without) put the rule at 1.4% and
+    1.6% more, more in 17 and 23 of 30; the two builds without the rule, whose kept-page
+    code is the same, differed by 0.6% over the three and by 1.2% to 1.8% either way
+    within one, the two with it by 0.4% and by 1.1% to 5.2%; and with room, where the rule
+    adds a load and a compare to a new URL, its build took 1.2% fewer than main's over ten
+    starts of three pairs, from 4.4% fewer to 3.8% more by start. So two builds that run
+    the same instructions differ by one to five hundredths from one start to the next, the
+    same way through a start's pairs, and a kept page's difference is inside that. The
+    rule's builds took more in 7 of their 10 starts and two builds of the same code in 2
+    of 6, which does not tell them apart: no cost of the rule to a kept page is shown, and
+    one of a hundredth or two is not ruled out. While the store still has room (a bound
+    of 6 GiB, so that no turn fills it), a new URL took 108,731 cycles on main against
+    68,006 with the store off, 59.7% more, more in all of 30 pairs and 57.1% to 78.1% more
+    by start: 50,977 against 29,559 in the kernel and 58,099 against 38,421 in user mode.
+    The kernel's part goes with memory the store touches for the first time: 1.6 page
+    faults a request for a page of 4,944 bytes, where the store off takes none and a full
+    store 0.03 at most (counted by `perf stat` on a machine that ran other work, which a
+    count of faults does not depend on), and a full store spends 31,863 cycles in the
+    kernel.
     By simulation from these counts (`bench/catalog/sim-kept-store.mjs` at `16f2f5480`: the
     store's clock with and without the rule, 5,461 pages of 6 KiB in 32 MiB, four million
     requests of which the second two million are counted, drawn from a Zipf law over the
@@ -7533,10 +7556,13 @@ rules something out.
     its CPUs 95 to 100% busy, and one pair's change ranged from -7.7% to +16.1%.
     Not measured: what a write pays for its count; how the URLs of an app in use are spread,
     so how often one first asked for in a full store is asked for again (the simulation's
-    spreads are a law, not a log); a miss that is kept with room against the same page made
-    with nothing kept, in cycles; a store read from more than one core; the cycles of a miss,
-    and requests that miss together on a quiet host or with a real source; a miss in a full store
-    with the table, which the counts of the rule for a full store above were taken without; and the
+    spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
+    kept page in those rounds is the rule, two builds of the same code having differed by
+    more from one start to the next; a miss kept with room in memory the store has used
+    before (room made by a write or by a page's lifetime ending), in cycles; a store read
+    from more than one core; the cycles of a miss, and requests that miss together on a quiet
+    host or with a real source; a miss in a full store with the table, which the counts of the
+    rule for a full store above were taken without; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
@@ -7576,9 +7602,17 @@ rules something out.
     difference of a run of 1,300 requests and one of 300 under callgrind, a new URL each, of
     which the first 28 or so fill a bound of 256 KiB, and for the second request the
     difference of such runs over 1,000 URLs less its 700 first requests, the simulation with
-    Node.js 24, and the cycles as in the pass over the headers below, but that other work ran
-    on the machine's other CPUs and at times on the app's core's other thread, with a new URL
-    for every request or for every second one, and the store off by `kept_answers(0)`.
+    Node.js 24, and the cycles on a cloud host with eight dedicated CPUs (Xeon Platinum
+    8280, Linux 6.12, `wrk` 4.1.0) that ran nothing else of its own, the app on one CPU and
+    `wrk` with 64 connections on two others, each pair of builds started four times for ten
+    pairs of three seconds (three times for the builds set beside earlier ones, and ten
+    times for three pairs where the store was to keep its room), the order turned about
+    from each pair to the next within a start, which began with the build compared
+    against, so that 20 of the 30 pairs with room ran it first, the app's cycles and
+    instructions counted by `perf stat` and divided by the requests answered, with a new
+    URL for every request or for every second one or with one of 500 kept pages, the store
+    off by `kept_answers(0)`, and the page faults counted the same way on the machine of
+    the counts above.
     2026-11-21, the second look and the table's bounds with rustc 1.100.0, release
     builds of `200f08426` and `fc86d8eff` counted by valgrind 3.24.0's callgrind and the waves
     timed on a workstation's Docker VM with 4 worker threads and 4 CPUs. 2026-11-21, requests
@@ -7588,8 +7622,8 @@ rules something out.
     VM's CPUs, its sibling left idle, and loaded in turn for three seconds each by `wrk` with 64
     connections on another core's two, the order turned about from each pair to the next, the
     app's counters read by `perf stat` at 100% and divided by the requests `wrk` saw answered,
-    the bodies identical and the headers but `Date` and `Age`. 2026-11-21, the pass over the
-    headers with rustc 1.100.0: the counts under
+    the bodies identical and the headers but `Date` and `Age`.
+    2026-11-21, the pass over the headers with rustc 1.100.0: the counts under
     callgrind, and the cycles from the two builds started once on one CPU, its core's other thread
     left idle, and loaded in turn for three seconds each by `wrk` with 64 connections on the two
     CPUs of another core, 500 URLs asked for unevenly and uncompressed, the order of the two

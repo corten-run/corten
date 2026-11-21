@@ -443,7 +443,7 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
         const bootstrapReady = state?.bootstrapReady;
         const bootstrap = !first || bootstrapReady && /^[a-f0-9]{64}$/.test(bootstrapReady.sha256)
           && typeof bootstrapReady.observedAt === "string" && Number.isFinite(Date.parse(bootstrapReady.observedAt));
-        const retired = code === 1 && state?.status === "retired" && state.destroyedAt && ["unused", "setup-failed"].includes(state.retirement?.kind)
+        const retired = code === 1 && state?.status === "retired" && state.destroyedAt && ["unused", "setup-failed", "native-failed"].includes(state.retirement?.kind)
           && /^[a-f0-9]{64}$/.test(state.retirement.evidenceSha256);
         const consistent = saved?.outcome === "available" && (launching
           ? code === 3 && state.status === "running" && state.id && state.ip && !state.deletionIntentAt && !state.destroyedAt
@@ -455,7 +455,7 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
         if (!consistent) Object.assign(row, { outcome: "error", error: "group-state-invalid" });
         else if (closed) row.collection = "separate-child-approval-required";
         else if (launching) { admittedIds.add(state.id); admittedIps.add(state.ip); }
-        else if (retired) row.outcome = state.retirement.kind === "unused" ? "unused-retired" : "setup-failed-retired";
+        else if (retired) row.outcome = `${state.retirement.kind}-retired`;
       }
       return persist(job, row);
     };
@@ -510,7 +510,7 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
     await controlCheckpoint(cancelled);
     write(JSON.stringify({ schema: "benchmark-group-fleet-operation/v1", action: preview.subject.action, groups, fullGroupQualified: false }));
     if (groups.some((g) => ["error", "missing", "ambiguous", "busy", "not-admitted"].includes(g.outcome))) return 2;
-    return groups.some((g) => ["pending", "deferred"].includes(g.outcome)) ? 3 : groups.some((g) => ["terminal-incomplete", "unused-retired", "setup-failed-retired"].includes(g.outcome)) ? 1 : 0;
+    return groups.some((g) => ["pending", "deferred"].includes(g.outcome)) ? 3 : groups.some((g) => ["terminal-incomplete", "unused-retired", "setup-failed-retired", "native-failed-retired"].includes(g.outcome)) ? 1 : 0;
   } catch (error) {
     if (error?.controlTreeUncertain || error?.controlUncertain) uncertain = true;
     throw error;

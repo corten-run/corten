@@ -1368,8 +1368,10 @@ impl Applied {
     /// The security headers. `csp` is the policy of the area at the request's path (the app's
     /// when it is in none), and `nonce` the request's nonce slot, or `None` for a response that is
     /// never a page (an API route, a misdirected request), which gets a CSP that allows nothing and
-    /// the app's opener policy, and still the area's referrer policy.
-    pub fn headers(&self, res: &mut Response, nonce: Option<&NonceSlot>, csp: &Csp) {
+    /// the app's opener policy, and still the area's referrer policy. `vary` says whether the
+    /// answer has a `Vary` already, as the app's last stage found when it settled the language
+    /// (`crate::page::vary_on_language`).
+    pub fn headers(&self, res: &mut Response, nonce: Option<&NonceSlot>, csp: &Csp, vary: bool) {
         let page = nonce.map(|nonce| (nonce, csp));
         let block = if page.is_some() { res.extensions_mut().remove::<StyleBlock>() } else { None };
         let headers = res.headers_mut();
@@ -1377,7 +1379,7 @@ impl Applied {
         // existing one, or added): the map grows at most once, and not at all when a page reserved
         // enough. Asking for more than this reallocates an error page's map for nothing. A
         // document's `Permissions-Policy` fits in what a page reserves (13), with room left.
-        headers.reserve(6 + usize::from(self.hsts) + usize::from(!headers.contains_key(header::VARY)));
+        headers.reserve(6 + usize::from(self.hsts) + usize::from(!vary));
         let csp_header =
             if self.report_only { header::CONTENT_SECURITY_POLICY_REPORT_ONLY } else { header::CONTENT_SECURITY_POLICY };
         let ours = csp.referrer;

@@ -131,6 +131,7 @@ test("captured production composition ignores arbitrary hints, binds POST identi
     assert.equal(uploads.length, 3);
     assert.deepEqual(saved.control.sealed, ["bootstrap"]);
     assert.equal(saved.control.monitor.phase, "closed");
+    assert.equal(saved.launchHostKeySha256, fileHash(path.join(p.h.base, group, "groups-r21/known_hosts")));
     assert.equal(events.filter((row) => row.group === group && row.boundary === "monitor").length, 1);
     const firstSsh = events.filter((row) => row.group === group && row.boundary === "ssh").slice(0, 3);
     assert.ok(firstSsh.every((row) => row.options.input === "set -euo pipefail\ntrue\n"));
