@@ -8,7 +8,7 @@ import { campaignOutcome, controllerState, full } from "./cloud-options.mjs";
 import { digest, fileHash, physical, regular, resolveStateRoot, treeHash } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
-import { setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+import { retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function fleetRoot(path, repo) {
@@ -208,11 +208,18 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
           identities.add(key);
         }
       }
-      if (job.outcome !== "available") { result.groups.push({ group, outcome: job.outcome }); continue; }
       const s = job.state;
+      // Read-only exception: a fully verified retirement may keep the original
+      // invalid monitor locks. Do not make that child available for fleet work.
+      const safelyRetained = () => !present(join(job.local, "stream-recovery.lock")) && !retainedInvalidOwner(job.local, s);
+      const retained = job.outcome === "busy" && s.status === "retired" && s.retirement.kind === "native-failed"
+        && s.control?.monitor?.phase === "invalid" && s.launchHostKeySha256 !== undefined && safelyRetained();
+      if (job.outcome !== "available" && !retained) { result.groups.push({ group, outcome: job.outcome }); continue; }
       if (s.status === "retired") {
         if (s.retirement.kind === "native-failed") {
           verifyFailedNativeRetirement(job.local, s);
+          assert.equal(digest(regular(join(job.local, "state.json"), 1024 * 1024)), job.stateSha256, "retirement changed during verification");
+          if (retained) assert.ok(safelyRetained(), "retained lock owner changed during verification");
           result.groups.push({ group, outcome: s.destroyedAt ? "native-failed-retired" : "cleanup-pending", id: s.id }); continue;
         }
         const setup = s.retirement.kind === "setup-failed";

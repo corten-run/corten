@@ -268,16 +268,28 @@ campaign and the fixed native output path (both prepare and timing for JSON),
 including a record of any output path proved absent. The archived plan and
 pending list are checked against the reservation; neither chooses what to copy
 or authorizes deletion. No failed data enters native replay or becomes timings.
+If native validation finished but sealing or later collection failed, raw
+exit 2 permits custody only. The collector keeps both archives, leaves the host
+in place and returns 3. It does not create a retirement intent.
 
 Use the per-child command above if an invalid monitor left locks behind. The
-original operation and launch locks remain unchanged. Collection waits for
-local stream closure and lease expiry, uses the separate stream recovery lock,
-and verifies the saved host key, boot and exact started unit. Live or uncertain
+original operation and launch locks remain unchanged. Collection requires
+local stream closure, lease expiry and an absent original owner PID. It uses
+the separate stream recovery lock and checks the registered boot and exact
+started unit. Read-only fleet inspection can verify a saved retirement behind
+those retained child locks, but not while their owner or a recovery collector
+may still be active. Live or uncertain
 custody is preserved. The shared failed-native procedure below checks the
 download, rehashes the remote data, renews the idle-host proof and records a
 `native-failed` intent before one DELETE. Repeat collection after intent can only
 check exact-ID absence. Confirmed retirement returns 1, not success. This does
 not reopen old reservations from a different checkout or change sibling state.
+Launch saves the digest of the host key established by its acknowledged
+first SSH handshake. The collection approval binds that digest, and each
+subsequent SSH or SFTP uses a private snapshot of the matching key. A replaced
+key is refused; old reservations without a launch pin cannot use failed-native
+custody through ordinary collection. Existing explicit recovery policies are
+unchanged.
 
 **Pinned r21 only.** Use a separately reviewed, merged successor for one
 closed child of the original staged fleet at a time. Keep the original fleet

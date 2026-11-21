@@ -10,7 +10,7 @@ import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
-import { failedNativePolicy, failedNativeRoots, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
+import { failedNativePolicy, failedNativeRoots, launchHostKey, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
@@ -60,7 +60,7 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
     if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
   // Native replay (ordinary collection, and so a launch's) reads this checkout's bench compiler.
   if ((options.detach || options.collect && options.unusedBootstrapKnownHosts === undefined && !options.r21MeasuredCheckout) && !compiler()) missing.push(localCompilerMissing);
-  let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery;
+  let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery, launchHostKeySha256;
   if (options.group !== undefined) {
     const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = requireStagedFleet(JSON.parse(bytes));
     assert.equal(fleet.round, options.round); assert.equal(fleet.commit, head); assert.equal(fleet.sshKey, options.sshKey);
@@ -121,13 +121,20 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
       else assert.ok(saved.archiveSha256 && saved.evidenceSha256 && saved.evidence && saved.fullGroupQualified === false, "preserved failed evidence required");
       recovery = { measuredCommit: saved.commit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256, roots,
         policy: failedNativePolicy(saved) };
-    } else assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
+    } else {
+      assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
+      if (options.collect && saved.launchHostKeySha256 !== undefined) {
+        launchHostKey(join(physicalRequest, `groups-${options.round}`), saved);
+        launchHostKeySha256 = saved.launchHostKeySha256;
+      }
+    }
     reservationSha256 = digest(bytes);
   }
   if (options.deliverAudit) deliverySha256 = digest(regular(resolve(options.deliverAudit), 16 * 1024 ** 2));
   assert.equal(resolveStateRoot(options.stateDir), physicalRequest, "state root changed during approval");
   const subject = { action: options.detach ? "detach" : options.collect ? "collect" : options.cancelMixedWait ? "cancel-mixed-wait" : options.retireFailedNative ? "retire-failed-native" : "deliver-audit", controllerCommit: head,
     options, stateRoot: physicalRequest, reservationSha256, deliverySha256, ...(fleetSha256 ? { fleetSha256 } : {}),
+    ...(launchHostKeySha256 ? { launchHostKeySha256 } : {}),
     ...(remainingPlacement === undefined ? {} : { remainingPlacement }),
     ...(recovery ? { recovery } : {}),
     declaration: options.unusedBootstrapKnownHosts !== undefined
@@ -205,6 +212,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   const plan = await productionPlan(options, deps);
   if (preview) {
     write(JSON.stringify({ action: plan.subject.action, controllerCommit: plan.subject.controllerCommit, round: options.round,
+      ...(plan.subject.launchHostKeySha256 ? { launchHostKeySha256: plan.subject.launchHostKeySha256 } : {}),
       ...(plan.subject.recovery ? { recovery: plan.subject.recovery, reservationSha256: plan.subject.reservationSha256 } : {}),
       ...(options.unusedBootstrapKnownHosts !== undefined ? { declaration: plan.subject.declaration } : {}),
       approvalSha256: plan.approvalSha256, missing: plan.missing, fullGroupQualified: false }));

@@ -991,13 +991,30 @@ test("approved group composition runs only its native group and collection canno
   assert.equal(await productionMain(await g.approval(), g.p.deps), 3);
   assert.equal(g.p.h.creates, 1); assert.equal(g.p.h.deletes, 0);
   assert.equal(g.p.h.saved().group, groupNames[0]);
+  const known = join(g.p.h.local, "known_hosts"), launchKey = readFileSync(known);
+  assert.equal(g.p.h.saved().launchHostKeySha256, digest(launchKey));
+  const ssh = g.p.calls.filter(([binary]) => binary === "ssh").map(([, argv]) => argv);
+  assert.ok(ssh[0].includes("StrictHostKeyChecking=accept-new") && ssh[0].includes("GlobalKnownHostsFile=none"));
+  assert.ok(ssh.slice(1).every(argv => argv.includes("StrictHostKeyChecking=yes") && argv.some(arg => arg.includes(".launch-host-key-"))));
   assert.deepEqual(g.p.h.saved().selection.groups.map((row) => row.group), [groupNames[0]]);
   assert.ok(readFileSync(join(g.p.h.local, "job.sh"), "utf8").includes(`--group '${groupNames[0]}'`));
   const values = g.p.args();
   assert.equal(await productionMain([...values, "--print-approval"], g.p.deps), 3);
+  assert.equal(g.p.stdout.at(-1).launchHostKeySha256, digest(launchKey));
   assert.equal(await productionMain([...values, "--approve-reviewed-merged-ready", g.p.stdout.at(-1).approvalSha256], g.p.deps), 3);
   assert.equal(g.p.h.creates, 1); assert.equal(g.p.h.deletes, 0);
   await assert.rejects(productionMain([...values, "--group", groupNames[1], "--fleet", g.path, "--print-approval"], g.p.deps));
+});
+
+test("replacing the launch host key after collection approval refuses before provider access", async (t) => {
+  const flags = { active: true }, g = groupProduction(t, flags);
+  assert.equal(await productionMain(await g.approval(), g.p.deps), 3);
+  const approved = await g.p.approve(), before = g.p.calls.length, known = join(g.p.h.local, "known_hosts");
+  flags.afterFetch = () => writeFileSync(known, "synthetic replacement\n");
+  await assert.rejects(productionMain(approved, g.p.deps), /saved host key differs from launch/);
+  await assert.rejects(productionMain([...g.p.args(), "--print-approval"], g.p.deps), /saved host key differs from launch/);
+  assert.ok(g.p.calls.slice(before).every(([binary]) => binary === "git"));
+  assert.equal(g.p.h.deletes, 0);
 });
 
 test("changing the fleet between preview and merged-source gate refuses allocation", async (t) => {

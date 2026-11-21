@@ -144,7 +144,7 @@ export function controllerState(s, round) {
   validateState(s, round);
   const allowed = ["schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "createdAt", "status", "id", "ip",
     "createIntentAt", "archiveSha256", "evidenceSha256", "extractionAttempts", "evidence", "evidenceOutcome", "collectedAt", "deletionIntentAt", "destroyedAt",
-    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "remainingPlacement"];
+    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "remainingPlacement", "launchHostKeySha256"];
   assert.ok(Object.keys(s).every((k) => allowed.includes(k)), "unknown controller state field");
   providerIdentity(s.provider);
   if (s.fleet) assert.deepEqual(s.provider, s.fleet.provider, "fleet account/context differs");
@@ -153,6 +153,10 @@ export function controllerState(s, round) {
   if (s.status === "reserved") assert.ok(!s.createIntentAt && !s.id, "reserved host already has create intent");
   if (s.status === "creating") assert.ok(!s.id, "creating host unexpectedly bound");
   assert.equal(s.fullGroupQualified, false, "this provisional contract cannot qualify a campaign");
+  if (s.launchHostKeySha256 !== undefined) {
+    full(s.launchHostKeySha256, /[a-f0-9]{64}/, "launch host-key digest required");
+    assert.ok(s.fleet && s.control?.monitor && s.id && s.ip && s.createIntentAt, "launch host key requires a bound supervised child");
+  }
   if (s.preBootstrapTerminal !== undefined) {
     const p = s.preBootstrapTerminal, m = s.control?.monitor;
     assert.deepEqual(Object.keys(p).sort(), ["hostId", "invocation", "ip", "monitorId", "stdout"]);

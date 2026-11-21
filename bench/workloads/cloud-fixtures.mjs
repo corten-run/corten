@@ -163,7 +163,13 @@ export function harness(t, flags = {}) {
           setupFailed: true, exitCode: 1, observedAtMs: Date.now() };
         return good(JSON.stringify(Object.hasOwn(flags, "setupProof") ? flags.setupProof : proof));
       }
-      if (script === "true") return flags.noSsh ? { ...good(), status: 255 } : good();
+      if (script === "true") {
+        if (flags.noSsh) return { ...good(), status: 255 };
+        const known = join(local, "known_hosts");
+        if (args.includes("StrictHostKeyChecking=accept-new") && args.includes("GlobalKnownHostsFile=none") && !existsSync(known))
+          writeFileSync(known, "synthetic launch SSH host key\n", { flag: "wx" });
+        return good();
+      }
       if (script.includes("CORTEN_IDLE") && flags.busyHost) return { ...good(), status: 1 };
       if (script.startsWith("systemctl show") || script.includes("CORTEN_IDLE") && script.includes("\nsystemctl show")) {
         units++; if (flags.unitError) throw new Error("fake unit failure");

@@ -104,32 +104,49 @@ function mixedCancelledCustody(directory, subject, binding) {
 export const groupedFailureCandidate = (state) => (stagedFleet(state.fleet) || state.fleet?.schema === "benchmark-group-fleet/v4")
   && ["closed", "invalid"].includes(state.control?.monitor?.phase);
 
+export function launchHostKey(local, state) {
+  assert.match(state.launchHostKeySha256 ?? "", /^[a-f0-9]{64}$/, "no launch-established host key; preserve host");
+  const key = regular(join(local, "known_hosts"), 1024 * 1024);
+  assert.ok(key.length && digest(key) === state.launchHostKeySha256, "saved host key differs from launch");
+  return key;
+}
+
+export function retainedInvalidOwner(local, state) {
+  // Both locks belong to the original foreground controller, not to the
+  // separate recovery operation. Never take them over or treat a live or
+  // inaccessible PID (including a reused PID) as a settled owner.
+  const lock = JSON.parse(regular(join(local, "operation.lock"), 1024)), { pid } = lock;
+  assert.deepEqual(Object.keys(lock).sort(), ["at", "pid"], "not an original operation lock");
+  assert.equal(new Date(lock.at).toISOString(), lock.at, "invalid original operation lock time");
+  assert.ok(Number.isSafeInteger(pid) && pid > 0, "invalid original operation lock");
+  assert.deepEqual(JSON.parse(regular(join(dirname(local), ".groups-launch.lock"), 1024)),
+    { pid, round: state.round }, "retained launch lock differs");
+  try { process.kill(pid, 0); } catch (error) { if (error.code === "ESRCH") return false; }
+  return true;
+}
+
 export function groupedFailure(local, state) {
   assert.ok(groupedFailureCandidate(state), "official dedicated reservation required");
+  launchHostKey(local, state);
   const { registration, terminal } = state.control?.monitor?.phase === "closed" ? sealedMonitor(local, state) : settledMonitor(local, state);
   assert.equal(state.control.ledger.findLast(r => r.request.epoch === "bootstrap")?.code, 0, "bootstrap seal was not acknowledged");
   assert.equal(registration.host.hostname, state.name, "registered host differs");
   if (terminal.kind === "invalid") {
     assert.ok(terminal.publicationRevoked === true && terminal.remoteTerminal === false, "invalid monitor publication not revoked");
-    // Both retained locks came from the original foreground controller. They
-    // stay in place; the separate recovery lock and expired lease admit only
-    // observation of the saved unit, not takeover of either lock.
-    const { pid } = JSON.parse(regular(join(local, "operation.lock"), 1024));
-    assert.ok(Number.isSafeInteger(pid) && pid > 0, "invalid original operation lock");
-    assert.deepEqual(JSON.parse(regular(join(dirname(local), ".groups-launch.lock"), 1024)),
-      { pid, round: state.round }, "retained launch lock differs");
+    assert.ok(!retainedInvalidOwner(local, state), "original monitor owner is still live or uncertain");
   }
   const round = campaignRounds(state.round)[state.group];
   assert.ok(round, "unknown reserved group");
   const phases = { ...(state.group === "json-api" ? { prepare: nativeArtifactRoot(state.group, jsonPreparationRound(state.round)) } : {}),
     timing: nativeArtifactRoot(state.group, round) };
   return { registration, terminal, round, phases, host: { bootId: registration.host.bootId, name: state.name,
-    knownHostsSha256: fileHash(join(local, "known_hosts"), 1024 * 1024) },
+    knownHostsSha256: state.launchHostKeySha256 },
     roots: ["/bench/campaign", ...Object.values(phases).map(path => `/bench/repo/${path}`)] };
 }
 
 export function failedNativeArchive(local, state, grouped) {
   const roots = grouped?.roots ?? failedNativeRoots(state);
+  let retirementAllowed = true;
   assert.equal(fileHash(join(local, "results.tgz")), state.archiveSha256, "original failed archive changed");
   const extracted = join(local, state.evidence); physical(extracted);
   assert.equal(treeHash(extracted), state.evidenceSha256, "original failed extraction changed");
@@ -168,7 +185,11 @@ export function failedNativeArchive(local, state, grouped) {
     assert.equal(status.controllerReady, false); assert.equal(status.isolation, "unverified");
     assert.equal(result.wholeHostTerminal, "parent-must-observe"); assert.equal(result.deletionAuthorized, false);
     assert.equal(status.outcomes.length, 1); assert.equal(status.outcomes[0].group, state.group);
-    assert.ok(["failed", "blocked", "not-run", "preserved-uncertain"].includes(status.outcomes[0].outcome), "failed group outcome required");
+    const outcome = status.outcomes[0].outcome;
+    assert.ok(["failed", "blocked", "not-run", "preserved-uncertain", "native-validated"].includes(outcome), "failed campaign outcome required");
+    // Native composition can finish before stream seal, drain or campaign
+    // collection fails. Keep the data but do not infer retirement or success.
+    retirementAllowed = outcome !== "native-validated";
     assert.ok(status.uncollectedNativeRoots.length <= Object.keys(grouped.phases).length);
     const phases = new Set();
     for (const pending of status.uncollectedNativeRoots) {
@@ -201,7 +222,7 @@ export function failedNativeArchive(local, state, grouped) {
     assert.equal(result.status.outcomes.length, 1); assert.equal(result.status.outcomes[0].group, state.group); assert.equal(result.status.outcomes[0].outcome, "not-run");
     assert.ok(!readdirSync(dir).some((n) => /^mixed-(native-audits|audit-delivery(?:-retained)?)\.json$/.test(n)), "cancelled wait advanced into audit");
   }
-  return { campaign, roots };
+  return { campaign, roots, retirementAllowed };
 }
 
 // Only trusted controller code runs remotely. Native files are opened as data,
@@ -576,8 +597,9 @@ export function verifyFailedNativeReservation(state, prior, grouped) {
   assert.deepEqual(current, prior, "original measured reservation changed");
 }
 
-export function verifyFailedNativeCustody(local, state, capture, grouped) {
-  failedNativeArchive(local, state, grouped);
+export function verifyFailedNativeCustody(local, state, capture, grouped, requireRetirement = false) {
+  const { retirementAllowed } = failedNativeArchive(local, state, grouped);
+  if (requireRetirement) assert.ok(retirementAllowed, "ambiguous native outcome permits custody only");
   assert.equal(capture.schema, "benchmark-failed-native-custody/v1");
   assert.equal(capture.measuredCommit, state.commit);
   assert.match(capture.controllerCommit, /^[a-f0-9]{40}$/);
@@ -633,7 +655,7 @@ export function verifyFailedNativeRetirement(local, state, expectedSha256 = stat
   // Ordinary collection runs at the measured commit. The historical action
   // requires a distinct, explicitly approved repair source.
   const grouped = record.capture.controllerCommit === state.commit ? groupedFailure(local, state) : undefined;
-  verifyFailedNativeCustody(local, state, record.capture, grouped);
+  verifyFailedNativeCustody(local, state, record.capture, grouped, true);
   assert.deepEqual(Object.keys(record.rehash).sort(), ["finishedAtMs", "observation", "scriptSha256", "startedAtMs"]);
   const rehash = failedNativeObservation(JSON.stringify(record.rehash.observation), state, record.rehash.startedAtMs, record.rehash.finishedAtMs, grouped);
   assert.equal(record.rehash.scriptSha256, digest(failedNativeScript(state, record.capture.observation.snapshotSha256, null, grouped)));

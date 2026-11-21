@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata } from "./cloud-fixtures.mjs";
 import { fleetPlan, reservation, tags } from "./cloud-contract.mjs";
@@ -8,24 +8,33 @@ import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { digest, treeHash } from "./cloud-local.mjs";
 import { verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
+import { readFleet, readGroup, verifyFleet } from "./fleet-verify.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 import { streamLimits } from "./isolated/control-stream.mjs";
 
 const round = "r37", campaign = "r37-0123456789abcdef";
-const retainedOperation = JSON.stringify({ pid: 9876, at: "2026-11-21T00:00:00.000Z" });
-const retainedLaunch = JSON.stringify({ pid: 9876, round });
+const retiredPid = 2147483647;
+const retainedOperation = JSON.stringify({ pid: retiredPid, at: "2026-11-21T00:00:00.000Z" });
+const retainedLaunch = JSON.stringify({ pid: retiredPid, round });
+const establishedKey = "synthetic established host key\n";
 const canonical = (value) => JSON.stringify(value, (_, v) => v && typeof v === "object" && !Array.isArray(v)
   ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, v[k]])) : v);
 
 function fixture(t, group, flags = {}) {
   const json = group === "json-api", phase = json ? "closed" : "invalid";
-  const h = harness(t, { ...flags, round }); h.seed();
+  const h = harness(t, { ...flags, round, ...(flags.fleetLayout ? { fleetGroup: group } : {}) });
+  if (flags.fleetLayout) mkdirSync(h.base);
+  h.seed();
+  const root = dirname(h.base);
+  const region = json ? "blr1" : "sfo3";
   const child = fleetPlan({ round, commit, token: "a".repeat(16), sshKey: "42", provider: { accountId, context },
     tokens: Object.fromEntries(h.saved().selection.groups.map(({ group }, index) => [group, String(index).padStart(16, "0")])) },
-  "2026-11-21T00:00:00.000Z", "sfo3", { stagedPlacement: true });
+  "2026-11-21T00:00:00.000Z", "sfo3", { stagedPlacement: !flags.fleetLayout });
+  if (flags.fleetLayout) writeFileSync(join(root, `fleet-${round}.json`), JSON.stringify(child));
   const token = child.jobs.find((j) => j.group === group).token;
   const saved = { ...h.saved(), ...reservation({ round, commit, token, group, fleet: child,
-    remainingPlacement: { region: json ? "blr1" : "sfo3", intentSha256: "a".repeat(64) } }), provider: child.provider, status: "running" };
+    ...(!flags.fleetLayout ? { remainingPlacement: { region, intentSha256: "a".repeat(64) } } : {}) }), provider: child.provider, status: "running",
+    ...(!flags.legacyKey ? { launchHostKeySha256: digest(establishedKey) } : {}) };
   const binding = { round, commit, token, helperSha256: guardianSha256 };
   const reg = { ...structuredClone(registration), binding, host: { ...registration.host, hostname: saved.name } };
   const boot = { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: ["bootstrap"] };
@@ -50,7 +59,7 @@ function fixture(t, group, flags = {}) {
     writeFileSync(join(h.base, ".groups-launch.lock"), flags.foreignLock ? "{}" : retainedLaunch);
   }
   const sibling = join(h.base, "sibling.lock"); writeFileSync(sibling, "sibling stays locked");
-  writeFileSync(join(h.local, "known_hosts"), "synthetic established host key\n");
+  writeFileSync(join(h.local, "known_hosts"), flags.replaceKey ? "synthetic replacement\n" : establishedKey);
 
   const mainRoot = json ? "bench/json-api/results/j75" : "bench/fullstack-browser/work/w37";
   const outputRoots = json ? ["bench/json-api/results/j74", mainRoot] : [mainRoot];
@@ -61,8 +70,8 @@ function fixture(t, group, flags = {}) {
   const attempt = { schema: "benchmark-isolated-campaign-reservation/v1", id: campaign, commit, campaignSha256: plan.campaignSha256 };
   const status = { schema: "benchmark-isolated-campaign-status/v1", state: json ? "finished" : "preserved-uncertain", round,
     campaign, campaignSha256: plan.campaignSha256, controllerReady: false, isolation: "unverified", executionVersion: 5,
-    outcomes: [{ group, outcome: json ? "failed" : "preserved-uncertain" }],
-    uncollectedNativeRoots: json ? [] : [{ group, phase: "timing", artifactRoot: flags.foreignPath ?? mainRoot }] };
+    outcomes: [{ group, outcome: flags.lateSealFailure ? "native-validated" : json ? "failed" : "preserved-uncertain" }],
+    uncollectedNativeRoots: json || flags.lateSealFailure ? [] : [{ group, phase: "timing", artifactRoot: flags.foreignPath ?? mainRoot }] };
   const entries = [{ name: "campaign/" }, { name: "campaign/.host-attempt.json", body: JSON.stringify(attempt) },
     { name: `campaign/${campaign}/` }, { name: `campaign/${campaign}/plan.json`, body: JSON.stringify(plan) },
     { name: `campaign/${campaign}/campaign-result.json`, body: JSON.stringify({ status, wholeHostTerminal: "parent-must-observe", deletionAuthorized: false }) },
@@ -115,7 +124,7 @@ function fixture(t, group, flags = {}) {
     if (binary === "doctl" && args[2] === "delete") deleteExpiry = rest[2];
     return h.run(binary, args, ...rest);
   };
-  return { h, sibling, wrapper, custody, roots, get probes() { return probes; }, get downloads() { return custodyDownloads; },
+  return { h, root, sibling, wrapper, custody, roots, get probes() { return probes; }, get downloads() { return custodyDownloads; },
     get deleteExpiry() { return deleteExpiry; }, task: () => h.task({ run, inspect: () => assert.fail("native replay must not decide custody") }) };
 }
 
@@ -173,4 +182,60 @@ test("uncertain delete reconciles by exact ID without another delete or SSH", as
   const calls = f.h.calls.slice(start);
   assert.ok(calls.some(([bin, a, b, c, id]) => bin === "doctl" && a === "compute" && b === "droplet" && c === "get" && id === "123"));
   assert.ok(calls.every(([bin]) => bin === "doctl"));
+});
+
+test("an old or replaced key cannot authorize failed custody or DELETE", async (t) => {
+  for (const [flags, reason] of [[{ replaceKey: true }, /saved host key differs from launch/],
+    [{ legacyKey: true }, /no launch-established host key/]]) {
+    const f = fixture(t, "fullstack-browser", flags), state = readFileSync(f.h.statePath);
+    await assert.rejects(f.task().collect(), reason);
+    assert.deepEqual(readFileSync(f.h.statePath), state);
+    assert.deepEqual(f.h.calls, []);
+    assert.equal(f.probes, 0); assert.equal(f.h.deletes, 0);
+  }
+});
+
+test("a late stream-seal failure retains native-validated data as custody only", async (t) => {
+  const f = fixture(t, "fullstack-browser", { lateSealFailure: true });
+  assert.equal(await f.task().collect(), 3);
+  assert.equal(await f.task().collect(), 3);
+  assert.deepEqual(readFileSync(join(f.h.local, "results.tgz")), f.wrapper);
+  assert.deepEqual(readFileSync(join(f.h.local, "failed-native-results.tgz")), f.custody);
+  assert.ok(existsSync(join(f.h.local, "failed-native-capture.json")));
+  assert.ok(!existsSync(join(f.h.local, "failed-native-host.json")));
+  assert.equal(f.probes, 1); assert.equal(f.downloads, 1); assert.equal(f.h.deletes, 0);
+  const s = f.h.saved();
+  assert.equal(s.status, "running"); assert.equal(s.fullGroupQualified, false);
+  for (const key of ["retirement", "deletionIntentAt", "validation", "exitCode", "collectedAt", "evidenceOutcome"])
+    assert.equal(s[key], undefined);
+});
+
+test("fleet verification reads retired custody behind settled locks, not live owners or collectors", async (t) => {
+  const group = "fullstack-browser", f = fixture(t, group, { fleetLayout: true, deleteLost: true });
+  const verify = async () => {
+    const before = treeHash(f.root);
+    const report = await verifyFleet({ root: f.root, round, commit }, { inspect: () => assert.fail("retirement must not replay native data") });
+    assert.equal(treeHash(f.root), before);
+    assert.equal(report.publishableBaseline, false); assert.equal(report.status, "incomplete");
+    assert.equal(report.error, undefined);
+    assert.equal(readGroup(readFleet(f.root, round), group).outcome, "busy", "mutating fleet paths still see retained locks");
+    return report.groups.find(row => row.group === group).outcome;
+  };
+  await assert.rejects(f.task().collect(), /acknowledgement lost/);
+  assert.equal(await verify(), "cleanup-pending");
+  const recovery = join(f.h.local, "stream-recovery.lock");
+  writeFileSync(recovery, JSON.stringify({ pid: process.pid }));
+  assert.equal(await verify(), "busy");
+  unlinkSync(recovery);
+  assert.equal(await f.task().collect(), 1);
+  assert.equal(await verify(), "native-failed-retired");
+  const op = join(f.h.local, "operation.lock"), launch = join(f.h.base, ".groups-launch.lock");
+  assert.equal(readFileSync(op, "utf8"), retainedOperation);
+  assert.equal(readFileSync(launch, "utf8"), retainedLaunch);
+  const owner = JSON.stringify({ ...JSON.parse(retainedOperation), pid: process.pid });
+  writeFileSync(op, owner);
+  writeFileSync(launch, JSON.stringify({ pid: process.pid, round }));
+  assert.equal(await verify(), "busy");
+  assert.equal(readFileSync(op, "utf8"), owner);
+  assert.equal(f.h.deletes, 1);
 });

@@ -13,8 +13,8 @@ import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-sealed-collection.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
-import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, setupEvidence, settledBootstrap, terminalSetupScript,
-  unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
+import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, launchHostKey, setupEvidence,
+  settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
   verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { controlCheckpoint, pinnedHostOptions } from "./cloud-transport.mjs";
@@ -50,7 +50,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   mkdirSync(requested, { recursive: true, mode: 0o700 });
   const base = realpathSync(requested); physical(base);
   const local = join(base, `groups-${options.round}`), statePath = join(local, "state.json"), archive = join(local, "results.tgz");
-  let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, groupedHostKey;
+  let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
   const read = (path = local, round = options.round) => { boundary(path); return controllerState(JSON.parse(regular(join(path, "state.json"), 1024 * 1024)), round); };
@@ -185,23 +185,60 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   const sshLimits = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"];
   const sshOptions = ["-o", "StrictHostKeyChecking=accept-new", "-o", `UserKnownHostsFile=${join(local, "known_hosts").replaceAll("\\", "/")}`, ...sshLimits];
+  const launchSshOptions = [...sshOptions, "-o", "GlobalKnownHostsFile=none", "-o", "UpdateHostKeys=no"];
+  async function withHostKeySnapshot(key, prefix, fn) {
+    const sha256 = digest(key), dir = mkdtempSync(join(base, prefix)), path = join(dir, "known_hosts");
+    const identity = lstatSync(dir, { bigint: true });
+    let fileIdentity;
+    try {
+      durable(path, key);
+      fileIdentity = lstatSync(path, { bigint: true });
+      const result = await fn([...pinnedHostOptions(path), ...sshLimits]);
+      assert.equal(digest(regular(path, 1024 * 1024)), sha256, "private host-key snapshot changed");
+      return result;
+    } finally {
+      if (!preserveOperationLock) {
+        physical(dir);
+        const current = lstatSync(dir, { bigint: true });
+        assert.ok(current.dev === identity.dev && current.ino === identity.ino, "private host-key directory changed");
+        const files = readdirSync(dir);
+        if (files.length) {
+          assert.deepEqual(files, ["known_hosts"], "unexpected private host-key artifacts; preserve");
+          const file = lstatSync(path, { bigint: true });
+          assert.ok(fileIdentity && file.dev === fileIdentity.dev && file.ino === fileIdentity.ino
+            && digest(regular(path, 1024 * 1024)) === sha256, "private host-key snapshot changed; preserve");
+          unlinkSync(path);
+        }
+        rmdirSync(dir);
+      }
+    }
+  }
+  async function usingLaunchHostKey(fn) {
+    const result = await withHostKeySnapshot(launchHostKey(local, state), ".launch-host-key-", fn);
+    launchHostKey(local, state);
+    return result;
+  }
   const transport = async (binary, args, timeout, allowFail) => {
     await own(); assert.ok(state.id && state.ip, "bound host required");
     const mixedRecovery = state.group === "mixed-production" && (options.cancelMixedWait || options.retireFailedNative);
-    const pinnedKey = mixedRecovery ? mixedWait.knownHostsSha256 : options.r21MeasuredCheckout ? recoveryApproval.knownHostsSha256 : groupedHostKey;
+    const pinnedKey = mixedRecovery ? mixedWait.knownHostsSha256 : options.r21MeasuredCheckout ? recoveryApproval.knownHostsSha256 : undefined;
     if (pinnedKey) assert.equal(fileHash(join(local, "known_hosts")), pinnedKey, "native host keys changed");
     if (existsSync(join(local, "known_hosts"))) regular(join(local, "known_hosts"), 1024 * 1024);
-    let registration;
-    if (state.control) {
-      assert.equal(state.control.helperSha256, guardianSha256, "control source changed; preserve host");
-      assert.ok(!state.control.sealed.includes(controlEpoch), "control epoch already sealed");
-      const intent = controlRequest(state, binary, args, timeout ?? 60000, controlEpoch, sealing);
-      state.control.ledger.push({ request: intent, localTerminal: false }); save();
-      registration = controlRegistration(intent);
-    }
-    const hostOptions = pinnedKey ? [...pinnedHostOptions(join(local, "known_hosts")), ...sshLimits] : sshOptions;
-    const startedAtMs = Date.now();
-    const result = await execute(binary, [...hostOptions, ...args], timeout, allowFail, undefined, undefined, registration);
+    let startedAtMs;
+    const invoke = (hostOptions) => {
+      let registration;
+      if (state.control) {
+        assert.equal(state.control.helperSha256, guardianSha256, "control source changed; preserve host");
+        assert.ok(!state.control.sealed.includes(controlEpoch), "control epoch already sealed");
+        const intent = controlRequest(state, binary, args, timeout ?? 60000, controlEpoch, sealing);
+        state.control.ledger.push({ request: intent, localTerminal: false }); save();
+        registration = controlRegistration(intent);
+      }
+      startedAtMs = Date.now();
+      return execute(binary, [...hostOptions, ...args], timeout, allowFail, undefined, undefined, registration);
+    };
+    const result = !pinnedKey && state.launchHostKeySha256 ? await usingLaunchHostKey(invoke)
+      : await invoke(pinnedKey ? [...pinnedHostOptions(join(local, "known_hosts")), ...sshLimits] : sshOptions);
     if (pinnedKey) assert.equal(fileHash(join(local, "known_hosts")), pinnedKey, "native host keys changed during transport");
     return { ...result, startedAtMs };
   };
@@ -215,14 +252,22 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(Number.isFinite(current) && Number.isFinite(deadline) && current >= previous && current < deadline, "SSH unavailable within readiness budget");
       previous = current; return Math.max(1, Math.floor(deadline - current));
     };
+    const known = join(local, "known_hosts");
+    if (fleet) assert.ok(!lstatSync(known, { throwIfNoEntry: false }), "unexpected host key before first launch SSH");
     for (let attempt = 0; attempt < attempts; attempt++) {
       await own(remaining);
-      const known = join(local, "known_hosts");
       if (lstatSync(known, { throwIfNoEntry: false })) regular(known, 1024 * 1024);
       // No guardian or other remote write is dispatched by this probe. Only a
       // settled SSH client failure can advance to another identical no-op.
-      const result = await execute("ssh", [...sshOptions, `root@${state.ip}`, "true"], 20000, true, undefined, remaining);
-      if (result.status === 0 && !result.error && !result.signal) return;
+      const result = await execute("ssh", [...(fleet ? launchSshOptions : sshOptions), `root@${state.ip}`, "true"], 20000, true, undefined, remaining);
+      if (result.status === 0 && !result.error && !result.signal) {
+        if (fleet) {
+          const key = regular(known, 1024 * 1024);
+          assert.ok(key.length, "launch SSH did not establish a host key");
+          state.launchHostKeySha256 = digest(key); save();
+        }
+        return;
+      }
       assert.equal(result.status, 255, "SSH unavailable; readiness did not return an SSH transport status");
       if (attempt + 1 < attempts) await sleep(Math.min(spacingMs, remaining()));
     }
@@ -269,8 +314,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           assert.equal(state.control.monitor.phase, "pending");
           const expected = { id: state.control.monitor.id, binding: { round: state.round, commit: state.commit,
             token: state.token, helperSha256: state.control.helperSha256 } };
-          await execute("ssh", [...sshOptions, 'root@' + state.ip], 30000, false, undefined, undefined,
+          const connect = (opts) => execute("ssh", [...opts, 'root@' + state.ip], 30000, false, undefined, undefined,
             { stream: true, expected, local, interrupted });
+          if (state.launchHostKeySha256) await usingLaunchHostKey(connect);
+          else await connect(sshOptions);
           assert.ok(monitor);
           state.control.monitor.registrationSha256 = digest(JSON.stringify(monitor.registration));
           state.control.monitor.phase = "live"; save();
@@ -429,31 +476,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       knownHostsSha256 = digest(key);
       assert.equal(knownHostsSha256, unusedBootstrapApproval.knownHostsSha256, "approved host-key file changed");
       // Stay under the private state root, but outside the durable reservation.
-      const dir = mkdtempSync(join(base, ".unused-host-key-")), path = join(dir, "known_hosts"), identity = lstatSync(dir, { bigint: true });
-      let fileIdentity;
-      try {
-        durable(path, key);
-        fileIdentity = lstatSync(path, { bigint: true });
+      raw = await withHostKeySnapshot(key, ".unused-host-key-", async (hostOptions) => {
         // Do not install a guardian or turn a missing acknowledgement into a receipt.
         startedAtMs = Date.now();
-        raw = (await execute("ssh", [...pinnedHostOptions(path), ...sshLimits, `root@${state.ip}`, script], 30000)).stdout;
-        assert.equal(digest(regular(path, 1024 * 1024)), knownHostsSha256, "private host-key snapshot changed");
-      } finally {
-        if (!preserveOperationLock) {
-          physical(dir);
-          const current = lstatSync(dir, { bigint: true });
-          assert.ok(current.dev === identity.dev && current.ino === identity.ino, "private host-key directory changed");
-          const files = readdirSync(dir);
-          if (files.length) {
-            assert.deepEqual(files, ["known_hosts"], "unexpected private host-key artifacts; preserve");
-            const file = lstatSync(path, { bigint: true });
-            assert.ok(fileIdentity && file.dev === fileIdentity.dev && file.ino === fileIdentity.ino
-              && digest(regular(path, 1024 * 1024)) === knownHostsSha256, "private host-key snapshot changed; preserve");
-            unlinkSync(path);
-          }
-          rmdirSync(dir);
-        }
-      }
+        return (await execute("ssh", [...hostOptions, `root@${state.ip}`, script], 30000)).stdout;
+      });
     }
     const finishedAtMs = Date.now();
     const evidence = unusedEvidence(raw, state, script, startedAtMs, finishedAtMs, knownHostsSha256);
@@ -467,7 +494,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     return retire("setup-failed", evidence, finishedAtMs);
   };
   async function retireNativeFailure(controllerCommit, grouped) {
-    failedNativeArchive(local, state, grouped);
+    const { retirementAllowed } = failedNativeArchive(local, state, grouped);
     const originalPath = join(local, "failed-native-reservation.json");
     const original = regular(existsSync(originalPath) ? originalPath : statePath, 1024 * 1024);
     verifyFailedNativeReservation(state, JSON.parse(original), grouped);
@@ -496,6 +523,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // Local custody verification precedes a fresh, full remote rehash and
     // current-quiescence proof. Neither is historical native qualification.
     verifyFailedNativeCustody(local, state, capture, grouped); check();
+    if (!retirementAllowed) return 3; // Ambiguous native outcome: retain both the data and the host.
     const rehashScript = failedNativeScript(state, capture.observation.snapshotSha256, null, grouped), rehashStarted = Date.now();
     const rehashRaw = (await ssh(rehashScript, 11 * 60000)).stdout, rehashFinished = Date.now();
     const rehashObservation = failedNativeObservation(rehashRaw, state, rehashStarted, rehashFinished, grouped);
@@ -718,9 +746,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           assert.equal(digest(regular(statePath)), recoveryApproval.reservationSha256, "locked r21 reservation changed");
         }
         const sealed = state.control?.monitor?.phase === "closed";
-        const grouped = !options.r21MeasuredCheckout && state.status === "running" && groupedFailureCandidate(state)
+        const groupedCandidate = !options.r21MeasuredCheckout && state.status === "running" && groupedFailureCandidate(state);
+        if (groupedCandidate && failedMonitorRecovery) assert.ok(state.launchHostKeySha256, "no launch-established host key; preserve host");
+        const grouped = groupedCandidate && state.launchHostKeySha256
           ? groupedFailure(local, state) : undefined;
-        if (grouped) groupedHostKey = grouped.host.knownHostsSha256;
         let inspectUnit = unit, idleScript, unitState;
         const query = unitQuery(state) + " --all --property=Job --property=SubState --property=ControlPID";
         if (sealed || grouped) {
@@ -730,7 +759,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             assert.equal(terminal.campaign, recoveryApproval.campaign); assert.equal(terminal.sealSha256, recoveryApproval.sealSha256);
           }
           const unitSha256 = digest(remoteFiles(state)[state.unit]);
-          idleScript = (pack, stamp) => idleArchiveScript(state, registration.host.bootId, unitSha256, { pack, stamp, completedOnly: !!grouped });
+          idleScript = (pack, stamp) => idleArchiveScript(state, registration.host.bootId, unitSha256, { pack, stamp, completedOnly: !!groupedCandidate });
           inspectUnit = async () => {
             const result = await ssh(query, 60000, true);
             assert.ok(result.status === 0 && !result.error, "unit query refused");
@@ -796,7 +825,8 @@ else ${pack}; fi` : pack, 11 * 60000);
           state.evidence = basename(extracted); state.evidenceSha256 = hash; save();
         }
         if (setupCandidate) return retireFailedSetup(); // Never inspect/publish native evidence without supervision.
-        if (grouped && regular(join(local, state.evidence, "exit-code"), 16).equals(Buffer.from("2\n"))) {
+        if (groupedCandidate && regular(join(local, state.evidence, "exit-code"), 16).equals(Buffer.from("2\n"))) {
+          assert.ok(grouped, "no launch-established host key; preserve host");
           assert.equal((await execute("git", ["rev-parse", "HEAD"])).stdout.trim(), state.commit, "failed custody requires the measured checkout");
           return retireNativeFailure(state.commit, grouped);
         }
