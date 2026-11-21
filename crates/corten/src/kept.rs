@@ -86,10 +86,15 @@ const HEADER: usize = 112;
 /// An entry's size once it is no longer kept: nothing made for it counts from then on.
 const GONE: usize = usize::MAX;
 
-/// Room for the names the stages after the handler add to a kept answer's head (`Age`, the tag,
-/// the security headers and what compression writes come to fewer), so it does not grow as they
-/// are written. A middleware of the app that adds more grows it as it would any other.
+/// Room for the names the stages after the handler add to a kept answer's head, so it does not
+/// grow as they are written: `Age`, the tag, the security headers, the reporting endpoints and
+/// what compression writes are twelve at most. A middleware of the app that adds more grows it as
+/// it would any other.
 const ADDED: usize = 12;
+
+/// The most names a kept answer's head is given that room beside. One with more is copied as it
+/// is, so no head is too large for the map the room asks for.
+const ROOMY: usize = 64;
 
 /// `Last-Event-ID`, held once: a comparison with a name that is not the `http` crate's own
 /// would make the name each time.
@@ -101,12 +106,12 @@ static NOTICE: header::HeaderName = crate::page::NOTICE_HEADER;
 /// names: a copy made by `clone` is as large as what it holds, and grows on the first header a
 /// stage adds.
 fn with_room(head: &HeaderMap) -> HeaderMap {
-    // More names than a map takes with that room: the copy as large as what it holds.
-    let Ok(mut copy) = HeaderMap::try_with_capacity(head.keys_len() + ADDED) else { return head.clone() };
+    if head.keys_len() > ROOMY {
+        return head.clone();
+    }
+    let mut copy = HeaderMap::with_capacity(head.keys_len() + ADDED);
     for (name, value) in head {
-        if copy.try_append(name.clone(), value.clone()).is_err() {
-            return head.clone();
-        }
+        copy.append(name.clone(), value.clone());
     }
     copy
 }
@@ -531,7 +536,13 @@ impl<'a> Sent<'a> {
             if name == header::HOST {
                 host = host.or(Some(value));
             } else if name == header::ACCEPT {
-                accept = accept.or(Some(value));
+                if accept.is_none() {
+                    accept = Some(value);
+                    // A data client's request leaves here, as it left before the rest was read.
+                    if Mode::accepting(value.to_str().unwrap_or("")) != Mode::Document {
+                        return None;
+                    }
+                }
             } else if name == header::ACCEPT_LANGUAGE {
                 language = language.or(Some(value));
             } else if name == header::CONTENT_LENGTH
@@ -542,8 +553,11 @@ impl<'a> Sent<'a> {
                 return None;
             }
         }
-        let accept = accept.and_then(|accept| accept.to_str().ok()).unwrap_or("");
-        (Mode::accepting(accept) == Mode::Document).then_some(Sent { host, language })
+        // What `Mode::asked` says of these headers, which is where the rule for a request's mode
+        // lives: a signal it reads that this pass does not fails here in every test that asks for
+        // a page.
+        debug_assert_eq!(Mode::asked(headers), (Mode::Document, false));
+        Some(Sent { host, language })
     }
 }
 
@@ -747,17 +761,20 @@ mod tests {
         let mut head = HeaderMap::new();
         for (name, value) in [
             ("content-type", "text/html; charset=utf-8"),
-            ("vary", "corten, accept"),
             ("link", "</a.css>; rel=preload; as=style"),
+            ("vary", "corten, accept"),
             ("corten-shell", "f2858fac99b1c5e6"),
             ("vary", "accept-language"),
-            ("link", "</b.js>; rel=modulepreload"),
         ] {
             head.append(header::HeaderName::from_static(name), HeaderValue::from_static(value));
         }
-        // A name taken out and put back, so the map's own order is not the order it was filled in.
-        head.remove("corten-shell");
-        head.append("corten-shell", HeaderValue::from_static("f2858fac99b1c5e6"));
+        // A name taken out and put back, which moves the last name to its place: the map's own
+        // order is no longer the order it was filled in.
+        head.remove("link");
+        head.append("link", HeaderValue::from_static("</a.css>; rel=preload; as=style"));
+        head.append("link", HeaderValue::from_static("</b.js>; rel=modulepreload"));
+        let filled: Vec<_> = lines(&head).into_iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(filled, ["content-type", "corten-shell", "vary", "vary", "link", "link"]);
         let mut copy = with_room(&head);
         assert_eq!(lines(&copy), lines(&head));
         // As many more names as the stages add, and the map is the size it was made.
@@ -772,20 +789,18 @@ mod tests {
         assert_eq!(copy.capacity(), room);
         assert_eq!(lines(&copy)[..head.len()], lines(&head)[..]);
 
-        // A head too large for the room is copied as it is: more lines of one name than a map
-        // has names, and more names than a map takes with that room.
-        let mut many_lines = HeaderMap::new();
-        for line in 0..40_000 {
-            many_lines.append(header::LINK, HeaderValue::from(line));
+        // A head of more names than is given room, with two lines of one, is copied as it is.
+        let mut large = HeaderMap::new();
+        for name in 0..=ROOMY {
+            large.append(header::HeaderName::from_bytes(format!("x-{name}").as_bytes()).unwrap(), HeaderValue::from(name));
         }
-        assert_eq!(lines(&with_room(&many_lines)), lines(&many_lines));
-        let mut many_names = HeaderMap::new();
-        for name in 0..24_570 {
-            many_names
-                .append(header::HeaderName::from_bytes(format!("x-{name}").as_bytes()).unwrap(), HeaderValue::from_static("1"));
-        }
-        assert!(HeaderMap::<HeaderValue>::try_with_capacity(many_names.keys_len() + ADDED).is_err());
-        assert_eq!(lines(&with_room(&many_names)), lines(&many_names));
+        large.append("x-0", HeaderValue::from_static("again"));
+        let copy = with_room(&large);
+        assert_eq!(lines(&copy), lines(&large));
+        assert_eq!(copy.capacity(), large.clone().capacity());
+        // And the largest that is given room has it.
+        large.remove("x-1");
+        assert!(with_room(&large).capacity() >= ROOMY + ADDED);
     }
 
     #[test]

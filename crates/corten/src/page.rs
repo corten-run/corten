@@ -130,8 +130,10 @@ impl Mode {
         Self::read(headers, false).0
     }
 
-    /// The mode a request's `Accept` asks for, where its `corten` header names none. Browsers
-    /// never put JSON first for a navigation.
+    /// The mode a request's `Accept` asks for, where its `corten` header names none: all that
+    /// [`Mode::asked`] reads of such a request, which `crate::kept` relies on when it reads a
+    /// request's headers itself (and checks in a debug build). Browsers never put JSON first for a
+    /// navigation.
     pub(crate) fn accepting(accept: &str) -> Mode {
         if crate::api::media_type(accept.split(',').next().unwrap_or("")) == crate::api::JSON {
             Mode::Data
