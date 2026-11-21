@@ -1633,27 +1633,37 @@ rules something out.
        box itself, which `FeedBody` cannot name (its stream holds an `async fn`'s future) without
        making the public `FeedBody` generic, for 0.5% of an event (1.5% with glibc).
 
-       A page request on Corten's own server allocates 18 times after warm-up, 19,479 bytes in a
-       page shaped like the lean catalog page's (`crates/corten/tests/page_allocations.rs`, which
-       fails on one more; 19 with feature `compress`, whose `accept-encoding` is a second `Vary`
-       value the header map holds apart). They are hyper's read buffer and the head it splits off,
-       the answer's header map (two), the page and its body's box and bytes, the stage and handler
-       futures, the request's `Signal` and nonce slot and their places in the extensions, the
-       matched path's three, the page's key header and the route's parameter. Two more were taken
-       out ([#1779 More than half of the catalog page's cycles are below the framework (kernel 32%, hyper 20%): what an answer path of Corten's own, an answer cache and io_uring could each take, measured on a bare ladder](https://github.com/corten-run/corten/issues/1779)):
-       a request hyper says has no body (no length, or a length of 0) is handed on as the empty
-       body rather than boxed, and the room a page's head tags are written in is kept by the
-       thread. On the lean catalog page over `corten::serve_on`, counted on `e8f8e47dc` and on
-       it with that change: 20 allocations and 20,762 bytes a request against 18 and 19,714 (a
-       counting global allocator, three rounds of 2,000 after 3,000, every round the same); 40,446
-       and 40,463 instructions a request against 40,146 and 40,140 with glibc's allocator and
-       37,816 and 37,814 against 37,582 and 37,589 with jemalloc (callgrind, release, the run of
-       1,200 less the run of 200 over 1,000, two runs each); and under `wrk` (64 connections, the
-       server on one CPU, `perf stat`, 20 rounds taking turns, on a busy WSL2 workstation rather
-       than a quiet bench host) 312 fewer user instructions a request at the median, fewer in 16
-       of 20 rounds, but cycles a median of 2,373 fewer with quartiles 8,420 fewer and 4,384 more,
-       so the cycles do not tell the builds apart and no CPU-cost win is claimed. The rest are
-       hyper's and `http`'s, or the extensions' map, which the stages read for the matched path.
+       A page request on Corten's own server allocates 19 times after warm-up, 20,503 bytes, in a
+       page shaped like the lean catalog page's, on `2899e131e` (`crates/corten/tests/page_allocations.rs`,
+       which fails when the mean over its 500 counted requests is one more: it pins the mean, not
+       a per-request maximum; 20 with feature `compress`, whose `accept-encoding` is a second
+       `Vary` value the header map holds apart). hyper's are its read buffer and the head it splits
+       off, and `http`'s the answer's header map (two); Corten's own are the page, its head tags and
+       its body's box and bytes, the stage and handler futures, the request's `Signal` and nonce
+       slot and their places in the extensions' map, the matched path's three, the page's key
+       header and the route's parameter. One was taken out
+       ([#1779 More than half of the catalog page's cycles are below the framework (kernel 32%, hyper 20%): what an answer path of Corten's own, an answer cache and io_uring could each take, measured on a bare ladder](https://github.com/corten-run/corten/issues/1779)):
+       a request hyper says has no body (no body framing or a zero decoded length, that is no
+       `Content-Length` or `Transfer-Encoding`, or `Content-Length: 0`) is handed on as the empty
+       body rather than boxed in the type that marks a read that waits, against 20 allocations and
+       20,527 bytes on `e8f8e47dc`. Keeping the room the head tags are written in in the thread
+       (`e7f40d8a5`: 18 and 19,479) took one more, for up to 16 KiB each thread keeps, a cap and a
+       test of the cap; it was taken back out, since one allocation does not pay for state each
+       thread holds. Under `wrk` (64 connections from three CPUs, the server on one CPU with the lean
+       catalog profile's timeouts off, `perf stat` on the server for 10 seconds after 2 of
+       warm-up, release builds, 24 rounds in which the builds took turns, answers checked against
+       `e8f8e47dc`'s to the byte but for the date, no request failed, every counter running 100%),
+       on a busy WSL2 workstation rather than a quiet bench host: user instructions a request
+       were 34,906 on `2899e131e` against 35,050 on `e8f8e47dc` at the median, 138 fewer within a
+       round, fewer in 16 of 24. The smallest worthwhile reduction, declared before the run, was
+       1,000 user and kernel cycles a request. Those cycles were 120,902 against 120,418 at the
+       median (ranges 103,314 to 142,628 and 98,648 to 146,706), and within a round a median of
+       1,460 fewer (user 637, kernel 609), from 20,275 fewer to 14,265 more, fewer in 14 of 24; the
+       interval for that median (97.7%, the 7th and 18th of 24) runs from 4,788 fewer to 1,981 more.
+       `e8f8e47dc` against a copy of itself in the same rounds moved a median of 2,944 (7,614 fewer
+       to 2,702 more), more than the change did. The run does not resolve cycles at the declared
+       margin, and no CPU-cost win is claimed; `e7f40d8a5` was no different (306 fewer user
+       instructions, cycles 3,799 fewer at the median, from 11,574 fewer to 2,697 more).
 
     Not chosen: keeping axum's router and handlers, which this Choice held until the seam above
     was measured (functions named for axum, tower or matchit were 2.5% of the item page's user
@@ -1930,9 +1940,9 @@ rules something out.
     case at `5596df8b5` with the reading pattern varied, five rounds each: even 2 KiB reads
     every 125 ms from the socket over TLS and plain kept, tokio-rustls cut, 16 KiB a second
     over plain cut, `curl --limit-rate 16K` (7.88.1) over plain and TLS cut; 2026-11-20, a
-    page request's allocations on `e8f8e47dc` and on it with the empty request body unboxed and
-    the head tags' room kept, attributed by site with DHAT, and hyper 1.12.0's `Incoming` read
-    for which requests it says have no body.
+    page request's allocations attributed by site with DHAT, and hyper 1.12.0's `Incoming` read
+    for which requests it says have no body; 2026-11-21, a page request's allocations, user
+    instructions and cycles under `wrk` on `e8f8e47dc`, `e7f40d8a5` and `2899e131e`.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
