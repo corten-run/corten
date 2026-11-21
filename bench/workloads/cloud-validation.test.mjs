@@ -267,9 +267,9 @@ test("semver snapshot pins same-read library bytes before actual worker executio
   assert.throws(h.capture, /validation unavailable/);
 });
 
-test("only named catalog, bounded resilience and compiler replay dependencies extend the worker source budget", { timeout: 15000 }, async (t) => {
+test("only named replay dependencies extend the worker source budget", { timeout: 15000 }, async (t) => {
   const paths = validationPaths.filter((path) => path === "bench/catalog/cgroup.mjs" || path === "bench/typescript.mjs" || path === "bench/fullstack/edge.mjs"
-    || /^bench\/hardening\/(?:bounded-requests\.mjs$|dependency-recovery-)/.test(path));
+    || path === "bench/workloads/isolated/native-roles.mjs" || /^bench\/hardening\/(?:bounded-requests\.mjs$|dependency-recovery-)/.test(path));
   assert.deepEqual(paths, [
     "bench/catalog/cgroup.mjs",
     "bench/fullstack/edge.mjs",
@@ -277,16 +277,17 @@ test("only named catalog, bounded resilience and compiler replay dependencies ex
     "bench/hardening/dependency-recovery-capture.mjs",
     "bench/hardening/dependency-recovery-contract.mjs",
     "bench/typescript.mjs",
+    "bench/workloads/isolated/native-roles.mjs",
   ]);
   const h = semverSnapshot(t), snapshot = h.capture();
   assert.equal(snapshot.sources.length - paths.length, 211);
   const task = validationTask(h.input, { snapshot, WorkerClass: class extends Worker {
     constructor(entry, options) {
       // Inject below the exact parent manifest check to exercise the worker's own bound. The
-      // replay never imports the compiler entry, so only its named slot, not a generic extra
+      // replay never imports the role entry, so only its named slot, not a generic extra
       // one, keeps an unused path in its place from fitting.
       options.workerData.sources = options.workerData.sources.map((row) =>
-        row.path === "bench/typescript.mjs" ? { ...row, path: "bench/hardening/unlisted-control.mjs" } : row);
+        row.path === "bench/workloads/isolated/native-roles.mjs" ? { ...row, path: "bench/hardening/unlisted-control.mjs" } : row);
       super(entry, options);
     }
   } });

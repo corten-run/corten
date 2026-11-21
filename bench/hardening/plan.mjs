@@ -49,6 +49,7 @@ export function parseArgs(args) {
     const key = args[i];
     assert.ok(!seen.has(key), `duplicate option ${key}`); seen.add(key);
     if (key === "--build") { assert.equal(o.build, false, "duplicate --build"); o.build = true; continue; }
+    if (key === "--isolated") { o.isolated = true; continue; }
     assert.ok(["--out", "--profile", "--review", "--node-modules", "--verify-app", "--verify-source", "--verify-case", "--verify-phase"].includes(key), `unknown argument ${key}`);
     const value = args[++i]; assert.ok(value && !value.startsWith("--"), `${key} needs a value`);
     if (key.startsWith("--verify-")) { const name = key.slice(9); assert.equal(o.verify[name], undefined, "duplicate verification filter"); o.verify[name] = value; }

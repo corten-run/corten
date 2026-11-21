@@ -9,6 +9,7 @@ import { phaseInputs, savedProofVersion } from "../../../hardening/evidence.mjs"
 import { boundedRequestsVersion, budgets, deploymentQualificationVersion, matrix, parseArgs, registryDigest } from "../../../hardening/plan.mjs";
 import { recoveryProfile } from "../../../hardening/dependency-recovery-contract.mjs";
 import { selectedApps } from "../../registry.mjs";
+import { nativeControlPartition } from "../native-roles.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const same = (a, b) => assert.ok(isDeepStrictEqual(a, b));
@@ -72,6 +73,10 @@ function bindingOptions(binding) {
   same(selection.contractSha256, registryDigest); same(sources.commit, request.commit);
   assert.match(binding.subjectSha256, /^[a-f0-9]{64}$/);
   const argv = [request.round, "--build", "--review", binding.subjectSha256];
+  if (resources.actorCpus || execution.effectiveOptions.isolated) {
+    nativeControlPartition(binding);
+    argv.push("--isolated");
+  }
   same(execution.invocation, { executable: "node", argv: ["bench/hardening/run.mjs", ...argv], cwd: "repository-root", shell: false });
   const options = parseArgs(argv);
   same(options.profile, "bounded"); same(options.verify, {}); same(options.build, true);
@@ -185,6 +190,10 @@ export async function inspectSaved(binding, folder) {
     const proof = native.proof;
     let clean = summary.cleanupFailures.length === 0 && Number.isFinite(Date.parse(summary.finishedAt)) && proof?.cleanupComplete === true;
     let resources = native.observed === expected.length && proof?.resources === "verified" && proof?.sources === "verified";
+    if (options.isolated && proof?.cpuRoles !== "verified") {
+      resources = false;
+      block("hardening-effective-cpu-role-proof-missing");
+    }
     if (proof) {
       same(proof.schema, "native-hardening-saved-proof/v1");
       assert.ok(["verified", "blocked"].includes(proof.resources) && ["verified", "blocked"].includes(proof.sources));
