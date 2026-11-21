@@ -583,6 +583,188 @@ async fn a_public_page_is_shared_only_when_nothing_makes_it_personal() {
     assert_eq!(cache_control(&api, "/api/rates", &[("cookie", "session=abc")]).await, "private, no-cache");
 }
 
+/// A form's submit key is drawn for each render, so a `Public` page that draws one
+/// (`SubmitKey::field`) differs between visitors: a cache that gave the first visitor's page to
+/// the next would have the second visitor's submit taken for a repeat of the first. It goes out
+/// `private, no-cache` whoever set the header, as a page with the request's nonce does, and the
+/// browser asks again before reusing it, so a reload is not sent a key it already used. A page
+/// whose only key field is a template's draws nothing and stays shared.
+#[tokio::test]
+async fn a_public_page_that_draws_a_submit_key_is_not_shared() {
+    let minute = std::time::Duration::from_secs(60);
+    let form = || html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> };
+    let routes = Table::new()
+        .route("/keyed", get(move |req: Req| async move { Public::new(minute, req.test_page_for("Keyed", form())) }))
+        .route(
+            "/keyed-rendered",
+            get(move |req: Req| async move {
+                let form = req.rendered(form());
+                let placed = &form;
+                Public::new(minute, req.test_page_for("Keyed", html! { {placed} }))
+            }),
+        )
+        .route(
+            "/keyed-by-hand",
+            get(move |req: Req| async move {
+                Ok::<_, Error>((Cache::public(minute).shared(minute * 60), req.test_page("Keyed", form())?))
+            }),
+        )
+        .route(
+            "/template-keyed",
+            get(move |req: Req| async move {
+                let template = html! {
+                    <template><form method="post">{crate::SubmitKey::template_field(KeyedWrite::FIELDS.submit)}</form></template>
+                };
+                Public::new(minute, req.test_page_for("Keyed", template))
+            }),
+        );
+    let router = App::new(Routes::from(routes)).router();
+    for uri in ["/keyed", "/keyed-rendered", "/keyed-by-hand"] {
+        for asked in [&[][..], &[("corten", "nav")], &[("accept", "application/json")]] {
+            assert_eq!(cache_control(&router, uri, asked).await, "private, no-cache", "{uri} {asked:?}");
+        }
+    }
+    assert_eq!(cache_control(&router, "/template-keyed", &[]).await, "public, max-age=60", "a template's key draws nothing");
+}
+
+/// The caching headers a CDN or proxy reads before `Cache-Control`, as Corten names them. A name a
+/// deployment configures for itself (RFC 9213 allows one) is the deployment's to keep off.
+const CDN_OVERRIDES: [&str; 6] = [
+    "cdn-cache-control",
+    "cloudflare-cdn-cache-control",
+    "vercel-cdn-cache-control",
+    "surrogate-control",
+    "edge-control",
+    "x-accel-expires",
+];
+
+/// Headers a CDN reads that do not say how long to keep the answer.
+const CDN_OTHERS: [&str; 3] = ["cache-status", "surrogate-key", "cache-tag"];
+
+/// A CDN reads its own caching header before `Cache-Control`, so a page that draws a submit key
+/// goes out with none of those Corten names, whoever wrote one (here staged middleware), and also
+/// when its `Cache-Control` already keeps it private or out of every cache. Other headers a CDN
+/// reads stay, and a page with no key keeps what the middleware wrote.
+#[tokio::test]
+async fn a_page_that_draws_a_submit_key_keeps_no_cdn_caching_header() {
+    assert_eq!(crate::cache::CDN_CACHING, CDN_OVERRIDES, "the list the guide names");
+    struct CdnHeaders;
+
+    impl crate::Middleware for CdnHeaders {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            let headers = res.headers_mut();
+            for name in CDN_OVERRIDES {
+                headers.insert(name, HeaderValue::from_static("max-age=60"));
+            }
+            for name in CDN_OTHERS {
+                headers.insert(name, HeaderValue::from_static("x"));
+            }
+            res
+        }
+    }
+
+    let minute = std::time::Duration::from_secs(60);
+    let form = || html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> };
+    let routes = Table::new()
+        .route("/keyed", get(move |req: Req| async move { Public::new(minute, req.test_page_for("Keyed", form())) }))
+        .route("/keyed-default", get(move |req: Req| async move { req.test_page("Keyed", form()) }))
+        .route(
+            "/keyed-private",
+            get(move |req: Req| async move {
+                Ok::<_, Error>(([(header::CACHE_CONTROL, "private, max-age=60")], req.test_page("Keyed", form())?))
+            }),
+        )
+        .route("/keyed-no-store", get(move |req: Req| async move { NoStore(req.test_page("Keyed", form())) }))
+        .route(
+            "/plain",
+            get(move |req: Req| async move { Public::new(minute, req.test_page_for("Plain", html! { <p>"plain"</p> })) }),
+        );
+    let router = App::new(Routes::from(routes)).middleware(CdnHeaders).router();
+    let get = |uri: &'static str| {
+        let router = router.clone();
+        async move { router.oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap().headers().clone() }
+    };
+    for (uri, cache) in [
+        ("/keyed", "private, no-cache"),
+        ("/keyed-default", "private, no-cache"),
+        ("/keyed-private", "private, max-age=60"),
+        ("/keyed-no-store", "private, no-store"),
+    ] {
+        let headers = get(uri).await;
+        assert_eq!(headers[header::CACHE_CONTROL], cache, "{uri}");
+        for cdn in CDN_OVERRIDES {
+            assert!(!headers.contains_key(cdn), "{uri}: {headers:?}");
+        }
+        for other in CDN_OTHERS {
+            assert_eq!(headers[other], "x", "{uri}: {other}");
+        }
+    }
+    let headers = get("/plain").await;
+    assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60");
+    for name in CDN_OVERRIDES {
+        assert_eq!(headers[name], "max-age=60", "a page with no key keeps the middleware's {name}");
+    }
+    for other in CDN_OTHERS {
+        assert_eq!(headers[other], "x", "{other}");
+    }
+}
+
+/// A refused cross-site write gets the app's error page, which goes out before the cache rules
+/// run. One that draws a submit key goes out as any page that draws one does: a `no-store` it
+/// says as `private, no-store`, and none of the CDN caching headers it wrote. One that draws none
+/// is sent `private, no-cache`, whatever it said, as before.
+#[tokio::test]
+async fn a_refusal_page_that_draws_a_submit_key_is_not_shared() {
+    let refused = |keyed: bool, cache: &'static str| {
+        let router = App::new(Routes::from(Table::new().route("/", get(|| async { "home" }).post(|| async { "saved" }))))
+            .error_page(
+                move |_: Failure, req: Req| async move {
+                    let form = html! {
+                        <form method="post">if keyed { {crate::SubmitKey::field(KeyedWrite::FIELDS.submit)} }</form>
+                    };
+                    req.test_page("Not allowed", form).map(|mut page| {
+                        let headers = page.headers_mut();
+                        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+                        for name in CDN_OVERRIDES {
+                            headers.insert(name, HeaderValue::from_static("max-age=60"));
+                        }
+                        page
+                    })
+                },
+                (),
+            )
+            .router();
+        async move {
+            let req = Request::post("/")
+                .header("origin", "https://evil.example")
+                .header("sec-fetch-site", "cross-site")
+                .header("accept", "text/html")
+                .body(Body::empty())
+                .unwrap();
+            let res = router.oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::FORBIDDEN);
+            res.headers().clone()
+        }
+    };
+    for (keyed, cache, sent) in [
+        (true, "no-store", "private, no-store"),
+        (true, "public, max-age=60", "private, no-cache"),
+        (false, "no-store", "private, no-cache"),
+        (false, "public, max-age=60", "private, no-cache"),
+    ] {
+        let headers = refused(keyed, cache).await;
+        assert_eq!(headers[header::CACHE_CONTROL], sent, "keyed {keyed}, {cache}");
+        for name in CDN_OVERRIDES {
+            if keyed {
+                assert!(!headers.contains_key(name), "a keyed refusal sends no {name} ({cache})");
+            } else {
+                assert_eq!(headers[name], "max-age=60", "a refusal with no key keeps its {name} ({cache})");
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn cache_stages_keep_incoming_headers_while_the_handler_sees_middleware_edits() {
     struct Rewrite;
@@ -2252,4 +2434,38 @@ async fn a_kept_page_keeps_the_hash_its_policy_allows_its_style_block_by() {
     assert!(styles.contains("'sha256-"), "the block's hash: {policy}");
     assert!(again.contains_key(header::AGE) && same == body, "the kept page");
     assert_eq!(again[header::CONTENT_SECURITY_POLICY], policy);
+}
+
+/// What settling a page's caching costs a request: `SETTLE_REQUESTS` (200) full-document `GET`s
+/// in process, one at a time. `SETTLE_CASE` is the page: `keyed`, a `Public` page that draws a
+/// submit key (sent `private, no-cache`); `public` (the default), the same page without the key,
+/// which the app keeps; `private`, the page with the key and no `Public`; `plain`, the page with
+/// neither (the default caching, the usual page). Counting it under
+/// callgrind at two numbers of requests gives the instructions per request. Run in release:
+/// `cargo test --release -p corten-run --all-features --lib --no-run`, then
+/// `SETTLE_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::cache::what_settling_a_page_costs`
+/// (Debian's `libjemalloc2`) and again at 200.
+#[test]
+#[ignore]
+fn what_settling_a_page_costs() {
+    let requests: usize = std::env::var("SETTLE_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let case = std::env::var("SETTLE_CASE").unwrap_or_else(|_| "public".to_string());
+    let minute = Duration::from_secs(60);
+    let keyed = case == "keyed" || case == "private";
+    let form = move || html! { <form method="post">if keyed { {crate::SubmitKey::field(KeyedWrite::FIELDS.submit)} }</form> };
+    let routes = if case == "private" || case == "plain" {
+        Table::new().route("/", get(move |req: Req| async move { req.test_page("Form", form()) }))
+    } else {
+        Table::new().route("/", get(move |req: Req| async move { Public::new(minute, req.test_page_for("Form", form())) }))
+    };
+    let router = App::new(Routes::from(routes)).router();
+    let expected = if case == "public" { "public, max-age=60" } else { "private, no-cache" };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for _ in 0..requests {
+            let (status, headers, body) = call_with(router.clone(), "GET", "/", None, None).await;
+            assert!(status == StatusCode::OK && body.contains("<form method=\"post\">"), "{status}: {body}");
+            assert_eq!(headers[header::CACHE_CONTROL], expected);
+        }
+    });
 }

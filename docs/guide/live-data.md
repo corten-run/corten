@@ -16,6 +16,18 @@ stream: the page's own handler answers it ([A slow part](#a-slow-part)).
 
 A value that keeps changing is the next section's `corten::live_watch`.
 
+A stream's headers go out before its fragments are rendered, and a fragment is text, so a form's
+new submit key (`SubmitKey::field`) in one cannot make the stream private as it makes a page. A
+stream whose fragments may draw a key is never `Public` and says `Cache-Control: private,
+no-cache` itself, written by a middleware of its area (`Area::middleware`): its default
+`no-cache` is not enough, since some CDNs keep an answer that says only `no-cache` or
+`no-store`. It carries no CDN caching header (`CDN-Cache-Control`, `Surrogate-Control`, the others
+[caching](app.md#caching) lists, or a name the deployment configures), and no edge rule caches
+its URL whatever it says; otherwise a shared cache gives every visitor the same key
+([forms](requests-and-forms.md#forms)). Under `corten dev`, a stream whose headers as sent have
+no plain `private`, or carry one of those listed CDN headers, is logged when a fragment it gives
+draws a key.
+
 ### Resuming
 
 A part whose data changes rarely should not be drawn again on every page view and reconnect. Give
