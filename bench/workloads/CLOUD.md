@@ -446,7 +446,7 @@ that fleet. Use `[]` when starting without retained evidence. For example:
 
 Use an unmodified index and the same continuation root for the entire set. The
 report replays each original attempt, checks the successful archives, the
-extracted trees and confirmed deletion, and checks each reusable group's own
+extracted trees against the pinned archive bytes and confirmed deletion, and checks each reusable group's own
 contract and roster. It does not use a cached report as evidence. The measured
 commits must be ancestors of the report checkout, but groups need not have the
 same commit, date, framework versions or host. Preserve target failures (including
@@ -454,6 +454,15 @@ comparison-ineligibility) in verified group results; a failed or incomplete
 apparatus is not a result. An old bound host without confirmed cleanup is shown
 as such. Continuation then requires the same provider account and still refuses
 create if the existing pre-create census finds any foreign benchmark host.
+
+When the launcher checkout advances or a measured checkout moves, use the
+optional sibling directory `ABSOLUTE_ROOT-checkouts/MEASURED_SHA` for that
+commit's clean worktree. Here `MEASURED_SHA` is the full 40-character Git commit.
+The replay first uses that path when present, otherwise the saved checkout
+(`checkout` for an indexed fleet, the launch checkout for a new group). Install
+the measured checkout's pinned root and bench dependencies there. Replay checks
+HEAD and the original dependency pins and bytes; it does not rewrite a reservation
+or measure the group again.
 
 ```sh
 node bench/workloads/group-continuation.mjs --continuation-root ABSOLUTE_ROOT
@@ -475,14 +484,21 @@ native readiness, independent review and operator approval requirements apply.
 
 For collection or audit delivery use the ordinary per-host commands at the
 measured checkout, with state root `ABSOLUTE_ROOT/json-api/json-api` in this
-example. Each group has one new reservation slot and no automatic retry; a spent
-or unconfirmed slot is not reusable. Leave failure evidence and locks in place
-and follow the existing recovery procedures. Do not start a parallel continuation
-with another root to bypass a reservation. Run the report again after collection,
-then select another missing group with its own official round and commit.
+example. Each group has one new reservation slot and no automatic retry. A
+settled `not-created` attempt does not stop other groups, but its consumed intent
+cannot be reused. To retry that group after `not-created` or confirmed retirement,
+use a new root with all previous index references and every reserved independent
+slot as a source. Point each slot entry's `root` at the old `ROOT/GROUP` and
+provide `archives: {}` for a settled failure or no-create attempt; pin every
+eligible success as usual. Use a fresh round, reservation and normal exact approval.
+Do not operate the previous root again. An ambiguous or active slot is refused;
+leave its failure evidence and locks in place and use the existing recovery
+procedure. Run the report after collection to select another missing group.
 
 The report is an index of independently publishable group results, with each
-group's actual round, commit, configuration, dates, archive and attempts. Link
+group's actual round, commit, dates, archive, attempts and `baseEffectiveOptions`.
+Those options describe the base binding; for JSON, actual prepare and timing
+options are in the verified per-phase campaign artifacts. Link
 each group to its original measurement. It is not a single-revision baseline or
 evidence for a speed comparison across groups or revisions.
 

@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fleetCreateMode, roundName, selection, stagedFleet, validateFleet } from "./cloud-contract.mjs";
 import { campaignOutcome, controllerState, full } from "./cloud-options.mjs";
-import { digest, fileHash, physical, regular, resolveStateRoot, treeHash } from "./cloud-local.mjs";
+import { digest, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
@@ -171,13 +171,14 @@ export function recheckContinuationProofs(proofs) {
     recheckCollectedGroup(fleet, snapshot);
   }
 }
-export async function verifyCollectedGroup(fleet, group, { inspect, start, details, interrupted = () => false } = {}) {
+export async function verifyCollectedGroup(fleet, group, { inspect, start, details, bindArchive, interrupted = () => false } = {}) {
   const job = readGroup(fleet, group), { round, commit } = fleet.manifest;
   assert.equal(job.outcome, "available");
   const s = job.state;
   assert.ok(s.status === "collected" && s.collectedAt, "group-not-collected");
   assert.ok(!interrupted());
   const hashes = evidenceSnapshot(job), folder = join(job.local, s.evidence, "campaign");
+  if (bindArchive) await verifyArchiveTree(join(job.local, "results.tgz"), dirname(folder), s.archiveSha256);
   const report = await inspectCampaign(Object.freeze({ folder, round, commit }), { inspect, start, interrupted });
   assert.ok(!interrupted());
   campaignOutcome(report, s, s.exitCode);
@@ -203,14 +204,14 @@ export async function verifyCollectedGroup(fleet, group, { inspect, start, detai
     recordedTimes: { reservationCreatedAt: s.createdAt, collectedAt: s.collectedAt, ...(s.destroyedAt ? { destroyedAt: s.destroyedAt } : {}) },
     timeScope: "reservation-and-collection-not-provider-billing-or-benchmark-elapsed", ...hashes,
     campaignSha256: report.campaignSha256, sourceSha256: report.sourceSha256,
-    ...(details ? { campaignCreatedAt: reservation.createdAt, configuration: plan.bindings?.[0]?.execution?.effectiveOptions } : {}),
+    ...(details ? { campaignCreatedAt: reservation.createdAt, baseEffectiveOptions: plan.bindings?.[0]?.execution?.effectiveOptions } : {}),
     ...(report.status === "verified" ? { appOutcomes: report.groups[0].appOutcomes.map(({ app, outcome, comparisonEligible }) => ({ app, outcome, comparisonEligible })) } : {}) };
   return { evidenceMode: inspect ? "synthetic-inspection" : "native-replay", row, snapshot };
 }
 
 // inspect and compiler are in-process synthetic TEST seams only. The CLI never accepts code,
 // module paths, reports or commands from JSON. Default replay imports fixed code.
-export async function verifyFleet({ root, round, commit }, { inspect, start, details, priorSelection, interrupted = () => false, compiler = localCompiler } = {}) {
+export async function verifyFleet({ root, round, commit }, { inspect, start, details, bindArchive, priorSelection, interrupted = () => false, compiler = localCompiler } = {}) {
   const base = { schema: "benchmark-group-fleet-inspection/v1", scope: "intrinsic-evidence", status: "incomplete",
     evidenceMode: inspect ? "synthetic-inspection" : "native-replay", nativeReadiness: false,
     publishableBaseline: false, comparisonScope: "within-group-host-only" };
@@ -284,7 +285,7 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
         add({ group, outcome: s.destroyedAt ? setup ? "setup-failed-retired" : "unused-retired" : "cleanup-pending", id: s.id }); continue;
       }
       if (s.status !== "collected" || !s.collectedAt) { add({ group, outcome: "uncollected" }); continue; }
-      const verified = await verifyCollectedGroup(fleet, group, { inspect, start, details, interrupted });
+      const verified = await verifyCollectedGroup(fleet, group, { inspect, start, details, bindArchive, interrupted });
       snapshots.push(verified.snapshot); add(verified.row);
     } catch { add({ group, outcome: "error", error: "group-evidence-invalid" }); }
   }

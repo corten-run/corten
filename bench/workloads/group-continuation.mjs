@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { isBuiltin, registerHooks } from "node:module";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { roundName, selection } from "./cloud-contract.mjs";
 import { digest, physical } from "./cloud-local.mjs";
@@ -23,8 +23,16 @@ function git(repo, ...args) {
   return r.stdout;
 }
 
-async function measuredReplay(repo, checkout, commit) {
+export function measuredCheckout(root, saved, commit) {
+  full(commit, /[a-f0-9]{40}/, "measured commit");
+  const pinned = join(`${root}-checkouts`, commit);
+  const checkout = fleetRoot(present(pinned) ? pinned : saved);
+  physical(checkout);
   assert.equal(git(checkout, "rev-parse", "--verify", "HEAD^{commit}").trim(), commit, "use the original measured checkout");
+  return checkout;
+}
+
+async function measuredReplay(repo, checkout, commit) {
   git(repo, "merge-base", "--is-ancestor", commit, "HEAD");
   // Read the measured adapter from a trusted Git object, not from evidence or the
   // mutable checkout. Like r21 recovery it imports only builtins and captures its
@@ -46,34 +54,53 @@ async function measuredReplay(repo, checkout, commit) {
   } finally { hook.deregister(); }
 }
 
-const acceptable = (row) => ["missing", "verified", "native-failed-retired", "setup-failed-retired", "unused-retired"].includes(row.outcome)
+const acceptable = (row) => ["missing", "not-created", "verified", "native-failed-retired", "setup-failed-retired", "unused-retired"].includes(row.outcome)
   || ["failed", "blocked"].includes(row.outcome) && !!row.destroyedAt;
+
+function notCreated(fleet, saved, lock) {
+  if (!fleet.manifest.single || lock !== null || !present(join(fleet.root, "launch-intent.json"))) return false;
+  if (saved.outcome !== "missing" && (saved.state?.status !== "reserved" || saved.outcome !== "ambiguous"
+      || present(join(saved.stateRoot, ".groups-launch.lock")) || present(join(saved.local, "stream-recovery.lock")))) return false;
+  readLaunchIntent(fleet);
+  // Create requires a durable binding before any provider dispatch. A settled
+  // launch with no child directory, or a reservation still before that binding,
+  // cannot have sent create. Never accept "creating" or missing state in a child.
+  return true;
+}
 
 // inspect is a synthetic in-process test seam. On the CLI every accepted result
 // comes from the measured native replay; index entries are references, not verdicts.
 export async function inspectContinuation(root, { repo, interrupted, inspect } = {}) {
   root = fleetRoot(root, repo);
   const bytes = continuationIndex(root), indexSha256 = digest(bytes), index = JSON.parse(bytes);
-  assert.ok(Array.isArray(index) && index.length <= names.length, "invalid continuation index");
+  assert.ok(Array.isArray(index) && index.length <= 64, "invalid continuation index");
+  const indexed = new Map(index.map((entry) => {
+    keys(entry, ["archives", "checkout", "commit", "root", "round"]);
+    return [fleetRoot(entry.root, repo), entry];
+  }));
+  assert.equal(indexed.size, index.length, "retained fleet roots must be unique");
   const members = () => readdirSync(root).filter((name) => name !== continuationLock).sort();
   const paths = members();
   assert.ok(paths.every((name) => name === "index.json" || name === continuationLock || names.includes(name)), "continuation root members differ");
-  const attempts = new Map(names.map((group) => [group, []])), slots = new Map(), sources = new Set(), ids = new Set();
+  const attempts = new Map(names.map((group) => [group, []])), slots = new Map(), ids = new Set();
   const proofs = [], manifests = [], states = [], needsCensus = new Set();
   const read = async (fleet, checkout, archives) => {
     const { manifest, manifestSha256 } = fleet, { round, commit } = manifest;
     const lock = fleetLockSnapshot(fleet.root);
     assert.notEqual(lock, "busy", "continuation source has an active batch");
-    manifests.push({ ...fleet, lock });
-    const replay = inspect ? { inspect } : await measuredReplay(repo, checkout, commit);
-    const report = await verifyFleet({ root: fleet.root, round, commit }, { ...replay, interrupted, details: true, priorSelection: true });
+    const launch = manifest.single && present(join(fleet.root, "launch-intent.json")) ? readLaunchIntent(fleet).sha256 : undefined;
+    if (manifest.single && archives) assert.ok(launch, "old independent slot was never attempted; use its original reservation");
+    manifests.push({ ...fleet, lock, launch });
+    const replay = inspect ? { inspect } : await measuredReplay(repo, measuredCheckout(root, checkout, commit), commit);
+    const report = await verifyFleet({ root: fleet.root, round, commit }, { ...replay, interrupted, details: true, bindArchive: true, priorSelection: true });
     assert.ok(!report.error, report.error);
     assert.equal(report.manifestSha256, manifestSha256, "continuation manifest changed");
     for (const row of report.groups) {
-      const { group, outcome } = row;
+      const { group } = row;
       const saved = readGroup(fleet, group);
       assert.equal(saved.stateSha256, row.stateSha256, "continuation state changed");
       states.push({ fleet, group, stateSha256: saved.stateSha256, outcome: saved.outcome });
+      const outcome = notCreated(fleet, saved, lock) ? "not-created" : row.outcome;
       const selected = manifest.selection.groups.find((s) => s.group === group);
       const matches = groups.groups.some((s) => s.group === group && s.contractSha256 === selected.contractSha256
         && JSON.stringify(s.apps) === JSON.stringify(selected.apps));
@@ -82,12 +109,13 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
         const pinned = Object.hasOwn(archives, group);
         assert.equal(reusable, pinned, `retained ${group} must have a compatible replayed archive pin`);
         if (pinned) assert.equal(row.archiveSha256, archives[group], `retained ${group} archive changed`);
+        if (manifest.single) assert.ok(outcome !== "missing" && acceptable({ ...row, outcome }), "old independent slot is not settled; never retry");
       }
       if (row.id) {
         assert.ok(!ids.has(row.id), "duplicate continuation host identity"); ids.add(row.id);
       }
       if (reusable) {
-        if (manifest.single) readLaunchIntent(fleet);
+        if (manifest.single) assert.ok(launch, "no original group launch intent");
         const { stateSha256, archiveSha256, evidenceSha256 } = row;
         proofs.push({ fleet, snapshot: { group, stateSha256, archiveSha256, evidenceSha256 } });
       }
@@ -99,26 +127,37 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
         && saved.state.validation?.status !== "verified");
       if (censusRequired) needsCensus.add(manifest.provider.accountId);
       assert.ok(attempts.has(group) || censusRequired || acceptable(row), "unresolved custody for a historical group");
-      attempts.get(group)?.push({ ...row, ...(outcome === "verified" && !reusable ? { outcome: "incompatible" } : {}),
+      attempts.get(group)?.push({ ...row, outcome: outcome === "verified" && !reusable ? "incompatible" : outcome,
         round, commit, manifestSha256, selection: selected,
         ...(censusRequired ? { cleanupUnconfirmed: true } : {}),
         ...(row.archiveSha256 ? { archive: `${group}/groups-${round}/results.tgz` } : {}) });
     }
   };
-  for (const entry of index) {
-    keys(entry, ["archives", "checkout", "commit", "root", "round"]);
-    const saved = fleetRoot(entry.root, repo), checkout = fleetRoot(entry.checkout);
-    assert.ok(outside(root, saved) && outside(saved, root) && !sources.has(saved), "retained fleet root must be separate and unique");
-    sources.add(saved); physical(checkout);
+  const previousRoots = new Map();
+  for (const [saved, entry] of indexed) {
+    assert.ok(outside(root, saved) && outside(saved, root), "retained fleet root must be separate");
     full(entry.commit, /[a-f0-9]{40}/, "retained commit"); roundName(entry.round);
     assert.equal(Object.getPrototypeOf(entry.archives), Object.prototype, "archive pins required");
     const fleet = readFleet(saved, entry.round, { priorSelection: true });
-    assert.ok(!fleet.manifest.single && fleet.manifest.commit === entry.commit, "retained fleet source differs");
+    assert.equal(fleet.manifest.commit, entry.commit, "retained fleet source differs");
+    if (fleet.manifest.single) {
+      const previous = dirname(saved), old = continuationIndex(previous);
+      assert.equal(digest(old), fleet.manifest.single.indexSha256, "previous continuation index changed");
+      const dirs = names.filter((name) => present(join(previous, name)) && readdirSync(join(previous, name)).length);
+      assert.ok(dirs.every((name) => indexed.has(join(previous, name))), "re-index every reserved group in the previous continuation");
+      assert.ok(!present(join(previous, continuationLock)), "previous continuation is active");
+      for (const source of JSON.parse(old)) {
+        const carried = indexed.get(fleetRoot(source.root, repo));
+        assert.ok(carried && carried.round === source.round && carried.commit === source.commit, "re-index every previous source");
+        assert.deepEqual(carried.archives, source.archives, "previous archive pins changed");
+      }
+      previousRoots.set(previous, { sha256: digest(old), dirs });
+    }
     for (const [group, hash] of Object.entries(entry.archives)) {
       assert.ok(fleet.manifest.jobs.some((job) => job.group === group), "unknown retained group");
       full(hash, /[a-f0-9]{64}/, "retained archive pin");
     }
-    await read(fleet, checkout, entry.archives);
+    await read(fleet, entry.checkout, entry.archives);
   }
   for (const group of names.filter((name) => paths.includes(name))) {
     const slot = join(root, group);
@@ -131,7 +170,7 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
     assert.equal(fleet.manifest.single?.group, group, "independent reservation required");
     assert.equal(fleet.manifest.single.indexSha256, indexSha256, "continuation index changed");
     slots.set(group, fleet);
-    await read(fleet, fleetRoot(fleet.manifest.single.checkout));
+    await read(fleet, fleet.manifest.single.checkout);
     const row = attempts.get(group).at(-1);
     if (row.outcome === "missing") row.outcome = present(join(slot, "launch-intent.json")) ? "attempt-consumed" : "prepared";
   }
@@ -146,9 +185,16 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
     assert.ok(!interrupted?.());
     assert.equal(continuationIndexSha256(root), indexSha256, "continuation index changed");
     assert.deepEqual(members(), paths, "continuation slots changed");
-    for (const { root, manifest, manifestSha256, lock } of manifests) {
-      assert.equal(readFleet(root, manifest.round, { priorSelection: true }).manifestSha256, manifestSha256);
+    for (const [previous, { sha256, dirs }] of previousRoots) {
+      assert.ok(!present(join(previous, continuationLock)), "previous continuation is active");
+      assert.equal(continuationIndexSha256(previous), sha256);
+      assert.deepEqual(names.filter((name) => present(join(previous, name)) && readdirSync(join(previous, name)).length), dirs);
+    }
+    for (const { root, manifest, manifestSha256, lock, launch } of manifests) {
+      const current = readFleet(root, manifest.round, { priorSelection: true });
+      assert.equal(current.manifestSha256, manifestSha256);
       if (root !== operatingRoot) assert.equal(fleetLockSnapshot(root), lock, "continuation source lock changed");
+      if (launch) assert.equal(readLaunchIntent(current).sha256, launch, "group launch intent changed");
     }
     for (const { fleet, group, stateSha256, outcome } of states) {
       const current = readGroup(fleet, group);
