@@ -1527,7 +1527,8 @@ else a page could differ by, and the answer nothing made for one request:
 A `Date` header the handler set is its own answer's and is not kept: each answer given in its
 place is dated when it is sent, and its `Age` counts from the handler's date, so a cache in front
 finds every answer as old as the first. A page that date makes older than its lifetime, or whose
-date is not written as HTTP writes one (`Sun, 06 Nov 1994 08:49:37 GMT`), is not kept.
+date is not written as HTTP writes one (`Sun, 06 Nov 1994 08:49:37 GMT`, with the day of the
+week that date fell on, and a date that exists), is not kept.
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
@@ -1580,6 +1581,7 @@ who arrives meanwhile, after a deploy too. When the first request's page is not 
 handler failed, or drew something for that request), each of the others then runs its own
 handler, and does not wait again, and for a minute, or until the page is kept or written to,
 requests for that page do not wait for each other (the latest 1,024 such pages are remembered);
+a page another request kept meanwhile is not remembered so;
 when the first request is dropped or panics, each of the others runs its own. A request waits no
 longer than its own deadline (`App::deadline`), which answers it as it would a slow handler. Only
 requests for one copy wait for each other: another query, host or `Accept-Language` does not
@@ -1602,7 +1604,9 @@ of a page's handler: in a full store the answer to the first request for a URL t
 not remember is not kept, whether the page is new, or was kept while there was room or before
 the bits were last cleared and has since passed its lifetime or been dropped. Requests that ask
 for such a URL while its first request is made wait for it as above, and are its second
-requests: the page is kept then and given to them, so they run its handler once. A store that has filled mostly stays full, since a page past its lifetime keeps
+requests: the page is kept then and given to them, so they run its handler once. Whether any
+waits is settled once the first request's page is made: one that comes after that makes the page
+itself, as the URL's second, and those that come while it does wait for it. A store that has filled mostly stays full, since a page past its lifetime keeps
 its room until another needs it. Nothing is kept under `corten dev`,
 so a change shows on the next load. An app with no `Public` page keeps nothing whatever the
 bound, and its writes are not counted, so it pays nothing for pages it cannot keep. An app's tests keep pages as a deploy does (`App::test`,

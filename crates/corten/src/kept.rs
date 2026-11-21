@@ -40,7 +40,8 @@
 //! `Date` the handler set is not kept with it: each answer given in its place is dated when it
 //! is sent, and its `Age` counts from the handler's date as a cache would (RFC 9111, 4.2.3), so a
 //! cache after this one finds every answer as old. A page that date makes older than its
-//! lifetime, or whose date is not in the form HTTP sends, is not kept.
+//! lifetime, or whose date is not in the form HTTP sends (with the day of the week that date fell
+//! on, and a date that exists), is not kept.
 //!
 //! A write drops what is kept at its path, whatever the query (a named post is `?do=name` at its
 //! page's path) and however the path is escaped, whatever it is answered: a handler or a
@@ -74,14 +75,15 @@
 //! panics, each runs its own handler then, and none waits again. At most [`MAKING`] pages are
 //! made at once that others wait for; past that a request makes its page as it would with
 //! nothing kept. A page answered and not kept is remembered as not kept for [`FORGOT`], until a
-//! write to its path or until it is kept, so the requests that meet in that time each run the
-//! handler at once, as they would with nothing kept; that is best effort, as only the latest
-//! [`NOT_KEPT`] are remembered. A request waits no longer than its own deadline, which drops its
-//! wait as it would its handler. In a full store the first request for a URL not asked for before
+//! write to its path or until it is kept (by that request or another meanwhile), so the requests
+//! that meet in that time each run the handler at once, as they would with nothing kept; that is
+//! best effort, as only the latest [`NOT_KEPT`] are remembered. A request waits no longer than
+//! its own deadline, which drops its wait as it would its handler. In a full store the first request for a URL not asked for before
 //! makes the page for the others as any first request does, and a request that comes to wait for
 //! it is the URL's second: the page is kept then, and given to them. With none waiting it is not
 //! kept, and not remembered as not kept, so the next requests for it, which the store keeps it
-//! for, wait for one another.
+//! for, wait for one another. Whether one waits is settled once its page is made, in one step with
+//! the end of the wait for it, so a request that comes after makes the page itself.
 
 use std::collections::{hash_map, HashMap, VecDeque};
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher, RandomState};
@@ -1170,6 +1172,17 @@ impl Missed {
         let shared = self.signal.as_ref().and_then(crate::Signal::shared);
         let Some(answers) = shared.and_then(|shared| shared.kept.as_ref()) else { return res };
         let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else { return res };
+        // A URL not asked for before, in a full store, that no other request asked for while it
+        // was made: refused by the store alone, decided as soon as the answer is a page with a
+        // lifetime, before the rest of it is read. Not remembered as not kept, so the requests that
+        // miss it next, which the store keeps it for, wait for one another as for any page; and one
+        // that comes from here on makes it itself rather than wait for this one. (An error is
+        // remembered, as for any page.)
+        if !self.stored && res.status() == StatusCode::OK && !self.leading.as_mut().is_some_and(Leading::waited) {
+            #[cfg(test)]
+            answers.0.stop(Stop::Refused);
+            return res;
+        }
         // Whether the page varies on `Accept-Language` (`App::messages`, or a locale negotiated
         // from it), or on something the key does not cover.
         let Some(mut language) = varies(res.headers()) else { return res };
@@ -1194,16 +1207,6 @@ impl Missed {
             // A write to the path while the handler read: the page may show what was there before.
             || !self.written.stands(&answers.0)
         {
-            return res;
-        }
-        // A URL not asked for before, in a full store, that no other request asked for while it
-        // was made: refused by the store alone, decided once the answer is ready and before its
-        // headers are read. Not remembered as not kept, so the requests that miss it next, which
-        // the store keeps it for, wait for one another as for any page; and one that comes from
-        // here on makes it itself rather than wait for this one.
-        if !self.stored && !self.leading.as_mut().is_some_and(Leading::waited) {
-            #[cfg(test)]
-            answers.0.stop(Stop::Refused);
             return res;
         }
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };

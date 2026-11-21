@@ -7346,8 +7346,9 @@ rules something out.
     and a page the same in every language is made once for each `Accept-Language` sent while it
     is made. When the first request's page is not kept (an error, a page drawn for that request),
     the others run their own handlers then, and the page is remembered as not kept for a minute,
-    until a write to its path, or until a request that made it alone keeps it, so requests for a
-    page never kept wait for each other about once a minute. That is best effort: the table
+    until a write to its path, or until a request that made it alone keeps it (a page so kept
+    while another request makes it is not remembered when that one's page is not kept), so
+    requests for a page never kept wait for each other about once a minute. That is best effort: the table
     remembers the latest 1,024 such pages and forgets the one remembered first, so with more than
     that in a minute a page may be waited for again sooner. At most 1,024 pages are made at once
     that others wait for; past that, a request makes its page as it would with nothing kept. So
@@ -7374,6 +7375,12 @@ rules something out.
     request), and then each keeps its own only where the store would have kept it at that
     request's own ask. A request the store refuses that finds the table full, or the page
     remembered as not kept, is the handler's at once, as in a store with room.
+    Whether any request waits is settled once the first request's page is made, before its
+    headers are read for its size and date, in one step under the table's lock with the end of
+    the wait for it: a request comes in time to have the page kept for it, or finds no page being
+    made and makes it itself, as the URL's second, for those that come after it. A refused first
+    request pays for the table and the second look as any miss does, and for the checks of its
+    answer that come before its headers are read, not for the copy (measured below).
 
     Not chosen: in front of the middleware, for the reasons above, though it would save the
     stages too; asking the marks whether or not the store has room, which spares the copy
@@ -7413,7 +7420,10 @@ rules something out.
     on a measured path; leaving a request a full store refuses out of the table, which ran a new
     URL's handler twice for requests that miss it together, the first request's alone and then
     one for the rest, and kept the page for those; remembering a page the store alone refused as
-    not kept, which had the requests that miss it together next each run the handler; leaving a handler's `Date` out with nothing for its age, with which a cache
+    not kept, which had the requests that miss it together next each run the handler; settling
+    the refusal after the answer's headers were read and ending the wait apart from it, which a
+    review found let requests that came between the two wait for a page never kept and then each
+    run their own, and cost the refused request the reading of its headers; leaving a handler's `Date` out with nothing for its age, with which a cache
     after the app counted the first answer older than each given in its place, and not keeping a
     page that sets a `Date` at all, which loses the page for an input HTTP gives a meaning to; and,
     left for changes of their own, a call
@@ -7537,9 +7547,10 @@ rules something out.
     rounds, its store never full): a kept page given again ran 19,226 instructions against
     19,228, a page made and kept at a new URL 35,903 against 34,853 (3.0% more), a write and the
     page made again 46,094 against 44,938 (2.6% more), and a page for one visitor 18,270 against
-    18,287, each build's rounds within 11 instructions of each other. Timed (`tests/kept_wave.rs`, 64
+    18,287, each build's rounds within 11 instructions of each other. Timed (`tests/kept_wave.rs`,
+    `200f08426` against `fc86d8eff`, not timed again with the rule for a full store beside it, 64
     requests sent at once for a page whose handler reads a source that answers 4 reads at a time
-    in 50 ms each, under a 500 ms deadline, the same two builds in 2 passes of 5 rounds each, the
+    in 50 ms each, under a 500 ms deadline, the two builds in 2 passes of 5 rounds each, the
     order of the builds turned about between the passes, the medians of the 10 rounds): where a
     write had dropped the copy, the handler ran once where it had run 64 times, and all 64
     requests were answered, the slowest in 52.0 ms (from 51.0 to 52.1 over the rounds), where 28
@@ -7552,9 +7563,10 @@ rules something out.
     again for the second look, which a kept page does not reach), a kept page's
     cycles changed by +0.1% at the median of 140 pairs of turns, with a one-sided 95% bound of
     +0.6%, its user cycles by -0.4% with a bound of +0.2%, and its user instructions by -0.1% with
-    a bound of +0.5%, which meets the margin set before the rounds, cycles not worse with the bound
-    under +1%; the first 40 pairs alone did not (+0.4%, bound +1.7%), so 100 more were run the
-    same way and all 140 are counted. The host was not quiet: the workstation's other work kept
+    a bound of +0.5%. Those bounds describe the 140 pairs and do not test the margin set before
+    the rounds, cycles not worse with the bound under +1%: the first 40 pairs alone did not meet it
+    (+0.4%, bound +1.7%), and the 100 more run the same way were added after that was seen, with no
+    rule for stopping set beforehand. The host was not quiet: the workstation's other work kept
     its CPUs 95 to 100% busy, and one pair's change ranged from -7.7% to +16.1%.
     What a write pays for its count, under callgrind (valgrind 3.24.0, rustc 1.99.1, release with
     debuginfo) on an app with one route whose `GET` and `POST` each answer text, sent
