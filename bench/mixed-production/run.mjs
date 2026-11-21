@@ -10,10 +10,10 @@ import { slowMs } from "../fullstack/mixed.mjs";
 import { maxConnections } from "../fullstack/conformance.mjs";
 import { records as fixtureRecords, writeFixture } from "../marketplace/fixtures.mjs";
 import { buildInputPaths, sourceSnapshot, sourceAuditIdentity, verifySourceAudit } from "./source-audit.mjs";
-import { nativeBuildContext } from "./build-context.mjs";
-import { createExecutionEvidence, executionContext, participantSetupCause } from "./execution-evidence.mjs";
+import { extractNativeSource, nativeBuildContext } from "./build-context.mjs";
+import { createAttachedParticipant, createExecutionEvidence, executionContext, participantSetupCause } from "./execution-evidence.mjs";
 import { withImmutableGit } from "./immutable-git.mjs";
-import { prepareExecutionInputs, finalizeExecutionInputs } from "./execution-inputs.mjs";
+import { executionMountArgs, prepareExecutionInputs, finalizeExecutionInputs } from "./execution-inputs.mjs";
 
 export function parseArgs(args) {
   const options = { round: args[0], apps: null, images: null, readbacks: null, nativeAudits: null, build: false, buildRef: null, seed: 42, clients: 2, repetitions: 1,
@@ -136,12 +136,11 @@ export async function run(args) {
       nativeSource.commit = await io.command("git", ["rev-parse", "--verify", `${options.buildRef ?? summary.provenance.commit}^{commit}`]);
       nativeSource.tree = await io.command("git", ["rev-parse", `${nativeSource.commit}^{tree}`]);
       nativeSource.dirty = false;
-      buildRoot = join(folder, "build-source"); mkdirSync(buildRoot);
-      const archive = join(folder, "build-source.tar");
-      await io.command("git", ["-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar", "--output", archive, nativeSource.commit], { timeout: 60000 });
-      nativeSource.archiveSha256 = sha256(readFileSync(archive));
-      await io.command("tar", ["-xf", archive, "-C", buildRoot], { timeout: 60000 });
+      const extracted = await extractNativeSource(io, folder, nativeSource.commit);
+      buildRoot = extracted.root;
+      nativeSource.archiveSha256 = extracted.archiveSha256;
     }
+    const mount = executionMountArgs(buildRoot, folder);
     const harnessPaths = (await io.command("git", ["ls-tree", "-r", "--name-only", nativeSource.commit])).split(/\r?\n/).filter((p) => /\.(?:mjs|cjs|js|json)$/.test(p));
     summary.executionInputs = prepareExecutionInputs({ folder, buildRoot, repo, commit: nativeSource.commit, harnessPaths });
     summary.executionMounts = JSON.parse(readFileSync(join(folder, "execution/inputs.json"))).mounts;
@@ -202,7 +201,6 @@ export async function run(args) {
         if (io.interrupted) throw new Error("run interrupted");
         const appName = `${runId}-${app}-${source}`, upstreamName = `${appName}-upstream`, workerName = `${appName}-capture`;
         const raw = join(folder, app, source); mkdirSync(raw, { recursive: true });
-        const mount = ["-v", `${buildRoot}:/src:ro`, "-v", `${join(folder, "execution/dependencies")}:/src/node_modules:ro`, "-v", `${folder}:/out`, "-w", "/src"];
         const sourceEntry = entry.sources[source] = { complete: false, readiness: [] };
         let stage = "upstream-create";
         console.log(`${app} ${source}: capturing ${plan.requests.filter((r) => r.source === source).length} planned native operations`);
@@ -228,11 +226,11 @@ export async function run(args) {
           config.base = "http://127.0.0.1:8080";
           writeFileSync(join(raw, "settings.json"), JSON.stringify(config, null, 2));
           stage = "worker-create";
-          await own(["create", "--network", `container:${appName}`, "--cpus", "2", "--memory", "1g", "--shm-size", "512m", ...mount,
-            "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", "-e", `MIXED_CONTROL_TOKEN=${token}`, browserImage.Id, "node", "bench/mixed-production/worker.mjs", `/out/${app}/${source}/settings.json`], workerName);
+          const startWorker = await createAttachedParticipant({ own, docker }, workerName, ["--network", `container:${appName}`, "--cpus", "2", "--memory", "1g", "--shm-size", "512m", ...mount,
+            "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", "-e", `MIXED_CONTROL_TOKEN=${token}`, browserImage.Id, "node", "bench/mixed-production/worker.mjs", `/out/${app}/${source}/settings.json`]);
           const operationCount = plan.requests.filter((r) => r.source === source).length;
           stage = "worker-capture";
-          await docker(["start", "-a", workerName], { timeout: Math.min(20 * 60 * 1000, operationCount * (options.requestTimeoutMs * 5 + options.cleanupMs + 1000) + 20000) });
+          await startWorker({ timeout: Math.min(20 * 60 * 1000, operationCount * (options.requestTimeoutMs * 5 + options.cleanupMs + 1000) + 20000) });
           stage = "worker-artifacts";
           const result = JSON.parse(readFileSync(join(raw, "capture.json"), "utf8"));
           assert.equal(result.cells.length, operationCount, "partial worker capture");

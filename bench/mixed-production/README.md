@@ -307,6 +307,11 @@ by ID. For functional setup failures, `summary.json` distinguishes create-comman
 an unusable create ID, unconfirmed name or inspection evidence, and start-command failure
 without retaining raw Docker errors. An acknowledged create is not a readiness result.
 
+For a fresh Git archive, the extracted tree gets an empty `node_modules` directory so the
+verified dependency snapshot can mount read-only at `/src/node_modules` under read-only
+`/src`. The tar and its committed files are unchanged. Attached capture and qualification
+workers start by their acknowledged IDs, not by names that could have been reused.
+
 Cleanup skips roles that never attempted creation. After a failed start it removes only
 the acknowledged container ID with matching ownership and checks that the container and
 its recorded volumes are absent. A matching name alone is not authority; missing or

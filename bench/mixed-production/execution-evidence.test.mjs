@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, isAbsolute } from "node:path";
-import { bindExecutionParticipant, createExecutionEvidence, participantSetupCause, replayExecution } from "./execution-evidence.mjs";
+import { bindExecutionParticipant, createAttachedParticipant, createExecutionEvidence, participantSetupCause, replayExecution } from "./execution-evidence.mjs";
 import { immutableGit } from "./immutable-git.mjs";
 import { mountSourceHash } from "./execution-inputs.mjs";
 
@@ -186,6 +186,35 @@ test("matched functional source and target bind create IDs before start, preserv
     for (const ref of read(folder, "execution/manifest.json").events)
       assert.ok(!readFileSync(join(folder, ref.path), "utf8").includes("private-canary"));
   }));
+});
+
+test("attached capture and qualification cannot start a same-name replacement", async (t) => {
+  const s = summary(), base = `${s.runId}-corten-fixture`;
+  for (const [name, script] of [[base + "-capture", "worker"], [`${s.runId}-q-corten-fixture-worker`, "qualify-worker"]]) await t.test(script, async () => {
+    const replacement = "e".repeat(64), existing = new Set([id, replacement]), names = new Map([[name, id]]), calls = [];
+    const args = ["--network", `container:${base}`, image, "node", `bench/mixed-production/${script}.mjs`];
+    const start = await createAttachedParticipant({
+      async own(create, subject) {
+        assert.deepEqual(create, ["create", ...args]); assert.equal(subject, name); return id;
+      },
+      async docker(argv, options) {
+        calls.push([argv, options]);
+        const target = names.get(argv[2]) ?? argv[2];
+        assert.notEqual(target, replacement);
+        if (!existing.has(target)) throw Error("original absent");
+        return target;
+      },
+    }, name, args);
+    names.set(name, replacement);
+    const options = { timeout: 1000 };
+    assert.equal(await start(options), id, "bind the original even after the name moves");
+    existing.delete(id);
+    await assert.rejects(start(options), /original absent/);
+    assert.deepEqual(calls, [[["start", "-a", id], options], [["start", "-a", id], options]]);
+    await assert.rejects(createAttachedParticipant({
+      own: async () => name, docker: () => assert.fail("a name is not a create ID"),
+    }, name, args), /full create ID/);
+  });
 });
 
 test("cleanup retains original create acknowledgement ID across same-name replacement", () => temporary(async (folder) => {

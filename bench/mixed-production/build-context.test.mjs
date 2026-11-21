@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import { nativeBuildArchiveArgs, nativeBuildContext } from "./build-context.mjs";
+import { extractNativeSource, nativeBuildArchiveArgs, nativeBuildContext } from "./build-context.mjs";
+import { executionMountArgs } from "./execution-inputs.mjs";
 import { sourceSnapshot } from "./source-audit.mjs";
 import { commands } from "../json-api/process.mjs";
 import { sha256 } from "./capture.mjs";
@@ -17,6 +18,41 @@ test("native archive arguments share a fixed tree timestamp without changing Cor
   assert.deepEqual(nativeBuildArchiveArgs(commit, "corten"), [...prefix, commit]);
   assert.deepEqual(nativeBuildArchiveArgs(commit, "corten", { output: "context.tar" }), [...prefix, "--output", "context.tar", commit]);
   for (const [id, app] of [["HEAD", "express"], [commit, "../express"], [commit, "express:evil"]]) assert.throws(() => nativeBuildArchiveArgs(id, app));
+});
+
+test("fresh Git extraction supplies only the empty mount point under the read-only source bind", async () => {
+  const root = mkdtempSync(join(tmpdir(), "corten-mixed-archive-")), io = commands(root);
+  try {
+    const file = "bench/worker.mjs", body = 'import "playwright";\n';
+    mkdirSync(join(root, "bench")); writeFileSync(join(root, file), body);
+    await io.command("git", ["init", "--quiet"]);
+    await io.command("git", ["-c", "core.autocrlf=false", "add", file]);
+    const commit = async () => {
+      await io.command("git", ["-c", "user.name=Archive Test", "-c", "user.email=archive@example.test", "commit", "--quiet", "-m", "archive fixture"]);
+      return io.command("git", ["rev-parse", "HEAD"]);
+    };
+    const clean = await commit(), out = join(root, "out"), dependencies = join(out, "execution/dependencies");
+    mkdirSync(dependencies, { recursive: true });
+    const source = await extractNativeSource(io, out, clean), archive = join(out, "build-source.tar");
+    assert.deepEqual((await io.command("tar", ["-tf", archive])).split(/\r?\n/), ["bench/", file]);
+    assert.equal(sha256(readFileSync(archive)), source.archiveSha256);
+    assert.equal(readFileSync(join(source.root, file), "utf8"), body);
+    assert.deepEqual(readdirSync(source.root).sort(), ["bench", "node_modules"]);
+    assert.deepEqual(readdirSync(join(source.root, "node_modules")), []);
+    assert.deepEqual(executionMountArgs(source.root, out), ["-v", `${source.root}:/src:ro`, "-v", `${dependencies}:/src/node_modules:ro`,
+      "-v", `${out}:/out`, "-w", "/src"]);
+
+    writeFileSync(join(root, "node_modules"), "tracked collision");
+    await io.command("git", ["add", "--force", "node_modules"]);
+    const collision = await commit(), other = join(root, "collision");
+    mkdirSync(other);
+    await assert.rejects(extractNativeSource(io, other, collision), { code: "EEXIST" });
+    assert.equal(readFileSync(join(other, "build-source/node_modules"), "utf8"), "tracked collision");
+  } finally {
+    io.dispose();
+    assert.equal(dirname(resolve(root)), resolve(tmpdir())); assert.ok(basename(root).startsWith("corten-mixed-archive-"));
+    rmSync(root, { recursive: true });
+  }
 });
 
 test("Docker stdin context excludes ignored working-tree inputs and stays bound to the committed archive", async () => {

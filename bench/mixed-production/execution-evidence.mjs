@@ -30,6 +30,12 @@ export function participantSetupCause(error) {
   return error instanceof ParticipantSetupError ? error.message : undefined;
 }
 
+export async function createAttachedParticipant({ own, docker }, name, args) {
+  const id = await own(["create", ...args], name);
+  assert.ok(typeof id === "string" && containerId.test(id), "attached participant requires the full create ID");
+  return (options) => docker(["start", "-a", id], options);
+}
+
 export function bindExecutionParticipant(participants, context, observed) {
   const matches = participants.filter((p) => Object.entries(context).every(([key, value]) => p[key] === value));
   assert.equal(matches.length, 1, "native participant lifecycle missing or ambiguous");
