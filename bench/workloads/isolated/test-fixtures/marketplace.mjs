@@ -2,8 +2,8 @@
 import { locales, workload } from "../../../marketplace/contract.mjs";
 import { records } from "../../../marketplace/fixtures.mjs";
 import { phases, resultSchema, sources, stageAggregate, timedProfiles } from "../../../marketplace/run-contract.mjs";
-import { featureProfile, qualification, qualificationSettings } from "../../../marketplace/feature-contract.mjs";
-import { qualificationProbes } from "../../../marketplace/qualification-fixture.mjs";
+import { boundedFeatureProfile as featureProfile, produceBoundedQualification, boundedQualificationSettings as qualificationSettings } from "../../../marketplace/feature-contract.mjs";
+import { boundedQualificationProbes } from "../../../marketplace/qualification-fixture.mjs";
 import { digest } from "../evidence.mjs";
 
 export function marketplaceResult(binding) {
@@ -16,7 +16,7 @@ export function marketplaceResult(binding) {
       cpus: binding.resources.expectedCpus, encoding: "identity", fixedRate: options.rate, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, featureProfile, qualificationSettings } };
   for (const app of options.apps) {
     const a = s.apps[app] = { label: app, imageId: `sha256:${"b".repeat(64)}`, builtCommit: commit, builtDirty: false, checks: {}, runs: {}, phases: {},
-      qualification: Object.fromEntries(sources.map((source) => [source, qualification(qualificationProbes(), source)])) };
+      qualification: Object.fromEntries(sources.map((source) => [source, produceBoundedQualification(boundedQualificationProbes(source), source)])) };
     for (const source of sources) {
       a.checks[source] = { workload, source, jsonRecords: 500, pages: 264,
         profiles: locales.flatMap((locale) => [false, true].flatMap((javaScriptEnabled) => [false, true].map((mobile) => ({ locale, javaScriptEnabled, mobile, passed: true })))),

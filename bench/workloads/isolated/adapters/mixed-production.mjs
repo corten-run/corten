@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { join } from "node:path";
 import { validateSaved } from "../../../mixed-production/verify.mjs";
 import { parseArgs } from "../../../mixed-production/run.mjs";
+import { boundedFeatureProfile } from "../../../marketplace/feature-contract.mjs";
 import { selectedApps, contractSha256 } from "../../registry.mjs";
 import { readRegular, tree } from "../evidence.mjs";
 
@@ -62,7 +63,10 @@ export async function inspectSaved(binding, folder) {
       }
       return { app, outcome };
     });
-    if (summary.timing) assert.deepEqual(summary.timing.cpus, binding.resources.measurement.cpu);
+    if (summary.timing) {
+      assert.equal(summary.timing.qualificationProfile, boundedFeatureProfile, "current group requires bounded qualification");
+      assert.deepEqual(summary.timing.cpus, binding.resources.measurement.cpu);
+    }
     const proof = native.proof; assert.equal(proof.schema, "mixed-native-saved-proof/v1");
     assert.ok(["verified", "blocked"].includes(proof.sources) && ["verified", "blocked"].includes(proof.resources));
     assert.equal(typeof proof.cleanupComplete, "boolean"); assert.ok(Array.isArray(proof.blockers));

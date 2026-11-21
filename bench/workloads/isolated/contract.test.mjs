@@ -14,7 +14,7 @@ import { parseArgs as jsonOptions } from "../../json-api/contract.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
 import { parseOptions as browserOptions } from "../../fullstack-browser/contract.mjs";
-import { parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
+import { budgets as hardeningBudgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
 import { sourceRoots as clientSourceRoots } from "../../client-heavy/contract.mjs";
 import { committed as nativeClientSources } from "../../client-heavy/verify.mjs";
 
@@ -204,7 +204,11 @@ test("hardening binds native reviewed-profile reference without treating the str
   assert.deepEqual(e.effectiveOptions, hardeningOptions(e.invocation.argv.slice(1)));
   assert.equal(e.nativeDefaults.review, null); assert.equal(e.effectiveOptions.review, b.subjectSha256);
   assert.deepEqual(e.effectiveOptions.verify, {}); assert.equal(e.effectiveOptions.profile, "bounded");
-  assert.equal(e.settings.attack.maxConnections, 12); assert.equal(e.settings.resources.cpuCoresTotal, 1.5);
+  assert.equal(Object.hasOwn(e.settings, "attack"), false);
+  const expected = hardeningBudgets("bounded");
+  assert.deepEqual(e.settings.boundedRequests, expected.boundedRequests);
+  assert.deepEqual(e.settings.dependencyRecovery, expected.dependencyRecovery);
+  assert.equal(e.settings.resources.cpuCoresTotal, expected.resources.cpuCoresTotal);
   assert.equal(b.review.state, "unknown"); assert.equal(b.status.executionAuthorized, false);
 });
 

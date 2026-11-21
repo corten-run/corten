@@ -175,7 +175,7 @@ not a new dependency. Native SSE refreshes its write deadline before each batch
 and removes its subscriber on disconnect. Other profiles retain `gin.Default()`
 and `r.Run` without this production configuration.
 
-The app-local functional driver runs the existing, unchanged marketplace production
+The app-local functional driver runs the bounded marketplace production
 qualification against a real image, with separate fixture/API source receipts:
 
 ```sh
@@ -183,9 +183,9 @@ node bench/fullstack/apps/gin/check-production.mjs IMAGE OUTPUT_DIRECTORY
 ```
 
 It retains raw probes, image identity and source revision, and checks actual API
-disconnect/deadline cleanup and alert readback. Its synthetic upstream runs in a
-separate worker so synchronous socket probes cannot stall it. Containers have
+disconnect cleanup with a finite upstream delay, plus alert readback. Containers have
 the same one-CPU/512-MiB bound as the alert checker and are removed afterwards.
 These direct HTTP checks do not qualify a TLS deployment, the complete hardening
 matrix, or comparative throughput. Run the alert browser checker for both profiles
 as well; eligibility is an observed result, never inferred from this configuration.
+Connection-flood resistance: not measured.

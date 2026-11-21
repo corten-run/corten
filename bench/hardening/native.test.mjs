@@ -11,24 +11,14 @@ import { records } from "../marketplace/fixtures.mjs";
 import { qualification, validateQualification } from "../marketplace/feature-contract.mjs";
 import { qualificationProbes } from "../marketplace/qualification-fixture.mjs";
 import { livePaths } from "../fullstack/conformance.mjs";
-import { nativeControls, assessNative, assessTimedSource, observe } from "./native.mjs";
-import { resourceAsync } from "./probe.mjs";
-import { matrix, nativeGroup, groupReady, budgets } from "./plan.mjs";
-import { targetOutcome, verifyNativeLimits } from "./evidence.mjs";
-import { tlsRequest, tlsHold, tlsProbe, elapsedMs } from "./tls-qualification.mjs";
+import { nativeControls, assessNative, observe } from "./native.mjs";
+import { resourceAsync } from "./resource-sample.mjs";
+import { matrix, nativeGroup, groupReady, budgets, boundedRequestsVersion } from "./plan.mjs";
+import { verifyNativeLimits } from "./evidence.mjs";
 import { trackedImageBuild, removeOwnedImage, requireSourceControl, failureKind, terminalRecovery } from "./lifecycle.mjs";
 
 const listen = async (server) => { await new Promise((r) => server.listen(0, "127.0.0.1", r)); return `http://127.0.0.1:${server.address().port}`; };
 const close = async (server) => { server.closeAllConnections(); await new Promise((r) => server.close(r)); };
-test("TLS hold durations retain the existing integer-millisecond qualification wire contract", () => {
-  const probes = qualificationProbes();
-  probes.unfinishedHead = { closedMs: elapsedMs(10.1, 30010.9) };
-  probes.cap.releaseMs = elapsedMs(1.1, 2.3);
-  assert.equal(probes.unfinishedHead.closedMs, 30001); assert.equal(probes.cap.releaseMs, 1);
-  validateQualification(qualification(probes, "fixture"));
-  probes.unfinishedHead.closedMs = 30000.8;
-  assert.throws(() => validateQualification(qualification(probes, "fixture")), /unfinished-head result/);
-});
 test("real API control receipts detect cache, double reads, passthrough and swallowed faults, and reset independently", async () => {
   const fixture = records(), upstreamServer = marketplaceServer(fixture), upstream = await listen(upstreamServer);
   let mode = "correct";
@@ -50,6 +40,11 @@ test("real API control receipts detect cache, double reads, passthrough and swal
     for (mode of ["correct", "cache", "double", "passthrough", "swallow", "health-depends"]) {
       const raw = await nativeControls({ base, source: "api", upstream, qualification: q, original: fixture.item_1 });
       assert.equal(assessNative(raw, q).sourceControl, ["correct", "health-depends"].includes(mode) ? "passed" : "target-functional-failure");
+      if (mode === "correct") {
+        const interrupted = structuredClone(raw);
+        Object.assign(interrupted.api.responses.find(r => r.step === "mutated-json").response, { complete: false, error: "EMFILE" });
+        assert.throws(() => assessNative(interrupted, q), /incomplete native API transport/);
+      }
       if (mode === "health-depends") { assert.equal(assessNative(raw, q).livenessDuringUpstreamFailure, "not-live"); assert.equal(assessNative(raw, q).productionQualified, false); }
       const restored = JSON.parse((await observe(upstream + "/marketplace/records/item_1")).body); assert.deepEqual(restored, fixture.item_1);
       if (mode === "correct") {
@@ -63,37 +58,13 @@ test("real API control receipts detect cache, double reads, passthrough and swal
   } finally { await close(app); await close(upstreamServer); }
 });
 
-test("timed API receipts preserve independent actual read totals and explicit unavailability", async () => {
-  const server = marketplaceServer(records()), base = await listen(server);
-  const raw = [{ type: "upstream-control-before", response: await observe(base + "/__marketplace/control", { method: "POST", body: "{}" }) }];
-  try {
-    await observe(base + "/marketplace/records/item_1"); await observe(base + "/marketplace/records/item_1");
-    raw.push({ type: "upstream-control-after", response: await observe(base + "/__marketplace/control") });
-    assert.deepEqual(assessTimedSource(raw).counts, { requests: { item_1: 2 }, status: 200, answers: { 200: 2 } });
-    const successful = [{ type: "legitimate", ok: true }, { type: "legitimate", ok: true }];
-    assessTimedSource([...raw, ...successful]);
-    assert.throws(() => assessTimedSource([...raw, ...successful, successful[0]]), /contradict completed/);
-    const zero = structuredClone(raw), response = zero[1].response;
-    response.body = JSON.stringify({ status: 200, requests: {}, answers: {} }); response.bytes = Buffer.byteLength(response.body);
-    const { createHash } = await import("node:crypto"); response.sha256 = createHash("sha256").update(response.body).digest("hex");
-    assert.throws(() => assessTimedSource([...zero, ...successful]), /contradict completed/);
-    for (const mutate of [(r) => r.pop(), (r) => r.push(r[0]), (r) => r[1].response.sha256 = "invented"]) {
-      const bad = structuredClone(raw); mutate(bad); assert.throws(() => assessTimedSource(bad));
-    }
-  } finally { await close(server); }
-  raw[1].response = await observe(base + "/__marketplace/control");
-  const result = assessTimedSource(raw); assert.equal(result.state, "unavailable"); assert.equal(result.counts, null);
-});
-
 test("terminal native exit after recovery midpoint blocks recovery and numeric qualification without inventing a sample", () => {
   const processes = [{ id: "application", role: "application" }], samples = [{ id: "application", running: true }];
   const lifecycle = { application: { after: { State: { Running: false, ExitCode: 137, OOMKilled: true, FinishedAt: "2026-11-12T12:00:13.000Z" } } } };
   const recovery = terminalRecovery(true, processes, samples, lifecycle);
   assert.equal(recovery.disposition, "not-recovered"); assert.equal(samples[0].running, true);
   assert.equal(recovery.terminalApplications[0].exitCode, 137); assert.equal(recovery.terminalApplications[0].oomKilled, true);
-  const capture = { legitimate: Object.fromEntries(["before", "during", "after"].map((key) => [key, { counts: { sent: 4, ok: 4, errors: 0 } }])), recovery, measurement: "complete" };
-  assert.equal(targetOutcome(capture, { productionQualified: true }).classification, "target-capacity-failure");
-  assert.equal(targetOutcome(capture, { productionQualified: true }).numericComparisonQualified, false);
+  assert.equal(recovery.terminalServices[0].healthy, false);
 });
 
 test("owned image registration precedes failed/cancelled build and cleanup refuses unrelated tags", async () => {
@@ -152,28 +123,6 @@ test("missing native host and liveness remain observed gaps, while a catch-all 2
   finally { await close(catchAll); }
 });
 
-test("TLS qualification never falls back to plaintext or counts TCP handshake as a completed TLS connection", async () => {
-  const connections = new Set(), received = [];
-  const server = createTcpServer((socket) => {
-    connections.add(socket); socket.once("close", () => connections.delete(socket));
-    socket.on("data", (chunk) => received.push(chunk)); socket.on("error", () => {});
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const r = { host: "127.0.0.1", port: server.address().port, method: "GET", path: "/marketplace/en-US/item_1", headers: { host: "localhost" }, timeoutMs: 100, connectMs: 100 };
-  try {
-    for (const input of [r, { ...r, method: "POST", body: "native=body" }]) {
-      const answer = await tlsRequest(input); assert.equal(answer.timedOut, true); assert.equal(answer.status, undefined);
-    }
-    assert.equal((await tlsHold({ ...r, mode: "head" })).error, "could not connect");
-    assert.ok(received.length >= 3);
-    assert.ok(received.every((chunk) => chunk[0] === 22), "only TLS handshake records, never an unverified HTTP request");
-    assert.throws(() => tlsProbe("made-up-probe", r), /AssertionError/);
-  } finally {
-    for (const socket of connections) socket.destroy();
-    await new Promise((resolve) => server.close(resolve));
-  }
-});
-
 test("unknown HTTP Host control cannot replace TLS server identity or fail before reaching HTTP", async () => {
   const peers = new Set(); let hello;
   const server = createTcpServer((socket) => {
@@ -193,10 +142,7 @@ test("unknown HTTP Host control cannot replace TLS server identity or fail befor
   } finally { for (const socket of peers) socket.destroy(); await new Promise((resolve) => server.close(resolve)); }
 });
 
-test("capacity failure is an observed target outcome, not apparatus success or numeric service evidence", () => {
-  const capture = { legitimate: Object.fromEntries(["before", "during", "after"].map((key) => [key, { counts: { sent: 4, ok: 0, errors: 4 } }])), recovery: { disposition: "stopped" }, measurement: "unavailable" };
-  assert.equal(targetOutcome(capture, { productionQualified: true }).classification, "target-capacity-failure");
-  assert.equal(targetOutcome(capture, { productionQualified: true }).numericComparisonQualified, false);
+test("unbacked observed flags do not constitute native evidence", () => {
   const cells = matrix(); assert.equal(nativeGroup(cells).length, 9); assert.ok(nativeGroup(cells).every((a) => a.productionQualification === "not-established"));
   for (const cell of cells) Object.assign(cell, { status: "observed", parity: "passed", apparatusValid: true });
   assert.equal(groupReady(cells), false, "shared oracle flags cannot replace native assessment");
@@ -216,9 +162,21 @@ test("checklist-only, failed browser and missing edge receipts cannot label a co
   for (const c of cells.filter((c) => c.mode === "deployed-edge")) c.edgeAssessment = { ...c.nativeAssessment, productionQualified: false, hostValidation: "missing" };
   assert.ok(nativeGroup(cells).every((app) => app.productionQualification === "gaps-observed"));
   assert.equal(groupReady(cells), false, "a protection receipt cannot stand in for dependency recovery");
-  for (const c of cells.filter(c => c.phase === "dependency-recovery"))
-    c.dependencyRecovery = { version: "dependency-recovery/v1", source: c.source, status: c.source === "api" ? "recovered" : "fixture-control" };
+  for (const c of cells) {
+    if (c.phase === "dependency-recovery") {
+      c.dependencyRecovery = { version: "dependency-recovery/v1", source: c.source, status: c.source === "api" ? "recovered" : "fixture-control" };
+      c.dependencyTerminalHealthy = true;
+    } else {
+      c.boundedRequests = { version: boundedRequestsVersion, phase: c.phase, source: c.source,
+        status: c.phase === "request-limit" ? "accepted" : c.source === "api" ? "client-deadline" : "fixture-control", healthy: true };
+      c.boundedTerminalHealthy = true;
+    }
+  }
   assert.equal(groupReady(cells), true, "complete apparatus evidence may retain observed native defense gaps without qualifying production");
+  Object.assign(cells[0].boundedRequests, { status: "target-failure", healthy: false });
+  cells[0].boundedTerminalHealthy = false;
+  assert.equal(groupReady(cells), true, "an observed target failure is not a missing apparatus result");
+  assert.ok(nativeGroup(cells).every((app) => !app.numericComparisonQualified));
   cells[0].nativeAssessment.hostValidation = "unknown"; assert.equal(groupReady(cells), false);
 });
 
