@@ -2585,10 +2585,12 @@ impl<S: Steps> Layer<S> {
                     page.credentials = credentials.for_error_page(headers);
                     let watch = Watch(self.signal(&credentials, crate::extract::BODY_LIMIT));
                     let asked = Asked::new(req, &self.shared, &mut page, nonce.as_ref(), &watch.0);
-                    let mut page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
+                    let page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
                     // The error page's language, as on any other answer (below).
-                    let vary = page::vary_on_language(&watch.0, page.headers_mut());
-                    (signal::follow(page, watch, self.zoned()), vary)
+                    let asked = watch.0.asked_language();
+                    let mut page = signal::follow(page, watch, self.zoned());
+                    let vary = page::vary_on_language(asked, page.headers_mut());
+                    (page, vary)
                 }
                 None => (refused, false),
             };
@@ -2645,12 +2647,13 @@ impl<S: Steps> Layer<S> {
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
         let next = Next { steps: &self.steps, scope: steps, route };
         // The signal ends when this future is dropped, then when the response is dropped.
-        let mut res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
+        let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
         let caller = watch.0.is_personal();
+        let asked = watch.0.asked_language();
+        let mut res = signal::follow(res, watch, self.zoned());
         // Whatever answered (a page, JSON, a redirect, the error page, a middleware after
         // `next`): a locale it negotiated from `Accept-Language` is in its `Vary`.
-        let vary = page::vary_on_language(&watch.0, res.headers_mut());
-        let mut res = signal::follow(res, watch, self.zoned());
+        let vary = page::vary_on_language(asked, res.headers_mut());
         if let Some(wrote) = wrote {
             wrote.answered(&res);
         }

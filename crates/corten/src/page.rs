@@ -73,22 +73,29 @@ const VARY_LANGUAGE: &str = "corten, accept, accept-language";
 /// Settles the answer's dependency on `Accept-Language` as it leaves the app, whatever made it: a
 /// page, JSON, a redirect, the error page, or a middleware that read messages after `next` or put
 /// its own `Vary` on a kept page (which says the language it was kept for, [`crate::kept`]). When
-/// something negotiated the request's locale from the header ([`crate::Signal::asked_language`])
-/// and no line of the answer's `Vary` names it (or `*`), it is added ([`add_language`]). A page
-/// that read messages before it was made names it on its own line ([`Req::vary`]), which is taken
-/// as it is before the signal is asked. Returns whether the answer has a `Vary`, so the security
-/// headers do not look it up again.
-pub(crate) fn vary_on_language(signal: &crate::Signal, headers: &mut HeaderMap) -> bool {
-    let Some(first) = headers.get(header::VARY) else {
-        if !signal.asked_language() {
-            return false;
+/// something negotiated the request's locale from the header (`asked`, read from
+/// [`crate::Signal::asked_language`] before the answer's body is wrapped) and no line of the
+/// answer's `Vary` names it (or `*`), it is added ([`add_language`]). A page that read messages
+/// before it was made names it on its own line ([`Req::vary`]), which is taken as it is, unscanned.
+/// Returns whether the answer has a `Vary`, so the security headers do not look it up again.
+///
+/// Inlined, so the common answer (a page's own line, or nothing negotiated) costs the lookup the
+/// security headers would make anyway and a comparison.
+#[inline(always)]
+pub(crate) fn vary_on_language(asked: bool, headers: &mut HeaderMap) -> bool {
+    match headers.get(header::VARY) {
+        None if !asked => false,
+        Some(first) if !asked || first.as_bytes() == VARY_LANGUAGE.as_bytes() => true,
+        _ => {
+            name_language(headers);
+            true
         }
-        headers.insert(header::VARY, HeaderValue::from_static("accept-language"));
-        return true;
-    };
-    if first.as_bytes() == VARY_LANGUAGE.as_bytes() || !signal.asked_language() {
-        return true;
     }
+}
+
+/// The rest of [`vary_on_language`]: `accept-language` added unless a line names it or `*`.
+#[inline(never)]
+fn name_language(headers: &mut HeaderMap) {
     let named = headers.get_all(header::VARY).iter().any(|line| {
         line.as_bytes()
             .split(|&b| b == b',')
@@ -98,7 +105,6 @@ pub(crate) fn vary_on_language(signal: &crate::Signal, headers: &mut HeaderMap) 
     if !named {
         add_language(headers);
     }
-    true
 }
 
 /// Names `accept-language` in a `Vary` none of whose lines does: in the place of a page's own
