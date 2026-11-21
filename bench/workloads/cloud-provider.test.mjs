@@ -752,6 +752,31 @@ test("HTTP failures, redirects and ambiguous requests are never retried or expos
   await assert.rejects(uncertain(create, 1000, true), (error) => error.controlUncertain === true && !error.message.includes(credential)); assert.equal(count, 1);
 });
 
+test("native catalog transport refuses complete invalid JSON but cannot settle truncated or timed-out reads", { timeout: 10000 }, async (t) => {
+  let mode = "malformed";
+  const server = createServer((req, res) => {
+    assert.equal(req.method, "GET");
+    assert.equal(req.url, "/v2/sizes?page=1&per_page=200");
+    if (mode === "malformed") res.end("{");
+    else if (mode === "truncated") { res.writeHead(200, { "content-length": 10 }); res.end("{"); }
+    else { res.writeHead(200); res.flushHeaders(); }
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); });
+  const connect = (url, options, callback) =>
+    httpRequest({ ...options, hostname: "127.0.0.1", port: server.address().port, path: url.pathname + url.search }, callback);
+  const run = providerTransport({ repo: resolve("."), spawn, connect });
+  const command = [...fleetCatalogCommand, "--context", context];
+  const refused = await run(command, 1000, true);
+  assert.deepEqual({ status: refused.status, stdout: refused.stdout, stderr: refused.stderr, diagnostic: refused.providerDiagnostic },
+    { status: 1, stdout: "", stderr: "", diagnostic: { code: "catalog-response" } });
+  for (mode of ["truncated", "slow"]) {
+    await assert.rejects(run(command, mode === "slow" ? 100 : 1000, true), {
+      controlUncertain: true, providerDiagnostic: { code: "catalog-request" },
+    });
+  }
+});
+
 test("native HTTP boundary pins origin, sends only memory credential and bounds redirects/body/deadline/cancellation", { timeout: 10000 }, async (t) => {
   let requests = 0, route = "account";
   const server = createServer((req, res) => {

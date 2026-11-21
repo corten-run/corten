@@ -372,6 +372,7 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
     assert.deepEqual(readdirSync(root), [], "fleet-root-not-empty");
     const lock = join(root, ".fleet-operation.lock"), owner = json({ pid: process.pid, action: "prepare" });
     durable(lock, owner);
+    let uncertain = false;
     try {
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
       const provider = { accountId: options.accountId, context: options.context };
@@ -387,9 +388,14 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
       assert.deepEqual(readFleet(root, options.round).manifest, manifest);
       write(JSON.stringify({ schema: "benchmark-group-fleet-preparation/v1", round: options.round, outcome: "prepared", groups: manifest.jobs.map(({ group }) => group), fullGroupQualified: false }));
       return 3;
+    } catch (error) {
+      uncertain = !!(error?.controlTreeUncertain || error?.controlUncertain);
+      throw error;
     } finally {
-      physical(root); assert.equal(regular(lock, 1024).toString(), owner, "fleet-lock-changed");
-      unlinkSync(lock); syncDirectory(root);
+      if (!uncertain) {
+        physical(root); assert.equal(regular(lock, 1024).toString(), owner, "fleet-lock-changed");
+        unlinkSync(lock); syncDirectory(root);
+      }
     }
   }
   const deps = { repo, run, plan, verify, inspect, interrupted, compiler }, preview = await fleetOperationPlan(options, deps);

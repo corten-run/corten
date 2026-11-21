@@ -95,12 +95,13 @@ const synthetic = (${syntheticDependencies.toString()})({
   const args = ["r21", "--fleet-root", h.base];
   const saved = (group = groupNames[0]) => JSON.parse(fs.readFileSync(path.join(h.base, group, "groups-r21/state.json")));
   const events = () => fs.readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const prepareArgs = [...args, "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
   async function prepare() {
-    assert.equal(await fleetMain([...args, "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context], deps), 3);
+    assert.equal(await fleetMain(prepareArgs, deps), 3);
     assert.equal(await fleetMain([...args, "--detach", "--print-approval"], deps), 3);
     return [...args, "--detach", "--approve-reviewed-merged-ready", output.at(-1).approvalSha256];
   }
-  return { h, output, workers, saved, events, prepare, deps, trace, hosts };
+  return { h, output, workers, saved, events, prepare, prepareArgs, deps, trace, hosts };
 }
 
 test("captured production composition ignores arbitrary hints, binds POST identity and propagates remote options", { timeout: 30000 }, async (t) => {
@@ -306,40 +307,77 @@ test("captured production rejects Git advertisement before reservation or provid
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
 });
 
-test("catalog HTTP denial settles before intent; a disconnected read retains the fleet lock", { timeout: 15000 }, async (t) => {
-  for (const mode of ["catalog-denial", "catalog-disconnect"]) await t.test(mode, async (t) => {
-    const p = fixture(t), approved = await p.prepare(), uncertain = mode === "catalog-disconnect";
-    let child;
-    p.deps.catalogProvider = (deps) => providerTransport({ ...deps, launch(_binary, _args, options) {
-      child = fork(new URL("./fleet-provider-test-worker.mjs", import.meta.url),
-        [mode, p.trace, p.hosts, p.h.base, "parent", userId],
-        { ...options, execArgv: [], env: { ...options.env, NODE_OPTIONS: "--max-old-space-size=64 --max-semi-space-size=4" } });
-      return child;
-    } });
-    await assert.rejects(fleetMain(approved, p.deps), (error) => {
-      assert.equal(!!error.controlTreeUncertain, uncertain);
-      if (!uncertain) assert.deepEqual(error.providerDiagnostic, { code: "catalog-http", httpStatus: 403 });
-      return true;
-    });
-    assert.equal(child.exitCode, uncertain ? 2 : 0);
+function realCatalog(p, mode) {
+  let child;
+  p.deps.catalogProvider = (deps) => providerTransport({ ...deps, launch(_binary, _args, options) {
+    child = fork(new URL("./fleet-provider-test-worker.mjs", import.meta.url),
+      [mode, p.trace, p.hosts, p.h.base, "parent", userId],
+      { ...options, execArgv: [], env: { ...options.env, NODE_OPTIONS: "--max-old-space-size=64 --max-semi-space-size=4" } });
+    return child;
+  } });
+  return () => child.exitCode;
+}
+
+const refusedCatalog = { code: "catalog-response" };
+const deniedCatalog = { code: "catalog-http", httpStatus: 403 };
+const catalogFailure = (diagnostic) => (error) => {
+  assert.equal(!!error.controlTreeUncertain, diagnostic === null);
+  if (diagnostic) assert.deepEqual(error.providerDiagnostic, diagnostic);
+  return true;
+};
+
+test("prepare can retry a settled invalid listing, but retains the lock on disconnect", { timeout: 15000 }, async (t) => {
+  for (const [mode, diagnostic] of [["catalog-shape", refusedCatalog], ["catalog-disconnect", null]]) await t.test(mode, async (t) => {
+    const p = fixture(t), exitCode = realCatalog(p, mode);
+    await assert.rejects(fleetMain(p.prepareArgs, p.deps), catalogFailure(diagnostic));
+    assert.equal(exitCode(), diagnostic ? 0 : 2);
+    assert.deepEqual(fs.readdirSync(p.h.base), diagnostic ? [] : [".fleet-operation.lock"]);
     assert.equal(p.workers.length, 0);
-    assert.deepEqual(p.events().filter((row) => row.boundary === "provider").map((row) => [row.method, row.path]),
-      [["GET", "/v2/account"], ["GET", "/v2/sizes?page=1&per_page=200"]]);
-    assert.equal(fs.existsSync(path.join(p.h.base, "launch-intent.json")), false);
-    assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), uncertain);
+    assert.ok(p.events().filter((row) => row.boundary === "provider").every((row) => row.method === "GET"));
+    if (diagnostic) {
+      const retryExitCode = realCatalog(p, "success");
+      assert.equal(await fleetMain(p.prepareArgs, p.deps), 3);
+      assert.equal(retryExitCode(), 0);
+      assert.equal(readFleet(p.h.base, "r21").manifest.host.region, "sfo3");
+      assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
+    }
   });
 });
 
-test("child catalog denial settles its locks without a create; disconnect preserves custody", { timeout: 20000 }, async (t) => {
-  for (const mode of ["catalog-denial", "catalog-disconnect"]) await t.test(mode, async (t) => {
-    const p = fixture(t, mode), uncertain = mode === "catalog-disconnect";
+test("settled catalog refusals retry before fleet intent; disconnect retains the lock", { timeout: 20000 }, async (t) => {
+  for (const [mode, diagnostic] of [["catalog-denial", deniedCatalog], ["catalog-count", refusedCatalog],
+    ["catalog-pagination", refusedCatalog], ["catalog-disconnect", null]]) await t.test(mode, async (t) => {
+    const p = fixture(t);
+    p.deps.catalogProvider = syntheticCatalogProvider(syntheticPlacement(["sfo2"]));
+    const approved = await p.prepare(), exitCode = realCatalog(p, mode);
+    await assert.rejects(fleetMain(approved, p.deps), catalogFailure(diagnostic));
+    assert.equal(exitCode(), diagnostic ? 0 : 2);
+    assert.equal(p.workers.length, 0);
+    assert.deepEqual(p.events().filter((row) => row.boundary === "provider").map((row) => [row.method, row.path]),
+      [["GET", "/v2/account"], ["GET", "/v2/sizes?page=1&per_page=200"],
+        ...(mode === "catalog-pagination" ? [["GET", "/v2/sizes?page=2&per_page=200"]] : [])]);
+    assert.equal(fs.existsSync(path.join(p.h.base, "launch-intent.json")), false);
+    assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), diagnostic === null);
+    if (diagnostic?.code === "catalog-response") {
+      const retryExitCode = realCatalog(p, "success");
+      assert.equal(await fleetMain(approved, p.deps), 3);
+      assert.equal(retryExitCode(), 0);
+      assert.equal(p.events().filter((row) => row.boundary === "provider" && row.method === "POST").length, 1);
+      assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
+    }
+  });
+});
+
+test("settled child catalog refusals release locks without a create; disconnect preserves custody", { timeout: 20000 }, async (t) => {
+  for (const [mode, diagnostic] of [["catalog-denial", deniedCatalog], ["catalog-shape", refusedCatalog], ["catalog-disconnect", null]]) await t.test(mode, async (t) => {
+    const p = fixture(t, mode), uncertain = diagnostic === null;
     assert.equal(await fleetMain(await p.prepare(), p.deps), 2);
     assert.equal(p.workers.length, 1);
     const state = p.saved(), [row] = p.output.at(-1).groups;
     assert.equal(state.status, "reserved"); assert.equal(state.createIntentAt, undefined);
     assert.equal(row.uncertain, uncertain);
     assert.equal(row.controllerStage, uncertain ? "provider-settlement" : "controller-launch");
-    if (!uncertain) assert.deepEqual(row.providerDiagnostic, { code: "catalog-http", httpStatus: 403 });
+    if (diagnostic) assert.deepEqual(row.providerDiagnostic, diagnostic);
     assert.ok(p.events().some((row) => row.path === "/v2/sizes?page=1&per_page=200"));
     assert.ok(p.events().filter((row) => row.boundary === "provider").every((row) => row.method === "GET"));
     for (const lock of [".fleet-operation.lock", "catalog-page/.groups-launch.lock", "catalog-page/groups-r21/operation.lock"])

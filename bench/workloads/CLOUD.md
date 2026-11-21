@@ -148,9 +148,12 @@ recheck only the reserved `c-8` placement. Direct child launches outside that
 admission still check both sizes. No check selects another region.
 `fleet-placement-preflight-failed` means the saved account
 or placement could not be verified; inspect both listings rather than editing the
-manifest. An acknowledged catalog HTTP denial stops without a create and releases
-settled locks; a disconnected worker cannot establish settlement. Each child has an independent state directory,
-operation lock, private credential worker and remote systemd unit.
+manifest. An acknowledged catalog HTTP denial or a fully received but invalid
+listing stops without a create and releases settled locks. A truncated response,
+timeout or disconnected worker does not establish settlement; the lock stays.
+An already recorded launch intent still cannot be replayed. Each child has an
+independent state directory, operation lock, private credential worker and remote
+systemd unit.
 Every group in the roster uses the same commit. Merge the repairs needed by
 the entire round before preparing it: the first group's results cannot be
 carried into a new reservation for a different commit.

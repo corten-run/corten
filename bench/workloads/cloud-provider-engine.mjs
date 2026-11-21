@@ -15,6 +15,7 @@ import { providerDiagnostic, providerFailure, unsentDelete } from "./cloud-optio
 const origin = "https://api.digitalocean.com";
 const stopped = (uncertain = false, diagnostic) => Object.assign(new Error("provider control failed; preserve state/evidence/host"),
   uncertain ? { controlUncertain: true } : {}, diagnostic ? { providerDiagnostic: diagnostic } : {});
+const refused = (diagnostic) => ({ status: 1, stdout: "", stderr: "", providerDiagnostic: diagnostic, error: stopped(false, diagnostic) });
 const positive = (value) => Number.isSafeInteger(value) && value > 0;
 const validContext = (value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value);
 
@@ -103,7 +104,7 @@ function accountClock(clock) {
   };
 }
 
-function restRequest({ method, path, credential, body, timeout, accountDeadline = Infinity, now = Date.now, interrupted = () => false, deleteProofExpiresAtMs }, connect, resources) {
+function restRequest({ method, path, credential, body, timeout, accountDeadline = Infinity, now = Date.now, interrupted = () => false, deleteProofExpiresAtMs, catalog = false }, connect, resources) {
   return new Promise((resolve, reject) => {
     let settled = false, informationSeen = false, connectEntered = false, sendEntered = false, req, timer, cancellation, failureDetail = "internal-refusal";
     const account = method === "GET" && path === "/v2/account";
@@ -192,12 +193,21 @@ function restRequest({ method, path, credential, body, timeout, accountDeadline 
         res.on("aborted", () => finish("response-aborted"));
         res.on("end", () => {
           if (settled || outcome) return;
+          if (catalog && !(res instanceof IncomingMessage && res.complete)) { finish("response-aborted"); return; }
           let detail = "response-status";
           try {
             assert.ok(Number.isInteger(res.statusCode));
             // Error bodies are never parsed/returned: they can contain raw values.
             detail = "invalid-json";
-            const value = res.statusCode >= 200 && res.statusCode < 300 && bytes ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null;
+            let value = null;
+            if (res.statusCode >= 200 && res.statusCode < 300 && bytes) {
+              try { value = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
+              catch (error) {
+                // Only a complete catalog read can send malformed JSON to
+                // listing validation instead of failing the transport.
+                if (!catalog || !(error instanceof SyntaxError)) throw error;
+              }
+            }
             finish(null, { status: res.statusCode, value });
           } catch { finish(detail); }
         });
@@ -325,6 +335,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       }
       try { requestEntered = true; response = await request({ method, path, body, credential, timeout: remaining, interrupted,
         ...(phase === "account" ? { accountDeadline: deadline, now } : {}),
+        ...(phase === "catalog" ? { catalog: true } : {}),
         ...(deleteProofExpiresAtMs === undefined ? {} : { deleteProofExpiresAtMs }) }); }
       catch (error) {
         if (reportUnsent && unsentDeletes.has(error)) throw error;
@@ -361,11 +372,18 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         value = (await call("account", "GET", "/v2/account"))?.account ?? null;
       } else if (command[1] === "placement") {
         assert.deepEqual(command, fleetCatalogCommand);
-        value = await placementCatalog(async (...args) => {
-          const result = await call(...args);
-          code = "catalog-response";
-          return result;
-        });
+        try {
+          value = await placementCatalog(async (...args) => {
+            code = "catalog-request"; // Before the next page's checkpoint, not just its request.
+            const result = await call(...args);
+            code = "catalog-response";
+            return result;
+          });
+        } catch (error) {
+          if (!allowFail || code !== "catalog-response" || error?.controlUncertain) throw error;
+          readRemaining();
+          return refused({ code });
+        }
       } else if (command[2] === "list") {
         assert.deepEqual(command, ["compute", "droplet", "list", "--output", "json"]);
         let requests = 0;
@@ -494,7 +512,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       if (error?.controlUncertain) throw stopped(true, diagnostic);
       if (allowFail && !reportUnsent && (error?.createSemanticFailure === true || error?.httpFailure
         && (command[2] !== "get" || diagnostic.code === "get-http" && diagnostic.httpStatus === 404)))
-        return { status: 1, stdout: "", stderr: "", providerDiagnostic: diagnostic, error: stopped(false, diagnostic) };
+        return refused(diagnostic);
       throw stopped(false, diagnostic);
     }
   };
