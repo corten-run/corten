@@ -10,10 +10,10 @@ import { slowMs } from "../fullstack/mixed.mjs";
 import { maxConnections } from "../fullstack/conformance.mjs";
 import { records as fixtureRecords, writeFixture } from "../marketplace/fixtures.mjs";
 import { buildInputPaths, sourceSnapshot, sourceAuditIdentity, verifySourceAudit } from "./source-audit.mjs";
-import { nativeBuildContext } from "./build-context.mjs";
-import { createExecutionEvidence, executionContext } from "./execution-evidence.mjs";
+import { extractNativeSource, nativeBuildContext } from "./build-context.mjs";
+import { createAttachedParticipant, createExecutionEvidence, executionContext, participantSetupCause } from "./execution-evidence.mjs";
 import { withImmutableGit } from "./immutable-git.mjs";
-import { prepareExecutionInputs, finalizeExecutionInputs } from "./execution-inputs.mjs";
+import { executionMountArgs, prepareExecutionInputs, finalizeExecutionInputs } from "./execution-inputs.mjs";
 
 export function parseArgs(args) {
   const options = { round: args[0], apps: null, images: null, readbacks: null, nativeAudits: null, build: false, buildRef: null, seed: 42, clients: 2, repetitions: 1,
@@ -68,7 +68,7 @@ export async function run(args) {
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder);
   const runId = `mixed-${options.round}-${randomBytes(4).toString("hex")}`, network = `${runId}-net`;
   const io = withImmutableGit(commands(repo), repo), docker = (args, opts) => io.command("docker", args, opts);
-  const active = new Set(), builtImages = new Set(); let networkCreated = false;
+  const builtImages = new Set(); let networkCreated = false;
   const label = "run.corten.mixed-production", token = randomBytes(32).toString("hex");
   const records = fixtureRecords(), plan = createPlan({ seed: options.seed, clients: options.clients, repetitions: options.repetitions, records });
   const summary = { schema: "mixed-native-run/v1", group: "mixed-production", inventory, definition: registry.definition("mixed-production"),
@@ -89,10 +89,7 @@ export async function run(args) {
   summary.provenance.fixtureSha256 = sha256(readFileSync(join(folder, "marketplace.json")));
   summary.provenance.harnessFiles = Object.fromEntries(["build-context.mjs", "capture.mjs", "native.mjs", "snapshot.mjs", "source-audit.mjs", "upstream.mjs", "worker.mjs", "run.mjs"].map((file) => [file, sha256(readFileSync(join(here, file)))]));
   const inspect = async (name) => JSON.parse(await docker(["inspect", name], { cleanup: true }))[0];
-  const own = async (args, name) => {
-    active.add(name);
-    await execution.create(name, () => docker([args[0], "--name", name, "--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`, ...args.slice(1)]));
-  };
+  const own = (args, name) => execution.own(name, args);
   const remove = async (name) => {
     const observed = await execution.remove(name), context = executionContext(name, summary);
     if (observed && context.stage === "functional" && context.role === "app") {
@@ -100,9 +97,8 @@ export async function run(args) {
       entry.container = { imageId: observed.imageId, startedAt: observed.state.StartedAt, running: observed.state.Running,
         exitCode: observed.state.ExitCode, oomKilled: observed.state.OOMKilled, restartCount: observed.restartCount };
     }
-    active.delete(name);
   };
-  const fail = (app, source, stage) => { summary.failures.push({ app, source, stage }); save(); };
+  const fail = (app, source, stage, cause) => { summary.failures.push({ app, source, stage, ...(cause ? { cause } : {}) }); save(); };
   const ready = async (name, path, probes, role, wire) => {
     const info = await inspect(name), port = info.NetworkSettings.Ports["8080/tcp"]?.[0]?.HostPort;
     assert.ok(port, "private readiness port missing");
@@ -140,12 +136,11 @@ export async function run(args) {
       nativeSource.commit = await io.command("git", ["rev-parse", "--verify", `${options.buildRef ?? summary.provenance.commit}^{commit}`]);
       nativeSource.tree = await io.command("git", ["rev-parse", `${nativeSource.commit}^{tree}`]);
       nativeSource.dirty = false;
-      buildRoot = join(folder, "build-source"); mkdirSync(buildRoot);
-      const archive = join(folder, "build-source.tar");
-      await io.command("git", ["-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar", "--output", archive, nativeSource.commit], { timeout: 60000 });
-      nativeSource.archiveSha256 = sha256(readFileSync(archive));
-      await io.command("tar", ["-xf", archive, "-C", buildRoot], { timeout: 60000 });
+      const extracted = await extractNativeSource(io, folder, nativeSource.commit);
+      buildRoot = extracted.root;
+      nativeSource.archiveSha256 = extracted.archiveSha256;
     }
+    const mount = executionMountArgs(buildRoot, folder);
     const harnessPaths = (await io.command("git", ["ls-tree", "-r", "--name-only", nativeSource.commit])).split(/\r?\n/).filter((p) => /\.(?:mjs|cjs|js|json)$/.test(p));
     summary.executionInputs = prepareExecutionInputs({ folder, buildRoot, repo, commit: nativeSource.commit, harnessPaths });
     summary.executionMounts = JSON.parse(readFileSync(join(folder, "execution/inputs.json"))).mounts;
@@ -206,7 +201,6 @@ export async function run(args) {
         if (io.interrupted) throw new Error("run interrupted");
         const appName = `${runId}-${app}-${source}`, upstreamName = `${appName}-upstream`, workerName = `${appName}-capture`;
         const raw = join(folder, app, source); mkdirSync(raw, { recursive: true });
-        const mount = ["-v", `${buildRoot}:/src:ro`, "-v", `${join(folder, "execution/dependencies")}:/src/node_modules:ro`, "-v", `${folder}:/out`, "-w", "/src"];
         const sourceEntry = entry.sources[source] = { complete: false, readiness: [] };
         let stage = "upstream-create";
         console.log(`${app} ${source}: capturing ${plan.requests.filter((r) => r.source === source).length} planned native operations`);
@@ -232,18 +226,18 @@ export async function run(args) {
           config.base = "http://127.0.0.1:8080";
           writeFileSync(join(raw, "settings.json"), JSON.stringify(config, null, 2));
           stage = "worker-create";
-          await own(["create", "--network", `container:${appName}`, "--cpus", "2", "--memory", "1g", "--shm-size", "512m", ...mount,
-            "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", "-e", `MIXED_CONTROL_TOKEN=${token}`, browserImage.Id, "node", "bench/mixed-production/worker.mjs", `/out/${app}/${source}/settings.json`], workerName);
+          const startWorker = await createAttachedParticipant({ own, docker }, workerName, ["--network", `container:${appName}`, "--cpus", "2", "--memory", "1g", "--shm-size", "512m", ...mount,
+            "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", "-e", `MIXED_CONTROL_TOKEN=${token}`, browserImage.Id, "node", "bench/mixed-production/worker.mjs", `/out/${app}/${source}/settings.json`]);
           const operationCount = plan.requests.filter((r) => r.source === source).length;
           stage = "worker-capture";
-          await docker(["start", "-a", workerName], { timeout: Math.min(20 * 60 * 1000, operationCount * (options.requestTimeoutMs * 5 + options.cleanupMs + 1000) + 20000) });
+          await startWorker({ timeout: Math.min(20 * 60 * 1000, operationCount * (options.requestTimeoutMs * 5 + options.cleanupMs + 1000) + 20000) });
           stage = "worker-artifacts";
           const result = JSON.parse(readFileSync(join(raw, "capture.json"), "utf8"));
           assert.equal(result.cells.length, operationCount, "partial worker capture");
           parts[app].push({ ...result, source }); Object.assign(sourceEntry, { complete: true, capture: `${app}/${source}/capture.json` });
           for (const cell of result.cells) Object.assign(entry.cells.find((c) => c.requestId === cell.requestId), cell);
-        } catch {
-          fail(app, source, `native-source-${stage}-failed`);
+        } catch (error) {
+          fail(app, source, `native-source-${stage}-failed`, participantSetupCause(error));
           sourceEntry.failedStage = stage;
           for (const cell of entry.cells.filter((c) => c.source === source)) cell.gaps = [`native-source-${stage}-failed-or-missing-capture`];
           // Recover every incrementally saved attempted row after worker timeout/crash.
@@ -298,7 +292,7 @@ export async function run(args) {
     summary.complete = inventory.every((app) => summary.apps[app].sources.fixture?.complete && summary.apps[app].sources.api?.complete);
   } catch { fail(null, null, "suite-setup-or-execution-failed"); }
   finally {
-    for (const name of [...active]) try { await remove(name); } catch { summary.cleanupFailures.push({ name }); }
+    for (const name of execution.pendingNames()) try { await remove(name); } catch { summary.cleanupFailures.push({ name }); }
     if (networkCreated) try {
       await execution.removeNetwork(network);
     } catch { summary.cleanupFailures.push({ network }); }

@@ -35,6 +35,7 @@ cleanup() {
   exit "$result"
 }
 trap cleanup EXIT
+"$node" scripts/benchmark-mixed-mount-smoke.mjs "$image" "$task-mixed-mount" "$work"
 id=$(docker run -d --pull=never --network none --label agent.owner=codex --label "agent.task=$task" \
   --cpus 1 --memory 1g "$image" node -e 'setInterval(()=>{},1000)')
 [[ "$id" =~ ^[a-f0-9]{64}$ ]]
