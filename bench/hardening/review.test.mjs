@@ -118,7 +118,13 @@ test("terminal native liveness and Docker health must both recover in every crit
     const fixture = structuredClone(lifecycle); fixture.upstream.health = failed.upstream;
     assert.throws(() => recovery(fixture, "fixture"), /apparatus upstream unhealthy/);
     const missing = structuredClone(lifecycle); missing.application.health = { path: null, response: null };
-    assert.equal(terminalRecovery(true, processes, resources, missing, "api", { ...paths, application: null }, endpoints).disposition, "not-recovered");
+    const missingPath = () => terminalRecovery(true, processes, resources, missing, "api", { ...paths, application: null }, endpoints);
+    assert.equal(missingPath().disposition, "missing-liveness");
+    missing.proxy.health = failed.proxy;
+    assert.equal(missingPath().disposition, "not-recovered");
+    missing.proxy.health = lifecycle.proxy.health;
+    missing.application.after.State.Running = false;
+    assert.equal(missingPath().disposition, "not-recovered");
   } finally { app.closeAllConnections(); await new Promise((r) => app.close(r)); }
 });
 

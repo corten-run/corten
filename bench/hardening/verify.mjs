@@ -166,15 +166,17 @@ export function verify(folder) {
     assert.equal(cell.apparatusValid, true); assert.equal(cell.parity, "passed");
     observed++;
     qualifications.push({ key: cell.key, productionQualified: nativeAssessment.productionQualified && (edgeAssessment?.productionQualified ?? true) });
+    const replay = { key: cell.key, assessment: capture.assessment, terminalHealthy: capture.terminal.healthy,
+      terminalDisposition: capture.terminal.disposition };
     if (recovery) {
       assert.deepEqual(cell.dependencyRecovery, capture.assessment);
       assert.equal(cell.dependencyTerminalHealthy, capture.terminal.healthy, "saved dependency terminal health differs from replay");
-      dependencyRecovery.push({ key: cell.key, assessment: capture.assessment, terminalHealthy: capture.terminal.healthy });
+      dependencyRecovery.push(replay);
       continue;
     }
     assert.deepEqual(cell.boundedRequests, capture.assessment);
     assert.equal(cell.boundedTerminalHealthy, capture.terminal.healthy, "saved bounded terminal health differs from replay");
-    boundedRequests.push({ key: cell.key, assessment: capture.assessment, terminalHealthy: capture.terminal.healthy });
+    boundedRequests.push(replay);
   }
   const ready = groupReady(summary.cells) && !Object.keys(summary.options.verify).length && summary.cleanupFailures.length === 0;
   assert.equal(summary.groupReady, ready);

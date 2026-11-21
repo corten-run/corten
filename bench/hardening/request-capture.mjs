@@ -27,7 +27,7 @@ export function assembleBounded({ settings, raw, parity, config, cleanup, proven
   const cleanupProof = verifyLifecycle(raw[0], settings.deployment, lifecycle, provenance, cleanup, assessment.completeAtMs);
   const { disposition, terminalServices } = terminalRecovery(true, settings.deployment.processes, [], lifecycle, source, settings.terminalHealthPaths);
   return { schema: "native-bounded-requests-capture/v1", case: settings.case, phase, assessment,
-    terminal: { healthy: disposition === "recovered", services: terminalServices },
+    terminal: { healthy: disposition === "recovered", disposition, services: terminalServices },
     deployment: settings.deployment, effectiveBudgets: settings.effectiveBudgets, provenance,
     parity: { status: "passed", evidence: "parity.json" }, cleanup: cleanupProof };
 }

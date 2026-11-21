@@ -48,20 +48,21 @@ const summaryBase = { schema: "native-hardening-run/v3", registryDigest, commit,
     ...(c.phase === phase ? { dependencyRecovery: replayAssessment(c.source, recoveryLedger(c.source)), dependencyTerminalHealthy: true }
       : { boundedRequests: boundedAssessment(c), boundedTerminalHealthy: true }) })) };
 const recoveryCells = summaryBase.cells.filter((c) => c.phase === phase);
-const recoveryBase = recoveryCells.map(({ key, dependencyRecovery: assessment }) => ({ key, assessment, terminalHealthy: true }));
+const recoveryBase = recoveryCells.map(({ key, dependencyRecovery: assessment }) => ({ key, assessment, terminalHealthy: true, terminalDisposition: "recovered" }));
 const boundedBase = summaryBase.cells.filter((c) => c.phase !== phase)
-  .map(({ key, boundedRequests: assessment }) => ({ key, assessment, terminalHealthy: true }));
+  .map(({ key, boundedRequests: assessment }) => ({ key, assessment, terminalHealthy: true, terminalDisposition: "recovered" }));
 const recoveryKey = recoveryBase[0].key;
 const write = (p, v) => { const path = join(root, p); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, JSON.stringify(v)); };
 write("summary.json", summaryBase);
 for (const { key, mode, source, dependencyRecovery: assessment } of recoveryCells) {
-  write(`${key}/capture.json`, { schema: "native-dependency-recovery-capture/v1", case: mode, phase, assessment, terminal: { healthy: true } });
+  write(`${key}/capture.json`, { schema: "native-dependency-recovery-capture/v1", case: mode, phase, assessment,
+    terminal: { healthy: true, disposition: "recovered" } });
   write(`${key}/raw.jsonl`, recoveryLedger(source));
 }
 for (const c of summaryBase.cells) {
   if (c.phase !== phase) {
     write(`${c.key}/capture.json`, { schema: "native-bounded-requests-capture/v1", case: c.mode, phase: c.phase,
-      assessment: c.boundedRequests, terminal: { healthy: true } });
+      assessment: c.boundedRequests, terminal: { healthy: true, disposition: "recovered" } });
     write(`${c.key}/raw.jsonl`, { type: "bounded-requests", version: boundedRequestsVersion });
   }
   const roles = ["application", "upstream", ...(c.mode === "deployed-edge" ? ["proxy"] : [])];
@@ -173,6 +174,8 @@ for (const [name, remove] of [
   ["replayed terminal flag", () => delete dependencyRecovery[0].terminalHealthy],
   ["summary terminal flag", () => delete summary.cells.find((c) => c.key === recoveryKey).dependencyTerminalHealthy],
   ["persisted terminal flag", () => change(`${recoveryKey}/capture.json`, (v) => delete v.terminal.healthy)],
+  ["replayed terminal disposition", () => delete dependencyRecovery[0].terminalDisposition],
+  ["persisted terminal disposition", () => change(`${recoveryKey}/capture.json`, (v) => delete v.terminal.disposition)],
 ]) test(`dependency recovery missing ${name} is blocked, not success or target failure`, async () => {
   remove();
   const result = await inspect();
@@ -238,10 +241,10 @@ test("dependency recovery failed baseline requires verified source proof", async
 for (const corroborated of [true, false]) test(`dependency recovery terminal unhealthy is ${corroborated ? "a target failure" : "invalid if contradicted"}`, async () => {
   const cell = summary.cells.find((c) => c.phase === phase && c.source === "api");
   assert.equal(cell.dependencyRecovery.status, "recovered");
-  dependencyRecovery.find((row) => row.key === cell.key).terminalHealthy = false;
+  Object.assign(dependencyRecovery.find((row) => row.key === cell.key), { terminalHealthy: false, terminalDisposition: "not-recovered" });
   if (corroborated) {
     cell.dependencyTerminalHealthy = false;
-    change(`${cell.key}/capture.json`, (v) => v.terminal.healthy = false);
+    change(`${cell.key}/capture.json`, (v) => { v.terminal = { healthy: false, disposition: "not-recovered" }; });
   }
   const result = await inspect();
   assert.equal(result.status, corroborated ? "failed" : "invalid");
@@ -250,12 +253,34 @@ for (const corroborated of [true, false]) test(`dependency recovery terminal unh
   assert.deepEqual(result.comparisonEligibleApps, []);
 });
 
-function saveBounded(cell, status = "target-failure", terminalHealthy = true) {
+function saveBounded(cell, status = "target-failure", terminalDisposition = "recovered") {
+  const terminalHealthy = terminalDisposition === "recovered";
   const assessment = { ...cell.boundedRequests, status, healthy: status !== "target-failure" };
   cell.boundedRequests = assessment; cell.boundedTerminalHealthy = terminalHealthy;
-  Object.assign(boundedRequests.find((row) => row.key === cell.key), { assessment, terminalHealthy });
-  change(`${cell.key}/capture.json`, (v) => { v.assessment = assessment; v.terminal.healthy = terminalHealthy; });
+  Object.assign(boundedRequests.find((row) => row.key === cell.key), { assessment, terminalHealthy, terminalDisposition });
+  change(`${cell.key}/capture.json`, (v) => { v.assessment = assessment; v.terminal = { healthy: terminalHealthy, disposition: terminalDisposition }; });
 }
+
+for (const probe of ["request-timeout", "request-limit", phase]) test(`${probe} distinguishes absent liveness from a measured target failure`, async () => {
+  const cell = summary.cells.find((c) => c.phase === probe && c.source === "api" && c.mode === "deployed-edge");
+  const recovery = probe === phase;
+  const row = (recovery ? dependencyRecovery : boundedRequests).find((row) => row.key === cell.key);
+  row.terminalHealthy = false;
+  row.terminalDisposition = "missing-liveness";
+  cell[recovery ? "dependencyTerminalHealthy" : "boundedTerminalHealthy"] = false;
+  change(`${cell.key}/capture.json`, (v) => { v.terminal = { healthy: false, disposition: row.terminalDisposition }; });
+  qualifications.find((row) => row.key === cell.key).productionQualified = false;
+  const unsupported = await inspect();
+  assert.equal(unsupported.status, "verified");
+  assert.equal(unsupported.attemptComplete, true);
+  assert.deepEqual(unsupported.outcomes[0], { app: cell.app, outcome: "unsupported" });
+
+  if (recovery) saveRecovery(cell, recoveryLedger(cell.source, (ms) => ms < restoredAtMs));
+  else saveBounded(cell, "target-failure", "missing-liveness");
+  const failed = await inspect();
+  assert.equal(failed.status, "failed");
+  assert.deepEqual(failed.outcomes[0], { app: cell.app, outcome: "failed" });
+});
 
 test("a boundary accepted within the bounded profile is an observation, not a target failure", async () => {
   const cell = summary.cells.find((c) => c.phase === "request-limit");
@@ -266,10 +291,19 @@ test("a boundary accepted within the bounded profile is an observation, not a ta
 
 test("a bounded observation with failed terminal health stays a measured target failure", async () => {
   const cell = summary.cells.find((c) => c.phase === "request-timeout" && c.source === "api");
-  saveBounded(cell, "client-deadline", false);
+  saveBounded(cell, "client-deadline", "not-recovered");
   const r = await inspect();
   assert.equal(r.status, "failed"); assert.equal(r.attemptComplete, true);
   assert.deepEqual(r.outcomes[0], { app: cell.app, outcome: "failed" });
+});
+
+test("saved missing liveness cannot override a replayed terminal failure with the same health flag", async () => {
+  const cell = summary.cells.find((c) => c.phase === "request-limit");
+  saveBounded(cell, "rejected", "not-recovered");
+  change(`${cell.key}/capture.json`, (v) => v.terminal.disposition = "missing-liveness");
+  const result = await inspect();
+  assert.equal(result.status, "invalid");
+  assert.deepEqual(result.outcomes[0], { app: cell.app, outcome: "not-run" });
 });
 
 test("a matched bounded capture and summary cannot override the replayed outcome", async () => {

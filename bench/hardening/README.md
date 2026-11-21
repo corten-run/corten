@@ -20,6 +20,11 @@ evidence. Functional parity, the process inventory, terminal liveness and owned-
 cleanup have separate checks. A bad control or missing receipt cannot be reported as
 a framework failure. An unavailable measurement is not zero.
 
+If ordinary reads succeed but the deployment has no discoverable health endpoint,
+its terminal liveness check is unsupported. A discovered endpoint returning an
+error, a process observed to have stopped, or an incorrect follow-up read stays a
+failure; a missing endpoint does not erase it.
+
 Qualification applies only to the checked features. The runner does not test
 incomplete requests, connection caps, large bodies or server-enforced deadlines.
 A passed row is not evidence that those protections exist.

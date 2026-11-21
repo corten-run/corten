@@ -87,6 +87,11 @@ test("bounded capture keeps a complete target failure and rejects a mixed legacy
   assert.equal(capture.assessment.status, "target-failure"); assert.equal(capture.assessment.healthy, false);
   assert.equal(capture.terminal.healthy, true);
   assert.throws(() => assembleBounded({ ...input, raw: [...raw, { type: "attack" }], config }));
+  input.settings.terminalHealthPaths.application = null;
+  input.lifecycle.application.health = { path: null, response: null };
+  const missing = assembleBounded({ ...input, raw, config });
+  assert.equal(missing.assessment.status, "target-failure");
+  assert.equal(missing.terminal.disposition, "missing-liveness");
 });
 
 function openCircuit(source = "api", boundarySuccess = false) {
@@ -197,32 +202,33 @@ test("rejects forged success, missing dependency evidence, and invalid native re
   assert.throws(() => assembleRecovery(input), /unexpected upstream counter delta/);
 });
 
-function apiQualification() {
+function apiQualification(missingLive) {
   const base = { ms: 5, status: 200, headers: {}, bodyLength: 0 };
   const page = Buffer.from("<p>marketplace</p>");
   const probes = Object.fromEntries(["page", "json", "pageBr", "jsonBr", "jsonGzip", "page404", "json404", "json405", "head", "badHost",
     "page500", "json500", "afterUpstream"].map((key) => [key, base]));
   const live = { ...base, path: healthPath };
   return boundedQualification({ ...probes, page: { ...base, body: page.toString("base64"), bodyLength: page.length }, form: "no native POST form",
-    live, liveness: [live] }, "api");
+    ...(missingLive ? { liveness: livePaths.map((path) => ({ ...base, path, status: 404 })) } : { live, liveness: [live] }) }, "api");
 }
 
-function apiControls() {
+function apiControls(missingLive) {
   const nonce = "a".repeat(24), changed = { ...expected, title: nonce };
   const controllers = ["reset-before", "mutate", "count-json", "reset-count", "count-page", "fault-503", "fault-302", "reset-after", "verify-reset"]
     .map((step) => ({ step, response: response(200, JSON.stringify(step.startsWith("count-") ? { requests: { item_1: 1 } } : { status: 200, answers: {}, requests: {} })) }));
   const responses = [["mutated-json", 200, JSON.stringify(changed)], ["mutated-page", 200, nonce], ["fault-json-503", 503], ["fault-page-503", 503],
-    ["live-503", 200], ["fault-json-302", 502], ["fault-page-302", 502], ["restored-json", 200, JSON.stringify(expected)]]
+    ...(missingLive ? [] : [["live-503", 200]]), ["fault-json-302", 502], ["fault-page-302", 502], ["restored-json", 200, JSON.stringify(expected)]]
     .map(([step, status, body]) => ({ step, response: response(status, body) }));
   return { schema: "native-hardening-controls/v1", source: "api", host: { allowed: response(200), denied: response(400) },
-    liveness: { path: healthPath, baseline: response(200), negative: response(404) }, api: { nonce, expected: changed, original: expected, controllers, responses } };
+    liveness: { path: missingLive ? null : healthPath, baseline: missingLive ? null : response(200), negative: response(404) },
+    api: { nonce, expected: changed, original: expected, controllers, responses } };
 }
 
-test("real offline replay feeds a recovered sample window with unhealthy terminal service to the adapter as an app failure", async (t) => {
+test("real offline replay distinguishes an undiscovered endpoint from a terminal HTTP failure", async (t) => {
   const prefix = join(tmpdir(), "dependency-recovery-replay-"), folder = mkdtempSync(prefix);
   t.after(() => { assert.ok(folder.startsWith(prefix)); rmSync(folder, { recursive: true }); });
   const input = fixture(), cells = matrix(), cell = cells.find((c) => c.app === "corten" && c.phase === phase && c.mode === "direct" && c.source === "api");
-  const options = parseArgs(["w17", "--build", "--review", subjectSha256]), q = apiQualification(), controls = apiControls();
+  const options = parseArgs(["w17", "--build", "--review", subjectSha256]);
   const runId = "recovery-replay-fixture", tools = Object.fromEntries(["node", "checker", "edge", "cert"].map((name) => [name, { Id: "sha256:" + digest(name) }]));
   const files = [...new Set(["Cargo.lock", "Cargo.toml", "package.json", "package-lock.json", "bench/hardening/run.mjs", "bench/hardening/verify.mjs",
     "bench/hardening/evidence.mjs", ...phases.flatMap(phaseInputs),
@@ -232,7 +238,7 @@ test("real offline replay feeds a recovered sample window with unhealthy termina
   const sourceHash = digest(JSON.stringify(files.filter((f) => /^(Cargo\.|bench\/marketplace\/corten\/)/.test(f.path)).map((f) => [f.path, f.sha256])));
   const out = join(folder, cell.key); mkdirSync(out, { recursive: true }); mkdirSync(join(folder, "fixtures"));
   const put = (name, value) => writeFileSync(join(out, name), JSON.stringify(value));
-  const writeSummary = (capture, terminalHealthy = capture.terminal.healthy) => {
+  const writeSummary = (capture, q, controls, terminalHealthy = capture.terminal.healthy) => {
     Object.assign(cell, { status: "observed", parity: "passed", apparatusValid: true, nativeMissingFeatures: q.missing, nativeAssessment: assessNative(controls, q),
       dependencyRecovery: capture.assessment, dependencyTerminalHealthy: terminalHealthy });
     writeFileSync(join(folder, "summary.json"), JSON.stringify({ schema, options, budget, cells, runId, tools, commit, registryDigest, complete: false,
@@ -241,7 +247,6 @@ test("real offline replay feeds a recovered sample window with unhealthy termina
     writeFileSync(join(folder, "run-manifest.json"), JSON.stringify(savedFiles(folder).filter((f) => f.path !== "run-manifest.json")));
   };
   writeFileSync(join(folder, "fixtures/marketplace.json"), JSON.stringify(records()));
-  assert.deepEqual(input.settings.terminalHealthPaths, terminalHealthPaths(q));
   const deployment = { processes: [], provenance: input.provenance, totalBudget: budget.resources, network: { Name: runId + "-net", Id: digest(runId), Containers: {} } };
   for (const p of input.settings.deployment.processes) {
     const life = input.lifecycle[p.id], origin = input.provenance.find(({ id }) => id === p.id), before = life.before;
@@ -257,24 +262,38 @@ test("real offline replay feeds a recovered sample window with unhealthy termina
     put(p.id + "-before.json", { info: before, top: "PID COMMAND\n42 fixture\n" });
     origin.config = digest(readFileSync(join(out, p.id + "-before.json")));
   }
-  put("settings.json", input.settings); put("deployment.json", deployment); put("qualification.json", q); put("native-controls.json", controls);
+  put("deployment.json", deployment);
   put("native-parity.json", input.parity); put("parity.json", input.parity); put("cleanup.json", input.cleanup);
   writeFileSync(join(out, "raw.jsonl"), input.raw.map((row) => JSON.stringify(row)).join("\n") + "\n");
   const binding = { request: { group: "hardening", round: "w17", commit, recipe: "native-defaults" }, subjectSha256,
     selection: { group: "hardening", apps, contractSha256: registryDigest }, sources: { commit, files },
     execution: { invocation: { executable: "node", argv: ["bench/hardening/run.mjs", "w17", "--build", "--review", subjectSha256],
       cwd: "repository-root", shell: false }, effectiveOptions: options, settings: budget }, resources: { budget: budget.resources } };
-  for (const [status, terminalHealthy, expectedOutcome] of [[200, true, "not-run"], [503, false, "failed"]]) {
-    input.lifecycle.application.health.response.status = status;
+  const applicationHealth = structuredClone(input.lifecycle.application.health);
+  for (const [missingLive, status, terminalDisposition, expectedOutcome] of [
+    [false, 200, "recovered", "not-run"], [false, 503, "not-recovered", "failed"],
+    [true, 200, "missing-liveness", "not-run"], [true, 503, "not-recovered", "failed"],
+  ]) {
+    const q = apiQualification(missingLive), controls = apiControls(missingLive);
+    const terminalHealthy = terminalDisposition === "recovered";
+    input.settings.terminalHealthPaths = terminalHealthPaths(q);
+    input.lifecycle.application.health = missingLive ? { path: null, response: null } : structuredClone(applicationHealth);
+    input.lifecycle[missingLive ? "upstream" : "application"].health.response.status = status;
+    put("settings.json", input.settings); put("qualification.json", q); put("native-controls.json", controls);
     for (const [id, life] of Object.entries(input.lifecycle)) put(id + "-lifecycle.json", life);
-    const capture = assembleRecovery(input); put("capture.json", capture); put("manifest.json", artifacts(out)); writeSummary(capture);
+    const capture = assembleRecovery(input); put("capture.json", capture); put("manifest.json", artifacts(out)); writeSummary(capture, q, controls);
     assert.equal(capture.assessment.status, "recovered");
-    assert.deepEqual(verify(folder).dependencyRecovery, [{ key: cell.key, assessment: capture.assessment, terminalHealthy }]);
+    assert.deepEqual(verify(folder).dependencyRecovery, [{ key: cell.key, assessment: capture.assessment, terminalHealthy, terminalDisposition }]);
     const result = await inspectSaved(binding, folder);
     assert.equal(result.status, "blocked", "one synthetic cell cannot qualify the native run");
     assert.deepEqual(result.outcomes.find((o) => o.app === cell.app), { app: cell.app, outcome: expectedOutcome });
-    if (!terminalHealthy) {
-      writeSummary(capture, true);
+    if (missingLive && status === 503) {
+      put("capture.json", { ...capture, terminal: { ...capture.terminal, disposition: "missing-liveness" } });
+      put("manifest.json", artifacts(out)); writeSummary(capture, q, controls);
+      assert.throws(() => verify(folder), /saved capture differs from raw observations/);
+      assert.equal((await inspectSaved(binding, folder)).status, "invalid");
+    } else if (!terminalHealthy) {
+      writeSummary(capture, q, controls, true);
       assert.throws(() => verify(folder), /saved dependency terminal health differs from replay/);
       assert.equal((await inspectSaved(binding, folder)).status, "invalid");
     }

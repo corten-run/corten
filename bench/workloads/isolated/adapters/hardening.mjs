@@ -106,24 +106,29 @@ function replayedCells(observed, replayed) {
 function replayAssessment(fs, cell, replayed, recovery) {
   if (!fs.hasBytes(`${cell.key}/raw.jsonl`) || !fs.hasBytes(`${cell.key}/capture.json`)) return;
   const capture = fs.read(`${cell.key}/capture.json`);
-  const { assessment, terminalHealthy } = replayed ?? {};
+  const { assessment, terminalHealthy, terminalDisposition } = replayed ?? {};
   const [savedAssessment, savedTerminal] = recovery ? [cell.dependencyRecovery, cell.dependencyTerminalHealthy]
     : [cell.boundedRequests, cell.boundedTerminalHealthy];
   if (assessment == null || capture.assessment == null || savedAssessment == null
-    || terminalHealthy == null || capture.terminal?.healthy == null || savedTerminal == null) return;
+    || terminalHealthy == null || capture.terminal?.healthy == null || savedTerminal == null
+    || terminalDisposition == null || capture.terminal.disposition == null) return;
   same([capture.schema, capture.phase, capture.case], [
     recovery ? "native-dependency-recovery-capture/v1" : "native-bounded-requests-capture/v1", cell.phase, cell.mode]);
   same([capture.assessment, savedAssessment], [assessment, assessment]);
   same([assessment.version, assessment.source], [recovery ? recoveryProfile.version : boundedRequestsVersion, cell.source]);
   assert.equal(typeof terminalHealthy, "boolean"); same([capture.terminal.healthy, savedTerminal], [terminalHealthy, terminalHealthy]);
-  return { assessment, terminalHealthy };
+  assert.ok(["recovered", "missing-liveness", "not-recovered", "stopped"].includes(terminalDisposition));
+  same(capture.terminal.disposition, terminalDisposition);
+  same(terminalHealthy, terminalDisposition === "recovered");
+  return { assessment, terminalDisposition };
 }
 
 function disposition(fs, cell, replayed, sourcesVerified) {
   const recovery = cell.phase === recoveryPhase;
   const observation = replayAssessment(fs, cell, replayed, recovery);
   if (!observation) return;
-  const { assessment, terminalHealthy } = observation;
+  const { assessment, terminalDisposition } = observation;
+  const terminalOutcome = terminalDisposition === "recovered" ? "passed" : terminalDisposition === "missing-liveness" ? "unsupported" : "failed";
   if (!recovery) {
     same(assessment.phase, cell.phase);
     assert.ok(Number.isFinite(assessment.completeAtMs) && assessment.completeAtMs >= 0);
@@ -132,10 +137,10 @@ function disposition(fs, cell, replayed, sourcesVerified) {
     const targetFailed = assessment.status === "target-failure";
     assert.ok(targetFailed || accepted.includes(assessment.status));
     same(assessment.healthy, !targetFailed);
-    return !targetFailed && terminalHealthy ? "passed" : "failed";
+    return targetFailed ? "failed" : terminalOutcome;
   }
   const [passed, failed] = cell.source === "api" ? ["recovered", "unrecovered"] : ["fixture-control", "fixture-degraded"];
-  if (assessment.status === passed) return terminalHealthy ? "passed" : "failed";
+  if (assessment.status === passed) return terminalOutcome;
   if (assessment.status === failed || assessment.status === "baseline-unavailable" && sourcesVerified) return "failed";
   assert.ok(["incomplete", "baseline-unavailable"].includes(assessment.status));
 }
@@ -204,7 +209,7 @@ export async function inspectSaved(binding, folder) {
       else assert.equal(typeof qualification, "boolean");
       if (outcome !== undefined && qualification !== undefined) completeDispositions++;
       if (outcome === "failed") dispositions.set(cell.key, outcome);
-      else if (outcome === "passed" && qualification !== undefined) dispositions.set(cell.key, qualification ? "passed" : "unsupported");
+      else if (outcome !== undefined && qualification !== undefined) dispositions.set(cell.key, qualification ? outcome : "unsupported");
     }
     result.attemptComplete = summary.complete && completeDispositions === expected.length;
     phase = "resources";

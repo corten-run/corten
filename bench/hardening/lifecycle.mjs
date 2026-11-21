@@ -373,11 +373,13 @@ export function terminalRecovery(recovered, processes, resources, lifecycle, sou
   }
   const terminalApplications = terminalServices.filter((p) => p.role === "application").map(({ role, ...p }) => p);
   const sampledRunning = resources.filter((r) => applications.some((p) => p.id === r.id)).every((r) => r.running);
-  const terminalRunning = terminalServices.every((r) => r.healthy && r.liveness === "observed")
-    && resources.filter((r) => critical.some((p) => p.id === r.id)).every((r) => r.running);
+  const terminalFailed = terminalServices.some((r) => !r.healthy || r.liveness === "failed" || r.liveness === "unavailable")
+    || resources.some((r) => !r.running && critical.some((p) => p.id === r.id));
   // A midpoint sample cannot override a later terminal exit. Preserve its real timestamp
   // instead of moving the Docker observation into an earlier oracle sample/window.
-  return { disposition: !sampledRunning ? "stopped" : !terminalRunning ? "not-recovered" : recovered ? "recovered" : "not-recovered", terminalApplications, terminalServices };
+  const disposition = !sampledRunning ? "stopped" : terminalFailed || !recovered ? "not-recovered"
+    : terminalServices.some((r) => r.liveness === "missing") ? "missing-liveness" : "recovered";
+  return { disposition, terminalApplications, terminalServices };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
