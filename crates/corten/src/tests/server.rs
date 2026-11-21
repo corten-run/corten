@@ -1877,3 +1877,31 @@ async fn a_connect_answered_with_success_has_no_body() {
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
     assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), "tunnel");
 }
+
+/// A kept page is sent with the date it is sent on: a `Date` its handler set is its own answer's,
+/// not kept with the page, so the server writes the date of each answer given in its place.
+#[tokio::test]
+async fn a_kept_page_is_sent_with_the_date_it_is_sent_on() {
+    const SET: &str = "date: mon, 01 jan 2001 00:00:00 gmt";
+    let page = |req: Req| async move {
+        let page = req.test_page_for("Dated", html! { <p>"dated"</p> }).map(|mut page| {
+            page.headers_mut().insert(http::header::DATE, http::HeaderValue::from_static("Mon, 01 Jan 2001 00:00:00 GMT"));
+            page
+        });
+        Public::new(std::time::Duration::from_secs(60), page)
+    };
+    let routes = Table::new().route("/", crate::route::get(page).0);
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, App::new(Routes::from(routes)), async {
+        let _ = stopped.await;
+    }));
+    let made = raw_get(addr, "/", "").await.to_ascii_lowercase();
+    assert!(made.starts_with("http/1.1 200") && !made.contains("\r\nage:") && made.contains(SET), "{made}");
+    let kept = raw_get(addr, "/", "").await.to_ascii_lowercase();
+    assert!(kept.starts_with("http/1.1 200") && kept.contains("\r\nage:"), "{kept}");
+    assert!(!kept.contains(SET) && kept.matches("\r\ndate: ").count() == 1, "the date it is sent on: {kept}");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}

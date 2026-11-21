@@ -146,6 +146,9 @@ struct Store {
     /// kept, without a lock or a search.
     written: OnceLock<Box<[AtomicU32]>>,
     inner: RwLock<Inner>,
+    /// The requests that have waited for another's page, so a test sees one wait.
+    #[cfg(test)]
+    joined: AtomicUsize,
 }
 
 /// Which of the store's counts is a path's: by a hash of the path with its escapes decoded
@@ -436,7 +439,14 @@ impl Answers {
     /// Room for `bound` bytes of answers; none for a bound of 0.
     pub(crate) fn new(bound: usize) -> Option<Self> {
         (bound > 0).then(|| {
-            Answers(Arc::new(Store { bound, bytes: AtomicUsize::new(0), written: OnceLock::new(), inner: RwLock::default() }))
+            Answers(Arc::new(Store {
+                bound,
+                bytes: AtomicUsize::new(0),
+                written: OnceLock::new(),
+                inner: RwLock::default(),
+                #[cfg(test)]
+                joined: AtomicUsize::new(0),
+            }))
         })
     }
 
@@ -444,6 +454,12 @@ impl Answers {
     #[cfg(test)]
     pub(crate) fn bytes(&self) -> usize {
         self.0.bytes.load(Ordering::Acquire)
+    }
+
+    /// The requests that have waited for another's page.
+    #[cfg(test)]
+    pub(crate) fn joined(&self) -> usize {
+        self.0.joined.load(Ordering::Acquire)
     }
 
     /// The answer kept for a request, while it stands, with its age in seconds. Where none does,
@@ -483,6 +499,8 @@ impl Answers {
     fn lead(&self, stale: Arc<Entry>) -> Result<Box<Leading>, Making> {
         let mut making = stale.making.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(now) = making.as_ref() {
+            #[cfg(test)]
+            self.0.joined.fetch_add(1, Ordering::AcqRel);
             return Err(Making(now.clone()));
         }
         let now = Arc::new(Semaphore::new(0));
