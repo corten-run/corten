@@ -35,8 +35,14 @@
 //! Some things are never shared, whoever set the header (`Public`, or a `Cache-Control` written by
 //! hand, by a middleware or on an [`crate::HtmlResponse`]): a response that sets a cookie, HTML
 //! with this request's CSP nonce (`req.nonce()` in the layout, or a handler that takes
-//! [`crate::security::Nonce`]), and an answer to a request whose handler or middleware read a
-//! [`crate::Caller`]. They get `private, no-cache`, and `corten dev` logs the first two.
+//! [`crate::security::Nonce`]), a page that draws a form's new submit key
+//! ([`crate::SubmitKey::field`]: each visitor needs a key of their own), and an answer to a request
+//! whose handler or middleware read a [`crate::Caller`]. They get `private, no-cache`, and
+//! `corten dev` logs the first three. A page that draws a submit key also loses the caching headers
+//! a CDN reads first, by name ([`CDN_CACHING`]: `CDN-Cache-Control`, `Surrogate-Control`, ...),
+//! and its `no-store` goes out `private, no-store`, for a CDN that ignores a bare one. A
+//! [`crate::live`] stream's fragments are text rendered after its headers went out, so they carry
+//! no such mark.
 //!
 //! The app is the first shared cache of its own `Public` pages: the whole document one made for a
 //! request without credentials is kept for its shared lifetime and given again in the handler's
@@ -277,6 +283,38 @@ impl Typed {
 /// The default for what the app renders.
 pub(crate) const PRIVATE: HeaderValue = HeaderValue::from_static("private, no-cache");
 
+/// A page that draws a submit key and says `no-store`: some CDNs keep an answer that says only
+/// `no-store` (Fastly), and none keeps one that says `private`.
+pub(crate) const PRIVATE_NO_STORE: HeaderValue = HeaderValue::from_static("private, no-store");
+
+/// The caching headers a CDN or proxy reads before `Cache-Control`, by exact name: RFC 9213's
+/// `CDN-Cache-Control`, Cloudflare's and Vercel's own, `Surrogate-Control`, Akamai's `Edge-Control`
+/// and nginx's `X-Accel-Expires`. [`settle`] removes them from a page that draws a submit key, an
+/// unstaged route's answer that sets a cookie loses them and any other `*cache-control`, and a
+/// [`crate::Public`] answer may not set one. A name a deployment configures for itself (RFC 9213
+/// allows one) is the deployment's.
+pub(crate) const CDN_CACHING: [&str; 6] = [
+    "cdn-cache-control",
+    "cloudflare-cdn-cache-control",
+    "vercel-cdn-cache-control",
+    "surrogate-control",
+    "edge-control",
+    "x-accel-expires",
+];
+
+/// [`CDN_CACHING`] as header names, made once.
+static CDN_HEADERS: [header::HeaderName; CDN_CACHING.len()] = {
+    let [a, b, c, d, e, f] = CDN_CACHING;
+    [
+        header::HeaderName::from_static(a),
+        header::HeaderName::from_static(b),
+        header::HeaderName::from_static(c),
+        header::HeaderName::from_static(d),
+        header::HeaderName::from_static(e),
+        header::HeaderName::from_static(f),
+    ]
+};
+
 /// What the layer knows about a request, for [`settle`].
 pub(crate) struct Seen {
     /// A `Cookie` or `Authorization` header.
@@ -347,6 +385,12 @@ const NOTICE_GONE: [&[u8]; 2] = [b"__Host-corten-notice=;", b"corten-notice=;"];
 /// Sets the response's `Cache-Control`: the default when it has none, and a private one instead
 /// of a shared one when the response may differ between users.
 pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
+    // A page that drew a submit key ([`Unrepeatable`]) is the browser's alone, whatever its
+    // `Cache-Control` says: a CDN reads its own header first, so none of those Corten names stays.
+    let drew_key = res.extensions().get::<Unrepeatable>().is_some();
+    if drew_key {
+        drop_cdn_caching(res.headers_mut());
+    }
     let typed = res.extensions().get::<Typed>().cloned();
     // One lookup for the usual response, which says nothing.
     match res.headers_mut().entry(header::CACHE_CONTROL) {
@@ -381,7 +425,11 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
             }
             let plain = lines == 1 && !quoted && text;
             if no_store && !must_understand {
-                if quoted || !text {
+                // A page that drew a submit key says `private` too, for a CDN that ignores
+                // `no-store`.
+                if drew_key && !(private && plain) {
+                    entry.insert(PRIVATE_NO_STORE);
+                } else if quoted || !text {
                     entry.insert(NO_STORE);
                 } else if lines > 1 {
                     let mut joined = Vec::new();
@@ -408,23 +456,32 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     // `private, no-cache` for every reading. Read only when the header is replaced.
     let personal = |headers: &HeaderMap| {
         if headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes())) {
-            NO_STORE
+            if drew_key {
+                PRIVATE_NO_STORE
+            } else {
+                NO_STORE
+            }
         } else {
             PRIVATE
         }
     };
-    let headers = res.headers_mut();
     let bug = if seen.nonce {
         Some("its HTML has this request's CSP nonce (req.nonce() in the layout, or a handler that takes Nonce)")
-    } else if headers
+    } else if res
+        .headers()
         .get_all(header::SET_COOKIE)
         .iter()
         .any(|cookie| !NOTICE_GONE.iter().any(|gone| cookie.as_bytes().starts_with(gone)))
     {
         Some("it sets a cookie")
+    } else if drew_key {
+        // The mark that keeps its tag off and the app from keeping it: each visitor needs a key
+        // of their own, and the browser one it has not sent.
+        Some("it draws a form's new submit key (SubmitKey::field), and each visitor needs a key of their own")
     } else {
         None
     };
+    let headers = res.headers_mut();
     if let Some(bug) = bug {
         if seen.dev {
             tracing::warn!("corten: {path} is marked for shared caches, but {bug}, so it was sent private, no-cache (or no-store, if its header names it)");
@@ -444,6 +501,39 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     if !typed.named {
         headers.append(header::VARY, HeaderValue::from_static("cookie"));
     }
+}
+
+/// Removes the caching headers a CDN reads before `Cache-Control` ([`CDN_CACHING`]) from an
+/// answer no shared cache may keep.
+pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
+    // One pass comparing names first: the usual answer has none of them, and a lookup of each
+    // costs more than that pass.
+    if headers.keys().any(|name| CDN_CACHING.contains(&name.as_str())) {
+        for name in &CDN_HEADERS {
+            headers.remove(name);
+        }
+    }
+}
+
+/// The `Cache-Control` for a page that drew a submit key and goes out without [`settle`] (a
+/// refused write's error page), with the CDN caching headers it had removed: `private, no-store`
+/// where it names `no-store`, as [`settle`] gives one, and the default otherwise.
+pub(crate) fn drawn_unsettled(headers: &mut HeaderMap) -> HeaderValue {
+    drop_cdn_caching(headers);
+    if headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes())) {
+        PRIVATE_NO_STORE
+    } else {
+        PRIVATE
+    }
+}
+
+/// In a debug build: whether an answer's headers, as sent, let a shared cache keep it: one of
+/// [`CDN_CACHING`], or no line of its `Cache-Control` says a plain `private` (some CDNs keep an
+/// answer that says only `no-cache` or `no-store`).
+#[cfg(debug_assertions)]
+pub(crate) fn sent_shared(headers: &HeaderMap) -> bool {
+    CDN_HEADERS.iter().any(|name| headers.contains_key(name))
+        || !headers.get_all(header::CACHE_CONTROL).iter().any(|line| says(line.as_bytes()).private)
 }
 
 /// Whether the client explicitly accepts a coding other than identity. A positive wildcard counts:
@@ -472,7 +562,8 @@ pub(crate) fn accepts_a_coding(headers: &HeaderMap) -> bool {
 static TAG_KEY: std::sync::LazyLock<std::hash::RandomState> = std::sync::LazyLock::new(std::hash::RandomState::new);
 
 /// Marks a page whose body holds a value drawn for this request alone (a [`crate::SubmitKey`]'s
-/// new key): its tag would never match, so it is not made.
+/// new key): its tag would never match, so it is not made; no cache may give it to another
+/// visitor or reuse it unasked ([`settle`]), and the app does not keep it ([`crate::kept`]).
 #[derive(Clone, Copy)]
 pub(crate) struct Unrepeatable;
 
@@ -866,6 +957,45 @@ mod tests {
         }
         assert_eq!(settled(Some("Private, max-age=60"), true, Seen { nonce: true, ..seen() }, true), "Private, max-age=60");
         assert_eq!(settled(Some("no-store"), true, Seen { caller: true, ..seen() }, true), "no-store");
+    }
+
+    /// A page that drew a submit key for this request ([`Unrepeatable`]) is the browser's alone
+    /// and asked about again, whoever set its header; a plain `private` stands, and a `no-store`
+    /// goes out `private, no-store`, since some CDNs keep an answer that says only `no-store`.
+    #[test]
+    fn an_answer_that_drew_a_submit_key_is_not_shared() {
+        let drawn = |cache: Option<Cache>, lines: &[&'static str], seen: Seen| {
+            let mut res = "x".into_response();
+            res.extensions_mut().insert(Unrepeatable);
+            if let Some(cache) = cache {
+                cache.apply(&mut res);
+            }
+            for line in lines {
+                res.headers_mut().append(header::CACHE_CONTROL, HeaderValue::from_static(line));
+            }
+            settle(&mut res, seen, "/x");
+            let lines: Vec<_> =
+                res.headers().get_all(header::CACHE_CONTROL).iter().map(|v| v.to_str().unwrap().to_string()).collect();
+            lines.join(" | ")
+        };
+        let minute = Duration::from_secs(60);
+        for (partial, dev) in [(false, false), (true, false), (false, true)] {
+            let asked = || Seen { partial, dev, ..seen() };
+            assert_eq!(drawn(Some(Cache::public(minute).shared(minute * 60)), &[], asked()), "private, no-cache");
+            assert_eq!(drawn(Some(Cache::immutable()), &[], asked()), "private, no-cache", "its URL does not name a new key");
+            assert_eq!(drawn(None, &["public, max-age=60"], asked()), "private, no-cache", "a header written by hand");
+        }
+        assert_eq!(drawn(None, &[], seen()), "private, no-cache", "the default");
+        assert_eq!(drawn(None, &["private, max-age=60"], seen()), "private, max-age=60", "the app's own choice");
+        assert_eq!(drawn(None, &["private, no-store"], seen()), "private, no-store", "already private");
+        // Every way a `no-store` goes out keeps the browser out and says `private` to a CDN.
+        assert_eq!(drawn(Some(Cache::no_store()), &[], seen()), "private, no-store", "NoStore");
+        assert_eq!(drawn(None, &["no-store"], seen()), "private, no-store", "written by hand");
+        assert_eq!(drawn(None, &["no-store", "max-age=0"], seen()), "private, no-store", "on two lines");
+        assert_eq!(drawn(None, &["no-store, community=\"x\""], seen()), "private, no-store", "beside a quoted value");
+        assert_eq!(drawn(None, &["no-store, must-understand"], seen()), "private, no-store", "beside must-understand");
+        assert_eq!(drawn(None, &["public, no-store"], seen()), "private, no-store", "beside public");
+        assert_eq!(drawn(None, &["no-store"], Seen { caller: true, ..seen() }), "private, no-store", "and a caller read");
     }
 
     #[test]

@@ -12,11 +12,12 @@ import { assembleRecovery } from "./dependency-recovery-capture.mjs";
 import { assembleBounded, boundedProbeConfig } from "./request-capture.mjs";
 import { boundedReadPlan } from "./bounded-requests.mjs";
 import { recoverySchedule } from "./dependency-recovery-contract.mjs";
-import { artifacts, digest, savedFiles, savedProofVersion, phaseInputs } from "./evidence.mjs";
-import { terminalHealthPaths } from "./lifecycle.mjs";
+import { artifacts, digest, savedFiles, savedProofVersion, phaseInputs, verifyArtifacts } from "./evidence.mjs";
+import { ownedContainerRecorder, terminalHealthPaths } from "./lifecycle.mjs";
 import { assessNative } from "./native.mjs";
 import { apps, budgets, matrix, nativeGroup, parseArgs, registryDigest, schema, boundedRequestsVersion, deploymentQualificationVersion, phases } from "./plan.mjs";
 import { verify } from "./verify.mjs";
+import { finalizeCell } from "./run.mjs";
 
 const budget = budgets(), phase = "dependency-recovery", commit = "a".repeat(40), subjectSha256 = "b".repeat(64);
 const origin = 1_000_000_000_000n, bootId = "01234567-89ab-cdef-0123-456789abcdef";
@@ -92,6 +93,57 @@ test("bounded capture keeps a complete target failure and rejects a mixed legacy
   const missing = assembleBounded({ ...input, raw, config });
   assert.equal(missing.assessment.status, "target-failure");
   assert.equal(missing.terminal.disposition, "missing-liveness");
+});
+
+test("isolated runner finalizes a bounded cell using owned receipts, not the empty cleanup inventory", (t) => {
+  const folder = mkdtempSync(join(tmpdir(), "hardening-finalize-test-"));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const out = join(folder, "cell"); mkdirSync(out);
+  const input = fixture("fixture");
+  const cell = { key: "corten/fixture/direct/request-limit", mode: "direct", source: input.source, phase: "request-limit", status: "not-run" };
+  const runId = "hardening-123456789abc";
+  input.settings.phase = cell.phase;
+  input.config = boundedProbeConfig(cell, budget, runId);
+  const targetOrigin = input.config.target.origin, upstreamOrigin = input.config.upstream;
+  const samples = boundedReadPlan(cell.phase, targetOrigin, upstreamOrigin).reads.map((spec, i) =>
+    ({ ...spec, startMs: i * 20, endMs: i * 20 + 5, receipt }));
+  input.raw = [input.raw[0], { type: "bounded-requests", version: boundedRequestsVersion, phase: cell.phase, source: cell.source,
+    targetOrigin, upstreamOrigin, samples, upstream: null, completeAtMs: samples.at(-1).endMs }];
+
+  const recorder = ownedContainerRecorder({ folder, runId, command: () => assert.fail("offline finalization must not invoke Docker") });
+  const wall = Date.parse(input.raw[0].wallAtStart);
+  const before = {}, after = {};
+  for (const [i, [step, role, cpus]] of [["application", "applicationDirect", "1"], ["upstream", "upstream", "2"], ["probe", "apparatus", "4-5"]].entries()) {
+    const pid = 100 + i, service = input.lifecycle[step]?.before;
+    const created = service ? { ...service, State: { ...service.State, Pid: pid } }
+      : { Id: digest(step), Image: "sha256:" + digest("image " + step), State: { Pid: 0 } };
+    const startedAt = service?.State.StartedAt ?? new Date(wall - 10).toISOString();
+    const terminal = { State: { StartedAt: startedAt, FinishedAt: new Date(wall + 60).toISOString() } };
+    recorder.records.push({ intent: { cell: cell.key, step, role }, created, terminal });
+    const path = `/system.slice/docker-${created.Id}.scope`;
+    before[step] = { id: created.Id, imageId: created.Image, startedAt, pid, startTicks: "12345", path, atMs: wall - 5,
+      groups: [{ path, files: { "cgroup.procs": `${pid}\n`, "cpuset.cpus.effective": `${cpus}\n` } }] };
+    after[step] = { ...before[step], atMs: wall + 50 };
+  }
+  // A preceding cell's launch must not substitute for this cell's receipt.
+  recorder.records.unshift({ intent: { ...recorder.records[0].intent, cell: "previous-cell" } });
+  assert.deepEqual(input.cleanup.containers, []);
+  const cpuFile = join(out, "cpu-roles.json");
+  const cpuRoles = { schema: "native-hardening-cpu-roles/v1", before, after };
+  writeFileSync(cpuFile, JSON.stringify(cpuRoles));
+  assert.throws(() => finalizeCell(out, cell, true, input.cleanup.containers, input));
+  assert.equal(cell.status, "not-run");
+  finalizeCell(out, cell, true, recorder.records, input);
+  const capture = JSON.parse(readFileSync(join(out, "capture.json"), "utf8"));
+  const manifest = JSON.parse(readFileSync(join(out, "manifest.json"), "utf8"));
+  verifyArtifacts(out, manifest);
+  assert.ok(manifest.some((row) => row.path === "cpu-roles.json"));
+  assert.equal(cell.status, "observed");
+  assert.equal(cell.apparatusValid, true);
+  assert.equal(cell.capture, cell.key + "/capture.json");
+  assert.equal(capture.assessment.status, "accepted");
+  assert.deepEqual(cell.boundedRequests, capture.assessment);
+  assert.equal(cell.boundedTerminalHealthy, true);
 });
 
 function openCircuit(source = "api", boundarySuccess = false) {

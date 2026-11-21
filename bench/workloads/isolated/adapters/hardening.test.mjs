@@ -113,6 +113,24 @@ test("complete native composition has an intrinsic verified path without review 
   assert.equal(native.mock.callCount(), 1);
 });
 
+test("isolated hardening cannot reuse a historical verified resource proof without CPU roles", async () => {
+  binding.execution.invocation.argv.push("--isolated");
+  binding.execution.effectiveOptions.isolated = summary.options.isolated = true;
+  binding.resources.actorCpus = { application: "1", upstream: "2", proxy: "3", apparatus: "4-5", command: "6-7" };
+  const path = "bench/hardening/cpu-gate.mjs", input = { path, sha256: hash(path) };
+  binding.sources.files.push(input);
+  proof.sourceFiles.push(input);
+  const result = await inspect();
+  assert.equal(result.status, "blocked");
+  assert.equal(result.resources, "blocked");
+  assert.ok(result.blockers.includes("hardening-effective-cpu-role-proof-missing"));
+  assert.ok(result.outcomes.every((r) => r.outcome === "passed"), "historical outcomes are not relabelled");
+  native.mock.resetCalls();
+  delete summary.options.isolated;
+  assert.equal((await inspect()).status, "invalid", "official isolation cannot be downgraded to standalone");
+  assert.equal(native.mock.callCount(), 0);
+});
+
 test("dependency recovery is verified from matching saved and replayed assessments, with no numeric comparison", async () => {
   const result = await inspect();
   assert.equal(result.status, "verified");
