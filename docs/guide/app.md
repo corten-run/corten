@@ -1577,8 +1577,8 @@ show versions of a page up to a lifetime apart, as two edges of a CDN do, a writ
 only in the instance that answered it, and a restart starts empty.
 
 A `Public` route that answers JSON (`Public<JsonResult<T>>`) or text is kept the same way: its
-whole body, under every rule above and by the same key, with the tag's hash and each coding's
-bytes made once. What it saves is the handler with what it reads, the writing of the JSON, the
+whole body, under every rule above and by the same key (the language too, where the handler
+reads it with `req.t()` or `req.lang()`), with the tag's hash and each coding's bytes made once. What it saves is the handler with what it reads, the writing of the JSON, the
 hash and the compression. Such a route has one answer at its URL, where a page route has the
 document, its swap and its data, so a data client's request (`Accept: application/json` first) is
 kept too, as a copy apart from a request that does not ask for JSON first: a handler that takes

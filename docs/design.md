@@ -7217,8 +7217,8 @@ rules something out.
     [the request path](guide/app.md#your-own-middleware) says it does, and the security headers,
     `Cache-Control`, the tag and the compression treat a kept page as the handler's answer, so no
     rule about what may be shared is written twice. Only a route typed `Public` whose answer is
-    a page asks the store at all, which is known when the route is made, so no other route's
-    `GET` pays for it; a write pays a hash of its path and a count.
+    a page, JSON or text asks the store at all, which is known when the route is made, so no
+    other route's `GET` pays for it; a write pays a hash of its path and a count.
 
     "Cannot tell who asks" is less than a key needs: an extractor of the app's own may be
     `Anonymous` and read the browser's `User-Agent` or a country header a proxy set. So a page
@@ -7248,7 +7248,12 @@ rules something out.
     swap and its data) and only the document is kept; a JSON or text route has one, so a request
     that asks for JSON first is kept too. A handler that takes `Req` can read which of the two
     asked (`req.mode`), and whether it does is not in its type, so the two are kept apart and a
-    route asked both ways holds its body twice. An API's `Access-Control-Allow-Origin` is
+    route asked both ways holds its body twice. It can read the request's language too
+    (`req.t()`, `req.lang()`), and a body says nothing of it in `Vary` as a page does, so
+    reading `Accept-Language` tells the request's signal and the body is kept for the header as
+    it was sent. A body may hold markup its handler rendered, and one with a form's new submit
+    key is not kept, as such a page is not: a body carries no mark of it, so the store watches
+    the handler run for one being drawn. An API's `Access-Control-Allow-Origin` is
     written from the request's `Origin` by the stage after the handler, so it is no part of a
     kept answer and no site is sent another's. Outside an API the stages send a request that
     asks for JSON first for the browser alone (`private`), as one form of a page's URL; the app

@@ -1568,11 +1568,7 @@ impl Req {
             },
             None => match self.signal.locale() {
                 Some(index) => M::from_index(index),
-                None => {
-                    // No answer of this app says it varies on the header: a kept page is told.
-                    self.signal.ask_language();
-                    M::negotiate(self.accept_language())
-                }
+                None => M::negotiate(self.accept_language()),
             },
         }
     }
@@ -1676,7 +1672,12 @@ impl Req {
         self.shared.zoned_dates.then(|| crate::i18n::ZoneScope::enter(crate::i18n::Scope::of(self.signal.zone(), &self.signal)))
     }
 
+    /// The request's `Accept-Language`, read to choose the answer's language. The signal is
+    /// told, so what the app keeps of the answer is kept for the header as it was sent: a page of
+    /// an app with messages says it varies on the header, and JSON, text and a page of an app
+    /// with no `App::messages` do not (`crate::kept`).
     fn accept_language(&self) -> Option<&str> {
+        self.signal.ask_language();
         self.accept_language.as_ref().and_then(|v| v.to_str().ok())
     }
 

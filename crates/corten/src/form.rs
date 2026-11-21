@@ -2590,6 +2590,21 @@ thread_local! {
     pub(crate) static DREW_KEY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// `work` run to its end, and whether a submit key was drawn while it ran. A handler may move
+/// between threads where it waits, and one poll runs on one thread from start to end, so the
+/// mark is read after each poll and what the thread had before is put back.
+pub(crate) async fn watched<F: std::future::Future + Unpin>(mut work: F) -> (F::Output, bool) {
+    let mut drew = false;
+    let out = std::future::poll_fn(|cx| {
+        let before = DREW_KEY.replace(false);
+        let polled = std::pin::Pin::new(&mut work).poll(cx);
+        drew |= DREW_KEY.replace(before);
+        polled
+    })
+    .await;
+    (out, drew)
+}
+
 impl Render for SubmitField {
     fn render(&self, out: &mut String) {
         out.push_str(r#"<input type="hidden" name=""#);

@@ -1806,8 +1806,22 @@ async fn a_kept_api_answer_is_sent_with_each_request_s_own_cors() {
         ran.ran();
         async move { Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json(vec![1.5_f64, 2.5]))) }
     };
+    struct Counted(Runs);
+
+    impl crate::Middleware for Counted {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            self.0.ran();
+            next.run(req).await
+        }
+    }
+
+    let requests = Runs::default();
     let router = App::new(Routes::new())
-        .api::<ApiRoot>(|api| api.route::<ApiRates>(crate::route::get(rates)).allow_origin("https://partner.example"))
+        .api::<ApiRoot>(|api| {
+            api.route::<ApiRates>(crate::route::get(rates).post(|| async { StatusCode::NO_CONTENT }))
+                .allow_origin("https://partner.example")
+                .middleware(Counted(requests.clone()))
+        })
         .router();
     let partner = [("origin", "https://partner.example")];
     let allowed = |headers: &HeaderMap| headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).map(|v| v.to_str().unwrap().to_string());
@@ -1820,5 +1834,140 @@ async fn a_kept_api_answer_is_sent_with_each_request_s_own_cors() {
     assert!(other.contains_key(header::AGE) && allowed(&other).is_none(), "{other:?}");
     let (_, again, _) = fetch(&router, "GET", "/api/rates", &partner).await;
     assert!(again.contains_key(header::AGE) && allowed(&again).as_deref() == Some("https://partner.example"), "{again:?}");
-    assert_eq!(runs.count(), 1, "one run for all four");
+    assert_eq!((runs.count(), requests.count()), (1, 4), "one run for all four, and the API's middleware met each");
+
+    // A data client, as an API's usually is: kept as its own way of asking, and for every cache.
+    let data = [("accept", "application/json"), ("origin", "https://partner.example")];
+    let (_, asked, same) = fetch(&router, "GET", "/api/rates", &data).await;
+    assert!(runs.count() == 2 && !asked.contains_key(header::AGE) && same == body, "{asked:?}");
+    let (_, asked, same) = fetch(&router, "GET", "/api/rates", &data).await;
+    assert!(runs.count() == 2 && asked.contains_key(header::AGE) && same == body, "{asked:?}");
+    assert_eq!(asked[header::CACHE_CONTROL], "public, max-age=60");
+    assert_eq!(allowed(&asked).as_deref(), Some("https://partner.example"));
+
+    // A write in the API drops what is kept at its path, both ways of asking.
+    let (status, _, _) = fetch(&router, "POST", "/api/rates", &[("sec-fetch-site", "same-origin")]).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!fetch(&router, "GET", "/api/rates", &[]).await.1.contains_key(header::AGE));
+    assert!(!fetch(&router, "GET", "/api/rates", &data).await.1.contains_key(header::AGE));
+    assert_eq!(runs.count(), 4);
+}
+
+/// A kept body is for the language its handler read. No body says it varies on
+/// `Accept-Language`, so the header is part of its key once the handler reads it (`req.t()`,
+/// `req.lang()`): in an app with messages, with a messages type that is not the app's, and with
+/// none. A body whose handler does not read it is one copy for every language.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_kept_body_is_for_the_language_its_handler_read() {
+    crate::i18n::messages! { struct BodyMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    crate::i18n::messages! { struct OtherMsg { "fr" => "src/i18n/fr.json", "en" => "src/i18n/en.json" } }
+    let minute = Duration::from_secs(60);
+    let runs = Runs::default();
+    let routes = || {
+        let (words, lang, other, same) = (runs.clone(), runs.clone(), runs.clone(), runs.clone());
+        let words = move |req: Req| {
+            words.ran();
+            async move {
+                let t: BodyMsg = req.t();
+                Public::new(minute, t.item_listings().to_string())
+            }
+        };
+        let lang = move |req: Req| {
+            lang.ran();
+            async move { Public::new(minute, Ok::<_, JsonError>(Json(req.lang().to_string()))) }
+        };
+        let other = move |req: Req| {
+            other.ran();
+            async move {
+                let t: OtherMsg = req.t();
+                Public::new(minute, t.item_listings().to_string())
+            }
+        };
+        let same = move || {
+            same.ran();
+            async move { Public::new(minute, "same".to_string()) }
+        };
+        Table::new()
+            .route("/words", crate::route::get(words).0)
+            .route("/lang", crate::route::get(lang).0)
+            .route("/other", crate::route::get(other).0)
+            .route("/same", crate::route::get(same).0)
+    };
+    let with = App::new(Routes::from(routes())).messages::<BodyMsg>().router();
+    let bare = App::new(Routes::from(routes())).router();
+    // Without `App::messages` the request's locale is "en" and no header is read for it.
+    for (app, paths) in [(&with, &["/words", "/lang", "/other"][..]), (&bare, &["/words", "/other"][..])] {
+        for path in paths {
+            let before = runs.count();
+            for (asked, word, ran) in [("fr", "Annonces", 1), ("en", "Listings", 2), ("fr", "Annonces", 2), ("en", "Listings", 2)] {
+                let (_, _, body) = fetch(app, "GET", path, &[("accept-language", asked)]).await;
+                let said = if *path == "/lang" { format!("\"{asked}\"") } else { word.to_string() };
+                assert_eq!(String::from_utf8_lossy(&body), said, "{path} asked in {asked}");
+                assert_eq!(runs.count() - before, ran, "{path} asked in {asked}");
+            }
+        }
+        let before = runs.count();
+        for asked in ["fr", "en", "de"] {
+            let (_, _, body) = fetch(app, "GET", "/same", &[("accept-language", asked)]).await;
+            assert_eq!(&body[..], b"same");
+        }
+        assert_eq!(runs.count() - before, 1, "the header is not read, so one copy");
+    }
+}
+
+/// What is not kept of a route that answers JSON for everyone: a failure, JSON the app holds as
+/// bytes where the app compresses (it carries its own coded forms, a mark the store does not
+/// replay), and a body with a form's new submit key in markup its handler rendered, also where
+/// the handler waited after rendering it.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_json_answer_that_failed_or_is_one_request_s_alone_is_not_kept() {
+    const SUBMIT: crate::form::FieldName<crate::form::SubmitKey> = crate::form::FieldName::__new("submit");
+    let minute = Duration::from_secs(60);
+    let runs = Runs::default();
+    let (missing, raw, keyed, waited) = (runs.clone(), runs.clone(), runs.clone(), runs.clone());
+    let missing = move || {
+        missing.ran();
+        async move { Public::new(minute, Err::<Json<u32>, JsonError>(crate::Error::not_found().into())) }
+    };
+    let raw = move || {
+        raw.ran();
+        let held = crate::json::Raw::new(r#"{"ladders":[]}"#).expect("JSON");
+        async move { Public::new(minute, Ok::<_, JsonError>(Json(held))) }
+    };
+    let keyed = move || {
+        keyed.ran();
+        async move { Public::new(minute, Ok::<_, JsonError>(Json(crate::form::SubmitKey::field(SUBMIT).to_html()))) }
+    };
+    let waited = move |req: Req| {
+        waited.ran();
+        async move {
+            let field = req.rendered(crate::form::SubmitKey::field(SUBMIT)).into_string();
+            tokio::task::yield_now().await;
+            Public::new(minute, Ok::<_, JsonError>(Json(field)))
+        }
+    };
+    let routes = Table::new()
+        .route("/missing", crate::route::get(missing).0)
+        .route("/raw", crate::route::get(raw).0)
+        .route("/keyed", crate::route::get(keyed).0)
+        .route("/waited", crate::route::get(waited).0);
+    let router = App::new(Routes::from(routes)).router();
+    for (path, status, kept) in [
+        ("/missing", StatusCode::NOT_FOUND, false),
+        ("/raw", StatusCode::OK, !cfg!(feature = "compress")),
+        ("/keyed", StatusCode::OK, false),
+        ("/waited", StatusCode::OK, false),
+    ] {
+        let before = runs.count();
+        let (first, _, body) = fetch(&router, "GET", path, &[]).await;
+        let (_, headers, again) = fetch(&router, "GET", path, &[]).await;
+        assert_eq!(first, status, "{path}");
+        assert_eq!(headers.contains_key(header::AGE), kept, "{path}: {headers:?}");
+        assert_eq!(runs.count() - before, if kept { 1 } else { 2 }, "{path}");
+        if path == "/keyed" || path == "/waited" {
+            assert!(body.len() > 60 && body != again, "{path}: a key for each request");
+        }
+    }
 }

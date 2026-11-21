@@ -136,7 +136,18 @@ impl Endpoint for Keeping {
         let here = req.extensions().get::<crate::layout::StartHere>().filter(|_| page).cloned();
         let answer = self.inner.call(req);
         Box::pin(async move {
-            let res = answer.await;
+            let res = if page {
+                // A page's render marks a submit key it drew itself (`cache::Unrepeatable`).
+                answer.await
+            } else {
+                // A body has no such mark and may hold markup its handler rendered: one with a
+                // form's new submit key is this request's alone.
+                let (res, drew_key) = crate::form::watched(answer).await;
+                if drew_key {
+                    return res;
+                }
+                res
+            };
             let res = match here {
                 Some(here) => here.fill(res).await,
                 None => res,

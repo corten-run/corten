@@ -107,10 +107,36 @@ pub trait Answer: IntoResponse + Sized {
     /// its type is one an app cannot name, so an answer type of the app's own is never kept this
     /// way.
     ///
-    /// ```compile_fail,E0603
-    /// # use corten::{answer::{Answer, AnyAnswer, AnyInputs, Format, NotAFeed}, response::{IntoResponse, Response}};
+    /// ```compile_fail,E0326
+    /// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, Answer, AnyAnswer};
+    ///
     /// struct Mine;
-    /// # impl IntoResponse for Mine { fn into_response(self) -> Response { ().into_response() } }
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn into_response(self) -> Response {
+    ///         "mine".into_response()
+    ///     }
+    /// }
+    ///
+    /// impl Answer for Mine {
+    ///     const FORMAT: Format = Format::Html;
+    ///     const WHOLE: bool = true;
+    ///     type Inputs = AnyInputs;
+    ///     type Rows = NotAFeed;
+    ///     type Kind = AnyAnswer;
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0603
+    /// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, Answer, AnyAnswer};
+    ///
+    /// struct Mine;
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn into_response(self) -> Response {
+    ///         "mine".into_response()
+    ///     }
+    /// }
     ///
     /// impl Answer for Mine {
     ///     const FORMAT: Format = Format::Html;

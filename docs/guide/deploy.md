@@ -264,7 +264,7 @@ already stale, as it does from any CDN, and the browser asks again each time; th
 costs the app neither the render nor the compression. A purge at the cache in front does not
 reach the app: the cache is sent the kept page again until its lifetime ends or a write through
 the app drops it, so a page that must change at once on a purge takes a short lifetime in the app
-and a long one nowhere. The pages are held in the process's memory, 32 MiB of them unless
+and a long one nowhere. What is kept is held in the process's memory, 32 MiB of them unless
 `App::kept_answers` says otherwise, with 256 KiB beside them once a `Public` page is asked for.
 The bound counts the bytes asked of the allocator, and an allocator holds more than it is asked
 for when pages come and go: the benchmark app's resident memory settled 35 MiB above where it

@@ -22,8 +22,8 @@
 //! written in UTC), no `Authorization`, no caller read by a middleware, no `corten` header, JSON
 //! not asked for first, no notice sent back, no body, and the URL the router matched (a
 //! middleware that changed it since leaves the request to the handler). The key is the `Host`,
-//! the path and query, and `Accept-Language` when the page's `Vary` names it or a message was
-//! read in the language it asks for: a page for `/items?page=2` is not the one for `/items`. The
+//! the path and query, and `Accept-Language` when the page's `Vary` names it or the handler
+//! read the language it asks for (`req.t()`, `req.lang()`): a page for `/items?page=2` is not the one for `/items`. The
 //! headers are compared as they were sent, so `fr` and `fr-FR` each have a copy. An answer is
 //! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
 //! and no value made for this request alone, and varies on nothing but what the key covers.
@@ -37,7 +37,8 @@
 //! copy apart from one that does not: a handler that takes `Req` can read which of the two
 //! asked (`req.mode`). What an API adds for the site that asks (`Access-Control-Allow-Origin`,
 //! `Vary: origin`) is written after the handler for each request, and is no part of what is
-//! kept. JSON the app holds as bytes (`json::Raw`) carries its own compressed forms
+//! kept. A body with markup its handler rendered that holds a form's new submit key is that
+//! request's alone, as such a page is (`form::watched`). JSON the app holds as bytes (`json::Raw`) carries its own compressed forms
 //! where the app compresses, a mark this does not replay, so there it is its handler's for every
 //! request, which costs it no writing and no compression. Any other answer (a file, a relay, a
 //! stream, a feed, a status alone) is its handler's for every request.
@@ -631,8 +632,9 @@ impl Missed {
         let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else { return res };
         // Whether the page varies on `Accept-Language`, or on something the key does not cover.
         let Some(language) = varies(res.headers()) else { return res };
-        // A page in the language the request asked for, in an app whose answers do not say so
-        // (messages read with no `App::messages`): one copy for each `Accept-Language` too.
+        // An answer in the language the request asked for that does not say so (JSON, text, a
+        // page whose messages were read with no `App::messages`): one copy for each
+        // `Accept-Language` too.
         let language = language || self.signal.as_ref().is_some_and(crate::Signal::asked_language);
         let style = res.extensions().get::<crate::security::StyleBlock>().cloned();
         // Only what is put back on a kept answer: a mark this does not know is not replayed.
