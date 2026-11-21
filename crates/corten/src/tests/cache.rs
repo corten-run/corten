@@ -2190,10 +2190,8 @@ async fn requests_in_other_languages_do_not_wait_for_each_other() {
     assert!(!french.await.unwrap().1.contains_key(header::AGE));
     for asked in [FR, EN] {
         let (_, headers, _) = fetch(&router, "GET", "/", asked).await;
-        assert!(
-            headers.contains_key(header::AGE) && headers[header::VARY].to_str().unwrap().contains("accept-language"),
-            "{asked:?}"
-        );
+        let localized = headers.get_all(header::VARY).iter().any(|vary| vary == "accept-language");
+        assert!(headers.contains_key(header::AGE) && localized, "a copy for each language: {asked:?} {headers:?}");
     }
     assert_eq!((held.runs.count(), watch.joined()), (3, 0));
 }
