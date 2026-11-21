@@ -1679,3 +1679,289 @@ async fn a_kept_page_keeps_the_hash_its_policy_allows_its_style_block_by() {
     assert!(again.contains_key(header::AGE) && same == body, "the kept page");
     assert_eq!(again[header::CONTENT_SECURITY_POLICY], policy);
 }
+
+// ---- Requests that miss a kept page together ----
+
+/// Holds a page's handlers where they are until it is opened, as a slow source would.
+#[derive(Clone)]
+struct Gate(tokio::sync::watch::Sender<bool>);
+
+impl Gate {
+    fn new() -> Self {
+        Gate(tokio::sync::watch::channel(true).0)
+    }
+
+    fn hold(&self) {
+        self.0.send_replace(false);
+    }
+
+    fn open(&self) {
+        self.0.send_replace(true);
+    }
+
+    fn pass(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let mut open = self.0.subscribe();
+        async move {
+            let _ = open.wait_for(|open| *open).await;
+        }
+    }
+}
+
+/// One request sent on a task of its own.
+fn sent(
+    router: &Router,
+    method: &'static str,
+    uri: &'static str,
+    headers: &'static [(&'static str, &'static str)],
+) -> tokio::task::JoinHandle<(StatusCode, HeaderMap, bytes::Bytes)> {
+    let router = router.clone();
+    tokio::spawn(async move { fetch(&router, method, uri, headers).await })
+}
+
+/// Lets every task that can run go as far as it can.
+async fn settle() {
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+    }
+}
+
+/// Waits until a handler has run `count` times in all.
+async fn ran(runs: &Runs, count: usize) {
+    let reached = async {
+        while runs.count() < count {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), reached).await.unwrap_or_else(|_| panic!("{} runs of {count}", runs.count()));
+}
+
+type Once = std::sync::Arc<std::sync::atomic::AtomicBool>;
+
+/// A page for everyone for a minute at `/`, made behind `gate`, with a write to it. Its handler
+/// fails (a `404`) when `fails` is set and panics when `panics` is, each once.
+fn gated_routes(runs: &Runs, gate: &Gate, fails: &Once, panics: &Once) -> Table {
+    use std::sync::atomic::Ordering::Relaxed;
+    let (runs, gate, fails, panics) = (runs.clone(), gate.clone(), fails.clone(), panics.clone());
+    let page = move |req: Req| {
+        runs.ran();
+        let (pass, fails, panics) = (gate.pass(), fails.swap(false, Relaxed), panics.swap(false, Relaxed));
+        async move {
+            pass.await;
+            assert!(!panics, "a handler that panics");
+            let page = req.test_page_for("Gated", html! { <p>"gated"</p> });
+            Public::new(Duration::from_secs(60), if fails { Err(Error::not_found()) } else { page })
+        }
+    };
+    Table::new().route("/", crate::route::get(page).0.post(|| async { StatusCode::NO_CONTENT }))
+}
+
+const SAME_ORIGIN: &[(&str, &str)] = &[("sec-fetch-site", "same-origin")];
+
+/// Keeps the page at `/`, then writes to its path, so the copy kept no longer stands.
+async fn kept_then_written(router: &Router) {
+    assert!(!fetch(router, "GET", "/", &[]).await.1.contains_key(header::AGE));
+    assert!(fetch(router, "GET", "/", &[]).await.1.contains_key(header::AGE));
+    assert_eq!(fetch(router, "POST", "/", SAME_ORIGIN).await.0, StatusCode::NO_CONTENT);
+}
+
+/// Requests that miss a page kept before together run its handler once: the others wait for its
+/// answer, and each is given the page it kept.
+#[tokio::test]
+async fn requests_that_miss_a_page_kept_before_together_run_its_handler_once() {
+    let (runs, gate, fails, panics) = (Runs::default(), Gate::new(), Once::default(), Once::default());
+    let router = App::new(Routes::from(gated_routes(&runs, &gate, &fails, &panics))).router();
+    kept_then_written(&router).await;
+    assert_eq!(runs.count(), 1);
+    gate.hold();
+    let first = sent(&router, "GET", "/", &[]);
+    ran(&runs, 2).await;
+    let others: Vec<_> = (0..7).map(|_| sent(&router, "GET", "/", &[])).collect();
+    settle().await;
+    assert_eq!(runs.count(), 2, "one handler runs, and the others wait for it");
+    gate.open();
+    let (status, made, body) = first.await.unwrap();
+    assert!(status == StatusCode::OK && !made.contains_key(header::AGE), "{made:?}");
+    for other in others {
+        let (status, headers, same) = other.await.unwrap();
+        assert!(status == StatusCode::OK && headers.contains_key(header::AGE), "the page it kept: {headers:?}");
+        assert_eq!(same, body);
+    }
+    assert_eq!(runs.count(), 2);
+}
+
+/// When the request that went first makes no page that is kept (it failed), the others run their
+/// own handlers, all at once, and the next requests that miss do not wait.
+#[tokio::test]
+async fn when_the_first_request_s_page_is_not_kept_the_others_make_their_own() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let (runs, gate, fails, panics) = (Runs::default(), Gate::new(), Once::default(), Once::default());
+    let router = App::new(Routes::from(gated_routes(&runs, &gate, &fails, &panics))).router();
+    kept_then_written(&router).await;
+    gate.hold();
+    fails.store(true, Relaxed);
+    let first = sent(&router, "GET", "/", &[]);
+    ran(&runs, 2).await;
+    let others: Vec<_> = (0..7).map(|_| sent(&router, "GET", "/", &[])).collect();
+    settle().await;
+    assert_eq!(runs.count(), 2, "the others wait");
+    gate.open();
+    assert_eq!(first.await.unwrap().0, StatusCode::NOT_FOUND);
+    for other in others {
+        let (status, headers, _) = other.await.unwrap();
+        assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "its own page: {headers:?}");
+    }
+    assert_eq!(runs.count(), 9, "each ran its own");
+    assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE), "and one of them is kept");
+
+    // A page that failed again: what was kept before is no longer a reason to wait.
+    assert_eq!(fetch(&router, "POST", "/", SAME_ORIGIN).await.0, StatusCode::NO_CONTENT);
+    fails.store(true, Relaxed);
+    assert_eq!(fetch(&router, "GET", "/", &[]).await.0, StatusCode::NOT_FOUND);
+    gate.hold();
+    let together: Vec<_> = (0..4).map(|_| sent(&router, "GET", "/", &[])).collect();
+    ran(&runs, 14).await;
+    gate.open();
+    for request in together {
+        assert_eq!(request.await.unwrap().0, StatusCode::OK);
+    }
+}
+
+/// A request that went first and was dropped (its client left) or panicked leaves the others
+/// to run their own handlers, which they do.
+#[tokio::test]
+async fn when_the_first_request_is_dropped_or_panics_the_others_make_their_own() {
+    let (runs, gate, fails, panics) = (Runs::default(), Gate::new(), Once::default(), Once::default());
+    let router = App::new(Routes::from(gated_routes(&runs, &gate, &fails, &panics))).router();
+    kept_then_written(&router).await;
+    gate.hold();
+    let first = sent(&router, "GET", "/", &[]);
+    ran(&runs, 2).await;
+    let others: Vec<_> = (0..3).map(|_| sent(&router, "GET", "/", &[])).collect();
+    settle().await;
+    assert_eq!(runs.count(), 2, "the others wait");
+    first.abort();
+    assert!(first.await.is_err_and(|ended| ended.is_cancelled()));
+    ran(&runs, 5).await;
+    gate.open();
+    for other in others {
+        assert_eq!(other.await.unwrap().0, StatusCode::OK);
+    }
+    assert_eq!(runs.count(), 5, "each of the others ran its own");
+
+    assert_eq!(fetch(&router, "POST", "/", SAME_ORIGIN).await.0, StatusCode::NO_CONTENT);
+    gate.hold();
+    panics.store(true, std::sync::atomic::Ordering::Relaxed);
+    let first = sent(&router, "GET", "/", &[]);
+    ran(&runs, 6).await;
+    let others: Vec<_> = (0..3).map(|_| sent(&router, "GET", "/", &[])).collect();
+    settle().await;
+    assert_eq!(runs.count(), 6, "the others wait");
+    gate.open();
+    assert_eq!(first.await.unwrap().0, StatusCode::INTERNAL_SERVER_ERROR, "the handler panicked");
+    for other in others {
+        assert_eq!(other.await.unwrap().0, StatusCode::OK);
+    }
+    assert_eq!(runs.count(), 9);
+}
+
+/// A request waiting for another's page waits no longer than its own deadline.
+#[tokio::test(start_paused = true)]
+async fn a_request_waits_for_another_s_page_no_longer_than_its_deadline() {
+    struct Late;
+
+    impl crate::Middleware for Late {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            if req.headers().contains_key("x-late") {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            next.run(req).await
+        }
+    }
+
+    let (runs, gate, fails, panics) = (Runs::default(), Gate::new(), Once::default(), Once::default());
+    let router = App::new(Routes::from(gated_routes(&runs, &gate, &fails, &panics)))
+        .middleware(Late)
+        .deadline(Duration::from_millis(200))
+        .router();
+    kept_then_written(&router).await;
+    gate.hold();
+    // Its deadline starts first, and it reaches the page after the one that makes it.
+    let waiting = sent(&router, "GET", "/", &[("x-late", "1")]);
+    settle().await;
+    tokio::time::advance(Duration::from_millis(50)).await;
+    let first = sent(&router, "GET", "/", &[]);
+    ran(&runs, 2).await;
+    let (status, _, _) = waiting.await.unwrap();
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "its deadline passed while it waited");
+    assert!(!first.is_finished(), "while the one it waited for was still at work");
+    assert_eq!(runs.count(), 2, "and it ran no handler of its own");
+    gate.open();
+    let (status, _, _) = first.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE));
+}
+
+/// Only requests for one copy wait for each other: another query, another language the page is
+/// made in, or a page never kept is made at once.
+#[tokio::test]
+async fn requests_for_another_copy_or_a_page_never_kept_do_not_wait() {
+    crate::i18n::messages! { struct GatedMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    const FR: &[(&str, &str)] = &[("accept-language", "fr")];
+    const EN: &[(&str, &str)] = &[("accept-language", "en")];
+    let (runs, gate) = (Runs::default(), Gate::new());
+    let (counted, held) = (runs.clone(), gate.clone());
+    let page = move |req: Req| {
+        counted.ran();
+        let pass = held.pass();
+        async move {
+            pass.await;
+            let lang = req.lang();
+            Public::new(Duration::from_secs(60), req.test_page_for("Lang", html! { <p>"in "{lang}</p> }))
+        }
+    };
+    let (cookies, held) = (runs.clone(), gate.clone());
+    // Never kept: it sets a cookie.
+    let cookie = move |req: Req| {
+        cookies.ran();
+        let pass = held.pass();
+        async move {
+            pass.await;
+            let page = req.test_page_for("Cookie", html! { <p>"cookie"</p> }).map(|mut page| {
+                page.headers_mut().append(header::SET_COOKIE, SetCookie::new("a", "1").header());
+                page
+            });
+            Public::new(Duration::from_secs(60), page)
+        }
+    };
+    let routes = Table::new()
+        .route("/", crate::route::get(page).0.post(|| async { StatusCode::NO_CONTENT }))
+        .route("/cookie", crate::route::get(cookie).0);
+    let router = App::new(Routes::from(routes)).messages::<GatedMsg>().router();
+    for (uri, asked) in [("/", FR), ("/", EN), ("/?page=2", FR)] {
+        fetch(&router, "GET", uri, asked).await;
+        assert!(fetch(&router, "GET", uri, asked).await.1.contains_key(header::AGE), "{uri} {asked:?}");
+    }
+    assert_eq!(fetch(&router, "POST", "/", SAME_ORIGIN).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(runs.count(), 3);
+    gate.hold();
+    let first = sent(&router, "GET", "/", FR);
+    ran(&runs, 4).await;
+    let waits = sent(&router, "GET", "/", FR);
+    let others = [sent(&router, "GET", "/", EN), sent(&router, "GET", "/?page=2", FR)];
+    ran(&runs, 6).await;
+    // The first requests for a page, and those for one never kept, are each made at once.
+    let never: Vec<_> = (0..3).map(|_| sent(&router, "GET", "/cookie", &[])).chain([sent(&router, "GET", "/?new", &[])]).collect();
+    ran(&runs, 10).await;
+    settle().await;
+    assert_eq!(runs.count(), 10, "the second request for the French page waits");
+    gate.open();
+    let (_, _, body) = first.await.unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("<p>in fr</p>"));
+    let (status, headers, same) = waits.await.unwrap();
+    assert!(status == StatusCode::OK && headers.contains_key(header::AGE) && same == body, "{headers:?}");
+    for other in others.into_iter().chain(never) {
+        let (status, headers, _) = other.await.unwrap();
+        assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{headers:?}");
+    }
+    assert_eq!(runs.count(), 10);
+}
