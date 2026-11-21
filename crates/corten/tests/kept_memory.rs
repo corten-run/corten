@@ -120,8 +120,6 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
             assert!(!get(&mut stream, &mut read, &format!("/made?n={n}"), coding).await);
         }
     }
-    // And the counts of writes, 256 KiB made once with the first page kept, beside the bound.
-    assert!(!get(&mut stream, &mut read, "/kept?first", "identity").await);
     let before = LIVE.load(Ordering::Relaxed);
     for n in 0..PAGES {
         for (asked, coding) in CODINGS.iter().enumerate() {
@@ -129,7 +127,9 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
             assert_eq!(given, asked > 0, "page {n} in {coding}: made once, then given in each coding");
         }
     }
-    let held = LIVE.load(Ordering::Relaxed).saturating_sub(before);
+    // Less the counts of writes: 65,536 of four bytes, made once with the first page asked for
+    // and held beside the bound.
+    let held = LIVE.load(Ordering::Relaxed).saturating_sub(before + (4 << 16));
     assert!(get(&mut stream, &mut read, &format!("/kept?n={}", PAGES - 1), "identity").await, "the newest is kept");
     assert!(!get(&mut stream, &mut read, "/kept?n=0", "identity").await, "and the oldest went to make room");
     server.abort();

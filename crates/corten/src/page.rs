@@ -1408,7 +1408,7 @@ pub(crate) fn plain_origin(headers: &HeaderMap) -> bool {
 /// The page a notice is for, as its cookie names it: a hash of the path with its escapes decoded,
 /// so the link the app wrote (`/items/a b` as `a%20b`, a [`crate::Local`] with a `{`) and the path
 /// the browser asks for (which escapes the `{`) name one page, in 16 characters however long it is.
-/// An escaped `/` is kept as written, since it is part of one segment.
+/// An escaped `/` stays escaped, since it is part of one segment (`%2f` and `%2F` are the same).
 pub(crate) fn path_key(path: &str) -> String {
     crate::ascii::hex(path_hash(path.as_bytes()), &mut [0; 16]).to_string()
 }

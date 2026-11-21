@@ -125,9 +125,9 @@ impl Written {
         Written { count, was: counts[count].load(Ordering::Acquire) }
     }
 
-    /// No write to the path since.
+    /// No write to the path since. The counts are there, since [`Written::of`] made them.
     fn stands(self, store: &Store) -> bool {
-        store.written.get().is_none_or(|counts| counts[self.count].load(Ordering::Acquire) == self.was)
+        store.written.get().is_some_and(|counts| counts[self.count].load(Ordering::Acquire) == self.was)
     }
 }
 
@@ -144,13 +144,13 @@ pub(crate) struct Writing<'a> {
 impl Writing<'_> {
     /// The write was answered: counts it for its path and for the places on this site its answer
     /// names (RFC 9111 section 4.4), so nothing kept there stands. Not for a `4xx`, which says
-    /// the request was refused for what it asked, nor for a `501`, which says no handler has
-    /// its method. Any other `5xx` counts for its path: the handler may have written before it
-    /// failed or passed its deadline (work it left under `Signal::finish` counts again when it
-    /// ends).
+    /// the request was refused for what it asked. A `5xx` counts for its path: the handler may
+    /// have written before it failed or passed its deadline (work it left under
+    /// `Signal::finish` counts again when it ends). That includes the router's own `501` for a
+    /// method no route has, which is not told here from a handler's: it costs the page a render.
     pub(crate) fn answered(mut self, res: &Response) {
         self.answered = true;
-        if res.status().is_client_error() || res.status() == StatusCode::NOT_IMPLEMENTED {
+        if res.status().is_client_error() {
             return;
         }
         self.answers.count(self.count);
@@ -794,14 +794,25 @@ mod tests {
         write(&answers, "/notes/a%7eb").answered(&res);
         assert!(!kept("/notes/a%7Eb"), "a handler that failed, or passed its deadline, may have written");
         assert!(kept("/other"), "and what a failure names is not a place it wrote");
-        // A method no handler has ran nothing.
-        answers.keep(entry(&answers, "/notes/a%7Eb", None, 60, 10));
-        *res.status_mut() = StatusCode::NOT_IMPLEMENTED;
-        write(&answers, "/notes/a~b").answered(&res);
-        assert!(kept("/notes/a%7Eb"));
         // An escaped `/` is part of its segment, in either case of its digits.
         assert_eq!(count_of(b"/files/a%2Fb"), count_of(b"/files/a%2fb"));
         assert_ne!(count_of(b"/files/a%2Fb"), count_of(b"/files/a/b"));
+    }
+
+    /// The counts of writes are made when the first page is asked for: a write before then finds
+    /// none, and what it wrote is there for that page's handler.
+    #[test]
+    fn the_counts_of_writes_are_made_with_the_first_page_asked_for() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let res = Response::new(Body::empty());
+        write(&answers, "/p").answered(&res);
+        drop(write(&answers, "/p"));
+        assert!(answers.0.written.get().is_none(), "an app that keeps no page holds no counts");
+        answers.keep(entry(&answers, "/p", None, 60, 10));
+        assert!(answers.0.written.get().is_some_and(|counts| counts.len() == WRITES));
+        assert!(answers.find("/p", None, None).is_some());
+        write(&answers, "/p").answered(&res);
+        assert!(answers.find("/p", None, None).is_none());
     }
 
     /// Threads that keep, read, grow and write at once leave the bytes counted equal to what the

@@ -1037,12 +1037,12 @@ async fn a_kept_public_page_is_not_in_its_first_visitor_s_zone() {
         }
     };
     let utc = "<p>Mar 22, 2026, 3:04 PM UTC</p>";
-    get_with(Some("corten-zone=America/Chicago")).await;
+    let (kept, first) = get_with(Some("corten-zone=America/Chicago")).await;
+    assert!(!kept && first.contains(utc), "the first visitor's own page is in UTC: {first}");
     for cookie in [None, Some("corten-zone=Asia/Tokyo"), None] {
-        let (_, page) = get_with(cookie).await;
-        assert!(page.contains(utc), "{cookie:?}: {page}");
+        let (kept, page) = get_with(cookie).await;
+        assert!(kept && page == first, "{cookie:?}: the page made for the first visitor, given again: {page}");
     }
-    assert!(get_with(None).await.0, "and the page is one the app kept");
 }
 
 /// With the `zones` feature and `App::zoned_dates`, a date is written in the visitor's zone while
