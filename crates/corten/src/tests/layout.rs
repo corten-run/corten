@@ -1902,6 +1902,8 @@ mod layout_reads {
     async fn a_public_page_is_kept_filled_in_an_app_with_layout_reads() {
         let count = CartCount::default();
         let router = shop(count.clone(), Duration::ZERO);
+        // Asked for once, so the next answer is the one kept.
+        call_with(router.clone(), "GET", "/public", None, None).await;
         let (_, first, body) = call_with(router.clone(), "GET", "/public", None, None).await;
         let (_, again, same) = call_with(router, "GET", "/public", None, None).await;
         assert!(!first.contains_key(http::header::AGE) && again.contains_key(http::header::AGE), "{again:?}");
