@@ -210,7 +210,7 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
   const busy = () => ({ ...result, fleetLock: "busy", error: "fleet-operation-busy", groups: [] });
   if (lock === "busy") return busy();
   if (lock !== null) result.fleetLock = "retained";
-  const snapshots = [], identities = new Set();
+  const snapshots = [], retirements = [], identities = new Set();
   let remaining;
   if (stagedFleet(fleet.manifest) && present(join(fleet.root, "remaining-intent.json"))) {
     try { remaining = readRemainingIntent(fleet); }
@@ -236,9 +236,11 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
       if (job.outcome !== "available" && !retained) { result.groups.push({ group, outcome: job.outcome }); continue; }
       if (s.status === "retired") {
         if (s.retirement.kind === "native-failed") {
+          if (present(join(job.local, "stream-recovery.lock"))) { result.groups.push({ group, outcome: "busy" }); continue; }
           verifyFailedNativeRetirement(job.local, s);
           assert.equal(digest(regular(join(job.local, "state.json"), 1024 * 1024)), job.stateSha256, "retirement changed during verification");
           if (retained) assert.ok(safelyRetained(), "retained lock owner changed during verification");
+          retirements.push({ group, index: result.groups.length, stateSha256: job.stateSha256, retained });
           result.groups.push({ group, outcome: s.destroyedAt ? "native-failed-retired" : "cleanup-pending", id: s.id }); continue;
         }
         const setup = s.retirement.kind === "setup-failed";
@@ -262,7 +264,7 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
       snapshots.push(verified.snapshot); result.groups.push(verified.row);
     } catch { result.groups.push({ group, outcome: "error", error: "group-evidence-invalid" }); }
   }
-  let evidenceValid = true;
+  let evidenceError;
   try {
     assert.ok(!interrupted());
     assert.equal(readFleet(fleet.root, round).manifestSha256, fleet.manifestSha256);
@@ -272,9 +274,23 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
     }
     for (const snapshot of snapshots) recheckCollectedGroup(fleet, snapshot);
     assert.ok(!duplicate);
-  } catch { evidenceValid = false; }
-  if (fleetLockSnapshot(fleet.root) !== lock) return busy();
-  if (!evidenceValid) return { ...result, error: "fleet-evidence-changed-or-duplicated" };
+  } catch { evidenceError = "fleet-evidence-changed-or-duplicated"; }
+  // A later sibling's replay may have overlapped failed-host recovery. Rebind
+  // the status to the verified state and receipt, not the earlier display row.
+  for (const { group, index, stateSha256, retained } of retirements) {
+    try {
+      const job = readGroup(fleet, group);
+      if (present(join(job.local, "stream-recovery.lock"))
+          || (job.outcome === "busy" && (!retained || retainedInvalidOwner(job.local, job.state)))) {
+        result.groups[index] = { group, outcome: "busy" }; continue;
+      }
+      assert.equal(job.outcome, retained ? "busy" : "available");
+      assert.equal(job.stateSha256, stateSha256);
+      assert.equal(digest(regular(join(job.local, "failed-native-host.json"))), job.state.retirement.evidenceSha256);
+    } catch { result.groups[index] = { group, outcome: "uncertain", error: "group-retirement-changed" }; }
+  }
+  if (fleetLockSnapshot(fleet.root) !== lock) return { ...busy(), ...(evidenceError ? { evidenceError } : {}) };
+  if (evidenceError) return { ...result, error: evidenceError };
   if (lock === null && result.groups.every((g) => g.outcome === "verified")) result.status = "verified";
   return result;
 }

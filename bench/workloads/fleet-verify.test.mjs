@@ -100,6 +100,30 @@ test("a root lock acquired during verification is busy, not changed evidence", a
   assert.equal(readFileSync(path, "utf8"), bytes);
 });
 
+for (const change of ["manifest", "duplicate"]) {
+  test(`a root lock transition with ${change} evidence reports both diagnostics`, async (t) => {
+    const p = fixture(t), first = p.seed(groupNames[0]);
+    if (change === "duplicate") {
+      const second = p.seed(groupNames[1]); second.state.id = first.state.id; second.save();
+    }
+    const path = join(p.h.base, ".fleet-operation.lock");
+    const bytes = JSON.stringify({ pid: process.pid, approvalSha256: "b".repeat(64) });
+    const result = await p.verify({ inspect: async (input) => {
+      if (p.calls.length === 0) {
+        writeFileSync(path, bytes, { flag: "wx" });
+        if (change === "manifest") appendFileSync(p.manifestPath, "\n");
+      }
+      return p.inspect(input);
+    } });
+    assert.equal(result.status, "incomplete");
+    assert.equal(result.fleetLock, "busy");
+    assert.equal(result.error, "fleet-operation-busy");
+    assert.equal(result.evidenceError, "fleet-evidence-changed-or-duplicated");
+    assert.deepEqual(result.groups, []);
+    assert.equal(readFileSync(path, "utf8"), bytes);
+  });
+}
+
 test("missing, live, busy, recoverable and cleanup-pending groups keep a partial fleet incomplete", async (t) => {
   const p = fixture(t);
   const pending = p.seed(groupNames[0]); delete pending.state.destroyedAt; pending.save();

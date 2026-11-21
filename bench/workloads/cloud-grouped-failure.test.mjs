@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { accountId, archive, commit, context, harness, metadata } from "./cloud-fixtures.mjs";
+import { accountId, archive, commit, context, harness, metadata, syntheticInspection } from "./cloud-fixtures.mjs";
 import { fleetPlan, reservation, tags } from "./cloud-contract.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { digest, treeHash } from "./cloud-local.mjs";
@@ -254,5 +254,58 @@ test("fleet verification reads retired custody behind settled root and child loc
   writeFileSync(join(f.h.local, "failed-native-results.tgz"), "changed custody");
   assert.equal(await verify(), "error", "a retained root lock cannot vouch for changed custody");
   assert.equal(readFileSync(batchLock, "utf8"), batchOwner(retiredPid));
+  assert.equal(f.h.deletes, 1);
+});
+
+test("fleet readback revisits failed retirement after replaying a later sibling", async (t) => {
+  const group = "fullstack-browser", sibling = "client-heavy", f = fixture(t, group, { fleetLayout: true, deleteLost: true });
+  const batchLock = join(f.root, ".fleet-operation.lock");
+  const batchOwner = JSON.stringify({ pid: retiredPid, approvalSha256: "5".repeat(64) });
+  writeFileSync(batchLock, batchOwner);
+  const { manifest: fleet } = readFleet(f.root, round), { token } = fleet.jobs.find((job) => job.group === sibling);
+  assert.ok(fleet.jobs.findIndex((job) => job.group === group) < fleet.jobs.findIndex((job) => job.group === sibling));
+  const at = "2026-11-21T00:00:00.000Z", local = join(f.root, sibling, `groups-${round}`), evidence = "evidence-Synthetic";
+  const state = reservation({ round, commit, token, group: sibling, fleet }, at);
+  const report = syntheticInspection("verified");
+  Object.assign(report, { schema: "benchmark-isolated-group-campaign-inspection/v1", round,
+    campaign: `${round}-${token}`, selection: state.selection, groups: report.groups.filter((row) => row.group === sibling) });
+  const extracted = join(local, evidence), folder = join(extracted, "campaign");
+  mkdirSync(join(folder, report.campaign), { recursive: true });
+  const attempt = JSON.stringify({ id: report.campaign, commit, campaignSha256: report.campaignSha256 });
+  report.reservationSha256 = digest(attempt);
+  writeFileSync(join(folder, ".host-attempt.json"), attempt);
+  writeFileSync(join(folder, report.campaign, "plan.json"), JSON.stringify({ round, commit,
+    campaignSha256: report.campaignSha256, sourceSha256: report.sourceSha256 }));
+  writeFileSync(join(extracted, "exit-code"), "0\n");
+  writeFileSync(join(extracted, "host.txt"), "synthetic sibling");
+  const raw = archive([{ name: "campaign/" }]); writeFileSync(join(local, "results.tgz"), raw);
+  writeFileSync(join(local, "state.json"), JSON.stringify({ ...state, provider: fleet.provider, fullGroupQualified: false, status: "collected",
+    id: "800", ip: "192.0.2.80", createIntentAt: at, collectedAt: at, destroyedAt: at, deletionIntentAt: at,
+    exitCode: 0, evidence, extractionAttempts: [evidence], archiveSha256: digest(raw), evidenceSha256: treeHash(extracted),
+    evidenceOutcome: "validated", validation: { status: "verified", campaign: report.campaign, collectionIntegrity: "manifest-verified" } }));
+
+  const verify = async (change) => {
+    let replays = 0;
+    const result = await verifyFleet({ root: f.root, round, commit }, { inspect: async (input) => {
+      assert.equal(input.folder, folder); replays++; change(); return report;
+    } });
+    assert.equal(replays, 1);
+    assert.equal(result.groups.find((row) => row.group === sibling)?.outcome, "verified");
+    assert.equal(result.status, "incomplete"); assert.equal(result.fleetLock, "retained"); assert.equal(result.error, undefined);
+    assert.equal(readFileSync(batchLock, "utf8"), batchOwner);
+    assert.equal(readFileSync(join(f.h.local, "operation.lock"), "utf8"), retainedOperation);
+    assert.equal(readFileSync(join(f.h.base, ".groups-launch.lock"), "utf8"), retainedLaunch);
+    return result.groups.find((row) => row.group === group);
+  };
+  await assert.rejects(f.task().collect(), /acknowledgement lost/);
+  const receipt = join(f.h.local, "failed-native-host.json"), bytes = readFileSync(receipt);
+  assert.deepEqual(await verify(() => writeFileSync(receipt, "changed receipt")),
+    { group, outcome: "uncertain", error: "group-retirement-changed" });
+  assert.equal(readFileSync(receipt, "utf8"), "changed receipt");
+  writeFileSync(receipt, bytes);
+  assert.equal(await f.task().collect(), 1);
+  const recovery = join(f.h.local, "stream-recovery.lock"), owner = JSON.stringify({ pid: process.pid });
+  assert.deepEqual(await verify(() => writeFileSync(recovery, owner, { flag: "wx" })), { group, outcome: "busy" });
+  assert.equal(readFileSync(recovery, "utf8"), owner);
   assert.equal(f.h.deletes, 1);
 });
