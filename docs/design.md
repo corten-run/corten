@@ -7568,6 +7568,26 @@ rules something out.
     (+0.4%, bound +1.7%), and the 100 more run the same way were added after that was seen, with no
     rule for stopping set beforehand. The host was not quiet: the workstation's other work kept
     its CPUs 95 to 100% busy, and one pair's change ranged from -7.7% to +16.1%.
+    With the table, the refusal settled in one step with the end of its wait and before the
+    answer's headers are read, against main with its handling of a drawn submit key (`5fbe4e9ef`
+    against main's `564034b86`, `tests/kept_cost.rs` as above with a fifth case, a new URL in a
+    full store, the bound at 4 MiB and filled before the counted requests so that the store
+    refuses each of them, in 3 rounds that alternated the two builds): a new URL in a full store
+    ran 27,692 instructions against 23,354 at the median (18.6% more), where main gives the
+    request to the handler at once; a page made and kept at a new URL with room 35,954 against
+    34,853 (3.2% more), a write and the page made again 46,129 against 44,922 (2.7% more), a kept
+    page given again 19,227 against 19,226 and a page for one visitor 18,315 against 18,334, each
+    build's rounds within 11 instructions of each other. Of the 4,338 more for a new URL in a full
+    store, by callgrind's inclusive counts for the 1,000 requests counted (`35c98f2bc` against
+    `e388e070c`, main before the submit key's change), the table, its keyed hash, the count of
+    writes and the second look took about 1,800 a request, the future that keeps the answer and
+    its allocation about 860, and the answer's checks before the refusal most of the rest.
+    Settling the refusal before the answer's headers are read took 930 off (28,587 at `35c98f2bc`,
+    27,668 at `ec7f8b024` in one round), and settling it in one step with the end of the wait
+    about 220 off the reviewed head's (`f689a7132`, 28,810, its rounds alternated with those two
+    against `e388e070c`). That is what the first request for a URL in a full store pays so that
+    the requests that miss it together run its handler once; it is not shown that apps meet such
+    requests often enough to pay for it.
     What a write pays for its count, under callgrind (valgrind 3.24.0, rustc 1.99.1, release with
     debuginfo) on an app with one route whose `GET` and `POST` each answer text, sent
     `POST /items/7/edit` in process with `oneshot`, as (instructions at 1,200 writes less those at
@@ -7592,8 +7612,8 @@ rules something out.
     more from one start to the next; a miss kept with room in memory the store has used
     before (room made by a write or by a page's lifetime ending), in cycles; a store read
     from more than one core; the cycles of a miss, and requests that miss together on a quiet
-    host or with a real source; a miss in a full store with the table, which the counts of the
-    rule for a full store above were taken without; and the
+    host or with a real source; the cycles of a new URL in a full store with the table, and how
+    often an app's first requests for a URL in a full store meet another; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
@@ -7624,11 +7644,16 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; requests for
     pages not kept are shown to wait for each other often enough to matter, or requests in many
     languages for a page the same in all of them to load its source; an app is shown to make more
-    than 1,024 pages at once, or to forget pages not kept within their minute; or the connection
-    speaks HTTP/2, where a request's target carries its authority.
+    than 1,024 pages at once, or to forget pages not kept within their minute; a profile shows the
+    table's cost to the first requests for URLs in a full store (4,338 instructions a request in
+    the fixture) where such requests seldom meet another, so they should make their pages with
+    none waiting; or the connection speaks HTTP/2, where a request's target carries its authority.
 
     Last checked: 2026-11-21, the two rules together with rustc 1.100.0, release builds of
-    `cb9195a49` and `68ce3f1e6` counted by valgrind 3.24.0's callgrind.
+    `cb9195a49` and `68ce3f1e6` counted by valgrind 3.24.0's callgrind. 2026-11-21, a new URL in
+    a full store with the table and the four cases beside it, rustc 1.100.0, release builds of
+    `5fbe4e9ef` and `564034b86`, and of `35c98f2bc`, `ec7f8b024` and `f689a7132` against
+    `e388e070c`, counted by valgrind 3.24.0's callgrind.
     2026-11-21 for a write's count, the callgrind rounds above at `fc86d8eff` and
     `6984b2ac4`, and the cycles of the same write from the two builds, built with rustc 1.100.0
     on a dedicated 8-CPU cloud host (Xeon Platinum 8358, one thread a core) with nothing else
