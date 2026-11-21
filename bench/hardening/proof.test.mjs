@@ -7,7 +7,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { budgets } from "./plan.mjs";
 import { qualificationSettings } from "../marketplace/feature-contract.mjs";
-import { committedInputs, sourceGit, savedFiles, snapshotDependencies, verifyOwnedReceipts, verifyRunInputs, readyScript, buildNativeImage, digest, savedProofVersion, verifyNativeLimits } from "./evidence.mjs";
+import { committedInputs, sourceGit, savedFiles, snapshotDependencies, verifyOwnedReceipts, verifyRunInputs, readyScript, buildNativeImage, digest, savedProofVersion, verifyNativeLimits, phaseInputs } from "./evidence.mjs";
 import { ownedCleanupObservation, verifyOwnedCleanup, ownedContainerRecorder } from "./lifecycle.mjs";
 import { verifySavedProof } from "./verify.mjs";
 import { nativeBuildContext } from "../mixed-production/build-context.mjs";
@@ -24,18 +24,17 @@ const acknowledgeCreation = (r) => {
 };
 
 function fixture() {
-  const cell = { key: "corten/fixture/direct/slow-headers", app: "corten", source: "fixture", mode: "direct", status: "observed" };
+  const cell = { key: "corten/fixture/direct/request-limit", app: "corten", source: "fixture", phase: "request-limit", mode: "direct", status: "observed" };
   const summary = { runId, startedAt: stamp, finishedAt: stamp, originalFolder: root, budget, cleanupFailures: [], cells: [cell],
     tools: { node: image(1), checker: image(2), cert: image(3), edge: image(4) }, builds: { corten: { imageId: image(5).Id, image: image(5) } } };
   const node = "/repo/bench/hardening/", upstream = `http://${runId}-cell-upstream:8080`, base = "http://127.0.0.1:8080";
   const commands = [
     ["upstream", ["node", "/repo/bench/marketplace/upstream.mjs"], "upstream"],
     ["application", ["/server"], "applicationDirect"], ["ready", ["node", "--input-type=module", "-e", readyScript], "apparatus"],
-    ["qualification", ["node", "/repo/bench/marketplace/qualify.mjs", base, "fixture", upstream, "/results/qualification.json"], "qualification"],
+    ["qualification", ["node", node + "qualification.mjs", "fixture", "direct", upstream, "/results/qualification.json"], "qualification"],
     ["native-controls", ["node", node + "native.mjs", base, "fixture", upstream, "/results/qualification.json", "/results/native-controls.json"], "qualification"],
     ["parity", ["node", node + "parity.mjs", base, "fixture", upstream, "/results/parity.json"], "qualification"],
-    ["form", ["node", node + "form.mjs", JSON.stringify({ host: "127.0.0.1", port: 8080, authority: "localhost:8080", origin: "http://localhost:8080", tls: false }), "/results/form.json"], "qualification"],
-    ["probe", ["node", node + "probe.mjs", "/results/probe.json", "/results/raw.jsonl"], "apparatus"],
+    ["probe", ["node", node + "bounded-requests-probe.mjs", "/results/probe.json", "/results/raw.jsonl"], "apparatus"],
     ...["terminal-clock", "terminal-clock", "cleanup-clock"].map((step) => [step, ["node", node + "clock.mjs"], "apparatus"]),
   ];
   const receipts = commands.map(([step, Cmd, role], index) => {
@@ -48,7 +47,7 @@ function fixture() {
       mount("/repo/node_modules", join(root, "dependencies")); mount("/results", join(root, cell.key), true);
     }
     if (["application", "upstream"].includes(step) || role === "qualification") mount("/fixtures", join(root, "fixtures"));
-    if (step === "probe") { mount("/results", join(root, cell.key), true); mount("/sys/fs/cgroup", "/sys/fs/cgroup"); }
+    if (step === "probe") mount("/results", join(root, cell.key), true);
     const Env = step === "application" ? Object.entries({ MARKETPLACE_SOURCE: "fixture", MARKETPLACE_FIXTURE_PATH: "/fixtures/marketplace.json", API_BASE: upstream,
       PORT: "8080", HOSTS: "fsw-target,localhost,127.0.0.1", PROFILE: qualificationSettings.nativeProfile, MAX_CONNECTIONS: String(qualificationSettings.maxConnections) }).map(([k, v]) => `${k}=${v}`)
       : role === "qualification" ? ["PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"] : [];
@@ -58,14 +57,14 @@ function fixture() {
         ShmSize: role === "qualification" ? 1024 ** 3 : 64 * 1024 ** 2,
         RestartPolicy: { Name: "no" }, Privileged: false, PortBindings: {}, NetworkMode: ["upstream", "application"].includes(step) ? runId + "-net"
           : ["terminal-clock", "cleanup-clock"].includes(step) ? "none" : `container:${id(21)}`,
-        PidMode: step === "probe" ? "host" : "", CgroupnsMode: step === "probe" ? "host" : "private" },
+        PidMode: "", CgroupnsMode: "private" },
       State: { Running: false, ExitCode: 0, OOMKilled: false, Error: "", Dead: false, Restarting: false, StartedAt: stamp, FinishedAt: stamp } };
     const command = (args, stdout) => ({ args, stdout, exitCode: 0, timedOut: false, interrupted: false, startedAt: stamp, finishedAt: stamp });
     const operation = ["upstream", "application"].includes(step) ? "run" : "create";
     const args = [operation, ...(operation === "run" ? ["-d"] : []), "--network", created.HostConfig.NetworkMode,
       ...(step === "application" ? ["--network-alias", "fsw-target"] : []),
       "--cpus", String(limit.cpu), "--memory", String(limit.memory), "--memory-swap", String(limit.memory), "--pids-limit", "512", "--ulimit", "nofile=65536:65536",
-      ...(role === "qualification" ? ["--shm-size", "1g"] : []), ...(step === "probe" ? ["--cgroupns=host", "--pid=host"] : []),
+      ...(role === "qualification" ? ["--shm-size", "1g"] : []),
       ...mounts.flatMap((m) => ["-v", `${m.Source}:${m.Destination}${m.RW ? "" : ":ro"}`]), ...Env.flatMap((e) => ["-e", e]), created.Image,
       ...(step === "application" ? [] : Cmd)];
     const r = { schema: "native-hardening-container/v2", index, intent: { cell: cell.key, name, step, role, tool, operation, args },
@@ -78,7 +77,7 @@ function fixture() {
 }
 
 test("complete actual-configuration vectors replay every charged native step", () => {
-  const { summary, receipts } = fixture(); assert.equal(verifyOwnedReceipts(receipts, summary).get(summary.cells[0].key).length, 11);
+  const { summary, receipts } = fixture(); assert.equal(verifyOwnedReceipts(receipts, summary).get(summary.cells[0].key).length, 10);
   // A target exit remains compatible with complete apparatus receipts.
   receipts[1].terminal.State.ExitCode = 137; receipts[1].terminal.State.OOMKilled = true;
   assert.doesNotThrow(() => verifyOwnedReceipts(receipts, summary));
@@ -262,7 +261,11 @@ test("Git archive build and harness inputs replay committed bytes read-only, inc
   const source = digest(JSON.stringify(files.filter((f) => ["Cargo.toml", "Cargo.lock"].includes(f.path) || f.path.startsWith("crates/") || f.path.startsWith("bench/marketplace/corten/")).map((f) => [f.path, f.sha256])));
   const buildImage = image(1); buildImage.Config.Labels = { "run.corten.hardening.context": context.sha256, "run.corten.marketplace.commit": commit, "run.corten.hardening.source": source };
   const build = await buildNativeImage(async (args) => args[0] === "build" ? "" : JSON.stringify([buildImage]), { context, runId, commit, source, tag: `${runId}-corten`, files });
-  const summary = { commit, runId, cells: [{ app: "corten", status: "observed" }], builds: { corten: build } };
+  const summary = { commit, runId, cells: [{ app: "corten", phase: "request-limit", status: "observed" }], builds: { corten: build } };
+  if (phaseInputs("request-limit").some((path) => !files.some((file) => file.path === path))) {
+    assert.throws(() => verifyRunInputs(dir, summary), /native hardening input is not in the committed source/);
+    return t.skip("the current Git commit predates the v3 sources; positive replay requires a committed v3 checkout");
+  }
   const before = savedFiles(dir); assert.deepEqual(verifyRunInputs(dir, summary), input); assert.deepEqual(savedFiles(dir), before);
   assert.ok(files.some((f) => f.path === ".dockerignore"));
   const full = fixture(); Object.assign(full.summary, { commit, savedProofVersion, startedAt: "2000-01-01T00:00:00Z", finishedAt: "2100-01-01T00:00:00Z", builds: summary.builds });
@@ -313,13 +316,13 @@ test("Git archive build and harness inputs replay committed bytes read-only, inc
   for (const [label, mutate] of [
     ["unrelated creation command", (r) => r.creation.args = ["not-a-docker-create-command"]],
     ["coherently substituted creation intent and acknowledgement", (r) => { r.intent.args = ["create", "alpine", "true"]; acknowledgeCreation(r); }],
-    ["private observer PID namespace", (r) => {
-      r.created.HostConfig.PidMode = ""; r.terminal.HostConfig.PidMode = "";
-      r.intent.args = r.intent.args.map((a) => a === "--pid=host" ? "--pid=private" : a); acknowledgeCreation(r);
+    ["bounded probe gaining host PID access", (r) => {
+      r.created.HostConfig.PidMode = "host"; r.terminal.HostConfig.PidMode = "host";
+      r.intent.args.splice(1, 0, "--pid=host"); acknowledgeCreation(r);
     }],
-    ["private observer cgroup namespace", (r) => {
-      r.created.HostConfig.CgroupnsMode = "private"; r.terminal.HostConfig.CgroupnsMode = "private";
-      r.intent.args = r.intent.args.map((a) => a === "--cgroupns=host" ? "--cgroupns=private" : a); acknowledgeCreation(r);
+    ["bounded probe gaining host cgroup access", (r) => {
+      r.created.HostConfig.CgroupnsMode = "host"; r.terminal.HostConfig.CgroupnsMode = "host";
+      r.intent.args.splice(1, 0, "--cgroupns=host"); acknowledgeCreation(r);
     }],
   ]) await t.test(`sealed proof rejects ${label}`, () => {
     const r = structuredClone(full.receipts.find((r) => r.intent.step === "probe")), path = join(dir, "owned-containers", ownedFiles[r.index]);
@@ -340,8 +343,9 @@ test("Git archive build and harness inputs replay committed bytes read-only, inc
     const result = verifySavedProof(dir, partial);
     assert.equal(result.sources, "blocked"); assert.equal(result.resources, "blocked"); assert.equal(result.cleanupComplete, true);
   });
+  const probe = full.receipts.find((r) => r.intent.step === "probe");
   for (const [label, relative, mutate] of [
-    ["probe start exitCode", `owned-containers/${ownedFiles[7]}`, (value) => delete value.start.exitCode],
+    ["probe start exitCode", `owned-containers/${ownedFiles[probe.index]}`, (value) => delete value.start.exitCode],
     ["build timedOut", "@summary", (value) => delete value.builds.corten.command.timedOut],
     ["image removal exitCode", "resource-cleanup.json", (value) => delete value[1].commands[2].exitCode],
   ]) await t.test(`sealed proof blocks missing ${label} but rejects explicit failure`, () => {
@@ -363,7 +367,7 @@ test("Git archive build and harness inputs replay committed bytes read-only, inc
     }
   });
   // This is proof-layer replay only; verify(folder) still requires the complete
-  // canonical 216-cell ledger and independent semantic/parity replay first.
+  // canonical 108-cell ledger and independent bounded request/parity replay first.
   writeFileSync(join(dir, "corten-build-context/.dockerignore"), "changed"); assert.throws(() => verifyRunInputs(dir, summary));
   assert.throws(() => verifySavedProof(dir, full.summary), /run-wide saved byte closure differs/);
 });

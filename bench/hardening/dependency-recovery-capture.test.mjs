@@ -5,14 +5,17 @@ import { join } from "node:path";
 import test from "node:test";
 import { inspectSaved } from "../workloads/isolated/adapters/hardening.mjs";
 import { records } from "../marketplace/fixtures.mjs";
-import { qualification, qualificationSettings } from "../marketplace/feature-contract.mjs";
+import { featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
+import { boundedQualification } from "./qualification.mjs";
 import { livePaths } from "../fullstack/conformance.mjs";
 import { assembleRecovery } from "./dependency-recovery-capture.mjs";
+import { assembleBounded, boundedProbeConfig } from "./request-capture.mjs";
+import { boundedReadPlan } from "./bounded-requests.mjs";
 import { recoverySchedule } from "./dependency-recovery-contract.mjs";
-import { artifacts, digest, savedFiles, savedProofVersion } from "./evidence.mjs";
+import { artifacts, digest, savedFiles, savedProofVersion, phaseInputs } from "./evidence.mjs";
 import { terminalHealthPaths } from "./lifecycle.mjs";
 import { assessNative } from "./native.mjs";
-import { apps, budgets, matrix, nativeGroup, parseArgs, registryDigest, schema } from "./plan.mjs";
+import { apps, budgets, matrix, nativeGroup, parseArgs, registryDigest, schema, boundedRequestsVersion, deploymentQualificationVersion, phases } from "./plan.mjs";
 import { verify } from "./verify.mjs";
 
 const budget = budgets(), phase = "dependency-recovery", commit = "a".repeat(40), subjectSha256 = "b".repeat(64);
@@ -66,6 +69,24 @@ test("replays API recovery and fixture bypass without attack or defense results"
     assert.deepEqual(Object.keys(capture.resources), ["before", "during", "after"]);
     for (const field of ["attack", "defense", "targetOutcome", "sourceObservation"]) assert.ok(!Object.hasOwn(capture, field));
   }
+});
+
+test("bounded capture keeps a complete target failure and rejects a mixed legacy journal", () => {
+  const input = fixture("fixture");
+  const phase = input.settings.phase = "request-limit";
+  const config = boundedProbeConfig({ phase, source: input.source, mode: "direct" }, budget, "hardening-123456789abc");
+  const targetOrigin = config.target.origin, upstreamOrigin = config.upstream;
+  const { reads } = boundedReadPlan(phase, targetOrigin, upstreamOrigin);
+  const samples = reads.map((request, i) => ({ ...request, startMs: i * 20, endMs: i * 20 + 5,
+    receipt: i === 1 ? { ...receipt, status: 503, bodyBase64: "" } : receipt }));
+  const row = { type: "bounded-requests", version: boundedRequestsVersion, phase, source: input.source,
+    targetOrigin, upstreamOrigin, samples, upstream: null, completeAtMs: samples.at(-1).endMs };
+  const raw = [input.raw[0], row];
+  const capture = assembleBounded({ ...input, raw, config });
+  assert.equal(capture.schema, "native-bounded-requests-capture/v1");
+  assert.equal(capture.assessment.status, "target-failure"); assert.equal(capture.assessment.healthy, false);
+  assert.equal(capture.terminal.healthy, true);
+  assert.throws(() => assembleBounded({ ...input, raw: [...raw, { type: "attack" }], config }));
 });
 
 function openCircuit(source = "api", boundarySuccess = false) {
@@ -180,11 +201,10 @@ function apiQualification() {
   const base = { ms: 5, status: 200, headers: {}, bodyLength: 0 };
   const page = Buffer.from("<p>marketplace</p>");
   const probes = Object.fromEntries(["page", "json", "pageBr", "jsonBr", "jsonGzip", "page404", "json404", "json405", "head", "badHost",
-    "afterConnections", "bigHead", "page500", "json500", "afterUpstream", "slow"].map((key) => [key, base]));
+    "page500", "json500", "afterUpstream"].map((key) => [key, base]));
   const live = { ...base, path: healthPath };
-  return qualification({ ...probes, page: { ...base, body: page.toString("base64"), bodyLength: page.length }, form: "no native POST form",
-    live, liveness: [live], unfinishedHead: { closedMs: 500 }, cap: { below: 1, held: 2, releaseMs: 5,
-      belowHeld: 200, whileHeld: 429, afterwards: 200, afterRelease: 200 } }, "api");
+  return boundedQualification({ ...probes, page: { ...base, body: page.toString("base64"), bodyLength: page.length }, form: "no native POST form",
+    live, liveness: [live] }, "api");
 }
 
 function apiControls() {
@@ -204,9 +224,10 @@ test("real offline replay feeds a recovered sample window with unhealthy termina
   const input = fixture(), cells = matrix(), cell = cells.find((c) => c.app === "corten" && c.phase === phase && c.mode === "direct" && c.source === "api");
   const options = parseArgs(["w17", "--build", "--review", subjectSha256]), q = apiQualification(), controls = apiControls();
   const runId = "recovery-replay-fixture", tools = Object.fromEntries(["node", "checker", "edge", "cert"].map((name) => [name, { Id: "sha256:" + digest(name) }]));
-  const files = ["Cargo.lock", "Cargo.toml", "package.json", "package-lock.json", "bench/hardening/run.mjs", "bench/hardening/verify.mjs",
+  const files = [...new Set(["Cargo.lock", "Cargo.toml", "package.json", "package-lock.json", "bench/hardening/run.mjs", "bench/hardening/verify.mjs",
+    "bench/hardening/evidence.mjs", ...phases.flatMap(phaseInputs),
     "bench/hardening/dependency-recovery-capture.mjs", "bench/hardening/dependency-recovery-contract.mjs", "bench/hardening/dependency-recovery-probe.mjs",
-    "bench/hardening/dependency-recovery-upstream.mjs", "bench/hardening/resource-sample.mjs", "bench/marketplace/corten/Dockerfile"]
+    "bench/hardening/dependency-recovery-upstream.mjs", "bench/hardening/resource-sample.mjs", "bench/marketplace/corten/Dockerfile"])]
     .map((path) => ({ path, sha256: digest(path) }));
   const sourceHash = digest(JSON.stringify(files.filter((f) => /^(Cargo\.|bench\/marketplace\/corten\/)/.test(f.path)).map((f) => [f.path, f.sha256])));
   const out = join(folder, cell.key); mkdirSync(out, { recursive: true }); mkdirSync(join(folder, "fixtures"));
@@ -216,7 +237,7 @@ test("real offline replay feeds a recovered sample window with unhealthy termina
       dependencyRecovery: capture.assessment, dependencyTerminalHealthy: terminalHealthy });
     writeFileSync(join(folder, "summary.json"), JSON.stringify({ schema, options, budget, cells, runId, tools, commit, registryDigest, complete: false,
       groupReady: false, failures: [], cleanupFailures: [], nativeGroup: nativeGroup(cells), fixtureSha256: digest(readFileSync(join(folder, "fixtures/marketplace.json"))),
-      savedProofVersion, semanticReceiptsVersion: 2, lifecycleVersion: 4, nativeControlsVersion: 1, deploymentQualificationVersion: 1 }));
+      savedProofVersion, boundedRequestsVersion, lifecycleVersion: 4, nativeControlsVersion: 1, deploymentQualificationVersion }));
     writeFileSync(join(folder, "run-manifest.json"), JSON.stringify(savedFiles(folder).filter((f) => f.path !== "run-manifest.json")));
   };
   writeFileSync(join(folder, "fixtures/marketplace.json"), JSON.stringify(records()));
@@ -226,7 +247,7 @@ test("real offline replay feeds a recovered sample window with unhealthy termina
     const life = input.lifecycle[p.id], origin = input.provenance.find(({ id }) => id === p.id), before = life.before;
     deployment.processes.push({ ...p, containerId: before.Id }); deployment.network.Containers[before.Id] = {};
     if (p.id === "application") {
-      before.Config = { Labels: { "run.corten.marketplace.commit": commit, "run.corten.marketplace.dirty": "false", "run.corten.marketplace.profile": q.profile,
+      before.Config = { Labels: { "run.corten.marketplace.commit": commit, "run.corten.marketplace.dirty": "false", "run.corten.marketplace.profile": featureProfile,
         "run.corten.hardening.source": sourceHash }, Env: [`PROFILE=${qualificationSettings.nativeProfile}`, `MAX_CONNECTIONS=${qualificationSettings.maxConnections}`, "MARKETPLACE_SOURCE=api"] };
       origin.source = `${commit}:sha256:${sourceHash}`;
     } else {

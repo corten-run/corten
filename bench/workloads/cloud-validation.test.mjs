@@ -267,14 +267,14 @@ test("semver snapshot pins same-read library bytes before actual worker executio
   assert.throws(h.capture, /validation unavailable/);
 });
 
-test("only required catalog cgroup, recovery replay and classic compiler entry sources extend the worker source budget", { timeout: 15000 }, async (t) => {
+test("only named catalog, bounded resilience and compiler replay dependencies extend the worker source budget", { timeout: 15000 }, async (t) => {
   const paths = validationPaths.filter((path) => path === "bench/catalog/cgroup.mjs" || path === "bench/typescript.mjs"
-    || /^bench\/hardening\/(?:dependency-recovery-|resource-sample\.mjs$)/.test(path));
+    || /^bench\/hardening\/(?:bounded-requests\.mjs$|dependency-recovery-)/.test(path));
   assert.deepEqual(paths, [
     "bench/catalog/cgroup.mjs",
+    "bench/hardening/bounded-requests.mjs",
     "bench/hardening/dependency-recovery-capture.mjs",
     "bench/hardening/dependency-recovery-contract.mjs",
-    "bench/hardening/resource-sample.mjs",
     "bench/typescript.mjs",
   ]);
   const h = semverSnapshot(t), snapshot = h.capture();

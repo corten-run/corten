@@ -343,14 +343,14 @@ export function verifyOwnedCleanup(receipt, summary) {
 
 export function requireSourceControl(assessment, label) {
   if (assessment.sourceControl !== "target-functional-failure" && !assessment.targetFunctionalFailures?.length) return;
-  const error = new Error(`${label} native functional controls failed; no attack qualification`);
+  const error = new Error(`${label} native functional controls failed`);
   error.failureKind = "target-functional-failure";
   throw error;
 }
 
 export function failureKind(stage, error) {
   if (error.failureKind === "target-functional-failure") return error.failureKind;
-  return ["native-parity", "edge-parity", "native-form"].includes(stage) ? "parity-blocked" : "apparatus-invalid";
+  return ["native-parity", "edge-parity"].includes(stage) ? "parity-blocked" : "apparatus-invalid";
 }
 
 export function terminalRecovery(recovered, processes, resources, lifecycle, source = "fixture", paths = {}, endpoints = terminalHealthEndpoints(paths)) {

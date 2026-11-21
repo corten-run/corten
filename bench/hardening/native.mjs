@@ -7,6 +7,7 @@ import { request as https } from "node:https";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { validateQualification } from "../marketplace/feature-contract.mjs";
+import { validateBoundedQualification } from "./qualification.mjs";
 
 const hash = (body) => createHash("sha256").update(body).digest("hex");
 export function observe(url, { host, method = "GET", body, timeoutMs = 5000, ca } = {}) {
@@ -43,7 +44,8 @@ const receipt = (row) => {
 
 export function assessNative(report, qualification, deployment = "direct") {
   assert.ok(["direct", "deployed-edge"].includes(deployment));
-  validateQualification(qualification);
+  if (qualification.schema === "native-bounded-qualification/v1") validateBoundedQualification(qualification);
+  else validateQualification(qualification);
   assert.equal(report.schema, "native-hardening-controls/v1"); assert.equal(report.source, qualification.source);
   const { host, liveness } = report;
   receipt(host.allowed); receipt(host.denied); receipt(liveness.negative);
@@ -88,28 +90,12 @@ export function assessNative(report, qualification, deployment = "direct") {
   return { schema: "native-hardening-assessment/v1", representative: "existing-native-marketplace-production-matched", productionQualified,
     productionQualificationScope: deployment === "direct" ? "direct native production probes plus explicit deployment host/liveness/source controls; not inferred edge defense equivalence"
       : "effective TLS deployment production probes plus explicit deployment host/liveness/source controls; not inferred native/proxy mechanism attribution",
-    missingProductionFeatures: qualification.missing,
+    missingProductionFeatures: qualification.missing, ...(qualification.unmeasured ? { unmeasuredProductionFeatures: qualification.unmeasured } : {}),
     hostValidation: hostState, liveness: livenessState, sourceControl,
     ...(targetFunctionalFailures.length ? { targetFunctionalFailures } : {}),
     livenessDuringUpstreamFailure: liveDuringFailure,
     qualificationPurpose: productionQualified ? "qualified-native-hardening-observation" : "explicit-native-defense-gap-observation-not-qualified-performance",
     alternatives: [] };
-}
-
-export function assessTimedSource(raw) {
-  const one = (type) => { const rows = raw.filter((r) => r.type === type); assert.equal(rows.length, 1, `missing/duplicate ${type}`); receipt(rows[0].response); return rows[0].response; };
-  const before = one("upstream-control-before"), after = one("upstream-control-after");
-  assert.ok(healthy(before), "API upstream reset failed before timed injection"); assert.deepEqual(jsonOf(before), {});
-  if (!healthy(after)) return { state: "unavailable", status: after.status ?? null, error: after.error ?? (after.timedOut ? "timeout" : "incomplete response"), counts: null };
-  const counts = jsonOf(after); assert.deepEqual(Object.keys(counts).sort(), ["answers", "requests", "status"]); assert.equal(counts.status, 200, "upstream control state changed during injection");
-  for (const map of [counts.requests, counts.answers]) {
-    assert.ok(map && typeof map === "object" && !Array.isArray(map));
-    assert.ok(Object.values(map).every((value) => Number.isSafeInteger(value) && value >= 0), "invalid upstream counters");
-  }
-  const successes = raw.filter((row) => row.type === "legitimate" && row.ok === true).length;
-  assert.ok((counts.requests.item_1 ?? 0) >= successes && (counts.answers[200] ?? 0) >= successes, "timed API counters contradict completed successful native reads");
-  assert.ok(Object.values(counts.answers).reduce((a, n) => a + n, 0) <= Object.values(counts.requests).reduce((a, n) => a + n, 0), "timed API answers exceed actual requests");
-  return { state: "observed", status: 200, counts, attribution: "all native upstream reads including attacks; not assigned to individual legitimate requests" };
 }
 
 export async function nativeControls({ base, source, upstream, qualification, original, request = observe }) {
@@ -141,7 +127,7 @@ export async function nativeControls({ base, source, upstream, qualification, or
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [base, source, upstream, qualificationFile, output, deployment = "direct"] = process.argv.slice(2);
-  const qualification = validateQualification(JSON.parse(readFileSync(qualificationFile)));
+  const qualification = validateBoundedQualification(JSON.parse(readFileSync(qualificationFile)));
   const original = JSON.parse(readFileSync("/fixtures/marketplace.json")).item_1;
   const raw = await nativeControls({ base, source, upstream, qualification, original });
   writeFileSync(output, JSON.stringify(raw, null, 2));

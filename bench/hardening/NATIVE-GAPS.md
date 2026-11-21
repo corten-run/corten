@@ -1,5 +1,8 @@
 # Native App-Owner Handoff
 
+These are historical observations from the earlier hardening contract, not results
+from the bounded request and recovery group. See the [current contract](README.md).
+
 These are observations from clean, immutable native images, not inferred framework
 limitations or default-tier results. App changes belong to their native authors;
 the hardening driver does not install defenses or replace their server/renderer.

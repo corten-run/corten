@@ -120,7 +120,7 @@ function clockNs(value) {
   return BigInt(value);
 }
 
-function verifyLifecycle(clock, deployment, lifecycle, provenance, cleanup, completeAtMs) {
+export function verifyLifecycle(clock, deployment, lifecycle, provenance, cleanup, completeAtMs) {
   assert.equal(cleanup.complete, true); assert.deepEqual(cleanup.containers, []); assert.deepEqual(cleanup.volumes, []);
   assert.deepEqual(cleanup.failures, []); assert.equal(cleanup.commandClients, 0);
   assert.ok(Number.isFinite(Date.parse(clock.wallAtStart)), "missing recovery wall-clock origin");

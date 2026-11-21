@@ -16,7 +16,7 @@ or remove Corten's features to manufacture parity.
 | Client-heavy screens (`client-heavy`) | React, Vue | Solid, Svelte, Remix | equal-loaded-keyed-rows, dashboard-mutations, sort-filter-selection, no-operation-http, subscription-cleanup, final-dom |
 | Live delivery (`live-delivery`) | ASP.NET Core, Express, Phoenix, Rails + Hotwire | Gin + templ, Drogon, Leptos | equal-initial-state, ordered-visible-events, native-transport, bounded-slow-client, browser-correctness, cleanup |
 | Recoverable live application (`recoverable-live`) | Phoenix, Rails + Hotwire, Laravel + Livewire, ASP.NET Core | Leptos, Topcoat | equal-initial-state, disconnect, gap-detection, replay-or-resnapshot, no-duplicate-effects, final-keyed-state, bounded-slow-client, cleanup |
-| Resilience and hardening (`hardening`) | ASP.NET Core, Spring Boot, Next.js (Pages Router), Django, Express | Gin + templ, Drogon, Topcoat | equal-legitimate-traffic, declared-deployment-budget, slow-headers-bodies-readers, dependency-recovery, oversized-requests, useful-service, recovery |
+| Resilience and hardening (`hardening`) | ASP.NET Core, Spring Boot, Next.js (Pages Router), Django, Express | Gin + templ, Drogon, Topcoat | equal-legitimate-traffic, declared-deployment-budget, bounded-client-deadline, bounded-request-limit, dependency-recovery, useful-service, recovery |
 <!-- groups:end -->
 
 ## Implementation status
@@ -199,13 +199,11 @@ acknowledgements and owned-resource observations must come from the implementati
 from the reference-state helper. Browser execution, continuous peak instrumentation and
 complete native process/store inventories remain runner responsibilities.
 
-`hardening.mjs` validates `hardening-capture/v1` against a reviewed attack and legitimate
-traffic plan. Functional parity is a prerequisite, while missing defenses, refused
-connections, zero useful service, exhaustion and failure to recover stay visible as target
-outcomes. Broken injection, invalid controls, corrupt evidence and failed cleanup invalidate
-the apparatus instead. Direct and deployed-edge cases remain separate. Native process
-topologies may differ, but all required processes must be inventoried and charged within
-equivalent total budgets. Unavailable counters stay unavailable, never numeric zero.
+The [native hardening runner](../hardening/README.md) uses ordinary bounded HTTP requests
+to observe client deadlines, request limits and recovery after a private dependency delay.
+It keeps direct and deployed-edge deployments separate. A target that cannot serve a
+request stays in the results; an invalid control or missing evidence is not a target
+failure. Earlier pressure-workload captures are historical and cannot fill these cells.
 
 Run all shared contract checks with `npm run check:workloads`. None of these offline checks
 establishes build-time, instruction-count, browser-interactivity or load-test results.

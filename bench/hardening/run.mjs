@@ -6,17 +6,18 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, append
 import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { hostname, platform, release } from "node:os";
-import { budgets, validateBudget, parseArgs, schema, matrix, selected, groupReady, nativeGroup, registryDigest } from "./plan.mjs";
-import { assemble, artifacts, verifyArtifacts, verifyParity, verifyNativeLimits, digest, targetOutcome,
+import { budgets, validateBudget, parseArgs, schema, matrix, selected, groupReady, nativeGroup, registryDigest,
+  boundedRequestsVersion, deploymentQualificationVersion } from "./plan.mjs";
+import { artifacts, verifyArtifacts, verifyParity, verifyNativeLimits, digest, usesDelayUpstream, upstreamSourcePath, probeSourcePath, phaseInputs,
   savedProofVersion, committedInputs, savedFiles, snapshotDependencies, readyScript, buildNativeImage } from "./evidence.mjs";
 import { assembleRecovery } from "./dependency-recovery-capture.mjs";
-import { assessNative, assessTimedSource } from "./native.mjs";
-import { payload } from "./probe.mjs";
-import { emissionIdentity } from "./receipts.mjs";
+import { assembleBounded, boundedProbeConfig } from "./request-capture.mjs";
+import { assessNative } from "./native.mjs";
+import { validateBoundedQualification } from "./qualification.mjs";
 import { trackedImageBuild, trackedNetworkCreate, requireSourceControl, failureKind, terminalHealthPaths, collectTerminalHealth, ownedCleanupObservation, ownedContainerRecorder, ownedResourceCleanup } from "./lifecycle.mjs";
 import { nativeBuildContext } from "../mixed-production/build-context.mjs";
 import { records, writeFixture } from "../marketplace/fixtures.mjs";
-import { validateQualification, featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
+import { featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { nginxConf, edgeImage, edgeCertImage, edgeOffset } from "../fullstack/edge.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -36,8 +37,9 @@ export async function run(args) {
   const interrupt = () => { interrupted = true; for (const child of children) if (!settling.has(child)) child.kill(); };
   process.on("SIGINT", interrupt); process.on("SIGTERM", interrupt);
   const summary = { schema, runId, registryDigest, options, budget, startedAt: new Date().toISOString(), complete: false,
-    groupReady: false, savedProofVersion, nativeControlsVersion: 1, deploymentQualificationVersion: 1, semanticReceiptsVersion: 2, lifecycleVersion: 4, cells: matrix(), failures: [], cleanupFailures: [], builds: {}, originalFolder: folder, host: { hostname: hostname(), platform: platform(), release: release() },
-    scope: "HTTP/1.1 hardening of native production marketplace adapters; TLS edge uses existing pinned nginx deployment config; not HTTP/2/3 or kernel-peak measurement" };
+    groupReady: false, savedProofVersion, nativeControlsVersion: 1, deploymentQualificationVersion, boundedRequestsVersion, lifecycleVersion: 4,
+    cells: matrix(), failures: [], cleanupFailures: [], builds: {}, originalFolder: folder, host: { hostname: hostname(), platform: platform(), release: release() },
+    scope: "Bounded HTTP/1.1 resilience observations; the TLS edge uses the pinned nginx deployment; not a stress or performance comparison" };
   const save = () => { summary.nativeGroup = nativeGroup(summary.cells); json(join(folder, "summary.json"), summary); };
   async function command(binary, args, { timeout, file, cleanup = false, settleOnInterrupt = false, input, receipt } = {}) {
     timeout ??= cleanup ? budget.cleanup.timeoutMs : 30000;
@@ -123,16 +125,16 @@ export async function run(args) {
     const out = join(folder, cell.key); mkdirSync(out, { recursive: true });
     const prefix = `${runId}-cell`, appName = `${prefix}-app`, upstreamName = `${prefix}-upstream`, edgeName = `${prefix}-edge`, probeName = `${prefix}-probe`;
     const recovery = cell.phase === "dependency-recovery";
-    const upstreamSource = recovery ? "bench/hardening/dependency-recovery-upstream.mjs" : "bench/marketplace/upstream.mjs";
-    const probeSource = recovery ? "bench/hardening/dependency-recovery-probe.mjs" : "bench/hardening/probe.mjs";
-    let startedWall, probeEndedWall, raw, settings, provenance, lifecycle, parity, processList, recoveryDir, error, stage = "image-provenance";
+    const delayed = usesDelayUpstream(cell.phase), upstreamSource = upstreamSourcePath(cell.phase), probeSource = probeSourcePath(cell.phase);
+    const upstreamOrigin = `http://${upstreamName}:8080`;
+    let startedWall, probeEndedWall, raw, settings, provenance, lifecycle, parity, processList, recoveryDir, config, error, stage = "image-provenance";
     const targets = [], snapshot = {};
     try {
-      if (recovery) {
-        for (const path of [upstreamSource, probeSource]) {
-          const input = inputFiles.find((f) => f.path === path);
-          assert.ok(input && digest(readFileSync(join(sourceRoot, path))) === input.sha256, `unbound recovery input: ${path}`);
-        }
+      for (const path of phaseInputs(cell.phase)) {
+        const input = inputFiles.find((f) => f.path === path);
+        assert.ok(input && digest(readFileSync(join(sourceRoot, path))) === input.sha256, `unbound native hardening input: ${path}`);
+      }
+      if (delayed) {
         // Other sidecars can only write to /results, not this one-shot trigger.
         recoveryDir = mkdtempSync(join(folder, ".recovery-"));
       }
@@ -140,9 +142,9 @@ export async function run(args) {
       stage = "native-startup";
       const upstreamCommand = ["node", "/repo/" + upstreamSource];
       const upstream = await owned(upstreamName, ["run", "-d", "--network", network, ...limits(budget.resources.upstream), ...mounted, ...fixture,
-        ...(recovery ? ["-e", "RECOVERY_TRIGGER_DIR=/recovery", "-v", `${recoveryDir}:/recovery:ro`] : []), tools.node.Id, ...upstreamCommand]);
+        ...(delayed ? ["-e", "RECOVERY_TRIGGER_DIR=/recovery", "-v", `${recoveryDir}:/recovery:ro`] : []), tools.node.Id, ...upstreamCommand]);
       targets.push({ id: "upstream", role: "upstream", name: upstreamName, info: upstream, source: `${summary.commit}:${upstreamSource}` });
-      if (recovery) {
+      if (delayed) {
         assert.equal(upstream.Image, tools.node.Id, "recovery upstream image differs from the pinned tool");
         assert.deepEqual(upstream.Config.Cmd, upstreamCommand, "recovery upstream command differs from the committed entry point");
         assert.ok(upstream.Config.Env.includes("RECOVERY_TRIGGER_DIR=/recovery"), "recovery upstream trigger directory not configured");
@@ -155,8 +157,8 @@ export async function run(args) {
       targets.push({ id: "application", role: "application", name: appName, info: app, source: `${summary.commit}:sha256:${source}` });
       await ready(appName, out, image.Id);
       stage = "production-qualification";
-      await sidecar(`${prefix}-qualification`, appName, ["/repo/bench/marketplace/qualify.mjs", "http://127.0.0.1:8080", cell.source, `http://${upstreamName}:8080`, "/results/qualification.json"], out, "qualification.log", 8 * 60000);
-      const qualification = validateQualification(JSON.parse(readFileSync(join(out, "qualification.json"), "utf8")));
+      await sidecar(`${prefix}-qualification`, appName, ["/repo/bench/hardening/qualification.mjs", cell.source, "direct", upstreamOrigin, "/results/qualification.json"], out, "qualification.log", 2 * 60000);
+      const qualification = validateBoundedQualification(JSON.parse(readFileSync(join(out, "qualification.json"), "utf8")));
       let edgeQualification;
       cell.nativeMissingFeatures = qualification.missing;
       stage = "native-controls";
@@ -181,8 +183,8 @@ export async function run(args) {
         targets.push({ id: "proxy", role: "proxy", name: edgeName, info: edge, source: summary.commit + ":bench/fullstack/edge.mjs:nginxConf" });
         target = { host: "127.0.0.1", port: 8080, authority: "localhost:8080", origin: "https://localhost:8080", tls: true, caPem: readFileSync(join(cert, "cert.pem"), "utf8") }; namespace = edgeName;
         stage = "edge-production-qualification";
-        await sidecar(`${prefix}-edge-qualification`, edgeName, ["/repo/bench/hardening/tls-qualification.mjs", "https://localhost:8080", cell.source, `http://${upstreamName}:8080`, "/results/edge-qualification.json"], out, "edge-qualification.log", 8 * 60000);
-        edgeQualification = validateQualification(JSON.parse(readFileSync(join(out, "edge-qualification.json"), "utf8")));
+        await sidecar(`${prefix}-edge-qualification`, edgeName, ["/repo/bench/hardening/qualification.mjs", cell.source, "deployed-edge", upstreamOrigin, "/results/edge-qualification.json"], out, "edge-qualification.log", 2 * 60000);
+        edgeQualification = validateBoundedQualification(JSON.parse(readFileSync(join(out, "edge-qualification.json"), "utf8")));
         cell.edgeMissingFeatures = edgeQualification.missing;
         // The edge is a distinct deployment and must itself pass the complete content/browser gate.
         stage = "edge-parity";
@@ -192,13 +194,6 @@ export async function run(args) {
         await sidecar(`${prefix}-edge-controls`, edgeName, ["/repo/bench/hardening/native.mjs", "https://localhost:8080", cell.source, `http://${upstreamName}:8080`, "/results/edge-qualification.json", "/results/edge-native-controls.json", "deployed-edge"], out, "edge-native-controls.log", 90000);
         cell.edgeAssessment = assessNative(JSON.parse(readFileSync(join(out, "edge-native-controls.json"))), edgeQualification, "deployed-edge");
         requireSourceControl(cell.edgeAssessment, "edge");
-      }
-      let form;
-      if (!recovery) {
-        // Native form metadata is discovered in the measured namespace, never supplied by an oracle.
-        stage = "native-form";
-        await sidecar(`${prefix}-form`, namespace, ["/repo/bench/hardening/form.mjs", JSON.stringify(target), "/results/form.json"], out, "form.log", 15000);
-        form = JSON.parse(readFileSync(join(out, "form.json"), "utf8"));
       }
       processList = [];
       stage = "native-inventory";
@@ -210,37 +205,38 @@ export async function run(args) {
       const deployment = { mode: cell.mode, countAllProcesses: true, processes: processList.map(({ containerId, ...p }) => p) };
       settings = { review: options.review, case: cell.mode, phase: cell.phase, nativeSource: cell.source, deployment,
         terminalHealthPaths: terminalHealthPaths(qualification, edgeQualification),
-        ...(recovery ? {} : { emissionPlan: budget.attack.scheduledAtMs.map((_, index) => emissionIdentity(payload(cell.phase, index, target, budget.attack, form), cell.phase)) }),
         effectiveBudgets: JSON.stringify(budget) }; json(join(out, "settings.json"), settings);
       verifyNativeLimits(settings, Object.fromEntries(targets.map((t) => [t.id, { before: snapshot[t.id].before, after: snapshot[t.id].before, events: [] }])));
       provenance = targets.map((t) => ({ id: t.id, image: t.info.Image, source: t.source, config: digest(readFileSync(join(out, `${t.id}-before.json`))), evidence: `${t.id}-before.json` }));
       const net = JSON.parse(await docker(["network", "inspect", network]))[0];
       assert.deepEqual(Object.keys(net.Containers).sort(), processList.map((p) => p.containerId).sort(), "unaccounted native process container on isolated network");
       json(join(out, "deployment.json"), { network: net, processes: processList, provenance, totalBudget: budget.resources });
-      json(join(out, "probe.json"), { budget, phase: cell.phase, source: cell.source, upstream: `http://${upstreamName}:8080`, target,
-        ...(recovery ? {} : { form }), expected: records().item_1, processes: processList });
-      if (recovery) stage = "dependency-recovery";
-      const probe = await owned(probeName, ["create", "--network", `container:${namespace}`, ...limits(budget.resources.apparatus), "--cgroupns=host", "--pid=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mounted, "-v", `${out}:/results`,
-        ...(recovery ? ["-e", "RECOVERY_TRIGGER_DIR=/recovery", "-v", `${recoveryDir}:/recovery:rw`] : []), tools.node.Id,
+      config = recovery ? { budget, phase: cell.phase, source: cell.source, upstream: upstreamOrigin, target, expected: records().item_1, processes: processList }
+        : boundedProbeConfig(cell, budget, runId, target.caPem);
+      json(join(out, "probe.json"), config);
+      stage = cell.phase;
+      const probe = await owned(probeName, ["create", "--network", `container:${namespace}`, ...limits(budget.resources.apparatus),
+        ...(recovery ? ["--cgroupns=host", "--pid=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro"] : []), ...mounted, "-v", `${out}:/results`,
+        ...(delayed ? ["-e", "RECOVERY_TRIGGER_DIR=/recovery", "-v", `${recoveryDir}:/recovery:rw`] : []), tools.node.Id,
         "node", "/repo/" + probeSource, "/results/probe.json", "/results/raw.jsonl"]);
-      if (recovery) {
+      if (delayed) {
         const upstreamTrigger = upstream.Mounts.find((m) => m.Destination === "/recovery");
         const probeTrigger = probe.Mounts.find((m) => m.Destination === "/recovery");
         assert.ok(probeTrigger?.Type === "bind" && probeTrigger.RW === true && probeTrigger.Source === upstreamTrigger.Source,
           "recovery probe must be the writer of the upstream trigger directory");
       }
       startedWall = new Date().toISOString();
-      if (!recovery) stage = "native-injection";
-      const { beforeMs, duringMs, afterMs, timeoutMs } = recovery ? budget.dependencyRecovery : {};
-      const probeTimeout = recovery ? beforeMs + duringMs + afterMs + timeoutMs + 20000 : budget.legitimate.after.endMs + 20000;
+      const { beforeMs, duringMs, afterMs, timeoutMs } = budget.dependencyRecovery;
+      const probeTimeout = delayed ? beforeMs + duringMs + afterMs + timeoutMs + 20000 : 10000;
       try { await docker(["start", "-a", probeName], { timeout: probeTimeout, file: join(out, "probe.log") }); }
-      catch (e) { if (!recovery) throw e; error = e; }
+      catch (e) { error = e; }
       finally {
         probeEndedWall = Date.now();
         // Preserve the start failure and partial raw/log output; owned cleanup retries a failed removal.
         try { await remove(probeName); } catch (e) { if (!error) throw e; }
       }
       if (error) throw error;
+      assert.deepEqual(JSON.parse(readFileSync(join(out, "probe.json"), "utf8")), config, "native probe configuration changed");
       raw = readFileSync(join(out, "raw.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
       const clock = raw.find((r) => r.type === "clock"); assert.ok(clock);
       lifecycle = {};
@@ -284,8 +280,8 @@ export async function run(args) {
           rmSync(join(recoveryDir, "start"), { force: true }); rmdirSync(recoveryDir);
         } catch (e) { failures.push(e.message); }
       }
-      // Private ephemeral TLS/form material has no evidentiary role after its digests are saved.
-      for (const file of [join(out, "cert/key.pem"), join(out, "form.json"), join(out, "probe.json")]) if (existsSync(file)) rmSync(file);
+      // Retain the bounded configuration for replay, never the private TLS key.
+      for (const file of [join(out, "cert/key.pem"), ...(recovery ? [join(out, "probe.json")] : [])]) if (existsSync(file)) rmSync(file);
       let nativeClock = null;
       if (raw) {
         const name = `${prefix}-cleanup-clock`;
@@ -305,16 +301,15 @@ export async function run(args) {
         try {
           stage = "evidence-validation";
           const manifest = artifacts(out); json(join(out, "manifest.json"), manifest); verifyArtifacts(out, manifest);
-          const capture = (recovery ? assembleRecovery : assemble)({ settings, raw, parity, source: cell.source, cleanup, provenance, lifecycle });
+          const capture = (recovery ? assembleRecovery : assembleBounded)({ settings, raw, parity, source: cell.source, config, cleanup, provenance, lifecycle });
           json(join(out, "capture.json"), capture); cell.status = "observed"; cell.apparatusValid = true;
           cell.capture = `${cell.key}/capture.json`;
           if (recovery) {
             cell.dependencyRecovery = capture.assessment;
             cell.dependencyTerminalHealthy = capture.terminal.healthy;
           } else {
-            cell.defense = capture.defense.protection; cell.recovery = capture.recovery.disposition;
-            if (cell.source === "api") cell.sourceObservation = assessTimedSource(raw);
-            cell.targetOutcome = targetOutcome(capture, cell.edgeAssessment ?? cell.nativeAssessment, cell.sourceObservation);
+            cell.boundedRequests = capture.assessment;
+            cell.boundedTerminalHealthy = capture.terminal.healthy;
           }
         } catch (e) { error = e; }
       }

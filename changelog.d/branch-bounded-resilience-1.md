@@ -1,0 +1,1 @@
+- The [hardening benchmark](https://github.com/corten-run/corten/blob/main/bench/hardening/README.md) now compares ordinary request deadlines, request limits and dependency recovery across the same frameworks. Its results start a new series.
