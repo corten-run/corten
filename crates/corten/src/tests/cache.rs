@@ -1512,6 +1512,13 @@ async fn only_an_app_with_a_public_page_counts_its_writes() {
     assert_eq!(write(off).await, "store=false counted=false", "an app that keeps none");
     let dev = App::new(Routes::from(edit().merge(kept_routes(&runs)))).dev(true).router();
     assert_eq!(write(dev).await, "store=false counted=false", "under corten dev");
+
+    // A `Public` whole body is kept where the build compresses: an app whose only `Public` route
+    // answers one has a store there, and in a build that keeps no body its route asks nothing.
+    let words = || async { Public::new(Duration::from_secs(60), "words") };
+    let body = App::new(Routes::from(edit().route("/words", crate::route::get(words).0))).router();
+    let kept = cfg!(feature = "compress");
+    assert_eq!(write(body).await, format!("store={kept} counted={kept}"), "a Public body alone");
 }
 
 static COUNTER_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -2685,12 +2692,20 @@ async fn a_route_of_small_bodies_leaves_the_store_out_until_one_is_large_enough(
     size.store(2048, Ordering::Relaxed);
     assert!(!asked(router.clone()).await && asked(router.clone()).await, "kept, after fifteen small bodies");
     assert_eq!(runs.count(), 16);
-    // Sixteen small bodies in a row follow, at other URLs of the route: the kept body stands.
-    size.store(8, Ordering::Relaxed);
+    // The large one ended the run: fifteen more small bodies, at other URLs of the route so the
+    // kept body stands, and a large one is kept again.
     let other = |router: Router, n: usize| async move {
         fetch(&router, "GET", &format!("/body?n={n}"), &[]).await.1.contains_key(header::AGE)
     };
-    for n in 0..16 {
+    size.store(8, Ordering::Relaxed);
+    for n in 0..15 {
+        assert!(!other(router.clone(), n).await);
+    }
+    size.store(2048, Ordering::Relaxed);
+    assert!(!other(router.clone(), 50).await && other(router.clone(), 50).await, "the run began again at the large one");
+    // Sixteen small bodies in a row follow.
+    size.store(8, Ordering::Relaxed);
+    for n in 100..116 {
         assert!(!other(router.clone(), n).await);
     }
     // From here the store is left out: a large body is made for each request and not kept, and
