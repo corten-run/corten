@@ -61,7 +61,7 @@
 //! it was until its lifetime ends.
 
 use std::collections::HashMap;
-use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher};
+use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher, RandomState};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
@@ -156,6 +156,9 @@ struct Store {
     marks: OnceLock<Box<[AtomicU64]>>,
     /// How many of the marks are set.
     marked: AtomicUsize,
+    /// The keys of its hash of a URL, the process's own, so a client cannot choose URLs that share
+    /// a place in its table.
+    keys: RandomState,
     inner: RwLock<Inner>,
 }
 
@@ -164,6 +167,28 @@ struct Store {
 /// count, and then a write to either drops the other's pages early.
 fn count_of(path: &[u8]) -> usize {
     (crate::page::path_hash(path) >> 32) as usize % WRITES
+}
+
+/// The hasher of the store's table, whose keys are hashes already: a request's URL is hashed once,
+/// by the store's keys ([`Asked::of`]), and not again for each lookup.
+#[derive(Default)]
+struct Prehashed(u64);
+
+impl Hasher for Prehashed {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write_u64(&mut self, hash: u64) {
+        self.0 = hash;
+    }
+
+    /// Not called for a `u64`.
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.0 = self.0.rotate_left(8) ^ u64::from(byte);
+        }
+    }
 }
 
 /// A path's count of writes, as a request found it.
@@ -265,8 +290,9 @@ struct Place {
 
 #[derive(Default)]
 struct Inner {
-    /// By path and query, the copies for each `Host` and `Accept-Language`.
-    at: HashMap<Box<str>, Vec<Arc<Entry>>>,
+    /// By the hash of their path and query ([`Prehashed`]), the copies for each `Host` and
+    /// `Accept-Language`: each holds its URL, as two URLs may share a hash.
+    at: HashMap<u64, Vec<Arc<Entry>>, BuildHasherDefault<Prehashed>>,
     /// Every entry, in the place the clock's hand finds it: one not used since the hand last
     /// passed is the next to go when the bound is passed.
     slots: Vec<Option<Arc<Entry>>>,
@@ -277,6 +303,8 @@ struct Inner {
 /// One kept answer, as its handler gave it.
 pub(crate) struct Entry {
     at: Box<str>,
+    /// Its URL's hash, its key in the store's table.
+    hash: u64,
     place: Place,
     written: Written,
     host: Option<HeaderValue>,
@@ -445,10 +473,10 @@ impl Store {
             inner.slots[slot] = None;
             inner.free.push(slot);
         }
-        if let Some(copies) = inner.at.get_mut(&entry.at) {
+        if let Some(copies) = inner.at.get_mut(&entry.hash) {
             copies.retain(|copy| !Arc::ptr_eq(copy, entry));
             if copies.is_empty() {
-                inner.at.remove(&entry.at);
+                inner.at.remove(&entry.hash);
             }
         }
         let size = entry.size.swap(GONE, Ordering::AcqRel);
@@ -489,6 +517,7 @@ impl Answers {
                 written: OnceLock::new(),
                 marks: OnceLock::new(),
                 marked: AtomicUsize::new(0),
+                keys: RandomState::new(),
                 inner: RwLock::default(),
             }))
         })
@@ -500,12 +529,29 @@ impl Answers {
         self.0.bytes.load(Ordering::Acquire)
     }
 
-    /// The answer kept for a request, while it stands, with its age in seconds.
+    /// [`Answers::found`], for a test.
+    #[cfg(test)]
     fn find(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Option<(Arc<Entry>, u64)> {
+        self.found(self.0.keys.hash_one(at), at, host, language)
+    }
+
+    /// The answer kept for a request for `at`, whose hash by the store's keys is `hash`, while it
+    /// stands, with its age in seconds.
+    fn found(
+        &self,
+        hash: u64,
+        at: &str,
+        host: Option<&HeaderValue>,
+        language: Option<&HeaderValue>,
+    ) -> Option<(Arc<Entry>, u64)> {
         let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
         // The copy that stands: one that no longer does is in no other's way until it goes.
-        let entry = inner.at.get(at)?.iter().find(|entry| entry.is_for(host, language) && entry.stands(&self.0, now))?;
+        let entry = inner
+            .at
+            .get(&hash)?
+            .iter()
+            .find(|entry| *entry.at == *at && entry.is_for(host, language) && entry.stands(&self.0, now))?;
         let age = entry.age(now);
         // Stored only when it changes: a page read often is marked once for each pass of the hand.
         if !entry.used.load(Ordering::Relaxed) {
@@ -525,18 +571,20 @@ impl Answers {
             store: Arc::downgrade(&self.0),
         }));
         let now = Instant::now();
-        let copies = inner.at.get(&entry.at).map(Vec::as_slice).unwrap_or_default();
+        let copies = inner.at.get(&entry.hash).map(Vec::as_slice).unwrap_or_default();
         // The copies this one takes the place of: the one asked the same way, and those that no
         // longer stand. With none of either in a full set, the oldest not read since it was kept
         // (or since the hand passed it), so a way of asking seen once does not take the place of
         // one seen often; else the oldest.
+        let mut copies = copies.iter().filter(|copy| copy.at == entry.at);
         let mut replaced: Vec<_> = copies
-            .iter()
+            .clone()
             .filter(|copy| (copy.host == entry.host && copy.language == entry.language) || !copy.stands(store, now))
             .cloned()
             .collect();
-        if replaced.is_empty() && copies.len() >= COPIES {
-            replaced.extend(copies.iter().find(|copy| !copy.used.load(Ordering::Relaxed)).or(copies.first()).cloned());
+        if replaced.is_empty() && copies.clone().count() >= COPIES {
+            let unread = copies.clone().find(|copy| !copy.used.load(Ordering::Relaxed));
+            replaced.extend(unread.or_else(|| copies.next()).cloned());
         }
         for replaced in &replaced {
             store.drop_entry(&mut inner, replaced);
@@ -545,7 +593,7 @@ impl Answers {
             inner.slots.push(None);
         }
         inner.slots[slot] = Some(entry.clone());
-        inner.at.entry(entry.at.clone()).or_default().push(entry.clone());
+        inner.at.entry(entry.hash).or_default().push(entry.clone());
         store.bytes.fetch_add(entry.size.load(Ordering::Acquire), Ordering::AcqRel);
         store.make_room(&mut inner, &entry);
         entry
@@ -576,6 +624,8 @@ pub(crate) struct Asked<'a> {
     answers: &'a Answers,
     signal: &'a crate::Signal,
     at: &'a str,
+    /// `at`'s hash, by the store's keys.
+    hash: u64,
     host: Option<&'a HeaderValue>,
     language: Option<&'a HeaderValue>,
 }
@@ -654,12 +704,13 @@ impl<'a> Asked<'a> {
             return None;
         }
         let at = at.as_str();
-        Some(Asked { answers, signal, at, host, language })
+        let hash = answers.0.keys.hash_one(at);
+        Some(Asked { answers, signal, at, hash, host, language })
     }
 
     /// The kept answer for this request, as its handler gave it, with its age.
     pub(crate) fn find(&self) -> Option<Response> {
-        let (entry, age) = self.answers.find(self.at, self.host, self.language)?;
+        let (entry, age) = self.answers.found(self.hash, self.at, self.host, self.language)?;
         // Kept for the language it was asked in: the answer names `Accept-Language` as it leaves
         // the app, whatever `Vary` a middleware puts on it after this (`crate::page::vary_on_language`).
         if entry.language.is_some() {
@@ -695,6 +746,7 @@ impl<'a> Asked<'a> {
             signal: req.extensions().get::<crate::Signal>().cloned(),
             nonce: req.extensions().get::<crate::security::NonceSlot>().cloned(),
             at: self.at.into(),
+            hash: self.hash,
             // Copies of their own: a request's header values are slices of the connection's read
             // buffer, which a kept one would hold whole.
             host: self.host.and_then(|host| HeaderValue::from_bytes(host.as_bytes()).ok()),
@@ -710,6 +762,7 @@ pub(crate) struct Missed {
     signal: Option<crate::Signal>,
     nonce: Option<crate::security::NonceSlot>,
     at: Box<str>,
+    hash: u64,
     host: Option<HeaderValue>,
     language: Option<HeaderValue>,
 }
@@ -750,8 +803,8 @@ impl Missed {
         }
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
         let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
-        // The URL is held twice, by the entry and by the map.
-        let key = self.at.len() * 2
+        // The URL is held once, by the entry: the map holds its hash.
+        let key = self.at.len()
             + self.host.as_ref().map_or(0, HeaderValue::len)
             + self.language.as_ref().filter(|_| language).map_or(0, HeaderValue::len);
         let size = key + head + OVERHEAD + length as usize;
@@ -772,9 +825,10 @@ impl Missed {
         let mut body = Vec::from(body);
         body.shrink_to_fit();
         let body = Bytes::from(body);
-        let Missed { at, host, language: asked, asked: made, written, .. } = self;
+        let Missed { at, hash, host, language: asked, asked: made, written, .. } = self;
         let entry = answers.keep(|place| Entry {
             at,
+            hash,
             place,
             written,
             host,
@@ -970,10 +1024,11 @@ mod tests {
 
     /// An answer for `at` whose request found the path's writes as they are now.
     fn entry(answers: &Answers, at: &str, host: Option<&'static str>, lifetime: u64, body: usize) -> impl FnOnce(Place) -> Entry {
-        let written = Written::of(&answers.0, at);
+        let (hash, written) = (answers.0.keys.hash_one(at), Written::of(&answers.0, at));
         let at: Box<str> = at.into();
         move |place| Entry {
             at,
+            hash,
             place,
             written,
             host: host.map(HeaderValue::from_static),
