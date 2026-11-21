@@ -1502,6 +1502,19 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
                 })
                 .0,
             )
+            .route(
+                "/recovered",
+                typed(move |req: Req| async move {
+                    // The same, with a page that fails rendered between the key and the page given.
+                    let form =
+                        html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> }.to_html();
+                    let page = req
+                        .page(Headless)
+                        .or_else(|_| req.test_page_for("Recovered", html! { <div>{crate::view::raw(form)}</div> }));
+                    Public::new(minute, page)
+                })
+                .0,
+            )
     };
     let router = App::new(Routes::from(routes())).router();
     let kept = |router: Router, uri: &'static str| async move {
@@ -1521,6 +1534,7 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
         ("/status", "a status alone has no body to keep"),
         ("/keyed", "a submit key drawn for this request"),
         ("/placed", "a submit key drawn before the page's render and placed in it as markup"),
+        ("/recovered", "a submit key drawn before a page whose render failed, placed in the page given instead"),
         ("/device", "an input of the app's own, which may read a header no key covers"),
         ("/missing", "no route"),
     ] {
@@ -1528,6 +1542,26 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
     }
     for uri in ["/", "/catalog", "/inputs", "/text"] {
         assert!(kept(router.clone(), uri).await, "{uri}");
+    }
+    // The page that failed did fail, and each request's page has its own key.
+    let recovered =
+        |router: Router| async move { String::from_utf8(fetch(&router, "GET", "/recovered", &[]).await.2.to_vec()).unwrap() };
+    let (first, second) = (recovered(router.clone()).await, recovered(router.clone()).await);
+    assert!(first.contains("Recovered") && first.contains("<form") && first != second, "{first}\n{second}");
+
+    /// A document whose head has no `<Corten />`, which `html!` does not build: a page of it fails.
+    struct Headless;
+
+    impl Render for Headless {
+        fn render(&self, out: &mut String) {
+            out.push_str("<!DOCTYPE html><html><head><title>None</title></head><body><main></main></body></html>");
+        }
+    }
+
+    impl crate::view::Document for Headless {
+        fn render_part(&self, out: &mut String, _: crate::view::Part) {
+            self.render(out);
+        }
     }
     assert!(!kept(App::new(Routes::from(routes())).kept_answers(0).router(), "/").await, "an app that keeps none");
     assert!(!kept(App::new(Routes::from(routes())).dev(true).router(), "/").await, "under corten dev");

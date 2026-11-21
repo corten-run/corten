@@ -2594,13 +2594,17 @@ thread_local! {
 /// it starts and, as it ends, left set where it was before or a key was drawn since. So a watch
 /// around the handler ([`watched`]) still sees a key the handler drew before this render (one
 /// rendered to a string and placed in a page as markup), also when the render fails or panics.
+#[must_use = "the mark is put back where this is dropped"]
 pub(crate) struct Drawing {
     before: bool,
+    /// The mark is the thread's, so this is not `Send`: held across an `.await` in a handler's
+    /// work it would put the mark back on another thread, and that does not build.
+    thread: std::marker::PhantomData<*const ()>,
 }
 
 impl Drawing {
     pub(crate) fn start() -> Self {
-        Drawing { before: DREW_KEY.replace(false) }
+        Drawing { before: DREW_KEY.replace(false), thread: std::marker::PhantomData }
     }
 
     /// Whether a key was drawn since this started.
@@ -3044,11 +3048,19 @@ mod tests {
                 .await;
                 assert!(own != Ok(true) && watch, "{own:?} {watch}, failing {fails}");
             }
-            // And it reads its own key, whatever was drawn before it.
-            let drawing = Drawing::start();
-            let _ = SubmitKey::field(SUBMIT).to_html();
-            assert!(drawing.drew());
-            drop(drawing);
+            // It reads its own key and none drawn before it, and leaves the mark as it found it
+            // where it drew none.
+            for before in [false, true] {
+                DREW_KEY.set(before);
+                drop(Drawing::start());
+                assert_eq!(DREW_KEY.get(), before);
+                let drawing = Drawing::start();
+                assert!(!drawing.drew(), "after a mark of {before}");
+                let _ = SubmitKey::field(SUBMIT).to_html();
+                assert!(drawing.drew(), "after a mark of {before}");
+                drop(drawing);
+                assert!(DREW_KEY.get());
+            }
             DREW_KEY.set(false);
         }
         DREW_KEY.set(false);
