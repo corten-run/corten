@@ -13,8 +13,9 @@ import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-sealed-collection.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
-import { failedNativeArchive, failedNativeObservation, failedNativeScript, setupEvidence, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript,
-  verifyFailedNativeCustody, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, setupEvidence, settledBootstrap, terminalSetupScript,
+  unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
+  verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { controlCheckpoint, pinnedHostOptions } from "./cloud-transport.mjs";
 
@@ -49,7 +50,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   mkdirSync(requested, { recursive: true, mode: 0o700 });
   const base = realpathSync(requested); physical(base);
   const local = join(base, `groups-${options.round}`), statePath = join(local, "state.json"), archive = join(local, "results.tgz");
-  let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor;
+  let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, groupedHostKey;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
   const read = (path = local, round = options.round) => { boundary(path); return controllerState(JSON.parse(regular(join(path, "state.json"), 1024 * 1024)), round); };
@@ -187,7 +188,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const transport = async (binary, args, timeout, allowFail) => {
     await own(); assert.ok(state.id && state.ip, "bound host required");
     const mixedRecovery = state.group === "mixed-production" && (options.cancelMixedWait || options.retireFailedNative);
-    const pinnedKey = mixedRecovery ? mixedWait.knownHostsSha256 : options.r21MeasuredCheckout ? recoveryApproval.knownHostsSha256 : undefined;
+    const pinnedKey = mixedRecovery ? mixedWait.knownHostsSha256 : options.r21MeasuredCheckout ? recoveryApproval.knownHostsSha256 : groupedHostKey;
     if (pinnedKey) assert.equal(fileHash(join(local, "known_hosts")), pinnedKey, "native host keys changed");
     if (existsSync(join(local, "known_hosts"))) regular(join(local, "known_hosts"), 1024 * 1024);
     let registration;
@@ -465,6 +466,77 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const evidence = setupEvidence(raw, state, script, exit, startedAtMs, finishedAtMs, local);
     return retire("setup-failed", evidence, finishedAtMs);
   };
+  async function retireNativeFailure(controllerCommit, grouped) {
+    failedNativeArchive(local, state, grouped);
+    const originalPath = join(local, "failed-native-reservation.json");
+    const original = regular(existsSync(originalPath) ? originalPath : statePath, 1024 * 1024);
+    verifyFailedNativeReservation(state, JSON.parse(original), grouped);
+    if (!existsSync(originalPath)) durable(originalPath, original);
+    const capturePath = join(local, "failed-native-capture.json"), custodyArchive = join(local, "failed-native-results.tgz");
+    let capture;
+    if (existsSync(capturePath)) {
+      capture = verifyFailedNativeCustody(local, state, JSON.parse(regular(capturePath)), grouped);
+      assert.equal(capture.controllerCommit, controllerCommit, "custody controller source changed");
+    } else {
+      assert.ok(!existsSync(custodyArchive) && !existsSync(`${custodyArchive}.download`), "unrecorded custody retained; no automatic adoption");
+      const script = failedNativeScript(state, null, null, grouped), startedAtMs = Date.now();
+      const raw = (await ssh(script, 11 * 60000)).stdout, finishedAtMs = Date.now();
+      const observation = failedNativeObservation(raw, state, startedAtMs, finishedAtMs, grouped);
+      const download = `${custodyArchive}.download`; durable(download, "");
+      await scp(`root@${state.ip}:/bench/failed-native-custody.tgz`, download);
+      durableCopy(download, `${custodyArchive}.synced`, observation.archiveSha256);
+      renameSync(`${custodyArchive}.synced`, custodyArchive); syncDirectory(local);
+      const extracted = mkdtempSync(join(local, "custody-"));
+      const hash = await extractArchive(custodyArchive, extracted, observation.archiveSha256); check();
+      capture = { schema: "benchmark-failed-native-custody/v1", measuredCommit: state.commit, controllerCommit,
+        reservationSha256: digest(original), scriptSha256: digest(script), observation, startedAtMs, finishedAtMs,
+        evidence: basename(extracted), evidenceSha256: hash };
+      verifyFailedNativeCustody(local, state, capture, grouped); durable(capturePath, `${JSON.stringify(capture, null, 2)}\n`);
+    }
+    // Local custody verification precedes a fresh, full remote rehash and
+    // current-quiescence proof. Neither is historical native qualification.
+    verifyFailedNativeCustody(local, state, capture, grouped); check();
+    const rehashScript = failedNativeScript(state, capture.observation.snapshotSha256, null, grouped), rehashStarted = Date.now();
+    const rehashRaw = (await ssh(rehashScript, 11 * 60000)).stdout, rehashFinished = Date.now();
+    const rehashObservation = failedNativeObservation(rehashRaw, state, rehashStarted, rehashFinished, grouped);
+    const withoutTime = ({ observedAtMs, ...rest }) => rest;
+    assert.deepEqual(withoutTime(rehashObservation), withoutTime(capture.observation), "predelete custody differs");
+    verifyFailedNativeCustody(local, state, capture, grouped);
+    const receiptPath = join(local, "failed-native-host.json");
+    let interruptedReceipt;
+    if (existsSync(receiptPath)) {
+      const prior = regular(receiptPath), hash = digest(prior);
+      // Verify against the actual measured state, without adopting an intent.
+      verifyFailedNativeRetirement(local, state, hash);
+      const history = join(local, `failed-native-host.interrupted-${hash}.json`);
+      if (existsSync(history)) assert.equal(digest(regular(history)), hash); else durable(history, prior);
+      interruptedReceipt = hash;
+    }
+    // Full local verification can be expensive. Renew only the current host
+    // proof afterwards, while checking all remote metadata is still exactly
+    // the previously hashed inventory and the custody archive is unchanged.
+    const script = failedNativeScript(state, capture.observation.snapshotSha256, capture.observation, grouped), startedAtMs = Date.now();
+    const raw = (await ssh(script, 11 * 60000)).stdout, finishedAtMs = Date.now();
+    const confirmation = failedNativeObservation(raw, state, startedAtMs, finishedAtMs, grouped);
+    assert.deepEqual(withoutTime(confirmation), withoutTime(capture.observation), "final custody fence differs");
+    await own(); check();
+    // Bound the whole local fence operation, including SSH response delivery.
+    // Its start precedes the observation without relying on remote clock skew.
+    const deleteProofExpiresAtMs = startedAtMs + 60000;
+    assert.ok(Date.now() >= finishedAtMs && Date.now() < deleteProofExpiresAtMs, "current retirement proof expired");
+    const receipt = { schema: "benchmark-failed-native-retirement/v1", capture, confirmation, scriptSha256: digest(script), startedAtMs, finishedAtMs,
+      rehash: { observation: rehashObservation, scriptSha256: digest(rehashScript), startedAtMs: rehashStarted, finishedAtMs: rehashFinished } };
+    const bytes = `${JSON.stringify(receipt, null, 2)}\n`;
+    if (interruptedReceipt !== undefined) {
+      // Only this invocation's fresh proof can replace an interrupted receipt.
+      assert.equal(digest(regular(receiptPath)), interruptedReceipt); unlinkSync(receiptPath); syncDirectory(local);
+    }
+    durable(receiptPath, bytes);
+    Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
+    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);
+    await confirmDeleted();
+    state.destroyedAt = new Date().toISOString(); save(); return 1;
+  }
   return {
     get state() { return state ? structuredClone(state) : undefined; }, local,
     async cancelMixedWait() {
@@ -646,17 +718,19 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           assert.equal(digest(regular(statePath)), recoveryApproval.reservationSha256, "locked r21 reservation changed");
         }
         const sealed = state.control?.monitor?.phase === "closed";
+        const grouped = !options.r21MeasuredCheckout && state.status === "running" && groupedFailureCandidate(state)
+          ? groupedFailure(local, state) : undefined;
+        if (grouped) groupedHostKey = grouped.host.knownHostsSha256;
         let inspectUnit = unit, idleScript, unitState;
         const query = unitQuery(state) + " --all --property=Job --property=SubState --property=ControlPID";
-        if (sealed) {
-          assert.ok(!existsSync(join(base, ".groups-launch.lock")), "child launch custody still held");
-          const { sealedMonitor } = await import("./cloud-control-stream.mjs");
-          const { terminal, registration } = sealedMonitor(local, state);
+        if (sealed || grouped) {
+          if (sealed) assert.ok(!existsSync(join(base, ".groups-launch.lock")), "child launch custody still held");
+          const { terminal, registration } = grouped ?? (await import("./cloud-control-stream.mjs")).sealedMonitor(local, state);
           if (options.r21MeasuredCheckout) {
             assert.equal(terminal.campaign, recoveryApproval.campaign); assert.equal(terminal.sealSha256, recoveryApproval.sealSha256);
           }
           const unitSha256 = digest(remoteFiles(state)[state.unit]);
-          idleScript = (pack, stamp) => idleArchiveScript(state, registration.host.bootId, unitSha256, { pack, stamp });
+          idleScript = (pack, stamp) => idleArchiveScript(state, registration.host.bootId, unitSha256, { pack, stamp, completedOnly: !!grouped });
           inspectUnit = async () => {
             const result = await ssh(query, 60000, true);
             assert.ok(result.status === 0 && !result.error, "unit query refused");
@@ -665,13 +739,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         }
         const remoteHash = async (pack = false) => {
           // A settled refusal (e.g. a queued job) is not a lost SSH command.
-          const result = await ssh(idleScript?.(pack) ?? "sha256sum /bench/results.tgz", sealed ? 15 * 60000 : 60000, sealed);
+          const result = await ssh(idleScript?.(pack) ?? "sha256sum /bench/results.tgz", idleScript ? 15 * 60000 : 60000, !!idleScript);
           assert.ok(result.status === 0 && !result.error, "terminal archive or idle-host proof unavailable");
           const line = result.stdout;
-          full(line, sealed ? /[a-f0-9]{64}  \/bench\/results\.tgz\n[a-f0-9]{64}  -\n/ : /[a-f0-9]{64}  \/bench\/results\.tgz\n/, "invalid remote archive hash");
+          full(line, idleScript ? /[a-f0-9]{64}  \/bench\/results\.tgz\n[a-f0-9]{64}  -\n/ : /[a-f0-9]{64}  \/bench\/results\.tgz\n/, "invalid remote archive hash");
           const hash = line.slice(0, 64);
           if (options.r21MeasuredCheckout) assert.equal(hash, options.exitArchiveSha256, "not the reviewed exit archive");
-          return { hash, stamp: sealed ? line.split("\n")[1].slice(0, 64) : undefined };
+          return { hash, stamp: idleScript ? line.split("\n")[1].slice(0, 64) : undefined };
         };
         if (unusedCandidate) assert.ok(neverProvisioned(state), "unused allocation changed; preserve host");
         assert.ok(!(state.status === "preparing" && state.control?.monitor?.phase === "pending"
@@ -704,10 +778,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           // pack.sh copies current control custody before its archive-exists
           // check. Never change the snapshot beside a pre-existing exit archive.
           const pack = "timeout 600 /bin/bash /bench/pack.sh";
-          if (!sealed) await ssh(setupCandidate ? `if test -e /bench/results.tgz || test -L /bench/results.tgz; then
+          if (!idleScript) await ssh(setupCandidate ? `if test -e /bench/results.tgz || test -L /bench/results.tgz; then
 test -f /bench/results.tgz && test ! -L /bench/results.tgz && test "$(stat -c '%s' -- /bench/results.tgz)" -le ${archiveLimit}
 else ${pack}; fi` : pack, 11 * 60000);
-          const { hash } = await remoteHash(unitState === "terminal" && !options.r21MeasuredCheckout), download = `${archive}.download`;
+          const { hash } = await remoteHash(sealed && unitState === "terminal" && !options.r21MeasuredCheckout), download = `${archive}.download`;
           // Reserve the destination before SCP, so a crash cannot make it look retryable.
           durable(download, ""); await scp(`root@${state.ip}:/bench/results.tgz`, download);
           // Re-write through a synced exclusive file; never replace unexplained evidence.
@@ -722,6 +796,10 @@ else ${pack}; fi` : pack, 11 * 60000);
           state.evidence = basename(extracted); state.evidenceSha256 = hash; save();
         }
         if (setupCandidate) return retireFailedSetup(); // Never inspect/publish native evidence without supervision.
+        if (grouped && regular(join(local, state.evidence, "exit-code"), 16).equals(Buffer.from("2\n"))) {
+          assert.equal((await execute("git", ["rev-parse", "HEAD"])).stdout.trim(), state.commit, "failed custody requires the measured checkout");
+          return retireNativeFailure(state.commit, grouped);
+        }
         try { await validateEvidence(); }
         catch (error) {
           if (sealed) throw error;
@@ -791,74 +869,7 @@ else ${pack}; fi` : pack, 11 * 60000);
             state.evidence = basename(extracted); state.evidenceSha256 = hash; save();
           }
         }
-        failedNativeArchive(local, state);
-        const original = regular(statePath, 1024 * 1024), originalPath = join(local, "failed-native-reservation.json");
-        if (existsSync(originalPath)) assert.equal(digest(regular(originalPath, 1024 * 1024)), digest(original), "original reservation differs");
-        else durable(originalPath, original);
-        const capturePath = join(local, "failed-native-capture.json"), custodyArchive = join(local, "failed-native-results.tgz");
-        let capture;
-        if (existsSync(capturePath)) {
-          capture = verifyFailedNativeCustody(local, state, JSON.parse(regular(capturePath)));
-          assert.equal(capture.controllerCommit, recoveryApproval.controllerCommit, "custody controller source changed");
-        } else {
-          assert.ok(!existsSync(custodyArchive) && !existsSync(`${custodyArchive}.download`), "unrecorded custody retained; no automatic adoption");
-          const script = failedNativeScript(state), startedAtMs = Date.now();
-          const raw = (await ssh(script, 11 * 60000)).stdout, finishedAtMs = Date.now();
-          const observation = failedNativeObservation(raw, state, startedAtMs, finishedAtMs);
-          const download = `${custodyArchive}.download`; durable(download, "");
-          await scp(`root@${state.ip}:/bench/failed-native-custody.tgz`, download);
-          durableCopy(download, `${custodyArchive}.synced`, observation.archiveSha256);
-          renameSync(`${custodyArchive}.synced`, custodyArchive); syncDirectory(local);
-          const extracted = mkdtempSync(join(local, "custody-"));
-          const hash = await extractArchive(custodyArchive, extracted, observation.archiveSha256); check();
-          capture = { schema: "benchmark-failed-native-custody/v1", measuredCommit: state.commit, controllerCommit: recoveryApproval.controllerCommit,
-            reservationSha256: digest(original), scriptSha256: digest(script), observation, startedAtMs, finishedAtMs,
-            evidence: basename(extracted), evidenceSha256: hash };
-          verifyFailedNativeCustody(local, state, capture); durable(capturePath, `${JSON.stringify(capture, null, 2)}\n`);
-        }
-        // Local custody verification precedes a fresh, full remote rehash and
-        // current-quiescence proof. Neither is historical native qualification.
-        verifyFailedNativeCustody(local, state, capture); check();
-        const rehashScript = failedNativeScript(state, capture.observation.snapshotSha256), rehashStarted = Date.now();
-        const rehashRaw = (await ssh(rehashScript, 11 * 60000)).stdout, rehashFinished = Date.now();
-        const rehashObservation = failedNativeObservation(rehashRaw, state, rehashStarted, rehashFinished);
-        const withoutTime = ({ observedAtMs, ...rest }) => rest;
-        assert.deepEqual(withoutTime(rehashObservation), withoutTime(capture.observation), "predelete custody differs");
-        verifyFailedNativeCustody(local, state, capture);
-        const receiptPath = join(local, "failed-native-host.json");
-        let interruptedReceipt;
-        if (existsSync(receiptPath)) {
-          const prior = regular(receiptPath), hash = digest(prior);
-          // Verify against the actual measured state, without adopting an intent.
-          verifyFailedNativeRetirement(local, state, hash);
-          const history = join(local, `failed-native-host.interrupted-${hash}.json`);
-          if (existsSync(history)) assert.equal(digest(regular(history)), hash); else durable(history, prior);
-          interruptedReceipt = hash;
-        }
-        // Full local verification can be expensive. Renew only the current host
-        // proof afterwards, while checking all remote metadata is still exactly
-        // the previously hashed inventory and the custody archive is unchanged.
-        const script = failedNativeScript(state, capture.observation.snapshotSha256, capture.observation), startedAtMs = Date.now();
-        const raw = (await ssh(script, 11 * 60000)).stdout, finishedAtMs = Date.now();
-        const confirmation = failedNativeObservation(raw, state, startedAtMs, finishedAtMs);
-        assert.deepEqual(withoutTime(confirmation), withoutTime(capture.observation), "final custody fence differs");
-        await own(); check();
-        // Bound the whole local fence operation, including SSH response delivery.
-        // Its start precedes the observation without relying on remote clock skew.
-        const deleteProofExpiresAtMs = startedAtMs + 60000;
-        assert.ok(Date.now() >= finishedAtMs && Date.now() < deleteProofExpiresAtMs, "current retirement proof expired");
-        const receipt = { schema: "benchmark-failed-native-retirement/v1", capture, confirmation, scriptSha256: digest(script), startedAtMs, finishedAtMs,
-          rehash: { observation: rehashObservation, scriptSha256: digest(rehashScript), startedAtMs: rehashStarted, finishedAtMs: rehashFinished } };
-        const bytes = `${JSON.stringify(receipt, null, 2)}\n`;
-        if (interruptedReceipt !== undefined) {
-          // Only this invocation's fresh proof can replace an interrupted receipt.
-          assert.equal(digest(regular(receiptPath)), interruptedReceipt); unlinkSync(receiptPath); syncDirectory(local);
-        }
-        durable(receiptPath, bytes);
-        Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
-        await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);
-        await confirmDeleted();
-        state.destroyedAt = new Date().toISOString(); save(); return 1;
+        return retireNativeFailure(recoveryApproval.controllerCommit);
       });
     },
     async deliverAudit() {

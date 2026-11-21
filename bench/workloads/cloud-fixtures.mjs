@@ -71,10 +71,10 @@ export function harness(t, flags = {}) {
   const temp = mkdtempSync(join(tmpdir(), "groups-cloud-test-"));
   t.after(() => { assert.ok(temp.startsWith(join(tmpdir(), "groups-cloud-test-"))); rmSync(temp, { recursive: true, force: true }); });
   const repo = join(temp, "repo"), base = flags.fleetGroup === undefined ? join(temp, "control") : join(temp, "control", flags.fleetGroup);
-  const local = join(base, "groups-r21"), statePath = join(local, "state.json");
+  const round = flags.round ?? "r21", local = join(base, `groups-${round}`), statePath = join(local, "state.json");
   mkdirSync(repo); mkdirSync(flags.fleetGroup === undefined ? base : join(temp, "control"));
   const hostId = flags.hostId ?? "123";
-  let s = { ...reservation({ round: "r21", commit, token: flags.token ?? "0123456789abcdef" }), createIntentAt: new Date().toISOString(),
+  let s = { ...reservation({ round, commit, token: flags.token ?? "0123456789abcdef" }), createIntentAt: new Date().toISOString(),
     status: "running", id: hostId, ip: "192.0.2.10", provider: { accountId, context }, fullGroupQualified: false };
   const d = () => ({ id: Number(hostId), name: s.name, tags: [...tags, s.tag], size_slug: s.host.size, region: { slug: s.host.region },
     networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } });
@@ -169,7 +169,8 @@ export function harness(t, flags = {}) {
         units++; if (flags.unitError) throw new Error("fake unit failure");
         const started = flags.expired ? "ExecMainCode=0\nExecMainStartTimestamp=" : "ExecMainCode=1\nExecMainStartTimestamp=Fri 2026-11-13 00:00:00 UTC";
         const extra = script.includes("--property=ControlPID") ? `Job=${flags.job ?? ""}\nControlPID=${flags.controlPid ?? 0}\nSubState=dead\n` : "";
-        return good(`Id=${flags.wrongUnit ? "foreign.service" : s.unit}\nLoadState=${flags.missingUnit ? "not-found" : "loaded"}\nFragmentPath=/etc/systemd/system/${s.unit}\nActiveState=${flags.active || flags.activeAfterDownload && downloads ? "active" : "inactive"}\nRestart=${flags.restart ? "always" : "no"}\nMainPID=${flags.livePid ? "1" : "0"}\n${started}\n${extra}`);
+        const { unit } = JSON.parse(readFileSync(statePath));
+        return good(`Id=${flags.wrongUnit ? "foreign.service" : unit}\nLoadState=${flags.missingUnit ? "not-found" : "loaded"}\nFragmentPath=/etc/systemd/system/${unit}\nActiveState=${flags.active || flags.activeAfterDownload && downloads ? "active" : "inactive"}\nRestart=${flags.restart ? "always" : "no"}\nMainPID=${flags.livePid ? "1" : "0"}\n${started}\n${extra}`);
       }
       if (script.includes("CORTEN_IDLE") && script.includes("sha256sum <&3"))
         return good(`${flags.wrongHash ? "f".repeat(64) : digest(bytes)}  /bench/results.tgz\n${digest("archive stat")}  -\n`);
@@ -195,8 +196,8 @@ export function harness(t, flags = {}) {
     change(fn) { const value = this.saved(); fn(value); writeFileSync(statePath, JSON.stringify(value)); },
     host: d, hosts(value) { droplets = value ?? [d()]; }, setArchive(value) { bytes = value; },
     task(deps = {}, options = {}) {
-      return controller({ round: "r21", stateDir: base, collect: true, ...options }, { run, repo, sleep: async () => {}, interrupted: () => flags.cancelled,
-        inspect: async (input) => { inspections++; assert.deepEqual(input, { folder: join(local, this.saved().evidence, "campaign"), round: "r21", commit }); return report(); }, ...deps });
+      return controller({ round, stateDir: base, collect: true, ...options }, { run, repo, sleep: async () => {}, interrupted: () => flags.cancelled,
+        inspect: async (input) => { inspections++; assert.deepEqual(input, { folder: join(local, this.saved().evidence, "campaign"), round, commit }); return report(); }, ...deps });
     },
     pinnedUnused(deps = {}) {
       const key = join(temp, "synthetic-verified-host-key"), bytes = "synthetic operator-verified host key\n";

@@ -47,7 +47,7 @@ export function sealedUnit(output, s) {
 
 // The registered guardian supplies the shell on stdin (not argv). An unrelated
 // host process working in /bench, including one outside the unit, blocks cleanup.
-export function idleArchiveScript(s, bootId, unitSha256, { pack = false, stamp } = {}) {
+export function idleArchiveScript(s, bootId, unitSha256, { pack = false, stamp, completedOnly = false } = {}) {
   full(bootId, /[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/, "registered boot required");
   full(unitSha256, /[a-f0-9]{64}/, "unit bytes required");
   if (stamp !== undefined) full(stamp, /[a-f0-9]{64}/, "hashed archive identity required");
@@ -86,7 +86,12 @@ try: os.stat(os.path.basename(archive), dir_fd=fd, follow_symlinks=False)
 except FileNotFoundError: print('yes')
 CORTEN_ABSENT
 )
-if test "$absent" = yes; then timeout 600 /bin/bash /bench/pack.sh; fi` : ""}
+if test "$absent" = yes; then${completedOnly ? `
+  test -f /bench/exit-code
+  test ! -L /bench/exit-code
+  test "$(stat -c '%s' /bench/exit-code)" = 2
+  grep -qx '[01]' /bench/exit-code
+` : " "}timeout 600 /bin/bash /bench/pack.sh; fi` : ""}
 test -f /bench/results.tgz
 test ! -L /bench/results.tgz
 test "$(stat -c '%h' /bench/results.tgz)" = 1

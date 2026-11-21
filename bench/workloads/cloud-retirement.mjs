@@ -1,15 +1,18 @@
 // Retirement evidence is separate from benchmark qualification. No operations on import.
 import assert from "node:assert/strict";
 import { lstatSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { digest, evidenceEnvelope, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
-import { bootstrapWorkspaceScript } from "./cloud-contract.mjs";
+import { bootstrapWorkspaceScript, savedLoadLayout, savedPlacement, stagedFleet } from "./cloud-contract.mjs";
+import { sealedMonitor, settledMonitor } from "./cloud-control-stream.mjs";
 import { quote } from "./cloud-transport.mjs";
 import { guardianSha256, guardianSource } from "./cloud-control-runtime.mjs";
 import { verifyControlSetupQuery } from "./cloud-control-session.mjs";
 import { verifyControlWatcher } from "./isolated/control-admission.mjs";
+import { campaignRounds, jsonPreparationRound, nativeArtifactRoot } from "./registry.mjs";
+import { deploymentSha256 } from "./deployments.mjs";
 import { cancellationState, mixedDigest, mixedWait, originalMixedControls, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 
 // This migration is not a general old-source collection or validation override.
@@ -98,14 +101,41 @@ function mixedCancelledCustody(directory, subject, binding) {
   }
   assert.equal(subject.requests.length, entries.filter((e) => e.path.startsWith("contexts/")).length, "unreferenced mixed build context");
 }
-export function failedNativeArchive(local, state) {
-  const roots = failedNativeRoots(state);
+export const groupedFailureCandidate = (state) => (stagedFleet(state.fleet) || state.fleet?.schema === "benchmark-group-fleet/v4")
+  && ["closed", "invalid"].includes(state.control?.monitor?.phase);
+
+export function groupedFailure(local, state) {
+  assert.ok(groupedFailureCandidate(state), "official dedicated reservation required");
+  const { registration, terminal } = state.control?.monitor?.phase === "closed" ? sealedMonitor(local, state) : settledMonitor(local, state);
+  assert.equal(state.control.ledger.findLast(r => r.request.epoch === "bootstrap")?.code, 0, "bootstrap seal was not acknowledged");
+  assert.equal(registration.host.hostname, state.name, "registered host differs");
+  if (terminal.kind === "invalid") {
+    assert.ok(terminal.publicationRevoked === true && terminal.remoteTerminal === false, "invalid monitor publication not revoked");
+    // Both retained locks came from the original foreground controller. They
+    // stay in place; the separate recovery lock and expired lease admit only
+    // observation of the saved unit, not takeover of either lock.
+    const { pid } = JSON.parse(regular(join(local, "operation.lock"), 1024));
+    assert.ok(Number.isSafeInteger(pid) && pid > 0, "invalid original operation lock");
+    assert.deepEqual(JSON.parse(regular(join(dirname(local), ".groups-launch.lock"), 1024)),
+      { pid, round: state.round }, "retained launch lock differs");
+  }
+  const round = campaignRounds(state.round)[state.group];
+  assert.ok(round, "unknown reserved group");
+  const phases = { ...(state.group === "json-api" ? { prepare: nativeArtifactRoot(state.group, jsonPreparationRound(state.round)) } : {}),
+    timing: nativeArtifactRoot(state.group, round) };
+  return { registration, terminal, round, phases, host: { bootId: registration.host.bootId, name: state.name,
+    knownHostsSha256: fileHash(join(local, "known_hosts"), 1024 * 1024) },
+    roots: ["/bench/campaign", ...Object.values(phases).map(path => `/bench/repo/${path}`)] };
+}
+
+export function failedNativeArchive(local, state, grouped) {
+  const roots = grouped?.roots ?? failedNativeRoots(state);
   assert.equal(fileHash(join(local, "results.tgz")), state.archiveSha256, "original failed archive changed");
   const extracted = join(local, state.evidence); physical(extracted);
   assert.equal(treeHash(extracted), state.evidenceSha256, "original failed extraction changed");
-  assert.equal(regular(join(extracted, "exit-code"), 16).toString("ascii"), "2\n", "migration requires the saved failure exit, not a successful report");
+  assert.ok(regular(join(extracted, "exit-code"), 16).equals(Buffer.from("2\n")), "custody requires the saved failure exit, not a successful report");
   const folder = join(extracted, "campaign"); physical(folder);
-  const names = readdirSync(folder), campaigns = names.filter((name) => /^r21-[a-f0-9]{16}$/.test(name));
+  const names = readdirSync(folder), campaigns = names.filter((name) => new RegExp(`^${state.round}-[a-f0-9]{16}$`).test(name));
   assert.equal(campaigns.length, 1, "one original failed campaign required");
   assert.ok(names.every((name) => name === campaigns[0] || name === ".host-attempt.json"), "unknown campaign root");
   const campaign = campaigns[0], dir = join(folder, campaign); physical(dir);
@@ -123,7 +153,34 @@ export function failedNativeArchive(local, state) {
     assert.ok(["prepare", "timing"].includes(pending.phase));
     assert.ok(roots.includes(`/bench/repo/${pending.artifactRoot}`), "unaccounted pending native output");
   }
-  if (state.group === "mixed-production") {
+  if (grouped) {
+    // The wrapper corroborates this attempt. Its paths and authorization
+    // flags are never inputs to the remote custody probe.
+    const { campaignSha256, ...body } = plan;
+    assert.equal(deploymentSha256(body), campaignSha256, "archived campaign plan changed");
+    const [binding] = plan.bindings, attempt = JSON.parse(regular(join(folder, ".host-attempt.json"), 4096)), { status } = result;
+    assert.equal(binding.request.commit, state.commit); assert.equal(binding.request.round, grouped.round);
+    assert.equal(binding.campaignMode, savedLoadLayout(state) ?? savedPlacement(state) ?? "dedicated");
+    assert.equal(binding.validation.artifactRoot, grouped.phases.timing, "timing root differs");
+    assert.equal(attempt.schema, "benchmark-isolated-campaign-reservation/v1");
+    assert.equal(attempt.id, campaign); assert.equal(attempt.commit, state.commit); assert.equal(attempt.campaignSha256, campaignSha256);
+    assert.equal(status.schema, "benchmark-isolated-campaign-status/v1"); assert.equal(status.executionVersion, 5);
+    assert.equal(status.controllerReady, false); assert.equal(status.isolation, "unverified");
+    assert.equal(result.wholeHostTerminal, "parent-must-observe"); assert.equal(result.deletionAuthorized, false);
+    assert.equal(status.outcomes.length, 1); assert.equal(status.outcomes[0].group, state.group);
+    assert.ok(["failed", "blocked", "not-run", "preserved-uncertain"].includes(status.outcomes[0].outcome), "failed group outcome required");
+    assert.ok(status.uncollectedNativeRoots.length <= Object.keys(grouped.phases).length);
+    const phases = new Set();
+    for (const pending of status.uncollectedNativeRoots) {
+      assert.ok(Object.hasOwn(grouped.phases, pending.phase) && !phases.has(pending.phase));
+      assert.equal(pending.artifactRoot, grouped.phases[pending.phase], "pending root differs from reserved phase");
+      phases.add(pending.phase);
+    }
+    if (grouped.terminal.kind === "terminal") {
+      assert.equal(grouped.terminal.campaign, campaign, "sealed campaign differs");
+      assert.equal(fileHash(join(dir, "control-stream-seal.json")), grouped.terminal.sealSha256, "saved stream seal differs");
+    }
+  } else if (state.group === "mixed-production") {
     verifyMixedCancellation(local, state);
     assert.equal(campaign, mixedWait.campaign);
     const { campaignSha256, ...body } = plan;
@@ -149,17 +206,18 @@ export function failedNativeArchive(local, state) {
 
 // Only trusted controller code runs remotely. Native files are opened as data,
 // never imported, invoked, followed through links, or promoted to valid evidence.
-export function failedNativeScript(state, captureSha256 = null, fence = null) {
-  const roots = failedNativeRoots(state);
+export function failedNativeScript(state, captureSha256 = null, fence = null, grouped) {
+  const roots = grouped?.roots ?? failedNativeRoots(state);
   assert.ok(captureSha256 === null || /^[a-f0-9]{64}$/.test(captureSha256));
   if (fence !== null) {
     assert.equal(fence.snapshotSha256, captureSha256);
     assert.deepEqual(fence.roots.map((root) => root.path), [...roots, "/bench/run.log", "/bench/host.txt", "/bench/exit-code", "/bench/results.tgz"]);
   }
-  const files = state.group === "mixed-production" ? originalMixedControls(state)
+  const files = !grouped && state.group === "mixed-production" ? originalMixedControls(state)
     : Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
   const config = { roots, files, archiveSha256: state.archiveSha256, captureSha256, marker: `${JSON.stringify(bootstrapMarker(state))}\n`,
-    requireMarker: state.bootstrapReady !== undefined, commit: state.commit, bounds: evidenceEnvelope, fence };
+    requireMarker: state.bootstrapReady !== undefined, commit: state.commit, bounds: evidenceEnvelope, fence,
+    ...(grouped ? { host: grouped.host } : {}) };
   return `/usr/bin/timeout 600 /usr/bin/python3 - ${quote(state.id)} ${quote(state.unit)} ${quote(JSON.stringify(config))} <<'CORTEN_FAILED_NATIVE_HOST'
 import configparser, hashlib, io, json, os, pathlib, re, stat, subprocess, sys, tarfile, time, urllib.request
 host_id, unit, raw_config = sys.argv[1:]
@@ -269,14 +327,23 @@ def quiet():
     assert (parent / 'cmdline').read_bytes() == parent_command and os.readlink(parent / 'exe') == '/usr/bin/timeout'
     with urllib.request.urlopen('http://169.254.169.254/metadata/v1/id', timeout=3) as response:
         assert response.read(64).decode().strip() == host_id
-    properties = ['Id', 'LoadState', 'FragmentPath', 'ActiveState', 'Restart', 'MainPID', 'Job', 'ExecMainCode', 'ExecMainStatus', 'ExecMainStartTimestamp']
+    properties = ['Id', 'LoadState', 'FragmentPath', 'ActiveState', 'Restart', 'MainPID', 'Job', 'ExecMainCode', 'ExecMainStatus', 'ExecMainStartTimestamp']${grouped ? `
+    assert os.uname().nodename == c['host']['name']
+    assert pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip() == c['host']['bootId']
+    properties += ['ControlPID']
+    events = pathlib.Path('/sys/fs/cgroup/system.slice') / unit / 'cgroup.events'
+    try:
+        assert 'populated 0' in events.read_text().splitlines()
+    except FileNotFoundError:
+        assert not os.path.lexists(events.parent)` : ""}
     lines = command(['systemctl', 'show', unit] + ['--property=' + p for p in properties]).splitlines()
     assert len(lines) == len(properties) and all('=' in line for line in lines)
     v = dict(line.split('=', 1) for line in lines)
     assert set(v) == set(properties) and v['Id'] == unit and v['LoadState'] == 'loaded'
     assert v['FragmentPath'] == '/etc/systemd/system/' + unit
     assert v['ActiveState'] in ['inactive', 'failed'] and v['Restart'] == 'no' and v['MainPID'] == '0' and v['Job'] == ''
-    assert v['ExecMainCode'] == '1' and v['ExecMainStatus'] == '2' and v['ExecMainStartTimestamp'].strip() not in ['', 'n/a']
+    assert v['ExecMainCode'] == '1' and v['ExecMainStatus'] == '2' and v['ExecMainStartTimestamp'].strip() not in ['', 'n/a']${grouped ? `
+    assert v['ControlPID'] == '0'` : ""}
     assert command(['systemctl', 'list-jobs', '--no-legend', '--no-pager']).strip() == ''
     assert json.loads(command(['cloud-init', 'status', '--format', 'json']))['status'] == 'done'
     cloud_instance()
@@ -302,7 +369,8 @@ def quiet():
             continue
         try:
             cmd = (entry / 'cmdline').read_bytes()
-            assert b'/bench' not in cmd and b'corten-bench-groups-' not in cmd
+            assert b'/bench' not in cmd and b'corten-bench-groups-' not in cmd${grouped ? `
+            assert not any(name in cmd.split(b'\\0', 1)[0] for name in [b'containerd-shim', b'conmon'])` : ""}
             for name in ['cwd', 'exe']:
                 try:
                     target = os.readlink(entry / name)
@@ -463,7 +531,8 @@ print(json.dumps(dict(schema='benchmark-failed-native-host/v1', hostId=host_id, 
 CORTEN_FAILED_NATIVE_HOST`;
 }
 
-export function failedNativeObservation(raw, state, startedAtMs, finishedAtMs) {
+export function failedNativeObservation(raw, state, startedAtMs, finishedAtMs, grouped) {
+  const roots = grouped?.roots ?? failedNativeRoots(state);
   assert.ok(typeof raw === "string" && Buffer.byteLength(raw) <= 16384, "bounded custody observation required");
   const observation = JSON.parse(raw);
   assert.deepEqual(Object.keys(observation).sort(), ["archiveSha256", "custody", "historicalAccountingQualified", "hostId", "metadataSha256", "observedAtMs", "roots", "schema", "snapshotSha256", "unit"].sort());
@@ -471,7 +540,7 @@ export function failedNativeObservation(raw, state, startedAtMs, finishedAtMs) {
   assert.equal(observation.hostId, state.id); assert.equal(observation.unit, state.unit);
   assert.equal(observation.custody, true); assert.equal(observation.historicalAccountingQualified, false);
   for (const key of ["archiveSha256", "metadataSha256", "snapshotSha256"]) assert.match(observation[key], /^[a-f0-9]{64}$/);
-  assert.deepEqual(observation.roots.map((root) => root.path), [...failedNativeRoots(state), "/bench/run.log", "/bench/host.txt", "/bench/exit-code", "/bench/results.tgz"]);
+  assert.deepEqual(observation.roots.map((root) => root.path), [...roots, "/bench/run.log", "/bench/host.txt", "/bench/exit-code", "/bench/results.tgz"]);
   for (const root of observation.roots) {
     assert.equal(typeof root.present, "boolean");
     assert.deepEqual(Object.keys(root).sort(), (root.present ? ["bytes", "nodes", "path", "present", "treeSha256"] : ["path", "present"]).sort());
@@ -482,7 +551,7 @@ export function failedNativeObservation(raw, state, startedAtMs, finishedAtMs) {
     }
   }
   assert.equal(observation.roots[0].present, true);
-  assert.ok(observation.roots.slice(failedNativeRoots(state).length).every((root) => root.present));
+  assert.ok(observation.roots.slice(roots.length).every((root) => root.present));
   assert.ok(Number.isSafeInteger(startedAtMs) && Number.isSafeInteger(finishedAtMs) && finishedAtMs >= startedAtMs
     && finishedAtMs - startedAtMs <= 660000, "custody observation exceeded its local window");
   assert.ok(Number.isSafeInteger(observation.observedAtMs) && observation.observedAtMs >= startedAtMs - 5000
@@ -490,24 +559,36 @@ export function failedNativeObservation(raw, state, startedAtMs, finishedAtMs) {
   return observation;
 }
 
-export function verifyFailedNativeCustody(local, state, capture) {
-  failedNativeArchive(local, state);
-  assert.equal(capture.schema, "benchmark-failed-native-custody/v1");
-  assert.equal(capture.measuredCommit, state.commit);
-  assert.match(capture.controllerCommit, /^[a-f0-9]{40}$/);
-  assert.match(capture.reservationSha256, /^[a-f0-9]{64}$/);
-  const original = regular(join(local, "failed-native-reservation.json"), 1024 * 1024);
-  assert.equal(digest(original), capture.reservationSha256);
-  const prior = JSON.parse(original), current = { ...state };
+export function verifyFailedNativeReservation(state, prior, grouped) {
+  const current = { ...state };
   assert.ok(["starting", "running"].includes(prior.status));
   if (current.retirement) {
     current.status = prior.status;
     for (const key of ["retirement", "deletionIntentAt", "destroyedAt"]) delete current[key];
   }
+  if (grouped) {
+    // Supervised collection records each SSH/SCP in the reservation. No
+    // other change to the original reservation (or its ledger prefix) is allowed.
+    const { ledger } = current.control, count = prior.control.ledger.length;
+    assert.ok(ledger.length >= count && ledger.slice(count).every(r => r.localTerminal && r.request.epoch === "collection"));
+    current.control = { ...current.control, ledger: ledger.slice(0, count) };
+  }
   assert.deepEqual(current, prior, "original measured reservation changed");
+}
+
+export function verifyFailedNativeCustody(local, state, capture, grouped) {
+  failedNativeArchive(local, state, grouped);
+  assert.equal(capture.schema, "benchmark-failed-native-custody/v1");
+  assert.equal(capture.measuredCommit, state.commit);
+  assert.match(capture.controllerCommit, /^[a-f0-9]{40}$/);
+  assert.equal(capture.controllerCommit === state.commit, !!grouped, "custody controller scope differs");
+  assert.match(capture.reservationSha256, /^[a-f0-9]{64}$/);
+  const original = regular(join(local, "failed-native-reservation.json"), 1024 * 1024);
+  assert.equal(digest(original), capture.reservationSha256);
+  verifyFailedNativeReservation(state, JSON.parse(original), grouped);
   assert.match(capture.evidence, /^custody-[A-Za-z0-9]+$/);
-  const observation = failedNativeObservation(JSON.stringify(capture.observation), state, capture.startedAtMs, capture.finishedAtMs);
-  assert.equal(capture.scriptSha256, digest(failedNativeScript(state)));
+  const observation = failedNativeObservation(JSON.stringify(capture.observation), state, capture.startedAtMs, capture.finishedAtMs, grouped);
+  assert.equal(capture.scriptSha256, digest(failedNativeScript(state, null, null, grouped)));
   assert.equal(fileHash(join(local, "failed-native-results.tgz")), observation.archiveSha256, "custody archive changed");
   const extracted = join(local, capture.evidence); physical(extracted);
   assert.equal(treeHash(extracted), capture.evidenceSha256, "custody extraction changed");
@@ -515,15 +596,15 @@ export function verifyFailedNativeCustody(local, state, capture) {
   assert.equal(digest(snapshot), observation.snapshotSha256);
   assert.deepEqual(JSON.parse(snapshot), { roots: observation.roots, metadataSha256: observation.metadataSha256 });
   assert.equal(fileHash(join(extracted, "campaign", "custody-metadata.json")), observation.metadataSha256);
-  for (const [index, root] of observation.roots.slice(0, failedNativeRoots(state).length).entries()) {
-    if (state.group === "mixed-production" && index === 2) mixedIntentRoot(join(extracted, "campaign", "root-2"), root);
+  for (const [index, root] of observation.roots.slice(0, (grouped?.roots ?? failedNativeRoots(state)).length).entries()) {
+    if (!grouped && state.group === "mixed-production" && index === 2) mixedIntentRoot(join(extracted, "campaign", "root-2"), root);
     else if (root.present) assert.equal(treeHash(join(extracted, "campaign", `root-${index}`)), root.treeSha256, "custody root differs");
     else assert.ok(!readdirSync(join(extracted, "campaign")).includes(`root-${index}`), "absent native root was invented");
   }
   for (const name of ["run.log", "host.txt", "exit-code"])
     assert.equal(fileHash(join(extracted, name)), fileHash(join(local, state.evidence, name)), "failed metadata changed");
   assert.equal(treeHash(join(extracted, "campaign", "root-0")), treeHash(join(local, state.evidence, "campaign")), "original campaign changed before custody");
-  if (state.group === "mixed-production") {
+  if (!grouped && state.group === "mixed-production") {
     verifyMixedCancellation(local, state);
     assert.equal(capture.observation.roots[2].present, true, "remote cancellation intent missing");
     const intentPath = join(extracted, "campaign", "root-2"), intent = mixedIntentRoot(intentPath, capture.observation.roots[2]);
@@ -549,12 +630,15 @@ export function verifyFailedNativeRetirement(local, state, expectedSha256 = stat
   const record = JSON.parse(bytes);
   assert.deepEqual(Object.keys(record).sort(), ["capture", "confirmation", "finishedAtMs", "rehash", "schema", "scriptSha256", "startedAtMs"].sort());
   assert.equal(record.schema, "benchmark-failed-native-retirement/v1");
-  verifyFailedNativeCustody(local, state, record.capture);
+  // Ordinary collection runs at the measured commit. The historical action
+  // requires a distinct, explicitly approved repair source.
+  const grouped = record.capture.controllerCommit === state.commit ? groupedFailure(local, state) : undefined;
+  verifyFailedNativeCustody(local, state, record.capture, grouped);
   assert.deepEqual(Object.keys(record.rehash).sort(), ["finishedAtMs", "observation", "scriptSha256", "startedAtMs"]);
-  const rehash = failedNativeObservation(JSON.stringify(record.rehash.observation), state, record.rehash.startedAtMs, record.rehash.finishedAtMs);
-  assert.equal(record.rehash.scriptSha256, digest(failedNativeScript(state, record.capture.observation.snapshotSha256)));
-  const final = failedNativeObservation(JSON.stringify(record.confirmation), state, record.startedAtMs, record.finishedAtMs);
-  assert.equal(record.scriptSha256, digest(failedNativeScript(state, record.capture.observation.snapshotSha256, record.capture.observation)));
+  const rehash = failedNativeObservation(JSON.stringify(record.rehash.observation), state, record.rehash.startedAtMs, record.rehash.finishedAtMs, grouped);
+  assert.equal(record.rehash.scriptSha256, digest(failedNativeScript(state, record.capture.observation.snapshotSha256, null, grouped)));
+  const final = failedNativeObservation(JSON.stringify(record.confirmation), state, record.startedAtMs, record.finishedAtMs, grouped);
+  assert.equal(record.scriptSha256, digest(failedNativeScript(state, record.capture.observation.snapshotSha256, record.capture.observation, grouped)));
   const withoutTime = ({ observedAtMs, ...rest }) => rest;
   assert.deepEqual(withoutTime(rehash), withoutTime(record.capture.observation), "remote custody rehash differs");
   assert.deepEqual(withoutTime(final), withoutTime(record.capture.observation), "predelete custody differs");
