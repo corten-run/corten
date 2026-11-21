@@ -828,7 +828,12 @@ impl Missed {
             return res;
         }
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
-        let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
+        let head: usize = res
+            .headers()
+            .iter()
+            .filter(|(name, _)| *name != header::DATE)
+            .map(|(name, value)| name.as_str().len() + value.len() + HEADER)
+            .sum();
         // The URL is held twice, by the entry and by the map.
         let key = self.at.len() * 2
             + self.host.as_ref().map_or(0, HeaderValue::len)
@@ -847,6 +852,10 @@ impl Missed {
         // bytes made from it hold all of that for as long as they are kept.
         let body = Bytes::copy_from_slice(&body);
         let Missed { at, host, language: asked, asked: made, written, mut leading, .. } = self;
+        let mut head = parts.headers.clone();
+        // A `Date` the handler set is its own answer's: each answer given in its place is dated
+        // when it is sent, as any other is.
+        head.remove(header::DATE);
         let entry = answers.keep(|place| Entry {
             at,
             place,
@@ -855,7 +864,7 @@ impl Missed {
             language: language.then_some(asked),
             made,
             lifetime,
-            head: parts.headers.clone(),
+            head,
             cache,
             style,
             body: body.clone(),
