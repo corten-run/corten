@@ -168,7 +168,8 @@ independent state directory, operation lock, private credential worker and remot
 systemd unit.
 Every group in the roster uses the same commit. Merge the repairs needed by
 the entire round before preparing it: the first group's results cannot be
-carried into a new reservation for a different commit.
+carried into a new fleet reservation for a different commit. Use an
+[independent continuation](#independent-group-continuation) instead.
 
 Admission is staged, not a simultaneous fleet allocation. The first `--detach`
 approval launches only the first complete registry group. Untouched groups remain
@@ -429,6 +430,61 @@ region and public-IP checks. Only an explicit HTTP 404 establishes absence;
 authorization, rate-limit, network, timeout and malformed-response errors never do.
 Account/context checks still surround provider commands. Initial allocation and
 unbound recovery require a complete census.
+
+## Independent Group Continuation
+
+For an incomplete round, retain the original fleet and use a separate physical
+continuation root outside the checkout. Its `index.json` is an array of original
+fleet references. Each reference names an absolute fleet root, the original
+round and commit, a clean checkout at that commit with its original npm installs,
+and the reviewed SHA-256 of `results.tgz` for every compatible replayed group in
+that fleet. Use `[]` when starting without retained evidence. For example:
+
+```json
+[{"root":"/bench-state/original","checkout":"/src/measured","round":"r24","commit":"MEASURED_SHA","archives":{"catalog-page":"REVIEWED_ARCHIVE_SHA256"}}]
+```
+
+Use an unmodified index and the same continuation root for the entire set. The
+report replays each original attempt, checks the successful archives, the
+extracted trees and confirmed deletion, and checks each reusable group's own
+contract and roster. It does not use a cached report as evidence. The measured
+commits must be ancestors of the report checkout, but groups need not have the
+same commit, date, framework versions or host. Preserve target failures (including
+comparison-ineligibility) in verified group results; a failed or incomplete
+apparatus is not a result. An old bound host without confirmed cleanup is shown
+as such. Continuation then requires the same provider account and still refuses
+create if the existing pre-create census finds any foreign benchmark host.
+
+```sh
+node bench/workloads/group-continuation.mjs --continuation-root ABSOLUTE_ROOT
+node bench/workloads/fleet.mjs NEW_ROUND --continuation-root ABSOLUTE_ROOT --group json-api --prepare --commit MERGED_SHA --ssh-key KEY --account-id ACCOUNT --context CONTEXT
+node bench/workloads/fleet.mjs NEW_ROUND --continuation-root ABSOLUTE_ROOT --group json-api --detach --print-approval
+node bench/workloads/fleet.mjs NEW_ROUND --continuation-root ABSOLUTE_ROOT --group json-api --detach --approve-reviewed-merged-ready REVIEWED_EXACT_HASH
+```
+
+The first command is read-only and providerless (`0` all groups verified, `1`
+incomplete, `2` invalid). Its `eligibleToRun` is a local selection, not provider
+availability or authorization. The remaining commands are the normal official
+prepare, exact preview and approved launch for one complete group. Prepare reads
+provider placement but does not allocate. The selected group runs the normal
+staged first-host checks, native phases and terminal monitor. For JSON that
+includes its prepare and timing phases and the independently reviewed audit
+between them. There is no extra setup host and no `--admit-remaining` action.
+The continuation does not grant approval; the existing exact merged-source,
+native readiness, independent review and operator approval requirements apply.
+
+For collection or audit delivery use the ordinary per-host commands at the
+measured checkout, with state root `ABSOLUTE_ROOT/json-api/json-api` in this
+example. Each group has one new reservation slot and no automatic retry; a spent
+or unconfirmed slot is not reusable. Leave failure evidence and locks in place
+and follow the existing recovery procedures. Do not start a parallel continuation
+with another root to bypass a reservation. Run the report again after collection,
+then select another missing group with its own official round and commit.
+
+The report is an index of independently publishable group results, with each
+group's actual round, commit, configuration, dates, archive and attempts. Link
+each group to its original measurement. It is not a single-revision baseline or
+evidence for a speed comparison across groups or revisions.
 
 ## Failed Allocation Retirement
 
