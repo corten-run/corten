@@ -763,9 +763,14 @@ impl Missed {
             // A body of an exact size that could not be read: not a page to send as it is.
             return crate::response::IntoResponse::into_response(StatusCode::INTERNAL_SERVER_ERROR);
         };
-        // A copy of its own length: a page's buffer is sized for the last page rendered, and the
-        // bytes made from it hold all of that for as long as they are kept.
-        let body = Bytes::copy_from_slice(&body);
+        // Held in the buffer the handler made it in, which is the answer's alone here, cut to the
+        // body's length: a page's buffer is sized for the last page rendered, and kept whole it
+        // would hold all of that. An allocator that can (glibc's) gives back the rest where it
+        // is, so the bytes are not copied; one that cannot copies them, and so does a body that
+        // shares its bytes (one made from a static, or a middleware's).
+        let mut body = Vec::from(body);
+        body.shrink_to_fit();
+        let body = Bytes::from(body);
         let Missed { at, host, language: asked, asked: made, written, .. } = self;
         let entry = answers.keep(|place| Entry {
             at,
