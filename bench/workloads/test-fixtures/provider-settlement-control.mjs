@@ -95,5 +95,5 @@ export function settlementControl(t, h) {
     t.after(() => close(255));
     return child;
   }
-  return { spawn, streamSpawn };
+  return { spawn, streamSpawn, roleCheck: () => [] }; // Synthetic Git has no native binding to generate.
 }

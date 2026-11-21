@@ -5,6 +5,11 @@ import { selectedApps, retainedFamilies } from "../workloads/registry.mjs";
 export const schema = "native-fullstack-browser/v1";
 export const candidates = selectedApps("fullstack-browser");
 export { retainedFamilies };
+export const browserCpus = Object.freeze({ application: "1", upstream: "2-3", browser: "4-7" });
+export const browserContainers = Object.freeze({
+  application: Object.freeze({ cpu: 1, memoryBytes: 2 ** 30 }),
+  upstream: Object.freeze({ cpu: 1, memoryBytes: 256 * 2 ** 20 }),
+});
 export const settings = {
   profiles: {
     desktop: { viewport: { width: 1440, height: 1000 }, cpu: 1, network: null, cache: "cold", serviceWorker: "blocked" },
@@ -28,8 +33,9 @@ export function parseOptions(args) {
   const seen = new Set();
   for (let i = 1; i < args.length;) {
     const key = args[i]?.replace(/^--/, "");
-    assert.ok(args[i]?.startsWith("--") && Object.hasOwn(o, key) && !seen.has(key), "use wN [--build] [--targets file] --out directory [--apps a,b] [--cases key,key]");
-    if (key === "build") { o.build = true; seen.add(key); i++; continue; }
+    assert.ok(args[i]?.startsWith("--") && (Object.hasOwn(o, key) || key === "isolated") && !seen.has(key),
+      "use wN [--build] [--targets file] --out directory [--apps a,b] [--cases key,key] [--isolated]");
+    if (key === "build" || key === "isolated") { o[key] = true; seen.add(key); i++; continue; }
     assert.ok(args[i + 1], "option value missing");
     seen.add(key); o[key] = ["apps", "cases"].includes(key) ? args[i + 1].split(",") : args[i + 1];
     i += 2;

@@ -17,7 +17,7 @@ export const userId = "synthetic-user-0001", accountId = `user:${userId}`, conte
 export function syntheticPlacement(c8Regions = ["sfo2", "sfo3"]) {
   return { sizes: [{ slug: "c-8", available: true, regions: [...c8Regions] },
     { slug: "c-16", available: true, regions: ["sfo2"] }],
-  regions: ["sfo2", "sfo3"].map((slug) => ({ slug, available: true,
+  regions: ["sfo2", "sfo3", "lon1", "blr1"].map((slug) => ({ slug, available: true,
     sizes: [...(c8Regions.includes(slug) ? ["c-8"] : []), ...(slug === "sfo2" ? ["c-16"] : [])] })) };
 }
 export function syntheticCatalogProvider(catalog = syntheticPlacement(), calls = []) {
@@ -70,10 +70,11 @@ export const metadata = () => [{ name: "run.log", body: "synthetic fake-only evi
 export function harness(t, flags = {}) {
   const temp = mkdtempSync(join(tmpdir(), "groups-cloud-test-"));
   t.after(() => { assert.ok(temp.startsWith(join(tmpdir(), "groups-cloud-test-"))); rmSync(temp, { recursive: true, force: true }); });
-  const repo = join(temp, "repo"), base = join(temp, "control"), local = join(base, "groups-r21"), statePath = join(local, "state.json");
-  mkdirSync(repo); mkdirSync(base);
+  const repo = join(temp, "repo"), base = flags.fleetGroup === undefined ? join(temp, "control") : join(temp, "control", flags.fleetGroup);
+  const round = flags.round ?? "r21", local = join(base, `groups-${round}`), statePath = join(local, "state.json");
+  mkdirSync(repo); mkdirSync(flags.fleetGroup === undefined ? base : join(temp, "control"));
   const hostId = flags.hostId ?? "123";
-  let s = { ...reservation({ round: "r21", commit, token: flags.token ?? "0123456789abcdef" }), createIntentAt: new Date().toISOString(),
+  let s = { ...reservation({ round, commit, token: flags.token ?? "0123456789abcdef" }), createIntentAt: new Date().toISOString(),
     status: "running", id: hostId, ip: "192.0.2.10", provider: { accountId, context }, fullGroupQualified: false };
   const d = () => ({ id: Number(hostId), name: s.name, tags: [...tags, s.tag], size_slug: s.host.size, region: { slug: s.host.region },
     networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } });
@@ -126,19 +127,22 @@ export function harness(t, flags = {}) {
     }
     if (binary === "ssh") {
       if (registration?.stream) {
-        const apparatus = { ...structuredClone(streamRegistration), binding: registration.expected.binding, id: registration.expected.id };
+        const apparatus = { ...structuredClone(streamRegistration), binding: registration.expected.binding, id: registration.expected.id,
+          host: { ...streamRegistration.host, hostname: JSON.parse(readFileSync(statePath)).name } };
         writeFileSync(join(local, "monitor-registration.json"), JSON.stringify(apparatus));
         writeFileSync(join(local, "monitor-journal.jsonl"), JSON.stringify({ kind: "progress", id: apparatus.id, payload: { state: "active" } }) + "\n");
         const done = new Promise((resolve) => {
           flags.completeMonitor = (terminal = true) => {
+            const closedAtMs = Date.now(), recoverAfterMs = closedAtMs + 30000;
             if (terminal) supervisedTerminal = { registrationSha256: digest(JSON.stringify(apparatus)), sealSha256: digest("synthetic native seal") };
-            const value = { id: apparatus.id, binding: apparatus.binding, nativeTerminal: terminal, localClosed: true, remoteDrained: false,
-              ...(terminal ? { campaign, sealSha256: supervisedTerminal.sealSha256 } : { publicationRevoked: true }) };
+            const identity = { id: apparatus.id, binding: apparatus.binding };
+            const value = terminal
+              ? { ...identity, nativeTerminal: true, localClosed: true, remoteDrained: false, campaign, sealSha256: supervisedTerminal.sealSha256 }
+              : { ...identity, at: new Date(closedAtMs).toISOString(), recoverAfterMs, publicationRevoked: true, remoteTerminal: false };
             writeFileSync(join(local, "monitor-" + (terminal ? "terminal" : "invalid") + ".json"), JSON.stringify(value));
-            const closedAtMs = Date.now();
-            writeFileSync(join(local, "monitor-local-closed.json"), JSON.stringify({ id: apparatus.id, binding: apparatus.binding,
-              code: terminal ? 0 : 255, signal: null, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 30000 }));
-            resolve({ ...value, terminal });
+            writeFileSync(join(local, "monitor-local-closed.json"), JSON.stringify({ ...identity,
+              code: terminal ? 0 : 255, signal: null, remoteDrained: false, closedAtMs, recoverAfterMs }));
+            resolve({ ...value, terminal, remoteDrained: false });
           };
           if (!flags.monitorHold) flags.completeMonitor();
         });
@@ -162,13 +166,20 @@ export function harness(t, flags = {}) {
           setupFailed: true, exitCode: 1, observedAtMs: Date.now() };
         return good(JSON.stringify(Object.hasOwn(flags, "setupProof") ? flags.setupProof : proof));
       }
-      if (script === "true") return flags.noSsh ? { ...good(), status: 255 } : good();
+      if (script === "true") {
+        if (flags.noSsh) return { ...good(), status: 255 };
+        const known = join(local, "known_hosts");
+        if (args.includes("StrictHostKeyChecking=accept-new") && args.includes("GlobalKnownHostsFile=none") && !existsSync(known))
+          writeFileSync(known, "synthetic launch SSH host key\n", { flag: "wx" });
+        return good();
+      }
       if (script.includes("CORTEN_IDLE") && flags.busyHost) return { ...good(), status: 1 };
       if (script.startsWith("systemctl show") || script.includes("CORTEN_IDLE") && script.includes("\nsystemctl show")) {
         units++; if (flags.unitError) throw new Error("fake unit failure");
         const started = flags.expired ? "ExecMainCode=0\nExecMainStartTimestamp=" : "ExecMainCode=1\nExecMainStartTimestamp=Fri 2026-11-13 00:00:00 UTC";
         const extra = script.includes("--property=ControlPID") ? `Job=${flags.job ?? ""}\nControlPID=${flags.controlPid ?? 0}\nSubState=dead\n` : "";
-        return good(`Id=${flags.wrongUnit ? "foreign.service" : s.unit}\nLoadState=${flags.missingUnit ? "not-found" : "loaded"}\nFragmentPath=/etc/systemd/system/${s.unit}\nActiveState=${flags.active || flags.activeAfterDownload && downloads ? "active" : "inactive"}\nRestart=${flags.restart ? "always" : "no"}\nMainPID=${flags.livePid ? "1" : "0"}\n${started}\n${extra}`);
+        const { unit } = JSON.parse(readFileSync(statePath));
+        return good(`Id=${flags.wrongUnit ? "foreign.service" : unit}\nLoadState=${flags.missingUnit ? "not-found" : "loaded"}\nFragmentPath=/etc/systemd/system/${unit}\nActiveState=${flags.active || flags.activeAfterDownload && downloads ? "active" : "inactive"}\nRestart=${flags.restart ? "always" : "no"}\nMainPID=${flags.livePid ? "1" : "0"}\n${started}\n${extra}`);
       }
       if (script.includes("CORTEN_IDLE") && script.includes("sha256sum <&3"))
         return good(`${flags.wrongHash ? "f".repeat(64) : digest(bytes)}  /bench/results.tgz\n${digest("archive stat")}  -\n`);
@@ -194,8 +205,8 @@ export function harness(t, flags = {}) {
     change(fn) { const value = this.saved(); fn(value); writeFileSync(statePath, JSON.stringify(value)); },
     host: d, hosts(value) { droplets = value ?? [d()]; }, setArchive(value) { bytes = value; },
     task(deps = {}, options = {}) {
-      return controller({ round: "r21", stateDir: base, collect: true, ...options }, { run, repo, sleep: async () => {}, interrupted: () => flags.cancelled,
-        inspect: async (input) => { inspections++; assert.deepEqual(input, { folder: join(local, this.saved().evidence, "campaign"), round: "r21", commit }); return report(); }, ...deps });
+      return controller({ round, stateDir: base, collect: true, ...options }, { run, repo, sleep: async () => {}, interrupted: () => flags.cancelled,
+        inspect: async (input) => { inspections++; assert.deepEqual(input, { folder: join(local, this.saved().evidence, "campaign"), round, commit }); return report(); }, ...deps });
     },
     pinnedUnused(deps = {}) {
       const key = join(temp, "synthetic-verified-host-key"), bytes = "synthetic operator-verified host key\n";

@@ -98,10 +98,10 @@ It does not replace any native admission gate or default profile.
 | JSON API | `jN`; both fixtures; `--build --group json-api` | Same 60/30/150 defaults. All 36 functional cells plus independent exact-image native-source audits. Receipt staging is blocked here, not invented or waived. Entire results tree and strict commit-bound report. |
 | Localized marketplace | `wN` or native official `rN` starting at r17; marketplace fixtures; `--build --group localized-marketplace` | Native defaults are 60/30/150, not the separate short-window cloud profile. Exact-image production/browser gates; preserve excluded/stopped outcomes. Native report has no strict-completeness flag; collection must separately check complete selected coverage. |
 | Mixed production | `wN --build`; runner generates fixture | Default functional-only profile, seed 42, two clients, one repetition. Measurement defaults remain three passes, 120 s windows, 15 s warmup, 30 s calibration, 120 s tail, 16 cycles. Raw captures, readbacks, faults and measurement tree stay separate. No standalone validator yet. |
-| Full-stack browser | `wN --build --out bench/fullstack-browser/work/<round>` | All ten apps and 240 profiles, native desktop/mobile settings. Host Chromium, local Node tool image and free SvelteKit loopback port 8080 required. Native lifecycle/aggregation gaps and absent standalone validator remain blocked. |
-| Client-heavy | Safe explicit round; `--out bench/client-heavy/work/<round>` | Always builds all six native bundles and runs Corten's Rust generator; no `--build` flag, receipt substitution or Cargo override. Sizes 14/110/7/24. Separate qualification/measurement, `result.json`, raw captures and `native/`. No standalone validator or OS isolation. |
-| Live delivery | Safe explicit round; `--group live-delivery --build` | Preserve the group flag to avoid historical mode. Default bounded correctness: 24 events, queue 2/history 4, no measurement. Corten is incompatible with that profile; missing registrations remain visible. Entire `bench/live/results/parity/<round>` and shared verifier. |
-| Recoverable live | Safe explicit round; `--build` | Same bounded defaults, six recovery scenarios. Entire `bench/recoverable-live/results/<round>` and shared verifier. Missing registrations and Corten's default-profile incompatibility are blockers, not substituted transports. |
+| Full-stack browser | `wN --build --out bench/fullstack-browser/work/<round> --isolated` | All ten apps and 240 profiles, native desktop/mobile settings. Requires host Chromium, a delegated command cpuset, the local Node tool image and free SvelteKit loopback port 8080. Isolation evidence does not replace the native workload gates. |
+| Client-heavy | Safe explicit round; `--out bench/client-heavy/work/<round>` | Always builds all six native bundles and runs Corten's Rust generator; no `--build` flag, receipt substitution or Cargo override. Sizes 14/110/7/24. Separate qualification/measurement, `result.json`, raw captures and `native/`. The campaign supplies the delegated command cpuset. |
+| Live delivery | Safe explicit round; `--group live-delivery --build --isolated` | Preserve the group flag to avoid historical mode. Default bounded correctness: 24 events, queue 2/history 4, no measurement. Corten is incompatible with that profile; missing registrations remain visible. Entire `bench/live/results/parity/<round>` and shared verifier. |
+| Recoverable live | Safe explicit round; `--build --isolated` | Same bounded defaults, six recovery scenarios. Entire `bench/recoverable-live/results/<round>` and shared verifier. Missing registrations and Corten's default-profile incompatibility are blockers, not substituted transports. |
 | Hardening | `wN --build --review <exact-subject-hash>` | Existing bounded profile and matched native production adapters, all 216 cells. Direct/edge qualification stays separate. The required review-reference string alone establishes no approval. Entire results tree, raw controls/receipts and native verifier. |
 
 Four named override recipes exist: `marketplace-short-window` (three passes,
@@ -121,10 +121,13 @@ Requested overrides are always separate from recorded native defaults.
 
 ## Resources and validation
 
-The binding uses the provider placement for its campaign mode: c-8 in sfo3 for
-the default dedicated group and c-8 in sfo2 for either the legacy nonfleet
-campaign or the dedicated fleet's reserved `dedicated-sfo2` mode. Native
-replay reports the latter explicitly so the collector can match the saved fleet.
+The binding uses the provider placement for its campaign mode. The default
+dedicated group uses c-8 in sfo3 and the legacy nonfleet campaign uses c-8 in
+sfo2. A non-catalog group can use c-8 in sfo2 (`dedicated-sfo2`), lon1
+(`dedicated-lon1`) or blr1 (`dedicated-blr1`) when its fleet authorizes that
+placement. Native replay reports the alternate mode so the collector can check
+it against the child's reservation. These c-8 placements use the same workload
+and resource budgets.
 The fleet binds only catalog-page to c-16 in sfo2 with
 [`c16-generator-v1`](CAMPAIGN.md#parent-interface), which widens the load generator
 without changing the app, upstream or probes. Allocation and isolation remain
@@ -134,8 +137,9 @@ Those settings are expectations, not observed environment or native defaults. Mi
 functional capture has separate 1/2/2 CPU app/upstream/capture budgets; only its explicit
 measurement recipe requests the measured CPU placement. Its qualification worker has 1 GiB;
 the steady-load worker has 2 GiB and 512 MiB shared memory. Host drivers/checkers remain
-unisolated. Browser/live/client-heavy and hardening cannot borrow the HTTP pinning adapter.
-Hardening keeps its declared complete direct/edge process budgets, not one normalized server.
+unisolated in those throughput groups. Browser, live and client-heavy use their actual
+host and Docker actors instead of borrowing the HTTP roles. Hardening keeps its declared
+direct/edge budgets and blocks provisioning until it has a benign actor isolation adapter.
 
 Every contract keeps native evidence unknown, validators not run or explicitly missing,
 coverage cells unknown/not-run, `ready:false` and `executionAuthorized:false`.

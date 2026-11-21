@@ -20,7 +20,7 @@ import { composePhase } from "./composition.mjs";
 import * as actualLifetime from "./host-lifetime.mjs";
 import { samplingControl } from "./test-fixtures/host-lifetime-storage.mjs";
 import { ioError } from "./test-fixtures/host-durable-writer-control.mjs";
-import { processStat } from "./host-observation.mjs";
+import * as actualHost from "./host-observation.mjs";
 import * as controlAdmission from "./control-admission.mjs";
 import { guardianSource } from "../cloud-control-runtime.mjs";
 
@@ -29,11 +29,11 @@ const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
 let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observations = 0, authorizations = [], release, pendingStarted, abort, auditComplete = true, lifetimeFailure, replayLifetimeFailure;
 let lifetimeStartup;
 let lifetimeRun;
-let admittedHost, admittedApparatus, controlWindows;
+let admittedHost, admittedApparatus, controlWindows, settleAbort;
 mock.module("./control-admission.mjs", { exports: { ...controlAdmission,
   beginControlWindow(binding) {
     assert.equal(binding.round, "r21"); controlWindows.push("open");
-    return () => { assert.ok(existsSync(join(controlWindows.directory, "00-client-heavy-timing", "host-after.json"))); controlWindows.push("close"); };
+    return () => { assert.ok(existsSync(join(controlWindows.directory, controlWindows.phase ?? "00-client-heavy-timing", "host-after.json"))); controlWindows.push("close"); };
   },
 } });
 const cpu = { app: { cpuset: "1", quota: 1 } };
@@ -83,10 +83,37 @@ mock.module("./mixed-staging.mjs", { exports: {
 const host = () => ({ hostname: admittedHost?.hostname ?? "test-host", bootId: admittedHost?.bootId ?? "boot", containers: [], networks: ["bridge"], processes: [],
   ...(admittedApparatus ? { controlApparatus: { registration: structuredClone(admittedApparatus), sample: { host: admittedApparatus.host,
     monoNs: "2000000", members: admittedApparatus.members, listener: admittedApparatus.listener } } } : {}) });
+const udevPath = "0::/system.slice/systemd-udevd.service/udev\n";
+const udevExecutable = { path: "/usr/lib/systemd/systemd-udevd", device: "2049", inode: "10" };
+function rawProcess({ pid, startTicks, cgroup, parentPid }, comm = "ordinary") {
+  const fields = Array(49).fill("0"); fields[0] = parentPid; fields[5] = "4194304"; fields[18] = startTicks;
+  return { pid, startTicks, cgroup, stat: `${pid} (${comm}) S ${fields.join(" ")}\n` };
+}
+const udevClock = () => ({ bootId: admittedHost.bootId, uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" });
+function udevHost(observation) {
+  const value = host();
+  value.processes = [...admittedApparatus.members, admittedApparatus.listener].map((p) => rawProcess(p));
+  value.processes.push({ ...rawProcess({ pid: 846, startTicks: "812", cgroup: udevPath, parentPid: 1 }, "systemd-udevd"), udevExecutable });
+  if (observation === 3) value.processes.push({ ...rawProcess({ pid: 62274, startTicks: "10601", cgroup: udevPath, parentPid: 846 }, "(udev-worker)"), udevExecutable });
+  value.uptime = `${["100.00", "101.00", "106.15", "111.16"][observation - 1]} 1280.13\n`;
+  value.controlApparatus.sample.monoNs = ["2000000", "2000000", "5000000", "5015000000"][observation - 1];
+  return value;
+}
 mock.module("./host-observation.mjs", { namedExports: {
-  processStat,
-  observeHost() { observations++; const value = host(); if (mode === "leak" && observations > 2) value.containers = ["leak"]; return value; },
-  verifyHostBoundary(before, after) { assert.deepEqual(after, before, "host cleanup uncertain"); return { cleanup: "observed-boundary-matched", isolation: "unverified" }; },
+  ...actualHost, udevSettleMs: 0,
+  observeHost(_apparatus, retainUdev = false) {
+    observations++;
+    if (mode === "udev-settle") {
+      assert.equal(retainUdev, observations > 1);
+      if (observations === 3 && settleAbort) queueMicrotask(() => settleAbort.abort(new Error("abort during udev settle")));
+      return udevHost(observations);
+    }
+    const value = host(); if (mode === "leak" && observations > 2) value.containers = ["leak"]; return value;
+  },
+  verifyHostBoundary(before, after) {
+    if (mode === "udev-settle") return actualHost.verifyHostBoundary(before, after);
+    assert.deepEqual(after, before, "host cleanup uncertain"); return { cleanup: "observed-boundary-matched", isolation: "unverified" };
+  },
 } });
 mock.module("./host-lifetime.mjs", { exports: {
   beginLifetime(args) {
@@ -100,11 +127,13 @@ mock.module("./host-lifetime.mjs", { exports: {
     const { directory, command, startupSignal } = args;
     const startup = lifetimeStartup;
     mkdirSync(directory); writeFileSync(join(directory, "raw.json"), "{}");
-    const observer = { attach() { if (startup) startup.attached++; }, dispose() { if (startup) startup.disposed++; }, finish(result) {
+    const observer = { attach() { if (startup) startup.attached++; }, dispose() { if (startup) startup.disposed++; }, finish(result, retainTerminalClock) {
       const checks = { accounting: true, terminal: result.terminal, empty: true, observer: true,
         unforced: !result.cancelled && !result.forced, leader: true };
       if (lifetimeFailure?.command === command) Object.assign(checks, lifetimeFailure.checks);
-      writeFileSync(join(directory, "terminal.json"), JSON.stringify(checks)); return evidence.tree(directory);
+      if (retainTerminalClock) { assert.equal(mode, "udev-settle"); assert.equal(command, 1); assert.equal(observations, 2); }
+      writeFileSync(join(directory, "terminal.json"), JSON.stringify({ ...checks, ...(retainTerminalClock ? { terminalClock: udevClock() } : {}) }));
+      return evidence.tree(directory);
     } };
     if (!startup) return observer;
     assert.ok(startupSignal instanceof AbortSignal);
@@ -113,11 +142,11 @@ mock.module("./host-lifetime.mjs", { exports: {
   },
   inspectLifetime(binding, invocation, directory, expected) {
     if (lifetimeRun) return actualLifetime.inspectLifetime(binding, invocation, directory, expected);
-    const checks = JSON.parse(readFileSync(join(directory, "terminal.json")));
+    const { terminalClock, ...checks } = JSON.parse(readFileSync(join(directory, "terminal.json")));
     if (replayLifetimeFailure === expected.command) checks.accounting = false;
     const complete = Object.values(checks).every(Boolean);
     return { status: complete ? "verified" : "blocked", cleanupComplete: complete, checks,
-      context: { bootId: host().bootId }, manifestSha256: evidence.tree(directory).sha256 };
+      context: { bootId: host().bootId }, manifestSha256: evidence.tree(directory).sha256, terminalClock };
   },
   composeHostProof() { return { resources: mode === "complete" ? "verified" : "blocked", cleanupComplete: mode === "complete" }; },
 } });
@@ -197,7 +226,7 @@ const { createCampaign } = await import("./campaign.mjs");
 const { validateCampaign: validateSavedCampaign } = await import("./campaign-verify.mjs");
 let round = 100;
 function setup(policy = () => true) {
-  admittedHost = null; admittedApparatus = null; controlWindows = [];
+  admittedHost = null; admittedApparatus = null; controlWindows = []; settleAbort = null;
   round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null; lifetimeStartup = null; lifetimeRun = null;
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
@@ -258,31 +287,35 @@ test("v4 live campaign retains actual bootstrap proof before baseline and bracke
     "rehashed journal/collection cannot substitute for watcher termination");
 });
 
-test("v5 campaign carries presealed registration through native bookends, final seal and saved drain replay", async (t) => {
+test("v5 browser campaign carries the native roles through streamed bookends and saved drain replay", async (t) => {
   t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
   const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
     { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024, windowsHide: true });
   assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
-  const proof = JSON.parse(result.stdout), s = setupGroup("client-heavy"); s.plan.round = "r21"; admittedHost = proof.admission.host;
+  const proof = JSON.parse(result.stdout), s = setupGroup("fullstack-browser"); s.plan.round = "r21"; admittedHost = proof.admission.host;
   const { registration: fixture } = await import("../test-fixtures/control-stream-fixture.mjs");
   const { streamHash } = await import("./control-stream.mjs");
   const { deploymentSha256 } = await import("../deployments.mjs");
   admittedApparatus = { ...structuredClone(fixture), binding: proof.binding, host: proof.admission.host };
   proof.admission.apparatus = admittedApparatus;
   proof.admission.apparatusSample = { host: admittedHost, monoNs: "2000000", members: admittedApparatus.members, listener: admittedApparatus.listener };
-  s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2-3" }, load: { cpuset: "4-7" } };
+  s.plan.bindings[0].resources.browserCpus = { application: "1", upstream: "2-3", browser: "4-7" };
   const calls = [], stream = { registration: admittedApparatus, check() { calls.push("check"); },
-    open(cpus) { assert.deepEqual(cpus, { app: "1", api: "2-3", load: "4-7" }); calls.push("open"); },
+    open(cpus, roles) {
+      assert.deepEqual(cpus, { application: "1", upstream: "2-3", browser: "4-7" });
+      assert.deepEqual(roles, ["application", "upstream", "browser"]); calls.push("open");
+    },
     close() { calls.push("close"); }, async seal() {
       calls.push("seal"); return { schema: "benchmark-control-stream-seal/v1", registration: admittedApparatus,
         observations: [{ sequence: 1, monoNs: "2000000", registrationSha256: streamHash(admittedApparatus) }], sealedMonoNs: "3000000",
         lease: { id: admittedApparatus.id, host: admittedHost, expiresMonoNs: "15000000000" } };
     } };
   const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding: proof.binding, admission: proof.admission, stream } });
-  controlWindows.directory = handle.directory; assert.equal(s.campaign.status(handle).executionVersion, 5);
+  controlWindows.directory = handle.directory; controlWindows.phase = "00-fullstack-browser-timing";
+  assert.equal(s.campaign.status(handle).executionVersion, 5);
   assert.equal((await s.campaign.advance(handle)).state, "finished"); assert.ok(calls.indexOf("open") < calls.indexOf("close") && calls.indexOf("close") < calls.indexOf("seal"));
-  assert.deepEqual(JSON.parse(readFileSync(join(handle.directory, "00-client-heavy-timing", "host-after.json"))), host());
+  assert.deepEqual(JSON.parse(readFileSync(join(handle.directory, controlWindows.phase, "host-after.json"))), host());
   const drain = { schema: "benchmark-control-stream-drain/v1", id: admittedApparatus.id, registrationSha256: streamHash(admittedApparatus),
     host: admittedHost, monoNs: "4000000", identitiesAbsent: true, listener: admittedApparatus.listener,
     scopes: [{ path: "/user.slice/session-1.scope", exists: false, members: [], events: null }] };
@@ -796,6 +829,100 @@ test("audit wait mutation and image replacement halt before timing", async () =>
     await assert.rejects(s.campaign.submitJsonAudit(h, delivery(h))); assert.equal(calls.length, 4);
   }
 });
+
+for (const abortDuringSettle of [false, true]) test(
+  `v5 localized-marketplace ${abortDuringSettle ? "abort during udev settle keeps first evidence without a new census" : "keeps and replays the post-command udev settle"}`, async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
+    { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024, windowsHide: true });
+  assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
+  const proof = JSON.parse(result.stdout), s = setupGroup("localized-marketplace"); s.plan.round = "r21"; admittedHost = proof.admission.host;
+  mode = "udev-settle";
+  const { registration: fixture } = await import("../test-fixtures/control-stream-fixture.mjs");
+  const { streamHash } = await import("./control-stream.mjs");
+  const { deploymentSha256 } = await import("../deployments.mjs");
+  admittedApparatus = { ...structuredClone(fixture), binding: proof.binding, host: proof.admission.host };
+  proof.admission.apparatus = admittedApparatus;
+  proof.admission.apparatusSample = { host: admittedHost, monoNs: "2000000", members: admittedApparatus.members, listener: admittedApparatus.listener };
+  s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2-3" }, load: { cpuset: "4-7" } };
+  const calls = [], stream = { registration: admittedApparatus, check() { calls.push("check"); },
+    open(cpus) { assert.deepEqual(cpus, { app: "1", api: "2-3", load: "4-7" }); calls.push("open"); },
+    close() { calls.push("close"); }, async seal() {
+      calls.push("seal"); return { schema: "benchmark-control-stream-seal/v1", registration: admittedApparatus,
+        observations: Array.from({ length: 21 }, (_, i) => ({ sequence: i + 1,
+          monoNs: String(2000000 + i * 250500000), registrationSha256: streamHash(admittedApparatus) })),
+        sealedMonoNs: "5016000000",
+        lease: { id: admittedApparatus.id, host: admittedHost, expiresMonoNs: "15000000000" } };
+    } };
+  const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding: proof.binding, admission: proof.admission, stream } });
+  controlWindows.directory = handle.directory; controlWindows.phase = "00-localized-marketplace-timing";
+  if (abortDuringSettle) settleAbort = new AbortController();
+  const advanced = await s.campaign.advance(handle, { signal: settleAbort?.signal }).catch((error) => error);
+  const phase = join(handle.directory, controlWindows.phase), first = JSON.parse(readFileSync(join(phase, "host-after.json")));
+  if (abortDuringSettle) {
+    assert.equal(observations, 3, "abort must not run the settled process or Docker census");
+    assert.equal(existsSync(join(phase, "host-after-settled.json")), false);
+    assert.ok(existsSync(join(phase, "native-manifest.json")), "first boundary and native evidence were sealed");
+    assert.ok(existsSync(join(handle.directory, "campaign-result.json")));
+    assert.equal(advanced.name, "AbortError");
+    assert.ok(!calls.includes("seal"));
+    return;
+  }
+  const status = advanced;
+  assert.equal(status.state, "finished"); assert.ok(calls.indexOf("open") < calls.indexOf("close") && calls.indexOf("close") < calls.indexOf("seal"));
+  assert.equal(observations, 4);
+  assert.deepEqual(first, { ...udevHost(3), terminalClock: udevClock() });
+  assert.deepEqual(JSON.parse(readFileSync(join(phase, "command-1-host", "terminal.json"))).terminalClock, first.terminalClock);
+  assert.deepEqual(JSON.parse(readFileSync(join(phase, "host-after-settled.json"))), udevHost(4));
+  assert.deepEqual(status.outcomes[0].cleanup.settledUdevWorkers, [{ pid: 62274, startTicks: "10601" }]);
+  const drain = { schema: "benchmark-control-stream-drain/v1", id: admittedApparatus.id, registrationSha256: streamHash(admittedApparatus),
+    host: admittedHost, monoNs: "5017000000", identitiesAbsent: true, listener: admittedApparatus.listener,
+    scopes: [{ path: "/user.slice/session-1.scope", exists: false, members: [], events: null }] };
+  writeFileSync(join(handle.directory, "control-stream-drain.json"), JSON.stringify(drain));
+  writeFileSync(join(handle.directory, "collection-manifest.json"), JSON.stringify(s.campaign.collect(handle)));
+  const request = { folder: root, round: "r21", commit: s.plan.commit };
+  const inspected = await validateSavedCampaign(request);
+  assert.notEqual(inspected.status, "invalid");
+  assert.deepEqual(inspected.supervisedTerminal, { registrationSha256: streamHash(admittedApparatus),
+    sealSha256: evidence.digest(readFileSync(join(handle.directory, "control-stream-seal.json"))) });
+  const receipt = join(phase, "host-after-settled.json");
+  const collection = join(handle.directory, "collection-manifest.json"), previous = JSON.parse(readFileSync(collection));
+  const resealCollection = () => {
+    const entries = evidence.tree(handle.directory).entries.filter((e) => e.path !== "collection-manifest.json");
+    writeFileSync(collection, JSON.stringify({ ...previous, manifest: { entries, sha256: deploymentSha256(entries) } }));
+  };
+  const phaseEventPath = join(handle.directory, fs.readdirSync(handle.directory).find((name) => name.endsWith("-phase-sealed.json")));
+  const phaseEvent = JSON.parse(readFileSync(phaseEventPath));
+  const resealPhase = () => {
+    writeFileSync(phaseEventPath, JSON.stringify({ ...phaseEvent, phaseManifestSha256: evidence.phaseSnapshot(phase).sha256 }));
+    resealCollection();
+  };
+  const settled = udevHost(4);
+  settled.controlApparatus.sample.monoNs = String(BigInt(first.controlApparatus.sample.monoNs) + 1n);
+  writeFileSync(receipt, JSON.stringify(settled));
+  resealPhase();
+  assert.equal((await validateSavedCampaign(request)).status, "invalid", "5.01s uptime cannot substitute for a 1ns monotonic wait");
+
+  writeFileSync(receipt, JSON.stringify(udevHost(4)));
+  const firstPath = join(phase, "host-after.json");
+  const cutoff = { ...first.terminalClock, uptime: "105.99 1280.00\n" };
+  const exitPath = join(handle.directory, fs.readdirSync(handle.directory).filter((name) => name.endsWith("-command-exited.json")).sort().at(-1));
+  const exit = JSON.parse(readFileSync(exitPath));
+  writeFileSync(exitPath, JSON.stringify({ ...exit, hostTerminalClock: cutoff }));
+  writeFileSync(firstPath, JSON.stringify({ ...first, terminalClock: cutoff }));
+  resealPhase();
+  assert.equal((await validateSavedCampaign(request)).status, "invalid", "matching boundary and exit clocks cannot replace the sealed terminal lifetime cutoff");
+
+  writeFileSync(exitPath, JSON.stringify(exit));
+  writeFileSync(firstPath, JSON.stringify(first));
+  resealPhase();
+  assert.notEqual((await validateSavedCampaign(request)).status, "invalid");
+  writeFileSync(receipt, JSON.stringify(first));
+  resealCollection();
+  assert.equal((await validateSavedCampaign(request)).status, "invalid", "an outer rehash cannot change the sealed first or settled boundary");
+});
+
 test("a timing audit mismatch halts after sealed collection without leaking native diagnostics", async () => {
   const s = setup(), h = await begin(s); await s.campaign.advance(h); await s.campaign.advance(h);
   await s.campaign.submitJsonAudit(h, delivery(h)); mode = "audit-mismatch";

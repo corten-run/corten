@@ -58,6 +58,11 @@ Missing pages must return 404, but may use their native empty or HTML representa
 The production profile retains native `PROFILE=matched` configuration and the same connection
 limit setting for timing; the setting is not evidence that the limit holds under pressure.
 Probe both sources before timing; save raw probes, derived cells and every missing feature.
+The shared receipt filter retains Corten's fixed `trusted-types corten` directive and its
+explicit Bluetooth, local-fonts and window-management denials. CSP nonces and hashes
+are masked; unknown directive names and unfilterable values still block the receipt.
+The emitted headers and qualification checks are unchanged. This does not requalify a
+saved round.
 Unsupported candidates are explicitly excluded, never assigned throughput. An unhealthy
 probe, failed build, harness error or failed browser/content gate still fails the round.
 Require a qualified Corten and at least one qualified peer, otherwise preserve the evidence

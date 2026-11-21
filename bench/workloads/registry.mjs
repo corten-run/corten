@@ -50,6 +50,22 @@ export const groups = freeze({
 });
 
 export const groupNames = Object.freeze(Object.keys(groups));
+export function campaignRounds(round) {
+  assert.equal(typeof round, "string"); assert.match(round, /^r[1-9]\d*$/);
+  const n = Number(round.slice(1));
+  assert.ok(Number.isSafeInteger(n) && n >= 17 && n <= 1000000000, "official campaign round must be r17..r1000000000");
+  return Object.fromEntries(groupNames.map((group) => [group, group === "catalog-page" ? `c${n}`
+    : group === "json-api" ? `j${2 * n + 1}` : group === "localized-marketplace" ? round
+      : ["live-delivery", "recoverable-live"].includes(group) ? round : `w${n}`]));
+}
+export const jsonPreparationRound = (round) => `j${2 * Number(round.slice(1))}`;
+export function nativeArtifactRoot(group, round) {
+  const directory = group === "catalog-page" ? "catalog" : group === "localized-marketplace" ? "marketplace" : group;
+  return group === "client-heavy" ? `bench/client-heavy/work/${round}`
+    : group === "fullstack-browser" ? `bench/fullstack-browser/work/${round}`
+      : group === "live-delivery" ? `bench/live/results/parity/${round}` : `bench/${directory}/results/${round}`;
+}
+
 export function definition(name) {
   assert.ok(Object.hasOwn(groups, name), `unknown workload group: ${name}`);
   return groups[name];

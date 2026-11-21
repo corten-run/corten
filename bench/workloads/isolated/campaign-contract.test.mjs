@@ -3,28 +3,76 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { bindExecution } from "./contract.mjs";
-import { providerCreateHost } from "../cloud-contract.mjs";
+import { catalogFleetPlacement, providerCreateHost } from "../cloud-contract.mjs";
 import { bindCampaign, campaignRounds, jsonPhase, mixedPhase, productionRecipes, validateCampaign } from "./campaign-contract.mjs";
 import { groupNames, selectedApps } from "../registry.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
 import * as campaigns from "./campaign-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { isDeepStrictEqual } from "node:util";
+import { parseCampaignArgs } from "./campaign-entry.mjs";
+import { apparatusProof, nativeControlPartition } from "./control-stream.mjs";
+import { hardeningCpuGate } from "./native-roles.mjs";
+import { binding as controlBinding, registration } from "../test-fixtures/control-stream-fixture.mjs";
+import { inspectCampaign } from "../cloud-validation.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8",
   env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" } }).trim();
+test("the official r24 browser plan opens the CPU0 control proof with actual browser roles", (t) => {
+  const { round, group } = parseCampaignArgs(["r24", "--commit", commit, "--state-dir", "/bench/campaign", "--group", "fullstack-browser"]);
+  const plan = campaigns.bindGroupCampaign({ round, group, commit });
+  validateCampaign(plan);
+  const [b] = plan.bindings, sample = { ...registration, monoNs: "2000000" }, { cpus, roles } = nativeControlPartition(b);
+  assert.deepEqual(b.execution.invocation.argv, ["bench/fullstack-browser/run.mjs", "w24", "--build", "--out", "bench/fullstack-browser/work/w24", "--isolated"]);
+  assert.deepEqual(cpus, { application: "1", upstream: "2-3", browser: "4-7" });
+  assert.equal(apparatusProof(controlBinding, registration, sample, cpus, roles).cpu, 0);
+  assert.equal(b.status.ready, false);
+  t.diagnostic(`official ${round}/${group}: ${JSON.stringify(cpus)}; CPU0 apparatus separate; readiness remains false`);
+  for (const [browserCpus, message] of [
+    [undefined, /native CPU partition absent/],
+    [{ ...cpus, browser: "0,4-7" }, /CPU0 overlaps/],
+    [{ ...cpus, upstream: "1-3" }, /roles overlap/],
+    [{ app: "1", api: "2-3", load: "4-7" }, /native CPU partition absent/],
+  ]) assert.throws(() => nativeControlPartition({ ...b, resources: { ...b.resources, browserCpus } }), message);
+});
+test("the official r24 mixed timing phase supplies the same measured CPU roles at open and replay", (t) => {
+  const plan = campaigns.bindGroupCampaign({ round: "r24", group: "mixed-production", commit });
+  const b = mixedPhase(plan, "r24-0123456789abcdef"), replay = mixedPhase(structuredClone(plan), "r24-0123456789abcdef");
+  const { cpus, roles } = nativeControlPartition(b), sample = { ...registration, monoNs: "2000000" };
+  assert.deepEqual(nativeControlPartition(replay), { cpus, roles });
+  assert.deepEqual(cpus, { app: "1", load: "4-7", api: "2-3" });
+  assert.equal(apparatusProof(controlBinding, registration, sample, cpus, roles).cpu, 0);
+  const missing = structuredClone(replay); delete missing.resources.measurement.cpu.load;
+  assert.throws(() => nativeControlPartition(missing), /native CPU partition absent/);
+  t.diagnostic("official r24/mixed-production: measured app=1 api=2-3 load=4-7; no functional-capture CPU proof");
+});
+test("captured pre-create worker uses the real committed placements including bounded hardening", async () => {
+  const check = (group, mode) => inspectCampaign({ action: "actor-role-preflight", round: "r25", commit, group, mode });
+  for (const [group, mode, blockers] of [
+    ["catalog-page", catalogFleetPlacement.loadLayout, []],
+    ["live-delivery", "dedicated-lon1", []],
+    ["hardening", "dedicated", []],
+  ]) assert.deepEqual(await check(group, mode), blockers);
+});
 test("alternate dedicated placement is replayable and changes neither resources nor native execution", () => {
-  const request = { round: "r17", commit, group: "json-api" };
-  const alternate = campaigns.bindGroupCampaign(request, "dedicated-sfo2");
-  validateCampaign(alternate);
-  const [a] = alternate.bindings, [b] = campaigns.bindGroupCampaign(request).bindings;
-  assert.deepEqual(a.host, { ...b.host, region: "sfo2" });
+  const request = { round: "r25", commit, group: "json-api" };
+  const [b] = campaigns.bindGroupCampaign(request).bindings;
   assert.equal(b.host.region, "sfo3");
-  for (const key of ["resources", "execution", "selection", "validation"]) assert.deepEqual(a[key], b[key]);
-  assert.notEqual(a.subjectSha256, b.subjectSha256);
-  assert.throws(() => validateCampaign({ ...alternate, bindings: [{ ...a, host: b.host }] }), /fixed native bindings/);
-  assert.throws(() => campaigns.bindGroupCampaign({ ...request, group: "catalog-page" }, "dedicated-sfo2"), /unknown group placement/);
+  const subjects = new Set([b.subjectSha256]);
+  for (const region of ["sfo2", "lon1", "blr1"]) {
+    const mode = `dedicated-${region}`, alternate = campaigns.bindGroupCampaign(request, mode);
+    validateCampaign(alternate);
+    const [a] = alternate.bindings;
+    assert.equal(a.campaignMode, mode);
+    assert.deepEqual(a.host, { ...b.host, region });
+    for (const key of ["resources", "execution", "selection", "validation"]) assert.deepEqual(a[key], b[key]);
+    assert.ok(!subjects.has(a.subjectSha256)); subjects.add(a.subjectSha256);
+    assert.throws(() => validateCampaign({ ...alternate, bindings: [{ ...a, host: b.host }] }), /fixed native bindings/);
+    assert.throws(() => campaigns.bindGroupCampaign({ ...request, group: "catalog-page" }, mode), /unknown group placement/);
+  }
+  for (const mode of ["lon1", "dedicated-nyc1", "dedicated-sfo3"])
+    assert.throws(() => campaigns.bindGroupCampaign(request, mode), /unknown group placement/);
 });
 test("official rounds are one fixed mapping with disjoint preparation and timing", () => {
   const rounds = campaignRounds("r17");
@@ -46,6 +94,9 @@ test("full campaign binds real committed procedures, all groups, exact native de
   const mixed = plan.bindings.find((b) => b.request.group === "mixed-production");
   assert.equal(mixed.execution.nativeDefaults.profile, "defaults"); assert.equal(mixed.execution.effectiveOptions.profile, "matched");
   assert.equal(mixed.execution.effectiveOptions.measure, true);
+  assert.deepEqual(nativeControlPartition(mixed).cpus, { app: "1", api: "2-3", load: "4-7" });
+  assert.equal(mixed.resources.functional.pinning, "not available in functional capture");
+  assert.deepEqual(campaigns.campaignRoleBlockers(plan), []);
   const expected = mixedOptions(mixed.execution.invocation.argv.slice(1)); expected.apps = selectedApps("mixed-production");
   assert.deepEqual(mixed.execution.effectiveOptions, expected);
   const mixedTiming = mixedPhase(plan, "r17-0123456789abcdef");
@@ -78,6 +129,17 @@ test("full campaign binds real committed procedures, all groups, exact native de
 });
 test("group campaigns bind the entire exact native group with stable all-group provenance", () => {
   const all = bindCampaign({ round: "r17", commit });
+  const expected = {
+    "catalog-page": { app: "1", api: "2-3", load: "4-7" },
+    "json-api": { app: "1", api: "2-3", load: "4-7" },
+    "localized-marketplace": { app: "1", api: "2-3", load: "4-7" },
+    "mixed-production": { app: "1", api: "2-3", load: "4-7" },
+    "fullstack-browser": { application: "1", upstream: "2-3", browser: "4-7" },
+    "client-heavy": { client: "4-7" },
+    "live-delivery": { application: "1", browser: "4-7" },
+    "recoverable-live": { application: "1", browser: "4-7" },
+    hardening: { application: "1", upstream: "2", proxy: "3", apparatus: "4-5", command: "6-7" },
+  };
   for (const b of all.bindings) assert.equal(b.host.region, providerCreateHost("legacy").region);
   for (const path of ["campaign-contract.mjs", "campaign-entry.mjs", "campaign.mjs", "campaign-verify.mjs"])
     assert.ok(all.bindings[0].sources.files.some((f) => f.path === `bench/workloads/isolated/${path}`), "campaign modules must be source-bound");
@@ -94,6 +156,29 @@ test("group campaigns bind the entire exact native group with stable all-group p
     for (const field of ["procedures", "recipes", "sourceSha256", "ready", "executionAuthorized"])
       assert.deepEqual(plan[field], all[field]);
     assert.ok(Object.isFrozen(plan) && Object.isFrozen(plan.bindings[0].selection.apps));
+    if (group === "hardening") {
+      assert.ok(dedicated.sources.files.some((f) => f.path === hardeningCpuGate));
+      assert.throws(() => nativeControlPartition({ ...dedicated, execution: { ...dedicated.execution,
+        effectiveOptions: { ...dedicated.execution.effectiveOptions, isolated: false } } }), /isolation must be enabled/);
+      assert.throws(() => nativeControlPartition({ ...dedicated, sources: { ...dedicated.sources,
+        files: dedicated.sources.files.filter((f) => f.path !== hardeningCpuGate) } }), /CPU gate absent/);
+    }
+    {
+      assert.deepEqual(campaigns.campaignRoleBlockers(plan), []);
+      const { cpus, roles } = nativeControlPartition(dedicated);
+      assert.deepEqual(cpus, expected[group]);
+      const replay = JSON.parse(JSON.stringify(plan));
+      assert.deepEqual(nativeControlPartition(replay.bindings[0]), { cpus, roles });
+      assert.equal(apparatusProof(controlBinding, registration, { ...registration, monoNs: "2000000" }, cpus, roles).cpu, 0);
+      const resources = replay.bindings[0].resources;
+      const declared = resources.actorCpus ?? resources.browserCpus ?? resources.measurement?.cpu ?? resources.expectedCpus;
+      const role = roles.at(-1), value = declared[role];
+      delete declared[role];
+      assert.throws(() => nativeControlPartition(replay.bindings[0]), /partition absent/);
+      declared[role] = typeof value === "string" ? "0" : { ...value, cpuset: "0" };
+      assert.throws(() => nativeControlPartition(replay.bindings[0]), /CPU0 overlaps/);
+      assert.equal(campaigns.campaignRoleBlockers(replay).length, 1);
+    }
     const { campaignSha256, ...body } = plan; assert.equal(campaignSha256, deploymentSha256(body));
     validateCampaign(plan);
     if (group === "catalog-page") {

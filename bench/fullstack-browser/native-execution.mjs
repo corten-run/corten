@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { executionParticipant } from "../mixed-production/execution-evidence.mjs";
 import { definition } from "../workloads/registry.mjs";
-import { candidates } from "./contract.mjs";
+import { browserContainers, browserCpus, candidates } from "./contract.mjs";
 import { exact } from "./native-evidence.mjs";
 import { encodedSha256 } from "./json-records.mjs";
 
@@ -98,16 +98,17 @@ export class ExecutionLedger {
     this.value.endedAt = endedAt; this.closed = true; return this.store.record("execution", this.value);
   }
 }
-function config(snapshot, role) {
+export function participantLimitsMatch(snapshot, role, isolated) {
   if (role === "artifact") return snapshot.state.Running === false && snapshot.state.Pid === 0;
   const l = snapshot.limits;
-  return l.NanoCpus === 1000000000 && l.Memory === (role === "upstream" ? 256 : 1024) * 1024 ** 2
-    && l.CpusetCpus === "" && l.CpuQuota === 0 && l.CpuPeriod === 0;
+  const { cpu, memoryBytes } = browserContainers[role];
+  return l.NanoCpus === cpu * 1000000000 && l.Memory === memoryBytes
+    && l.CpusetCpus === (isolated ? browserCpus[role] : "") && l.CpuQuota === 0 && l.CpuPeriod === 0;
 }
 const neverStarted = (stamp) => stamp === "" || typeof stamp === "string" && /^0001-01-01T00:00:00(?:\.0+)?Z$/.test(stamp);
 const executionHistory = (snapshot) => snapshot.state.Running || snapshot.state.Pid > 0 || snapshot.restartCount > 0
   || !neverStarted(snapshot.state.StartedAt) || !neverStarted(snapshot.state.FinishedAt) || snapshot.state.Status !== "created";
-export function replayExecution(reader, receipt) {
+export function replayExecution(reader, receipt, { isolated = false } = {}) {
   const value = reader.json(receipt); exact(value, ["schema", "task", "commit", "startedAt", "endedAt", "events"]);
   assert.equal(value.schema, "native-browser-execution/v2"); assert.match(value.task, /^browser-[a-f0-9-]+$/); assert.match(value.commit, /^[a-f0-9]{40}$/);
   time(value.startedAt); time(value.endedAt); assert.ok(value.endedAt >= value.startedAt);
@@ -159,7 +160,7 @@ export function replayExecution(reader, receipt) {
       if (p.imageId === null) p.imageId = s.imageId;
       assert.deepEqual([p.role, p.app, p.case, p.imageId], [e.role, e.app, e.case, s.imageId]);
       if (p.role === "artifact" && executionHistory(s)) { p.artifactExecuted = true; block("artifact-executed"); }
-      if (!config(s, p.role)) block("participant-configuration-mismatch");
+      if (!participantLimitsMatch(s, p.role, isolated)) block("participant-configuration-mismatch");
       if (e.phase === "running") {
         assert.ok(p.role !== "artifact" && !p.runningAt); p.runningAt = e.at;
         if (!commands.some((c) => c.operation === "start" && c.id === p.id && c.code === 0)) block("running-before-start-acknowledgement");

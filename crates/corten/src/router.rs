@@ -133,7 +133,8 @@ impl Endpoint for Keeping {
         if let Some(kept) = asked.find() {
             return Box::pin(std::future::ready(kept));
         }
-        let missed = asked.missed(&req);
+        // In a full store a URL not asked for before is the handler's as any other request.
+        let Some(missed) = asked.missed(&req) else { return self.inner.call(req) };
         let here = req.extensions().get::<crate::layout::StartHere>().cloned();
         let answer = self.inner.call(req);
         Box::pin(async move {
@@ -392,6 +393,8 @@ pub(crate) struct MethodSet<S = ()> {
     /// The page's named posts (`post(hold) = ..`), each chosen by the `do` of the post's
     /// address ([`Chooser`]).
     actions: Vec<(&'static str, Slot<S>)>,
+    /// One of its handlers answers with a page the app keeps (`Public`, [`Keeping`]).
+    keeps: bool,
 }
 
 impl<S> Clone for MethodSet<S> {
@@ -401,19 +404,27 @@ impl<S> Clone for MethodSet<S> {
             fallback: self.fallback.clone(),
             allow: self.allow.clone(),
             actions: self.actions.clone(),
+            keeps: self.keeps,
         }
     }
 }
 
 impl<S> Default for MethodSet<S> {
     fn default() -> Self {
-        MethodSet { slots: std::array::from_fn(|_| None), fallback: None, allow: Allow::Methods(Vec::new()), actions: Vec::new() }
+        MethodSet {
+            slots: std::array::from_fn(|_| None),
+            fallback: None,
+            allow: Allow::Methods(Vec::new()),
+            actions: Vec::new(),
+            keeps: false,
+        }
     }
 }
 
 impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
     fn on<H: Handler<T, S>, T: 'static>(mut self, at: usize, handler: H) -> Self {
         assert!(self.slots[at].is_none(), "corten: a route has two handlers for {}", NAMES[at]);
+        self.keeps |= handler.keeps();
         self.slots[at] = Some(Slot::handler(handler));
         let names: &[&'static str] = if at == GET { &["GET", "HEAD"] } else { &NAMES[at..=at] };
         if let Allow::Methods(allowed) = &mut self.allow {
@@ -430,6 +441,7 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
     /// (its answer still says, in `Allow`, the methods the route has).
     pub(crate) fn fallback<H: Handler<T, S>, T: 'static>(mut self, handler: H) -> Self {
         assert!(self.fallback.is_none(), "corten: a route has two handlers for any method");
+        self.keeps |= handler.keeps();
         self.fallback = Some(Slot::handler(handler));
         self
     }
@@ -445,6 +457,7 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
 
     /// The handlers of both, which have none for the same method.
     pub(crate) fn merge(mut self, other: MethodSet<S>) -> Self {
+        self.keeps |= other.keeps;
         for (at, (mine, theirs)) in self.slots.iter_mut().zip(other.slots).enumerate() {
             if theirs.is_some() {
                 assert!(mine.is_none(), "corten: a route has two handlers for {}", NAMES[at]);
@@ -480,6 +493,7 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
             fallback: self.fallback.map(|slot| slot.bind(&state)),
             allow: self.allow,
             actions: self.actions.into_iter().map(|(name, slot)| (name, slot.bind(&state))).collect(),
+            keeps: self.keeps,
         }
     }
 
@@ -490,6 +504,7 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
             fallback: self.fallback.map(|slot| slot.gives(gives)),
             allow: self.allow,
             actions: self.actions.into_iter().map(|(name, slot)| (name, slot.gives(gives))).collect(),
+            keeps: self.keeps,
         }
     }
 }
@@ -625,6 +640,12 @@ impl<S: Clone + Send + Sync + 'static> Table<S> {
             self = self.place(&path, methods, written, through);
         }
         self
+    }
+
+    /// Whether a route's answer is a page the app keeps (`Public`): an app with none has no page
+    /// a write could drop, so it counts no writes ([`crate::kept`]).
+    pub(crate) fn keeps(&self) -> bool {
+        self.routes.iter().any(|placed| placed.methods.keeps)
     }
 
     /// The routes with the state their handlers take.

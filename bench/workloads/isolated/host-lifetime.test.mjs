@@ -7,8 +7,9 @@ import { join, posix, resolve, sep } from "node:path";
 import { test } from "node:test";
 import { deploymentSha256 } from "../deployments.mjs";
 import { definition } from "../registry.mjs";
+import { browserCpus } from "../../fullstack-browser/contract.mjs";
 import { participantSnapshot, replayExecution } from "../../fullstack-browser/native-execution.mjs";
-import { composeHostProof, inspectLifetime, processIdentity, inspectBrowserParticipants, resolveParticipantExecutables } from "./host-lifetime.mjs";
+import { composeHostProof, inspectLifetime, processIdentity, inspectBrowserParticipants, inspectLiveActors, resolveParticipantExecutables } from "./host-lifetime.mjs";
 import { executableIdentity, executableReference, hashExecutableDescriptor } from "./participant-executables.mjs";
 
 const campaign = "r17-0123456789abcdef", command = 0, pid = 100;
@@ -81,8 +82,13 @@ function fixture(t, change = () => {}, bound = binding) {
   return { directory, observation: () => inspectLifetime(bound, invocation, directory, { campaign, command, pid, result }) };
 }
 
-function browserFixture(t, selectedApp = "app") {
-  const bound = { ...binding, request: { ...binding.request, group: "fullstack-browser" }, selection: { apps: [selectedApp] } };
+function browserFixture(t, selectedApp = "app", isolated = false, workload = "fullstack-browser") {
+  const bound = { ...binding, request: { ...binding.request, group: workload }, selection: { apps: [selectedApp] } };
+  if (isolated) Object.assign(bound, {
+    resources: workload === "fullstack-browser" ? { browserCpus }
+      : { actorCpus: { application: "1", browser: "4-7" }, app: { cpu: 1, memoryBytes: 2 ** 30 } },
+    execution: { effectiveOptions: { isolated: true } },
+  });
   const id = "f".repeat(64), imageId = `sha256:${"e".repeat(64)}`, dockerPath = `/system.slice/docker-${id}.scope`;
   const state = { Status: "running", Pid: 300, Running: true, Paused: false, Restarting: false, OOMKilled: false,
     Dead: false, ExitCode: 0, StartedAt: "2026-11-14T00:00:00Z", FinishedAt: "0001-01-01T00:00:00Z" };
@@ -96,17 +102,35 @@ function browserFixture(t, selectedApp = "app") {
   } };
   record.kernel.ancestors.at(-1).files["cpu.max"] = null;
   record.kernel.ancestors.at(-1).files["memory.max"] = null;
+  const participants = [participant], records = [record];
+  if (isolated) {
+    participant.terminal.limits.CpusetCpus = "1"; g.files["cpuset.cpus.effective"] = "1\n";
+  }
+  if (isolated && workload === "fullstack-browser") {
+    const upstream = "8".repeat(64), upstreamPath = `/system.slice/docker-${upstream}.scope`, upstreamGroup = group(upstreamPath, [301]);
+    Object.assign(upstreamGroup.files, { "cpu.max": "100000 100000\n", "memory.max": `${256 * 2 ** 20}\n`, "cpuset.cpus.effective": "2-3\n" });
+    const upstreamState = { ...state, Pid: 301 };
+    participants.push({ id: upstream, role: "upstream", app: null, case: null, imageId, window: { startedAt: 15, endedAt: 80 },
+      terminal: { ...participant.terminal, id: upstream, state: upstreamState, limits: { NanoCpus: 1e9, Memory: 256 * 2 ** 20, CpusetCpus: "2-3" } } });
+    const upstreamStat = stat(301, "upstream"), cgroup = `0::${upstreamPath}\n`;
+    records.push({ ...record, container: { id: upstream, imageId, state: upstreamState, restartCount: 0 },
+      kernel: { ...record.kernel, stat: upstreamStat, cgroup, groups: [upstreamGroup],
+        processes: [{ stat: upstreamStat, cgroup, executableSha256: "5".repeat(64), type: null }] } });
+  }
   const f = fixture(t, ({ context, samples }) => {
     context.dockerBaseline = [];
     context.leaderIdentity = processIdentity(stat(100, "node"));
-    for (const s of samples) s.docker = { inventory: [], participants: [], gaps: [] };
-    samples[1].docker = { inventory: [id], participants: [record], gaps: [] };
+    for (const s of samples) {
+      s.docker = { inventory: [], participants: [], gaps: [] };
+      if (isolated) s.groups[0].files["cpuset.cpus.effective"] = "4-7\n";
+    }
+    samples[1].docker = { inventory: participants.map((p) => p.id), participants: records, gaps: [] };
   }, bound);
   const native = { cleanupComplete: true, qualificationPassed: false, outcomes: [{ app: "app", outcome: "unsupported" }],
     hostSubject: { schema: "native-browser-host-subject/v2", executionWindow: { startedAt: 10, endedAt: 90 },
       processWindows: [{ kind: "browser", app: "app", case: "case", startedAt: 20, endedAt: 70 }],
       toolIdentities: { node: "a".repeat(64), browser: "b".repeat(64), lockSha256: "9".repeat(64) },
-      participants: [participant], subjectSha256: "d".repeat(64), filesSha256: "e".repeat(64) } };
+      participants, subjectSha256: "d".repeat(64), filesSha256: "e".repeat(64) } };
   return { bound, native, observation: f.observation(), directory: f.directory, replay: f.observation };
 }
 
@@ -123,6 +147,103 @@ function browserResourceResults(f) {
     catch (error) { assert.equal(error.code, "ERR_ASSERTION"); return "invalid"; }
   });
 }
+
+test("saved browser CPU proof requires the driver/Chromium scope and both timed Docker actors", (t) => {
+  const f = browserFixture(t, "app", true);
+  const proof = composeHostProof(f.bound, f.native, replayBrowser(f));
+  assert.equal(proof.resources, "verified"); assert.equal(proof.policy, "observed-browser-cpu-partition");
+  const timed = f.observation.samples[1], control = "cpuset.cpus.effective";
+  for (const sample of f.observation.samples) sample.groups[0].files[control] = "0-7\n";
+  assert.deepEqual(browserResourceResults(f), ["blocked", "blocked"]);
+  for (const sample of f.observation.samples) sample.groups[0].files[control] = "4-7\n";
+  const upstream = timed.docker.participants[1];
+  upstream.kernel.groups[0].files[control] = "0-3\n";
+  assert.deepEqual(browserResourceResults(f), ["invalid", "invalid"]);
+  upstream.kernel.groups[0].files[control] = null;
+  assert.deepEqual(browserResourceResults(f), ["blocked", "blocked"]);
+  timed.docker.participants.pop(); timed.docker.inventory.pop(); f.native.hostSubject.participants.pop();
+  assert.deepEqual(browserResourceResults(f), ["blocked", "blocked"], "the upstream cannot disappear from both inventories");
+});
+
+test("saved client-heavy role requires the compiler and renderer under the pinned command", (t) => {
+  const bound = { ...binding, resources: { ...binding.resources, actorCpus: { client: "4-7" } } };
+  const childPath = `${path}/worker`;
+  const f = fixture(t, ({ context, samples }) => {
+    context.leaderIdentity = processIdentity(stat(100, "node"));
+    for (const sample of samples) sample.groups[0].files["cpuset.cpus.effective"] = "4-7\n";
+    const timed = samples[1], child = group(childPath, [101, 102]);
+    timed.groups[0].files["cgroup.procs"] = "100\n";
+    child.files["cpuset.cpus.effective"] = "5-6\n";
+    timed.groups.push(child);
+    for (const process of timed.processes.slice(1)) process.cgroup = `0::${childPath}\n`;
+  }, bound);
+  const native = { hostSubject: { executionWindow: { startedAt: 10, endedAt: 80 },
+    processWindows: ["compiler", "browser"].map((kind) => ({ kind, startedAt: 20, endedAt: 70 })),
+    subjectSha256: "d".repeat(64), filesSha256: "e".repeat(64),
+    toolIdentities: { node: "a".repeat(64), browser: "b".repeat(64) } } };
+  assert.equal(composeHostProof(bound, native, f.observation()).policy, "observed-client-cpu-partition");
+  const file = join(f.directory, "samples.jsonl"), rows = readFileSync(file, "utf8").trim().split("\n").map(JSON.parse);
+  for (const cpus of ["0,5-6\n", null]) {
+    rows[1].groups[1].files["cpuset.cpus.effective"] = cpus;
+    writeFileSync(file, rows.map((s) => JSON.stringify(s) + "\n").join(""));
+    const observed = f.observation();
+    assert.equal(observed.checks.accounting, false);
+    assert.equal(composeHostProof(bound, native, observed).resources, "blocked");
+  }
+});
+
+for (const workload of ["live-delivery", "recoverable-live"]) test(`saved ${workload} actor proof requires the actual app and renderer in the same window`, (t) => {
+  const f = browserFixture(t, "app", true, workload);
+  const [app] = f.native.hostSubject.participants, { node, browser } = f.native.hostSubject.toolIdentities;
+  const window = (startedAt, endedAt, renderer = { startedAt, endedAt }) => ({ app: app.app, startedAt, endedAt, renderer });
+  const windows = [window(30, 60)];
+  const proof = (participants = [app], window = windows) => inspectLiveActors(f.bound, replayBrowser(f), { node, browser }, participants, window);
+  assert.equal(proof(), true);
+  assert.equal(proof([]), false);
+  assert.equal(proof([app], [window(30, 40)]), false);
+  assert.equal(proof([app], [window(50, 50), window(50, 50)]), false);
+  assert.equal(proof([app], [window(30, 50), window(50, 60)]), false);
+  assert.equal(proof([app], [window(30, 45, null), window(45, 60)]), false,
+    "a failed scenario without a service observation cannot borrow a later success");
+  assert.equal(proof([app], [window(30, 45), window(45, 60)]), false,
+    "a failed scenario with a renderer cannot borrow a later success");
+  const timed = f.observation.samples[1], { kernel } = timed.docker.participants[0];
+  const child = group(`${kernel.groups[0].path}/worker`, [302]);
+  child.files["cpuset.cpus.effective"] = "1\n";
+  kernel.groups.push(child);
+  kernel.processes.push({ stat: stat(302, "worker"), cgroup: `0::${child.path}\n`, executableSha256: "4".repeat(64), type: null });
+  assert.equal(proof(), true);
+  child.files["cpuset.cpus.effective"] = "0-1\n";
+  assert.equal(proof(), false);
+  child.files["cpuset.cpus.effective"] = "1\n";
+  timed.processes.find((p) => p.type === "--type=renderer").executableSha256 = "0".repeat(64);
+  assert.equal(proof(), false);
+  assert.equal(proof([app], [window(30, 60, null)]), true, "a startup failure with no renderer still has actual service placement");
+});
+
+for (const [role, id, allowed, escaped] of [
+  ["browser", 102, "4,6-7", "0,4,6-7"],
+  ["upstream", 302, "3", "0,3"],
+  ["application", 303, "1", "1-2"],
+]) test(`saved browser CPU proof bounds the ${role} child's own effective CPU set`, (t) => {
+  const f = browserFixture(t, "app", true), timed = f.observation.samples[1], control = "cpuset.cpus.effective";
+  const participant = f.native.hostSubject.participants.find((p) => p.role === role);
+  const scope = role === "browser" ? timed : timed.docker.participants.find((r) => r.container.id === participant.id).kernel;
+  const root = scope.groups[0], child = group(`${root.path}/workers`, [id]);
+  child.files[control] = `${allowed}\n`;
+  scope.groups.push(child);
+  const cgroup = `0::${child.path}\n`;
+  if (role === "browser") {
+    root.files["cgroup.procs"] = "100\n101\n";
+    scope.processes.find((p) => processIdentity(p.stat).pid === id).cgroup = cgroup;
+  } else {
+    scope.processes.push({ stat: stat(id, "worker"), cgroup, executableSha256: "4".repeat(64), type: null });
+  }
+  assert.deepEqual(browserResourceResults(f), ["verified", "verified"]);
+  child.files[control] = `${escaped}\n`;
+  assert.deepEqual(browserResourceResults(f), ["blocked", "blocked"]);
+  if (role === "browser") assert.equal(replayBrowser(f).checks.accounting, false);
+});
 
 function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbsent = true } = {}) {
   const f = browserFixture(t, "corten"), template = f.observation.samples[1], p = f.native.hostSubject.participants[0];
@@ -359,6 +480,21 @@ test("actual inherited controls need no invented cap; terminal observations comp
   assert.equal(composeHostProof(binding, native, observed).resources, "verified");
   native.hostSubject.processWindows[0].endedAt = 40;
   assert.equal(composeHostProof(binding, native, observed).resources, "blocked");
+});
+test("only a verified marketplace lifetime exposes its sealed, same-boot terminal clock", (t) => {
+  const marketplace = { ...binding, request: { ...binding.request, group: "localized-marketplace" } };
+  const clock = { bootId: "boot", uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" };
+  const withClock = ({ terminal }) => { terminal.terminalClock = clock; };
+  const clean = fixture(t, withClock, marketplace).observation();
+  assert.equal(clean.status, "verified");
+  assert.deepEqual(clean.terminalClock, clock);
+  assert.equal(fixture(t, ({ terminal }) => {
+    withClock({ terminal }); terminal.empty = false;
+  }, marketplace).observation().terminalClock, undefined);
+  assert.throws(() => fixture(t, ({ terminal }) => {
+    terminal.terminalClock = { ...clock, bootId: "other" };
+  }, marketplace).observation());
+  assert.throws(() => fixture(t, withClock).observation());
 });
 test("missing effective command controls cannot verify a client lifetime", (t) => {
   const f = fixture(t, ({ samples }) => {

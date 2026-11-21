@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { contractSha256, definition, groupNames, registrySchema, retainedFamilies, selectedApps } from "../registry.mjs";
+import { contractSha256, definition, groupNames, nativeArtifactRoot, registrySchema, retainedFamilies, selectedApps } from "../registry.mjs";
 import { runnerFor } from "../run.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { coverage } from "../evidence.mjs";
@@ -15,14 +15,17 @@ import { parseArgs as jsonOptions } from "../../json-api/contract.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
 import { nightly } from "../../marketplace/droplet-contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
-import { parseOptions as browserOptions, settings as browserSettings } from "../../fullstack-browser/contract.mjs";
+import { browserContainers, browserCpus, parseOptions as browserOptions, settings as browserSettings } from "../../fullstack-browser/contract.mjs";
 import { createClientWorkload } from "../client.mjs";
 import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../live/native.mjs";
 import { fanoutProfile } from "../../live/fanout.mjs";
 import { budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
-import { alternateFleetMode, catalogFleetPlacement, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
+import { clientActorCpus, hardeningActorCpus, liveActorCpus, liveApplication, liveGroup } from "./native-roles.mjs";
+import { catalogFleetPlacement, fleetCatalogSlugs, host, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
 
 export const schema = "benchmark-isolated-contract/v1";
+export const alternateCampaignPlacements = Object.freeze(fleetCatalogSlugs.regions
+  .filter((region) => region !== host.region).map((region) => `dedicated-${region}`));
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 // New native v2 exposes a pure parser. Older committed runners retain their exact
 // reviewed source pin; a missing/invalid dependency inside a present parser fails.
@@ -47,8 +50,8 @@ const exact = (value, keys, at) => {
 // below cannot silently survive a change to their actual default/CLI implementation.
 const snapshotPins = freeze({
   ...(!clientParser ? { "bench/client-heavy/run.mjs": "71fc21c81f109b4ae43eb6585c675fe3e9eb49fa526de57ab20e8d4f48edbb8e" } : {}),
-  // Native HTTP/wire capture and registered ports changed; CLI/defaults did not.
-  "bench/live/parity.mjs": "b50bf096ae7a310a88c2a4cc226f60dbad812721bce28636511214caf2f23b74",
+  // Native live adds explicit isolation and actor receipts; workload defaults are unchanged.
+  "bench/live/parity.mjs": "d02cefc6f8d44a5b8ab4f744232abbae996760df4906e8221c9a45c657428c59",
 });
 const clientSourceRoots = Object.freeze([...(clientParser?.sourceRoots ?? [])]);
 export const sourceRoots = Object.freeze([...new Set(["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", ".dockerignore", ".gitignore",
@@ -130,7 +133,7 @@ const selection = (group) => ({ registry: registrySchema, group, contractSha256:
 
 function subjectFor(r, sources, campaignMode) {
   assert.ok(campaignMode === "dedicated" || campaignMode === "legacy"
-    || campaignMode === alternateFleetMode && r.group !== "catalog-page"
+    || alternateCampaignPlacements.includes(campaignMode) && r.group !== "catalog-page"
     || campaignMode === catalogFleetPlacement.loadLayout && r.group === "catalog-page", "unknown campaign placement");
   const inputs = Object.fromEntries(Object.entries(latestStableSources).filter(([key]) => key === "policy" || r.group === "client-heavy").map(([key, path]) => {
     const bytes = git(["show", `${r.commit}:${path}`]);
@@ -160,10 +163,7 @@ function native(group, round, recipe, reviewId) {
   const { entry, selection: flags } = runnerFor(group);
   const base = [round, ...flags], args = [...base], changes = [];
   let defaults, effective, settings = null;
-  const directory = group === "catalog-page" ? "catalog" : group === "localized-marketplace" ? "marketplace" : group;
-  const artifactRoot = group === "client-heavy" ? `bench/client-heavy/work/${round}`
-    : group === "fullstack-browser" ? `bench/fullstack-browser/work/${round}`
-      : group === "live-delivery" ? `bench/live/results/parity/${round}` : `bench/${directory}/results/${round}`;
+  const artifactRoot = nativeArtifactRoot(group, round);
   if (["catalog-page", "json-api", "localized-marketplace"].includes(group)) {
     const parse = group === "catalog-page" ? catalogOptions : group === "json-api" ? jsonOptions : marketplaceOptions;
     defaults = parse(base, available); args.push("--build");
@@ -183,7 +183,7 @@ function native(group, round, recipe, reviewId) {
     defaults.apps = [...selectedApps(group)]; effective.apps = [...selectedApps(group)];
   } else if (group === "fullstack-browser") {
     defaults = { targets: null, out: null, apps: selectedApps(group), cases: null, build: false };
-    args.push("--build", "--out", artifactRoot);
+    args.push("--build", "--out", artifactRoot, "--isolated");
     effective = browserOptions(args); settings = clone(browserSettings);
   } else if (group === "client-heavy") {
     if (clientParser) {
@@ -204,8 +204,8 @@ function native(group, round, recipe, reviewId) {
     }
   } else if (["live-delivery", "recoverable-live"].includes(group)) {
     defaults = { apps: selectedApps(group), build: false, profile: "bounded", measure: false };
-    args.push("--build");
-    effective = { ...defaults, build: true };
+    args.push("--build", "--isolated");
+    effective = { ...defaults, build: true, isolated: true };
     if (recipe === "native-feed-measure") {
       args.push("--profile", "native-feed", "--measure"); effective.profile = "native-feed"; effective.measure = true;
       changes.push({ profile: "native-feed", measure: true, reason: "explicit profile for every candidate, not a per-app fallback" });
@@ -215,7 +215,7 @@ function native(group, round, recipe, reviewId) {
       measurement: effective.measure ? clone(fanoutProfile) : null };
   } else {
     defaults = { round, profile: "bounded", review: null, build: false, verify: {}, out: artifactRoot, nodeModules: "node_modules" };
-    args.push("--build", "--review", reviewId);
+    args.push("--build", "--review", reviewId, "--isolated");
     effective = hardeningOptions(args); settings = budgets(effective.profile);
   }
   return { invocation: { executable: "node", argv: [entry, ...args], cwd: "repository-root", shell: false },
@@ -225,6 +225,8 @@ function native(group, round, recipe, reviewId) {
 }
 
 function resources(group, recipe, campaignMode) {
+  if (group === "fullstack-browser") return { ...browserContainers, browserCpus, requestedCpuEnv: null, state: "unknown",
+    requiredEvidence: "effective command cgroup cpuset for the browser and driver; Docker and kernel CPU/memory receipts for application and upstream" };
   if (group === "mixed-production") return { functional: { app: { cpu: 1, memoryBytes: 2 ** 30 },
     upstream: { cpu: 2, memoryBytes: 512 * 2 ** 20 }, capture: { cpu: 2, memoryBytes: 2 ** 30 }, pinning: "not available in functional capture" },
     measurement: ["mixed-measure", "mixed-production-measure"].includes(recipe) ? { cpu: cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
@@ -242,12 +244,13 @@ function resources(group, recipe, campaignMode) {
       hostProcesses: "unisolated driver; JSON functional checker also runs on host", state: "unknown",
       requiredEvidence: "actual per-role container quotas/cpusets/memory, tool identities, host topology and quiet-host/headroom observations" };
   }
-  if (group === "hardening") return { budget: budgets().resources, requestedCpuEnv: null, state: "blocked",
-    requiredEvidence: "all native target/proxy/upstream processes charged; native pinning adapter is absent; direct/edge receipts stay separate" };
-  return { app: group === "client-heavy" ? null : { cpu: 1, memoryBytes: 2 ** 30 },
-    upstream: group === "fullstack-browser" ? { cpu: 1, memoryBytes: 256 * 2 ** 20 } : null,
-    requestedCpuEnv: null, browser: "host process outside app budget; no native OS isolation/pinning interface",
-    state: "blocked", requiredEvidence: "reviewed native isolation adapter plus actual browser/server process and resource inventory" };
+  if (group === "hardening") return { budget: budgets().resources, actorCpus: clone(hardeningActorCpus), requestedCpuEnv: null, state: "unknown",
+    requiredEvidence: "effective CPU sets for ordinary bounded service and recovery participants; connection-flood resistance not measured" };
+  if (liveGroup(group)) return { app: liveApplication, upstream: null, actorCpus: liveActorCpus, requestedCpuEnv: null, state: "unknown",
+    requiredEvidence: "actual application Docker and kernel limits; same-window application and Chromium/driver CPU placement" };
+  assert.equal(group, "client-heavy");
+  return { app: null, upstream: null, actorCpus: clientActorCpus, requestedCpuEnv: null, state: "unknown",
+    requiredEvidence: "delegated command and observed browser/compiler/loopback server descendants; no additional quota or memory cap" };
 }
 function preparation(group) {
   const fixtures = ["catalog-page", "json-api", "localized-marketplace"].includes(group)

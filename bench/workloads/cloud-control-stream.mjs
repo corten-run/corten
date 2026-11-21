@@ -104,15 +104,21 @@ export function streamRecoveryReady(local, monitor) {
   return Date.now() >= closed.recoverAfterMs;
 }
 
-export function sealedMonitor(local, state) {
-  const m = state.control.monitor;
-  assert.equal(m.phase, "closed"); assert.ok(!existsSync(join(local, "monitor-invalid.json")));
+export function settledMonitor(local, state) {
+  const m = state.control.monitor, terminal = localStreamStatus(local);
+  assert.ok(m.phase === "closed" && terminal.kind === "terminal" || m.phase === "invalid" && terminal.kind === "invalid",
+    "saved monitor is not settled");
   assert.ok(state.control.sealed.includes("bootstrap") && state.control.ledger.every(r => r.localTerminal));
   const start = digest(`set -euo pipefail\nsystemctl start ${state.unit}\n`);
   assert.ok(state.control.ledger.some(r => r.request.epoch === "bootstrap" && r.code === 0
     && r.request.invocation.channel === "ssh" && r.request.invocation.requestSha256 === start), "acknowledged unit start required");
   assert.ok(streamRecoveryReady(local, m), "closed monitor lease required");
-  const registration = monitorRegistration(local, state), terminal = localStreamStatus(local);
+  return { registration: monitorRegistration(local, state), terminal };
+}
+
+export function sealedMonitor(local, state) {
+  assert.equal(state.control.monitor.phase, "closed");
+  const { registration, terminal } = settledMonitor(local, state);
   const closed = JSON.parse(regular(join(local, "monitor-local-closed.json")));
   assert.ok(closed.code === 0 && closed.signal === null);
   assert.ok(terminal.kind === "terminal" && terminal.nativeTerminal === true && terminal.localClosed === true && terminal.remoteDrained === false);

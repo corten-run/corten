@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { accountId, commit, context, harness, syntheticDelivery, syntheticProviderRequest } from "./cloud-fixtures.mjs";
-import { controllerPaths, nativePaths, parseProductionArgs, productionMain } from "./cloud-production.mjs";
+import { controllerPaths, nativePaths, parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
 import { benchPackagePaths } from "./droplet.mjs";
 import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { createProviderEngine } from "./cloud-engine-test-fixture.mjs";
@@ -18,6 +18,7 @@ import { registration as streamRegistration } from "./test-fixtures/control-stre
 import { controlRegistration, controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { digest } from "./cloud-local.mjs";
+import { fleetOperationPlan } from "./fleet.mjs";
 
 function productionHarness(t, flags = {}) {
   const h = harness(t, flags), calls = [], stdout = [];
@@ -60,7 +61,7 @@ function productionHarness(t, flags = {}) {
       ? { status: 1, stdout: "", stderr: "" } : h.run(binary, args, options.timeout);
     return trackedSsh ? { ...result, stderr: "CORTEN_CONTROL " + request.invocation.id + " " + "d".repeat(64) + "\nCORTEN_RESULT " + request.invocation.id + " " + result.status + "\n" } : result;
   };
-  const deps = { spawn, providerRequest: syntheticProviderRequest(h, (binary, argv, timeout) => {
+  const deps = { spawn, roleCheck: flags.roleCheck ?? (() => []), providerRequest: syntheticProviderRequest(h, (binary, argv, timeout) => {
     calls.push([binary, argv, { timeout }]); return h.run(binary, argv, timeout, true);
   }), repo: h.repo, inspect: async () => h.report(), sleep: async () => {}, interrupted: () => flags.cancelled, write: (v) => stdout.push(JSON.parse(v)) };
   deps.streamSpawn = (binary, argv) => {
@@ -742,6 +743,25 @@ test("normal new state directories preview without writes and create a bounded c
   assert.ok(existsSync(stateDir)); assert.ok(!existsSync(join(stateDir, "groups-r21"))); assert.equal(p.h.creates, 0);
 });
 
+test("role preflight blocks preview and rechecks before the first provider operation under the launch lock", async (t) => {
+  const denied = "hardening: isolated benign service/recovery actor proof unavailable; connection-flood resistance not measured";
+  const blocked = productionHarness(t, { roleCheck: () => [denied] });
+  assert.equal(await productionMain([...blocked.args("--detach"), "--print-approval"], blocked.deps), 2);
+  assert.deepEqual(blocked.stdout.at(-1).missing, [denied]);
+  assert.ok(blocked.calls.every(([binary]) => binary === "git"));
+  assert.ok(!existsSync(blocked.h.local));
+
+  let checks = 0;
+  const locked = productionHarness(t, { roleCheck: ({ commit: measured, group, mode }) => {
+    assert.equal(measured, commit); assert.equal(group, undefined); assert.equal(mode, undefined);
+    return ++checks === 4 ? [denied] : [];
+  } });
+  const approved = await locked.approve("--detach");
+  await assert.rejects(productionMain(approved, locked.deps), /integration missing/);
+  assert.equal(checks, 4); assert.equal(locked.h.creates, 0);
+  assert.ok(locked.calls.every(([binary]) => binary === "git"));
+});
+
 test("no/mismatched approval, dirty/mismatched source, unmerged head and fetch failure make no cloud calls", async (t) => {
   for (const flags of [{}, { dirty: true }, { wrongSource: true }, { unmerged: true }, { fetchError: true }]) {
     const p = productionHarness(t, flags);
@@ -910,7 +930,9 @@ test("retargeting an ordinary alias invalidates the approved physical root befor
 });
 
 test("production grammar permits authorization only, never arbitrary settings/adapters", () => {
-  assert.equal(controllerPaths.length, 33);
+  assert.equal(controllerPaths.length, 37);
+  for (const path of ["plan.mjs", "bounded-requests.mjs", "dependency-recovery-contract.mjs"])
+    assert.ok(controllerPaths.includes(`bench/hardening/${path}`), `missing pinned fleet dependency: ${path}`);
   assert.ok(controllerPaths.includes("bench/workloads/cloud-sealed-collection.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-cancellation.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-retirement.mjs"));
@@ -933,16 +955,45 @@ test("current saved-verifier checkout requirement fails before any provider acce
 });
 
 function groupProduction(t, flags = {}) {
-  const p = productionHarness(t, flags), path = join(p.h.temp, "fleet.json");
+  flags.fleetGroup = groupNames[0];
+  const p = productionHarness(t, flags), root = dirname(p.h.base), path = join(root, "fleet-r21.json");
   const fleet = fleetPlan({ round: "r21", commit, token: "f".repeat(16), sshKey: "42", provider: { accountId, context },
-    tokens: Object.fromEntries(groupNames.map((group, i) => [group, (i + 1).toString(16).padStart(16, "0")])) });
+    tokens: Object.fromEntries(groupNames.map((group, i) => [group, (i + 1).toString(16).padStart(16, "0")])) },
+    undefined, undefined, { stagedPlacement: true });
   writeFileSync(path, JSON.stringify(fleet));
   const values = [...p.args("--detach"), "--group", groupNames[0], "--fleet", path];
   return { p, path, fleet, values, async approval() {
     assert.equal(await productionMain([...values, "--print-approval"], p.deps), 3);
-    return [...values, "--approve-reviewed-merged-ready", p.stdout.at(-1).approvalSha256];
+    const { subject, approvalSha256 } = await fleetOperationPlan({ root, round: "r21", detach: true }, { repo: p.h.repo,
+      plan: (options, deps) => productionPlan(options, { ...deps, roleCheck: p.deps.roleCheck }),
+      run: (binary, argv, timeout = 60000) => p.deps.spawn(binary, argv, { timeout }) });
+    const childApproval = p.stdout.at(-1).approvalSha256;
+    assert.equal(subject.jobs[0].approvalSha256, childApproval);
+    writeFileSync(join(root, "launch-intent.json"), JSON.stringify({ schema: "benchmark-group-fleet-staged-launch-intent/v1",
+      approvalSha256, subject }));
+    writeFileSync(join(root, ".fleet-operation.lock"), JSON.stringify({ pid: process.pid, approvalSha256 }));
+    return [...values, "--approve-reviewed-merged-ready", childApproval];
   } };
 }
+
+test("v5 child CLI cannot launch without staged fleet admission or override its region", async (t) => {
+  const g = groupProduction(t);
+  assert.equal(await productionMain([...g.values, "--print-approval"], g.p.deps), 3);
+  const firstApproval = g.p.stdout.at(-1).approvalSha256;
+  await assert.rejects(productionMain([...g.values, "--approve-reviewed-merged-ready", firstApproval], g.p.deps), /launch-intent/);
+  const approved = await g.approval();
+  const lock = join(dirname(g.p.h.base), ".fleet-operation.lock");
+  const savedLock = JSON.parse(readFileSync(lock));
+  writeFileSync(lock, JSON.stringify({ ...savedLock, approvalSha256: "7".repeat(64) }));
+  await assert.rejects(productionMain(approved, g.p.deps), /active batch lock/);
+  const second = [...g.values];
+  second[second.indexOf("--group") + 1] = groupNames[1];
+  second[second.indexOf("--state-dir") + 1] = join(dirname(g.p.h.base), groupNames[1]);
+  await assert.rejects(productionMain([...second, "--print-approval"], g.p.deps), /only fleet admission/);
+  await assert.rejects(productionMain([...second, "--placement", "dedicated-lon1", "--print-approval"], g.p.deps), /unknown option/);
+  assert.equal(g.p.h.creates, 0);
+  assert.ok(g.p.calls.every(([binary]) => binary === "git"));
+});
 
 test("group production approval binds complete fleet bytes before any provider access", async (t) => {
   for (const mutate of [(g) => g.fleet.jobs.pop(), (g) => g.fleet.provider.context = "other",
@@ -962,13 +1013,30 @@ test("approved group composition runs only its native group and collection canno
   assert.equal(await productionMain(await g.approval(), g.p.deps), 3);
   assert.equal(g.p.h.creates, 1); assert.equal(g.p.h.deletes, 0);
   assert.equal(g.p.h.saved().group, groupNames[0]);
+  const known = join(g.p.h.local, "known_hosts"), launchKey = readFileSync(known);
+  assert.equal(g.p.h.saved().launchHostKeySha256, digest(launchKey));
+  const ssh = g.p.calls.filter(([binary]) => binary === "ssh").map(([, argv]) => argv);
+  assert.ok(ssh[0].includes("StrictHostKeyChecking=accept-new") && ssh[0].includes("GlobalKnownHostsFile=none"));
+  assert.ok(ssh.slice(1).every(argv => argv.includes("StrictHostKeyChecking=yes") && argv.some(arg => arg.includes(".launch-host-key-"))));
   assert.deepEqual(g.p.h.saved().selection.groups.map((row) => row.group), [groupNames[0]]);
   assert.ok(readFileSync(join(g.p.h.local, "job.sh"), "utf8").includes(`--group '${groupNames[0]}'`));
   const values = g.p.args();
   assert.equal(await productionMain([...values, "--print-approval"], g.p.deps), 3);
+  assert.equal(g.p.stdout.at(-1).launchHostKeySha256, digest(launchKey));
   assert.equal(await productionMain([...values, "--approve-reviewed-merged-ready", g.p.stdout.at(-1).approvalSha256], g.p.deps), 3);
   assert.equal(g.p.h.creates, 1); assert.equal(g.p.h.deletes, 0);
   await assert.rejects(productionMain([...values, "--group", groupNames[1], "--fleet", g.path, "--print-approval"], g.p.deps));
+});
+
+test("replacing the launch host key after collection approval refuses before provider access", async (t) => {
+  const flags = { active: true }, g = groupProduction(t, flags);
+  assert.equal(await productionMain(await g.approval(), g.p.deps), 3);
+  const approved = await g.p.approve(), before = g.p.calls.length, known = join(g.p.h.local, "known_hosts");
+  flags.afterFetch = () => writeFileSync(known, "synthetic replacement\n");
+  await assert.rejects(productionMain(approved, g.p.deps), /saved host key differs from launch/);
+  await assert.rejects(productionMain([...g.p.args(), "--print-approval"], g.p.deps), /saved host key differs from launch/);
+  assert.ok(g.p.calls.slice(before).every(([binary]) => binary === "git"));
+  assert.equal(g.p.h.deletes, 0);
 });
 
 test("changing the fleet between preview and merged-source gate refuses allocation", async (t) => {
