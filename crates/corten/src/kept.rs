@@ -497,21 +497,18 @@ impl Answers {
     fn find(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Result<(Arc<Entry>, u64), bool> {
         let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
-        let mut given = false;
+        let Some(copies) = inner.at.get(at) else { return Err(false) };
         // The copy that stands: one that no longer does is in no other's way until it goes.
-        for entry in inner.at.get(at).into_iter().flatten().filter(|entry| entry.is_for(host, language)) {
-            if entry.stands(&self.0, now) {
-                // Stored only when it changes: a page read often is marked once for each pass of
-                // the hand.
-                if !entry.used.load(Ordering::Relaxed) {
-                    entry.used.store(true, Ordering::Relaxed);
-                    entry.given.store(true, Ordering::Relaxed);
-                }
-                return Ok((entry.clone(), entry.age(now)));
-            }
-            given |= entry.given.load(Ordering::Relaxed);
+        let Some(entry) = copies.iter().find(|entry| entry.is_for(host, language) && entry.stands(&self.0, now)) else {
+            return Err(copies.iter().any(|entry| entry.is_for(host, language) && entry.given.load(Ordering::Relaxed)));
+        };
+        let age = entry.age(now);
+        // Stored only when it changes: a page read often is marked once for each pass of the hand.
+        if !entry.used.load(Ordering::Relaxed) {
+            entry.used.store(true, Ordering::Relaxed);
+            entry.given.store(true, Ordering::Relaxed);
         }
-        Err(given)
+        Ok((entry.clone(), age))
     }
 
     /// Keeps `entry`, in the place of the copy it stands for, and makes room for it.
