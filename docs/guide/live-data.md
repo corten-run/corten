@@ -658,10 +658,44 @@ benchmark (200 clients, 50 writes a second, each instance killed and restarted u
 every patch arrived in both committed runs: 777,600 of 777,600, and 800,000 of 800,000 with
 clients back on the other instance after 1.1 s at the median (measured on async-nats 0.50,
 `examples/listings-feed/results/failover-r1.json` and `failover-r2.json`). Those 200
-clients are the benchmark's own Node client of the feed's protocol, on its own retry schedule,
-and it counts a gap in `seq` as lost rather than loading a snapshot: they show what the server
-sends through a failover. Beside them a Chromium page runs `subscribe()` itself through the
-same run, and it lost nothing either (3,888 of 3,888 and 4,000 of 4,000, one snapshot each).
+clients are the benchmark's own Node client of the feed's protocol. When a stream is answered
+with an HTTP error they wait as `subscribe()` does (1 s, doubling to 30 s while the errors go
+on, and 1 s again once a stream has opened), but they are not an EventSource: they retry a
+failed snapshot on their own schedule and count a gap in `seq` as lost rather than loading a
+snapshot, so they show what the server sends through a failover. Beside them a Chromium page runs `subscribe()`
+itself through the same run, and it lost nothing either (3,888 of 3,888 and 4,000 of 4,000, one
+snapshot each).
+
+Behind nginx with more than one instance in one upstream with its passive health checks
+(`max_fails`), streams can keep a restarted instance out, as the benchmark found; to avoid it, route
+the app's stream addresses to an `upstream` of their own with `max_fails=0` on its servers, as
+the benchmark's [`nginx.conf`](../../examples/listings-feed/bench/nginx.conf) does for
+`/feeds/<seller>/live` (its location assumes a seller key without `/`; match your own routes).
+nginx lets a server that failed back in through one trial request every `fail_timeout` and
+clears its failures only when a trial ends well, and a stream does not end. With one upstream for
+everything, an instance that had restarted could stay out of one nginx worker's upstream a trial
+at a time, and once the other instance was killed that worker answered reconnects 502 itself
+(`no live upstreams`, 406 lines from one worker over 16 s while the restarted instance was up).
+In 1 of 11 runs at `e33484d44`, the Node clients' 237 timed reconnects (those that resumed
+with a patch) took up to 17.3 s, as long as four failed tries on the 1, 2, 4 and 8 s backoff take,
+and 60 more fell past the replay window and loaded a new snapshot (not timed). In 6 runs
+at `389ec774d`, with the streams' own upstream, no Node client got an HTTP error, the slowest
+took 1.3 to 1.6 s, and the median of the runs' medians went from 1.1 to 1.25 s: about half of
+the reconnects after a kill first try the killed instance (150 to 152 stream connects timed out
+a run). Every client caught up in every run, some through a snapshot.
+
+`max_fails=0` turns off only the passive exclusion: nginx still sends a new stream to a dead or
+starting instance and moves it to the next one after a connect error or timeout, under
+`proxy_next_upstream`, while another server and a try (`proxy_next_upstream_tries`) are left and
+before any byte is sent to the browser. A killed container's address often does not refuse a
+connection, it does not answer, so the benchmark's streams use a 250 ms
+`proxy_connect_timeout`, chosen for its local network; size yours for your own. That bounds only
+the connect: it does not move a stream that has already opened, or bound an instance that accepts
+and does not answer (`proxy_read_timeout` does, 1 hour in the sample). Where the load balancer can
+check readiness or drain an instance before it stops, prefer that. nginx keeps idle upstream
+connections by default, so keep them shorter than the app's header timeout as [Deploy](deploy.md)
+says.
+
 The runtime checks the envelope of what it is sent: a snapshot's `epoch`, `seq` and `rows`, and a
 patch's `seq` and each change's `op` and `id` (and an upsert's `value`). An answer that is not a
 snapshot (from a server of another version than the page's runtime, or a route that answers other
