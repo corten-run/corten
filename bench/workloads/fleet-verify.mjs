@@ -22,6 +22,21 @@ export function fleetRoot(path, repo) {
   return root;
 }
 export function present(path) { return lstatSync(path, { throwIfNoEntry: false }) !== undefined; }
+// For inspection only. A dead original batch owner does not unlock the fleet.
+function fleetLockSnapshot(root) {
+  const path = join(root, ".fleet-operation.lock");
+  try {
+    if (!present(path)) return null;
+    const bytes = regular(path, 1024), { pid, approvalSha256, ...rest } = JSON.parse(bytes);
+    assert.deepEqual(rest, {});
+    assert.ok(Number.isSafeInteger(pid) && pid > 0);
+    full(approvalSha256, /[a-f0-9]{64}/, "fleet lock approval");
+    try { process.kill(pid, 0); }
+    catch (error) { if (error.code === "ESRCH") return digest(bytes); }
+  } catch { /* Unreadable, foreign and prepare locks are not settled batch locks. */ }
+  return "busy";
+}
+
 export function readFleet(root, round) {
   roundName(round); physical(root);
   const path = join(root, `fleet-${round}.json`), bytes = regular(path, 1024 * 1024), manifest = validateFleet(JSON.parse(bytes));
@@ -191,6 +206,10 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
   } catch { return { ...base, error: "fleet-invalid", groups: [] }; }
   const result = { ...base, round, commit, fleetSha256: fleet.manifest.fleetSha256,
     manifestSha256: fleet.manifestSha256, selection: fleet.manifest.selection, groups: [] };
+  const lock = fleetLockSnapshot(fleet.root);
+  const busy = () => ({ ...result, fleetLock: "busy", error: "fleet-operation-busy", groups: [] });
+  if (lock === "busy") return busy();
+  if (lock !== null) result.fleetLock = "retained";
   const snapshots = [], identities = new Set();
   let remaining;
   if (stagedFleet(fleet.manifest) && present(join(fleet.root, "remaining-intent.json"))) {
@@ -243,9 +262,9 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
       snapshots.push(verified.snapshot); result.groups.push(verified.row);
     } catch { result.groups.push({ group, outcome: "error", error: "group-evidence-invalid" }); }
   }
+  let evidenceValid = true;
   try {
     assert.ok(!interrupted());
-    assert.ok(!present(join(fleet.root, ".fleet-operation.lock")), "fleet-operation-active");
     assert.equal(readFleet(fleet.root, round).manifestSha256, fleet.manifestSha256);
     if (remaining) {
       assert.equal(readRemainingIntent(fleet).sha256, remaining.sha256);
@@ -253,8 +272,10 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
     }
     for (const snapshot of snapshots) recheckCollectedGroup(fleet, snapshot);
     assert.ok(!duplicate);
-  } catch { return { ...result, error: "fleet-evidence-changed-or-duplicated" }; }
-  if (result.groups.every((g) => g.outcome === "verified")) result.status = "verified";
+  } catch { evidenceValid = false; }
+  if (fleetLockSnapshot(fleet.root) !== lock) return busy();
+  if (!evidenceValid) return { ...result, error: "fleet-evidence-changed-or-duplicated" };
+  if (lock === null && result.groups.every((g) => g.outcome === "verified")) result.status = "verified";
   return result;
 }
 

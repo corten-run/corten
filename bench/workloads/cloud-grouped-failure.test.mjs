@@ -210,14 +210,18 @@ test("a late stream-seal failure retains native-validated data as custody only",
     assert.equal(s[key], undefined);
 });
 
-test("fleet verification reads retired custody behind settled locks, not live owners or collectors", async (t) => {
+test("fleet verification reads retired custody behind settled root and child locks, not live owners or collectors", async (t) => {
   const group = "fullstack-browser", f = fixture(t, group, { fleetLayout: true, deleteLost: true });
+  const batchLock = join(f.root, ".fleet-operation.lock");
+  const batchOwner = (pid) => `${JSON.stringify({ pid, approvalSha256: "5".repeat(64) }, null, 2)}\n`;
+  writeFileSync(batchLock, batchOwner(retiredPid));
   const verify = async () => {
     const before = treeHash(f.root);
     const report = await verifyFleet({ root: f.root, round, commit }, { inspect: () => assert.fail("retirement must not replay native data") });
     assert.equal(treeHash(f.root), before);
     assert.equal(report.publishableBaseline, false); assert.equal(report.status, "incomplete");
     assert.equal(report.error, undefined);
+    assert.equal(report.fleetLock, "retained");
     assert.equal(readGroup(readFleet(f.root, round), group).outcome, "busy", "mutating fleet paths still see retained locks");
     return report.groups.find(row => row.group === group).outcome;
   };
@@ -237,5 +241,18 @@ test("fleet verification reads retired custody behind settled locks, not live ow
   writeFileSync(launch, JSON.stringify({ pid: process.pid, round }));
   assert.equal(await verify(), "busy");
   assert.equal(readFileSync(op, "utf8"), owner);
+  writeFileSync(op, retainedOperation);
+  writeFileSync(launch, retainedLaunch);
+
+  writeFileSync(batchLock, batchOwner(process.pid));
+  const live = await verifyFleet({ root: f.root, round, commit }, { inspect: () => assert.fail("live fleet must not replay") });
+  assert.equal(live.fleetLock, "busy"); assert.equal(live.error, "fleet-operation-busy");
+  assert.deepEqual(live.groups, []);
+  assert.equal(readFileSync(batchLock, "utf8"), batchOwner(process.pid));
+
+  writeFileSync(batchLock, batchOwner(retiredPid));
+  writeFileSync(join(f.h.local, "failed-native-results.tgz"), "changed custody");
+  assert.equal(await verify(), "error", "a retained root lock cannot vouch for changed custody");
+  assert.equal(readFileSync(batchLock, "utf8"), batchOwner(retiredPid));
   assert.equal(f.h.deletes, 1);
 });
