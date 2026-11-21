@@ -9,6 +9,11 @@ import { sha256 } from "./capture.mjs";
 export const toolPackages = ["@playwright/test", "playwright", "playwright-core"];
 export const mountSourceHash = (path) => sha256(path.replaceAll("\\", "/").replace(/^([A-Za-z]):/, (_, drive) => "/" + drive.toLowerCase())
   .replace(/^\/run\/desktop\/mnt\/host(?=\/)/, "").replace(/^\/host_mnt(?=\/)/, "").replace(/\/$/, ""));
+
+export function executionMountArgs(buildRoot, folder) {
+  return ["-v", `${buildRoot}:/src:ro`, "-v", `${join(folder, "execution/dependencies")}:/src/node_modules:ro`, "-v", `${folder}:/out`, "-w", "/src"];
+}
+
 const safe = (path) => typeof path === "string" && path.length <= 1024 && !/[\\:"<>|?*\x00-\x1f\x7f]/.test(path)
   && path.split("/").every((v) => v && v !== "." && v !== ".." && !/[. ]$/.test(v) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(v));
 

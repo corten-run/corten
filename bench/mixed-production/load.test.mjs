@@ -128,17 +128,25 @@ test("completed negative qualification never cleans up an uncreated CPU reader o
     const result = await measureNativeGroup({ summary, options, folder, repo, nativeBuildRoot: repo, runId, network: `${runId}-net`,
       nodeImage: { Id: imageId }, browserImage: { Id: imageId }, plan, records, captures: { corten: capture }, save() {},
       io: { command: async () => "" }, ready: async () => {},
-      own: async (_args, name) => {
+      own: async (args, name) => {
         assert.ok(!name.endsWith("measurement-cpu"), "qualification must reject before CPU reader creation");
         active.set(name, { Id: String(active.size + removed.length + 1).padStart(64, "0"), Image: imageId, RestartCount: 0,
           Config: { Env: ["PROFILE="] }, HostConfig: { Memory: 2 ** 30, NanoCpus: 1e9, CpusetCpus: "", NetworkMode: `${runId}-net` },
           State: { Running: true, Paused: false, OOMKilled: false, StartedAt: "2026-11-13T00:00:00Z" } });
+        if (name.endsWith("-worker")) {
+          const source = name.includes("-fixture-") ? "fixture" : "api";
+          assert.deepEqual(args.slice(0, 3), ["create", "--network", `container:${name.slice(0, -7)}`]);
+          assert.deepEqual(args.slice(-4), [imageId, "node", "bench/mixed-production/qualify-worker.mjs", `/out/measurement/corten/${source}/qualification/settings.json`]);
+        }
+        return active.get(name).Id;
       },
       inspect: async (name) => { assert.ok(active.has(name)); return active.get(name); },
       remove: async (name) => { assert.ok(active.has(name), "cleanup requires an actual creation receipt"); active.delete(name); removed.push(name); },
       docker: async (args) => {
         assert.deepEqual(args.slice(0, 2), ["start", "-a"]);
-        const source = args[2].includes("-fixture-") ? "fixture" : "api", dir = join(folder, "measurement/corten", source, "qualification");
+        const worker = [...active].find(([, { Id }]) => Id === args[2])?.[0];
+        assert.ok(worker?.endsWith("-worker"), "start exactly the qualification worker create ID");
+        const source = worker.includes("-fixture-") ? "fixture" : "api", dir = join(folder, "measurement/corten", source, "qualification");
         const config = JSON.parse(readFileSync(join(dir, "settings.json"))); config.output = join(dir, "qualification.json");
         config.upstream = `http://127.0.0.1:${upstream.address().port}`;
         const p = boundedQualificationProbes(source); p.crossSite.status = 200;

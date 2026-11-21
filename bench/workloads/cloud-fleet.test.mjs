@@ -224,6 +224,23 @@ test("a direct sibling launch cannot stand in for verified remaining admission",
   assert.equal(h.saved().createIntentAt, undefined);
 });
 
+test("a v5 sibling rechecks its consumed c-8 region before create intent, with no fallback", async (t) => {
+  const { h, fleet: old, path, options } = configured(t, { placement: syntheticPlacement(["blr1"]) });
+  const values = input(); values.provider = old.provider;
+  const fleet = contract.fleetPlan(values, at, "sfo2", { stagedPlacement: true });
+  writeFileSync(path, JSON.stringify(fleet));
+  const launch = { ...options, group: groupNames[1] };
+  assert.throws(() => h.task({}, launch), /consumed fleet approval/);
+  const remainingPlacement = { region: "lon1", intentSha256: "f".repeat(64) };
+  await assert.rejects(h.task({ remainingAdmission: true, remainingPlacement, checkFleetAdmission() {} }, launch).launch(),
+    /reserved fleet placement not advertised: c-8\/lon1/);
+  assert.equal(h.creates, 0);
+  assert.equal(h.saved().status, "reserved");
+  assert.equal(h.saved().createIntentAt, undefined);
+  assert.deepEqual(h.saved().remainingPlacement, remainingPlacement);
+  assert.equal(h.saved().host.region, "lon1");
+});
+
 test("group launch permits exact siblings but reserves only this group's complete work", async (t) => {
   const { h, fleet, options } = configured(t);
   h.hosts([droplet(fleet.jobs[1], 456)]);

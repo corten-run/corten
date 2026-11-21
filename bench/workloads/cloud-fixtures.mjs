@@ -17,7 +17,7 @@ export const userId = "synthetic-user-0001", accountId = `user:${userId}`, conte
 export function syntheticPlacement(c8Regions = ["sfo2", "sfo3"]) {
   return { sizes: [{ slug: "c-8", available: true, regions: [...c8Regions] },
     { slug: "c-16", available: true, regions: ["sfo2"] }],
-  regions: ["sfo2", "sfo3"].map((slug) => ({ slug, available: true,
+  regions: ["sfo2", "sfo3", "lon1", "blr1"].map((slug) => ({ slug, available: true,
     sizes: [...(c8Regions.includes(slug) ? ["c-8"] : []), ...(slug === "sfo2" ? ["c-16"] : [])] })) };
 }
 export function syntheticCatalogProvider(catalog = syntheticPlacement(), calls = []) {
@@ -70,8 +70,9 @@ export const metadata = () => [{ name: "run.log", body: "synthetic fake-only evi
 export function harness(t, flags = {}) {
   const temp = mkdtempSync(join(tmpdir(), "groups-cloud-test-"));
   t.after(() => { assert.ok(temp.startsWith(join(tmpdir(), "groups-cloud-test-"))); rmSync(temp, { recursive: true, force: true }); });
-  const repo = join(temp, "repo"), base = join(temp, "control"), local = join(base, "groups-r21"), statePath = join(local, "state.json");
-  mkdirSync(repo); mkdirSync(base);
+  const repo = join(temp, "repo"), base = flags.fleetGroup === undefined ? join(temp, "control") : join(temp, "control", flags.fleetGroup);
+  const local = join(base, "groups-r21"), statePath = join(local, "state.json");
+  mkdirSync(repo); mkdirSync(flags.fleetGroup === undefined ? base : join(temp, "control"));
   const hostId = flags.hostId ?? "123";
   let s = { ...reservation({ round: "r21", commit, token: flags.token ?? "0123456789abcdef" }), createIntentAt: new Date().toISOString(),
     status: "running", id: hostId, ip: "192.0.2.10", provider: { accountId, context }, fullGroupQualified: false };

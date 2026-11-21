@@ -32,7 +32,8 @@ const createAction = (status = "completed", resource_id = 3164444) => ({ status:
 
 test("provider engine refuses cross-mode or unbound create before consuming credentials", async () => {
   const legacy = create.with(7, "sfo2");
-  for (const [createMode, args] of [["legacy", create], ["dedicated", legacy], [null, create]]) {
+  for (const [createMode, args] of [["legacy", create], ["dedicated", legacy], [null, create],
+    ["dedicated-lon1", create.with(7, "blr1")], ["dedicated-blr1", create.with(7, "nyc1")]]) {
     let consumes = 0, requests = 0;
     const run = providerTransport({ repo: resolve("."), createMode,
       spawn() { consumes++; return spawn(); }, request() { requests++; return empty; } });
@@ -65,6 +66,34 @@ test("placement catalog uses bounded fixed GETs, projects facts and rejects inco
       ...(["foreign-next", "missing-page"].includes(mode) ? [] : ["/v2/sizes?page=2&per_page=200"]),
       ...(mode === "complete" ? ["/v2/regions?page=1&per_page=200"] : [])]);
   }
+});
+
+test("placement catalog retains both directions for supported candidates and drops unlisted regions", async () => {
+  const sizes = [
+    { slug: "c-8", available: true, regions: ["nyc1", "blr1", "lon1"] },
+    { slug: "c-16", available: true, regions: ["sfo2"] },
+    { slug: "c-4", available: true, regions: ["lon1"] },
+  ];
+  const regions = [
+    { slug: "sfo3", available: true, sizes: [] },
+    { slug: "sfo2", available: true, sizes: ["c-16"] },
+    { slug: "lon1", available: true, sizes: ["c-8", "c-4"] },
+    { slug: "blr1", available: true, sizes: ["c-8"] },
+    { slug: "nyc1", available: true, sizes: ["c-8"] },
+  ];
+  const calls = [];
+  const run = providerTransport({ repo: resolve("."), createMode: null, spawn, request({ method, path, body }) {
+    assert.equal(method, "GET"); assert.equal(body, undefined); calls.push(path);
+    if (path === "/v2/sizes?page=1&per_page=200") return { status: 200, value: { sizes, meta: { total: sizes.length } } };
+    assert.equal(path, "/v2/regions?page=1&per_page=200");
+    return { status: 200, value: { regions, meta: { total: regions.length } } };
+  } });
+  const result = await run([...fleetCatalogCommand, "--context", context]);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    sizes: [{ ...sizes[0], regions: ["lon1", "blr1"] }, sizes[1]],
+    regions: [regions[0], regions[1], { ...regions[2], sizes: ["c-8"] }, regions[3]],
+  });
+  assert.deepEqual(calls, ["/v2/sizes?page=1&per_page=200", "/v2/regions?page=1&per_page=200"]);
 });
 
 test("create-link diagnostics isolate each refused predicate without reflecting provider values", async (t) => {

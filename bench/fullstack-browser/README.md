@@ -18,6 +18,16 @@ a fresh container/store per case. The independent numeric upstream gets one CPU 
 The browser runs on the host, outside that budget; these are development diagnostics, not
 isolated performance measurements.
 
+The [isolated campaign](../workloads/isolated/CAMPAIGN.md) adds `--isolated`. Its
+delegated command cgroup places Chromium and the Node driver on logical CPUs 4-7;
+Docker places the application on CPU 1 and the numeric upstream on CPUs 2-3, retaining
+their one-CPU quotas and memory budgets. The supervised SSH apparatus uses CPU 0.
+The runner refuses to start outside the required command cgroup and checks each timed
+container's configured limits and effective cpuset before use. Saved campaign replay
+requires independent kernel observations of those roles as well as the Docker receipts.
+These are placement checks, not proof of an exclusive host, whole-stack parity or a
+publishable result. Row 7 remains provisional.
+
 The complete-group invocation needs no manually prepared targets or receipts:
 
 ```sh

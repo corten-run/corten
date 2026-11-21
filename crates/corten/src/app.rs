@@ -957,7 +957,10 @@ impl<M: Middleware> App<M> {
     /// kept page's key does not cover.
     ///
     /// Past the bound, a page not read since the last time room was made goes first, and one
-    /// larger than an eighth of the bound is not kept. A write to a page's path drops what is
+    /// larger than an eighth of the bound is not kept. Once the kept pages are within an
+    /// eighth of the bound, an answer is kept only when its URL was asked for before, so a
+    /// URL asked for once seldom takes a page's room and a page's handler runs twice before
+    /// its page is kept. A write to a page's path drops what is
     /// kept there, whatever it is answered, and so does one that redirects to it; a
     /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
     /// under `corten dev`, and an app with no `Public` page keeps none and counts no writes,
