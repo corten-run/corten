@@ -1,2 +1,3 @@
-- An answer kept from shared caches (a cookie, the nonce, a caller read, `NoStore`, `Public` with credentials, a partial mode, a refused write) drops a middleware's CDN caching headers whatever its `Cache-Control`; `NoStore` and personal `no-store` send `private, no-store`.
+- **Breaking:** `NoStore` and a personal `no-store` send `private, no-store`, not bare `no-store`; match its directives, not the whole field.
+  Personal answers, `NoStore`, `Public` partials and error pages no handler answered drop CDN caching headers
   ([#1814 A staged answer made private for a cookie, the nonce or a caller read keeps a middleware's CDN-Cache-Control and Surrogate-Control](https://github.com/corten-run/corten/issues/1814))
