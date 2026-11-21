@@ -1620,8 +1620,8 @@ impl<M: Middleware> App<M> {
             table = table.merge(unstaged);
         }
         // Under `corten dev` every load is the handler's, so a change shows on the next one. An app
-        // whose routes keep no page (none is `Public`) has none for a write to drop, so its writes
-        // are not counted.
+        // with no route eligible to keep a page has none for a write to drop, so its writes are not
+        // counted.
         shared.kept = if dev || !table.keeps() { None } else { crate::kept::Answers::new(self.kept) };
         // An app whose areas and APIs have no middleware of their own runs the app's alone.
         let plain = scopes.prefixed.iter().all(|(_, scope)| scope.middleware.is_empty());
