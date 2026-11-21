@@ -1499,15 +1499,16 @@ counted from when the request it was made for reached the handler, so a browser 
 the lifetime from when the page was made.
 
 An answer is kept only when there is a sign its copy will be given to someone: its URL was asked
-for before, less than the answer's lifetime ago, or the copy it replaces was given to a request.
-Keeping one costs a copy of it and, once the bound is reached, the room of another page, and a
-URL asked for once, or less often than its page lasts, never earns that back. So a crawler
+for before, less than the answer's lifetime ago, or a page kept for it since then was given to a
+request. Keeping one costs a copy of it and, once the bound is reached, the room of another page,
+and a URL asked for once, or less often than its page lasts, never earns that back. So a crawler
 walking a catalog, a search no one repeats and an app behind a CDN that asks once a lifetime are
-answered by the handler as if the app kept nothing, and the pages visitors ask for again stay
-kept. A page's handler runs for the first two requests for a URL, and once each time the page's
-lifetime ends or a write drops it. The app holds no list of the URLs asked for, only a mark for
-each in a table of a fixed size (256 KiB), so now and then a URL is not known again and its
-page is made once more than it had to be.
+answered by the handler without the copy into the store, and the pages visitors ask for again
+stay kept. A page's handler runs for the first two requests for a URL. After that it runs once
+each time the page's lifetime ends or a write drops it, as long as the kept page was given to
+someone; a page that was kept and given to no one starts again with two. The app holds no list
+of the URLs asked for, only a mark for each in a table sized by the bound (256 KiB for 32 MiB),
+so now and then a URL is not known again and its page is made once more than it had to be.
 
 A kept page stands where the handler does, after [your own middleware](#your-own-middleware). Every
 stage runs for every request: a middleware that refuses, counts or stamps a header still does, and

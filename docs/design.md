@@ -7245,27 +7245,42 @@ rules something out.
     may be asked for again. A URL asked for once pays that for nothing, and so does one asked
     for less often than its page lasts, which is every URL of an app behind a CDN that asks
     once a lifetime; a crawler walking a catalog fills the store with pages no one asks for
-    twice. So a request no kept answer stands for leaves a mark that says when its URL (path
-    and query) was asked for, and its answer is kept in two cases: the mark was the URL's
+    twice. So a request no kept answer stands for leaves a mark that says when its URL (host,
+    path and query) was asked for, and its answer is kept in two cases: the mark was the URL's
     already and younger than the answer's lifetime, so a copy kept at that request would have
-    been given to this one; or the copy this answer replaces (ended by its lifetime or dropped
-    by a write) was given to a request while it stood. Otherwise the handler answers as in an
-    app that keeps nothing. A mark is half of a hash of the URL and the millisecond it was
-    asked for, in a table of 32,768 (256 KiB, made when the first page is asked for) that the
-    other half of the hash indexes, and the hash is keyed for the process. No list of URLs is
-    held, and a request whose answer is not kept takes no lock but the read lock of the
-    lookup. A mark is the URL's whatever the host and language, so a page asked for with
-    another host or in another language soon after is kept the first time. The price is one
-    more run of the handler for every page that is asked for again, the first time, and now
-    and then an answer that is made where it could have been kept: a URL whose mark another
-    took between two asks, which is likely once about as many other URLs as there are marks
-    were asked for in between; two URLs that share a mark and are asked for in turn; and a
-    page whose copy left to make room, not by its lifetime, and is asked for again later than
-    its lifetime after the request it was kept from. None of those gives a wrong answer. A
-    client can find two URLs that share a page's mark by asking and watching for `Age`.
-    Asking for them in turn then costs that page's handler at most one more run for each
-    request the client sends, as a write to the page's path does, and only until the page is
-    kept and given once: after that its copies replace one another without the mark.
+    been given to this one; or the mark says an answer kept for the URL since then was given
+    to a request, which the lookup tells the mark the first time it gives a copy. A page that
+    was given is so kept again at once when its lifetime ends or a write drops it, however
+    long after, and whether or not its old copy is still held: one that no longer stands is
+    the first to go when room is made. Otherwise the answer is the handler's and is not
+    copied into the store. A request for a URL not asked for before then costs what it does in
+    an app that keeps nothing, and the mark. One for a URL asked for too long ago costs more
+    than that: the lifetime is the answer's to say, so the request is prepared for keeping
+    before its handler runs and refused after (the counts are below). The rule stands on a
+    premise no round here shows: that URLs asked for once in a page's lifetime are common
+    enough in an app's requests to be worth one more run of the handler for each page that is
+    asked for again.
+
+    A mark is half of a hash of the URL, the millisecond it was asked for (to two) and that
+    one bit, in a table the other half of the hash indexes: a mark of eight bytes for each KiB
+    of the bound, to a power of two (32,768 marks, 256 KiB, for the 32 MiB an app keeps unless
+    it says otherwise), made when the first page is asked for. The hash is keyed for the
+    process. No list of URLs is held, and a request whose answer is not kept takes no lock but
+    the read lock of the lookup. A mark is each host's own, so what one host's visitors asked
+    for does not show in another host's answers, and is the URL's in any language, so a page
+    asked for in a second language soon after the first is kept the first time. The price is
+    one more run of the handler for every page that is asked for again, the first time; a
+    copy given to no one for a URL asked for twice within a lifetime and then not until it
+    ended, which pays for the store every second request and is never given a page; and now
+    and then an answer that is made where it could have been kept, when another URL took the
+    mark between two asks or while the page stood, or when two URLs that share a mark are
+    asked for in turn. Each request that leaves a mark takes one mark, so it costs at most one
+    other URL one more run of its handler, and a given URL's mark with one chance in as many
+    as there are marks: as likely as not once seven tenths as many others as there are marks
+    were asked for with no kept answer since (about 23,000 for the default bound). None of
+    those gives a wrong answer. A client can find two URLs that share a page's mark by asking
+    and watching for `Age`. Asking for them in turn then costs that page's handler at most one
+    more run for each request the client sends, as a write to the page's path does.
 
     A write drops what is kept at its path, whatever the query, since a named post is
     `?do=name` at its page's path, whatever it is answered. That is wider than RFC 9111
@@ -7301,8 +7316,11 @@ rules something out.
     from the second ask however long after the first, which goes on paying for a URL asked
     for less often than its page lasts; a count of asks with a threshold above two, which
     makes a page asked for a few times in its lifetime wait longer for a gain no round has
-    shown; a mark for each host and language, which costs a second run for each of a page's
-    copies; a list of the URLs asked for, which grows with what clients send; leaving out a write by its status (a `4xx`, a `501`) or by a mark the router
+    shown; a mark for each language, which costs a second run for each of a page's copies; a
+    mark for a URL whatever its host, which shows one host's visitors, by an `Age`, what was
+    asked of another; the sign that a copy was given held with the copy, which is lost when
+    the copy goes to make room, as an ended one is the first to; a table of one size whatever
+    the bound; a list of the URLs asked for, which grows with what clients send; leaving out a write by its status (a `4xx`, a `501`) or by a mark the router
     set on the ones it refuses, each of which left a page stale in a case a review found; off unless asked for, which leaves the cost on every app that already said its
     pages are public; a page for one visitor kept by caller, where a mistake in the key shows
     one user's page to another ([architecture](architecture.md#what-belongs-in-the-framework));
