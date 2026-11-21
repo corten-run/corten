@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { contractSha256, selectedApps } from "../../registry.mjs";
 import { coverage } from "../../evidence.mjs";
+import { liveCaptureSchema, liveContracts } from "../../live.mjs";
+import { negativeRequests } from "../../../live/admission.mjs";
 import { inventory, scenarios, settingsFor, workloadFor } from "../../../live/native.mjs";
 import { fanoutProfile } from "../../../live/fanout.mjs";
 import { verifyRound } from "../../../live/verify.mjs";
@@ -144,6 +146,30 @@ if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
     assert.ok(r.blockers.includes("native-live-actor-tools-missing"));
     assert.ok(r.blockers.includes("native-live-actor-window-missing:corten"));
     assert.ok(r.outcomes.some((o) => o.outcome === "unsupported"));
+  });
+  for (const group of ["live-delivery", "recoverable-live"]) test(`${group}: a retained functional control contradicts a missing renderer`, async (t) => {
+    const f = await syntheticFixture(t, group);
+    f.binding.execution.effectiveOptions.isolated = f.plan.isolated = true;
+    f.binding.resources.actorCpus = { application: "1", browser: "4-7" };
+    await f.json("plan.json", f.plan);
+    const { inspectLiveSaved } = await import("./live-delivery.mjs");
+    const app = f.plan.inventory.find((entry) => entry.implementation === "implemented").app;
+    await rewriteArtifact(f, app, 0, (a) => {
+      a.actorWindow = { startedAt: 10, endedAt: 20, renderer: null };
+      a.controls = []; a.network = []; a.failures = []; a.html = "";
+      a.capture = { schema: liveCaptureSchema, contract: liveContracts[group], records: [] };
+    });
+    // A genuine failure before page creation may have an empty page journal.
+    const early = await inspectLiveSaved(f.binding, f.folder, group);
+    assert.equal(early.status, "blocked");
+    assert.equal(early.resources, "blocked");
+    assert.equal(early.outcomes.find((row) => row.app === app).outcome, "failed");
+    await rewriteArtifact(f, app, 0, (a) => {
+      a.controls.push({ request: negativeRequests(a.workload, a.profile)[0], status: 400, body: "rejected" });
+    });
+    const contradicted = await inspectLiveSaved(f.binding, f.folder, group);
+    assert.equal(contradicted.status, "invalid");
+    assert.ok(contradicted.blockers.includes("native-live-evidence-contradictory"));
   });
   for (const [name, change] of [
     ["group", (f) => { f.plan.group = "recoverable-live"; }], ["round", (f) => { f.plan.round = "another"; }],

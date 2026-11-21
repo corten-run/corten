@@ -124,7 +124,11 @@ export function liveActorWindow(a, app) {
   assert.ok(valid(startedAt, endedAt));
   const functional = a.schema === "native-live-evidence/v1", measured = a.schema === "native-live-fanout/v3";
   if (renderer === null) {
-    assert.ok(!functional && !measured && !a.browsers?.length && !a.network?.length, "missing renderer for retained browser activity");
+    // These functional receipts are collected only after newPage succeeds.
+    const failedWithPage = a.schema === "native-live-failure/v1"
+      && (a.configuration !== undefined || a.controls?.length || a.capture?.records?.length || a.failures?.length || a.html);
+    assert.ok(!functional && !measured && !failedWithPage && !a.browsers?.length && !a.network?.length,
+      "missing renderer for retained browser activity");
     return { app, startedAt, endedAt, renderer };
   }
   assert.ok(renderer && valid(renderer.startedAt, renderer.endedAt)
@@ -134,6 +138,8 @@ export function liveActorWindow(a, app) {
     const { timeOrigin, capturedAt } = a.costs;
     assert.ok(Number.isFinite(timeOrigin) && Number.isFinite(capturedAt) && capturedAt > 0
       && timeOrigin >= renderer.startedAt - 2 && timeOrigin + capturedAt <= renderer.endedAt + 2, "functional browser clock outside scenario activity");
+    const lastPageAt = a.capture.records.at(-1)?.at;
+    assert.ok(Number.isFinite(lastPageAt) && capturedAt >= lastPageAt, "functional capture precedes the last page record");
     const start = Math.max(renderer.startedAt, Math.ceil(timeOrigin));
     const end = Math.min(renderer.endedAt, Math.floor(timeOrigin + capturedAt) + 1);
     assert.ok(start < end, "functional scenario has no captured activity interval");

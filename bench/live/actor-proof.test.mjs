@@ -21,6 +21,7 @@ test("cleanup checks the original full container ID and ownership before removin
 test("functional actor proof requires a real scenario window and a matching browser clock", () => {
   const valid = { schema: "native-live-evidence/v1",
     actorWindow: { startedAt: 10, endedAt: 80, renderer: { startedAt: 20, endedAt: 70 } },
+    capture: { records: [{ at: 1 }, { at: 42 }] },
     costs: { timeOrigin: 23, capturedAt: 42 } };
   assert.deepEqual(liveActorWindow(valid, "app"), {
     app: "app", ...valid.actorWindow, renderer: { startedAt: 23, endedAt: 66 },
@@ -36,4 +37,13 @@ test("functional actor proof requires a real scenario window and a matching brow
   const brief = { ...early, actorWindow: { startedAt: 10, endedAt: 12, renderer: { startedAt: 11, endedAt: 11 } } };
   assert.deepEqual(liveActorWindow(brief, "app").renderer, brief.actorWindow.renderer,
     "retain a failed attempt's actual window without claiming it proves placement");
+});
+
+test("functional actor proof cannot end before the last retained record on the page clock", () => {
+  const a = { schema: "native-live-evidence/v1",
+    actorWindow: { startedAt: 10, endedAt: 80, renderer: { startedAt: 20, endedAt: 70 } },
+    capture: { records: [{ at: 1 }, { at: 42.25 }] }, costs: { timeOrigin: 23, capturedAt: 42 } };
+  assert.throws(() => liveActorWindow(a, "app"), /capture precedes the last page record/);
+  a.costs.capturedAt = 42.25;
+  assert.doesNotThrow(() => liveActorWindow(a, "app"));
 });

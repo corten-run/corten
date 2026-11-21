@@ -25,6 +25,24 @@ import { hardeningActorCpus, hardeningCpuGate, hardeningGateMs, hardeningRoleCpu
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const json = (file, value) => writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
+
+export function finalizeCell(out, cell, isolated, ownedReceipts, input) {
+  if (isolated) verifyHardeningCpuRoles(JSON.parse(readFileSync(join(out, "cpu-roles.json"), "utf8")),
+    cell, ownedReceipts.filter((r) => r.intent.cell === cell.key), input.raw);
+  const manifest = artifacts(out); json(join(out, "manifest.json"), manifest); verifyArtifacts(out, manifest);
+  const recovery = cell.phase === "dependency-recovery";
+  const capture = (recovery ? assembleRecovery : assembleBounded)(input);
+  json(join(out, "capture.json"), capture); cell.status = "observed"; cell.apparatusValid = true;
+  cell.capture = `${cell.key}/capture.json`;
+  if (recovery) {
+    cell.dependencyRecovery = capture.assessment;
+    cell.dependencyTerminalHealthy = capture.terminal.healthy;
+  } else {
+    cell.boundedRequests = capture.assessment;
+    cell.boundedTerminalHealthy = capture.terminal.healthy;
+  }
+}
+
 export async function run(args) {
   const options = parseArgs(args);
   if (options.isolated) requireNativeCommandCpuSet(hardeningActorCpus.command);
@@ -69,7 +87,7 @@ export async function run(args) {
     } finally { clearTimeout(timer); children.delete(child); settling.delete(child); }
   }
   const containers = ownedContainerRecorder({ folder, runId, command: (args, opts) => command("docker", args, opts), cell: () => currentCell, tools: () => tools });
-  const { docker, owned, remove, active } = containers;
+  const { docker, owned, remove, active, records: ownedReceipts } = containers;
   const inspect = async (name) => JSON.parse(await docker(["inspect", name], { cleanup: true }))[0];
   const labels = ["--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`];
   const limits = (role, limit = budget.resources[role]) => ["--cpus", String(limit.cpu), "--memory", String(limit.memory),
@@ -338,28 +356,17 @@ export async function run(args) {
         } catch (e) { failures.push(e.message); }
         finally { try { await remove(name); } catch (e) { failures.push(e.message); } }
       }
-      const containers = (await docker(["ps", "-aq", "--filter", `label=${label}=${runId}`], { cleanup: true })).split("\n").filter(Boolean);
+      const remainingContainers = (await docker(["ps", "-aq", "--filter", `label=${label}=${runId}`], { cleanup: true })).split("\n").filter(Boolean);
       const volumes = (await docker(["volume", "ls", "-q", "--filter", `label=${label}=${runId}`], { cleanup: true })).split("\n").filter(Boolean);
-      const cleanup = { complete: failures.length === 0 && containers.length === 0 && volumes.length === 0 && children.size === 0,
-        containers, volumes, commandClients: children.size, failures, nativeClock, elapsedAfterProbeMs: probeEndedWall ? Date.now() - probeEndedWall : null, finishedAt: new Date().toISOString() };
+      const cleanup = { complete: failures.length === 0 && remainingContainers.length === 0 && volumes.length === 0 && children.size === 0,
+        containers: remainingContainers, volumes, commandClients: children.size, failures, nativeClock,
+        elapsedAfterProbeMs: probeEndedWall ? Date.now() - probeEndedWall : null, finishedAt: new Date().toISOString() };
       json(join(out, "cleanup.json"), cleanup);
       if (!cleanup.complete) { summary.cleanupFailures.push({ key: cell.key, cleanup }); error ??= new Error("owned cleanup failed"); stage = "owned-cleanup"; }
       if (!error) {
         try {
           stage = "evidence-validation";
-          if (options.isolated) verifyHardeningCpuRoles(JSON.parse(readFileSync(join(out, "cpu-roles.json"), "utf8")),
-            cell, containers.records.filter((r) => r.intent.cell === cell.key), raw);
-          const manifest = artifacts(out); json(join(out, "manifest.json"), manifest); verifyArtifacts(out, manifest);
-          const capture = (recovery ? assembleRecovery : assembleBounded)({ settings, raw, parity, source: cell.source, config, cleanup, provenance, lifecycle });
-          json(join(out, "capture.json"), capture); cell.status = "observed"; cell.apparatusValid = true;
-          cell.capture = `${cell.key}/capture.json`;
-          if (recovery) {
-            cell.dependencyRecovery = capture.assessment;
-            cell.dependencyTerminalHealthy = capture.terminal.healthy;
-          } else {
-            cell.boundedRequests = capture.assessment;
-            cell.boundedTerminalHealthy = capture.terminal.healthy;
-          }
+          finalizeCell(out, cell, options.isolated, ownedReceipts, { settings, raw, parity, source: cell.source, config, cleanup, provenance, lifecycle });
         } catch (e) { error = e; }
       }
       if (error) { cell.status = "invalid"; cell.apparatusValid = false; cell.error = error.message; cell.failedStage = stage;
