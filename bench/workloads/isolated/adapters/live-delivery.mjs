@@ -344,7 +344,10 @@ export async function inspectLiveSaved(binding, folder, group) {
     if (result.attemptComplete) {
       let proof;
       try { proof = phaseProof(binding, folder, plan.startedAt, actors); }
-      catch (error) { if (error?.code !== "ENOENT") throw error; }
+      catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+        result.status = "blocked";
+      }
       if (proof) assert.equal(proof.code, passed ? 0 : 1, "observed exit contradicts native outcomes");
       if (proof?.complete) {
         result.cleanupComplete = true; result.resources = "verified"; result.blockers = [...missing];

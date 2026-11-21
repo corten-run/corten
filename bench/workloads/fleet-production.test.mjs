@@ -1,7 +1,7 @@
 // Offline composition acceptance: real snapshot Worker -> productionMain -> controller.
 // Only credential consumption and external Git/HTTPS/SSH/SCP responses are fake.
 import assert from "node:assert/strict";
-import { fork } from "node:child_process";
+import { execFileSync, fork } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
@@ -12,6 +12,8 @@ import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { providerTransport } from "./cloud-provider.mjs";
+import { productionPlan } from "./cloud-production.mjs";
+import { inspectCampaign } from "./cloud-validation.mjs";
 import { bootstrapWorkspaceScript, captureSshOwner, installSshIngress, savedLoadLayout, verifySshIngress } from "./cloud-contract.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { groupNames } from "./registry.mjs";
@@ -19,6 +21,12 @@ import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
+const checkout = fs.realpathSync(".");
+const checkoutCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim();
+const roleCheck = ({ round, commit: measured, group, mode }, interrupted) => {
+  assert.equal(measured, commit);
+  return inspectCampaign({ action: "actor-role-preflight", round, commit: checkoutCommit, group: group ?? null, mode: mode ?? null }, { interrupted });
+};
 
 function fixture(t, mode = "success") {
   t.after(() => {
@@ -36,15 +44,29 @@ function fixture(t, mode = "success") {
   // launch and collection preflights read. Linked, never copied or altered.
   fs.mkdirSync(path.join(repo, "bench/node_modules"));
   fs.symlinkSync(fs.realpathSync("bench/node_modules/typescript"), path.join(repo, "bench/node_modules/typescript"), "junction");
+  fs.mkdirSync(path.join(repo, "node_modules"));
+  fs.symlinkSync(fs.realpathSync("node_modules/semver"), path.join(repo, "node_modules/semver"), "junction");
   fs.copyFileSync(new URL("./fleet-provider-test-worker.mjs", import.meta.url), path.join(repo, "bench/workloads/fleet-provider-test-worker.mjs"));
   const sources = fleetWorkerPaths.map((file) => {
     const target = path.join(repo, file); fs.mkdirSync(path.dirname(target), { recursive: true });
     let source = committed.get(file);
     if (file === "bench/workloads/cloud-validation-snapshot.mjs") {
-      // The validator captures installed HEAD on import, even for detach. Fake
-      // only that Git boundary, not the validator or its snapshot checks.
+      // Keep the controller's synthetic commit, but validate real committed role
+      // bindings. Translate only the validator's fixed Git reads in the fixture.
       assert.equal(source.split("readGit = spawnSync").length, 3, "review eager Git seam when validation changes");
-      source = source.replaceAll("readGit = spawnSync", `readGit = () => ({ status: 0, stdout: '${commit}\\n' })`);
+      source = source.replaceAll("readGit = spawnSync", "readGit = syntheticReadGit") + `
+function syntheticReadGit(binary, [noReplace, at, root, ...args], options) {
+  assert.deepEqual([binary, noReplace, at, root], ["git", "--no-replace-objects", "-C", ${JSON.stringify(repo)}]);
+  if (args[0] === "rev-parse") {
+    assert.deepEqual(args, ["rev-parse", "--verify", "HEAD^{commit}"]);
+    return { status: 0, stdout: ${JSON.stringify(commit + "\n")} };
+  }
+  assert.deepEqual(args, ["cat-file", "--batch"]);
+  assert.ok(options.input.trimEnd().split("\\n").every((line) => line.startsWith("${commit}:")));
+  return spawnSync(binary, [noReplace, at, ${JSON.stringify(checkout)}, ...args],
+    { ...options, input: options.input.replaceAll("${commit}:", "${checkoutCommit}:") });
+}
+`;
     }
     if (file === "bench/workloads/cloud-production.mjs") {
       // Change defaults only. The actual productionMain body, approval gates,
@@ -90,7 +112,8 @@ const synthetic = (${syntheticDependencies.toString()})({
     if (argv[0] === "show") return { status: 0, stdout: committed.get(argv[1].slice(41)) };
     return h.run(binary, argv, 60000);
   };
-  const deps = { repo: h.repo, spawn, WorkerClass: SnapshotWorker, write: (value) => output.push(JSON.parse(value)) };
+  const deps = { repo: h.repo, spawn, WorkerClass: SnapshotWorker, write: (value) => output.push(JSON.parse(value)),
+    plan: (options, deps) => productionPlan(options, { ...deps, roleCheck }) };
   deps.catalogProvider = syntheticCatalogProvider(syntheticPlacement([mode === "overlap" ? "sfo2" : "sfo3"]));
   const args = ["r21", "--fleet-root", h.base];
   const saved = (group = groupNames[0]) => JSON.parse(fs.readFileSync(path.join(h.base, group, "groups-r21/state.json")));

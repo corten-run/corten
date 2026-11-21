@@ -155,5 +155,7 @@ test("native tree seal and external host evidence are mandatory, never plan rece
   await f.save(join(f.phase, "native-manifest.json"), tree(f.folder));
   const { unlink } = await import("node:fs/promises"); await unlink(join(f.phase, "host-after.json"));
   const r = await f.inspect(); assert.equal(r.cleanupComplete, false); assert.equal(r.resources, "blocked");
+  assert.equal(r.status, "blocked");
+  assert.ok(r.outcomes.every(({ outcome }) => outcome === "failed"));
   assert.ok(!JSON.stringify(r).includes("SYNTHETIC_PRIVATE_SENTINEL"));
 });
