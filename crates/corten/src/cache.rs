@@ -38,7 +38,9 @@
 //! [`crate::security::Nonce`]), a page that draws a form's new submit key
 //! ([`crate::SubmitKey::field`]: each visitor needs a key of their own), and an answer to a request
 //! whose handler or middleware read a [`crate::Caller`]. They get `private, no-cache`, and
-//! `corten dev` logs the first three.
+//! `corten dev` logs the first three. A page that draws a submit key also loses the caching headers
+//! a CDN reads first (`CDN-Cache-Control`, `Surrogate-Control`). A [`crate::live`] stream's
+//! fragments are text rendered after its headers went out, so they carry no such mark.
 //!
 //! The app is the first shared cache of its own `Public` pages: the whole document one made for a
 //! request without credentials is kept for its shared lifetime and given again in the handler's
@@ -285,6 +287,12 @@ const NOTICE_GONE: [&[u8]; 2] = [b"__Host-corten-notice=;", b"corten-notice=;"];
 /// Sets the response's `Cache-Control`: the default when it has none, and a private one instead
 /// of a shared one when the response may differ between users.
 pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
+    // A page that drew a submit key ([`Unrepeatable`]) is the browser's alone, whatever its
+    // `Cache-Control` says: a CDN reads its own header first, so none stays.
+    let drew_key = res.extensions().get::<Unrepeatable>().is_some();
+    if drew_key {
+        drop_cdn_caching(res.headers_mut());
+    }
     // One lookup for the usual response, which says nothing.
     match res.headers_mut().entry(header::CACHE_CONTROL) {
         header::Entry::Vacant(entry) => {
@@ -358,7 +366,7 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
         .any(|cookie| !NOTICE_GONE.iter().any(|gone| cookie.as_bytes().starts_with(gone)))
     {
         Some("it sets a cookie")
-    } else if res.extensions().get::<Unrepeatable>().is_some() {
+    } else if drew_key {
         // The mark that keeps its tag off and the app from keeping it: each visitor needs a key
         // of their own, and the browser one it has not sent.
         Some("it draws a form's new submit key (SubmitKey::field), and each visitor needs a key of their own")
@@ -385,6 +393,40 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     if !typed.named {
         headers.append(header::VARY, HeaderValue::from_static("cookie"));
     }
+}
+
+/// Removes the caching headers a CDN reads before `Cache-Control`: any `*cache-control` but
+/// that one (`CDN-Cache-Control`, `Cloudflare-CDN-Cache-Control`) and `Surrogate-Control`, as a
+/// [`crate::Public`] answer may not set, from an answer no shared cache may keep.
+pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
+    let cdn: Vec<header::HeaderName> = headers
+        .keys()
+        .filter(|name| {
+            let name = name.as_str();
+            (name.ends_with("cache-control") && name != "cache-control") || name == "surrogate-control"
+        })
+        .cloned()
+        .collect();
+    for name in cdn {
+        headers.remove(name);
+    }
+}
+
+/// In a debug build: whether `headers` mark an answer for shared caches as written, before
+/// [`settle`]: a `Cache-Control` none of whose lines says plain `private`, `no-store` or
+/// `no-cache` (a live stream's own, which asks again before any reuse).
+#[cfg(debug_assertions)]
+pub(crate) fn marked_shared(headers: &HeaderMap) -> bool {
+    let mut lines = headers.get_all(header::CACHE_CONTROL).iter().peekable();
+    lines.peek().is_some()
+        && lines.all(|line| {
+            directives(line.as_bytes()).all(|d| {
+                let d = d.trim_ascii();
+                !(d.eq_ignore_ascii_case(b"private")
+                    || d.eq_ignore_ascii_case(b"no-store")
+                    || d.eq_ignore_ascii_case(b"no-cache"))
+            })
+        })
 }
 
 /// Whether the client explicitly accepts a coding other than identity. A positive wildcard counts:

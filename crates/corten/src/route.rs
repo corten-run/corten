@@ -4630,19 +4630,8 @@ fn unstaged_headers(mut res: crate::response::Response) -> crate::response::Resp
     if headers.contains_key(header::SET_COOKIE) {
         let no_store = headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
         headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::NO_STORE } else { crate::cache::PRIVATE });
-        // A CDN reads its own before `Cache-Control`: any `*cache-control` and
-        // `surrogate-control`, as a [`crate::Public`] answer may not set.
-        let cdn: Vec<header::HeaderName> = headers
-            .keys()
-            .filter(|name| {
-                let name = name.as_str();
-                (name.ends_with("cache-control") && name != "cache-control") || name == "surrogate-control"
-            })
-            .cloned()
-            .collect();
-        for name in cdn {
-            headers.remove(name);
-        }
+        // A CDN reads its own before `Cache-Control`.
+        crate::cache::drop_cdn_caching(headers);
     }
     res
 }

@@ -866,8 +866,15 @@ mod layout_reads {
                 </html>
             })
         };
-        let routes =
-            Table::new().route("/", get(move |req: Req| page(req, true))).route("/plain", get(move |req: Req| page(req, false)));
+        // Marked for shared caches by hand: the key the layout draws keeps the page private.
+        let public = move |req: Req, read: bool| async move {
+            Ok::<_, crate::Error>((crate::cache::Cache::public(std::time::Duration::from_secs(60)), page(req, read).await?))
+        };
+        let routes = Table::new()
+            .route("/", get(move |req: Req| page(req, true)))
+            .route("/plain", get(move |req: Req| page(req, false)))
+            .route("/public", get(move |req: Req| public(req, true)))
+            .route("/public-plain", get(move |req: Req| public(req, false)));
         let router = App::new(Routes::from(routes)).layout_read(SignOut).router();
         // A browser's request, which names a tag it has, so it is answered with one.
         let get = |router: Router, uri: &'static str| async move {
@@ -879,8 +886,13 @@ mod layout_reads {
         let (status, headers, body) = get(router.clone(), "/").await;
         assert!(status == StatusCode::OK && body.contains("name=\"submit\""), "{body}");
         assert!(!headers.contains_key("etag"), "a key drawn by the layout makes the page unrepeatable: {headers:?}");
-        let (_, headers, _) = get(router, "/plain").await;
+        let (_, headers, _) = get(router.clone(), "/plain").await;
         assert!(headers.contains_key("etag"), "{headers:?}");
+        let (status, headers, body) = get(router.clone(), "/public").await;
+        assert!(status == StatusCode::OK && body.contains("name=\"submit\""), "{body}");
+        assert_eq!(headers["cache-control"], "private, no-cache", "a key drawn by the layout keeps the page private");
+        let (_, headers, _) = get(router, "/public-plain").await;
+        assert_eq!(headers["cache-control"], "public, max-age=60", "{headers:?}");
     }
 
     /// Middleware that puts a value on the request, as a pool's connection would be.

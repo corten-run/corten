@@ -242,3 +242,55 @@ async fn a_live_fragment_the_browser_would_drop_panics_in_debug_builds() {
     let router = Table::new().route("/", get(|| async { crate::live(futures_util::stream::iter([String::from("saved")])) }));
     let _ = call(router, "GET", None).await;
 }
+
+#[cfg(all(debug_assertions, feature = "log"))]
+#[derive(crate::view::Id)]
+struct LiveFormId;
+
+/// A live fragment is text, rendered after the stream's headers went out, so a form's new submit
+/// key in one cannot make the stream private as it makes a page: under `corten dev` a stream marked
+/// for shared caches whose fragment draws one is logged, and one left with its own caching, or
+/// whose fragments draw no key, is not.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn a_shared_live_stream_that_draws_a_submit_key_is_logged_under_corten_dev() {
+    use std::sync::Arc;
+    let minute = std::time::Duration::from_secs(60);
+    let form = |keyed: bool| {
+        futures_util::stream::once(async move {
+            html! { <form id={LiveFormId} method="post">if keyed { {crate::SubmitKey::field(KeyedWrite::FIELDS.submit)} }</form> }
+                .to_html()
+        })
+    };
+    let routes = Table::new()
+        .route("/shared", get(move || async move { Public::new(minute, crate::live(form(true))) }))
+        .route("/own", get(move || async move { crate::live(form(true)) }))
+        .route("/plain", get(move || async move { Public::new(minute, crate::live(form(false))) }));
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let router = App::new(Routes::from(routes)).dev(true).router();
+    let logged = |uri: &'static str| {
+        let (router, lines) = (router.clone(), lines.clone());
+        async move {
+            lines.0.lock().unwrap().clear();
+            let res = router.oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
+            let cache = res.headers()[header::CACHE_CONTROL].to_str().unwrap().to_string();
+            let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+            assert!(body.starts_with("event: patch\ndata: <form id="), "{body}");
+            (cache, String::from_utf8(lines.0.lock().unwrap().clone()).unwrap())
+        }
+    };
+    let (cache, text) = logged("/shared").await;
+    assert_eq!(cache, "public, max-age=60", "its headers went out before the fragment was drawn");
+    assert!(
+        text.contains("corten: /shared is marked for shared caches, but a live fragment draws a form's new submit key"),
+        "{text}"
+    );
+    let (cache, text) = logged("/own").await;
+    assert_eq!(cache, "no-cache");
+    assert!(!text.contains("submit key"), "{text}");
+    let (_, text) = logged("/plain").await;
+    assert!(!text.contains("submit key"), "{text}");
+}
