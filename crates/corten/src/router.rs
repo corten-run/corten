@@ -76,22 +76,8 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
 struct Status(StatusCode);
 
 impl Endpoint for Status {
-    fn call(&self, req: Request) -> Answering {
-        // A path with no route has no kept page to leave standing.
-        if self.0 == StatusCode::METHOD_NOT_ALLOWED {
-            turned_away(&req);
-        }
+    fn call(&self, _: Request) -> Answering {
         Box::pin(std::future::ready(self.0.into_response()))
-    }
-}
-
-/// The router answers a write itself, since the route at its path has no handler for its method:
-/// the pages the app keeps are told it wrote nothing ([`crate::Signal::turned_away`]).
-fn turned_away(req: &Request) {
-    if !req.method().is_safe() {
-        if let Some(signal) = req.extensions().get::<crate::Signal>() {
-            signal.turned_away();
-        }
     }
 }
 
@@ -101,8 +87,7 @@ struct Unimplemented;
 
 impl Endpoint for Unimplemented {
     #[cold]
-    fn call(&self, req: Request) -> Answering {
-        turned_away(&req);
+    fn call(&self, _: Request) -> Answering {
         let mut res = StatusCode::NOT_IMPLEMENTED.into_response();
         res.extensions_mut().insert(crate::page::Cause::UnknownMethod);
         Box::pin(std::future::ready(res))

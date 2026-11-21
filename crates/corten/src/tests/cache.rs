@@ -1171,9 +1171,9 @@ async fn a_kept_page_has_the_tag_and_the_coded_bytes_of_the_handler_s_answer() {
     assert_eq!((runs.count(), each.count()), (1, 14), "one render for all of them");
 }
 
-/// A write a handler met drops what is kept at its path, whatever the query and whatever it
-/// answered, and one that goes through drops the place it redirects to; one the router turned
-/// away, for a method no handler at the path has, changes nothing.
+/// A write drops what is kept at its path, whatever the query and whatever it is answered (the
+/// router's own answer for a method the path has no handler for included), and one that goes
+/// through drops the place it redirects to. No other path's page is dropped.
 #[tokio::test]
 async fn a_write_drops_the_pages_kept_at_its_path() {
     let (runs, read) = (Runs::default(), Runs::default());
@@ -1193,40 +1193,43 @@ async fn a_write_drops_the_pages_kept_at_its_path() {
     reads(router.clone()).await;
     assert_eq!(runs.count(), 1);
     // The router's own answers: the route has no `POST` (405), and no route has a `DELETE` (501).
-    fetch(&router, "GET", "/read", &[]).await;
+    // A middleware may have met either, so each counts as any write does.
+    assert!(!fetch(&router, "GET", "/read", &[]).await.1.contains_key(header::AGE));
+    assert!(fetch(&router, "GET", "/read", &[]).await.1.contains_key(header::AGE));
     let (status, _, _) = fetch(&router, "POST", "/read", &same_origin).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert!(!fetch(&router, "GET", "/read", &[]).await.1.contains_key(header::AGE));
+    assert_eq!((runs.count(), read.count()), (1, 2), "a write to a path with no handler for it, and that path alone");
     let (status, _, _) = fetch(&router, "DELETE", "/", &same_origin).await;
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-    assert!(fetch(&router, "GET", "/read", &[]).await.1.contains_key(header::AGE));
     reads(router.clone()).await;
-    assert_eq!((runs.count(), read.count()), (1, 1), "a write no handler met");
+    assert_eq!(runs.count(), 2, "a write in a method no route has");
     let (status, _, _) = fetch(&router, "PUT", "/", &same_origin).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     reads(router.clone()).await;
-    assert_eq!(runs.count(), 2, "a write its handler refused, which may have saved first");
+    assert_eq!(runs.count(), 3, "a write its handler refused, which may have saved first");
     let (status, _, _) = fetch(&router, "POST", "/", &same_origin).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     reads(router.clone()).await;
-    assert_eq!(runs.count(), 3, "a write to the page's URL");
+    assert_eq!(runs.count(), 4, "a write to the page's URL");
     let (status, headers, _) = fetch(&router, "POST", "/saved", &same_origin).await;
     assert_eq!((status, headers[header::LOCATION].to_str().unwrap()), (StatusCode::SEE_OTHER, "/"));
     reads(router.clone()).await;
-    assert_eq!(runs.count(), 4, "a write that redirects to it");
+    assert_eq!(runs.count(), 5, "a write that redirects to it");
     // As the runtime's form submit is answered: the place is in `corten-location`.
     let (_, headers, _) = fetch(&router, "POST", "/saved", &[("sec-fetch-site", "same-origin"), ("corten", "action")]).await;
     assert_eq!(headers["corten-location"], "/", "{headers:?}");
     reads(router.clone()).await;
-    assert_eq!(runs.count(), 5);
+    assert_eq!(runs.count(), 6);
     // Every page at the path: a named post is `?do=name` there, and the page has other queries.
     fetch(&router, "GET", "/?page=2", &[]).await;
-    assert_eq!(runs.count(), 6);
+    assert_eq!(runs.count(), 7);
     let (status, _, _) = fetch(&router, "POST", "/?do=save", &same_origin).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     fetch(&router, "GET", "/?page=2", &[]).await;
     reads(router.clone()).await;
-    assert_eq!(runs.count(), 8, "the page and its other query, both made again");
-    assert_eq!(read.count(), 1, "and no other path's page");
+    assert_eq!(runs.count(), 9, "the page and its other query, both made again");
+    assert!(fetch(&router, "GET", "/read", &[]).await.1.contains_key(header::AGE), "and no other path's page");
 }
 
 /// A write counts for its path however it ends: one that

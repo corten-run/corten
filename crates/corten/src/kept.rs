@@ -29,15 +29,15 @@
 //! and no value made for this request alone, and varies on nothing but what the key covers.
 //!
 //! A write drops what is kept at its path, whatever the query (a named post is `?do=name` at its
-//! page's path) and however the path is escaped, whatever it is answered: a handler that refused
-//! it, failed, passed its deadline or lost its client may have written first, and work that
-//! outlives its request ([`crate::Signal::finish`]) counts again when it ends. Only a write the
-//! router turned away, whose path has no handler for its method, leaves the page: nothing ran.
-//! So a client can have a kept page made again by sending a write its path takes, and the most
-//! that costs is what the app paid before it kept pages. A write that went through also drops what is kept at the place on this site its answer
-//! names (`Location`, `Content-Location`; RFC 9111 section 4.4). A page whose handler was
-//! reading while a write went through is not kept. Nothing else drops a page before its lifetime
-//! ends: the lifetime is how stale the app said the page may be. Off under `corten dev`. The
+//! page's path) and however the path is escaped, whatever it is answered: a handler or a
+//! middleware that refused it, failed, passed its deadline or lost its client may have written
+//! first, and a status does not say. Work that outlives its request
+//! ([`crate::Signal::finish`]) counts again when it ends. So a client can have a kept page made
+//! again by sending a write to its path, and the most that costs is what the app paid before it
+//! kept pages. A write that went through also drops what is kept at the place on this site its
+//! answer names (`Location`, `Content-Location`; RFC 9111 section 4.4). A page whose handler
+//! was reading while a write went through is not kept. Nothing else drops a page before its
+//! lifetime ends: the lifetime is how stale the app said the page may be. Off under `corten dev`. The
 //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
 //! the compressed forms made for it, with an allowance for what holds them; the body, the key
 //! and each compressed form are held in allocations of their own size
@@ -134,11 +134,9 @@ impl Written {
 }
 
 /// A request that may change what its path shows (a method that is not safe), from before its
-/// handler can start until it is answered or dropped: its path's count goes up either way, unless
-/// the router turned it away and no handler ran.
+/// handler can start until it is answered or dropped: its path's count goes up either way.
 pub(crate) struct Writing<'a> {
     answers: &'a Answers,
-    signal: crate::Signal,
     count: usize,
     host: Option<HeaderValue>,
     answered: bool,
@@ -149,15 +147,12 @@ impl Writing<'_> {
     /// names (RFC 9111 section 4.4), so nothing kept there stands. Its path counts whatever the
     /// answer: a handler that answered `4xx` or `5xx`, or passed its deadline (a `503`, or a
     /// `408` while it waited for the body), may have written first, and its status does not say
-    /// (work it left under `Signal::finish` counts again when it ends). Not when the router
-    /// turned the request away (its `405` or `501`): the route at the path has no handler for
-    /// the method, so none ran. The places an answer names count only for a write that did not
-    /// fail.
+    /// (work it left under `Signal::finish` counts again when it ends). That holds for the
+    /// router's own `404`, `405` and `501` too: a middleware met the request before the
+    /// router answered it, and nothing here knows it wrote nothing. The places an answer names
+    /// count only for a write that did not fail.
     pub(crate) fn answered(mut self, res: &Response) {
         self.answered = true;
-        if !self.signal.may_write() {
-            return;
-        }
         self.answers.count(self.count);
         if res.status().is_client_error() || res.status().is_server_error() {
             return;
@@ -459,7 +454,7 @@ impl Answers {
     pub(crate) fn writing(&self, req: &Request, signal: &crate::Signal) -> Writing<'_> {
         let count = count_of(req.uri().path().as_bytes());
         signal.writes(count);
-        Writing { answers: self, signal: signal.clone(), count, host: req.headers().get(header::HOST).cloned(), answered: false }
+        Writing { answers: self, count, host: req.headers().get(header::HOST).cloned(), answered: false }
     }
 
     /// Counts a write to the paths `count` is for, so no page kept for them stands: every
@@ -733,7 +728,7 @@ mod tests {
     }
 
     /// A URL's answer is one copy for each `Host` it was asked with, a new one in the place of the
-    /// one it stands for. A write a handler met drops every page at its path and at the
+    /// one it stands for. A write drops every page at its path, and one that did not fail at the
     /// path it redirects to, whatever their queries, and one whose handler read before it.
     #[test]
     fn a_url_has_a_copy_for_each_host_and_a_write_drops_its_path_s() {
@@ -757,14 +752,6 @@ mod tests {
         assert_eq!(answers.bytes(), 20 + 10 * (COPIES - 1) + OVERHEAD * COPIES);
         let last = HeaderValue::from_static("h7.example");
         let mut res = Response::new(Body::empty());
-        // The router's own refusal: no handler has the method at the path, so nothing ran.
-        *res.status_mut() = StatusCode::METHOD_NOT_ALLOWED;
-        let signal = crate::Signal::default();
-        let req = http::Request::builder().method("POST").uri("/p").header("host", "h7.example").body(Body::empty());
-        let turned_away = answers.writing(&req.expect("a request"), &signal);
-        signal.turned_away();
-        turned_away.answered(&res);
-        assert!(answers.find("/p", Some(&last), None).is_some(), "a write no handler met changed nothing");
         *res.status_mut() = StatusCode::SEE_OTHER;
         res.headers_mut().insert(header::LOCATION, HeaderValue::from_static("/q?x=1#top"));
         res.headers_mut().insert(header::CONTENT_LOCATION, HeaderValue::from_static("https://H7.example/made/1"));
@@ -805,8 +792,11 @@ mod tests {
         assert!(!kept("/notes/a%7Eb"), "a handler that failed, or passed its deadline, may have written");
         assert!(kept("/other"), "and what a failure names is not a place it wrote");
         // A handler that refused the request, waited too long for its body or says it does not
-        // do this may have saved first: its status does not say.
-        for status in [StatusCode::CONFLICT, StatusCode::REQUEST_TIMEOUT, StatusCode::NOT_IMPLEMENTED] {
+        // do this may have saved first, and so may a middleware around a route with no handler
+        // for the method: a status does not say.
+        let refusals =
+            [StatusCode::CONFLICT, StatusCode::REQUEST_TIMEOUT, StatusCode::METHOD_NOT_ALLOWED, StatusCode::NOT_IMPLEMENTED];
+        for status in refusals {
             answers.keep(entry(&answers, "/notes/a%7Eb", None, 60, 10));
             assert!(kept("/notes/a%7Eb"));
             *res.status_mut() = status;
