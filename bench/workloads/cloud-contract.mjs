@@ -139,16 +139,22 @@ function reservationRegion(fleet, job, placement) {
 // Keep the wider catalog job fixed, and use one common region for all other jobs.
 // Both directional listings must agree for each candidate pair.
 export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, staged = false } = {}) {
-  const listed = (kind, slug, membership) => {
+  const listed = (kind, slug, membership, optional) => {
     assert.ok(Array.isArray(catalog?.[kind]), "invalid fleet catalog listing");
     const rows = catalog[kind].filter((row) => row?.slug === slug);
+    if (optional && rows.length === 0) return;
+    const members = rows[0]?.[membership];
     assert.ok(rows.length === 1 && typeof rows[0].available === "boolean"
-      && Array.isArray(rows[0][membership]), `missing or invalid fleet catalog entry: ${slug}`);
+      && Array.isArray(members) && members.every((value) => typeof value === "string")
+      && new Set(members).size === members.length, `missing or invalid fleet catalog entry: ${slug}`);
     return rows[0];
   };
   const available = ({ size, region }) => {
-    const s = listed("sizes", size, "regions"), r = listed("regions", region, "sizes");
-    const inSize = s.regions.includes(region), inRegion = r.sizes.includes(size);
+    // A staged c-8 candidate may be absent from a complete listing, but
+    // neither direction may claim that the absent side offers the pair.
+    const optional = staged && size === host.size;
+    const s = listed("sizes", size, "regions", optional), r = listed("regions", region, "sizes", optional);
+    const inSize = s?.regions.includes(region) ?? false, inRegion = r?.sizes.includes(size) ?? false;
     assert.ok(inSize === inRegion, `fleet catalog listings disagree: ${size}/${region}`);
     return inSize && s.available && r.available;
   };

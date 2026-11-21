@@ -234,7 +234,7 @@ test("unusable wider placement, disagreement and missing facts stop before reser
     ({ sizes, regions }) => { sizes[1].regions = []; regions[0].sizes = ["c-8"]; },
     ({ regions }) => { regions[1].sizes = []; },
     ({ sizes }) => { sizes.pop(); },
-    ({ regions }) => { regions.pop(); },
+    ({ regions }) => { regions.splice(1, 1); }, // c-8 still advertises the missing sfo3 row.
     ({ sizes }) => { sizes[0].available = false; },
     ({ regions }) => { regions[0].available = false; },
   ]) {

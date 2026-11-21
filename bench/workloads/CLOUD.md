@@ -134,8 +134,9 @@ checks clean committed source and reads the DigitalOcean size and region catalog
 in the saved account/context, through a credential worker with create disabled.
 It needs `sizes:read` and `regions:read` in addition to the account read.
 The size and region entries must both list each advertised pair and both be
-marked available. Missing entries, incomplete listings, disagreement or no
-complete supported placement stop preparation without a saved fleet. This is
+marked available. An optional region absent in both directions is unavailable;
+incomplete listings, disagreement or no qualifying pair stop preparation
+without a saved fleet. This is
 advertised availability, not a stock or quota guarantee. It uses no trial
 create and neither allocates a host nor authorizes execution:
 
@@ -145,17 +146,18 @@ node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --detach --print
 node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --detach --approve-reviewed-merged-ready REVIEWED_EXACT_HASH
 ```
 
-Preparation returns 3 with a saved `fleet-ROUND.json`. A preview uses no provider
-access and cannot execute: independently
+Preparation returns 3 with a saved `fleet-ROUND.json`. The detach preview uses
+no provider access. The remaining preview reads the provider catalog after
+catalog replay to propose a region; neither preview can create a host. Independently
 review its exact source, physical root, complete roster and every contained child
 subject before supplying the batch approval. Source review and merged native
 readiness remain prerequisites; never automatically feed a preview into execution.
 The launch intent is durable before any child starts and prevents a second launch,
 including after partial failure. Initial detach rechecks both reserved sizes
-before consuming its intent and before the first create. After the first group
-is collected, verified and deleted, remaining admission and its children
-recheck only the reserved `c-8` placement. Direct child launches outside that
-admission still check both sizes. No check selects another region.
+before consuming its intent and before the first create. Remaining admission
+and its children recheck only the exact `c-8` placement bound into the reviewed
+remaining approval. Those checks refuse a missing pair; they never substitute
+another region after approval.
 `fleet-placement-preflight-failed` means the saved account
 or placement could not be verified; inspect both listings rather than editing the
 manifest. An acknowledged catalog HTTP denial or a fully received but invalid
