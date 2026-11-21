@@ -130,23 +130,37 @@ impl Mode {
         Self::read(headers, false).0
     }
 
-    fn read(headers: &HeaderMap, check_html: bool) -> ((Mode, bool), bool) {
-        let runtime = match headers.get(MODE_HEADER).map(HeaderValue::as_bytes) {
+    /// The mode, and whether the runtime sent the request, from the two headers that say so:
+    /// `corten`, and the first `Accept` line, which is asked for only where `corten` names no
+    /// mode. With them, that `Accept` as text, empty where it was not read. Every reader of a
+    /// request's mode comes through here, [`Mode::asked`] by looking the two up and `crate::kept`
+    /// from its pass over a request's headers, so a header added to the rule is an argument each
+    /// of them has to give. Browsers never put JSON first for a navigation.
+    pub(crate) fn said<'a>(
+        runtime: Option<&HeaderValue>,
+        accept: impl FnOnce() -> Option<&'a HeaderValue>,
+    ) -> ((Mode, bool), &'a str) {
+        let runtime = match runtime.map(HeaderValue::as_bytes) {
             Some(b"nav") => Some(Mode::Navigation),
             Some(b"action") => Some(Mode::Action),
             Some(b"page") => Some(Mode::Document),
             _ => None,
         };
-        let accept = if runtime.is_none() { accept(headers) } else { "" };
-        // Browsers never put JSON first for a navigation.
-        let mode = runtime.unwrap_or_else(|| {
-            if crate::api::media_type(accept.split(',').next().unwrap_or("")) == crate::api::JSON {
-                Mode::Data
-            } else {
-                Mode::Document
-            }
-        });
-        ((mode, runtime.is_some()), check_html && mode == Mode::Document && accept.contains("text/html"))
+        if let Some(mode) = runtime {
+            return ((mode, true), "");
+        }
+        let accept = accept().and_then(|accept| accept.to_str().ok()).unwrap_or("");
+        let mode = if crate::api::media_type(accept.split(',').next().unwrap_or("")) == crate::api::JSON {
+            Mode::Data
+        } else {
+            Mode::Document
+        };
+        ((mode, false), accept)
+    }
+
+    fn read(headers: &HeaderMap, check_html: bool) -> ((Mode, bool), bool) {
+        let (asked, accept) = Mode::said(headers.get(MODE_HEADER), || headers.get(header::ACCEPT));
+        (asked, check_html && asked.0 == Mode::Document && accept.contains("text/html"))
     }
 }
 
