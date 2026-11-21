@@ -11,7 +11,7 @@ import { executionGroups, inspectNative } from "./native-replay.mjs";
 import { inspectLifetime, composeHostProof } from "./host-lifetime.mjs";
 import { commandResult, composePhase } from "./composition.mjs";
 import { registrySchema } from "../registry.mjs";
-import { alternateFleetMode } from "../cloud-contract.mjs";
+import { alternateCampaignPlacements } from "./contract.mjs";
 import { verifyHostBoundary } from "./host-observation.mjs";
 import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { fileURLToPath } from "node:url";
@@ -283,7 +283,8 @@ export async function validateCampaign(input) {
     const complete = currentExecution && status.state === "finished" && collectionEntry && !replay.incomplete && !replay.pending.length
       && verifiedGroups.length === plan.order.length && verifiedGroups.every((g, i) => g.group === plan.order[i]) && !blockers.length;
     const loadLayout = groupScoped ? plan.bindings[0].resources.requestedCpuEnv?.CATALOG_LOAD_LAYOUT : undefined;
-    const placement = groupScoped && plan.bindings[0].campaignMode === alternateFleetMode ? alternateFleetMode : undefined;
+    const mode = groupScoped ? plan.bindings[0].campaignMode : undefined;
+    const placement = alternateCampaignPlacements.includes(mode) ? mode : undefined;
     const common = { schema: groupScoped ? "benchmark-isolated-group-campaign-inspection/v1" : "benchmark-isolated-campaign-inspection/v1", scope: "intrinsic-evidence",
       round, commit, campaign: id, campaignSha256: plan.campaignSha256, sourceSha256: plan.sourceSha256,
       ...(loadLayout ? { loadLayout } : {}),

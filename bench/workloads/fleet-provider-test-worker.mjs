@@ -39,15 +39,17 @@ serveProviderWorker({
         sizes: [{ slug: "c-8", available: true, regions: ["sfo2"] }], meta: { total: 2 },
         links: { pages: { next: "https://api.digitalocean.com/v2/sizes?page=2&per_page=200" } },
       } };
-      const sizes = [{ slug: "c-8", available: true, regions: later ? ["sfo2"] : ["sfo2", "sfo3"] }];
+      const sizes = [{ slug: "c-8", available: true, regions: later ? ["lon1"] : ["sfo2", "sfo3"] }];
       if (!later) sizes.push({ slug: "c-16", available: true, regions: ["sfo2"] });
       return { status: 200, value: { sizes, meta: { total: sizes.length } } };
     }
     if (mode === "catalog-pagination" && method === "GET" && path === "/v2/sizes?page=2&per_page=200")
       return { status: 200, value: { sizes: [{ slug: "c-16", available: true, regions: ["sfo2"] }], meta: { total: 3 } } };
     if (method === "GET" && path === "/v2/regions?page=1&per_page=200") {
-      const regions = [{ slug: "sfo2", available: true, sizes: later ? ["c-8"] : ["c-8", "c-16"] },
-        { slug: "sfo3", available: true, sizes: later ? [] : ["c-8"] }];
+      const regions = [{ slug: "sfo2", available: true, sizes: later ? [] : ["c-8", "c-16"] },
+        { slug: "sfo3", available: true, sizes: later ? [] : ["c-8"] },
+        { slug: "lon1", available: true, sizes: later ? ["c-8"] : [] },
+        { slug: "blr1", available: true, sizes: [] }];
       return { status: 200, value: { regions, meta: { total: regions.length } } };
     }
     if (method === "GET" && path.startsWith("/v2/droplets?")) {
@@ -55,7 +57,7 @@ serveProviderWorker({
     }
     if (method === "POST" && path === "/v2/droplets") {
       const saved = state(); assert.equal(saved.status, "creating"); assert.ok(saved.createIntentAt);
-      const droplets = hosts(), id = droplets.length + 101;
+      const droplets = hosts(), id = droplets.length + (later ? 102 : 101);
       const droplet = { id, name: body.name, tags: body.tags, size_slug: body.size, region: { slug: body.region },
         networks: { v4: [{ type: "public", ip_address: `192.0.2.${id - 100}` }] } };
       writeFileSync(hostsPath, JSON.stringify([...droplets, { ...droplet, id: mode === "host-id-mismatch" ? id + 100 : id }]));
