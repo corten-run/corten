@@ -600,6 +600,12 @@ impl Signal {
         self.0.write.store(count + 1, Ordering::Relaxed);
     }
 
+    /// Whether the request is counted as a write to its path ([`Signal::writes`]).
+    #[cfg(test)]
+    pub(crate) fn counts_a_write(&self) -> bool {
+        self.0.write.load(Ordering::Relaxed) != 0
+    }
+
     /// Work that outlived the request's handler has ended ([`Signal::finish`]): what it wrote
     /// after the request was answered or dropped counts as a write to the request's path too.
     fn wrote(&self) {

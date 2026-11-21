@@ -1593,7 +1593,8 @@ of a page's handler: in a full store the answer to the first request for a URL t
 not remember is not kept, whether the page is new, or was kept while there was room or before
 the bits were last cleared and has since passed its lifetime or been dropped. A store that has filled mostly stays full, since a page past its lifetime keeps
 its room until another needs it. Nothing is kept under `corten dev`,
-so a change shows on the next load. An app's tests keep pages as a deploy does (`App::test`,
+so a change shows on the next load. An app with no `Public` page keeps nothing whatever the
+bound, and its writes are not counted, so it pays nothing for pages it cannot keep. An app's tests keep pages as a deploy does (`App::test`,
 `App::router`): a test that changes what a `Public` page shows other than by a write through the
 app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page
