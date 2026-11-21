@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, isAbsolute } from "node:path";
-import { createExecutionEvidence, replayExecution } from "./execution-evidence.mjs";
+import { bindExecutionParticipant, createExecutionEvidence, participantSetupCause, replayExecution } from "./execution-evidence.mjs";
 import { immutableGit } from "./immutable-git.mjs";
 import { mountSourceHash } from "./execution-inputs.mjs";
 
@@ -115,6 +115,76 @@ test("terminal lifecycle cannot be repeated or reordered to erase an OOM failure
       assert.throws(() => replay(folder, s));
     }));
   }
+});
+
+test("matched functional source and target bind create IDs before start, preserving setup flags", async (t) => {
+  for (const mode of ["ready", "start-failed", "malformed-id"]) await t.test(mode, () => temporary(async (folder) => {
+    const s = summary(), net = `${s.runId}-net`, app = participant(s), upstreamId = "e".repeat(64);
+    s.options.profile = "matched"; app.Config.Env = ["PROFILE=matched", "MARKETPLACE_SOURCE=fixture"];
+    const name = app.Name.slice(1), up = `${name}-upstream`;
+    const source = { ...structuredClone(app), Id: upstreamId, Name: "/" + up,
+      Config: { ...app.Config, Cmd: ["node", "bench/mixed-production/upstream.mjs"], Env: ["MIXED_CONTROL_TOKEN=private-canary"] },
+      HostConfig: { ...app.HostConfig, NanoCpus: 2e9, Memory: 512 * 2 ** 20 },
+      Mounts: [["/source", "/src", false], ["/dependencies", "/src/node_modules", false], ["/output", "/out", true]]
+        .map(([Source, Destination, RW]) => ({ Type: "bind", Source, Destination, RW })) };
+    const model = new Map([[up, source], [name, app]]), present = new Map(), started = [];
+    const config = ["--network", net, "-p", "127.0.0.1::8080"];
+    const runtime = new Map([
+      [up, [...config, "--cpus", "2", "--memory", "512m", "-v", "/source:/src:ro", "-v", "/dependencies:/src/node_modules:ro",
+        "-v", "/output:/out", "-w", "/src", "-e", "MIXED_CONTROL_TOKEN=private-canary", image, ...source.Config.Cmd]],
+      [name, [...config, "--cpus", "1", "--memory", "1g", "-v", "/output:/fixtures:ro", "-e", "PROFILE=matched", image]],
+    ]);
+    const createLabels = ["--label", `run.corten.mixed-production=${s.runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${s.runId}`];
+    const docker = async ([command, ...args]) => {
+      if (command === "create") {
+        const n = args[1], info = model.get(n);
+        assert.deepEqual(args, ["--name", n, ...createLabels, ...runtime.get(n)]);
+        present.set(info.Id, { ...info, State: { ...info.State, Status: "created", Running: false, Pid: 0, StartedAt: info.State.FinishedAt } });
+        return mode === "malformed-id" ? info.Id + "\nprivate-canary" : info.Id;
+      }
+      if (command === "start") {
+        const [id] = args, info = present.get(id); assert.equal(info?.State.Status, "created");
+        assert.deepEqual(read(folder, "execution/manifest.json").events.slice(-3)
+          .map((ref) => read(folder, ref.path).kind), ["container-create", "container-name", "participant-created"]);
+        started.push(id);
+        if (mode === "start-failed") throw Error("private-canary");
+        info.State = [...model.values()].find((p) => p.Id === id).State;
+        return id;
+      }
+      if (command === "inspect") return JSON.stringify([present.get(args.at(-1))]);
+      if (command === "image" && args[0] === "inspect") return JSON.stringify([imageInfo]);
+      if (command === "ps") {
+        const filter = args[args.indexOf("--filter") + 1];
+        return [...present.values()].filter((p) => [`name=^${p.Name}$`, `id=${p.Id}`, `label=run.corten.mixed-production=${s.runId}`].includes(filter))
+          .map((p) => p.Id).join("\n");
+      }
+      if (command === "rm") { assert.ok(present.delete(args.at(-1))); return args.at(-1); }
+      if (command === "network" && args[0] === "inspect") return JSON.stringify([{ Id: netId, Name: net, Labels: app.Config.Labels }]);
+      if (command === "network" && args[0] === "rm") return netId;
+      if (args[0] === "ls") return "";
+      assert.fail("unexpected setup command");
+    };
+    const collector = createExecutionEvidence({ folder, summary: s, docker });
+    await collector.networkCreated(net, netId);
+    const own = (n) => collector.own(n, ["run", "-d", ...runtime.get(n)]);
+    if (mode === "ready") {
+      await own(up); await own(name);
+      assert.deepEqual(started, [upstreamId, id]); await collector.remove(name); await collector.remove(up);
+    } else {
+      const cause = mode === "start-failed" ? "docker-start-command-failed" : "docker-create-id-unavailable";
+      await assert.rejects(own(up), (error) => participantSetupCause(error) === cause);
+      assert.deepEqual(started, mode === "start-failed" ? [upstreamId] : []);
+      if (mode === "start-failed") { await collector.remove(up); assert.equal(present.size, 0); }
+      else { await assert.rejects(collector.remove(up), /without original create ID/); assert.equal(present.size, 1); }
+    }
+    await collector.removeNetwork(net); await collector.seal();
+    const replayed = replay(folder, s);
+    assert.equal(replayed.cleanupComplete, mode !== "malformed-id");
+    if (mode !== "malformed-id") assert.equal(bindExecutionParticipant(replayed.participants, { role: "upstream", source: "fixture" },
+      { id: upstreamId, imageId: image, startedAt: mode === "ready" ? source.State.StartedAt : source.State.FinishedAt }), mode === "ready");
+    for (const ref of read(folder, "execution/manifest.json").events)
+      assert.ok(!readFileSync(join(folder, ref.path), "utf8").includes("private-canary"));
+  }));
 });
 
 test("cleanup retains original create acknowledgement ID across same-name replacement", () => temporary(async (folder) => {

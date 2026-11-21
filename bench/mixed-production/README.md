@@ -302,6 +302,11 @@ Results are atomically reserved under `results/<round>/`, never overwritten:
   attempts and explicit missing cells. Invalid attempted evidence remains invalid; it is not
   rewritten into an unsupported unsent row to get a valid oracle document.
 
+The runner records the full Docker create ID and checks the participant before starting it
+by ID. For functional setup failures, `summary.json` distinguishes create-command failure,
+an unusable create ID, unconfirmed name or inspection evidence, and start-command failure
+without retaining raw Docker errors. An acknowledged create is not a readiness result.
+
 `validateResults` runs on the real merged capture. Isolated cell checks use only that cell and
 real preceding state transitions, with other cells explicitly unsupported, to expose independent
 read results even when a different write lacks state evidence. `afterFunctionalGate` blocks

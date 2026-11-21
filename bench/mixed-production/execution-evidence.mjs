@@ -25,6 +25,11 @@ const kinds = {
   ...Object.fromEntries(["container", "network", "image", "volume"].map((type) => [`owned-${type}-inventory`, "docker-query-failed"])),
 };
 
+class ParticipantSetupError extends Error {}
+export function participantSetupCause(error) {
+  return error instanceof ParticipantSetupError ? error.message : undefined;
+}
+
 export function bindExecutionParticipant(participants, context, observed) {
   const matches = participants.filter((p) => Object.entries(context).every(([key, value]) => p[key] === value));
   assert.equal(matches.length, 1, "native participant lifecycle missing or ambiguous");
@@ -159,17 +164,30 @@ export function createExecutionEvidence({ folder, summary, docker }) {
   const volumeQueries = async (names = volumes) => {
     for (const name of names) await query("volume-absence", name, ["volume", "ls", "--filter", `name=^${name.replaceAll(".", "\\.")}$`, "--format", "{{.Name}}"], "volume");
   };
+  const create = async (name, operation) => {
+    executionContext(name, summary); assert.ok(!attempted.has(name)); attempted.add(name);
+    const start = Date.now(); let result, cause;
+    try { result = await operation(); } catch { cause = "docker-create-command-failed"; }
+    if (!cause && (typeof result !== "string" || !containerId.test(result))) cause = "docker-create-id-unavailable";
+    if (!cause) originalIds.set(name, result);
+    append("container-create", name, start, cause ? null : { raw: result }, cause ? "docker-create-failed" : null);
+    const ids = await query("container-name", name, ["ps", "-a", "--no-trunc", "--filter", `name=^/${name}$`, "--format", "{{.ID}}"]);
+    if (cause) throw new ParticipantSetupError(cause);
+    if (ids?.length !== 1 || ids[0] !== result) throw new ParticipantSetupError("docker-create-name-unconfirmed");
+    if (!await inspect(name, "created", result)) throw new ParticipantSetupError("docker-create-inspection-failed");
+    return result;
+  };
   return {
-    async create(name, operation) {
-      executionContext(name, summary); assert.ok(!attempted.has(name)); attempted.add(name);
-      const start = Date.now(); let result, error;
-      try { result = await operation(); assert.ok(containerId.test(result)); originalIds.set(name, result); append("container-create", name, start, { raw: result }); }
-      catch (failure) { error = failure; append("container-create", name, start, null, "docker-create-failed"); }
-      const ids = await query("container-name", name, ["ps", "-a", "--no-trunc", "--filter", `name=^/${name}$`, "--format", "{{.ID}}"]);
-      if (ids?.length && originalIds.has(name)) await inspect(name, "created", originalIds.get(name));
-      if (error) throw error;
-      assert.ok(ids?.length === 1 && ids[0] === result && observed.has(name), "actual participant inspection unavailable");
-      return result;
+    create,
+    async own(name, args) {
+      const detached = args[0] === "run";
+      assert.ok(detached ? args[1] === "-d" : args[0] === "create", "expected detached run or create");
+      const id = await create(name, () => docker(["create", "--name", name, "--label", `${label}=${summary.runId}`,
+        "--label", "agent.owner=codex", "--label", `agent.task=${summary.runId}`, ...args.slice(detached ? 2 : 1)]));
+      // Bind the create receipt before start so a failed start cannot strand an unacknowledged ID.
+      if (detached) try { await docker(["start", id]); }
+      catch { throw new ParticipantSetupError("docker-start-command-failed"); }
+      return id;
     },
     async remove(name) {
       executionContext(name, summary);

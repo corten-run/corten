@@ -11,7 +11,7 @@ import { maxConnections } from "../fullstack/conformance.mjs";
 import { records as fixtureRecords, writeFixture } from "../marketplace/fixtures.mjs";
 import { buildInputPaths, sourceSnapshot, sourceAuditIdentity, verifySourceAudit } from "./source-audit.mjs";
 import { nativeBuildContext } from "./build-context.mjs";
-import { createExecutionEvidence, executionContext } from "./execution-evidence.mjs";
+import { createExecutionEvidence, executionContext, participantSetupCause } from "./execution-evidence.mjs";
 import { withImmutableGit } from "./immutable-git.mjs";
 import { prepareExecutionInputs, finalizeExecutionInputs } from "./execution-inputs.mjs";
 
@@ -91,7 +91,7 @@ export async function run(args) {
   const inspect = async (name) => JSON.parse(await docker(["inspect", name], { cleanup: true }))[0];
   const own = async (args, name) => {
     active.add(name);
-    await execution.create(name, () => docker([args[0], "--name", name, "--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`, ...args.slice(1)]));
+    await execution.own(name, args);
   };
   const remove = async (name) => {
     const observed = await execution.remove(name), context = executionContext(name, summary);
@@ -102,7 +102,7 @@ export async function run(args) {
     }
     active.delete(name);
   };
-  const fail = (app, source, stage) => { summary.failures.push({ app, source, stage }); save(); };
+  const fail = (app, source, stage, cause) => { summary.failures.push({ app, source, stage, ...(cause ? { cause } : {}) }); save(); };
   const ready = async (name, path, probes, role, wire) => {
     const info = await inspect(name), port = info.NetworkSettings.Ports["8080/tcp"]?.[0]?.HostPort;
     assert.ok(port, "private readiness port missing");
@@ -242,8 +242,8 @@ export async function run(args) {
           assert.equal(result.cells.length, operationCount, "partial worker capture");
           parts[app].push({ ...result, source }); Object.assign(sourceEntry, { complete: true, capture: `${app}/${source}/capture.json` });
           for (const cell of result.cells) Object.assign(entry.cells.find((c) => c.requestId === cell.requestId), cell);
-        } catch {
-          fail(app, source, `native-source-${stage}-failed`);
+        } catch (error) {
+          fail(app, source, `native-source-${stage}-failed`, participantSetupCause(error));
           sourceEntry.failedStage = stage;
           for (const cell of entry.cells.filter((c) => c.source === source)) cell.gaps = [`native-source-${stage}-failed-or-missing-capture`];
           // Recover every incrementally saved attempted row after worker timeout/crash.
