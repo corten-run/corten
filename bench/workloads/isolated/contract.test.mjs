@@ -207,6 +207,7 @@ test("hardening binds native reviewed-profile reference without treating the str
   assert.deepEqual(e.effectiveOptions, hardeningOptions(e.invocation.argv.slice(1)));
   assert.equal(e.nativeDefaults.review, null); assert.equal(e.effectiveOptions.review, b.subjectSha256);
   assert.deepEqual(e.effectiveOptions.verify, {}); assert.equal(e.effectiveOptions.profile, "bounded");
+  assert.equal(e.effectiveOptions.isolated, true); assert.ok(e.invocation.argv.includes("--isolated"));
   assert.equal(Object.hasOwn(e.settings, "attack"), false);
   const expected = hardeningBudgets("bounded");
   assert.deepEqual(e.settings.boundedRequests, expected.boundedRequests);

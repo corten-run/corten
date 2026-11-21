@@ -1,10 +1,32 @@
 import assert from "node:assert/strict";
+import { budgets } from "../../hardening/plan.mjs";
 
 export const clientActorCpus = Object.freeze({ client: "4-7" });
 export const liveActorCpus = Object.freeze({ application: "1", browser: "4-7" });
 export const liveApplication = Object.freeze({ cpu: 1, memoryBytes: 2 ** 30 });
 export const liveGroup = (group) => group === "live-delivery" || group === "recoverable-live";
-export const hardeningRoleBlocker = "hardening: isolated benign service/recovery actor proof unavailable; connection-flood resistance not measured";
+export const hardeningActorCpus = Object.freeze({ application: "1", upstream: "2", proxy: "3", apparatus: "4-5", command: "6-7" });
+export const hardeningCpuGate = "bench/hardening/cpu-gate.mjs";
+export const hardeningGateMs = 6000;
+export const hardeningRoleCpu = (role) => hardeningActorCpus[
+  ["applicationDirect", "applicationEdge"].includes(role) ? "application" : role === "qualification" ? "apparatus" : role];
+
+export function cpuRanges(cpus) {
+  assert.match(cpus, /^(0|[1-9]\d*)(?:-(0|[1-9]\d*))?(?:,(0|[1-9]\d*)(?:-(0|[1-9]\d*))?)*\n?$/);
+  const ranges = [];
+  for (const range of cpus.trim().split(",")) {
+    const [start, end = start] = range.split("-").map(Number), previous = ranges.at(-1);
+    assert.ok(Number.isSafeInteger(start) && Number.isSafeInteger(end) && start > (previous?.[1] ?? -1) && end >= start);
+    if (previous && start - previous[1] === 1) previous[1] = end;
+    else ranges.push([start, end]);
+  }
+  return ranges;
+}
+
+export function cpuSetWithin(actual, cpuset) {
+  const allowed = cpuRanges(cpuset);
+  return cpuRanges(actual).every(([start, end]) => allowed.some(([first, last]) => start >= first && end <= last));
+}
 
 export function verifyNativePartition(cpus, roles, cpuCount = 4096) {
   assert.ok(cpus && roles.every((role) => typeof cpus[role] === "string" && cpus[role]), "native CPU partition absent");
@@ -34,12 +56,19 @@ export function nativeControlPartition(binding) {
   } else if (group === "client-heavy" || liveGroup(group)) {
     fixed = group === "client-heavy" ? clientActorCpus : liveActorCpus;
     cpus = resources.actorCpus; roles = Object.keys(fixed);
+  } else if (group === "hardening") {
+    fixed = hardeningActorCpus;
+    cpus = resources.actorCpus; roles = Object.keys(fixed);
+    assert.equal(binding.execution.effectiveOptions.isolated, true, "native hardening isolation must be enabled");
+    assert.equal(binding.execution.effectiveOptions.profile, "bounded", "native hardening must use the bounded profile");
+    assert.deepEqual(resources.budget, budgets().resources, "native hardening budgets differ from the runner");
+    assert.ok(binding.sources?.files.some((f) => f.path === hardeningCpuGate), "native hardening CPU gate absent from bound sources");
   } else if (["catalog-page", "json-api", "localized-marketplace", "mixed-production"].includes(group)) {
     roles = ["app", "api", "load"];
     cpus = Object.fromEntries(Object.entries((group === "mixed-production" ? resources.measurement?.cpu : resources.expectedCpus) ?? {})
       .map(([role, value]) => [role, value.cpuset]));
   } else {
-    assert.fail(group === "hardening" ? hardeningRoleBlocker : group + ": native CPU partition absent");
+    assert.fail(group + ": native CPU partition absent");
   }
   const size = binding.host?.size;
   if (size !== undefined) assert.ok(["c-8", "c-16"].includes(size), "unknown native CPU host size");
@@ -65,5 +94,7 @@ export function commandCpuSet(binding) {
       const { cpus } = nativeControlPartition(binding);
       return group === "client-heavy" ? cpus.client : cpus.browser;
     }
+  } else if (group === "hardening" && (binding.resources?.actorCpus || binding.execution?.effectiveOptions?.isolated)) {
+    return nativeControlPartition(binding).cpus.command;
   }
 }

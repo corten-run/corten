@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { schema, registryDigest, groupReady, nativeGroup, matrix, validateBudget, boundedRequestsVersion, deploymentQualificationVersion, connectionFloodResistance } from "./plan.mjs";
-import { verifyArtifacts, verifyParity, digest, savedFiles, savedProofVersion, verifyRunInputs, verifyOwnedReceipts, upstreamSourcePath } from "./evidence.mjs";
+import { verifyArtifacts, verifyParity, digest, savedFiles, savedProofVersion, verifyRunInputs, verifyOwnedReceipts, verifyHardeningCpuRoles, upstreamSourcePath } from "./evidence.mjs";
 import { assembleRecovery } from "./dependency-recovery-capture.mjs";
 import { assembleBounded, boundedProbeConfig } from "./request-capture.mjs";
 import { assessNative } from "./native.mjs";
@@ -93,6 +93,11 @@ export function verifySavedProof(folder, summary, tree = savedFiles(folder)) {
       const launches = verifyOwnedReceipts(receipts, summary, folder);
       for (const cell of summary.cells.filter((c) => c.status === "observed")) {
         const deployment = read(join(folder, cell.key, "deployment.json")), list = launches.get(cell.key);
+        if (summary.options.isolated) {
+          const out = join(folder, cell.key);
+          const raw = readFileSync(join(out, "raw.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+          verifyHardeningCpuRoles(read(join(out, "cpu-roles.json")), cell, list, raw);
+        }
         for (const p of deployment.processes) {
           const r = list.find((r) => r.intent.step === p.role); assert.ok(r);
           const before = read(join(folder, cell.key, `${p.id}-before.json`)).info, life = read(join(folder, cell.key, `${p.id}-lifecycle.json`));
@@ -107,6 +112,7 @@ export function verifySavedProof(folder, summary, tree = savedFiles(folder)) {
           }
         }
       }
+      if (summary.options.isolated) proof.cpuRoles = "verified";
       proof.resources = "verified";
     }
     verifyResourceCleanup(read(join(folder, "resource-cleanup.json")), summary, [...usedNetworkIds]);

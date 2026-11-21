@@ -12,7 +12,7 @@ import { deploymentSha256 } from "../deployments.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { parseCampaignArgs } from "./campaign-entry.mjs";
 import { apparatusProof, nativeControlPartition } from "./control-stream.mjs";
-import { hardeningRoleBlocker } from "./native-roles.mjs";
+import { hardeningCpuGate } from "./native-roles.mjs";
 import { binding as controlBinding, registration } from "../test-fixtures/control-stream-fixture.mjs";
 import { inspectCampaign } from "../cloud-validation.mjs";
 
@@ -47,12 +47,12 @@ test("the official r24 mixed timing phase supplies the same measured CPU roles a
   assert.throws(() => nativeControlPartition(missing), /native CPU partition absent/);
   t.diagnostic("official r24/mixed-production: measured app=1 api=2-3 load=4-7; no functional-capture CPU proof");
 });
-test("captured pre-create worker uses the real committed placements and refuses hardening", async () => {
+test("captured pre-create worker uses the real committed placements including bounded hardening", async () => {
   const check = (group, mode) => inspectCampaign({ action: "actor-role-preflight", round: "r25", commit, group, mode });
   for (const [group, mode, blockers] of [
     ["catalog-page", catalogFleetPlacement.loadLayout, []],
     ["live-delivery", "dedicated-lon1", []],
-    ["hardening", "dedicated", [hardeningRoleBlocker]],
+    ["hardening", "dedicated", []],
   ]) assert.deepEqual(await check(group, mode), blockers);
 });
 test("alternate dedicated placement is replayable and changes neither resources nor native execution", () => {
@@ -96,7 +96,7 @@ test("full campaign binds real committed procedures, all groups, exact native de
   assert.equal(mixed.execution.effectiveOptions.measure, true);
   assert.deepEqual(nativeControlPartition(mixed).cpus, { app: "1", api: "2-3", load: "4-7" });
   assert.equal(mixed.resources.functional.pinning, "not available in functional capture");
-  assert.deepEqual(campaigns.campaignRoleBlockers(plan), [hardeningRoleBlocker]);
+  assert.deepEqual(campaigns.campaignRoleBlockers(plan), []);
   const expected = mixedOptions(mixed.execution.invocation.argv.slice(1)); expected.apps = selectedApps("mixed-production");
   assert.deepEqual(mixed.execution.effectiveOptions, expected);
   const mixedTiming = mixedPhase(plan, "r17-0123456789abcdef");
@@ -138,6 +138,7 @@ test("group campaigns bind the entire exact native group with stable all-group p
     "client-heavy": { client: "4-7" },
     "live-delivery": { application: "1", browser: "4-7" },
     "recoverable-live": { application: "1", browser: "4-7" },
+    hardening: { application: "1", upstream: "2", proxy: "3", apparatus: "4-5", command: "6-7" },
   };
   for (const b of all.bindings) assert.equal(b.host.region, providerCreateHost("legacy").region);
   for (const path of ["campaign-contract.mjs", "campaign-entry.mjs", "campaign.mjs", "campaign-verify.mjs"])
@@ -156,9 +157,13 @@ test("group campaigns bind the entire exact native group with stable all-group p
       assert.deepEqual(plan[field], all[field]);
     assert.ok(Object.isFrozen(plan) && Object.isFrozen(plan.bindings[0].selection.apps));
     if (group === "hardening") {
-      assert.deepEqual(campaigns.campaignRoleBlockers(plan), [hardeningRoleBlocker]);
-      assert.throws(() => nativeControlPartition(dedicated), /isolated benign service\/recovery/);
-    } else {
+      assert.ok(dedicated.sources.files.some((f) => f.path === hardeningCpuGate));
+      assert.throws(() => nativeControlPartition({ ...dedicated, execution: { ...dedicated.execution,
+        effectiveOptions: { ...dedicated.execution.effectiveOptions, isolated: false } } }), /isolation must be enabled/);
+      assert.throws(() => nativeControlPartition({ ...dedicated, sources: { ...dedicated.sources,
+        files: dedicated.sources.files.filter((f) => f.path !== hardeningCpuGate) } }), /CPU gate absent/);
+    }
+    {
       assert.deepEqual(campaigns.campaignRoleBlockers(plan), []);
       const { cpus, roles } = nativeControlPartition(dedicated);
       assert.deepEqual(cpus, expected[group]);

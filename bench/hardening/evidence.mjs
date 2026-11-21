@@ -8,6 +8,7 @@ import { validateBudget, phases } from "./plan.mjs";
 import { verifyContainerCommands, requireCommandAcknowledgement } from "./lifecycle.mjs";
 import { qualificationSettings, featureProfile } from "../marketplace/feature-contract.mjs";
 import { edgeOffset, nginxConf } from "../fullstack/edge.mjs";
+import { cpuSetWithin, hardeningCpuGate, hardeningGateMs, hardeningRoleCpu } from "../workloads/isolated/native-roles.mjs";
 
 export const proxyConfig = () => nginxConf([["target", { port: 8080 - edgeOffset }]], 1);
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -324,7 +325,8 @@ function verifyWorker(r, cell, summary, receipts) {
     "edge-controls": ["node", node + "native.mjs", base, cell.source, upstream, qualification, "/results/edge-native-controls.json", "deployed-edge"],
     parity: ["node", node + "parity.mjs", base, cell.source, upstream, "/results/parity.json"],
     "edge-parity": ["node", node + "parity.mjs", base, cell.source, upstream, "/results/parity.json"],
-    probe: ["node", "/repo/" + probeSourcePath(cell.phase), "/results/probe.json", "/results/raw.jsonl"],
+    probe: ["node", ...(summary.options.isolated ? ["--import", "/repo/" + hardeningCpuGate] : []),
+      "/repo/" + probeSourcePath(cell.phase), "/results/probe.json", "/results/raw.jsonl"],
     "terminal-clock": ["node", node + "clock.mjs"], "cleanup-clock": ["node", node + "clock.mjs"],
     certificate: ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "/cert/key.pem", "-out", "/cert/cert.pem", "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
   };
@@ -398,7 +400,7 @@ function verifyWorker(r, cell, summary, receipts) {
   // Inspect metadata cannot vouch for a different acknowledged command. Parse
   // the fixed native CLI vocabulary and compare it to the procedure, not intent.
   const args = r.creation.args.slice(9), options = new Map(), volumes = [], env = [];
-  const scalar = new Set(["--network", "--network-alias", "--cpus", "--memory", "--memory-swap", "--pids-limit", "--ulimit", "--shm-size"]);
+  const scalar = new Set(["--network", "--network-alias", "--cpus", "--memory", "--memory-swap", "--pids-limit", "--ulimit", "--shm-size", "--cpuset-cpus"]);
   let index = 0;
   while (typeof args[index] === "string" && args[index].startsWith("-")) {
     const flag = args[index++];
@@ -420,6 +422,11 @@ function verifyWorker(r, cell, summary, receipts) {
     ["--pids-limit", "512"], ["--ulimit", "nofile=65536:65536"],
   ]);
   if (role === "qualification") expectedOptions.set("--shm-size", "1g");
+  if (summary.options.isolated) {
+    const cpus = hardeningRoleCpu(role);
+    assert.equal(info.HostConfig.CpusetCpus, cpus, "native hardening Docker cpuset differs");
+    expectedOptions.set("--cpuset-cpus", cpus);
+  }
   if (sampleResources) { expectedOptions.set("--cgroupns=host", true); expectedOptions.set("--pid=host", true); }
   if (["application", "upstream", "proxy"].includes(step)) expectedOptions.set("-d", true);
   if (step === "application") expectedOptions.set("--network-alias", "fsw-target");
@@ -444,6 +451,65 @@ function verifyWorker(r, cell, summary, receipts) {
 }
 
 const missingProof = (message) => { throw Object.assign(new Error(message), { code: "ENOENT" }); };
+
+export function verifyHardeningCpuScope(sample, cpus) {
+  const { id, pid, startTicks, path, groups } = sample;
+  assert.match(id, /^[a-f0-9]{64}$/);
+  assert.ok(Number.isSafeInteger(pid) && pid > 0); assert.match(startTicks, /^[1-9]\d*$/);
+  assert.ok(posix.isAbsolute(path) && posix.normalize(path) === path && [id, `docker-${id}.scope`].includes(posix.basename(path)));
+  assert.ok(Array.isArray(groups) && groups.length > 0);
+  const paths = new Set(groups.map((g) => g.path)), pids = new Set();
+  assert.equal(paths.size, groups.length); assert.ok(paths.has(path));
+  for (const { path: child, files } of groups) {
+    assert.ok(child === path || child.startsWith(path + "/") && posix.normalize(child) === child && paths.has(posix.dirname(child)));
+    const members = files["cgroup.procs"].trim().split("\n").filter(Boolean);
+    for (const member of members) {
+      assert.match(member, /^[1-9]\d*$/); assert.ok(!pids.has(member)); pids.add(member);
+      if (member === String(pid)) assert.equal(child, path, "container init must belong to its Docker cgroup");
+    }
+    const effective = files["cpuset.cpus.effective"];
+    if (child === path) assert.equal(effective.trim(), cpus, "hardening actor effective cpuset differs");
+    else if (members.length) assert.ok(cpuSetWithin(effective, cpus), "hardening process effective cpuset escapes its role");
+  }
+  assert.ok(pids.has(String(pid)), "container init missing from Linux CPU scope");
+}
+
+export function verifyHardeningCpuRoles(evidence, cell, launches, raw) {
+  assert.equal(evidence.schema, "native-hardening-cpu-roles/v1");
+  const roles = ["application", "upstream", ...(cell.mode === "deployed-edge" ? ["proxy"] : []), "probe"];
+  const wall = Date.parse(raw.find((r) => r.type === "clock")?.wallAtStart);
+  const endMs = cell.phase === recoveryPhase
+    ? raw.find((r) => r.type === recoveryPhase)?.upstream.after.observedAtMs
+    : raw.find((r) => r.type === "bounded-requests")?.completeAtMs;
+  assert.ok(Number.isFinite(wall) && Number.isFinite(endMs) && endMs >= 0);
+  const end = wall + endMs;
+  assert.deepEqual(Object.keys(evidence.before).sort(), [...roles].sort());
+  assert.deepEqual(Object.keys(evidence.after).sort(), [...roles].sort());
+  for (const role of roles) {
+    const { created, terminal, intent } = launches.find((r) => r.intent.step === role);
+    const before = evidence.before[role], after = evidence.after[role];
+    const start = Date.parse(terminal.State.StartedAt);
+    assert.ok(before.atMs >= Math.max(start, wall - hardeningGateMs) && before.atMs <= wall
+      && after.atMs >= Math.floor(end) - 1 && after.atMs <= end + hardeningGateMs, "hardening CPU samples do not bracket the probe");
+    assert.ok(Number.isSafeInteger(before.atMs) && Number.isSafeInteger(after.atMs));
+    for (const row of [before, after]) {
+      assert.deepEqual([row.id, row.imageId, row.startedAt], [created.Id, created.Image, terminal.State.StartedAt]);
+    }
+    const cpus = hardeningRoleCpu(intent.role);
+    verifyHardeningCpuScope(before, cpus);
+    if (role === "probe") assert.ok(after.atMs <= Date.parse(terminal.State.FinishedAt), "CPU sample from after probe exit");
+    else assert.equal(before.pid, created.State.Pid, "wrong service init PID");
+    if (role !== "probe" && Object.hasOwn(after, "finishedAt")) {
+      assert.equal(terminal.State.Status, "exited");
+      assert.equal(after.finishedAt, terminal.State.FinishedAt);
+      assert.ok(Date.parse(after.finishedAt) >= before.atMs && Date.parse(after.finishedAt) <= after.atMs);
+    } else {
+      assert.deepEqual([after.pid, after.startTicks, after.path], [before.pid, before.startTicks, before.path]);
+      verifyHardeningCpuScope(after, cpus);
+    }
+  }
+}
+
 export function verifyOwnedReceipts(receipts, summary, folder, preflight) {
   assert.ok(Array.isArray(receipts)); if (!receipts.length) missingProof("missing owned container receipts");
   const ids = new Set(), launches = new Map(), resources = summary.budget.resources;

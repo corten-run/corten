@@ -195,11 +195,18 @@ test("saved client-heavy role requires the compiler and renderer under the pinne
 for (const workload of ["live-delivery", "recoverable-live"]) test(`saved ${workload} actor proof requires the actual app and renderer in the same window`, (t) => {
   const f = browserFixture(t, "app", true, workload);
   const [app] = f.native.hostSubject.participants, { node, browser } = f.native.hostSubject.toolIdentities;
-  const windows = [{ app: app.app, startedAt: 30, endedAt: 60, requireRenderer: true }];
+  const window = (startedAt, endedAt, renderer = { startedAt, endedAt }) => ({ app: app.app, startedAt, endedAt, renderer });
+  const windows = [window(30, 60)];
   const proof = (participants = [app], window = windows) => inspectLiveActors(f.bound, replayBrowser(f), { node, browser }, participants, window);
   assert.equal(proof(), true);
   assert.equal(proof([]), false);
-  assert.equal(proof([app], [{ ...windows[0], endedAt: 40 }]), false);
+  assert.equal(proof([app], [window(30, 40)]), false);
+  assert.equal(proof([app], [window(50, 50), window(50, 50)]), false);
+  assert.equal(proof([app], [window(30, 50), window(50, 60)]), false);
+  assert.equal(proof([app], [window(30, 45, null), window(45, 60)]), false,
+    "a failed scenario without a service observation cannot borrow a later success");
+  assert.equal(proof([app], [window(30, 45), window(45, 60)]), false,
+    "a failed scenario with a renderer cannot borrow a later success");
   const timed = f.observation.samples[1], { kernel } = timed.docker.participants[0];
   const child = group(`${kernel.groups[0].path}/worker`, [302]);
   child.files["cpuset.cpus.effective"] = "1\n";
@@ -211,6 +218,7 @@ for (const workload of ["live-delivery", "recoverable-live"]) test(`saved ${work
   child.files["cpuset.cpus.effective"] = "1\n";
   timed.processes.find((p) => p.type === "--type=renderer").executableSha256 = "0".repeat(64);
   assert.equal(proof(), false);
+  assert.equal(proof([app], [window(30, 60, null)]), true, "a startup failure with no renderer still has actual service placement");
 });
 
 for (const [role, id, allowed, escaped] of [

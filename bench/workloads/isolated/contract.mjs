@@ -20,7 +20,7 @@ import { createClientWorkload } from "../client.mjs";
 import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../live/native.mjs";
 import { fanoutProfile } from "../../live/fanout.mjs";
 import { budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
-import { clientActorCpus, hardeningRoleBlocker, liveActorCpus, liveApplication, liveGroup } from "./native-roles.mjs";
+import { clientActorCpus, hardeningActorCpus, liveActorCpus, liveApplication, liveGroup } from "./native-roles.mjs";
 import { catalogFleetPlacement, fleetCatalogSlugs, host, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
 
 export const schema = "benchmark-isolated-contract/v1";
@@ -51,7 +51,7 @@ const exact = (value, keys, at) => {
 const snapshotPins = freeze({
   ...(!clientParser ? { "bench/client-heavy/run.mjs": "71fc21c81f109b4ae43eb6585c675fe3e9eb49fa526de57ab20e8d4f48edbb8e" } : {}),
   // Native live adds explicit isolation and actor receipts; workload defaults are unchanged.
-  "bench/live/parity.mjs": "4d95b98ce79dccd377930d48b8989afabe2bf8185a24c2ac08ba3dc068d51f13",
+  "bench/live/parity.mjs": "d02cefc6f8d44a5b8ab4f744232abbae996760df4906e8221c9a45c657428c59",
 });
 const clientSourceRoots = Object.freeze([...(clientParser?.sourceRoots ?? [])]);
 export const sourceRoots = Object.freeze([...new Set(["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", ".dockerignore", ".gitignore",
@@ -218,7 +218,7 @@ function native(group, round, recipe, reviewId) {
       measurement: effective.measure ? clone(fanoutProfile) : null };
   } else {
     defaults = { round, profile: "bounded", review: null, build: false, verify: {}, out: artifactRoot, nodeModules: "node_modules" };
-    args.push("--build", "--review", reviewId);
+    args.push("--build", "--review", reviewId, "--isolated");
     effective = hardeningOptions(args); settings = budgets(effective.profile);
   }
   return { invocation: { executable: "node", argv: [entry, ...args], cwd: "repository-root", shell: false },
@@ -247,8 +247,8 @@ function resources(group, recipe, campaignMode) {
       hostProcesses: "unisolated driver; JSON functional checker also runs on host", state: "unknown",
       requiredEvidence: "actual per-role container quotas/cpusets/memory, tool identities, host topology and quiet-host/headroom observations" };
   }
-  if (group === "hardening") return { budget: budgets().resources, requestedCpuEnv: null, state: "blocked",
-    requiredEvidence: hardeningRoleBlocker };
+  if (group === "hardening") return { budget: budgets().resources, actorCpus: clone(hardeningActorCpus), requestedCpuEnv: null, state: "unknown",
+    requiredEvidence: "effective CPU sets for ordinary bounded service and recovery participants; connection-flood resistance not measured" };
   if (liveGroup(group)) return { app: liveApplication, upstream: null, actorCpus: liveActorCpus, requestedCpuEnv: null, state: "unknown",
     requiredEvidence: "actual application Docker and kernel limits; same-window application and Chromium/driver CPU placement" };
   assert.equal(group, "client-heavy");

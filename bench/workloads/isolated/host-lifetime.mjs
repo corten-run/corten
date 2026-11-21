@@ -9,7 +9,7 @@ import { hostDurableWriter } from "./host-durable-writer.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { executableReference, participantExecutables } from "./participant-executables.mjs";
 import { browserContainers } from "../../fullstack-browser/contract.mjs";
-import { commandCpuSet as boundCommandCpuSet, liveApplication, liveGroup, nativeControlPartition } from "./native-roles.mjs";
+import { commandCpuSet as boundCommandCpuSet, cpuRanges, cpuSetWithin, liveApplication, liveGroup, nativeControlPartition } from "./native-roles.mjs";
 
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const serial = (v) => `${JSON.stringify(v)}\n`;
@@ -50,18 +50,6 @@ function scopeCpuSetMatches(groups, path, cpuset) {
   return groups?.find((g) => g.path === path)?.files[cpusetField]?.trim() === cpuset;
 }
 
-function cpuRanges(cpus) {
-  assert.match(cpus, /^(0|[1-9]\d*)(?:-(0|[1-9]\d*))?(?:,(0|[1-9]\d*)(?:-(0|[1-9]\d*))?)*\n?$/);
-  const ranges = [];
-  for (const range of cpus.trim().split(",")) {
-    const [start, end = start] = range.split("-").map(Number), previous = ranges.at(-1);
-    assert.ok(Number.isSafeInteger(start) && Number.isSafeInteger(end) && start > (previous?.[1] ?? -1) && end >= start);
-    if (previous && start - previous[1] === 1) previous[1] = end;
-    else ranges.push([start, end]);
-  }
-  return ranges;
-}
-
 function participantCpuSetsWithin({ groups, processes }, root, cpuset) {
   // The root is checked exactly. Each process in a child has its own effective
   // set, which can be narrower but cannot include a CPU outside its role.
@@ -69,11 +57,9 @@ function participantCpuSetsWithin({ groups, processes }, root, cpuset) {
   children.delete(root);
   if (!children.size) return true;
   const effective = new Map(groups.map((g) => [g.path, g.files[cpusetField]]));
-  const allowed = cpuRanges(cpuset);
   return [...children].every((path) => {
     const actual = effective.get(path);
-    return actual != null && cpuRanges(actual).every(([start, end]) =>
-      allowed.some(([first, last]) => start >= first && end <= last));
+    return actual != null && cpuSetWithin(actual, cpuset);
   });
 }
 
@@ -260,6 +246,28 @@ function participantGroup(path, id) {
   assert.equal(posix.normalize(path), path);
   assert.ok(posix.isAbsolute(path) && !path.split("/").includes(".."));
   assert.ok([id, `docker-${id}.scope`].includes(posix.basename(path)), "Docker PID/cgroup namespace correspondence missing");
+}
+
+/** Boundary sample for short native probes; no executable hashing in the timed window. */
+export function captureNativeCpuScope(info) {
+  const { id, imageId, restartCount, state } = containerState(info);
+  const { Pid, Running, StartedAt, FinishedAt } = state;
+  assert.equal(restartCount, 0);
+  if (!Running) {
+    assert.equal(state.Status, "exited");
+    return { id, imageId, startedAt: StartedAt, finishedAt: FinishedAt, atMs: Date.now() };
+  }
+  assert.ok(Number.isSafeInteger(Pid) && Pid > 0);
+  const proc = "/proc/" + Pid;
+  const startTicks = processIdentity(readFileSync(join(proc, "stat"), "utf8")).startTicks;
+  const path = groupPath(readFileSync(join(proc, "cgroup"), "utf8"));
+  participantGroup(path, id);
+  const keys = ["cgroup.procs", cpusetField];
+  const groups = scopeGroups(path, keys);
+  assert.deepEqual(scopeGroups(path, keys), groups, "native CPU membership changed during the boundary sample");
+  assert.equal(groupPath(readFileSync(join(proc, "cgroup"), "utf8")), path);
+  assert.equal(processIdentity(readFileSync(join(proc, "stat"), "utf8")).startTicks, startTicks);
+  return { id, imageId, startedAt: StartedAt, pid: Pid, startTicks, path, groups, atMs: Date.now() };
 }
 
 /** Actual read-only Linux snapshot. Never reads a PID/path supplied by saved evidence. */
@@ -646,14 +654,20 @@ export function inspectLiveActors(binding, observation, tools, participants, win
       && processes.some((p) => p.type === "--type=renderer" && p.executableSha256 === tools.browser);
   };
   const observed = new Set(), previous = new Map();
-  for (const { app, startedAt, endedAt, requireRenderer } of windows) {
+  let lastSample = -1;
+  for (const { app, startedAt, endedAt, renderer } of windows) {
     const p = byApp.get(app);
     if (!p || startedAt < p.window.startedAt || endedAt > p.window.endedAt || startedAt < (previous.get(app) ?? 0)) return false;
-    assert.ok(Number.isSafeInteger(startedAt) && Number.isSafeInteger(endedAt) && endedAt >= startedAt);
+    if (!(Number.isSafeInteger(startedAt) && Number.isSafeInteger(endedAt) && endedAt > startedAt)) return false;
     previous.set(app, endedAt);
-    if (!requireRenderer) continue; // Failed attempts retain their disposition without inventing a renderer.
-    if (!samples.some((s) => s.at >= startedAt && s.at <= endedAt && observedBrowser(s)
-      && s.docker.participants.some((r) => r.container.id === p.id && r.kernel?.at >= startedAt && r.kernel.at <= endedAt))) return false;
+    const begin = renderer === null ? startedAt : renderer?.startedAt;
+    const end = renderer === null ? endedAt : renderer?.endedAt;
+    if (!(Number.isSafeInteger(begin) && Number.isSafeInteger(end) && begin >= startedAt && end <= endedAt && end > begin)) return false;
+    const index = samples.findIndex((s, i) => i > lastSample && s.at >= begin && s.at < end
+      && (renderer === null || observedBrowser(s))
+      && s.docker.participants.some((r) => r.container.id === p.id && r.kernel?.at >= begin && r.kernel.at < end));
+    if (index < 0) return false;
+    lastSample = index;
     observed.add(app);
   }
   return byApp.size === observed.size;
