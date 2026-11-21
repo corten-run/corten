@@ -947,12 +947,14 @@ async fn a_public_page_in_a_partial_mode_keeps_no_cdn_caching_header() {
         assert_eq!(headers[name], "public, max-age=60", "the full document keeps the middleware's {name}");
     }
 }
+
 /// A refused cross-site write gets the app's error page, which goes out before the cache rules
-/// run. One that draws a submit key goes out as any page that draws one does: a `no-store` it
-/// says as `private, no-store`, and none of the CDN caching headers it wrote. One that draws none
-/// is sent `private, no-cache`, whatever it said, as before.
+/// run, private whatever it said, and with none of the CDN caching headers it wrote: the page may
+/// show who is asking, and a CDN that read its own header would keep it for the next visitor. One
+/// that draws a submit key goes out as any page that draws one does, a `no-store` it says as
+/// `private, no-store`; one that draws none is sent `private, no-cache`, as before.
 #[tokio::test]
-async fn a_refusal_page_that_draws_a_submit_key_is_not_shared() {
+async fn a_refused_write_s_page_is_not_shared() {
     let refused = |keyed: bool, cache: &'static str| {
         let router = App::new(Routes::from(Table::new().route("/", get(|| async { "home" }).post(|| async { "saved" }))))
             .error_page(
@@ -993,11 +995,7 @@ async fn a_refusal_page_that_draws_a_submit_key_is_not_shared() {
         let headers = refused(keyed, cache).await;
         assert_eq!(headers[header::CACHE_CONTROL], sent, "keyed {keyed}, {cache}");
         for name in CDN_OVERRIDES {
-            if keyed {
-                assert!(!headers.contains_key(name), "a keyed refusal sends no {name} ({cache})");
-            } else {
-                assert_eq!(headers[name], "max-age=60", "a refusal with no key keeps its {name} ({cache})");
-            }
+            assert!(!headers.contains_key(name), "a refusal sends no {name} (keyed {keyed}, {cache})");
         }
     }
 }

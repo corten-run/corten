@@ -234,10 +234,10 @@ pub(crate) const PRIVATE_NO_STORE: HeaderValue = HeaderValue::from_static("priva
 /// The caching headers a CDN or proxy reads before `Cache-Control`, by exact name: RFC 9213's
 /// `CDN-Cache-Control`, Cloudflare's and Vercel's own, `Surrogate-Control`, Akamai's `Edge-Control`
 /// and nginx's `X-Accel-Expires`. [`settle`] removes them from a personal answer, a `NoStore` one
-/// and a `Public` one it sends as the browser's alone, a refused write's page that drew a submit
-/// key loses them, an unstaged route's answer that sets a cookie loses them and any other
-/// `*cache-control`, and a [`crate::Public`] answer may not set one. A name a deployment
-/// configures for itself (RFC 9213 allows one) is the deployment's.
+/// and a `Public` one it sends as the browser's alone, a refused write's page loses them, an
+/// unstaged route's answer that sets a cookie loses them and any other `*cache-control`, and a
+/// [`crate::Public`] answer may not set one. A name a deployment configures for itself (RFC 9213
+/// allows one) is the deployment's.
 pub(crate) const CDN_CACHING: [&str; 6] = [
     "cdn-cache-control",
     "cloudflare-cdn-cache-control",
@@ -465,16 +465,16 @@ pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
     }
 }
 
-/// The `Cache-Control` for a page that drew a submit key and goes out without [`settle`] (a
-/// refused write's error page), with the CDN caching headers it had removed: `private, no-store`
-/// where it names `no-store`, as [`settle`] gives one, and the default otherwise.
-pub(crate) fn drawn_unsettled(headers: &mut HeaderMap) -> HeaderValue {
+/// Settles a refused write's answer, which goes out without [`settle`]: the default, whatever it
+/// said, and none of the CDN caching headers its page wrote (the page may show who is asking). A
+/// page that drew a submit key and names `no-store` goes out `private, no-store`, as [`settle`]
+/// gives one.
+pub(crate) fn settle_refused(res: &mut Response) {
+    let drew_key = res.extensions().get::<Unrepeatable>().is_some();
+    let headers = res.headers_mut();
     drop_cdn_caching(headers);
-    if headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes())) {
-        PRIVATE_NO_STORE
-    } else {
-        PRIVATE
-    }
+    let no_store = drew_key && headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes()));
+    headers.insert(header::CACHE_CONTROL, if no_store { PRIVATE_NO_STORE } else { PRIVATE });
 }
 
 /// In a debug build: whether an answer's headers, as sent, let a shared cache keep it: one of
