@@ -7239,6 +7239,21 @@ rules something out.
     added later that this code does not know is not replayed by mistake, the page is simply not
     kept.
 
+    A route whose answer is JSON or text is kept the same way
+    ([#1794 `Public` text, JSON and files are not kept](https://github.com/corten-run/corten/issues/1794)):
+    its whole body, by a page's key and under a page's rules. Which answers those are is known
+    when the route is made (`Answer::WHOLE`, of a type an app cannot name, as `KEYED` is), so a
+    file, a relay, a stream, a feed and an answer type of the app's own ask the store nothing.
+    One thing differs from a page. A page route has three answers at its URL (the document, its
+    swap and its data) and only the document is kept; a JSON or text route has one, so a request
+    that asks for JSON first is kept too. A handler that takes `Req` can read which of the two
+    asked (`req.mode`), and whether it does is not in its type, so the two are kept apart and a
+    route asked both ways holds its body twice. An API's `Access-Control-Allow-Origin` is
+    written from the request's `Origin` by the stage after the handler, so it is no part of a
+    kept answer and no site is sent another's. Outside an API the stages send a request that
+    asks for JSON first for the browser alone (`private`), as one form of a page's URL; the app
+    still keeps the handler's answer for it, since its own key knows the form.
+
     A write drops what is kept at its path, whatever the query, since a named post is
     `?do=name` at its page's path, whatever it is answered. That is wider than RFC 9111
     section 4.4 asks (a write that did not fail): a handler that answered `4xx` or `5xx`,
@@ -7277,8 +7292,10 @@ rules something out.
     removes pages as their lifetimes end, since a page that no longer stands is replaced when it
     is next asked for and goes when room is made; and, left for changes of their own, a call
     that drops a page for a change no write to its path made, a way for an extractor of the
-    app's own to say it reads only the URL, `Public` text, JSON and files
-    (their handlers take other inputs, which a key would have to cover), a page served stale
+    app's own to say it reads only the URL, `Public` files (a `Media` may be a stream, which
+    has no size to keep, or bytes the app already holds, which cost no render, and what keeping
+    one saves is not measured), one copy
+    of a body for both ways of asking where its handler does not take `Req`, a page served stale
     while it is made again, one render for requests that miss together, and one copy for each
     locale rather than for each `Accept-Language` sent.
 

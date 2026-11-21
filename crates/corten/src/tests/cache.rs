@@ -1741,6 +1741,9 @@ async fn a_public_json_or_text_answer_is_kept_and_given_again() {
     assert!(runs.count() == 2 && !asked.contains_key(header::AGE) && same == body, "{asked:?}");
     let (_, asked, same) = fetch(&router, "GET", "/items", &data).await;
     assert!(runs.count() == 2 && asked.contains_key(header::AGE) && same == body, "{asked:?}");
+    // Outside an API the stages take a request for JSON first for one form of a page's URL, which
+    // they send for the browser alone. What is kept is the handler's answer, whose key knows the form.
+    assert_eq!(asked[header::CACHE_CONTROL], "private, max-age=60");
     for _ in 0..2 {
         let (_, _, plain) = fetch(&router, "GET", "/mode", &[]).await;
         let (_, _, asked) = fetch(&router, "GET", "/mode", &data).await;
