@@ -6,82 +6,27 @@ import { request as http } from "node:http";
 import { request as https } from "node:https";
 import { pathToFileURL } from "node:url";
 import { formBody, formOf, livePaths } from "../fullstack/conformance.mjs";
-import { csrfFields, sourceFeatures } from "../marketplace/feature-contract.mjs";
+import { csrfFields, boundedQualificationSchema as schema, boundedDeadlineMs as deadlineMs, boundedResponseBytes as maxResponseBytes,
+  boundedQualification, validateBoundedQualification, requireOwnPost } from "../marketplace/feature-contract.mjs";
+export { boundedQualification, validateBoundedQualification };
 
-const schema = "native-bounded-qualification/v1";
 const page = "/marketplace/en-US/item_1", record = "/api/marketplace/item_1";
-const deadlineMs = 5000, maxResponseBytes = 2 ** 20, maxFormBytes = 8192;
-const omitted = new Set(["bigHead", "bigBody", "deadline", "unfinishedHead", "connectionCap"]);
-const ordinary = ["page", "json", "pageBr", "jsonBr", "jsonGzip", "page404", "json404", "json405", "head", "badHost"];
-const responseFields = new Set(["status", "headers", "bodyLength", "ms", "body", "path"]);
-
-function completed(row, discovery = false) {
-  assert.ok(row && Number.isInteger(row.status) && row.status >= 100 && row.status <= 599);
-  assert.ok(Object.keys(row).every((key) => responseFields.has(key) || discovery && ["url", "method", "host"].includes(key)), "unexpected qualification response fields");
-  assert.ok(row.headers && typeof row.headers === "object" && !Array.isArray(row.headers));
-  assert.ok(Number.isSafeInteger(row.bodyLength) && row.bodyLength >= 0 && row.bodyLength <= maxResponseBytes);
-  assert.ok(Number.isFinite(row.ms) && row.ms >= 0 && row.ms <= deadlineMs, "qualification response missed its deadline");
-}
-
-export function boundedQualification(probes, source) {
-  const features = sourceFeatures(source), required = features.filter((f) => !omitted.has(f.key));
-  const cells = Object.fromEntries(required.map((f) => [f.key, f.cell(probes)]));
-  const missing = required.filter((f) => !f.meets(cells[f.key])).map((f) => f.key);
-  return { schema, source, probes, cells, missing, eligible: missing.length === 0,
-    unmeasured: features.filter((f) => omitted.has(f.key)).map((f) => f.key) };
-}
-
-function requireOwnPost(row) {
-  assert.ok(row.status >= 200 && row.status < 400 && row.headers.serverfnerror === undefined, "native same-origin form failed");
-}
-
-export function validateBoundedQualification(report) {
-  assert.equal(report.schema, schema);
-  assert.ok(!Object.hasOwn(report, "failure"), "incomplete qualification receipt");
-  const { source, probes: p } = report;
-  const keys = [...ordinary, "liveness"];
-  ordinary.forEach((key) => completed(p[key]));
-  for (const key of ordinary.slice(0, 5)) assert.equal(p[key].status, 200, `${key}: unhealthy qualification`);
-  assert.ok(typeof p.page.body === "string" && p.page.body.length > 0 && p.page.body.length <= 4 * Math.ceil(maxResponseBytes / 3));
-  const body = Buffer.from(p.page.body, "base64");
-  assert.equal(body.toString("base64"), p.page.body); assert.equal(body.length, p.page.bodyLength);
-  const form = formOf(body.toString("utf8"), page);
-  if (!form || form.script) { assert.equal(p.form, "no native POST form"); keys.push("form"); }
-  else {
-    keys.push("ownPost", "crossSite");
-    completed(p.ownPost); completed(p.crossSite);
-    requireOwnPost(p.ownPost);
-  }
-  assert.ok(Array.isArray(p.liveness) && p.liveness.length > 0 && p.liveness.length <= livePaths.length);
-  p.liveness.forEach((row, i) => {
-    assert.equal(row.path, livePaths[i]); completed(row, true);
-    if (i < p.liveness.length - 1) assert.notEqual(row.status, 200);
-  });
-  const last = p.liveness.at(-1);
-  if (last.status === 200) { assert.deepEqual(p.live, last); keys.push("live"); }
-  else assert.equal(p.liveness.length, livePaths.length, "incomplete liveness path discovery");
-  if (source === "api") {
-    for (const key of ["page500", "json500", "afterUpstream"]) { completed(p[key]); keys.push(key); }
-    assert.equal(p.afterUpstream.status, 200, "unhealthy qualification after upstream control");
-  }
-  assert.deepEqual(Object.keys(p).sort(), keys.sort(), "unexpected or missing bounded qualification probes");
-  assert.deepEqual(report, boundedQualification(p, source), "bounded qualification differs from its raw probes");
-  return report;
-}
+const maxFormBytes = 8192;
 
 class RequestFailure extends Error {}
 
-function collect(origin, ca, path, headers, method, body, discovery = false) {
+export function collectBoundedResponse(origin, ca, path, headers, method, body, discovery = false) {
   assert.ok(path.startsWith("/") && !path.startsWith("//"));
-  const tls = origin.startsWith("https:");
+  const address = new URL(origin), tls = address.protocol === "https:";
+  assert.ok(tls || address.protocol === "http:");
   if (body !== undefined && Buffer.byteLength(body) > maxFormBytes) throw new RequestFailure("form-byte-cap");
   return new Promise((resolve, reject) => {
     const started = performance.now();
     const fail = (kind) => reject(new RequestFailure(kind));
     const abort = (kind) => { fail(kind); req.destroy(); };
-    const options = { hostname: "127.0.0.1", port: 8080, path, method, agent: false,
-      ...(tls ? { servername: "localhost", ca } : {}),
-      headers: { host: new URL(origin).host, connection: "close", "accept-encoding": "identity", ...headers,
+    const options = { hostname: address.hostname === "localhost" ? "127.0.0.1" : address.hostname, port: address.port || (tls ? 443 : 80), path, method, agent: false,
+      ...(tls ? { servername: address.hostname, ca } : {}),
+      headers: { host: address.host, connection: "close", "accept-encoding": "identity", ...headers,
         ...(body === undefined ? {} : { "content-length": Buffer.byteLength(body) }) } };
     const req = (tls ? https : http)(options, (res) => {
       const chunks = [];
@@ -107,7 +52,11 @@ function collect(origin, ca, path, headers, method, body, discovery = false) {
 async function qualify(source, mode, upstream, p, step) {
   const origin = mode === "direct" ? "http://127.0.0.1:8080" : "https://localhost:8080";
   const ca = mode === "direct" ? undefined : await step("setup", () => readFileSync("/results/cert/cert.pem", "utf8"));
-  const request = (path, headers, method = "GET", body) => collect(origin, ca, path, headers, method, body);
+  return collectQualification({ origin, source, upstream, p, step,
+    request: (path, headers, method = "GET", body, discovery) => collectBoundedResponse(origin, ca, path, headers, method, body, discovery) });
+}
+
+export async function collectQualification({ origin, source, upstream, request, p = {}, step = (_name, run) => run() }) {
   const probe = async (key, ...args) => { p[key] = await step(key, () => request(...args)); };
   await probe("page", page); await probe("json", record);
   await probe("pageBr", page, { "accept-encoding": "br, gzip" });
@@ -131,7 +80,7 @@ async function qualify(source, mode, upstream, p, step) {
   }
   p.liveness = [];
   for (const path of livePaths) {
-    const row = { ...await step("liveness", () => collect(origin, ca, path, undefined, "GET", undefined, true)), path }; p.liveness.push(row);
+    const row = { ...await step("liveness", () => request(path, undefined, "GET", undefined, true)), path }; p.liveness.push(row);
     if (row.status === 200) { p.live = row; break; }
   }
   if (source === "api") {

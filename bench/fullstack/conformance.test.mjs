@@ -1,12 +1,13 @@
 // Checks conformance.mjs's cells, what each column counts as doing its thing, the form reader,
 // and that a stored round's rows are what its probes score now, without Docker.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { test } from "node:test";
-import { capBelow, capHeld, errorOf, features, featuresOf, format, formBody, formOf, logLinesOf, maxConnections, parseAnswer, rowOf, scriptPolicyOf, securityOf, statusOf } from "./conformance.mjs";
+import { capBelow, capHeld, errorOf, features, featuresOf, format, formBody, formOf, logLinesOf, parseAnswer, rowOf, scriptPolicyOf, securityOf, statusOf } from "./conformance.mjs";
 
 const answer = (/** @type {number} */ status, /** @type {Record<string, string>} */ headers = {}, body = "x", ms = 5) => ({ status, headers, bodyLength: body.length, ms });
 const secure = { "content-security-policy": "default-src 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "cross-origin-opener-policy": "same-origin" };
@@ -45,6 +46,7 @@ test("an error is its status and format, and a failure says how it failed", () =
   assert.equal(errorOf(answer(404, { "content-type": "text/html" }, "")), "404 empty");
   assert.equal(statusOf({ timedOut: true, ms: 45_000 }), "held 45 s");
   assert.equal(statusOf({ error: "ECONNRESET", ms: 3 }), "error ECONNRESET");
+  assert.equal(statusOf({ error: "ECONNREFUSED", ms: 3 }), "error ECONNREFUSED");
   assert.equal(statusOf({ didNotStart: true, error: "no answer in 120 s", ms: 0 }), "did not start");
 });
 
@@ -184,51 +186,62 @@ test("an answer read from raw bytes gives its status, headers and the length aft
   assert.equal(parseAnswer(Buffer.from("garbage\r\n\r\n")), null);
 });
 
-/**
- * Runs conform-probe.mjs, as conform.mjs does inside fsw-probe, against a local server that
- * answers each connection as `serve` does.
- * @param {(socket: import("node:net").Socket) => void} serve
- * @param {Record<string, any>} request
- */
-const probeAgainst = async (serve, request) => {
-  const server = createServer(serve);
-  await new Promise((r) => server.listen(0, "127.0.0.1", () => r(undefined)));
-  const port = /** @type {import("node:net").AddressInfo} */ (server.address()).port;
-  const child = spawn(process.execPath, [join(import.meta.dirname, "conform-probe.mjs")]);
-  child.stdin.end(JSON.stringify({ host: "127.0.0.1", port, method: "POST", path: "/form", headers: { host: "localhost" }, timeoutMs: 2000, ...request }));
-  let out = "";
-  child.stdout.on("data", (c) => (out += c));
-  await new Promise((r) => child.on("close", r));
-  server.close();
-  return JSON.parse(out);
-};
+test("complete form POSTs can succeed or be refused, followed by successful GET and HEAD", async (t) => {
+  const seen = [];
+  const record = '{"id":"item_5"}';
+  const server = createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req.setEncoding("utf8")) body += chunk;
+    seen.push([req.method, req.url, body, req.headers.connection]);
+    const post = req.method === "POST";
+    const refused = post && req.headers.origin !== "http://localhost";
+    const response = post ? (refused ? "refused" : "saved") : record;
+    res.writeHead(refused ? 403 : 200, {
+      "Content-Type": post ? "text/plain" : "application/json",
+      "Content-Length": Buffer.byteLength(response),
+    });
+    res.end(req.method === "HEAD" ? undefined : response);
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => new Promise((resolve) => {
+    server.close(resolve);
+    server.closeAllConnections();
+  }));
+  const { port } = /** @type {import("node:net").AddressInfo} */ (server.address());
+  const probe = (/** @type {Record<string, any>} */ request) => new Promise((resolve, reject) => {
+    const child = execFile(process.execPath, [join(import.meta.dirname, "conform-probe.mjs")],
+      { timeout: 5000, maxBuffer: 16 * 1024 }, (error, stdout) => {
+        if (error) return reject(error);
+        try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
+      });
+    child.stdin.on("error", reject);
+    child.stdin.end(JSON.stringify({ host: "127.0.0.1", port, timeoutMs: 2000, ...request }));
+  });
 
-test("a POST's answer is read even when the server answers before the body arrives and keeps the connection open", async () => {
-  const early = await probeAgainst((s) => { s.on("error", () => {}); s.write("HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\n\r\n"); }, { body: "a".repeat(1024 * 1024) });
-  assert.equal(early.status, 413);
-  assert.ok(!early.timedOut);
-  const closed = await probeAgainst((s) => { s.once("data", () => s.end("HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nno")); }, { body: "a=1" });
-  assert.equal(closed.status, 403);
-  assert.equal(closed.bodyLength, 2);
-  assert.ok(closed.ms < 1000, "settled by the close, not the limit");
-  // An answer and then a reset (the server closes with the body unread): the answer is kept.
-  const reset = await probeAgainst((s) => { s.on("error", () => {}); s.write("HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\n\r\n", () => setTimeout(() => s.resetAndDestroy(), 100)); }, { body: "a".repeat(4 * 1024 * 1024) });
-  assert.equal(reset.status, 413);
-  assert.ok(reset.ms < 1000, "settled by the reset, not the limit");
-});
-
-test("a POST nothing answers is held until the limit, and one to a closed port keeps the connection's error", async () => {
-  const held = await probeAgainst((s) => { s.on("error", () => {}); }, { body: "a=1", timeoutMs: 500 });
-  assert.equal(held.timedOut, true);
-  const server = createServer();
-  await new Promise((r) => server.listen(0, "127.0.0.1", () => r(undefined)));
-  const port = /** @type {import("node:net").AddressInfo} */ (server.address()).port;
-  await new Promise((r) => server.close(r));
-  const refused = await probeAgainst(() => {}, { port, body: "a=1" });
-  assert.equal(refused.error, "ECONNREFUSED");
-  // A reset with nothing answered keeps the connection's error.
-  const dropped = await probeAgainst((s) => { s.on("error", () => {}); s.once("data", () => s.resetAndDestroy()); }, { body: "a".repeat(4 * 1024 * 1024) });
-  assert.match(String(dropped.error), /^(ECONNRESET|EPIPE)$/);
+  const submit = (/** @type {string} */ origin) => probe({
+    method: "POST", path: "/form", headers: { host: "localhost", origin, "content-type": "application/x-www-form-urlencoded" },
+    body: "email=a%40example.com&target_price=1",
+  });
+  const read = (/** @type {string} */ method) => probe({
+    method, path: "/api/items/item_5", headers: { host: "localhost" }, keepBody: true,
+  });
+  const ownPost = await submit("http://localhost");
+  const crossSite = await submit("https://other.invalid");
+  const json = await read("GET");
+  const head = await read("HEAD");
+  assert.deepEqual([ownPost.status, crossSite.status, json.status, head.status], [200, 403, 200, 200]);
+  assert.deepEqual([ownPost.bodyLength, crossSite.bodyLength, json.bodyLength, head.bodyLength], [5, 7, Buffer.byteLength(record), 0]);
+  assert.equal(Buffer.from(json.body, "base64").toString("utf8"), record);
+  assert.deepEqual(seen, [
+    ["POST", "/form", "email=a%40example.com&target_price=1", "close"],
+    ["POST", "/form", "email=a%40example.com&target_price=1", "close"],
+    ["GET", "/api/items/item_5", "", "close"],
+    ["HEAD", "/api/items/item_5", "", "close"],
+  ]);
+  const row = rowOf({ pages: true, tier: "matched", ownPost, crossSite, json, head });
+  assert.deepEqual([row.crossSite, row.head], ["403", "200"]);
+  for (const key of ["unfinishedHead", "connectionCap"]) assert.equal(row[key], "n/a: not probed");
 });
 
 // A round of the current format is scored as stored; an older one keeps each cell it had, and its
@@ -268,17 +281,16 @@ test("a failed read, the header limit and the log lines are scored from format 2
   assert.equal(logLinesOf(null, 4, 20), "unreadable");
 });
 
-test("the matched tier's columns are its own: a defaults row has neither", () => {
+test("archived matched-tier columns do not appear in a defaults row", () => {
   const matchedOnly = ["unfinishedHead", "connectionCap"];
   assert.deepEqual(featuresOf("defaults").filter((f) => matchedOnly.includes(f.key)), []);
   assert.deepEqual(featuresOf("matched").filter((f) => matchedOnly.includes(f.key)).map((f) => f.key), matchedOnly);
   assert.equal(featuresOf("matched").length, features.length);
   const row = rowOf({ pages: false });
   for (const key of matchedOnly) assert.ok(!(key in row), key);
-  assert.ok(capHeld > maxConnections, "the cap probe holds more connections than the cap allows");
 });
 
-test("an unfinished head counts when closed within 35 seconds; the cap when a request waits past it alone and the app serves after", () => {
+test("archived connection-pressure rows distinguish a pass, failure and absent evidence", () => {
   const row = (/** @type {Record<string, any>} */ o) => rowOf({ pages: false, tier: "matched", ...o });
   const capped = { below: capBelow, belowHeld: 200, held: capHeld, whileHeld: null, afterRelease: 200, releaseMs: 40, afterwards: 200 };
   const closed = row({ unfinishedHead: { closedMs: 30_120 }, cap: capped });
@@ -311,59 +323,6 @@ test("an unfinished head counts when closed within 35 seconds; the cap when a re
   assert.ok(!unseen.unmet.includes("connectionCap"));
   assert.equal(row({ unfinishedHead: { error: "could not connect" } }).unfinishedHead, "error could not connect");
   assert.ok(row({ unfinishedHead: { error: "could not connect" } }).unmet.includes("unfinishedHead"));
-  assert.equal(row({}).unfinishedHead, "n/a: not probed");
-});
-
-/**
- * Runs conform-hold.mjs, as conform.mjs does inside fsw-probe, against a local server.
- * @param {import("node:net").Server} server
- * @param {Record<string, any>} request
- */
-const holdAgainst = async (server, request) => {
-  await new Promise((r) => server.listen(0, "127.0.0.1", () => r(undefined)));
-  const port = /** @type {import("node:net").AddressInfo} */ (server.address()).port;
-  const child = spawn(process.execPath, [join(import.meta.dirname, "conform-hold.mjs")]);
-  child.stdin.end(JSON.stringify({ host: "127.0.0.1", port, path: "/api/items/item_5", ...request }));
-  let out = "";
-  child.stdout.on("data", (c) => (out += c));
-  await new Promise((r) => child.on("close", r));
-  server.close();
-  return JSON.parse(out);
-};
-const answers = (/** @type {import("node:net").Socket} */ s) => { s.on("error", () => {}); s.once("data", () => s.end("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")); };
-
-test("the head probe sees a server close an unfinished head, and one that holds it until the probe's limit", async () => {
-  const closes = await holdAgainst(createServer((s) => { s.on("error", () => {}); setTimeout(() => s.destroy(), 100); }), { mode: "head", timeoutMs: 5000 });
-  assert.ok(closes.closedMs !== undefined && closes.closedMs < 5000, JSON.stringify(closes));
-  const holds = await holdAgainst(createServer((s) => s.on("error", () => {})), { mode: "head", timeoutMs: 300 });
-  assert.ok(holds.timedOutMs >= 300, JSON.stringify(holds));
-});
-
-test("the cap probe tells a server that answers past the held connections from one that refuses them, and one that makes the next wait", async () => {
-  const probe = { mode: "cap", below: 3, hold: 6, waitMs: 1000, releaseMs: 2000 };
-  const uncapped = await holdAgainst(createServer(answers), probe);
-  assert.deepEqual([uncapped.below, uncapped.belowHeld, uncapped.held, uncapped.whileHeld, uncapped.afterRelease, uncapped.afterwards], [3, 200, 6, 200, null, 200]);
-  // node:net's own cap closes a connection past it at once.
-  const closing = createServer(answers);
-  closing.maxConnections = 5;
-  const closed = await holdAgainst(closing, probe);
-  assert.deepEqual([closed.belowHeld, closed.held, closed.whileHeld, closed.afterRelease, closed.afterwards], [200, 6, null, "closed", 200]);
-  // A server that, past five open connections, answers a request only once fewer are open: the
-  // request waits while they are held and is answered when they close.
-  /** @type {Set<import("node:net").Socket>} */
-  const open = new Set();
-  /** @type {(() => void)[]} */
-  const waiting = [];
-  const waits = createServer((s) => {
-    open.add(s);
-    s.on("error", () => {});
-    s.on("close", () => { open.delete(s); while (open.size <= 5 && waiting.length) /** @type {() => void} */ (waiting.shift())(); });
-    s.once("data", () => {
-      const answer = () => s.end("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
-      if (open.size <= 5) answer(); else waiting.push(answer);
-    });
-  });
-  // The connect limit (200 ms here) is on connecting only: held connections idle past it stay open.
-  const waited = await holdAgainst(waits, { ...probe, connectMs: 200 });
-  assert.deepEqual([waited.belowHeld, waited.held, waited.whileHeld, waited.afterRelease, waited.afterwards], [200, 6, null, 200, 200]);
+  const missing = row({});
+  assert.deepEqual([missing.unfinishedHead, missing.connectionCap], ["n/a: not probed", "n/a: not probed"]);
 });

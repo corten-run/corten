@@ -23,7 +23,7 @@ const originalBinding = { request: { group: "mixed-production", round: "w17", co
     effectiveOptions: options, settings: null }, resources: { measurement: { cpu: cpus } } };
 const originalSummary = { schema: "mixed-native-run/v1", group: "mixed-production", round: "w17", options, inventory: apps,
   contractSha256: contractSha256("mixed-production"), provenance: { commit, dirty: "", nativeSource: { commit, dirty: false } },
-  apps: Object.fromEntries(apps.map((a) => [a, {}])), timing: { cpus }, failures: [], cleanupFailures: [], finishedAt: "2026-11-13T00:00:00Z" };
+  apps: Object.fromEntries(apps.map((a) => [a, {}])), timing: { cpus, qualificationProfile: "marketplace-production/v2" }, failures: [], cleanupFailures: [], finishedAt: "2026-11-13T00:00:00Z" };
 const originalNative = { schema: "mixed-native-saved-verification/v1", verdict: "verified", round: "w17", commit,
   complete: true, attemptComplete: true, functionalPassed: true, comparisonEligible: true,
   dispositions: { functional: "passed", qualification: "passed", calibration: "passed", steady: "passed", gate: null }, issues: [],
@@ -78,6 +78,7 @@ for (const [name, change, status] of [
   ["missing cleanup", () => { native.verdict = "blocked"; native.attemptComplete = false; native.proof.cleanupComplete = false; }, "blocked"],
   ["wrong source bytes", () => { native.proof.sourceFiles[0].sha256 = "c".repeat(64); }, "invalid"],
   ["wrong CPU placement", () => { summary.timing.cpus.app.cpuset = "3"; }, "invalid"],
+  ["historical qualification profile", () => { delete summary.timing.qualificationProfile; }, "invalid"],
   ["missing functional cell", () => { native.apps[apps[0]].cells.pop(); }, "invalid"],
   ["other audit path", () => { binding.execution.effectiveOptions.nativeAudits = "/tmp/audits.json"; summary.options.nativeAudits = "/tmp/audits.json"; }, "invalid"],
   ["blocked raw proof beside failure", () => { native.verdict = "blocked"; native.attemptComplete = false; native.issues = [{ kind: "blocked", code: "native-process-limits-missing" }]; native.apps[apps[0]].cells[0].passed = false; }, "blocked"],

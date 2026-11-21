@@ -32,7 +32,9 @@ It prints one JSON `mixed-native-saved-verification/v1` verdict to stdout: `veri
 There is no write, fix, collect, execute, publish or ranking option. The API returns
 the same object, including `issues` (`kind`, `code`, `at`), every candidate's raw
 functional cells/outcomes/reasons and replayed oracle, and any replayed measurement
-cells/aggregates. `comparisonEligible` is always false for partial or blocked proof.
+cells/aggregates. `comparisonEligible` is always false for partial or blocked proof
+or historical qualification; only the current qualification profile can admit a
+current comparison.
 Diagnostics do not include arbitrary saved values or exception messages. Invalid
 round/commit arguments are not copied into the verdict; both identities remain null
 until their bounded syntax has been validated.
@@ -103,7 +105,10 @@ a final host-input observation detects changes during collection.
 Actual DOM query results replay the unchanged native snapshot; exact public JSON
 response bytes replay record/state normalization. No expected markup or audit is
 generated. Qualification replays the filtered actual probe journal through the
-unchanged current contract. Original cgroup stdout, participant restart counts,
+contract for its recorded profile. Historical `marketplace-production/v1` evidence
+keeps its original meaning; the verifier still enforces the requested commit's
+harness identity and does not translate old receipts into current qualifications.
+Original cgroup stdout, participant restart counts,
 all raw resource samples and the stats client's actual OS close event are required
 for extended measurement proof. Unknown credential/filter shapes remain blocked.
 
@@ -319,11 +324,15 @@ runtime budgets are recorded. Matched uses the existing native production connec
 not a replacement server. Neither variant is assumed feature-qualified; failed defaults are
 not relabeled as a passing variant. There is no external positive qualification input.
 
-Every candidate/source first runs the unchanged `bench/marketplace/qualify.mjs` production
-HTTP probes on its real image/configuration, including errors, methods, compression, security,
-CSRF/origin, body/header/connection bounds and recovery. Original probes are validated in
-memory. Saved capability cells and native probe/body hashes omit cookies and hidden secrets.
-Every candidate/source must pass; no successful subset is measured.
+Every candidate/source first runs the shared `bench/marketplace/qualify.mjs` precheck on
+its real image/configuration. The `marketplace-production/v2` profile uses sequential,
+completed HTTP requests for methods, errors, compression, security headers, CSRF/origin,
+liveness, and API-source upstream error handling and recovery. It does not test request
+size limits, held connections, or the upstream deadline. Original probes are validated
+in memory. Saved capability cells and native probe/body hashes omit cookies and hidden
+secrets. Every candidate/source must pass; no successful subset is measured.
+
+Connection-flood resistance: not measured.
 
 Calibration and steady windows execute the shared plan, not k6's older item-page mix. Each
 cycle has exactly the original source subplan (22 fixture or 31 API primary operations for the

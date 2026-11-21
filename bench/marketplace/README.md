@@ -256,8 +256,11 @@ Use a fresh `wN` each time: an existing result directory is never overwritten. `
 select individual apps for development checks. A publishable group baseline needs raw
 qualification for every candidate, the full gate and three passes for every admitted app,
 and a qualified Corten plus at least one peer. `--group production-qualify` explicitly audits
-the full inventory. ETag and downstream readiness are disclosed exceptions to the reused
-production checklist; this uncached workload does not claim all enterprise features match.
+the full inventory. New grouped runs use the bounded
+[`marketplace-production/v2` qualification](nightly.md#framework-groups).
+Connection-flood resistance: not measured. ETag and downstream readiness remain exceptions;
+this uncached workload does not claim all enterprise features match.
+Rebuild images from the old feature profile with `--build` before using them in a new group.
 The read-only reporter rejects arbitrary subsets, check-only runs, dirty commits,
 missing profiles or passes, failed cleanup and aggregates that disagree with saved passes. A
 phase in which an app answered requests with anything but a 200 or timed out on them, or could
@@ -281,6 +284,8 @@ from the upstream to a record read. Results written
 this way are schema `marketplace-results/v5`, with raw feature qualification for named groups.
 The reporter and `compare.mjs` retain groupless v3/v4 history (under v3 an app that stopped
 failed the round). Historical full-inventory results do not compare with qualified groups.
+Archived `marketplace-production/v1` evidence is read under its original contract; it cannot
+be mixed with v2 in a split merge or used as a v2 comparison baseline.
 The local `wN` commands do not create a droplet, collect c1, update nightly state or publish anything.
 
 ### Saved raw evidence
@@ -304,6 +309,8 @@ above exits nonzero for invalid evidence. A split round validates each native `d
 the merged summary alone is not a producer folder. The historical summary reporter remains
 available, but its success is not raw-evidence validation. Old folders without the new
 receipts fail closed; do not backfill them with inferred observations.
+Raw replay checks the profile, settings, app image label and qualification receipts under the
+same contract. V1 replay is offline only and still requires the original raw receipts.
 The v3 receipts also retain the selected immutable k6 manifest, platform and actual
 executable version in both the summary and raw tool observation. Earlier versions
 without that identity remain historical, not newly qualified v3 measurements.

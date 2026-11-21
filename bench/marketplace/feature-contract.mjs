@@ -89,3 +89,80 @@ export function validateProbes(p, source) {
 export function admitted(app) {
   return app.qualification?.fixture?.eligible === true && app.qualification?.api?.eligible === true;
 }
+
+// Current bounded precheck. The original contract above remains a reader for historical data.
+export const boundedFeatureProfile = "marketplace-production/v2";
+export const boundedQualificationSchema = "native-bounded-qualification/v1";
+export const boundedDeadlineMs = 5000, boundedResponseBytes = 2 ** 20;
+const omitted = new Set(["bigHead", "bigBody", "deadline", "unfinishedHead", "connectionCap"]);
+const ordinary = ["page", "json", "pageBr", "jsonBr", "jsonGzip", "page404", "json404", "json405", "head", "badHost"];
+const responseFields = new Set(["status", "headers", "bodyLength", "ms", "body", "path"]);
+
+function completed(row, discovery = false) {
+  assert.ok(row && Number.isInteger(row.status) && row.status >= 100 && row.status <= 599);
+  assert.ok(Object.keys(row).every((key) => responseFields.has(key) || discovery && ["url", "method", "host"].includes(key)), "unexpected qualification response fields");
+  assert.ok(row.headers && typeof row.headers === "object" && !Array.isArray(row.headers));
+  assert.ok(Number.isSafeInteger(row.bodyLength) && row.bodyLength >= 0 && row.bodyLength <= boundedResponseBytes);
+  assert.ok(Number.isFinite(row.ms) && row.ms >= 0 && row.ms <= boundedDeadlineMs, "qualification response missed its deadline");
+}
+
+export function boundedQualification(probes, source) {
+  const features = sourceFeatures(source), required = features.filter((f) => !omitted.has(f.key));
+  const cells = Object.fromEntries(required.map((f) => [f.key, f.cell(probes)]));
+  const missing = required.filter((f) => !f.meets(cells[f.key])).map((f) => f.key);
+  return { schema: boundedQualificationSchema, source, probes, cells, missing, eligible: missing.length === 0,
+    unmeasured: features.filter((f) => omitted.has(f.key)).map((f) => f.key) };
+}
+
+export function requireOwnPost(row) {
+  assert.ok(row.status >= 200 && row.status < 400 && row.headers.serverfnerror === undefined, "native same-origin form failed");
+}
+
+export function validateBoundedQualification(report) {
+  assert.equal(report.schema, boundedQualificationSchema);
+  assert.ok(!Object.hasOwn(report, "failure"), "incomplete qualification receipt");
+  const { source, probes: p } = report;
+  const keys = [...ordinary, "liveness"];
+  ordinary.forEach((key) => completed(p[key]));
+  for (const key of ordinary.slice(0, 5)) assert.equal(p[key].status, 200, `${key}: unhealthy qualification`);
+  assert.ok(typeof p.page.body === "string" && p.page.body.length > 0 && p.page.body.length <= 4 * Math.ceil(boundedResponseBytes / 3));
+  const body = Buffer.from(p.page.body, "base64");
+  assert.equal(body.toString("base64"), p.page.body); assert.equal(body.length, p.page.bodyLength);
+  const form = formOf(body.toString("utf8"), "/marketplace/en-US/item_1");
+  if (!form || form.script) { assert.equal(p.form, "no native POST form"); keys.push("form"); }
+  else {
+    keys.push("ownPost", "crossSite");
+    completed(p.ownPost); completed(p.crossSite);
+    requireOwnPost(p.ownPost);
+  }
+  assert.ok(Array.isArray(p.liveness) && p.liveness.length > 0 && p.liveness.length <= livePaths.length);
+  p.liveness.forEach((row, i) => {
+    assert.equal(row.path, livePaths[i]); completed(row, true);
+    if (i < p.liveness.length - 1) assert.notEqual(row.status, 200);
+  });
+  const last = p.liveness.at(-1);
+  if (last.status === 200) { assert.deepEqual(p.live, last); keys.push("live"); }
+  else assert.equal(p.liveness.length, livePaths.length, "incomplete liveness path discovery");
+  if (source === "api") {
+    for (const key of ["page500", "json500", "afterUpstream"]) { completed(p[key]); keys.push(key); }
+    assert.equal(p.afterUpstream.status, 200, "unhealthy qualification after upstream control");
+  }
+  assert.deepEqual(Object.keys(p).sort(), keys.sort(), "unexpected or missing bounded qualification probes");
+  assert.deepEqual(report, boundedQualification(p, source), "bounded qualification differs from its raw probes");
+  return report;
+}
+
+export const boundedQualificationSettings = {
+  ...qualificationSettings,
+  required: Object.fromEntries(["fixture", "api"].map(s => [s, sourceFeatures(s).filter(f => !omitted.has(f.key)).map(f => f.key)])),
+  unmeasured: [...omitted],
+};
+export function produceBoundedQualification(probes, source) {
+  return { ...boundedQualification(probes, source), profile: boundedFeatureProfile };
+}
+export function validateActiveQualification(q) {
+  const { profile, ...bounded } = q;
+  assert.equal(profile, boundedFeatureProfile);
+  validateBoundedQualification(bounded);
+  return q;
+}

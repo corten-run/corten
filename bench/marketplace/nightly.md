@@ -12,7 +12,7 @@ The approved [workload-specific registry](../workloads/README.md) preserves all 
 families and selected challengers independently of implementation readiness. Its localized
 marketplace selection is available explicitly as `--group localized-marketplace`: Corten,
 Next.js, ASP.NET Core, Django, Topcoat, Leptos, Gin and Drogon. It uses this procedure's
-unchanged qualification, browser/content and measurement gates. Missing parity remains
+qualification, browser/content and measurement gates. Missing parity remains
 visible, never fabricated timing. Other workload groups still need native runner/adapter
 integration; the existing scheduled selection below is not silently migrated by the registry.
 Old group identities and saved reservations retain their original membership.
@@ -20,7 +20,7 @@ Old group identities and saved reservations retain their original membership.
 `groups.mjs` defines candidate cohorts, not language families or unconditional anchors.
 The default `production` run deduplicates the popular and performance-oriented shortlists,
 so overlapping peers are built and timed once. All candidates must qualify against
-`marketplace-production/v1` on the exact image and configuration used for timing:
+`marketplace-production/v2` on the exact image and configuration used for timing:
 
 | Group | Adapters |
 |---|---|
@@ -38,10 +38,12 @@ post-hoc removal of a slow peer. A new adapter is not automatically admitted to 
 Axum is not an anchor: it may enter a capability audit, but without equivalent features it
 has no row in a production comparison. The same rule applies to Corten and every peer.
 
-Qualification reuses the existing production feature checklist: security headers and strict
-script CSP, private caching, page/JSON compression, native form cross-site and size defenses,
-404 handling, HTML/JSON upstream errors, HEAD, Host/header defenses, liveness, upstream failure/deadline handling,
-incomplete-head timeout and connection cap. Fixture mode omits only upstream-failure probes.
+Qualification uses sequential, bounded HTTP checks: security headers and strict script CSP,
+private caching, page/JSON compression, native form cross-site protection, 404 handling, HEAD,
+Host rejection and liveness. The HTTP source also checks HTML/JSON errors from an upstream
+failure and verifies recovery after restoring the upstream. Fixture mode has no upstream probes.
+Oversized requests, incomplete request headers and downstream deadlines are not assessed by
+the bounded gate. Connection-flood resistance: not measured.
 Conditional GET/ETag and downstream readiness are disclosed exceptions: this workload times
 uncached identity responses, not conditional reads or readiness traffic. Request logging is
 not a scored feature. This is scoped production parity, not every enterprise capability.
@@ -53,7 +55,8 @@ Cross-site probes omit only known native hidden antiforgery tokens that an attac
 read; public routing fields remain. A legitimate same-origin POST must still succeed.
 Missing pages must return 404, but may use their native empty or HTML representation.
 
-The production profile uses native `PROFILE=matched` configuration and a connection cap.
+The production profile retains native `PROFILE=matched` configuration and the same connection
+limit setting for timing; the setting is not evidence that the limit holds under pressure.
 Probe both sources before timing; save raw probes, derived cells and every missing feature.
 Unsupported candidates are explicitly excluded, never assigned throughput. An unhealthy
 probe, failed build, harness error or failed browser/content gate still fails the round.
@@ -73,7 +76,9 @@ without `--group` retains the full inventory for compatibility with older reserv
 Keep the last compatible baseline in operator state `groupBaselines[group]` (round and
 measuredCommit) separately for each group, updating it only after validated results merge;
 retain lastFullRound/measuredCommit as the latest merged run. Never compare a group with a
-different group or a different admitted set. Reports must name the feature profile, group,
+different group or a different admitted set. Archived v1 evidence remains readable under its
+original contract, but cannot be merged or compared with the bounded v2 results. Reports must
+name the feature profile, group,
 admitted, excluded and omitted adapters. Omitted apps were not tested; excluded candidates
 were probed but not timed. Grouping changes coverage and cost, not the required work.
 Record measured wall time from the first

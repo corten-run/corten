@@ -42,7 +42,7 @@ async function run(repo, { failRun = 1, failRemove = false, failNetwork = false,
     if (name !== missing) install(repo, name, name === stale ? "1.65.1" : installedVersion);
   }
   if (shadow) install(join(repo, "node_modules/@playwright/test"), "playwright", "1.65.1");
-  const calls = [], containers = new Map(), networks = new Map();
+  const calls = [], qualificationCalls = [], logs = [], containers = new Map(), networks = new Map();
   let runs = 0;
   const reply = (stdout = "", status = 0, stderr = "") => ({ stdout, stderr, status });
   const labelsOf = (args) => Object.fromEntries(args.flatMap((arg, i) => arg === "--label" ? [args[i + 1].split("=")] : []));
@@ -75,7 +75,7 @@ async function run(repo, { failRun = 1, failRemove = false, failNetwork = false,
     throw new Error(`unexpected docker command: ${args.join(" ")}`);
   };
   const context = vm.createContext({ process: { argv: [process.execPath, fileURLToPath(driver), output], pid: process.pid + ++sequence },
-    console: { log() {}, error() {} }, fetch: async () => ({ status: 200, arrayBuffer: async () => new ArrayBuffer(0) }), AbortSignal, setTimeout, URL });
+    console: { log: value => logs.push(value), error() {} }, fetch: async () => ({ status: 200, arrayBuffer: async () => new ArrayBuffer(0) }), AbortSignal, setTimeout, URL });
   const url = pathToFileURL(driverPath).href;
   const module = new vm.SourceTextModule(readFileSync(driver, "utf8"), { context, identifier: url, initializeImportMeta(meta) { meta.url = url; } });
   await module.link(async (specifier) => {
@@ -92,12 +92,19 @@ async function run(repo, { failRun = 1, failRemove = false, failNetwork = false,
     }
     const exports = specifier === "node:child_process" ? { spawnSync } :
       specifier === "../../../marketplace/check.mjs" ? await import(pathToFileURL(join(repo, checkerPath))) :
-      specifier.endsWith("/qualify.mjs") ? { qualify: async () => ({ eligible: true }) } : await import(specifier);
+      specifier === "../../../marketplace/qualify.mjs" ? { qualify: async options => {
+        qualificationCalls.push({ ...options });
+        return { profile: "marketplace-production/v2", source: options.source, eligible: true, missing: [], unmeasured: ["unfinishedHead", "connectionCap"] };
+      } } : await import(specifier);
     return new vm.SyntheticModule(Object.keys(exports), function () { for (const [key, value] of Object.entries(exports)) this.setExport(key, value); }, { context });
   });
   let error;
   try { await module.evaluate(); } catch (caught) { error = caught; }
-  return { error, calls, containers, networks, madeOutput: existsSync(output),
+  return { error, calls, containers, networks, madeOutput: existsSync(output), qualificationCalls, logs,
+    qualifications: ["fixture", "api"].map(source => {
+      const file = join(output, `${source}-bounded-qualification.json`);
+      return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
+    }),
     receipt: (() => { try { return JSON.parse(readFileSync(join(output, "run-failures.json"))); } catch { return null; } })() };
 }
 
@@ -166,6 +173,16 @@ test("a stale Playwright install is rejected before starting Docker", async () =
   assert.match(String(r.error), /installed @playwright\/test does not match the root lockfile/);
   assert.deepEqual(r.calls, []);
   assert.equal(r.madeOutput, false);
+});
+
+test("both source modes retain the bounded receipts and report connection-flood resistance as unmeasured", async () => {
+  const r = await exercise({ failRun: 0 });
+  assert.equal(r.error, undefined);
+  const address = "http://127.0.0.1:12345";
+  assert.deepEqual(r.qualificationCalls, ["fixture", "api"].map(source => ({ source, base: address, upstream: address })));
+  assert.deepEqual(r.qualifications, ["fixture", "api"].map(source =>
+    ({ profile: "marketplace-production/v2", source, eligible: true, missing: [], unmeasured: ["unfinishedHead", "connectionCap"] })));
+  assert.equal(r.logs.filter(value => value === "Connection-flood resistance: not measured.").length, 2);
 });
 
 for (const [options, name] of [

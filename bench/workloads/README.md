@@ -10,8 +10,8 @@ or remove Corten's features to manufacture parity.
 |---|---|---|---|
 | Catalog page (`catalog-page`) | ASP.NET Core, Express, FastAPI | axum + Maud, Drogon, Gin + templ | typed-record, escaped-fields-and-links, get-filter, request-time-source, no-output-cache |
 | JSON API (`json-api`) | ASP.NET Core, FastAPI, Express, Spring Boot | axum + Maud, Drogon, Gin + templ, ASP.NET Core Native AOT (JSON only) | typed-complete-schema, numeric-json, tested-errors, fetch-parse-reserialize, no-output-cache |
-| Localized marketplace (`localized-marketplace`) | Next.js (Pages Router), ASP.NET Core, Django | Topcoat, Leptos, Gin + templ, Drogon | complete-marketplace, request-time-localization, filter-sort, valid-invalid-forms, js-and-no-js, production-http |
-| Mixed production traffic (`mixed-production`) | ASP.NET Core, Spring Boot, Django, Express, FastAPI | Topcoat, Gin + templ, Drogon | localized-reads, numeric-json, listings, accepted-rejected-writes, write-readback, slow-upstream, production-http |
+| Localized marketplace (`localized-marketplace`) | Next.js (Pages Router), ASP.NET Core, Django | Topcoat, Leptos, Gin + templ, Drogon | complete-marketplace, request-time-localization, filter-sort, valid-invalid-forms, js-and-no-js, bounded-production-http/v2 |
+| Mixed production traffic (`mixed-production`) | ASP.NET Core, Spring Boot, Django, Express, FastAPI | Topcoat, Gin + templ, Drogon | localized-reads, numeric-json, listings, accepted-rejected-writes, write-readback, slow-upstream, bounded-production-http/v2 |
 | Full-stack browser experience (`fullstack-browser`) | Next.js (Pages Router), Nuxt, React Router, Rails + Hotwire, Laravel + Livewire | SvelteKit, Astro, TanStack Start, Leptos | ssr, native-navigation, filter-sort, valid-invalid-forms, js-and-no-js, desktop-mobile, readiness-actions-bytes |
 | Client-heavy screens (`client-heavy`) | React, Vue | Solid, Svelte, Remix | equal-loaded-keyed-rows, dashboard-mutations, sort-filter-selection, no-operation-http, subscription-cleanup, final-dom |
 | Live delivery (`live-delivery`) | ASP.NET Core, Express, Phoenix, Rails + Hotwire | Gin + templ, Drogon, Leptos | equal-initial-state, ordered-visible-events, native-transport, bounded-slow-client, browser-correctness, cleanup |
@@ -70,7 +70,9 @@ captures and validate its complete evidence before publishing comparative number
 
 The localized marketplace group is wired to the existing marketplace runner as an explicit
 `--group localized-marketplace` selection. Its exact-image feature qualification and complete
-browser/content gates remain mandatory. Candidates missing production parity stay in the
+browser/content gates remain mandatory. Both the localized and mixed groups check ordinary,
+sequential HTTP requests before timing. Connection-flood resistance: not measured.
+Historical qualification does not admit an app to a new run. Candidates missing production parity stay in the
 report with their missing features and are not timed. The existing scheduled `production`
 selection and historical reservations are unchanged while native parity work is completed.
 

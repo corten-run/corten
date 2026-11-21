@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { passPlan, stageAggregate, timedProfiles } from "./run-contract.mjs";
+import { boundedFeatureProfile, featureProfile } from "./feature-contract.mjs";
 
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 const invalid = (fn) => assert.throws(fn, (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID");
@@ -20,7 +21,7 @@ function temporary(t) {
   return folder;
 }
 
-test("reproduction: a summary-only native round passes the historical summary reader", () => {
+test("a summary-only native round passes the read-only summary reader", () => {
   assert.equal(validateSummary(summaryFixture("a".repeat(40))).complete, true);
 });
 
@@ -71,6 +72,7 @@ test("native saved validation rejects summary-only, historical and malformed pro
 test("complete native fixture replays every raw profile, pass, phase, gate and cleanup", (t) => {
   const folder = temporary(t), args = { folder, round: "r17", commit };
   const expected = writeSavedFixture(folder, commit, sourceTree(commit));
+  assert.equal(expected.measurement.featureProfile, boundedFeatureProfile);
   assert.equal(JSON.parse(readFileSync(join(folder, "fixture/corten/check-container.json"))).memoryBytes, 2 * 2 ** 30, "native browser gate uses 2 GiB, not the app's 1 GiB");
   const hashes = () => Object.fromEntries(readdirSync(folder, { recursive: true, withFileTypes: true }).filter((d) => d.isFile()).map((d) => {
     const path = join(d.parentPath, d.name); return [path, createHash("sha256").update(readFileSync(path)).digest("hex")];
@@ -80,6 +82,25 @@ test("complete native fixture replays every raw profile, pass, phase, gate and c
   const command = spawnSync(process.execPath, ["bench/marketplace/validate.mjs", folder, "r17", commit], { encoding: "utf8", timeout: 30000 });
   assert.equal(command.status, 0, command.stderr); assert.match(command.stdout, /raw saved evidence valid/);
   assert.deepEqual(hashes(), before, "saved validation must not write evidence");
+});
+
+test("historical native evidence replays, but the two profiles' raw receipts cannot mix", (t) => {
+  for (const historical of [true, false]) {
+    const folder = temporary(t), args = { folder, round: "r17", commit };
+    const expected = writeSavedFixture(folder, commit, sourceTree(commit), { historical });
+    assert.equal(expected.measurement.featureProfile, historical ? featureProfile : boundedFeatureProfile);
+    assert.deepEqual(validateSaved(args), expected);
+    const other = summaryFixture(commit, { historical: !historical });
+    const raw = join(folder, "api/corten/qualification.json"), imagesPath = join(folder, "images.json");
+    const saved = readFileSync(raw);
+    writeFileSync(raw, JSON.stringify(other.apps.corten.qualification.api));
+    invalid(() => validateSaved(args));
+    writeFileSync(raw, saved);
+    const images = JSON.parse(readFileSync(imagesPath));
+    images.corten.labels["run.corten.marketplace.profile"] = other.measurement.featureProfile;
+    writeFileSync(imagesPath, JSON.stringify(images));
+    invalid(() => validateSaved(args));
+  }
 });
 
 test("native replay requires the retained executable identity and raw version probe", (t) => {
@@ -153,7 +174,7 @@ test("hostile saved edits fail replay, even when the summary remains internally 
   });
   change("summary.json", (v) => { delete v.apps.corten.runs["api-neutral-json"]; });
   change("fixture/corten/checks.json", (v) => { v.profiles.pop(); });
-  change("api/corten/qualification.json", (v) => { v.probes.cap.belowHeld = 503; });
+  change("api/corten/qualification.json", (v) => { v.probes.page.ms++; });
   change("fixture/corten/check-container.json", (v) => { v.state.FinishedAt = "2026-01-01T01:01:00Z"; });
   change("cleanup.json", (v) => { v.removed.pop(); });
   change("cleanup.json", (v) => { v.remaining.containers = "still-running"; });
