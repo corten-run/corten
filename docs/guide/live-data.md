@@ -497,15 +497,18 @@ that runs late and loading the snapshot come on top.
 With 20 Chromium pages and a local server that answered every request 502 for 5, 8.5 and 20 s and
 came back with a new epoch, the median page had the new snapshot 6.2, 12.3 and 24.4 s after the
 cut at `074398815`, against 8.2, 16.2 and 32.3 s at `42b474017` (medians of two runs and of
-three); after 90 s, the median of five pages had it at 94.2 s, against 92.2 s (one run each). A
-server that stays down gets 11 requests from each page in the first minute, where it got 6, and
-one every 30 s once the wait reaches 30 s, from 64 s after the cut where it was from 32 s; in the
-90 s runs each page sent it 12 requests, against 7. The tries are not spread at random: 2,000
+three); after 90 s, the median of five pages had it at 94.2 s, against 92.2 s (one run each).
+Each page sent the 502 responder 12 requests in the 90 s runs, against 7 (11 in the first minute
+against 6 in one page's trace); by the schedule, a server that stays down then gets one every 30 s
+once the wait reaches 30 s, from 64 s after the cut where it was from 32 s. The tries are not
+spread at random: 2,000
 clients of the feed's protocol (four Node processes of 500, not `subscribe()`), each reconnecting
 to a `watchlist` instance on one CPU (its server code as at `42b474017`, on Docker Desktop), all
 had a snapshot and an open stream within 0.64 to 1.41 s of starting together, by their processes'
 clocks, and within 0.71 to 1.94 s when their starts were spread over 0.5 s (three runs each, the
-first of each the slowest): the experiment showed no gain from spreading.
+first of each the slowest). Spreading cut each client's median time (157 to 248 ms against 450 to
+534 ms after the first run) but not the time until the last one was current, so the runtime does
+not spread them.
 
 `corten-cluster` runs one feed across instances (Postgres outbox, a leased relay to NATS
 JetStream). The integration tests use PostgreSQL 19 and NATS JetStream. The crate uses
