@@ -25,12 +25,12 @@ const COUNTS: usize = 4 << 16;
 const MARKS: usize = BOUND / 256;
 
 /// A browser's codings: it is given a kept page's brotli at the kept level once that is made, and
-/// zstd until then.
+/// zstd until then or when the store had no room for it.
 #[cfg(feature = "compress")]
 const BROWSER: &str = "gzip, deflate, br, zstd";
 
 /// Each coding alone, then a browser's: its answer is the second to a client that takes brotli,
-/// so the page's brotli at the kept level is made after it, on the compression thread.
+/// so the page's brotli at the kept level is queued for the compression thread with it.
 #[cfg(feature = "compress")]
 const CODINGS: &[&str] = &["identity", "zstd", "br", "gzip", BROWSER];
 #[cfg(not(feature = "compress"))]
@@ -65,6 +65,9 @@ mod url {
 
     #[route("/made", get = crate::made)]
     pub struct Made;
+
+    #[route("/mark", get = crate::mark)]
+    pub struct Mark;
 }
 
 /// About 5 KB of words that do not repeat, so each coding's bytes are a real page's share of it.
@@ -91,6 +94,23 @@ async fn kept(req: Req) -> Public<HtmlResult> {
 /// The same page for one visitor, which is made for every request and never kept.
 async fn made(req: Req) -> HtmlResult {
     req.page(document())
+}
+
+/// A small page, kept by an app of its own ([`drained`]).
+async fn mark(req: Req) -> Public<HtmlResult> {
+    let text = "mark ".repeat(300);
+    let page = html! {
+        <html lang="en">
+            <head>
+                <title>"Mark"</title>
+                <Corten />
+            </head>
+            <body>
+                <main><p>{text}</p></main>
+            </body>
+        </html>
+    };
+    Public::new(Duration::from_secs(600), req.page(page))
 }
 
 /// One request as a browser sends it, read to the end of its body. True when the answer was a
@@ -125,21 +145,29 @@ async fn answer(stream: &mut TcpStream, read: &mut Vec<u8>, path: &str, coding: 
     (text.lines().any(|line| line.starts_with("age:")), encoding)
 }
 
-/// Asks for page `n` as a browser until it is given in brotli, which it is once the compression
-/// thread has made and counted the page's brotli at the kept level: it was queued on the
-/// browser's answer before, and nothing else is queued meanwhile.
+/// Waits until the compression thread has done the brotli of every kept page queued before, made
+/// or let go: it takes them in the order they were queued, and gives the one of `/mark`, kept by
+/// an app of its own whose store has room for it, once it is made. A write to `/mark` drops that
+/// page first, so it is made and kept again, in the place of the one it drops, and its brotli is
+/// queued once more by its second answer to a browser. The write is answered whatever its status.
 #[cfg(feature = "compress")]
-async fn made_at_the_kept_level(stream: &mut TcpStream, read: &mut Vec<u8>, n: usize) {
-    let asked = std::time::Instant::now();
-    loop {
-        let (kept, coding) = answer(stream, read, &format!("/kept?n={n}"), BROWSER).await;
-        assert!(kept, "page {n} is kept");
-        match coding.as_deref() {
-            Some("br") => return,
-            Some("zstd") => {}
-            other => panic!("page {n} in {other:?}"),
+async fn drained(stream: &mut TcpStream, read: &mut Vec<u8>) {
+    stream.write_all(b"POST /mark HTTP/1.1\r\nhost: localhost\r\ncontent-length: 0\r\n\r\n").await.unwrap();
+    read.clear();
+    let head = loop {
+        if let Some(at) = read.windows(4).position(|window| window == b"\r\n\r\n") {
+            break at + 4;
         }
-        assert!(asked.elapsed() < Duration::from_secs(30), "page {n}'s brotli was not made");
+        assert!(stream.read_buf(read).await.unwrap() > 0, "the connection closed");
+    };
+    let text = std::str::from_utf8(&read[..head]).unwrap().to_ascii_lowercase();
+    let length: usize = text.lines().find_map(|line| line.strip_prefix("content-length: ")).map_or(0, |n| n.trim().parse().unwrap());
+    while read.len() < head + length {
+        assert!(stream.read_buf(read).await.unwrap() > 0, "the connection closed");
+    }
+    let asked = std::time::Instant::now();
+    while answer(stream, read, "/mark", BROWSER).await.1.as_deref() != Some("br") {
+        assert!(asked.elapsed() < Duration::from_secs(60), "the compression thread did not come to /mark");
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
 }
@@ -151,16 +179,31 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
     let server = tokio::spawn(corten::serve_on(vec![listener], App::new(url::router()).dev(false).kept_answers(BOUND)));
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let mut read = Vec::with_capacity(64 << 10);
+    // The app whose page says when the compression thread is done ([`drained`]).
+    #[cfg(feature = "compress")]
+    let (marker, mut marks) = {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = App::new(url::router()).dev(false).kept_answers(1 << 20);
+        (tokio::spawn(corten::serve_on(vec![listener], app)), TcpStream::connect(addr).await.unwrap())
+    };
     // What a request leaves behind that is no kept page (a connection's buffers, each coder's
-    // first use) is there before the count starts.
+    // first use, the marking app's page and its forms) is there before the count starts.
     for n in 0..100 {
         for coding in CODINGS {
             assert!(!get(&mut stream, &mut read, &format!("/made?n={n}"), coding).await);
         }
     }
+    #[cfg(feature = "compress")]
+    drained(&mut marks, &mut read).await;
     let before = LIVE.load(Ordering::Relaxed);
     let mut twice = 0;
     for n in 0..PAGES {
+        // The marking app's connection read now and then, so it is not closed as idle.
+        #[cfg(feature = "compress")]
+        if n % 100 == 0 {
+            answer(&mut marks, &mut read, "/mark", "identity").await;
+        }
         // With room a page is kept the first time it is made. In a full store it is kept from
         // the second request for its URL, so one more comes first.
         let made = !get(&mut stream, &mut read, &format!("/kept?n={n}"), "identity").await;
@@ -184,18 +227,33 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
                 assert!(first >= COUNTS, "the first page asked for took {first} bytes: the counts were made before it");
             }
         }
-        // So every page kept holds its brotli at the kept level when the count is read, and the
-        // thread has no page's brotli left to make (it frees the encoder's tables before it is
-        // given).
-        #[cfg(feature = "compress")]
-        made_at_the_kept_level(&mut stream, &mut read, n).await;
     }
     assert!(twice > PAGES / 2, "{twice} of {PAGES} pages were asked for in a full store");
-    // A lookup waits for the store's lock, which the thread holds while it counts the last
-    // page's brotli and makes room for it.
+    // So the thread has no page's brotli left to make when the count is read: each it made is
+    // counted, and it freed the encoder's tables before it went on.
+    #[cfg(feature = "compress")]
+    drained(&mut marks, &mut read).await;
     assert!(get(&mut stream, &mut read, &format!("/kept?n={}", PAGES - 1), "identity").await, "the newest is kept");
     let held = LIVE.load(Ordering::Relaxed).saturating_sub(before + COUNTS + MARKS);
     assert!(!get(&mut stream, &mut read, "/kept?n=0", "identity").await, "and the oldest went to make room");
+    // The pages held with their brotli: those it had room for when each was made, so not every
+    // one, the store being at its bound. Asked for newest first, until one is not kept.
+    #[cfg(feature = "compress")]
+    {
+        let (mut kept, mut brotli) = (0, 0);
+        for n in (0..PAGES).rev() {
+            match answer(&mut stream, &mut read, &format!("/kept?n={n}"), BROWSER).await {
+                (false, _) => break,
+                (true, coding) => {
+                    kept += 1;
+                    brotli += usize::from(coding.as_deref() == Some("br"));
+                }
+            }
+        }
+        println!("{brotli} of the {kept} newest pages kept were given in brotli at the kept level");
+        assert!(brotli > 0, "no page kept had its brotli");
+        marker.abort();
+    }
     server.abort();
     // The figure `docs/design.md#choice-kept-pages` cites:
     // `cargo test -p corten-run --all-features --test kept_memory -- --nocapture`.

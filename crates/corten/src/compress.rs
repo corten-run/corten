@@ -39,10 +39,11 @@
 
 use std::{
     cell::RefCell,
+    collections::VecDeque,
     io::Write,
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
-        Arc, OnceLock,
+        Arc, Condvar, Mutex, OnceLock, PoisonError,
     },
 };
 
@@ -507,7 +508,7 @@ fn zstd_stream(
 }
 
 /// Adds `cost` to `held` unless that would pass `budget`.
-fn reserve(held: &AtomicUsize, cost: usize, budget: usize) -> bool {
+pub(crate) fn reserve(held: &AtomicUsize, cost: usize, budget: usize) -> bool {
     let mut now = held.load(Ordering::Acquire);
     loop {
         if now + cost > budget {
@@ -637,7 +638,7 @@ impl Precompressed {
                 // Files: as many as the app has, each once.
                 Level::Best => std::thread::Builder::new().spawn(job()).is_ok(),
                 // Held values: as many as the app's data, so one worker, a bounded queue.
-                _ => later(job()),
+                _ => later(Turn::Held, job()),
             };
             if !queued {
                 // Full, or no thread to be had: a later read asks again.
@@ -671,33 +672,82 @@ fn make(identity: &Bytes, slot: &OnceLock<[Bytes; 2]>, level: Level) {
     let _ = slot.set([br, gzip]);
 }
 
-/// Held values waiting to be compressed; past this, a read leaves its value to a later one.
-const HELD_QUEUE: usize = 64;
+/// The jobs that may wait in each of the thread's queues; past this, a read or an answer leaves
+/// its job to a later one.
+const QUEUE: usize = 64;
 
-/// The one thread that compresses held values ([`Level::Held`]), in the order they were asked
-/// for: a burst of documents read twice at once is compressed one at a time, not on a thread
-/// each. `None` when the thread could not be started.
-fn held_worker() -> Option<&'static std::sync::mpsc::SyncSender<Job>> {
-    static WORKER: OnceLock<Option<std::sync::mpsc::SyncSender<Job>>> = OnceLock::new();
-    WORKER
-        .get_or_init(|| {
-            let (tx, rx) = std::sync::mpsc::sync_channel::<Job>(HELD_QUEUE);
-            let worker = std::thread::Builder::new().name("corten-compress".into()).spawn(move || {
-                for job in rx {
-                    // A job that panics loses its own forms (that value is compressed per
-                    // request), not the worker every later value needs.
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
-                }
-            });
-            worker.ok().map(|_| tx)
-        })
-        .as_ref()
+/// Which of the queues of the thread that compresses held values a job waits in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Turn {
+    /// A held value's forms ([`Level::Held`]): before any kept page's.
+    Held,
+    /// A kept page's brotli ([`Level::Kept`]): when no held value waits.
+    Kept,
 }
 
-/// Gives `job` to the thread that compresses held values, after those asked for before it.
-/// False when it is not taken: the queue is full, or there is no thread to be had.
-pub(crate) fn later(job: Job) -> bool {
-    held_worker().is_some_and(|tx| tx.try_send(job).is_ok())
+/// A thread that compresses off the request, and the jobs that wait for it: held values in the
+/// order they were asked for, then kept pages' brotli in theirs, each in a bounded queue of its
+/// own. So a burst of documents read twice at once is compressed one at a time, not on a thread
+/// each, and a burst of kept pages neither keeps a held value out of its queue nor makes it wait
+/// for more than the one job running.
+struct Worker {
+    waiting: Mutex<[VecDeque<Job>; 2]>,
+    ready: Condvar,
+}
+
+impl Worker {
+    /// A worker on a thread of its own, which waits for jobs until the process ends; `None` when
+    /// the thread could not be started.
+    fn start() -> Option<Arc<Worker>> {
+        let worker = Arc::new(Worker { waiting: Mutex::default(), ready: Condvar::new() });
+        let run = worker.clone();
+        std::thread::Builder::new().name("corten-compress".into()).spawn(move || run.run()).ok()?;
+        Some(worker)
+    }
+
+    /// Queues `job` in `turn`'s queue, after those there before it. False when it is full.
+    fn give(&self, turn: Turn, job: Job) -> bool {
+        let mut waiting = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
+        let queue = &mut waiting[turn as usize];
+        if queue.len() >= QUEUE {
+            return false;
+        }
+        queue.push_back(job);
+        drop(waiting);
+        self.ready.notify_one();
+        true
+    }
+
+    /// Runs the jobs as they come, a held value's first.
+    fn run(&self) {
+        loop {
+            let job = {
+                let mut waiting = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
+                loop {
+                    if let Some(job) = waiting.iter_mut().find_map(VecDeque::pop_front) {
+                        break job;
+                    }
+                    waiting = self.ready.wait(waiting).unwrap_or_else(PoisonError::into_inner);
+                }
+            };
+            // A job that panics loses its own forms (that value is compressed per request), not
+            // the worker every later value needs.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+        }
+    }
+}
+
+/// The one thread that compresses held values ([`Level::Held`]) and kept pages' brotli
+/// ([`Level::Kept`]). `None` when the thread could not be started.
+fn worker() -> Option<&'static Worker> {
+    static WORKER: OnceLock<Option<Arc<Worker>>> = OnceLock::new();
+    WORKER.get_or_init(Worker::start).as_deref()
+}
+
+/// Gives `job` to the thread that compresses held values, in `turn`'s queue. False when it is not
+/// taken: that queue is full, or there is no thread to be had.
+pub(crate) fn later(turn: Turn, job: Job) -> bool {
+    worker().is_some_and(|worker| worker.give(turn, job))
 }
 
 /// Sets the headers for a body [`Precompressed::pick`] chose.
@@ -926,7 +976,7 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn a_job_that_panics_leaves_the_worker_for_the_next() {
-        held_worker().unwrap().send(Box::new(|| panic!("corten test: a compression job that fails"))).unwrap();
+        assert!(later(Turn::Held, Box::new(|| panic!("corten test: a compression job that fails"))));
         let held = Arc::new(Precompressed::held(Bytes::from(format!("[{}]", "1,".repeat(2000) + "1"))));
         assert!(Precompressed::stored_held(&held, Coding::Brotli).is_none());
         assert!(Precompressed::stored_held(&held, Coding::Brotli).is_none());
@@ -935,6 +985,42 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "the worker did not compress the value after a job panicked");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    /// A burst of kept pages' brotli neither keeps a held value out of the thread's queues nor
+    /// makes it wait behind them: with the thread busy and every place in the kept pages' queue
+    /// taken, a held value's job is taken, and it runs next. (A worker of the test's own, so no
+    /// other test's jobs share its queues.)
+    #[test]
+    fn a_held_value_is_compressed_before_the_kept_pages_that_wait() {
+        let worker = Worker::start().expect("a thread");
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let (running, started) = std::sync::mpsc::channel();
+        let busy = Box::new(move || {
+            running.send(()).ok();
+            held.recv().ok();
+        });
+        assert!(worker.give(Turn::Kept, busy));
+        started.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread took the job");
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let job = |turn: Turn| -> Job {
+            let ran = ran.clone();
+            Box::new(move || ran.lock().unwrap().push(turn))
+        };
+        for _ in 0..QUEUE {
+            assert!(worker.give(Turn::Kept, job(Turn::Kept)));
+        }
+        assert!(!worker.give(Turn::Kept, job(Turn::Kept)), "the kept pages' queue is bounded");
+        assert!(worker.give(Turn::Held, job(Turn::Held)), "a held value's job is taken");
+        drop(release);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while ran.lock().unwrap().len() < QUEUE + 1 {
+            assert!(std::time::Instant::now() < deadline, "the thread did not run the jobs");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let ran = ran.lock().unwrap();
+        assert_eq!(ran[0], Turn::Held, "the held value goes first");
+        assert!(ran[1..].iter().all(|turn| *turn == Turn::Kept));
     }
 
     /// A handler or a middleware that replaces a held value's body keeps the extension, not the

@@ -1292,13 +1292,14 @@ async fn an_answer_a_full_store_did_not_keep_does_not_count_toward_its_brotli() 
         room += 1;
         assert!(room < 100, "the store never filled");
     }
-    // Everything queued on the compression thread before is done.
+    // Everything queued on the compression thread before is done: this waits in the kept pages'
+    // queue, after the jobs there and any held value's.
     let drained = || {
         let (done, heard) = std::sync::mpsc::channel();
         let job = Box::new(move || {
             done.send(()).ok();
         });
-        assert!(crate::compress::later(job), "the thread took the job");
+        assert!(crate::compress::later(crate::compress::Turn::Kept, job), "the thread took the job");
         heard.recv_timeout(Duration::from_secs(10)).expect("the thread is done");
     };
     let browser = [("accept-encoding", "gzip, deflate, br, zstd")];

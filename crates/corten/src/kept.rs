@@ -75,7 +75,7 @@ use http::{header, HeaderMap, HeaderValue, StatusCode};
 
 use crate::body::Body;
 #[cfg(feature = "compress")]
-use crate::compress::{Accepts, Coding, Level};
+use crate::compress::{Accepts, Coding, Level, Turn};
 use crate::handler::Request;
 use crate::page::Mode;
 use crate::response::Response;
@@ -120,6 +120,13 @@ const ROOMY: usize = 64;
 static LAST_EVENT_ID: header::HeaderName = header::HeaderName::from_static("last-event-id");
 /// [`crate::page::NOTICE_HEADER`], held once for the same reason.
 static NOTICE: header::HeaderName = crate::page::NOTICE_HEADER;
+
+#[cfg(all(test, feature = "compress"))]
+thread_local! {
+    /// Run by [`Entry::make_brotli`] on its thread once the page was found kept under the store's
+    /// lock and before its brotli is put with it: what a test makes happen at that moment.
+    static ADMITTING: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
+}
 
 /// A copy of a kept answer's `head`, each line where it was, with room for [`ADDED`] more
 /// names: a copy made by `clone` holds its lines in a vector as long as they are, which grows on
@@ -372,7 +379,14 @@ impl Kept {
         if accepts.ranks_brotli_first() {
             let coded = &entry.coded;
             if let Some(brotli) = coded.brotli.get() {
-                return (brotli.clone(), Coding::Brotli);
+                // Unless the form made for the coding it takes now is no larger: the levels' and
+                // the codings' sizes are not in the same order on every page. That coding is zstd
+                // only for a client that ranks zstd as high as brotli, so either is its first
+                // (RFC 9110 section 12.5.3), and is never made here to compare.
+                return match coded.now[coding as usize].get() {
+                    Some(made) if made.len() <= brotli.len() => (made.clone(), coding),
+                    _ => (brotli.clone(), Coding::Brotli),
+                };
             }
             // Not on the first such answer (usually the one that made the page): a page asked
             // for once is compressed once. The job holds the page weakly while it waits its
@@ -380,7 +394,7 @@ impl Kept {
             // skipped (`Entry::make_brotli`).
             if coded.asked.fetch_add(1, Ordering::Relaxed) >= 1 && !coded.started.swap(true, Ordering::AcqRel) {
                 let page = Arc::downgrade(entry);
-                let made = crate::compress::later(Box::new(move || {
+                let made = crate::compress::later(Turn::Kept, Box::new(move || {
                     if let Some(entry) = page.upgrade() {
                         entry.make_brotli();
                     }
@@ -408,10 +422,13 @@ impl Kept {
 
 impl Entry {
     /// Makes its body's brotli at [`Level::Kept`], gives it to the answers from then on and
-    /// counts it, while it is kept and stands: asked before the work, and again when the bytes are
-    /// put with it under the store's lock, which an entry is taken out under. So the brotli of a
-    /// page written to, past its lifetime, replaced or dropped meanwhile is not given or counted,
-    /// and no page that stands makes room for it.
+    /// counts it, while it is kept and stands and the bound has room for it: asked before the
+    /// work, and again when the bytes are put with it under the store's lock, which an entry is
+    /// taken out under. So the brotli of a page written to, past its lifetime, replaced or
+    /// dropped before then is not given or counted. A page does without it, so it takes only the
+    /// room the bound has left and no page is dropped for it: a write or the end of a lifetime
+    /// that lands once the page was found kept costs no other page, and in a store at its bound
+    /// a page has it only when there was room for it then.
     #[cfg(feature = "compress")]
     fn make_brotli(&self) {
         let Some(store) = self.place.store.upgrade() else { return };
@@ -422,19 +439,27 @@ impl Entry {
         // A copy of its own length, as each coding's bytes are (`Kept::coded`).
         let made = Bytes::copy_from_slice(&crate::compress::encode(Coding::Brotli, &self.body, Level::Kept));
         let size = made.len() + FORM;
-        let mut inner = store.inner.write().unwrap_or_else(PoisonError::into_inner);
+        let _inner = store.inner.write().unwrap_or_else(PoisonError::into_inner);
+        if !kept() {
+            return;
+        }
+        #[cfg(test)]
+        if let Some(then) = ADMITTING.take() {
+            then();
+        }
+        // The room taken at once, so a form made meanwhile does not take it too; counted in the
+        // store first, as `grew` counts, and under the lock the entry cannot go meanwhile.
+        if !crate::compress::reserve(&store.bytes, size, store.bound) {
+            return;
+        }
         // Put with it as a clone, which makes the record that shares the bytes (`FORM`) here: the
         // first answer to give them would make it otherwise, and every answer would clone them by
         // the path for bytes not yet shared.
-        if !kept() || self.coded.brotli.set(made.clone()).is_err() {
+        if self.coded.brotli.set(made.clone()).is_err() {
+            store.bytes.fetch_sub(size, Ordering::AcqRel);
             return;
         }
-        // Counted in the store first, as `grew` counts; under the lock it cannot go meanwhile.
-        store.bytes.fetch_add(size, Ordering::AcqRel);
         self.size.fetch_add(size, Ordering::AcqRel);
-        if store.bytes.load(Ordering::Acquire) > store.bound {
-            store.make_room(&mut inner, self);
-        }
     }
 
     /// Counts `more` bytes made for it, unless it is no longer kept, and makes room for them when
@@ -1469,19 +1494,20 @@ mod tests {
             running.send(()).ok();
             held.recv().ok();
         });
-        assert!(crate::compress::later(job), "the thread took the job");
+        assert!(crate::compress::later(Turn::Kept, job), "the thread took the job");
         started.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread reached the job");
         release
     }
 
-    /// Hears once every job queued on that thread before it is done.
+    /// Hears once every job queued on that thread before it is done: it waits in the kept
+    /// pages' queue, which the thread comes to only when no held value waits.
     #[cfg(feature = "compress")]
     fn queued_before_done() -> std::sync::mpsc::Receiver<()> {
         let (done, heard) = std::sync::mpsc::channel();
         let job = Box::new(move || {
             done.send(()).ok();
         });
-        assert!(crate::compress::later(job), "the thread took the job");
+        assert!(crate::compress::later(Turn::Kept, job), "the thread took the job");
         heard
     }
 
@@ -1525,7 +1551,7 @@ mod tests {
             let done = queued_before_done();
             // A page that stands, with less room left beside it than the brotli would take.
             let other = bound - answers.bytes() - OVERHEAD - 16;
-            answers.keep(entry(&answers, "/c", None, 60, other));
+            let standing = answers.keep(entry(&answers, "/c", None, 60, other));
             if ended == "written" {
                 answers.count(count_of(b"/a"));
             }
@@ -1545,19 +1571,92 @@ mod tests {
             assert!(stale.coded.brotli.get().is_none(), "{ended}: not made");
             assert_eq!(answers.bytes(), before, "{ended}: nor counted");
             assert!(answers.find("/c", None, None).is_some(), "{ended}: the page that stands is kept");
-            // The page kept in its place, of other bytes, is made and given its own brotli.
+            // The page kept in its place, of other bytes, is made and given its own brotli, in
+            // room the other page leaves.
+            answers.0.drop_entry(&mut answers.0.inner.write().unwrap(), &standing);
             let body = a_page(1);
             let fresh = answers.keep(|place| Entry { body: body.clone(), ..entry(&answers, "/a", None, 60, body.len())(place) });
             assert_eq!(answers.find("/a", None, None).expect("the new page").0.body, body, "{ended}");
             let mut extensions = http::Extensions::new();
             extensions.insert(Kept(fresh.clone()));
+            // Its fast form larger than brotli at the kept level, so that is what it is given.
             for _ in 0..2 {
-                Kept::coded(&extensions, &fresh.body, accepts("br"), Coding::Brotli, || Bytes::from_static(b"fast"));
+                Kept::coded(&extensions, &fresh.body, accepts("br"), Coding::Brotli, || body.clone());
             }
             queued_before_done().recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
             let brotli = fresh.coded.brotli.get().expect("made").clone();
             assert_eq!(brotli, crate::compress::encode(Coding::Brotli, &body, Level::Kept), "{ended}");
             assert_eq!(Kept::coded(&extensions, &fresh.body, accepts("br"), Coding::Brotli, || unreachable!()).0, brotli);
         }
+    }
+
+    /// A page's brotli at `Level::Kept` takes only the room the bound has left: it drops no other
+    /// page, also when a write to the page's path lands after the thread found the page kept under
+    /// the store's lock and before it puts the bytes with it.
+    #[cfg(feature = "compress")]
+    #[test]
+    fn a_kept_answer_s_brotli_drops_no_other_page() {
+        for racing in [true, false] {
+            let bound = 64 << 10;
+            let answers = Answers::new(bound).expect("a bound");
+            let body = a_page(0);
+            let page = answers.keep(|place| Entry { body: body.clone(), ..entry(&answers, "/a", None, 60, body.len())(place) });
+            // A page that stands, with less room left beside it than the brotli would take.
+            let other = bound - answers.bytes() - OVERHEAD - 16;
+            answers.keep(entry(&answers, "/c", None, 60, other));
+            let before = answers.bytes();
+            if racing {
+                let store = Answers(answers.0.clone());
+                ADMITTING.set(Some(Box::new(move || store.count(count_of(b"/a")))));
+            }
+            page.make_brotli();
+            assert!(ADMITTING.take().is_none(), "racing {racing}: the thread came to the brotli's admission");
+            assert_eq!(page.stands(&answers.0, Instant::now()), !racing, "racing {racing}");
+            assert!(answers.find("/c", None, None).is_some(), "racing {racing}: the page that stands is kept");
+            assert!(page.coded.brotli.get().is_none(), "racing {racing}: there is no room for the brotli");
+            assert_eq!(answers.bytes(), before, "racing {racing}");
+        }
+    }
+
+    /// A kept answer's brotli at `Level::Kept` is not given in the place of a form already made
+    /// for the request's coding that is no larger, as the codings' and levels' sizes are not in
+    /// the same order on every page: a client that ties zstd with brotli gets the zstd made, and
+    /// one that ranks brotli above zstd the brotli 1 made, when it is no larger. One that ranks
+    /// brotli above zstd is never given zstd, and no request compresses anything to compare.
+    #[cfg(feature = "compress")]
+    #[test]
+    fn a_kept_answer_s_brotli_is_not_given_for_more_bytes_than_a_form_made_for_the_request() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let bytes = |n: usize| Bytes::from(vec![b'b'; n]);
+        let made = |kept: usize, zstd: Option<usize>, fast: Option<usize>| {
+            let page = answers.keep(entry(&answers, "/p", None, 60, 4000));
+            page.coded.brotli.set(bytes(kept)).unwrap();
+            if let Some(n) = zstd {
+                page.coded.now[Coding::Zstd as usize].set(bytes(n)).unwrap();
+            }
+            if let Some(n) = fast {
+                page.coded.now[Coding::Brotli as usize].set(bytes(n)).unwrap();
+            }
+            page
+        };
+        let given = |page: Arc<Entry>, asked: &'static str, now: Coding| {
+            let mut extensions = http::Extensions::new();
+            extensions.insert(Kept(page.clone()));
+            let (bytes, coding) = Kept::coded(&extensions, &page.body, accepts(asked), now, || unreachable!("{asked}: compressed"));
+            (bytes.len(), coding)
+        };
+        let browser = "gzip, deflate, br, zstd";
+        // Smaller than each form made: given.
+        assert_eq!(given(made(500, Some(600), Some(700)), browser, Coding::Zstd), (500, Coding::Brotli));
+        assert_eq!(given(made(500, Some(600), Some(700)), "br", Coding::Brotli), (500, Coding::Brotli));
+        // A tie's zstd, made and no larger.
+        assert_eq!(given(made(500, Some(400), None), browser, Coding::Zstd), (400, Coding::Zstd));
+        assert_eq!(given(made(500, Some(500), Some(300)), browser, Coding::Zstd), (500, Coding::Zstd));
+        // Brotli 1 made smaller, for a client that ranks brotli first.
+        assert_eq!(given(made(500, Some(100), Some(300)), "br, zstd;q=0.5", Coding::Brotli), (300, Coding::Brotli));
+        // Never zstd for a client that ranks brotli above it, however small.
+        assert_eq!(given(made(500, Some(100), None), "br, zstd;q=0.5", Coding::Brotli), (500, Coding::Brotli));
+        // Nothing made to compare: the kept level's.
+        assert_eq!(given(made(500, None, None), browser, Coding::Zstd), (500, Coding::Brotli));
     }
 }
