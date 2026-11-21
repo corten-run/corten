@@ -130,8 +130,9 @@ impl Endpoint for Keeping {
             return Box::pin(std::future::ready(kept));
         }
         let making = match asked.missed(&req) {
-            Ok(missed) => return made(&self.inner, req, missed),
-            Err(making) => making,
+            crate::kept::Miss::Kept(kept) => return Box::pin(std::future::ready(kept)),
+            crate::kept::Miss::Make(missed) => return made(&self.inner, req, missed),
+            crate::kept::Miss::Wait(making) => making,
         };
         // Another request is making the page: the page it keeps is this one's too.
         let inner = self.inner.clone();

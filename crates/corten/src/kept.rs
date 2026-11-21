@@ -28,7 +28,9 @@
 //! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
 //! and no value made for this request alone, and varies on nothing but what the key covers. A
 //! `Date` the handler set is not kept with it: each answer given in its place is dated when it
-//! is sent.
+//! is sent, and its `Age` counts from the handler's date as a cache would (RFC 9111, 4.2.3), so a
+//! cache after this one finds every answer as old. A page that date makes older than its
+//! lifetime, or whose date is not in the form HTTP sends, is not kept.
 //!
 //! A write drops what is kept at its path, whatever the query (a named post is `?do=name` at its
 //! page's path) and however the path is escaped, whatever it is answered: a handler or a
@@ -55,20 +57,24 @@
 //! Requests that miss a page together run its handler once: the first makes the page, and the
 //! others asking for the same copy (the same URL, `Host` and `Accept-Language` as sent, with no
 //! write to its path between them) wait for it ([`Making`]) and are given the page when it is
-//! kept for them. When it is not (an error, a page drawn for that request), or that request is
-//! dropped (its client left, its deadline passed) or panics, each runs its own handler then, and
-//! none waits again. A page answered and not kept is remembered as not kept for [`FORGOT`], or
-//! until a write to its path, so the requests that meet in that time each run the handler at once,
-//! as they would with nothing kept. A request waits no longer than its own deadline, which drops
-//! its wait as it would its handler.
+//! kept for them. A request looks for the page again once it is to make it or wait for it, so
+//! one kept since its first look is given at once. When the page is not kept (an error, a page
+//! drawn for that request), or that request is dropped (its client left, its deadline passed) or
+//! panics, each runs its own handler then, and none waits again. At most [`MAKING`] pages are
+//! made at once that others wait for; past that a request makes its page as it would with
+//! nothing kept. A page answered and not kept is remembered as not kept for [`FORGOT`], until a
+//! write to its path or until it is kept, so the requests that meet in that time each run the
+//! handler at once, as they would with nothing kept; that is best effort, as only the latest
+//! [`NOT_KEPT`] are remembered. A request waits no longer than its own deadline, which drops its
+//! wait as it would its handler.
 
-use std::collections::{hash_map, HashMap};
+use std::collections::{hash_map, HashMap, VecDeque};
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher, RandomState};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use bytes::Bytes;
 use http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -93,9 +99,12 @@ const COPIES: usize = 8;
 /// time each run its handler at once, as they would with nothing kept.
 const FORGOT: Duration = Duration::from_secs(60);
 
-/// The most pages remembered as not kept, with those being made: past it, the ones whose time is
-/// up go, then the others.
+/// The most pages remembered as not kept: past it, the one remembered first is forgotten.
 const NOT_KEPT: usize = 1024;
+
+/// The most pages being made at once that other requests may wait for: past it, a request that
+/// misses makes its page as it would with nothing kept, and none waits for it.
+const MAKING: usize = 1024;
 
 /// What an entry counts for beside its key, its headers and its bytes: itself, its header map
 /// and its places in the maps.
@@ -160,6 +169,66 @@ struct Store {
     /// The requests that have waited for another's page, so a test sees one wait.
     #[cfg(test)]
     joined: AtomicUsize,
+    /// Where a test holds the next request that comes to it ([`Answers::stop_at`]).
+    #[cfg(test)]
+    stop: Mutex<Option<Armed>>,
+}
+
+/// A [`Stop`] a test is waiting at: told when a request comes there, and when to let it go on.
+#[cfg(test)]
+type Armed = (Stop, tokio::sync::oneshot::Sender<()>, std::sync::mpsc::Receiver<()>);
+
+/// A point where a test holds a request, to make an order of events that timing alone seldom
+/// makes.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Stop {
+    /// No kept answer stood for it, and it has yet to look for a page being made.
+    Missed,
+    /// Its handler answered with a page that may be kept, which is not kept yet.
+    Keep,
+}
+
+/// A request held at a [`Stop`]: the test waits for it to come there, then lets it go on.
+#[cfg(test)]
+pub(crate) struct Stopped {
+    reached: tokio::sync::oneshot::Receiver<()>,
+    go: std::sync::mpsc::Sender<()>,
+}
+
+#[cfg(test)]
+impl Stopped {
+    /// Waits until a request is held there.
+    pub(crate) async fn reached(&mut self) {
+        (&mut self.reached).await.expect("the store was dropped");
+    }
+
+    /// Lets the request held there go on.
+    pub(crate) fn go(self) {
+        let _ = self.go.send(());
+    }
+}
+
+#[cfg(test)]
+impl Store {
+    /// Holds the request at `at` where a test asked for it: the first to come there, once. The
+    /// thread is given up while it is held (a test runs on more than one), so the others go on.
+    fn stop(&self, at: Stop) {
+        let held = {
+            let mut stop = self.stop.lock().unwrap_or_else(PoisonError::into_inner);
+            match stop.take() {
+                Some((armed, reached, go)) if armed == at => Some((reached, go)),
+                other => {
+                    *stop = other;
+                    None
+                }
+            }
+        };
+        if let Some((reached, go)) = held {
+            let _ = reached.send(());
+            tokio::task::block_in_place(|| go.recv().ok());
+        }
+    }
 }
 
 /// Which of the store's counts is a path's: by a hash of the path with its escapes decoded
@@ -263,7 +332,24 @@ fn on_site<'a>(to: &'a [u8], host: Option<&HeaderValue>) -> Option<&'a [u8]> {
 /// are made one after the other: each request still looks its own copy up once it has waited.
 struct Flights {
     keys: RandomState,
-    at: Mutex<HashMap<u64, Flight, BuildHasherDefault<Same>>>,
+    at: Mutex<Table>,
+}
+
+/// What [`Flights`] holds under its lock: at most [`MAKING`] pages being made and [`NOT_KEPT`]
+/// remembered as not kept, so a request that misses, or ends, does no more than a lookup and a
+/// few steps in it.
+#[derive(Default)]
+struct Table {
+    at: HashMap<u64, Flight, BuildHasherDefault<Same>>,
+    /// The pages remembered as not kept, the first remembered first, each with the time it is
+    /// remembered until (each later than the one before): those to forget are at the front. One
+    /// made again since, or remembered again, is passed over when it comes to the front.
+    remembered: VecDeque<(u64, Instant)>,
+    /// The pages of `at` being made.
+    making: usize,
+    /// The places in `remembered` looked at to forget a page.
+    #[cfg(test)]
+    scanned: usize,
 }
 
 /// A key of [`Flights`] as it is: one is a hash already, of a key this process chose.
@@ -295,6 +381,79 @@ enum Flight {
     NotKept(Instant),
 }
 
+/// What a request that missed is to do with the page it asked for ([`Table::admit`]).
+enum Admitted {
+    /// Make it, the others asking for its copy waiting for it.
+    Leads,
+    /// Wait for the request making it.
+    Joins(Arc<Semaphore>),
+    /// Make it with none waiting: it was made and not kept a moment ago, or as many pages are
+    /// being made as may be.
+    Alone,
+}
+
+impl Table {
+    /// What a request that missed the page `key` names is to do, `now`.
+    fn admit(&mut self, key: u64, now: Instant) -> Admitted {
+        let room = self.making < MAKING;
+        match self.at.entry(key) {
+            hash_map::Entry::Occupied(flight) => match flight.into_mut() {
+                Flight::Making(waiting) => {
+                    return Admitted::Joins(waiting.get_or_insert_with(|| Arc::new(Semaphore::new(0))).clone());
+                }
+                Flight::NotKept(until) if *until > now => return Admitted::Alone,
+                flight if room => *flight = Flight::Making(None),
+                _ => return Admitted::Alone,
+            },
+            hash_map::Entry::Vacant(flight) if room => {
+                flight.insert(Flight::Making(None));
+            }
+            hash_map::Entry::Vacant(_) => return Admitted::Alone,
+        }
+        self.making += 1;
+        Admitted::Leads
+    }
+
+    /// The page `key` names, which a request was admitted to make, was answered or dropped: what
+    /// waits for it, to be woken. A page answered and not kept is remembered as such until
+    /// [`FORGOT`] after `not_kept`, the one remembered first forgotten to make room.
+    fn ended(&mut self, key: u64, not_kept: Option<Instant>) -> Option<Arc<Semaphore>> {
+        let ended = self.at.remove(&key);
+        self.making -= 1;
+        if let Some(now) = not_kept {
+            while let Some(&(first, until)) = self.remembered.front() {
+                if until > now && self.remembered.len() < NOT_KEPT {
+                    break;
+                }
+                self.remembered.pop_front();
+                #[cfg(test)]
+                {
+                    self.scanned += 1;
+                }
+                // Unless it was made again since, or remembered again.
+                if matches!(self.at.get(&first), Some(Flight::NotKept(at)) if *at == until) {
+                    self.at.remove(&first);
+                }
+            }
+            let until = now + FORGOT;
+            self.at.insert(key, Flight::NotKept(until));
+            self.remembered.push_back((key, until));
+        }
+        match ended {
+            Some(Flight::Making(waiting)) => waiting,
+            _ => None,
+        }
+    }
+
+    /// The page `key` names was kept, by a request that made it alone: it is not remembered as not
+    /// kept. A page being made is left as it is.
+    fn kept(&mut self, key: u64) {
+        if matches!(self.at.get(&key), Some(Flight::NotKept(_))) {
+            self.at.remove(&key);
+        }
+    }
+}
+
 impl Flights {
     /// The key of the copy asked for at `at` with this `Host` and `Accept-Language`, by
     /// requests that found the path's count of writes at `was`.
@@ -316,16 +475,8 @@ impl Flights {
         hasher.finish() ^ u64::from(was).wrapping_mul(0x9e37_79b9_7f4a_7c15)
     }
 
-    /// Makes room for a page remembered as not kept: the ones whose time is up go, then the others
-    /// if that was not enough. Pages being made stay.
-    fn prune(at: &mut HashMap<u64, Flight, BuildHasherDefault<Same>>, now: Instant) {
-        at.retain(|_, flight| match flight {
-            Flight::Making(_) => true,
-            Flight::NotKept(until) => *until > now,
-        });
-        if at.len() >= NOT_KEPT {
-            at.retain(|_, flight| matches!(flight, Flight::Making(_)));
-        }
+    fn table(&self) -> std::sync::MutexGuard<'_, Table> {
+        self.at.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -527,6 +678,8 @@ impl Answers {
                 flights: Flights { keys: RandomState::new(), at: Mutex::default() },
                 #[cfg(test)]
                 joined: AtomicUsize::new(0),
+                #[cfg(test)]
+                stop: Mutex::default(),
             }))
         })
     }
@@ -543,6 +696,28 @@ impl Answers {
         self.0.joined.load(Ordering::Acquire)
     }
 
+    /// Holds the next request that comes to `at` there, until the test lets it go on. A test
+    /// that holds one runs on more than one thread.
+    #[cfg(test)]
+    pub(crate) fn stop_at(&self, at: Stop) -> Stopped {
+        let (reached, reached_rx) = tokio::sync::oneshot::channel();
+        let (go, go_rx) = std::sync::mpsc::channel();
+        *self.0.stop.lock().unwrap_or_else(PoisonError::into_inner) = Some((at, reached, go_rx));
+        Stopped { reached: reached_rx, go }
+    }
+
+    /// The pages being made now, which others may wait for.
+    #[cfg(test)]
+    pub(crate) fn making(&self) -> usize {
+        self.0.flights.table().making
+    }
+
+    /// The places looked at to forget a page remembered as not kept.
+    #[cfg(test)]
+    pub(crate) fn scanned(&self) -> usize {
+        self.0.flights.table().scanned
+    }
+
     /// The answer kept for a request, while it stands, with its age in seconds.
     fn find(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Option<(Arc<Entry>, u64)> {
         let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
@@ -557,16 +732,25 @@ impl Answers {
         Some((entry.clone(), age))
     }
 
-    /// Keeps `entry`, in the place of the copy it stands for, and makes room for it.
-    fn keep(&self, make: impl FnOnce(Place) -> Entry) -> Arc<Entry> {
+    /// Keeps `entry`, in the place of the copy it stands for, and makes room for it; unless a write
+    /// was made to its path since its handler read, when it is not kept and takes no copy's place.
+    /// That is seen under the lock the copies are changed under, so a copy read after a write and
+    /// kept before it is never put out by one read before.
+    fn keep(&self, make: impl FnOnce(Place) -> Entry) -> Option<Arc<Entry>> {
         let store = &*self.0;
         let mut inner = store.inner.write().unwrap_or_else(PoisonError::into_inner);
-        let slot = inner.free.pop().unwrap_or(inner.slots.len());
+        let slot = inner.free.last().copied().unwrap_or(inner.slots.len());
         let entry = Arc::new(make(Place {
             slot,
             #[cfg(feature = "compress")]
             store: Arc::downgrade(&self.0),
         }));
+        if !entry.written.stands(store) {
+            return None;
+        }
+        if slot < inner.slots.len() {
+            inner.free.pop();
+        }
         let now = Instant::now();
         let copies = inner.at.get(&entry.at).map(Vec::as_slice).unwrap_or_default();
         // The copies this one takes the place of: the one asked the same way, and those that no
@@ -591,7 +775,7 @@ impl Answers {
         inner.at.entry(entry.at.clone()).or_default().push(entry.clone());
         store.bytes.fetch_add(entry.size.load(Ordering::Acquire), Ordering::AcqRel);
         store.make_room(&mut inner, &entry);
-        entry
+        Some(entry)
     }
 
     /// A request that may change what its path shows is about to reach its handler. `signal` is
@@ -716,47 +900,49 @@ impl<'a> Asked<'a> {
         Some(res)
     }
 
-    /// Once no kept answer stood for this request: what keeping its handler's answer needs of it,
-    /// the others asking for the same copy waiting for its page; or, where another request is
-    /// making that page, that request, to wait for ([`Making::ended`]). Taken before the handler
-    /// runs, so the answer's age counts its making and a write made meanwhile is seen; and a
-    /// request after a write makes the page again rather than wait for one read before it.
-    pub(crate) fn missed(&self, req: &Request) -> Result<Missed, Making> {
+    /// Once no kept answer stood for this request: what it is to do ([`Miss`]). Taken before the
+    /// handler runs, so the answer's age counts its making and a write made meanwhile is seen; and
+    /// a request after a write makes the page again rather than wait for one read before it.
+    pub(crate) fn missed(&self, req: &Request) -> Miss {
+        #[cfg(test)]
+        self.answers.0.stop(Stop::Missed);
         let (store, asked) = (&self.answers.0, Instant::now());
         let written = Written::of(store, self.at);
         let key = store.flights.key(self.at, self.host, self.language, written.was);
-        let mut flights = store.flights.at.lock().unwrap_or_else(PoisonError::into_inner);
-        let leads = match flights.entry(key) {
-            hash_map::Entry::Vacant(flight) => {
-                flight.insert(Flight::Making(None));
-                true
+        let admitted = store.flights.table().admit(key, asked);
+        // Each looks again once it holds or has joined the page being made: one kept between its
+        // first look and then (by the request it would wait for, or for every language by
+        // another) is given at once, and the page is not made again.
+        let leading = match admitted {
+            Admitted::Alone => return Miss::Make(self.missing(req, asked, written, None, Some(key))),
+            Admitted::Joins(waiting) => {
+                if let Some(kept) = self.find() {
+                    return Miss::Kept(kept);
+                }
+                #[cfg(test)]
+                store.joined.fetch_add(1, Ordering::AcqRel);
+                return Miss::Wait(Making(waiting));
             }
-            hash_map::Entry::Occupied(mut flight) => match flight.get_mut() {
-                Flight::Making(waiting) => {
-                    #[cfg(test)]
-                    store.joined.fetch_add(1, Ordering::AcqRel);
-                    return Err(Making(waiting.get_or_insert_with(|| Arc::new(Semaphore::new(0))).clone()));
-                }
-                // Made and not kept: this request makes its own, and none waits for it.
-                Flight::NotKept(until) if *until > asked => false,
-                flight => {
-                    *flight = Flight::Making(None);
-                    true
-                }
-            },
+            Admitted::Leads => Leading { store: store.clone(), key, written, answered: false },
         };
-        drop(flights);
-        let leading = leads.then(|| Leading { store: store.clone(), key, written, answered: false });
-        Ok(self.missing(req, asked, written, leading))
+        if let Some(kept) = self.find() {
+            // The requests that came to wait for this one look again, and are given it too.
+            drop(leading);
+            return Miss::Kept(kept);
+        }
+        Miss::Make(self.missing(req, asked, written, Some(leading), None))
     }
 
     /// After waiting for another request whose page was not kept for this one: what keeping its
     /// own handler's answer needs of it, which no other request waits for.
     pub(crate) fn missed_again(&self, req: &Request) -> Missed {
-        self.missing(req, Instant::now(), Written::of(&self.answers.0, self.at), None)
+        let (store, asked) = (&self.answers.0, Instant::now());
+        let written = Written::of(store, self.at);
+        let key = store.flights.key(self.at, self.host, self.language, written.was);
+        self.missing(req, asked, written, None, Some(key))
     }
 
-    fn missing(&self, req: &Request, asked: Instant, written: Written, leading: Option<Leading>) -> Missed {
+    fn missing(&self, req: &Request, asked: Instant, written: Written, leading: Option<Leading>, alone: Option<u64>) -> Missed {
         Missed {
             asked,
             written,
@@ -768,8 +954,19 @@ impl<'a> Asked<'a> {
             host: self.host.and_then(|host| HeaderValue::from_bytes(host.as_bytes()).ok()),
             language: self.language.and_then(|language| HeaderValue::from_bytes(language.as_bytes()).ok()),
             leading,
+            alone,
         }
     }
+}
+
+/// What a request no kept answer stood for is to do ([`Asked::missed`]).
+pub(crate) enum Miss {
+    /// Be given the page, kept since it first looked.
+    Kept(Response),
+    /// Make the page, kept if it may be.
+    Make(Missed),
+    /// Wait for the request making the page.
+    Wait(Making),
 }
 
 /// The page another request is making for the same copy: a request waits for it, then is given
@@ -800,23 +997,9 @@ impl Drop for Leading {
     /// Answered or dropped: the requests waiting for it look again. A page answered and not kept,
     /// with no write to its path since its handler read, is remembered as not kept.
     fn drop(&mut self) {
-        let flights = &self.store.flights;
-        let mut at = flights.at.lock().unwrap_or_else(PoisonError::into_inner);
-        let ended = match self.answered && self.written.stands(&self.store) {
-            true => {
-                let now = Instant::now();
-                if at.len() >= NOT_KEPT {
-                    Flights::prune(&mut at, now);
-                }
-                match at.len() < NOT_KEPT {
-                    true => at.insert(self.key, Flight::NotKept(now + FORGOT)),
-                    false => at.remove(&self.key),
-                }
-            }
-            false => at.remove(&self.key),
-        };
-        drop(at);
-        if let Some(Flight::Making(Some(waiting))) = ended {
+        let not_kept = (self.answered && self.written.stands(&self.store)).then(Instant::now);
+        let waiting = self.store.flights.table().ended(self.key, not_kept);
+        if let Some(waiting) = waiting {
             waiting.close();
         }
     }
@@ -833,6 +1016,9 @@ pub(crate) struct Missed {
     language: Option<HeaderValue>,
     /// Where the others asking for the same copy wait for its page.
     leading: Option<Leading>,
+    /// The page's key in [`Flights`] for a request that makes it with none waiting: once kept,
+    /// it is not remembered as not kept.
+    alone: Option<u64>,
 }
 
 impl Missed {
@@ -865,24 +1051,32 @@ impl Missed {
             || self.signal.as_ref().is_none_or(crate::Signal::is_personal)
             // A write to the path while the handler read: the page may show what was there before.
             || !self.written.stands(&answers.0)
-            // Made over a time longer than it lasts: it would never be given.
-            || self.asked.elapsed().as_secs() >= lifetime
         {
             return res;
         }
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
-        // A `Date` the handler set is its own answer's, and is not kept (below).
-        let mut dated = false;
+        // A `Date` the handler set is its own answer's, and is not kept (below): it says how old the
+        // page is, which the age of each answer given in its place counts.
+        let mut dated = None;
         let head: usize = res
             .headers()
             .iter()
-            .filter(|(name, _)| {
+            .filter(|&(name, value)| {
                 let date = *name == header::DATE;
-                dated |= date;
+                if date {
+                    dated = Some(value);
+                }
                 !date
             })
             .map(|(name, value)| name.as_str().len() + value.len() + HEADER)
             .sum();
+        let made = match dated {
+            None => Some(self.asked),
+            Some(date) => made_at(date, self.asked),
+        };
+        let dated = dated.is_some();
+        // Made over a time longer than it lasts, or by its date: it would never be given.
+        let Some(made) = made.filter(|made| made.elapsed().as_secs() < lifetime) else { return res };
         // The URL is held twice, by the entry and by the map.
         let key = self.at.len() * 2
             + self.host.as_ref().map_or(0, HeaderValue::len)
@@ -900,12 +1094,14 @@ impl Missed {
         // A copy of its own length: a page's buffer is sized for the last page rendered, and the
         // bytes made from it hold all of that for as long as they are kept.
         let body = Bytes::copy_from_slice(&body);
-        let Missed { at, host, language: asked, asked: made, written, mut leading, .. } = self;
+        let Missed { at, host, language: asked, written, mut leading, alone, .. } = self;
         let mut head = parts.headers.clone();
-        // Each answer given in its place is dated when it is sent, as any other is.
+        // Each answer given in its place is dated when it is sent, as any other is, with its age.
         if dated {
             head.remove(header::DATE);
         }
+        #[cfg(test)]
+        answers.0.stop(Stop::Keep);
         let entry = answers.keep(|place| Entry {
             at,
             place,
@@ -924,11 +1120,16 @@ impl Missed {
             used: AtomicBool::new(false),
             size: AtomicUsize::new(size),
         });
-        // Kept: the requests waiting for it are given it.
+        // A write since its handler read, seen once the copies were in hand: not kept.
+        let Some(entry) = entry else { return Response::from_parts(parts, Body::from(body)) };
+        // Kept: the requests waiting for it are given it, and it is not remembered as not kept.
         if let Some(leading) = &mut leading {
             leading.answered = false;
         }
         drop(leading);
+        if let Some(key) = alone {
+            answers.0.flights.table().kept(key);
+        }
         // This answer's tag and compression are the kept one's first.
         parts.extensions.insert(Kept(entry));
         Response::from_parts(parts, Body::from(body))
@@ -950,6 +1151,42 @@ fn varies(headers: &HeaderMap) -> Option<bool> {
         }
     }
     Some(language)
+}
+
+/// When a page whose handler set `date` was made, for its request asked at `asked`: as much
+/// earlier than then as the date says the answer was already old when it was given, as a cache
+/// counts a page's age (RFC 9111, 4.2.3), so each answer given in its place is as old as the
+/// first. `None` where the date is not in the form HTTP sends (IMF-fixdate), or is older than
+/// this clock counts back.
+fn made_at(date: &HeaderValue, asked: Instant) -> Option<Instant> {
+    let date = http_date(date.as_bytes())?;
+    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).ok()?.as_secs();
+    // Its apparent age, less the time the answer took, which `asked` counts already.
+    let older = now.saturating_sub(date).saturating_sub(asked.elapsed().as_secs());
+    asked.checked_sub(Duration::from_secs(older))
+}
+
+/// The seconds since 1970 an HTTP date in the form HTTP sends (IMF-fixdate, RFC 9110, 5.6.7)
+/// names: `Sun, 06 Nov 1994 08:49:37 GMT`.
+fn http_date(date: &[u8]) -> Option<u64> {
+    let &[_, _, _, b',', b' ', d0, d1, b' ', m0, m1, m2, b' ', y0, y1, y2, y3, b' ', h0, h1, b':', n0, n1, b':', s0, s1, b' ', b'G', b'M', b'T'] =
+        date
+    else {
+        return None;
+    };
+    let number = |digits: &[u8]| {
+        digits.iter().try_fold(0, |sum, &digit| digit.is_ascii_digit().then(|| sum * 10 + u32::from(digit - b'0')))
+    };
+    const MONTHS: [&[u8; 3]; 12] =
+        [b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep", b"Oct", b"Nov", b"Dec"];
+    let month = MONTHS.iter().position(|month| **month == [m0, m1, m2])? as u32 + 1;
+    let (day, year) = (number(&[d0, d1])?, number(&[y0, y1, y2, y3])?);
+    let (hour, minute, second) = (number(&[h0, h1])?, number(&[n0, n1])?, number(&[s0, s1])?);
+    if !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    let days = crate::i18n::days_from_civil(i64::from(year), month, day);
+    u64::try_from(days * 86_400 + i64::from(hour * 3600 + minute * 60 + second)).ok()
 }
 
 #[cfg(test)]
@@ -1338,26 +1575,72 @@ mod tests {
         assert_eq!(answers.bytes(), 20 + OVERHEAD, "the one past its lifetime went when the URL was kept again");
     }
 
-    /// The pages remembered as not kept are at most [`NOT_KEPT`] with those being made, and one
-    /// being made is never put out to make room for them.
+    /// At most [`MAKING`] pages are made at once that others wait for, and at most [`NOT_KEPT`]
+    /// remembered as not kept; each end forgets one page at most beside those whose time is up,
+    /// and a page being made is never put out to make room.
     #[test]
-    fn the_pages_remembered_as_not_kept_are_bounded() {
-        let answers = Answers::new(1 << 20).expect("a bound");
-        let store = &answers.0;
-        let written = Written::of(store, "/p");
-        let flights = || store.flights.at.lock().unwrap_or_else(PoisonError::into_inner);
-        flights().insert(u64::MAX, Flight::Making(None));
-        let making = Leading { store: store.clone(), key: u64::MAX, written, answered: false };
-        for key in 0..NOT_KEPT as u64 * 3 {
-            flights().insert(key, Flight::Making(None));
-            // Answered, and not kept.
-            drop(Leading { store: store.clone(), key, written, answered: true });
-            assert!(flights().len() <= NOT_KEPT, "{key}: {}", flights().len());
-            assert!(matches!(flights().get(&key), Some(Flight::NotKept(_))), "{key}: the latest is remembered");
+    fn the_pages_being_made_and_remembered_as_not_kept_are_bounded() {
+        let (mut table, now) = (Table::default(), Instant::now());
+        let keys = (MAKING * 3) as u64;
+        for key in 0..keys {
+            let admitted = table.admit(key, now);
+            assert_eq!(matches!(admitted, Admitted::Leads), key < MAKING as u64, "{key}");
         }
-        assert!(matches!(flights().get(&u64::MAX), Some(Flight::Making(None))), "the page being made stays");
-        drop(making);
-        assert!(flights().get(&u64::MAX).is_none(), "until it is answered or dropped");
+        assert_eq!((table.making, table.at.len()), (MAKING, MAKING));
+        assert!(matches!(table.admit(0, now), Admitted::Joins(_)), "one being made is waited for");
+        // A page made again and again, and not kept: it is remembered once at a time.
+        for key in 1..MAKING as u64 {
+            table.ended(key, Some(now));
+            assert!(matches!(table.admit(key, now), Admitted::Alone), "{key}: remembered");
+        }
+        for round in 0..3 {
+            let first = keys + round * NOT_KEPT as u64;
+            for key in first..first + NOT_KEPT as u64 {
+                assert!(matches!(table.admit(key, now), Admitted::Leads), "{round} {key}");
+                let scanned = table.scanned;
+                table.ended(key, Some(now));
+                assert!(table.scanned - scanned <= 1, "{round} {key}: one forgotten at most");
+                assert!(table.at.len() <= 1 + NOT_KEPT && table.remembered.len() <= NOT_KEPT, "{round} {key}");
+            }
+        }
+        assert!(matches!(table.at.get(&0), Some(Flight::Making(Some(_)))), "the page being made stays");
+        assert!(table.ended(0, None).is_some(), "and wakes those waiting for it when it ends");
+        assert_eq!((table.making, table.at.len()), (0, NOT_KEPT));
+    }
+
+    /// A page remembered as not kept is made alone until [`FORGOT`] has passed, then waited for
+    /// again; one kept by a request that made it alone is forgotten at once.
+    #[test]
+    fn a_page_not_kept_is_waited_for_again_once_its_time_is_up_or_it_is_kept() {
+        let (mut table, now) = (Table::default(), Instant::now());
+        assert!(matches!(table.admit(1, now), Admitted::Leads));
+        table.ended(1, Some(now));
+        assert!(matches!(table.admit(1, now + FORGOT - Duration::from_millis(1)), Admitted::Alone));
+        assert!(matches!(table.admit(1, now + FORGOT), Admitted::Leads), "its time is up");
+        table.ended(1, Some(now + FORGOT));
+        assert!(matches!(table.admit(1, now + FORGOT), Admitted::Alone));
+        table.kept(1);
+        assert!(matches!(table.admit(1, now + FORGOT), Admitted::Leads), "kept since");
+        // Kept by a request that made it alone, while another makes it: that one stays.
+        table.kept(1);
+        assert!(matches!(table.admit(1, now + FORGOT), Admitted::Joins(_)));
+    }
+
+    #[test]
+    fn an_http_date_is_read_in_the_form_http_sends() {
+        assert_eq!(http_date(b"Sun, 06 Nov 1994 08:49:37 GMT"), Some(784_111_777));
+        assert_eq!(http_date(b"Thu, 01 Jan 1970 00:00:00 GMT"), Some(0));
+        for other in [
+            &b"Sunday, 06-Nov-94 08:49:37 GMT"[..],
+            b"Sun Nov  6 08:49:37 1994",
+            b"Sun, 06 Nov 1994 08:49:37 UTC",
+            b"Sun, 06 nov 1994 08:49:37 GMT",
+            b"Sun, 32 Nov 1994 08:49:37 GMT",
+            b"Sun, 06 Nov 1994 24:49:37 GMT",
+            b"Sun, 06 Nov 1994 08:49:3x GMT",
+        ] {
+            assert_eq!(http_date(other), None, "{}", String::from_utf8_lossy(other));
+        }
     }
 
     #[test]
@@ -1384,7 +1667,7 @@ mod tests {
     #[test]
     fn a_kept_answer_s_hash_and_coded_bytes_are_made_once() {
         let answers = Answers::new(1 << 20).expect("a bound");
-        let kept = answers.keep(entry(&answers, "/p", None, 60, 2000));
+        let kept = answers.keep(entry(&answers, "/p", None, 60, 2000)).expect("kept");
         let mut extensions = http::Extensions::new();
         extensions.insert(Kept(kept.clone()));
         let key = std::hash::RandomState::new();
@@ -1429,8 +1712,8 @@ mod tests {
         use crate::compress::Coding;
         let size = 1000 + OVERHEAD;
         let answers = Answers::new(size * 2 + 100).expect("a bound");
-        let first = answers.keep(entry(&answers, "/a", None, 60, 1000));
-        let second = answers.keep(entry(&answers, "/b", None, 60, 1000));
+        let first = answers.keep(entry(&answers, "/a", None, 60, 1000)).expect("kept");
+        let second = answers.keep(entry(&answers, "/b", None, 60, 1000)).expect("kept");
         assert_eq!(answers.bytes(), size * 2);
         let mut extensions = http::Extensions::new();
         extensions.insert(Kept(second.clone()));

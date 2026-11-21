@@ -1878,30 +1878,74 @@ async fn a_connect_answered_with_success_has_no_body() {
     assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), "tunnel");
 }
 
-/// A kept page is sent with the date it is sent on: a `Date` its handler set is its own answer's,
-/// not kept with the page, so the server writes the date of each answer given in its place.
+/// `at` as an HTTP date (IMF-fixdate).
+fn http_date(at: std::time::SystemTime) -> String {
+    let seconds = at.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let (days, time) = (seconds.div_euclid(86_400), seconds.rem_euclid(86_400));
+    let (year, month, day) = crate::i18n::civil_from_days(days);
+    let weekday = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"][days.rem_euclid(7) as usize];
+    let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let (hour, minute, second) = (time / 3600, time / 60 % 60, time % 60);
+    format!("{weekday}, {day:02} {} {year} {hour:02}:{minute:02}:{second:02} GMT", months[month as usize - 1])
+}
+
+/// A kept page is sent with the date it is sent on, and an `Age` that counts from a `Date` its
+/// handler set, as a cache counts it (RFC 9111, 4.2.3): a cache after the app finds the page as
+/// old whichever answer it is given. A page that date makes older than its lifetime is not kept.
 #[tokio::test]
 async fn a_kept_page_is_sent_with_the_date_it_is_sent_on() {
-    const SET: &str = "date: mon, 01 jan 2001 00:00:00 gmt";
-    let page = |req: Req| async move {
-        let page = req.test_page_for("Dated", html! { <p>"dated"</p> }).map(|mut page| {
-            page.headers_mut().insert(http::header::DATE, http::HeaderValue::from_static("Mon, 01 Jan 2001 00:00:00 GMT"));
-            page
-        });
-        Public::new(std::time::Duration::from_secs(60), page)
+    use std::time::{Duration, SystemTime};
+    const OLD: &str = "Mon, 01 Jan 2001 00:00:00 GMT";
+    let dated = |old: bool| {
+        move |req: Req| async move {
+            let date = if old { OLD.to_owned() } else { http_date(SystemTime::now() - Duration::from_secs(30)) };
+            let page = req.test_page_for("Dated", html! { <p>"dated"</p> }).map(|mut page| {
+                page.headers_mut().insert(http::header::DATE, http::HeaderValue::from_str(&date).unwrap());
+                page
+            });
+            Public::new(Duration::from_secs(60), page)
+        }
     };
-    let routes = Table::new().route("/", crate::route::get(page).0);
+    let routes = Table::new().route("/", crate::route::get(dated(false)).0).route("/old", crate::route::get(dated(true)).0);
     let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
     let addr = listeners[0].local_addr().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, App::new(Routes::from(routes)), async {
         let _ = stopped.await;
     }));
+    let line = |answer: &str, name: &str| {
+        let lines: Vec<_> = answer.split("\r\n").filter_map(|line| line.strip_prefix(&format!("{name}: ")[..])).collect();
+        assert!(lines.len() <= 1, "{answer}");
+        lines.first().map(|line| line.to_string())
+    };
+    // The dates of the seconds from `from` to now: one of them is that of an answer sent between.
+    let between = |from: SystemTime| {
+        let mut dates = Vec::new();
+        let mut at = from - Duration::from_secs(1);
+        while at <= SystemTime::now() + Duration::from_secs(1) {
+            dates.push(http_date(at).to_ascii_lowercase());
+            at += Duration::from_secs(1);
+        }
+        dates
+    };
+    let start = SystemTime::now();
     let made = raw_get(addr, "/", "").await.to_ascii_lowercase();
-    assert!(made.starts_with("http/1.1 200") && !made.contains("\r\nage:") && made.contains(SET), "{made}");
+    let handler_date = line(&made, "date").unwrap();
+    assert!(made.starts_with("http/1.1 200") && line(&made, "age").is_none(), "{made}");
+    assert!(between(start - Duration::from_secs(30)).contains(&handler_date), "the handler's date: {made}");
+    let sent = SystemTime::now();
     let kept = raw_get(addr, "/", "").await.to_ascii_lowercase();
-    assert!(kept.starts_with("http/1.1 200") && kept.contains("\r\nage:"), "{kept}");
-    assert!(!kept.contains(SET) && kept.matches("\r\ndate: ").count() == 1, "the date it is sent on: {kept}");
+    assert!(kept.starts_with("http/1.1 200"), "{kept}");
+    assert!(between(sent).contains(&line(&kept, "date").unwrap()), "the date it is sent on: {kept}");
+    // A cache after the app counts the made page's age from its date (30 seconds then), and the
+    // kept one's from its `Age`, its date being the time it was sent.
+    let age: u64 = line(&kept, "age").expect("kept").parse().unwrap();
+    assert!((29..=33).contains(&age), "as old as its handler's date says: {age}");
+    for _ in 0..2 {
+        let old = raw_get(addr, "/old", "").await.to_ascii_lowercase();
+        let date = line(&old, "date").unwrap_or_default();
+        assert!(date == OLD.to_ascii_lowercase() && line(&old, "age").is_none(), "made each time: {old}");
+    }
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
 }
