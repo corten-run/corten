@@ -121,7 +121,7 @@ export async function superviseControlStream(binding, admission, abort, runtime 
   catch (error) { invalidate("watchdog startup"); throw error; }
   return {
     registration, check,
-    open(cpus) { assert.ok(!sealed && !draining && !windowStart); const observed = check(); apparatusProof(binding, registration, observed, cpus); windowStart = observed.monoNs; return observed; },
+    open(cpus, roles) { assert.ok(!sealed && !draining && !windowStart); const observed = check(); apparatusProof(binding, registration, observed, cpus, roles); windowStart = observed.monoNs; return observed; },
     close() { const observed = check(); assert.ok(windowStart && BigInt(observed.monoNs) >= BigInt(windowStart)); windowStart = undefined; return observed; },
     progress(status) {
       assert.ok(!sealed && !draining);

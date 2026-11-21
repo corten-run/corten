@@ -17,7 +17,7 @@ import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./m
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { verifyControlAdmission } from "./control-admission.mjs";
-import { apparatusProof, verifyStreamAudit, verifyStreamDrain, verifyStreamSeal } from "./control-stream.mjs";
+import { apparatusProof, nativeControlPartition, verifyStreamAudit, verifyStreamDrain, verifyStreamSeal } from "./control-stream.mjs";
 
 export async function validateCampaign(input) {
   try {
@@ -120,9 +120,9 @@ export async function validateCampaign(input) {
         if (status.executionVersion === 5) {
           assert.deepEqual(hostBefore.controlApparatus?.registration, apparatus);
           const after = read(`${id}/${entry.path}/host-after.json`);
-          const cpus = Object.fromEntries(Object.entries(recorded.binding.resources.expectedCpus ?? {}).map(([role, value]) => [role, value.cpuset]));
+          const { cpus, roles } = nativeControlPartition(recorded.binding);
           for (const observation of [hostBefore, after]) {
-            const sample = observation.controlApparatus.sample; apparatusProof(apparatus.binding, apparatus, sample, cpus);
+            const sample = observation.controlApparatus.sample; apparatusProof(apparatus.binding, apparatus, sample, cpus, roles);
             if (streamSeal) assert.ok(BigInt(sample.monoNs) <= BigInt(streamSeal.sealedMonoNs));
           }
         }

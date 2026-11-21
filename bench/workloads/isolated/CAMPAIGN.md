@@ -187,6 +187,20 @@ process/container/network or changed host halts sequencing. These conservative o
 are not a resource peak measurement, an independent quiet-host audit, or proof of isolation.
 Actual native CPU quotas/cpusets must still pass the fixed native saved-evidence gate.
 
+The full-stack browser's timed roles are the application (CPU 1), upstream (CPUs 2-3)
+and Chromium with its Node driver (CPUs 4-7); none uses the SSH apparatus's CPU 0.
+The campaign pins the existing delegated command scope before starting the browser runner.
+The runner checks effective CPU placement before timing. Replay requires the sampled
+driver/Chromium cgroup, role-specific Docker limits, and corresponding running container
+cgroups in the timing windows. This proves separation for those roles, not reserved physical
+cores, host service placement, or qualification of the native browser matrix.
+
+Stream open and replay use the same CPU-partition projection. Mixed production shares
+the throughput roles for its measured stage only; its separate functional capture has
+no pinning proof. Client-heavy, live delivery, recoverable live and hardening still
+lack supported timed-role partitions for this control check. They must not be treated
+as ready for a supervised launch. No live failure in those groups is inferred.
+
 ## Kernel lifetime observations
 
 The parent-owned service must put its wrapper/worker in a supervisor leaf under its exact
@@ -195,8 +209,8 @@ and enabled on the empty service root. A compatible systemd layout uses
 `Delegate=cpu cpuset memory pids` and `DelegateSubgroup=supervisor`; the parent must verify
 that layout on its actual systemd/kernel. Core does not change parent controllers, quotas,
 cpusets or memory budgets and never moves the wrapper or an unrelated process. It fails
-closed when delegation/accounting is absent. This is not an approved new finite client
-budget or mandatory isolated CPU partition.
+closed when delegation/accounting is absent. Only the full-stack browser command has a
+required child cpuset here; it does not set a new finite client CPU quota or memory budget.
 
 The fixed cloud bootstrap prepares Node 26, the root, bench and bench/browser npm lockfile
 installations, Playwright Chromium, the native runner's digest-pinned Node tool image,

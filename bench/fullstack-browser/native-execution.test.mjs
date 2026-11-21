@@ -16,11 +16,11 @@ export function participantFixture() {
     HostConfig: { NanoCpus: 1000000000, CpuQuota: 0, CpuPeriod: 0, CpusetCpus: "", Memory: 1024 ** 3, MemorySwap: 2 * 1024 ** 3, ShmSize: 64 * 1024 ** 2, PidsLimit: null, NetworkMode: "bridge" }, Mounts: [] };
   return { info, image };
 }
-function replay(t, events) {
+function replay(t, events, options) {
   const root = mkdtempSync(join(tmpdir(), "corten-native-execution-")); t.after(() => rmSync(root, { recursive: true }));
   const store = new EvidenceStore(root), ledger = new ExecutionLedger(store, { task, commit, startedAt: 100 });
   for (const event of events) ledger.append(event);
-  const ref = ledger.finish({ endedAt: 300 }); store.seal(); const reader = openEvidence(root), result = replayExecution(reader, ref); reader.finish(); return result;
+  const ref = ledger.finish({ endedAt: 300 }); store.seal(); const reader = openEvidence(root), result = replayExecution(reader, ref, options); reader.finish(); return result;
 }
 function fixture() {
   const { info, image } = participantFixture(), created = participantSnapshot(info, image);
@@ -62,6 +62,15 @@ test("missing absence/removal/final inventories and failed inventory cannot masq
 test("configuration mismatch cannot relax fixed budgets, but does not invent a cleanup leak", (t) => {
   const e = fixture(); e.find((v) => v.phase === "running").snapshot.limits.Memory = 1;
   const result = replay(t, e); assert.ok(result.blocked.includes("participant-configuration-mismatch")); assert.equal(result.cleanupComplete, true);
+});
+test("isolated native Docker replay requires the role-specific cpuset in all app snapshots", (t) => {
+  for (const pins of ["1", "", "0-1", "2-3"]) {
+    const events = fixture();
+    for (const e of events.filter((v) => v.event === "participant")) e.snapshot.limits.CpusetCpus = pins;
+    const result = replay(t, events, { isolated: true });
+    assert.deepEqual(result.blocked, pins === "1" ? [] : ["participant-configuration-mismatch"]);
+    assert.equal(result.cleanupComplete, true);
+  }
 });
 test("rm -f -v acknowledgement still needs positive original anonymous-volume absence", (t) => {
   const events = fixture(), volume = "f".repeat(64);

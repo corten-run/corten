@@ -16,7 +16,7 @@ import { inspectNative } from "./native-replay.mjs";
 import { beginLifetime, composeHostProof, inspectLifetime } from "./host-lifetime.mjs";
 import { composePhase } from "./composition.mjs";
 import { prepareMixedAudit, replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
-import { verifyStreamAudit } from "./control-stream.mjs";
+import { nativeControlPartition, verifyStreamAudit } from "./control-stream.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url)).replace(/[\\/]$/, "");
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -143,7 +143,10 @@ export function createCampaign({ authorize }) {
     c.attempted.add(binding.request.group);
     const pending = { group: binding.request.group, phase: phaseName, artifactRoot: binding.validation.artifactRoot };
     c.pendingNative.push(pending); event(c, "native-output-reserved", pending);
-    c.stream?.open(Object.fromEntries(Object.entries(binding.resources.expectedCpus ?? binding.resources.measurement?.cpu ?? {}).map(([role, value]) => [role, value.cpuset])));
+    if (c.stream) {
+      const { cpus, roles } = nativeControlPartition(binding);
+      c.stream.open(cpus, roles);
+    }
     const closeControlWindow = c.control ? beginControlWindow(c.control) : null;
     const before = observeHost(c.stream?.registration); save(c, `${relative}/host-before.json`, before);
     if (c.stream) verifyHostBoundary(before, before);
