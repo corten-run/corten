@@ -2590,11 +2590,28 @@ thread_local! {
     pub(crate) static DREW_KEY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// `work` run to its end, and whether a submit key was drawn while it ran, on the thread that
-/// ran it. A handler may move between threads where it waits, and one poll runs on one thread
-/// from start to end, so the mark is read after each poll and what the thread had before is put
-/// back, also when the poll panics. A key drawn on another thread (a render the handler handed
-/// to a blocking task) is not seen.
+/// The thread's mark as it stood, cleared for a render that reads whether it drew a key itself
+/// ([`drew`]).
+pub(crate) fn drawing() -> bool {
+    DREW_KEY.replace(false)
+}
+
+/// Whether a key was drawn since [`drawing`], which gave `before`. The mark is left set where
+/// either was, so a watch around the handler ([`watched`]) still sees a key the handler drew
+/// before this render: one rendered to a string and placed in the page as markup.
+pub(crate) fn drew(before: bool) -> bool {
+    let drew = DREW_KEY.get();
+    DREW_KEY.set(before || drew);
+    drew
+}
+
+/// `work` run to its end, and whether a submit key was drawn in any of its polls. A handler may
+/// move between threads where it waits, and one poll runs on one thread from start to end, so
+/// the mark is cleared before each poll and read after it, also when the poll panics, and then
+/// left set where it was before or a key was drawn: a watch around this one sees that key too,
+/// and a mark another request left on the thread counts for no one, since every reader clears
+/// it first. A key drawn outside the polls of `work` (by a task the handler spawned, or a render
+/// it handed to a blocking task) is not seen.
 pub(crate) async fn watched<F: std::future::Future + Unpin>(mut work: F) -> (F::Output, bool) {
     struct Poll<'a> {
         before: bool,
@@ -2603,7 +2620,9 @@ pub(crate) async fn watched<F: std::future::Future + Unpin>(mut work: F) -> (F::
 
     impl Drop for Poll<'_> {
         fn drop(&mut self) {
-            *self.drew |= DREW_KEY.replace(self.before);
+            let drew = DREW_KEY.get();
+            *self.drew |= drew;
+            DREW_KEY.set(self.before || drew);
         }
     }
 
@@ -2987,9 +3006,70 @@ mod tests {
             }))
             .await;
             assert!(drew && html.contains("data-submit value="), "drawn in its second poll");
-            assert_eq!(DREW_KEY.get(), before, "the thread's own mark is as it was");
+            assert!(DREW_KEY.get(), "and left marked, for a watch around this one");
             let (_, drew) = watched(Box::pin(async { SubmitKey::template_field(SUBMIT).to_html() })).await;
-            assert!(!drew, "a template's field holds no key");
+            assert!(!drew, "a template's field holds no key, and the mark left on the thread is not this work's");
+            DREW_KEY.set(false);
+            // A watch inside another: both see the key the inner work drew.
+            let ((_, inner), outer) = watched(Box::pin(async {
+                tokio::task::yield_now().await;
+                watched(Box::pin(async { SubmitKey::field(SUBMIT).to_html() })).await
+            }))
+            .await;
+            assert!(inner && outer, "a key drawn under two watches");
+            // A render that reads the mark for itself leaves a key drawn before it for the watch.
+            let ((first, second), watch) = watched(Box::pin(async {
+                let field = SubmitKey::field(SUBMIT).to_html();
+                let before = drawing();
+                let first = super::drew(before);
+                let before = drawing();
+                let _ = (field, SubmitKey::field(SUBMIT).to_html());
+                (first, super::drew(before))
+            }))
+            .await;
+            assert!(!first && second && watch, "{first} {second} {watch}");
+        }
+        DREW_KEY.set(false);
+    }
+
+    /// A handler's polls may each run on another thread, and one may panic: the key drawn in a
+    /// poll on one thread is seen when the work ends on another, and a poll that panics leaves
+    /// the thread no mark its work did not make.
+    #[test]
+    fn a_watch_follows_its_work_between_threads_and_through_a_panic() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+        const SUBMIT: FieldName<SubmitKey> = FieldName::__new("submit");
+        let mut work = Box::pin(watched(Box::pin(async {
+            let field = SubmitKey::field(SUBMIT).to_html();
+            tokio::task::yield_now().await;
+            field
+        })));
+        assert!(work.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+        DREW_KEY.set(false);
+        let (field, drew) = std::thread::spawn(move || {
+            let Poll::Ready(out) = work.as_mut().poll(&mut Context::from_waker(Waker::noop())) else { panic!("still waiting") };
+            assert!(!DREW_KEY.get(), "nothing drawn on this thread");
+            out
+        })
+        .join()
+        .expect("the second thread");
+        assert!(drew && field.contains("data-submit value="), "the key drawn in the first thread's poll");
+
+        // A poll that panics before it draws leaves no mark; one that panics after leaves its own.
+        for (draws, before) in [(false, false), (false, true), (true, false)] {
+            DREW_KEY.set(before);
+            let mut work = Box::pin(watched(Box::pin(async move {
+                if draws {
+                    let _ = SubmitKey::field(SUBMIT).to_html();
+                } else {
+                    DREW_KEY.set(false);
+                }
+                panic!("in a poll");
+            })));
+            let poll = std::panic::AssertUnwindSafe(|| work.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_ready());
+            assert!(std::panic::catch_unwind(poll).is_err());
+            assert_eq!(DREW_KEY.get(), before || draws, "drew {draws}, with {before} on the thread before");
         }
         DREW_KEY.set(false);
     }

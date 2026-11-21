@@ -704,7 +704,9 @@ impl Missed {
 
 /// Whether an answer with these headers varies on `Accept-Language`; `None` when it varies on
 /// something a kept answer's key does not cover (`*`, a header of the app's), so it is not kept.
-/// `corten` and `accept` choose the page's form, which only the whole document is kept for.
+/// `corten` and `accept` choose the form of a page's answer, which the request was already
+/// asked by: a page is kept for the whole document alone, and a whole body apart for each way
+/// of asking.
 fn varies(headers: &HeaderMap) -> Option<bool> {
     let mut language = false;
     for line in headers.get_all(header::VARY) {

@@ -392,6 +392,13 @@ pub trait ToJson {
         false
     }
 
+    /// Whether [`Json`] of the type is a whole body the app keeps for a `Public` route
+    /// (`Answer::WHOLE`): every type's but [`Raw`]'s in a build that compresses, where it holds
+    /// its compressed forms itself and its route is its handler's for every request. Not a
+    /// public API.
+    #[doc(hidden)]
+    const __KEPT: bool = true;
+
     /// The response [`Json`] sends, before its headers: the value written into a new vector, or
     /// for [`Raw`] the bytes it holds. Not a public API.
     #[doc(hidden)]
@@ -520,6 +527,8 @@ impl ToJson for Raw {
     fn write_json(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(self.as_bytes());
     }
+
+    const __KEPT: bool = !cfg!(feature = "compress");
 
     /// `Raw::new` parsed it.
     fn __well_formed() -> bool {

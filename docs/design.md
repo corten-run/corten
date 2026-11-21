@@ -7260,11 +7260,14 @@ rules something out.
     With both, a URL's eight copies are shared by the ways of asking times the languages asked
     in. An answer may hold markup its handler rendered, and one with a form's new submit key is
     not kept. A page's render marks the key it drew; markup rendered any other way (into JSON
-    or text, or into a file a page route answers) carries no mark, so the store watches the
-    handler run for one being drawn, on the thread that polls it. A key drawn on another
-    thread, by a render the handler handed to a blocking task, is not seen, and such an answer
-    is kept with it, as every cache in front already keeps it for the lifetime its route
-    wrote. An API's `Access-Control-Allow-Origin` is
+    or text, or into a file a page route answers) carries no mark, so the store watches the handler's own polls for one being drawn, and a render that reads
+    the mark for itself (a page's, a patch's, a layout's fill) leaves a key drawn before it for
+    the watch: a field rendered to a string and placed in a page as markup. A key drawn
+    outside the handler's polls, by a task it spawned or a render it handed to a blocking
+    task, is not seen, and such an answer is kept with it, as every cache in front already
+    keeps it for the lifetime its route wrote. `Json` of bytes the app holds (`json::Raw`) is
+    left out by its type in a build that compresses, where it keeps its compressed forms
+    itself and the store would refuse every one. An API's `Access-Control-Allow-Origin` is
     written from the request's `Origin` by the stage after the handler, so it is no part of a
     kept answer and no site is sent another's. Outside an API the stages send a request that
     asks for JSON first for the browser alone (`private`), as one form of a page's URL; the app
@@ -7348,8 +7351,8 @@ rules something out.
     for first, which is in its key too; the stages after the handler read the request and the
     answer and nothing the handler held, so they treat a kept answer as its own); bet (an app that
     marks a page `Public` means the lifetime it wrote also with no CDN in front, and does in its
-    handler nothing that must happen for every request; markup with a form's new submit key is
-    rendered where the handler runs, not on another thread); value (fast and proven fast; standards
+    handler nothing that must happen for every request; markup with a form's new submit key is rendered by the handler itself, not by a task it
+    spawned or handed a render to); value (fast and proven fast; standards
     first, the app being a shared cache as RFC 9111 describes one; mistakes fail at compile time,
     what may be kept being known from the route's types; good defaults, easy overrides, with one
     setting for the bound, README Values).
@@ -7360,8 +7363,9 @@ rules something out.
     become most of a kept page's cost on a measured app, so a place further out is worth its
     rules; a multi-core measurement shows requests waiting on the store's lock; writes no
     handler takes (a scanner's `POST /`) make kept pages again often enough to show, so the
-    router's own refusals are worth leaving out where the request met no middleware; or the
-    connection speaks HTTP/2, where a request's target carries its authority.
+    router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; or an app
+    is found rendering a form's submit key in a task its `Public` handler spawned, which the
+    watch does not see.
 
     Last checked: 2026-11-20, the rounds above with rustc 1.99.1, the app on one CPU under `wrk`
     with 64 connections on three others, 500 URLs asked for unevenly, the app's cycles and

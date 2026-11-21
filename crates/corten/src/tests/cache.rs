@@ -1492,6 +1492,16 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
                 })
                 .0,
             )
+            .route(
+                "/placed",
+                typed(move |req: Req| async move {
+                    // Rendered to a string first, so the page's own render draws no key.
+                    let form =
+                        html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> }.to_html();
+                    Public::new(minute, req.test_page_for("Placed", html! { <div>{crate::view::raw(form)}</div> }))
+                })
+                .0,
+            )
     };
     let router = App::new(Routes::from(routes())).router();
     let kept = |router: Router, uri: &'static str| async move {
@@ -1510,6 +1520,7 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
         ("/file", "a file, which is neither a page nor a whole body its type names"),
         ("/status", "a status alone has no body to keep"),
         ("/keyed", "a submit key drawn for this request"),
+        ("/placed", "a submit key drawn before the page's render and placed in it as markup"),
         ("/device", "an input of the app's own, which may read a header no key covers"),
         ("/missing", "no route"),
     ] {
@@ -1696,6 +1707,9 @@ fn an_answer_s_type_says_whether_its_body_is_kept() {
     assert!(!whole::<StatusCode>() && !whole::<Media>() && !whole::<Public<crate::Result<Media>>>());
     assert!(!whole::<crate::Relay>() && !whole::<HtmlResult>() && !whole::<Public<HtmlResult>>());
     assert!(!whole::<NoStore<String>>(), "an answer no cache may store");
+    // Bytes the app holds keep their own compressed forms where the build compresses.
+    #[cfg(feature = "json")]
+    assert_eq!(whole::<Json<crate::json::Raw>>(), !cfg!(feature = "compress"));
 }
 
 /// A `Public` JSON answer and a `Public` text answer are made once for their lifetime, as a
@@ -1883,6 +1897,8 @@ async fn a_file_in_a_page_s_place_is_kept_as_the_page_unless_it_drew_a_submit_ke
     };
     let routes = Table::new().route("/file", crate::route::get(file).0).route("/keyed", crate::route::get(keyed).0);
     let router = App::new(Routes::from(routes)).router();
+    // A mark an earlier request left on the thread is no one's: the file is kept all the same.
+    let _ = crate::form::SubmitKey::field(SUBMIT).to_html();
     for (path, kept) in [("/file", true), ("/keyed", false)] {
         let before = runs.count();
         let (status, _, body) = fetch(&router, "GET", path, &[]).await;
@@ -1937,9 +1953,6 @@ fn a_submit_key_is_seen_wherever_the_handler_s_poll_ran() {
             }
         }
         assert_eq!(runs.count(), 160, "every request's own");
-        // A body with no key is kept on these threads all the same: a mark another request left
-        // on one of them is not this request's.
-        assert!(fetch(&router, "GET", "/plain", &[]).await.1.contains_key(header::AGE));
     });
 }
 

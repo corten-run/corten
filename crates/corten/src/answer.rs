@@ -104,8 +104,9 @@ pub trait Answer: IntoResponse + Sized {
     const PAGE: bool = false;
     /// The answer is one whole body that only the handler's inputs decide (JSON, text): what the
     /// app keeps for a [`Public`] route, as it keeps a page ([`crate::kept`]). Not a public API:
-    /// its type is one an app cannot name, so an answer type of the app's own is never kept this
-    /// way.
+    /// its type is one an app cannot name, so an answer type of the app's own is never kept this way
+    /// (`Json` of a type of the app's is `Json`'s answer, kept under the checks every kept answer
+    /// passes).
     ///
     /// ```compile_fail,E0326
     /// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, Answer, AnyAnswer};
@@ -1396,12 +1397,9 @@ impl<A: Answer> Answer for std::result::Result<A, JsonError> {
 }
 
 #[cfg(feature = "json")]
-impl<T> Answer for crate::Json<T>
-where
-    crate::Json<T>: IntoResponse,
-{
+impl<T: crate::json::ToJson> Answer for crate::Json<T> {
     const FORMAT: Format = Format::Json;
-    const WHOLE: sealed::Whole = sealed::Whole(true);
+    const WHOLE: sealed::Whole = sealed::Whole(T::__KEPT);
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
     type Kind = AnyAnswer;

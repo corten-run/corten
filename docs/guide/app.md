@@ -1488,8 +1488,8 @@ mistake, the runtime loads the URL as a whole page instead of swapping it in.
 
 ### The pages the app keeps
 
-The app is the first shared cache of its own `Public` pages. The whole document a `Public`
-page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
+The app is the first shared cache of its own `Public` pages, and of its `Public` JSON and
+text (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
 such request in the handler's place until the answer's shared lifetime ends: `s-maxage` where
 the answer has `.shared(..)`, else `max_age`. So a `Public` page's handler does not run for
 every request, and what it read may be that old when a visitor sees it, as it already may be
@@ -1522,7 +1522,7 @@ else a page could differ by, and the answer nothing made for one request:
 | the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound |
-| what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key (drawn where the handler runs, not by a render it handed to another thread), a `Vary` of the app's own |
+| what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself, not by a task it spawned or a render it handed to a blocking task), a `Vary` of the app's own |
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
@@ -1589,9 +1589,10 @@ site is sent another's. A write drops it as it drops a page: `PUT /api/items/7` 
 kept for `GET /api/items/7`, and not the list at `/api/items`, which shows the change when its
 lifetime ends.
 
-A file (`Media`), a relay, a live stream and a feed are not kept: each is its handler's for every
-request, and so is JSON the app holds as bytes (`json::Raw`) where the app compresses, which
-already keeps its compressed forms. One file is kept: a file of a known size that a page route
+A file (`Media`), a sitemap or `robots.txt` (`seo::File`), a relay, a live stream and a feed are
+not kept: each is its handler's for every request, and so is JSON the app holds as bytes
+(`Json<json::Raw>`) in a build with the `compress` feature, which already keeps its compressed
+forms. One file is kept: a file of a known size that a page route
 answers in its page's place (`PageOr<Media>`), as that page would be. Neither is anything that is not `Public`: a
 page for one visitor runs its handler for every request, because a key that had to cover the
 caller is where a mistake shows one user's page to another. Cache the data such a page reads in
@@ -1600,7 +1601,7 @@ the app, where it knows when the data changes.
 A page route's answer to a `GET` or `HEAD` (the page, a navigation's swap, a patch read again, a
 data client's JSON, a `Media` file) carries a weak `ETag` made from the body it rendered, its type
 and its `corten-*` headers, and a request whose `If-None-Match` names it is answered `304 Not
-Modified`: the answer is still rendered (unless it is a page the app kept), but not compressed
+Modified`: the answer is still made (unless it is one the app kept), but not compressed
 or sent. The browser keeps a `private,
 no-cache` page and asks before reusing it, so this is what lets it reuse its copy: on a page loaded
 again by a typed URL or a link without the runtime (every browser), and on a reload and the

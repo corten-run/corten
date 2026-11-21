@@ -131,15 +131,14 @@ impl Endpoint for Keeping {
             return Box::pin(std::future::ready(kept));
         }
         let missed = asked.missed(&req);
-        // A whole body has no places: its route's reads are the middleware's to end, as before.
-        let page = self.shape == crate::kept::Shape::Page;
-        let here = req.extensions().get::<crate::layout::StartHere>().filter(|_| page).cloned();
+        let here = req.extensions().get::<crate::layout::StartHere>().cloned();
         let answer = self.inner.call(req);
         Box::pin(async move {
             // An answer with a form's new submit key is this request's alone. A page's render
             // marks one it drew (`cache::Unrepeatable`); markup rendered any other way (into
-            // JSON or text, or into a file a page route answers) has no mark to carry, so the
-            // handler is watched for one being drawn.
+            // JSON or text, into a file a page route answers, or to a string the page then
+            // holds as markup) has no mark to carry, so the handler is watched for one being
+            // drawn.
             let (res, drew_key) = crate::form::watched(answer).await;
             let res = match here {
                 Some(here) => here.fill(res).await,
