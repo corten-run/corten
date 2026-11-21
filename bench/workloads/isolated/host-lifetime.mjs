@@ -6,9 +6,9 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSy
 import { join, posix } from "node:path";
 import { durable, readRegular, syncDirectory, tree } from "./evidence.mjs";
 import { hostDurableWriter } from "./host-durable-writer.mjs";
+import { hostTerminalClock } from "./host-observation.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { executableReference, participantExecutables } from "./participant-executables.mjs";
-import { hostTerminalClock } from "./host-observation.mjs";
 
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const serial = (v) => `${JSON.stringify(v)}\n`;
