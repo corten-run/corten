@@ -4620,15 +4620,18 @@ where
     }
 }
 
-/// `res` with `nosniff`, `sandbox`, and no shared caching when it sets a cookie.
+/// `res` with `nosniff`, `sandbox`, and no shared caching when it sets a cookie or is a
+/// [`crate::NoStore`] answer (a relayed upstream's caching headers included).
 fn unstaged_headers(mut res: crate::response::Response) -> crate::response::Response {
     use http::header;
     use http::HeaderValue;
+    let kept_out = crate::cache::Typed::is_no_store(&res);
     let headers = res.headers_mut();
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.append(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
-    if headers.contains_key(header::SET_COOKIE) {
-        let no_store = headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
+    if kept_out || headers.contains_key(header::SET_COOKIE) {
+        let no_store = kept_out
+            || headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
         headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::PRIVATE_NO_STORE } else { crate::cache::PRIVATE });
         // A CDN reads its own before `Cache-Control`: any `*cache-control`, as a
         // [`crate::Public`] answer may not set, and the others Corten names
