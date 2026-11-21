@@ -6,14 +6,15 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { isIPv4 } from "node:net";
-import { fleetCatalogCommand, fleetPlan, fleetRegion, roundName, selection, validateLaunchFleet } from "./cloud-contract.mjs";
+import { fleetCatalogCommand, fleetPlan, fleetRegion, requireStagedFleet, roundName, selection } from "./cloud-contract.mjs";
 import { digest, durable, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { controllerFailure, fleetCatalogResult, full, providerAccount, providerFailure, providerIdentity } from "./cloud-options.mjs";
 import { controllerPaths, productionPlan, productionSignals } from "./cloud-production.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { streamRecoveryReady } from "./cloud-control-stream.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
-import { fleetRoot, present, readFleet, readGroup, recheckCollectedGroup, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { fleetChildOptions as childOptions, fleetRoot, present, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
+  recheckCollectedGroup, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -101,12 +102,6 @@ function rootRecords(fleet) {
     } else records[name] = digest(regular(path, 1024 * 1024));
   }
   return records;
-}
-function childOptions(fleet, group, mode) {
-  const f = fleet.manifest;
-  return { round: f.round, stateDir: join(fleet.root, group), [mode]: true,
-    ...(mode === "detach" ? { commit: f.commit, sshKey: f.sshKey, accountId: f.provider.accountId,
-      context: f.provider.context, group, fleet: fleet.path } : {}) };
 }
 function childArgs(options, hash) {
   const args = [options.round, "--state-dir", options.stateDir, options.detach ? "--detach" : "--collect"];
@@ -210,81 +205,40 @@ export function productionChild(args, { cancellation, WorkerClass = Worker, sour
   });
 }
 
-function stagedIntent(fleet) {
-  const bytes = regular(join(fleet.root, "launch-intent.json"), 1024 * 1024), intent = JSON.parse(bytes);
-  assert.deepEqual(Object.keys(intent).sort(), ["approvalSha256", "schema", "subject"]);
-  assert.equal(intent.schema, "benchmark-group-fleet-staged-launch-intent/v1", "fleet-legacy-launch-cannot-admit");
-  const s = intent.subject, first = fleet.manifest.jobs[0].group;
-  assert.equal(intent.approvalSha256, digest(JSON.stringify(s)), "fleet-launch-intent-changed");
-  assert.equal(s.schema, "benchmark-group-fleet-staged-approval/v1");
-  assert.equal(s.action, "detach"); assert.equal(s.controllerCommit, fleet.manifest.commit);
-  assert.equal(s.stateRoot, fleet.root);
-  // The approved spelling may be a junction; it must still name this physical
-  // fleet, never a missing or retargeted alias. Keep the consumed subject intact.
-  assert.equal(fleetRoot(s.requestedRoot), fleet.root, "fleet-requested-root-changed");
-  assert.equal(s.round, fleet.manifest.round);
-  assert.equal(s.manifestSha256, fleet.manifestSha256); assert.deepEqual(s.fleet, fleet.manifest);
-  assert.deepEqual(s.records, {});
-  assert.deepEqual(s.admission, { mode: "first-group-only", firstGroup: first, gate: "collected-verified-deleted", nativeReadiness: false });
-  assert.deepEqual(s.jobs.map(({ group }) => group), fleet.manifest.jobs.map(({ group }) => group));
-  for (const job of s.jobs) {
-    if (job.group !== first) assert.deepEqual(job, { group: job.group, outcome: "deferred" });
-    else {
-      assert.equal(job.outcome, "planned"); assert.deepEqual(job.options, childOptions(fleet, first, "detach"));
-      assert.deepEqual(job.subject.options, job.options); assert.equal(job.subject.controllerCommit, fleet.manifest.commit);
-      assert.equal(job.approvalSha256, digest(JSON.stringify(job.subject))); assert.deepEqual(job.missing, []);
-    }
-  }
-  return digest(bytes);
-}
-
 // Bind a successor's single-child collection to the consumed launch, never
 // grant launch/admission authority or move a reservation to a different root.
 export function stagedChildIntent(stateRoot, saved) {
   const fleet = readFleet(dirname(stateRoot), saved.round), first = fleet.manifest.jobs[0].group;
   assert.equal(stateRoot, join(fleet.root, saved.group)); assert.deepEqual(fleet.manifest, saved.fleet);
-  const launch = stagedIntent(fleet);
-  if (saved.group === first) return { launch };
-  const bytes = regular(join(fleet.root, "remaining-intent.json"), 1024 * 1024), intent = JSON.parse(bytes), s = intent.subject;
-  assert.equal(intent.schema, "benchmark-group-fleet-remaining-intent/v1"); assert.equal(intent.approvalSha256, digest(JSON.stringify(s)));
-  assert.equal(s.schema, "benchmark-group-fleet-staged-approval/v1"); assert.equal(s.action, "admit-remaining");
-  assert.equal(s.stateRoot, fleet.root); assert.equal(fleetRoot(s.requestedRoot), fleet.root);
-  assert.deepEqual(s.fleet, fleet.manifest); assert.equal(s.manifestSha256, fleet.manifestSha256);
-  assert.equal(s.controllerCommit, saved.commit); assert.equal(s.round, saved.round);
-  assert.equal(s.records["launch-intent.json"], launch);
-  assert.deepEqual(s.admission, { mode: "remaining-once", firstGroup: first, gate: "collected-verified-deleted", nativeReadiness: false });
-  assert.equal(s.firstGroup.evidenceMode, "native-replay"); assert.equal(s.firstGroup.row.outcome, "verified");
-  assert.equal(s.firstGroup.row.group, first);
-  assert.deepEqual(s.jobs.map(j => j.group), fleet.manifest.jobs.map(j => j.group));
-  const job = s.jobs.find(j => j.group === saved.group);
-  assert.equal(job.outcome, "planned"); assert.deepEqual(job.missing, []);
-  assert.deepEqual(job.options, childOptions(fleet, saved.group, "detach")); assert.deepEqual(job.options, job.subject.options);
-  assert.equal(job.subject.controllerCommit, saved.commit); assert.equal(job.approvalSha256, digest(JSON.stringify(job.subject)));
-  return { launch, remaining: digest(bytes) };
+  assert.equal(saved.commit, fleet.manifest.commit);
+  if (saved.group === first) return { launch: readLaunchIntent(fleet).sha256 };
+  const intent = readRemainingIntent(fleet, saved.group);
+  if (intent.placement) assert.deepEqual(saved.remainingPlacement, { region: intent.placement.region, intentSha256: intent.sha256 });
+  return { launch: intent.launch, remaining: intent.sha256 };
 }
 
 // verify and compiler are code-only synthetic TEST seams, never selected by argv/JSON.
 export async function fleetOperationPlan(options, { repo = checkout, run, plan = productionPlan, verify = verifyCollectedGroup,
-  inspect, interrupted = () => false, compiler = localCompiler } = {}) {
+  inspect, interrupted = () => false, compiler = localCompiler, catalogProvider = providerTransport, reservedRegion } = {}) {
   repo = realpathSync(repo);
   const root = fleetRoot(options.root, repo), head = await exactSource(repo, run), fleet = readFleet(root, options.round);
   assert.equal(fleet.manifest.commit, head, "fleet-source-mismatch");
   const mode = options.detach ? "detach" : options["admit-remaining"] ? "admit-remaining" : "collect", records = rootRecords(fleet);
   const launching = mode !== "collect", first = fleet.manifest.jobs[0].group;
-  if (launching) validateLaunchFleet(fleet.manifest);
+  if (launching) requireStagedFleet(fleet.manifest);
   let deferred = false;
   if (mode === "collect" && present(join(root, "launch-intent.json")) && !present(join(root, "remaining-intent.json"))) {
     // Only a valid staged reservation explains absent future children. Legacy
     // fleets retain their existing missing-state diagnostics and collection.
-    try { stagedIntent(fleet); deferred = true; } catch { /* Not staged authority. */ }
+    try { readLaunchIntent(fleet); deferred = true; } catch { /* Not staged authority. */ }
   }
-  let firstGroup;
+  let firstGroup, remainingRegion;
   if (mode === "detach") {
     assert.ok(!present(join(root, "launch-intent.json")), "fleet-already-attempted");
     assert.ok(!present(join(root, "remaining-intent.json")) && !present(join(root, "receipts")), "fleet-reservation-consumed");
   }
   if (mode === "admit-remaining") {
-    stagedIntent(fleet);
+    readLaunchIntent(fleet);
     assert.ok(!present(join(root, "remaining-intent.json")), "fleet-remaining-already-attempted");
     // Native replay reads this checkout's bench compiler: without it, name the install instead of replaying.
     if (inspect !== undefined || compiler()) {
@@ -292,6 +246,8 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
       assert.equal(firstGroup.evidenceMode, "native-replay", "fleet-native-first-group-replay-required");
       assert.equal(firstGroup.row.outcome, "verified", "fleet-first-group-not-verified-and-deleted");
       recheckCollectedGroup(fleet, firstGroup.snapshot);
+      remainingRegion = await readPlacement(fleet.manifest.provider,
+        { repo, interrupted, catalogProvider }, reservedRegion, { remainingOnly: true, staged: true });
     }
   }
   const jobs = [], ids = new Set(), ips = new Set();
@@ -305,7 +261,8 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
     }
     if (launching) {
       assert.ok(!present(child.stateDir), "fleet-child-already-reserved");
-      jobs.push(mode === "detach" && group !== first ? { group, outcome: "deferred" } : { group, options: child, outcome: "planned" });
+      jobs.push(mode === "detach" && group !== first || mode === "admit-remaining" && !firstGroup
+        ? { group, outcome: "deferred" } : { group, options: child, outcome: "planned" });
     } else {
       if (deferred && group !== first && !present(child.stateDir)) {
         jobs.push({ group, outcome: "deferred" }); continue;
@@ -321,11 +278,13 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
         ...(saved.stateSha256 ? { stateSha256: saved.stateSha256 } : {}), ...(saved.outcome === "available" ? { options: child } : {}) });
     }
   }
+  const remainingPlacement = remainingRegion === undefined ? undefined : { region: remainingRegion, firstGroup: firstGroup.snapshot };
   // All preflights settle before approval, including rejected group-local plans.
   const plans = await Promise.allSettled(jobs.map(async (job) => {
     if (job.outcome !== "planned") return;
-    const p = await plan(job.options, { repo, run });
+    const p = await plan(job.options, { repo, run, remainingPlacement });
     assert.equal(p.subject.controllerCommit, head); assert.equal(p.subject.stateRoot, job.options.stateDir);
+    if (remainingPlacement) assert.deepEqual(p.subject.remainingPlacement, remainingPlacement);
     assert.equal(p.approvalSha256, digest(JSON.stringify(p.subject)));
     assert.ok(Array.isArray(p.missing));
     return p;
@@ -341,7 +300,7 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
   if (firstGroup) recheckCollectedGroup(fleet, firstGroup.snapshot);
   const subject = { schema: launching ? "benchmark-group-fleet-staged-approval/v1" : "benchmark-group-fleet-approval/v1", action: mode, controllerCommit: head,
     stateRoot: root, requestedRoot: resolve(options.root), round: options.round, manifestSha256: fleet.manifestSha256,
-    fleet: fleet.manifest, records, jobs,
+    fleet: fleet.manifest, records, jobs, ...(remainingRegion === undefined ? {} : { remainingRegion }),
     ...(launching ? { admission: { mode: mode === "detach" ? "first-group-only" : "remaining-once", firstGroup: first,
       gate: "collected-verified-deleted", nativeReadiness: false }, ...(firstGroup ? { firstGroup } : {}) } : {}),
     declaration: "operator-approved-after-merged-independent-review-and-full-native-readiness" };
@@ -376,11 +335,11 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
     try {
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
       const provider = { accountId: options.accountId, context: options.context };
-      const region = await readPlacement(provider, placement);
+      const region = await readPlacement(provider, placement, undefined, { staged: true });
       const used = new Set(), token = () => { let v; do { v = randomBytes(8).toString("hex"); } while (used.has(v)); used.add(v); return v; };
       const manifest = fleetPlan({ round: options.round, commit: options.commit, token: token(),
         tokens: Object.fromEntries(selection().groups.map(({ group }) => [group, token()])),
-        provider, sshKey: options.sshKey }, undefined, region);
+        provider, sshKey: options.sshKey }, undefined, region, { stagedPlacement: true });
       await controlCheckpoint(interrupted); // Provider close is asynchronous.
       physical(root); assert.equal(regular(lock, 1024).toString(), owner, "fleet-lock-changed");
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
@@ -398,7 +357,7 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
       }
     }
   }
-  const deps = { repo, run, plan, verify, inspect, interrupted, compiler }, preview = await fleetOperationPlan(options, deps);
+  const deps = { repo, run, plan, verify, inspect, interrupted, compiler, catalogProvider }, preview = await fleetOperationPlan(options, deps);
   if (options["print-approval"]) {
     write(JSON.stringify({ subject: preview.subject, approvalSha256: preview.approvalSha256, fullGroupQualified: false }));
     return preview.subject.jobs.some((j) => j.missing?.length) ? 2 : 3;
@@ -410,11 +369,12 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
   durable(lock, owner);
   let uncertain = false;
   try {
-    const repeated = await fleetOperationPlan(options, deps);
+    const repeated = await fleetOperationPlan(options, { ...deps, reservedRegion: preview.subject.remainingRegion });
     assert.equal(repeated.approvalSha256, options.approval, "fleet-action-changed");
     if (options.detach || options["admit-remaining"]) {
       const { manifest } = repeated.fleet;
-      await readPlacement(manifest.provider, placement, manifest.host.region, { remainingOnly: repeated.subject.action === "admit-remaining" });
+      await readPlacement(manifest.provider, placement, repeated.subject.remainingRegion ?? manifest.host.region,
+        { remainingOnly: repeated.subject.action === "admit-remaining", staged: true });
       assert.equal(readFleet(root, options.round).manifestSha256, repeated.fleet.manifestSha256, "fleet-manifest-changed");
       assert.deepEqual(rootRecords(repeated.fleet), repeated.subject.records, "fleet-records-changed");
       assert.equal(regular(lock, 1024 * 1024).toString(), owner, "fleet-lock-changed");
