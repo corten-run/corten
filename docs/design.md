@@ -7339,10 +7339,10 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; or the
     connection speaks HTTP/2, where a request's target carries its authority.
 
-    Last checked: 2026-11-21 for a write's count, the callgrind rounds above; 2026-11-20 for the
-    rest, the rounds above with rustc 1.99.1, the app on one CPU under `wrk`
-    with 64 connections on three others, 500 URLs asked for unevenly, the app's cycles and
-    instructions counted by `perf stat` and divided by the requests answered. The bodies of the two
+    Last checked: 2026-11-21 for a write's count, the callgrind rounds above at `30b39d455` and
+    `45489ced9`; 2026-11-20 for the rest, the rounds above with rustc 1.99.1, the app on one CPU
+    under `wrk` with 64 connections on three others, 500 URLs asked for unevenly, the app's
+    cycles and instructions counted by `perf stat` and divided by the requests answered. The bodies of the two
     builds' answers were identical in each coding, and the headers differed by the kept page's `Age`
     and, where compressed, the tag. The commits after `f7e53a594` change which writes count and
     nothing a page's `GET` runs. `tests/kept_memory.rs` at this change, with all features and with
