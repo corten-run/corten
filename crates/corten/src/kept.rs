@@ -353,7 +353,8 @@ impl Kept {
             }
             // Not on the first such answer (usually the one that made the page): a page asked
             // for once is compressed once. The job holds the page weakly while it waits its
-            // turn, so one dropped by then is skipped, and its bytes are not held for it.
+            // turn, so its bytes are not held for it, and one that no longer stands by then is
+            // skipped (`Entry::make_brotli`).
             if coded.asked.fetch_add(1, Ordering::Relaxed) >= 1 && !coded.started.swap(true, Ordering::AcqRel) {
                 let page = Arc::downgrade(entry);
                 let made = crate::compress::later(Box::new(move || {
@@ -383,17 +384,30 @@ impl Kept {
 }
 
 impl Entry {
-    /// Makes its body's brotli at [`Level::Kept`] and counts it, unless it is no longer kept.
+    /// Makes its body's brotli at [`Level::Kept`], gives it to the answers from then on and
+    /// counts it, while it is kept and stands: asked before the work, and again when the bytes are
+    /// put with it under the store's lock, which an entry is taken out under. So the brotli of a
+    /// page written to, past its lifetime, replaced or dropped meanwhile is not given or counted,
+    /// and no page that stands makes room for it.
     #[cfg(feature = "compress")]
     fn make_brotli(&self) {
-        if self.size.load(Ordering::Acquire) == GONE {
+        let Some(store) = self.place.store.upgrade() else { return };
+        let kept = || self.size.load(Ordering::Acquire) != GONE && self.stands(&store, Instant::now());
+        if !kept() {
             return;
         }
         // A copy of its own length, as each coding's bytes are (`Kept::coded`).
         let made = Bytes::copy_from_slice(&crate::compress::encode(Coding::Brotli, &self.body, Level::Kept));
         let size = made.len() + FORM;
-        if self.coded.brotli.set(made).is_ok() {
-            self.grew(size);
+        let mut inner = store.inner.write().unwrap_or_else(PoisonError::into_inner);
+        if !kept() || self.coded.brotli.set(made).is_err() {
+            return;
+        }
+        // Counted in the store first, as `grew` counts; under the lock it cannot go meanwhile.
+        store.bytes.fetch_add(size, Ordering::AcqRel);
+        self.size.fetch_add(size, Ordering::AcqRel);
+        if store.bytes.load(Ordering::Acquire) > store.bound {
+            store.make_room(&mut inner, self);
         }
     }
 
@@ -1319,5 +1333,101 @@ mod tests {
         assert_eq!(answers.bytes(), size + 400 + FORM, "the other page went, and the bound holds");
         assert!(answers.find("/a", None, None).is_none() && answers.find("/b", None, None).is_some());
         assert_eq!(first.size.load(Ordering::Acquire), GONE);
+    }
+
+    /// Holds the thread that compresses held values at a job of its own until the returned
+    /// sender is sent to or dropped, so what is queued after it waits.
+    #[cfg(feature = "compress")]
+    fn hold_the_compression_thread() -> std::sync::mpsc::Sender<()> {
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let (running, started) = std::sync::mpsc::channel();
+        let job = Box::new(move || {
+            running.send(()).ok();
+            held.recv().ok();
+        });
+        assert!(crate::compress::later(job), "the thread took the job");
+        started.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread reached the job");
+        release
+    }
+
+    /// Hears once every job queued on that thread before it is done.
+    #[cfg(feature = "compress")]
+    fn queued_before_done() -> std::sync::mpsc::Receiver<()> {
+        let (done, heard) = std::sync::mpsc::channel();
+        let job = Box::new(move || {
+            done.send(()).ok();
+        });
+        assert!(crate::compress::later(job), "the thread took the job");
+        heard
+    }
+
+    /// A page's body that brotli makes much smaller, numbered so two are not the same.
+    #[cfg(feature = "compress")]
+    fn a_page(n: u32) -> Bytes {
+        (0..120u32).map(|i| format!(r#"<li><a href="/items/{i}">Item {i}</a> {}</li>"#, (i + n) * 7919 % 1000)).collect::<String>().into()
+    }
+
+    /// A page's brotli queued for the compression thread is not made, counted or given once the
+    /// page no longer stands (a write to its path, its lifetime over, the store gone) when the
+    /// thread comes to it, though nothing looked the page up since: it takes no room from a page
+    /// that stands, and the page kept in its place is made and given its own.
+    #[cfg(feature = "compress")]
+    #[test]
+    fn a_kept_answer_s_brotli_is_not_made_once_it_no_longer_stands() {
+        let bound = 64 << 10;
+        for ended in ["written", "past its lifetime", "the store gone"] {
+            let answers = Answers::new(bound).expect("a bound");
+            let body = a_page(0);
+            // One past its lifetime was made longer ago than that.
+            let (made, lifetime) = match ended {
+                "past its lifetime" => (Instant::now().checked_sub(std::time::Duration::from_secs(2)).expect("a time"), 1),
+                _ => (Instant::now(), 60),
+            };
+            let stale = answers
+                .keep(|place| Entry { body: body.clone(), made, ..entry(&answers, "/a", None, lifetime, body.len())(place) });
+            let mut extensions = http::Extensions::new();
+            extensions.insert(Kept(stale.clone()));
+            let release = hold_the_compression_thread();
+            for _ in 0..2 {
+                Kept::coded(&extensions, &stale.body, accepts("br"), Coding::Brotli, || Bytes::from_static(b"fast"));
+            }
+            assert!(stale.coded.started.load(Ordering::Acquire), "{ended}: queued");
+            let done = queued_before_done();
+            // A page that stands, with less room left beside it than the brotli would take.
+            let other = bound - answers.bytes() - OVERHEAD - 16;
+            answers.keep(entry(&answers, "/c", None, 60, other));
+            if ended == "written" {
+                answers.count(count_of(b"/a"));
+            }
+            assert_eq!(stale.stands(&answers.0, Instant::now()), ended == "the store gone", "{ended}");
+            let before = answers.bytes();
+            let store = Arc::downgrade(&answers.0);
+            if ended == "the store gone" {
+                drop(answers);
+                drop(release);
+                done.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
+                assert!(store.upgrade().is_none());
+                assert!(stale.coded.brotli.get().is_none(), "{ended}: not made for a store no one has");
+                continue;
+            }
+            drop(release);
+            done.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
+            assert!(stale.coded.brotli.get().is_none(), "{ended}: not made");
+            assert_eq!(answers.bytes(), before, "{ended}: nor counted");
+            assert!(answers.find("/c", None, None).is_some(), "{ended}: the page that stands is kept");
+            // The page kept in its place, of other bytes, is made and given its own brotli.
+            let body = a_page(1);
+            let fresh = answers.keep(|place| Entry { body: body.clone(), ..entry(&answers, "/a", None, 60, body.len())(place) });
+            assert_eq!(answers.find("/a", None, None).expect("the new page").0.body, body, "{ended}");
+            let mut extensions = http::Extensions::new();
+            extensions.insert(Kept(fresh.clone()));
+            for _ in 0..2 {
+                Kept::coded(&extensions, &fresh.body, accepts("br"), Coding::Brotli, || Bytes::from_static(b"fast"));
+            }
+            queued_before_done().recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
+            let brotli = fresh.coded.brotli.get().expect("made").clone();
+            assert_eq!(brotli, crate::compress::encode(Coding::Brotli, &body, Level::Kept), "{ended}");
+            assert_eq!(Kept::coded(&extensions, &fresh.body, accepts("br"), Coding::Brotli, || unreachable!()).0, brotli);
+        }
     }
 }
