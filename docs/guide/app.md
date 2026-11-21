@@ -1229,10 +1229,10 @@ answer whose own script must run is a page, not an unstaged route's. Its answer 
 ([Caching](#caching) describes the stages' rules, which it does not meet): an answer that changes
 says so (`NoStore`, which sends `private, no-store`, or `Public`), as the figure above does. One
 that sets a cookie is `private, no-cache` (`private, no-store` when it says `no-store`), whatever
-caching it says, and loses any
-`*-cache-control` header and the other caching headers a CDN reads first that [Caching](#caching)
-lists (`Surrogate-Control`, `Edge-Control`, ...), so no shared cache hands one visitor's cookie
-to another.
+caching it says, and it and a `NoStore` one (a `NoStore<Relay>`'s upstream headers included) lose
+any `*-cache-control` header and the other caching headers a CDN reads first that
+[Caching](#caching) lists (`Surrogate-Control`, `Edge-Control`, ...), so no shared cache hands one
+visitor's cookie or one-time answer to another.
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
 or a plain 501 with none when no route in the app has a handler for the method ([error
 pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
@@ -1406,11 +1406,13 @@ the next: `CDN-Cache-Control` (RFC 9213), `Cloudflare-CDN-Cache-Control`,
 `X-Accel-Expires`. Such an answer read a caller, sets a cookie, has the request's nonce or draws a
 submit key, or is a `Public` answer to a request with credentials. A `no-store` on it goes out
 `private, no-store`: some CDNs ignore a bare `no-store`, and none keeps a `private` answer. A
-`NoStore` answer, a `Public` one the third row sends as the browser's alone, and a refused
-write's error page lose those headers too, whatever a middleware made of their `Cache-Control`
-(a `NoStore` one still goes out `private, no-store`, below). Those names, matched exactly, are the
-whole list (a `Public` answer cannot set one either); any other answer keeps the ones a
-middleware wrote.
+`NoStore` answer, a `Public` one the third row sends as the browser's alone, a refused write's
+error page and the error page for a failure no handler answered (below) lose those headers too,
+whatever a middleware made of their `Cache-Control` (a `NoStore` one still goes out
+`private, no-store`, below, and so does a `Public` one sent as the browser's alone whose header
+names `no-store` anywhere, `must-understand` or a second line included). Those names, matched
+exactly, are the whole list (a `Public` answer cannot set one either); any other answer keeps the
+ones a middleware wrote.
 
 Keeping a personal answer out of a shared cache by any other means is the deployment's: a name
 its CDN is configured to read (RFC 9213 allows any), a layer around the app (`App::layer`, which
@@ -1455,13 +1457,13 @@ carries the secret (a new key shown once) names the methods instead,
 `#[route("/account/key", get = page, post = rotate, no_store(post))]`: only `rotate`'s answers
 and refusals are `private, no-store`, and the page keeps its usual caching (and the back/forward cache).
 Use `no_store` in a routes module and `NoStore<..>` for a handler added by hand (`Api::route`,
-`Area::route`). Some failures never reach either and get the default, `private, no-cache`: a handler
-that panics and one past its deadline, whose error page no middleware sees, and, for
-`NoStore<..>`, a request refused before the handler runs, whose error page keeps a CDN caching
-header a middleware wrote on the refusal unless the page is personal (above). Each sends the
-app's error page, not the handler's answer: it shows who is asking only if the error page reads a
-caller, which makes it personal. An unstaged route's `NoStore` answer meets none of these rules
-and goes out as `NoStore` writes it, `private, no-store`. A handler
+`Area::route`). Some failures never reach either: a handler that panics, one past its deadline,
+and, for `NoStore<..>`, a request refused before the handler runs. Each sends the app's error page,
+which can read the request's `Cookie` and `Authorization` without reading a caller, so Corten never
+lets it be shared, as for a refused write: it goes out `private, no-cache` (`private, no-store`
+when a middleware's header or its own names `no-store`), with none of the CDN caching headers
+above, whoever wrote them. An unstaged route's `NoStore` answer goes out `private, no-store` with
+none of them either ([a route outside the stages](#a-route-outside-the-stages)). A handler
 cannot mark an answer public any other way: a response it builds by hand is not an answer a route
 can name, and if anything read a caller the answer is private whatever its header says.
 
