@@ -27,6 +27,9 @@ mod api {
     pub struct Record<'a> {
         pub id: &'a str,
     }
+
+    #[route("/api/ping", get = ping)]
+    pub struct Ping;
 }
 
 #[derive(Clone, Default, Route, Fields)]
@@ -51,8 +54,18 @@ async fn show(req: Req, State(source): State<Source>, Params(at): Params<routes:
     req.page(views::document(&req, &record.title, views::record(&record, at.query.field.as_deref().unwrap_or(""))))
 }
 
-async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>) -> JsonResult<Arc<Record>> {
-    Ok(Json(source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?))
+async fn json(
+    State(source): State<Source>,
+    Params(at): Params<api::Record<'_>>,
+) -> corten::Public<JsonResult<Arc<Record>>> {
+    let answer: JsonResult<Arc<Record>> =
+        async { Ok(Json(source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?)) }.await;
+    corten::Public::new(std::time::Duration::from_secs(60), answer)
+}
+
+/// The cheapest handler there is: what keeping an answer costs where it saves nothing.
+async fn ping() -> corten::Public<String> {
+    corten::Public::new(std::time::Duration::from_secs(60), String::from("ok"))
 }
 
 fn app(source: Source, lean: bool) -> App {
