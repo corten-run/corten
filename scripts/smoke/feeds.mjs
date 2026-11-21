@@ -200,16 +200,55 @@ export async function feedRecovery(page, errors, located) {
       failedStates.includes("reconnecting live"),
     `${failedLive ? "live 3 times" : "not live 3 times within 60 s"}, ${failedFeed.snapshots.length} snapshots, ${failedFeed.streams} streams since ${failedFeed.since.join(" ")}, ${failedAt.sources.length} sources, waits asked ${failedAsked.join(", ")} ms and taken ${failedGaps.map((g) => `${g} ms`).join(", ")} (as Playwright saw the requests: ${seenGaps.map((g) => `+${g} ms`).join(", ")}); ${failedStates}`,
   );
-  // A snapshot that fails is fetched again after 1 s, and the feed goes live once one arrives.
-  const retriedFeed = await feedTimes("retried", () => "retry: 60000\n\n", { snapshot: (n) => (n === 1 ? 500 : 200) });
-  await feedLive("retried", 1);
+  // A snapshot that fails is fetched again on the same schedule, counted with the stream's errors:
+  // four fail, so the runtime waits 1, 1, 1 then 2 s, and the fifth loads. A loaded snapshot starts
+  // the count again, so its stream, answered with a 503, is listened to again after 1 s (2 s if the
+  // count went on), and the feed goes live. Each snapshot request and source records the timer
+  // whose callback started it, which must be the one set after the failure before it.
+  await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    const fetch_ = window.fetch;
+    const fetches = (w.__retriedFetches = /** @type {{ at: number, by: number }[]} */ ([]));
+    w.__retriedRestore = () => void (window.fetch = fetch_);
+    window.fetch = (input, init) => {
+      if (String(input).endsWith("/feed/retried")) fetches.push({ at: performance.now(), by: w.__timerRunning() });
+      return fetch_.call(window, input, init);
+    };
+  });
+  const retriedFeed = await feedTimes("retried", (n) => (n === 1 ? { status: 503 } : "retry: 60000\n\n"), { snapshot: (n) => (n <= 4 ? 500 : 200) });
+  // Long enough for a loaded browser that runs each timer seconds late; it ends once live.
+  const retriedLive = await feedLive("retried", 1, 60_000);
   const retriedStates = await stopFeed("retried");
   await unrouteFeed("retried");
-  const retriedGap = retriedFeed.snapshots.length === 2 ? retriedFeed.snapshots[1] - retriedFeed.snapshots[0] : NaN;
+  const retriedAt = await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    w.__retriedRestore();
+    const timers = /** @type {number[]} */ (w.__timers);
+    const fetches = /** @type {{ at: number, by: number }[]} */ (w.__retriedFetches);
+    const sources = w.__sources
+      .filter((/** @type {EventSource} */ s) => s.url.includes("/feed/retried/live"))
+      .map((/** @type {any} */ s) => ({ next: /** @type {number | undefined} */ (s.nextTimer), by: /** @type {number} */ (s.openedBy) }));
+    // The timer that started each later snapshot request, then the one that started the second source.
+    const by = [...fetches.slice(1).map((f) => f.by), sources[1]?.by ?? -1];
+    return { fetches, sources, by, asked: by.map((i) => (i >= 0 ? (timers[i] ?? null) : null)) };
+  });
+  const retriedGaps = retriedAt.fetches.slice(1).map((f, i) => Math.round(f.at - retriedAt.fetches[i].at));
   check(
-    "a snapshot that fails is fetched again after 1 s, and the feed goes live",
-    retriedFeed.snapshots.length === 2 && retriedGap >= 900 && retriedGap < 1900 && retriedFeed.streams === 1 && retriedStates.startsWith("syncing live"),
-    `${retriedFeed.snapshots.length} snapshots, +${retriedGap} ms, ${retriedFeed.streams} streams; ${retriedStates}`,
+    "a snapshot that fails is fetched again after 1, 1, 1 then 2 s, and a loaded snapshot starts the count again: its stream's error waits 1 s",
+    retriedFeed.snapshots.length === 5 &&
+      retriedAt.fetches.length === 5 &&
+      retriedFeed.streams === 2 &&
+      retriedAt.sources.length === 2 &&
+      retriedAt.asked.join() === "1000,1000,1000,2000,1000" &&
+      // Each request after the first started by a timer, the source after the 503 by the one set as it closed.
+      retriedAt.by.every((i) => i >= 0) &&
+      new Set(retriedAt.by).size === 5 &&
+      retriedAt.sources[1].by === retriedAt.sources[0].next &&
+      // Not sooner than asked (5 ms for the clock's granularity), from one request's start to the next.
+      retriedGaps.every((gap, i) => gap >= /** @type {number} */ (retriedAt.asked[i]) - 5) &&
+      retriedLive &&
+      retriedStates.startsWith("syncing reconnecting live"),
+    `${retriedLive ? "live" : "not live within 60 s"}, ${retriedFeed.snapshots.length} snapshots, ${retriedFeed.streams} streams, waits asked ${retriedAt.asked.join(", ")} ms, snapshot requests ${retriedGaps.map((g) => `+${g} ms`).join(", ")}; ${retriedStates}`,
   );
   // An answer that is JSON but not a snapshot (no epoch) is a failed snapshot: never handed to the
   // script, logged, and fetched again after 1 s (#1039).
@@ -263,9 +302,9 @@ export async function feedRecovery(page, errors, located) {
   const logged = (/** @type {RegExp} */ text) => snapshotLogged.filter((e) => text.test(e)).length;
   check(
     "a snapshot that fails, one that is not a snapshot and each patch that is not one are logged once",
-    snapshotLogged.length === 4 &&
+    snapshotLogged.length === 7 &&
       // Firefox gives each as `Error`, from the runtime.
-      (snapshotLogged.every((e) => e.startsWith("Error at ")) || (logged(/retried answered 500/) === 1 && logged(/malformed sent no snapshot/) === 1 && logged(/rejected sent a bad patch/) === 2)),
+      (snapshotLogged.every((e) => e.startsWith("Error at ")) || (logged(/retried answered 500/) === 4 && logged(/malformed sent no snapshot/) === 1 && logged(/rejected sent a bad patch/) === 2)),
     feedErrors.join(" | ") || "nothing logged",
   );
   const feedOthers = feedErrors.filter((e) => !snapshotLogged.includes(e));

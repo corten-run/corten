@@ -66,6 +66,8 @@ export async function openWatchlist(browser) {
     const timers = (w.__timers = /** @type {number[]} */ ([]));
     // The index of the recorded timer whose callback is running, so a source knows which opened it.
     let running = -1;
+    // The same, for a request a check records itself (a feed's snapshot, say).
+    w.__timerRunning = () => running;
     const setTimer = window.setTimeout;
     window.setTimeout = /** @type {typeof setTimeout} */ (
       (/** @type {TimerHandler} */ handler, /** @type {number | undefined} */ delay, /** @type {unknown[]} */ ...rest) => {

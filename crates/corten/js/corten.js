@@ -892,8 +892,9 @@ export function subscribe(url, handlers, { signal } = {}) {
 
   /**
    * Runs `next` after a backoff that doubles every second failure in a row: 1, 1, 1, 2, 2, 4, 4 s
-   * and on to 30 s. Tries at 1, 2, 3, 4, 6, 8, 12, 16 s ... reach a server that comes back within
-   * half its outage, and cost one try in 30 s while it stays down.
+   * and on to 30 s, for a failed snapshot and a stream answered with an HTTP error alike. After
+   * the browser's own retry at 1 s, the tries come about 1, 2, 3, 4, 6, 8, 12, 16, 24, 32 s after a
+   * cut: sooner after a short outage than doubling from 1 s, up to 2 s later after some long ones.
    * @param {() => void} next
    */
   function retry(next) {
