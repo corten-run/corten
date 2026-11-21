@@ -1472,7 +1472,10 @@ mod tests {
     /// A page's body that brotli makes much smaller, numbered so two are not the same.
     #[cfg(feature = "compress")]
     fn a_page(n: u32) -> Bytes {
-        (0..120u32).map(|i| format!(r#"<li><a href="/items/{i}">Item {i}</a> {}</li>"#, (i + n) * 7919 % 1000)).collect::<String>().into()
+        (0..120u32)
+            .map(|i| format!(r#"<li><a href="/items/{i}">Item {i}</a> {}</li>"#, (i + n) * 7919 % 1000))
+            .collect::<String>()
+            .into()
     }
 
     /// A page's brotli queued for the compression thread is not made, counted or given once the
@@ -1491,8 +1494,11 @@ mod tests {
                 "past its lifetime" => (Instant::now().checked_sub(std::time::Duration::from_secs(2)).expect("a time"), 1),
                 _ => (Instant::now(), 60),
             };
-            let stale = answers
-                .keep(|place| Entry { body: body.clone(), made, ..entry(&answers, "/a", None, lifetime, body.len())(place) });
+            let stale = answers.keep(|place| Entry {
+                body: body.clone(),
+                made,
+                ..entry(&answers, "/a", None, lifetime, body.len())(place)
+            });
             let mut extensions = http::Extensions::new();
             extensions.insert(Kept(stale.clone()));
             let release = hold_the_compression_thread();
