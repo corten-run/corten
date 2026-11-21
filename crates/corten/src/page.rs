@@ -70,28 +70,46 @@ const VARY: &str = "corten, accept";
 /// The same, for an answer whose locale follows `Accept-Language`.
 const VARY_LANGUAGE: &str = "corten, accept, accept-language";
 
-/// Settles the answer's dependency on `Accept-Language` once it is finished, whatever made it: a
-/// page, JSON, a redirect, the error page, or a middleware that read messages after `next`. When
+/// Settles the answer's dependency on `Accept-Language` as it leaves the app, whatever made it: a
+/// page, JSON, a redirect, the error page, or a middleware that read messages after `next` or put
+/// its own `Vary` on a kept page (which says the language it was kept for, [`crate::kept`]). When
 /// something negotiated the request's locale from the header ([`crate::Signal::asked_language`])
-/// and its `Vary` does not name it (or `*`) yet, `accept-language` is added on a line of its own,
-/// beside the fields already there. A page that read messages before it was made already names
-/// it ([`Req::vary`]); one that read them later, or an answer that is not a page, gets it here.
-/// Called on the handler's answer before the app keeps it ([`crate::kept`]) and on every answer
-/// as it leaves the app, so the kept copy's key and the header on the wire are the same.
-pub(crate) fn vary_on_language(signal: &crate::Signal, headers: &mut HeaderMap) {
-    if !signal.asked_language() {
-        return;
+/// and no line of the answer's `Vary` names it (or `*`), it is added ([`add_language`]). A page
+/// that read messages before it was made names it on its own line ([`Req::vary`]), which is taken
+/// as it is before the signal is asked. Returns whether the answer has a `Vary`, so the security
+/// headers do not look it up again.
+pub(crate) fn vary_on_language(signal: &crate::Signal, headers: &mut HeaderMap) -> bool {
+    let Some(first) = headers.get(header::VARY) else {
+        if !signal.asked_language() {
+            return false;
+        }
+        headers.insert(header::VARY, HeaderValue::from_static("accept-language"));
+        return true;
+    };
+    if first.as_bytes() == VARY_LANGUAGE.as_bytes() || !signal.asked_language() {
+        return true;
     }
     let named = headers.get_all(header::VARY).iter().any(|line| {
-        let line = line.as_bytes();
-        // A page's own line ([`Req::vary`]) first: one comparison rather than a scan of its names.
-        line == VARY_LANGUAGE.as_bytes()
-            || line
-                .split(|&b| b == b',')
-                .map(<[u8]>::trim_ascii)
-                .any(|name| name == b"*" || name.eq_ignore_ascii_case(b"accept-language"))
+        line.as_bytes()
+            .split(|&b| b == b',')
+            .map(<[u8]>::trim_ascii)
+            .any(|name| name == b"*" || name.eq_ignore_ascii_case(b"accept-language"))
     });
     if !named {
+        add_language(headers);
+    }
+    true
+}
+
+/// Names `accept-language` in a `Vary` none of whose lines does: in the place of a page's own
+/// line when it is the only one, as a page that read messages before it was made says it
+/// ([`Req::vary`]), else on a line of its own beside the others.
+pub(crate) fn add_language(headers: &mut HeaderMap) {
+    let mut lines = headers.get_all(header::VARY).iter();
+    let own = lines.next().is_some_and(|line| line.as_bytes() == VARY.as_bytes()) && lines.next().is_none();
+    if own {
+        headers.insert(header::VARY, HeaderValue::from_static(VARY_LANGUAGE));
+    } else {
         headers.append(header::VARY, HeaderValue::from_static("accept-language"));
     }
 }

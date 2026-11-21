@@ -2538,7 +2538,8 @@ impl<S: Steps> Layer<S> {
         // page, no caller lookup.
         if !self.policy.answers(req.uri(), || origin.host()) {
             let mut res = crate::security::misdirected();
-            self.policy.headers(&mut res, None, &self.policy.csp);
+            let vary = res.headers().contains_key(header::VARY);
+            self.policy.headers(&mut res, None, &self.policy.csp, vary);
             res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
             pending.discard();
             return res;
@@ -2561,7 +2562,8 @@ impl<S: Steps> Layer<S> {
         let cors = mount.filter(|mount| !mount.origins().is_empty()).and_then(|mount| mount.allowed_origin(origin.value()));
         if let Some(mount) = mount {
             if let Some(mut res) = mount.preflight(req.method(), headers, cors) {
-                self.policy.headers(&mut res, None, csp);
+                let vary = res.headers().contains_key(header::VARY);
+                self.policy.headers(&mut res, None, csp, vary);
                 res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
                 pending.discard();
                 return res;
@@ -2573,18 +2575,24 @@ impl<S: Steps> Layer<S> {
         // A page's nonce is made only if its HTML asks for one; an API route never has one.
         let nonce = mount.is_none().then(|| NonceSlot::new(shell, csp.script_loads));
         if let Some(refused) = self.policy.refuse(req.method(), &mut origin, cors.is_some() && !credentials.has_cookie()) {
-            let mut refused = match mount {
-                Some(mount) => crate::api::json_failure(refused, false, mount.errors.as_ref()).await,
+            let (mut refused, vary) = match mount {
+                Some(mount) => {
+                    let refused = crate::api::json_failure(refused, false, mount.errors.as_ref()).await;
+                    let vary = refused.headers().contains_key(header::VARY);
+                    (refused, vary)
+                }
                 None if page.refusal_wants_html(headers) => {
                     page.credentials = credentials.for_error_page(headers);
                     let watch = Watch(self.signal(&credentials, crate::extract::BODY_LIMIT));
                     let asked = Asked::new(req, &self.shared, &mut page, nonce.as_ref(), &watch.0);
-                    let page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
-                    signal::follow(page, watch, self.zoned())
+                    let mut page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
+                    // The error page's language, as on any other answer (below).
+                    let vary = page::vary_on_language(&watch.0, page.headers_mut());
+                    (signal::follow(page, watch, self.zoned()), vary)
                 }
-                None => refused,
+                None => (refused, false),
             };
-            self.policy.headers(&mut refused, nonce.as_ref(), csp);
+            self.policy.headers(&mut refused, nonce.as_ref(), csp, vary);
             if mount.is_none() {
                 self.policy.document(&mut refused, csp, mode.swaps());
             }
@@ -2641,7 +2649,7 @@ impl<S: Steps> Layer<S> {
         let caller = watch.0.is_personal();
         // Whatever answered (a page, JSON, a redirect, the error page, a middleware after
         // `next`): a locale it negotiated from `Accept-Language` is in its `Vary`.
-        page::vary_on_language(&watch.0, res.headers_mut());
+        let vary = page::vary_on_language(&watch.0, res.headers_mut());
         let mut res = signal::follow(res, watch, self.zoned());
         if let Some(wrote) = wrote {
             wrote.answered(&res);
@@ -2656,7 +2664,7 @@ impl<S: Steps> Layer<S> {
             res.headers_mut().insert(header::ALLOW, http::HeaderValue::from_static(""));
         }
         // First: the security headers reserve room for `Cache-Control` and `Vary` too.
-        self.policy.headers(&mut res, nonce.as_ref(), csp);
+        self.policy.headers(&mut res, nonce.as_ref(), csp, vary);
         if mount.is_none() {
             self.policy.document(&mut res, csp, mode.swaps());
         }

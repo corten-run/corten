@@ -1728,6 +1728,191 @@ async fn a_late_message_read_is_kept_and_sent_for_its_language() {
     }
 }
 
+/// A middleware that puts its own `Vary` on the answer after `next`, without reading messages,
+/// does not take the language away from a kept page: the kept copy says it was made for its
+/// `Accept-Language`, so the last stage names the header again, on the hit as on the miss. A
+/// language not kept yet is made for itself.
+#[tokio::test]
+async fn a_kept_page_names_its_language_after_a_middleware_replaced_vary() {
+    struct Replaces;
+
+    impl crate::Middleware for Replaces {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            res.headers_mut().insert(header::VARY, HeaderValue::from_static("corten, accept"));
+            res
+        }
+    }
+
+    let runs = Runs::default();
+    let counted = runs.clone();
+    let page = move |req: Req| {
+        counted.ran();
+        async move {
+            let t: WordsMsg = req.t();
+            let listings = t.item_listings().to_string();
+            Public::new(Duration::from_secs(60), req.test_page_for("Words", html! { <p>{listings}</p> }))
+        }
+    };
+    let router = App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).middleware(Replaces).router();
+    for (asked, word, ran, hit) in [("fr", "Annonces", 1, false), ("fr", "Annonces", 1, true), ("en", "Listings", 2, false)] {
+        let (status, headers, body) = fetch(&router, "GET", "/", &[("accept-language", asked)]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(String::from_utf8_lossy(&body).contains(word), "{asked}: {}", String::from_utf8_lossy(&body));
+        assert_eq!((runs.count(), headers.contains_key(header::AGE)), (ran, hit), "{asked}: {headers:?}");
+        names_once(&headers, &["corten", "accept", "accept-language"], &format!("{asked}, kept {hit}"));
+    }
+}
+
+/// A middleware that reads messages after `next` makes the answer depend on the language, on the
+/// kept page given in the handler's place as on the one made, though the page itself is one for
+/// every language: its `Vary` names `Accept-Language` once, beside the page's own fields.
+#[tokio::test]
+async fn a_middleware_that_reads_messages_after_next_names_the_language_on_a_kept_page() {
+    struct Labels;
+
+    impl crate::Middleware for Labels {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            use crate::extract::FromRequestParts;
+            let (mut parts, body) = req.into_parts();
+            let words = Req::from_request_parts(&mut parts, &()).await.unwrap();
+            let mut res = next.run(Request::from_parts(parts, body)).await;
+            let t: WordsMsg = words.t();
+            res.headers_mut().insert("x-listings", HeaderValue::from_str(t.item_listings()).unwrap());
+            res
+        }
+    }
+
+    let runs = Runs::default();
+    let counted = runs.clone();
+    let page = move |req: Req| {
+        counted.ran();
+        async move { Public::new(Duration::from_secs(60), req.test_page_for("Plain", html! { <p>"plain"</p> })) }
+    };
+    let router = App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).middleware(Labels).router();
+    for (asked, word, hit) in [("fr", "Annonces", false), ("fr", "Annonces", true), ("en", "Listings", true)] {
+        let (status, headers, _) = fetch(&router, "GET", "/", &[("accept-language", asked)]).await;
+        assert_eq!((status, runs.count(), headers.contains_key(header::AGE)), (StatusCode::OK, 1, hit), "{asked}: {headers:?}");
+        assert_eq!(headers["x-listings"], word);
+        names_once(&headers, &["corten", "accept", "accept-language"], &format!("{asked}, kept {hit}"));
+    }
+}
+
+/// A page that read its messages after it was built, asked for with `HEAD` and revalidated with
+/// the tag it was given (here from its kept copy), names `Accept-Language` on each: a `HEAD`
+/// has its `GET`'s headers and a `304` varies as its `200`.
+#[tokio::test]
+async fn a_localized_head_and_its_304_name_accept_language() {
+    let page = |req: Req| async move { Public::new(Duration::from_secs(60), late_words(&req)) };
+    let router = App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).router();
+    let french = ("accept-language", "fr");
+    // A tag the page does not have, so the answer is tagged without being compressed.
+    let (status, got, body) = fetch(&router, "GET", "/", &[french, ("if-none-match", "\"other\"")]).await;
+    assert!(status == StatusCode::OK && String::from_utf8_lossy(&body).contains("Annonces"), "{got:?}");
+    let tag = got[header::ETAG].to_str().unwrap().to_string();
+    let (status, head, body) = fetch(&router, "HEAD", "/", &[french]).await;
+    assert_eq!((status, body.len()), (StatusCode::OK, 0), "{head:?}");
+    let (status, revalidated, body) = fetch(&router, "GET", "/", &[french, ("if-none-match", &tag)]).await;
+    assert_eq!((status, body.len()), (StatusCode::NOT_MODIFIED, 0), "{revalidated:?}");
+    assert!(revalidated.contains_key(header::AGE), "revalidated against the kept copy: {revalidated:?}");
+    for (case, headers) in [("GET", &got), ("HEAD", &head), ("304", &revalidated)] {
+        names_once(headers, &["corten", "accept", "accept-language"], case);
+    }
+}
+
+/// `accept-language` is added once, on a line of its own, beside the `Vary` lines the answer
+/// already has, and not at all when one of them names it in another case. A patch and a streamed
+/// answer that negotiated their messages before answering name it too.
+#[tokio::test]
+async fn the_language_is_named_once_beside_the_answer_s_own_vary() {
+    let with = |extra: &'static str| {
+        move |req: Req| async move {
+            let page: HtmlResult = late_words(&req).map(|mut page| {
+                page.headers_mut().append(header::VARY, HeaderValue::from_static(extra));
+                page
+            });
+            page
+        }
+    };
+    let patch = |req: Req| async move {
+        let t: WordsMsg = req.t();
+        let listings = t.item_listings().to_string();
+        let patched: HtmlResult = req.action().ok_or_else(crate::Error::not_found)?.patch(html! { <p id={MsgId}>{listings}</p> });
+        patched
+    };
+    let stream = |req: Req| async move {
+        let t: WordsMsg = req.t();
+        let chunk = Ok::<_, std::convert::Infallible>(bytes::Bytes::from(format!("<p>{}</p>", t.item_listings())));
+        ([(header::CONTENT_TYPE, "text/html")], Body::from_stream(futures_util::stream::iter([chunk])))
+    };
+    let routes = Table::new()
+        .route("/tenant", crate::route::get(with("X-Tenant")).0)
+        .route("/mixed", crate::route::get(with("Accept-Language")).0)
+        .route("/patch", get(patch))
+        .route("/stream", get(stream));
+    let router = App::new(Routes::from(routes)).router();
+    for (uri, mode, lines) in [
+        ("/tenant", None, &["corten, accept", "X-Tenant", "accept-language"][..]),
+        ("/mixed", None, &["corten, accept", "Accept-Language"][..]),
+        ("/patch", Some("action"), &[][..]),
+        ("/stream", None, &[][..]),
+    ] {
+        let mut sent = vec![("accept-language", "fr")];
+        sent.extend(mode.map(|mode| ("corten", mode)));
+        let (status, headers, body) = fetch(&router, "GET", uri, &sent).await;
+        assert!(status == StatusCode::OK && String::from_utf8_lossy(&body).contains("Annonces"), "{uri}: {headers:?}");
+        let had: Vec<_> = headers.get_all(header::VARY).iter().map(|line| line.to_str().unwrap()).collect();
+        assert_eq!(&had[..lines.len()], lines, "{uri}");
+        names_once(&headers, &["accept-language"], uri);
+    }
+}
+
+/// A cross-site write refused with the app's error page, which reads its messages after it built
+/// its page, names `Accept-Language` as any other answer does.
+#[tokio::test]
+async fn a_refused_write_s_error_page_names_the_language_it_read_late() {
+    async fn late_error_page(_: Failure, req: Req) -> HtmlResult {
+        late_words(&req)
+    }
+    let routes = Table::new().route(
+        "/",
+        get(|req: Req| async move { req.test_page("Home", html! { <p>"home"</p> }) }).post(|| async { StatusCode::OK }),
+    );
+    let router = App::new(Routes::from(routes)).error_page(late_error_page, ()).router();
+    for (asked, word) in [("fr", "Annonces"), ("en", "Listings")] {
+        let sent = [
+            ("origin", "https://evil.example"),
+            ("sec-fetch-site", "cross-site"),
+            ("accept", "text/html"),
+            ("accept-language", asked),
+        ];
+        let (status, headers, body) = fetch(&router, "POST", "/", &sent).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(String::from_utf8_lossy(&body).contains(word), "{asked}: {}", String::from_utf8_lossy(&body));
+        names_once(&headers, &["corten", "accept", "accept-language"], asked);
+    }
+}
+
+/// Both pages built before the messages are read, then the one in the language asked for.
+fn late_words<For>(req: &Req) -> crate::Result<HtmlResponse<For>> {
+    let english = req.test_page_for("Words", html! { <p>"Listings"</p> });
+    let french = req.test_page_for("Words", html! { <p>"Annonces"</p> });
+    let t: WordsMsg = req.t();
+    if t.item_listings() == "Annonces" {
+        french
+    } else {
+        english
+    }
+}
+
+/// Each of `names` is on the answer's `Vary` exactly once, in any case, over all its lines.
+fn names_once(headers: &HeaderMap, names: &[&str], case: &str) {
+    let vary = vary_names(headers);
+    for name in names {
+        assert_eq!(vary.iter().filter(|named| named.as_str() == *name).count(), 1, "{case} {name}: {vary:?}");
+    }
+}
+
 /// Answers other than a `Public` page that negotiate their messages from `Accept-Language` in an
 /// app without `App::messages` say so too: the error page, a page drawn with a notice it was sent
 /// back, and a redirect chosen by the language (which says so with `App::messages` as well).
