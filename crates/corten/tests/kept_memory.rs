@@ -21,10 +21,15 @@ const PAGES: usize = 3000;
 /// beside the bound.
 const COUNTS: usize = 4 << 16;
 
+/// A browser's codings: it is given a kept page's brotli at the kept level once that is made, and
+/// zstd until then.
+#[cfg(feature = "compress")]
+const BROWSER: &str = "gzip, deflate, br, zstd";
+
 /// Each coding alone, then a browser's: its answer is the second to a client that takes brotli,
 /// so the page's brotli at the kept level is made after it, on the compression thread.
 #[cfg(feature = "compress")]
-const CODINGS: &[&str] = &["identity", "zstd", "br", "gzip", "gzip, deflate, br, zstd"];
+const CODINGS: &[&str] = &["identity", "zstd", "br", "gzip", BROWSER];
 #[cfg(not(feature = "compress"))]
 const CODINGS: &[&str] = &["identity"];
 
@@ -88,6 +93,11 @@ async fn made(req: Req) -> HtmlResult {
 /// One request as a browser sends it, read to the end of its body. True when the answer was a
 /// kept page (it has an `Age`).
 async fn get(stream: &mut TcpStream, read: &mut Vec<u8>, path: &str, coding: &str) -> bool {
+    answer(stream, read, path, coding).await.0
+}
+
+/// [`get`], and the answer's `Content-Encoding`.
+async fn answer(stream: &mut TcpStream, read: &mut Vec<u8>, path: &str, coding: &str) -> (bool, Option<String>) {
     let request = format!(
         "GET {path} HTTP/1.1\r\nhost: localhost\r\naccept: text/html,application/xhtml+xml,*/*;q=0.8\r\n\
          accept-language: en-US,en;q=0.9\r\naccept-encoding: {coding}\r\n\
@@ -108,7 +118,27 @@ async fn get(stream: &mut TcpStream, read: &mut Vec<u8>, path: &str, coding: &st
     while read.len() < head + length {
         assert!(stream.read_buf(read).await.unwrap() > 0, "the connection closed");
     }
-    text.lines().any(|line| line.starts_with("age:"))
+    let encoding = text.lines().find_map(|line| line.strip_prefix("content-encoding: ")).map(|coding| coding.trim().to_owned());
+    (text.lines().any(|line| line.starts_with("age:")), encoding)
+}
+
+/// Asks for page `n` as a browser until it is given in brotli, which it is once the compression
+/// thread has made and counted the page's brotli at the kept level: it was queued on the
+/// browser's answer before, and nothing else is queued meanwhile.
+#[cfg(feature = "compress")]
+async fn made_at_the_kept_level(stream: &mut TcpStream, read: &mut Vec<u8>, n: usize) {
+    let asked = std::time::Instant::now();
+    loop {
+        let (kept, coding) = answer(stream, read, &format!("/kept?n={n}"), BROWSER).await;
+        assert!(kept, "page {n} is kept");
+        match coding.as_deref() {
+            Some("br") => return,
+            Some("zstd") => {}
+            other => panic!("page {n} in {other:?}"),
+        }
+        assert!(asked.elapsed() < Duration::from_secs(30), "page {n}'s brotli was not made");
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
 }
 
 #[tokio::test]
@@ -136,16 +166,16 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
                 assert!(first >= COUNTS, "the first page asked for took {first} bytes: the counts were made before it");
             }
         }
+        // So every page kept holds its brotli at the kept level when the count is read, and the
+        // thread has no page's brotli left to make (it frees the encoder's tables before it is
+        // given).
+        #[cfg(feature = "compress")]
+        made_at_the_kept_level(&mut stream, &mut read, n).await;
     }
-    // What the compression thread makes for the last pages, and the encoder's own tables while
-    // it does, are counted once it is done with them.
-    let mut last = usize::MAX;
-    while LIVE.load(Ordering::Relaxed) != last {
-        last = LIVE.load(Ordering::Relaxed);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    let held = LIVE.load(Ordering::Relaxed).saturating_sub(before + COUNTS);
+    // A lookup waits for the store's lock, which the thread holds while it counts the last
+    // page's brotli and makes room for it.
     assert!(get(&mut stream, &mut read, &format!("/kept?n={}", PAGES - 1), "identity").await, "the newest is kept");
+    let held = LIVE.load(Ordering::Relaxed).saturating_sub(before + COUNTS);
     assert!(!get(&mut stream, &mut read, "/kept?n=0", "identity").await, "and the oldest went to make room");
     server.abort();
     // The figure `docs/design.md#choice-kept-pages` cites:
