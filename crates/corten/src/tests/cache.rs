@@ -1247,6 +1247,72 @@ fn what_a_page_s_caching_costs() {
     });
 }
 
+/// A `Public` page's `Cache-Control` is read as it stands when it leaves the app, not as `Public`
+/// wrote it: a line a middleware wrote in its place or beside it after the handler counts, for the
+/// handler's answer and for the kept one given in its place. The same text written again is the
+/// same header.
+#[tokio::test]
+async fn a_cache_control_a_middleware_wrote_on_a_public_page_counts() {
+    struct Rewrite;
+
+    impl crate::Middleware for Rewrite {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let how = req.headers().get("x-rewrite").cloned();
+            let mut res = next.run(req).await;
+            let headers = res.headers_mut();
+            match how.as_ref().map(|how| how.as_bytes()) {
+                None => {}
+                Some(b"same") => {
+                    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=60"));
+                }
+                Some(b"moved") => {
+                    let line = headers.remove(header::CACHE_CONTROL).unwrap();
+                    headers.insert(header::CACHE_CONTROL, line);
+                }
+                Some(b"no-store") => {
+                    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+                }
+                Some(b"beside") => {
+                    headers.append(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+                }
+                Some(b"private") => {
+                    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=5"));
+                }
+                Some(b"valued") => {
+                    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=60, no-store=1"));
+                }
+                Some(other) => panic!("{other:?}"),
+            }
+            res
+        }
+    }
+
+    let runs = Runs::default();
+    for keeps in [true, false] {
+        let app = App::new(Routes::from(kept_routes(&runs))).middleware(Rewrite);
+        let router = if keeps { app.router() } else { app.kept_answers(0).router() };
+        // The first is kept, where the app keeps answers: the others are given that one.
+        for (how, lines, cookie) in [
+            ("", &["public, max-age=60"][..], true),
+            ("same", &["public, max-age=60"], true),
+            ("moved", &["public, max-age=60"], true),
+            ("no-store", &["no-store"], false),
+            ("beside", &["public, max-age=60, no-store"], false),
+            ("private", &["private, max-age=5"], false),
+            ("valued", &["public, max-age=60, no-store=1"], true),
+        ] {
+            let asked: &[(&'static str, &str)] = if how.is_empty() { &[] } else { &[("x-rewrite", how)] };
+            let (status, headers, _) = fetch(&router, "GET", "/", asked).await;
+            assert_eq!(status, StatusCode::OK);
+            let sent: Vec<_> = headers.get_all(header::CACHE_CONTROL).iter().map(|v| v.to_str().unwrap()).collect();
+            assert_eq!(sent, lines, "{how}, kept: {keeps}");
+            assert_eq!(vary_names(&headers).contains(&"cookie".to_string()), cookie, "{how}, kept: {keeps}: {headers:?}");
+            assert_eq!(headers.contains_key(header::AGE), keeps && !how.is_empty(), "{how}, kept: {keeps}");
+        }
+    }
+    assert_eq!(runs.count(), 8, "one render kept, seven for the app that keeps none");
+}
+
 /// A kept page's tag and its bytes in every coding are those the handler's own answer has in an
 /// app that keeps none: only who makes them, and how often, differs.
 #[tokio::test]

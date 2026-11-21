@@ -171,8 +171,17 @@ impl Cache {
 impl Cache {
     /// Sets the response's `Cache-Control` to this, as [`settle`] reads it.
     pub(crate) fn apply(self, res: &mut Response) {
-        res.headers_mut().insert(header::CACHE_CONTROL, self.header());
-        res.extensions_mut().insert(Typed { named: self.kind == Kind::Immutable, lifetime: self.lifetime() });
+        let (value, typed) = self.typed(self.kind == Kind::Immutable);
+        res.headers_mut().insert(header::CACHE_CONTROL, value);
+        res.extensions_mut().insert(typed);
+    }
+
+    /// The header and the mark [`settle`] reads it by. A `public` one says none of what [`settle`]
+    /// reads a line for, so the mark holds it to know it while it stands as written.
+    fn typed(self, named: bool) -> (HeaderValue, Typed) {
+        let value = self.header();
+        let wrote = matches!(self.kind, Kind::Public { .. } | Kind::Immutable).then(|| value.clone());
+        (value, Typed { named, lifetime: self.lifetime(), wrote })
     }
 }
 
@@ -180,33 +189,44 @@ impl IntoResponseParts for Cache {
     type Error = std::convert::Infallible;
 
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
-        res.headers_mut().insert(header::CACHE_CONTROL, self.header());
-        res.extensions_mut().insert(Typed { named: false, lifetime: self.lifetime() });
+        let (value, typed) = self.typed(false);
+        res.headers_mut().insert(header::CACHE_CONTROL, value);
+        res.extensions_mut().insert(typed);
         Ok(res)
     }
 }
 
 /// Marks a `Cache-Control` that came from [`Cache`], which [`settle`] checks against the request.
 /// One extension, not two, since each costs a lookup.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct Typed {
     /// A [`Cache::immutable`] answer: its URL names it, so the request's cookies do not change it.
     named: bool,
     /// [`Cache::lifetime`], for the app's own keeping of the answer ([`crate::kept`]).
     lifetime: u64,
+    /// The `public` header [`Cache`] wrote, held so no other value has its bytes.
+    wrote: Option<HeaderValue>,
 }
 
 impl Typed {
     /// `res`'s mark and its lifetime in seconds, when it is an answer a shared cache may keep for
     /// one: what the app itself keeps ([`crate::kept`]).
     pub(crate) fn shared(res: &Response) -> Option<(Typed, u64)> {
-        let typed = *res.extensions().get::<Typed>()?;
-        (!typed.named && typed.lifetime > 0).then_some((typed, typed.lifetime))
+        let typed = res.extensions().get::<Typed>()?;
+        (!typed.named && typed.lifetime > 0).then(|| (typed.clone(), typed.lifetime))
+    }
+
+    /// Whether `lines` are the header [`Cache`] wrote and nothing else: one line with its very
+    /// bytes, not text a middleware or the handler wrote, which [`settle`] reads.
+    fn as_written(&self, lines: &header::OccupiedEntry<'_, HeaderValue>) -> bool {
+        let Some(wrote) = &self.wrote else { return false };
+        let mut lines = lines.iter();
+        lines.next().is_some_and(|line| std::ptr::eq(line.as_bytes(), wrote.as_bytes())) && lines.next().is_none()
     }
 
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
-        Typed { named: false, lifetime: 60 }
+        Typed { named: false, lifetime: 60, wrote: None }
     }
 }
 
@@ -283,12 +303,15 @@ const NOTICE_GONE: [&[u8]; 2] = [b"__Host-corten-notice=;", b"corten-notice=;"];
 /// Sets the response's `Cache-Control`: the default when it has none, and a private one instead
 /// of a shared one when the response may differ between users.
 pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
+    let typed = res.extensions().get::<Typed>().cloned();
     // One lookup for the usual response, which says nothing.
     match res.headers_mut().entry(header::CACHE_CONTROL) {
         header::Entry::Vacant(entry) => {
             entry.insert(PRIVATE);
             return;
         }
+        // `public` and its ages as [`Cache`] wrote them say nothing read for below.
+        header::Entry::Occupied(entry) if typed.as_ref().is_some_and(|typed| typed.as_written(&entry)) => {}
         header::Entry::Occupied(mut entry) => {
             // The directives of every line count, as HTTP joins them (a second line is rare: only
             // a header written by hand has one). Only a plain `private` makes the answer private:
@@ -346,7 +369,6 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
             PRIVATE
         }
     };
-    let typed = res.extensions().get::<Typed>().copied();
     let headers = res.headers_mut();
     let bug = if seen.nonce {
         Some("its HTML has this request's CSP nonce (req.nonce() in the layout, or a handler that takes Nonce)")
@@ -366,7 +388,7 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
         headers.insert(header::CACHE_CONTROL, personal(headers));
         return;
     }
-    if seen.caller || typed.is_some_and(|typed| seen.credentials && !typed.named) {
+    if seen.caller || typed.as_ref().is_some_and(|typed| seen.credentials && !typed.named) {
         headers.insert(header::CACHE_CONTROL, personal(headers));
         return;
     }
@@ -683,7 +705,7 @@ mod tests {
             res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
         }
         if typed {
-            res.extensions_mut().insert(Typed { named: false, lifetime: 60 });
+            res.extensions_mut().insert(Typed::for_test());
         }
         if cookie {
             res.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_static("a=b"));
