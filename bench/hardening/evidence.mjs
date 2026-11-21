@@ -312,6 +312,7 @@ export const phaseInputs = (phase) => [...new Set([upstreamSourcePath(phase), pr
 // Missing options are not valid standalone evidence.
 export function savedIsolation(options) {
   assert.ok(options && Object.getPrototypeOf(options) === Object.prototype, "native hardening options required");
+  assert.equal(options.profile, "bounded", "bounded profile required in native hardening options");
   if (!Object.hasOwn(options, "isolated")) return false;
   assert.equal(options.isolated, true, "invalid native hardening isolation option");
   return true;

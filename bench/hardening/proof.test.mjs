@@ -106,6 +106,7 @@ test("owned receipts require declared options and enforce isolated launch CPU pr
   const { summary, receipts } = fixture("direct", true);
   assert.equal(verifyOwnedReceipts(receipts, summary).get(summary.cells[0].key).length, 10);
   assert.throws(() => verifyOwnedReceipts(receipts, { ...summary, options: undefined }), /native hardening options required/);
+  assert.throws(() => verifyOwnedReceipts(fixture().receipts, { ...summary, options: {} }), /bounded profile required/);
   assert.throws(() => verifyOwnedReceipts(receipts, { ...summary, options: { ...summary.options, isolated: false } }),
     /invalid native hardening isolation option/);
   assert.throws(() => verifyOwnedReceipts(fixture().receipts, summary), /Docker cpuset differs/);
@@ -397,6 +398,7 @@ test("Git archive build and harness inputs replay committed bytes read-only, inc
   writeFileSync(join(dir, "run-manifest.json"), JSON.stringify(savedFiles(dir)));
   const sealed = savedFiles(dir), proof = verifySavedProof(dir, full.summary);
   assert.equal(proof.sources, "verified"); assert.equal(proof.resources, "verified"); assert.equal(proof.cleanupComplete, true); assert.deepEqual(proof.blockers, []);
+  assert.equal(proof.cpuRoles, undefined, "standalone receipts do not prove CPU isolation");
   assert.deepEqual(savedFiles(dir), sealed);
   const reseal = () => writeFileSync(join(dir, "run-manifest.json"), JSON.stringify(savedFiles(dir).filter((f) => f.path !== "run-manifest.json")));
   for (const kind of ["image", "network"]) await t.test(`sealed proof blocks a known-used ${kind} disappearing before owned removal`, () => {
