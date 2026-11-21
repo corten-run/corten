@@ -1075,10 +1075,33 @@ async fn a_no_store_answer_goes_out_private_no_store_whatever_a_middleware_made_
 
 /// A `Public` page asked for as anything but its full document is the browser's alone, and goes out
 /// with none of the caching headers a CDN reads first also when a staged middleware already made
-/// its `Cache-Control` `private` or `no-store`, or took it out. The full document keeps what the
-/// middleware wrote.
+/// its `Cache-Control` `private` or `no-store`, or took it out. A `no-store` any reader could find
+/// (beside `must-understand`, on a second line, `no-store=1`) goes out `private, no-store`: some
+/// CDNs keep an answer that says only `no-store`. The full document keeps what the middleware wrote.
 #[tokio::test]
 async fn a_public_page_in_a_partial_mode_keeps_no_cdn_caching_header_whatever_a_middleware_says() {
+    /// Staged middleware that writes these lines in place of the answer's `Cache-Control` (none
+    /// takes it out) and marks the answer for a CDN, as [`CdnWrites`] does.
+    struct Recached(&'static [&'static str]);
+
+    impl crate::Middleware for Recached {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            let headers = res.headers_mut();
+            headers.remove(header::CACHE_CONTROL);
+            for line in self.0 {
+                headers.append(header::CACHE_CONTROL, HeaderValue::from_static(line));
+            }
+            for name in CDN_OVERRIDES {
+                headers.insert(name, HeaderValue::from_static("public, max-age=60"));
+            }
+            for name in CDN_OTHERS {
+                headers.insert(name, HeaderValue::from_static("x"));
+            }
+            res
+        }
+    }
+
     let minute = std::time::Duration::from_secs(60);
     let routes = || {
         Table::new().route(
@@ -1087,10 +1110,15 @@ async fn a_public_page_in_a_partial_mode_keeps_no_cdn_caching_header_whatever_a_
         )
     };
     let mut wrong = Vec::new();
-    for (cache, sent) in
-        [(Some("private, max-age=60"), "private, max-age=60"), (Some("no-store"), "no-store"), (None, "private, no-cache")]
-    {
-        let router = App::new(Routes::from(routes())).middleware(CdnRecaches(cache)).router();
+    for (lines, partial, full) in [
+        (&["private, max-age=60"][..], "private, max-age=60", "private, max-age=60"),
+        (&["no-store"], "private, no-store", "no-store"),
+        (&[], "private, no-cache", "private, no-cache"),
+        (&["must-understand, no-store"], "private, no-store", "must-understand, no-store"),
+        (&["public, max-age=60", "no-store"], "private, no-store", "public, max-age=60, no-store"),
+        (&["public, max-age=60, no-store=1"], "private, no-store", "public, max-age=60, no-store=1"),
+    ] {
+        let router = App::new(Routes::from(routes())).middleware(Recached(lines)).router();
         for asked in [
             &[("corten", "nav")][..],
             &[("corten", "action")],
@@ -1098,15 +1126,16 @@ async fn a_public_page_in_a_partial_mode_keeps_no_cdn_caching_header_whatever_a_
             &[("corten", "page"), ("accept", "text/html")],
         ] {
             let (status, headers) = asked_for(&router, "/", asked).await;
-            assert_eq!(status, StatusCode::OK, "{cache:?} {asked:?}");
-            for what in kept_from_cdns(&headers, sent) {
-                wrong.push(format!("{cache:?} {asked:?}: {what}"));
+            assert_eq!(status, StatusCode::OK, "{lines:?} {asked:?}");
+            assert_eq!(headers.get_all(header::CACHE_CONTROL).iter().count(), 1, "{lines:?} {asked:?}: one line");
+            for what in kept_from_cdns(&headers, partial) {
+                wrong.push(format!("{lines:?} {asked:?}: {what}"));
             }
         }
         let (_, headers) = asked_for(&router, "/", &[]).await;
-        assert_eq!(headers[header::CACHE_CONTROL], sent, "{cache:?}: the full document");
+        assert_eq!(headers[header::CACHE_CONTROL], full, "{lines:?}: the full document");
         for name in CDN_OVERRIDES {
-            assert_eq!(headers[name], "public, max-age=60", "{cache:?}: the full document keeps the middleware's {name}");
+            assert_eq!(headers[name], "public, max-age=60", "{lines:?}: the full document keeps the middleware's {name}");
         }
     }
     assert!(wrong.is_empty(), "the browser's alone, still open to a CDN: {wrong:#?}");

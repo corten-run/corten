@@ -426,8 +426,9 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
         return;
     }
     if no_store && !must_understand {
-        // A personal answer says `private` too, for a CDN that ignores `no-store`.
-        if personal && !(is_private && plain) {
+        // A personal answer, and one sent as the browser's alone, says `private` too, for a CDN
+        // that ignores `no-store`.
+        if (personal || partial) && !(is_private && plain) {
             headers.insert(header::CACHE_CONTROL, PRIVATE_NO_STORE);
         } else if quoted || !text {
             headers.insert(header::CACHE_CONTROL, NO_STORE);
@@ -466,7 +467,14 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     }
     let Some(typed) = typed else { return };
     if seen.partial {
-        let browser = private(headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).unwrap_or(""));
+        // A `no-store` any reader could find (`no-store=1`, beside `must-understand`) is kept,
+        // with `private` for a CDN that ignores a bare one; otherwise the same lifetime.
+        let lines = headers.get_all(header::CACHE_CONTROL);
+        if lines.iter().any(|line| mentions_no_store(line.as_bytes())) {
+            headers.insert(header::CACHE_CONTROL, PRIVATE_NO_STORE);
+            return;
+        }
+        let browser = private(lines.iter().next().and_then(|v| v.to_str().ok()).unwrap_or(""));
         headers.insert(header::CACHE_CONTROL, browser);
     }
     if !typed.named {
