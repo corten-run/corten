@@ -1,7 +1,7 @@
 // Offline composition acceptance: real snapshot Worker -> productionMain -> controller.
 // Only credential consumption and external Git/HTTPS/SSH/SCP responses are fake.
 import assert from "node:assert/strict";
-import { fork } from "node:child_process";
+import { execFileSync, fork } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
@@ -12,6 +12,8 @@ import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { providerTransport } from "./cloud-provider.mjs";
+import { productionPlan } from "./cloud-production.mjs";
+import { inspectCampaign } from "./cloud-validation.mjs";
 import { bootstrapWorkspaceScript, captureSshOwner, installSshIngress, savedLoadLayout, verifySshIngress } from "./cloud-contract.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { groupNames } from "./registry.mjs";
@@ -19,6 +21,24 @@ import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
+const checkout = fs.realpathSync(".");
+const checkoutCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim();
+function roleCheckFor(fixtureCommit, sourceCommit) {
+  // Reuse the real result for identical inputs within this fixture/worker so
+  // role replay does not consume the offline monitor's peer-overlap window.
+  const checked = new Map();
+  return async ({ round, commit: measured, group, mode }, interrupted) => {
+    assert.equal(measured, fixtureCommit);
+    assert.ok(!interrupted?.());
+    const key = JSON.stringify([round, group, mode]);
+    if (!checked.has(key)) {
+      const report = await inspectCampaign({ action: "actor-role-preflight", round, commit: sourceCommit,
+        group: group ?? null, mode: mode ?? null }, { interrupted });
+      checked.set(key, report);
+    }
+    return checked.get(key);
+  };
+}
 
 function fixture(t, mode = "success") {
   t.after(() => {
@@ -41,18 +61,21 @@ function fixture(t, mode = "success") {
     const target = path.join(repo, file); fs.mkdirSync(path.dirname(target), { recursive: true });
     let source = committed.get(file);
     if (file === "bench/workloads/cloud-validation-snapshot.mjs") {
-      // The validator captures installed HEAD on import, even for detach. Fake
-      // only that Git boundary, not the validator or its snapshot checks.
-      assert.equal(source.split("readGit = spawnSync").length, 3, "review eager Git seam when validation changes");
-      source = source.replaceAll("readGit = spawnSync", `readGit = () => ({ status: 0, stdout: '${commit}\\n' })`);
+      // The synthetic controller tree has no Git repository. Use the same real
+      // validation checkout (and commit) as the parent-side role check.
+      const before = 'const checkout = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), "../.."));';
+      assert.equal(source.split(before).length, 2, "review validation checkout seam");
+      source = source.replace(before, `const checkout = ${JSON.stringify(checkout)};`);
     }
     if (file === "bench/workloads/cloud-production.mjs") {
       // Change defaults only. The actual productionMain body, approval gates,
       // transport, controller and worker protocol remain the production code.
       const before = "spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted";
       const after = "spawn = synthetic.spawn, streamSpawn = synthetic.streamSpawn, providerFactory = synthetic.providerFactory, repo = synthetic.repo, inspect, sleep = synthetic.sleep, interrupted";
+      const roleDefault = "compiler, roleCheck, remainingAdmission = false";
       assert.equal(source.split(before).length, 2, "review fixture injection when production signature changes");
-      source = source.replace(before, after) + `\nimport * as syntheticFs from 'node:fs';
+      assert.equal(source.split(roleDefault).length, 2, "review role-check fixture default");
+      source = source.replace(before, after).replace(roleDefault, "compiler, roleCheck = syntheticRoleCheck, remainingAdmission = false") + `\nimport * as syntheticFs from 'node:fs';
 import * as syntheticPath from 'node:path';
 import { workerData as syntheticData } from 'node:worker_threads';
 import { fork as syntheticFork } from 'node:child_process';
@@ -63,6 +86,7 @@ import { bootstrapMarker as syntheticMarker, bootstrapReadScript as syntheticRea
 import { bootstrapWorkspaceScript } from './cloud-contract.mjs';
 const syntheticArgs = syntheticData.args;
 const syntheticGroup = syntheticArgs[syntheticArgs.indexOf('--group') + 1];
+const syntheticRoleCheck = (${roleCheckFor.toString()})(${JSON.stringify(commit)}, ${JSON.stringify(checkoutCommit)});
 const synthetic = (${syntheticDependencies.toString()})({
   repo: ${JSON.stringify(repo)}, trace: ${JSON.stringify(trace)}, hosts: ${JSON.stringify(hosts)},
   stateDir: syntheticArgs[syntheticArgs.indexOf('--state-dir') + 1], group: syntheticGroup,
@@ -90,7 +114,8 @@ const synthetic = (${syntheticDependencies.toString()})({
     if (argv[0] === "show") return { status: 0, stdout: committed.get(argv[1].slice(41)) };
     return h.run(binary, argv, 60000);
   };
-  const deps = { repo: h.repo, spawn, WorkerClass: SnapshotWorker, write: (value) => output.push(JSON.parse(value)) };
+  const roleCheck = roleCheckFor(commit, checkoutCommit), deps = { repo: h.repo, spawn, WorkerClass: SnapshotWorker, write: (value) => output.push(JSON.parse(value)),
+    plan: (options, deps) => productionPlan(options, { ...deps, roleCheck }) };
   deps.catalogProvider = syntheticCatalogProvider(syntheticPlacement([mode === "overlap" ? "sfo2" : "sfo3"]));
   const args = ["r21", "--fleet-root", h.base];
   const saved = (group = groupNames[0]) => JSON.parse(fs.readFileSync(path.join(h.base, group, "groups-r21/state.json")));

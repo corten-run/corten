@@ -131,6 +131,10 @@ for (const [name, change, expected] of [
 ]) test(`live external ${name} cannot clear cleanup`, async (t) => {
   const f = await fixture(t, "live-delivery", change), result = await f.inspect();
   assert.equal(result.cleanupComplete, false); assert.equal(result.status, expected);
+  if (expected === "blocked") {
+    assert.equal(result.resources, "blocked");
+    assert.ok(result.outcomes.every((row) => row.outcome === "failed"), "retain the recorded app dispositions as diagnostics");
+  }
 });
 
 test("a source-bound harness error without target observations is retained but cannot qualify", async (t) => {
@@ -151,5 +155,7 @@ test("native tree seal and external host evidence are mandatory, never plan rece
   await f.save(join(f.phase, "native-manifest.json"), tree(f.folder));
   const { unlink } = await import("node:fs/promises"); await unlink(join(f.phase, "host-after.json"));
   const r = await f.inspect(); assert.equal(r.cleanupComplete, false); assert.equal(r.resources, "blocked");
+  assert.equal(r.status, "blocked");
+  assert.ok(r.outcomes.every(({ outcome }) => outcome === "failed"));
   assert.ok(!JSON.stringify(r).includes("SYNTHETIC_PRIVATE_SENTINEL"));
 });

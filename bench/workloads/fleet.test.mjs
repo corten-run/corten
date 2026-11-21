@@ -36,7 +36,8 @@ function fixture(t, flags = {}) {
     if (argv[0] === "status" && flags.dirty) return { status: 0, stdout: " M synthetic" };
     return h.run(binary, argv, 60000);
   };
-  const deps = { repo: h.repo, spawn, interrupted: () => !!flags.cancelled, write: (value) => output.push(JSON.parse(value)),
+  const deps = { repo: h.repo, spawn, plan: (options, deps) => productionPlan(options, { ...deps, roleCheck: () => [] }),
+    interrupted: () => !!flags.cancelled, write: (value) => output.push(JSON.parse(value)),
     catalogProvider: syntheticCatalogProvider(() => (typeof flags.placement === "function" ? flags.placement() : flags.placement) ?? syntheticPlacement(), catalogCalls),
     main: async (argv, { onReady }) => {
       const { options, approval } = parseProductionArgs(argv), group = options.group ?? groupNames.find((g) => options.stateDir === join(h.base, g));
@@ -815,7 +816,8 @@ test("no approval, stale bytes/source/account, invalid roster or existing child 
 
 test("missing native integration blocks the entire batch", async (t) => {
   const p = fixture(t); await fleetMain(p.prepare(), p.deps);
-  p.deps.plan = async (...args) => { const plan = await productionPlan(...args); plan.missing = ["synthetic-missing"]; return plan; };
+  const basePlan = p.deps.plan;
+  p.deps.plan = async (...args) => { const plan = await basePlan(...args); plan.missing = ["synthetic-missing"]; return plan; };
   await fleetMain([...p.args("--detach"), "--print-approval"], p.deps);
   const hash = p.output.at(-1).approvalSha256;
   await assert.rejects(fleetMain([...p.args("--detach"), "--approve-reviewed-merged-ready", hash], p.deps), /integration-missing/);
@@ -967,7 +969,7 @@ test("productionMain awaits its final close before releasing the fleet lock on a
   const { options } = p.output.at(-1).subject.jobs[0].subject;
   const reached = Promise.withResolvers(), settlement = Promise.withResolvers();
   let workers = 0, requests = 0, closes = 0;
-  p.deps.main = productionMain;
+  p.deps.main = (args, deps) => productionMain(args, { ...deps, roleCheck: () => [] });
   p.deps.providerFactory = () => {
     workers++;
     // Change the approved bytes after transport construction. The controller

@@ -31,8 +31,15 @@ confirmed failure before timing counts against the app, not as a timed result.
 Qualification applies only to the checked features. The runner does not test
 incomplete requests, connection caps, large bodies or server-enforced deadlines.
 A passed row is not evidence that those protections exist.
+Connection-flood resistance: not measured.
 
 Use the [grouped benchmark procedure](../workloads/CLOUD.md) for an official round.
+Isolated grouped runs pin the service, upstream, optional proxy, apparatus and host
+command to separate CPU sets. Replay checks live Linux cgroups for the service
+containers and native probe at the two boundaries of the probe's work, including
+the effective sets of occupied child cgroups. Setup and terminal helpers are
+checked against their Docker launch receipts, not sampled as timed participants.
+This is boundary evidence, not continuous monitoring of every process.
 Offline replay checks the saved native evidence; it does not run a new measurement:
 
 ```sh

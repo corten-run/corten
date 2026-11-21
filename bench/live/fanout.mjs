@@ -142,7 +142,7 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
   return summary;
 }
 
-export async function fanoutJourney(browser, base, settings, clients, port, kernelCounters) {
+export async function fanoutJourney(browser, base, settings, clients, port, kernelCounters, recordRenderer) {
   const workload = createLiveWorkload(fanoutProfile), contexts = [], readers = [];
   const host = { timeOrigin: performance.timeOrigin, base, requests: [] }, resourceObservations = {};
   const deadline = setTimeout(() => { for (const c of contexts) c.close().catch(() => {}); }, fanoutProfile.deadlineMs);
@@ -159,6 +159,7 @@ export async function fanoutJourney(browser, base, settings, clients, port, kern
     for (let i = 0; i < clients; i++) {
       const context = await browser.newContext(); contexts.push(context);
       const page = await context.newPage(); page.setDefaultTimeout(15000);
+      recordRenderer?.(true);
       const cdp = await context.newCDPSession(page); await cdp.send("Network.enable"); await cdp.send("Performance.enable");
       const identityReceipt = await cdp.send("Target.getTargetInfo");
       const identity = { receipt: identityReceipt, targetId: identityReceipt.targetInfo.targetId, contextId: identityReceipt.targetInfo.browserContextId };
@@ -234,5 +235,5 @@ export async function fanoutJourney(browser, base, settings, clients, port, kern
       html: await captureHtml(r.page, wire).catch(() => ""),
     }))) };
     throw error;
-  } finally { clearTimeout(deadline); await Promise.all(contexts.map((c) => c.close())); }
+  } finally { recordRenderer?.(false); clearTimeout(deadline); await Promise.all(contexts.map((c) => c.close())); }
 }

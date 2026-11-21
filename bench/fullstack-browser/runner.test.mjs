@@ -30,8 +30,12 @@ test("isolated runner binds Docker actor limits and refuses to start outside the
   assert.deepEqual(browserDockerLimits("upstream", true), ["--cpus", "1", "--memory", "268435456", "--cpuset-cpus", "2-3"]);
   assert.deepEqual(browserDockerLimits("upstream", false), ["--cpus", "1", "--memory", "268435456"]);
   assert.throws(() => browserDockerLimits("browser", true), /not a timed browser container role/);
-  await assert.rejects(run(["w1", "--targets", "not-read.json", "--out", "not-created", "--isolated"]),
-    /isolated browser requires|browser command effective cpuset differs/);
+  await assert.rejects(run(["w1", "--targets", "not-read.json", "--out", "not-created", "--isolated"]), {
+    code: "ERR_ASSERTION",
+    message: process.platform === "linux"
+      ? /^(?:isolated native work requires the delegated native command cgroup|native command effective cpuset differs)(?:\n|$)/
+      : /^isolated native work requires Linux cgroup v2(?:\n|$)/,
+  });
 });
 
 // Explicit local Docker/Chromium integration, separate from portable units.
