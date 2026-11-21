@@ -10,10 +10,41 @@ import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
 import * as campaigns from "./campaign-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { isDeepStrictEqual } from "node:util";
+import { parseCampaignArgs } from "./campaign-entry.mjs";
+import { apparatusProof, nativeControlPartition } from "./control-stream.mjs";
+import { binding as controlBinding, registration } from "../test-fixtures/control-stream-fixture.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8",
   env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" } }).trim();
+test("the official r24 browser plan opens the CPU0 control proof with actual browser roles", (t) => {
+  const { round, group } = parseCampaignArgs(["r24", "--commit", commit, "--state-dir", "/bench/campaign", "--group", "fullstack-browser"]);
+  const plan = campaigns.bindGroupCampaign({ round, group, commit });
+  validateCampaign(plan);
+  const [b] = plan.bindings, sample = { ...registration, monoNs: "2000000" }, { cpus, roles } = nativeControlPartition(b);
+  assert.deepEqual(b.execution.invocation.argv, ["bench/fullstack-browser/run.mjs", "w24", "--build", "--out", "bench/fullstack-browser/work/w24", "--isolated"]);
+  assert.deepEqual(cpus, { application: "1", upstream: "2-3", browser: "4-7" });
+  assert.equal(apparatusProof(controlBinding, registration, sample, cpus, roles).cpu, 0);
+  assert.equal(b.status.ready, false);
+  t.diagnostic(`official ${round}/${group}: ${JSON.stringify(cpus)}; CPU0 apparatus separate; readiness remains false`);
+  for (const [browserCpus, message] of [
+    [undefined, /native CPU partition absent/],
+    [{ ...cpus, browser: "0,4-7" }, /CPU0 overlaps/],
+    [{ ...cpus, upstream: "1-3" }, /roles overlap/],
+    [{ app: "1", api: "2-3", load: "4-7" }, /native CPU partition absent/],
+  ]) assert.throws(() => nativeControlPartition({ ...b, resources: { ...b.resources, browserCpus } }), message);
+});
+test("the official r24 mixed timing phase supplies the same measured CPU roles at open and replay", (t) => {
+  const plan = campaigns.bindGroupCampaign({ round: "r24", group: "mixed-production", commit });
+  const b = mixedPhase(plan, "r24-0123456789abcdef"), replay = mixedPhase(structuredClone(plan), "r24-0123456789abcdef");
+  const { cpus, roles } = nativeControlPartition(b), sample = { ...registration, monoNs: "2000000" };
+  assert.deepEqual(nativeControlPartition(replay), { cpus, roles });
+  assert.deepEqual(cpus, { app: "1", load: "4-7", api: "2-3" });
+  assert.equal(apparatusProof(controlBinding, registration, sample, cpus, roles).cpu, 0);
+  const missing = structuredClone(replay); delete missing.resources.measurement.cpu.load;
+  assert.throws(() => nativeControlPartition(missing), /native CPU partition absent/);
+  t.diagnostic("official r24/mixed-production: measured app=1 api=2-3 load=4-7; no functional-capture CPU proof");
+});
 test("alternate dedicated placement is replayable and changes neither resources nor native execution", () => {
   const request = { round: "r25", commit, group: "json-api" };
   const [b] = campaigns.bindGroupCampaign(request).bindings;
@@ -53,6 +84,10 @@ test("full campaign binds real committed procedures, all groups, exact native de
   const mixed = plan.bindings.find((b) => b.request.group === "mixed-production");
   assert.equal(mixed.execution.nativeDefaults.profile, "defaults"); assert.equal(mixed.execution.effectiveOptions.profile, "matched");
   assert.equal(mixed.execution.effectiveOptions.measure, true);
+  assert.deepEqual(nativeControlPartition(mixed).cpus, { app: "1", api: "2-3", load: "4-7" });
+  assert.equal(mixed.resources.functional.pinning, "not available in functional capture");
+  for (const group of ["client-heavy", "live-delivery", "recoverable-live", "hardening"])
+    assert.throws(() => nativeControlPartition(plan.bindings.find((b) => b.request.group === group)), /native CPU partition absent/);
   const expected = mixedOptions(mixed.execution.invocation.argv.slice(1)); expected.apps = selectedApps("mixed-production");
   assert.deepEqual(mixed.execution.effectiveOptions, expected);
   const mixedTiming = mixedPhase(plan, "r17-0123456789abcdef");
