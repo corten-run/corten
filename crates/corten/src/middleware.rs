@@ -34,8 +34,10 @@
 //!    for (an unknown URL, a wrong method, a method no route in the app has (the router's 501), a
 //!    refusal other than a 429, a request that does not parse), the error page starts the layout reads not started yet and waits for them, here,
 //!    outside 5: a middleware sees neither the error page nor that wait.
-//! 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak
-//!    `ETag` on the answer to a `GET` or `HEAD` (outside an API and Corten's own paths), and
+//! 8. `accept-language` in `Vary` when anything negotiated the request's locale from it (the
+//!    app's middleware too), security headers, `Cache-Control` (private when anything read a
+//!    caller), then the weak `ETag` on the answer to a `GET` or `HEAD` (outside an API and
+//!    Corten's own paths), and
 //!    `304 Not Modified` in place of the body when the client already has it
 //!    (`docs/design.md#limit-etag`), then compression. A middleware sees the `200` with the
 //!    whole body, also when the client gets the `304`.
