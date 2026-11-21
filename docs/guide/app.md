@@ -1498,6 +1498,15 @@ must show at once a short lifetime, or leave it private. An answer given again c
 counted from when the request it was made for reached the handler, so a browser and a CDN count
 the lifetime from when the page was made.
 
+An answer is kept from the second time its URL is asked for. Keeping one costs a copy of it and,
+once the bound is reached, the room of another page, and a URL asked for once in its lifetime
+never earns that back: a crawler walking a catalog, or a search no one repeats, is answered by
+the handler as if the app kept nothing, and the pages visitors ask for again stay kept. So a
+page's handler runs for the first two requests for a URL, and once more after a write or the end
+of its lifetime. The app holds no list of the URLs asked for, only a mark for each in a table of
+a fixed size (128 KiB), so now and then a URL is not known again and its page is made once more
+than it had to be.
+
 A kept page stands where the handler does, after [your own middleware](#your-own-middleware). Every
 stage runs for every request: a middleware that refuses, counts or stamps a header still does, and
 sees the `200` with the whole body; the security headers and `Cache-Control` are written as for any
