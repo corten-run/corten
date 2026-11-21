@@ -260,6 +260,40 @@ automatic retry. A live, never-started, unsupervised
 or invalid-monitor run cannot use this proof. Target failures remain results,
 not successful timings or a publishable baseline.
 
+**Terminal native failures.** Ordinary approved child `--collect` at the measured
+checkout also handles a dedicated supervised run that ended with raw exit 2
+after native entry. It retains the original wrapper without repacking and saves
+`failed-native-results.tgz` plus a verified extraction. Custody covers the entire
+campaign and the fixed native output path (both prepare and timing for JSON),
+including a record of any output path proved absent. The archived plan and
+pending list are checked against the reservation; neither chooses what to copy
+or authorizes deletion. No failed data enters native replay or becomes timings.
+If native validation finished but sealing or later collection failed, raw
+exit 2 permits custody only. The collector keeps both archives, leaves the host
+in place and returns 3. It does not create a retirement intent.
+
+Use the per-child command above if an invalid monitor left locks behind. The
+original operation and launch locks remain unchanged. Collection requires
+local stream closure, lease expiry and an absent original owner PID. It uses
+the separate stream recovery lock and checks the registered boot and exact
+started unit. Read-only fleet inspection can verify a saved retirement behind
+those retained child locks, but not while their owner or a recovery collector
+may still be active. An unchanged root batch lock with a dead owner is reported
+as retained, not as changed evidence. A live, unrecognized or changing root
+lock is busy. Inspection never clears a lock or makes a locked fleet complete.
+Live or uncertain
+custody is preserved. The shared failed-native procedure below checks the
+download, rehashes the remote data, renews the idle-host proof and records a
+`native-failed` intent before one DELETE. Repeat collection after intent can only
+check exact-ID absence. Confirmed retirement returns 1, not success. This does
+not reopen old reservations from a different checkout or change sibling state.
+Launch saves the digest of the host key established by its acknowledged
+first SSH handshake. The collection approval binds that digest, and each
+subsequent SSH or SFTP uses a private snapshot of the matching key. A replaced
+key is refused; old reservations without a launch pin cannot use failed-native
+custody through ordinary collection. Existing explicit recovery policies are
+unchanged.
+
 **Pinned r21 only.** Use a separately reviewed, merged successor for one
 closed child of the original staged fleet at a time. Keep the original fleet
 in place. Keep a separate clean checkout at the measured revision
@@ -508,8 +542,8 @@ the archive and extracted-tree hashes. No native validator result, timings or
 successful exit is invented. Unsettled validation, any entry evidence, failed
 observations or a running unit preserves the host. Fleet output reports
 `setup-failed-retired`; repeat collection checks the same receipt and absence,
-without another DELETE. Native-started jobs retain the existing native collection
-and evidence gates. Neither retirement path can delete a running benchmark.
+without another DELETE. Native-started jobs use the separate collection and
+custody paths above. No retirement path can delete a running benchmark.
 
 The common-bootstrap marker precedes native entry. It is not native evidence or
 a reason to strand a terminal host whose entry failed before writing any data.

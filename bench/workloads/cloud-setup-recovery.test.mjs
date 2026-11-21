@@ -54,11 +54,18 @@ test("observed common bootstrap with a lost monitor honors the close embargo and
   assert.equal(await h.task(noNative).collect(), 3);
   assert.equal(h.calls.length, calls); assert.ok(!existsSync(join(h.local, "results.tgz")));
   t.mock.timers.setTime(close.recoverAfterMs);
+  await assert.rejects(h.task(noNative).collect(), /original monitor owner is still live or uncertain/);
+  assert.equal(h.calls.length, calls);
+  // The test process stood in for the launcher. Model its exit without removing either lock.
+  const pid = 2147483647, operation = join(h.local, "operation.lock"), launch = join(h.base, ".groups-launch.lock");
+  const operationBytes = JSON.stringify({ ...JSON.parse(readFileSync(operation)), pid });
+  const launchBytes = JSON.stringify({ ...JSON.parse(readFileSync(launch)), pid });
+  writeFileSync(operation, operationBytes); writeFileSync(launch, launchBytes);
   await assert.rejects(h.task(noNative).collect(), /sealed\/native entry cannot use pre-entry retirement/);
   const s = h.saved();
   assert.deepEqual(s.bootstrapReady, bootstrapReady); assert.equal(s.validation, undefined);
   assert.ok(s.archiveSha256 && s.evidenceSha256); assert.equal(s.retirement, undefined); assert.equal(s.deletionIntentAt, undefined);
-  assert.ok(existsSync(join(h.local, "operation.lock"))); assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
+  assert.equal(readFileSync(operation, "utf8"), operationBytes); assert.equal(readFileSync(launch, "utf8"), launchBytes);
   assert.equal(h.deletes, 0);
 });
 test("ordinary collect preserves failed-setup archive and retires only after separate terminal no-entry proof", async (t) => {

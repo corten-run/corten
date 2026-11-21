@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { contractSha256, definition, groupNames, registrySchema, retainedFamilies, selectedApps } from "../registry.mjs";
+import { contractSha256, definition, groupNames, nativeArtifactRoot, registrySchema, retainedFamilies, selectedApps } from "../registry.mjs";
 import { runnerFor } from "../run.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { coverage } from "../evidence.mjs";
@@ -162,10 +162,7 @@ function native(group, round, recipe, reviewId) {
   const { entry, selection: flags } = runnerFor(group);
   const base = [round, ...flags], args = [...base], changes = [];
   let defaults, effective, settings = null;
-  const directory = group === "catalog-page" ? "catalog" : group === "localized-marketplace" ? "marketplace" : group;
-  const artifactRoot = group === "client-heavy" ? `bench/client-heavy/work/${round}`
-    : group === "fullstack-browser" ? `bench/fullstack-browser/work/${round}`
-      : group === "live-delivery" ? `bench/live/results/parity/${round}` : `bench/${directory}/results/${round}`;
+  const artifactRoot = nativeArtifactRoot(group, round);
   if (["catalog-page", "json-api", "localized-marketplace"].includes(group)) {
     const parse = group === "catalog-page" ? catalogOptions : group === "json-api" ? jsonOptions : marketplaceOptions;
     defaults = parse(base, available); args.push("--build");
