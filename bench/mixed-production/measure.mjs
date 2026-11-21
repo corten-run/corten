@@ -13,6 +13,8 @@ import { reconcileLedger, upstreamManifest, upstreamPhase } from "./upstream-led
 import { sourceAuditIdentity, sourceSnapshot, verifySourceAudit } from "./source-audit.mjs";
 import { cpuBoundary, participantEvidence } from "./producer-evidence.mjs";
 import { producerEvidenceFiles, qualificationScope } from "./qualification-evidence.mjs";
+import { createAttachedParticipant } from "./execution-evidence.mjs";
+import { executionMountArgs } from "./execution-inputs.mjs";
 
 export function savedRelative(root, path) {
   const value = relative(root, path).replaceAll("\\", "/");
@@ -37,7 +39,7 @@ export async function measureNativeGroup(context) {
       qualification: null, calibration: null, passes: Array.from({ length: options.passes }, (_, i) => ({ pass: i + 1, outcome: "not-run", metrics: null })),
     }]))])), sourceAudits: {}, failures: [] };
   summary.provenance.measurementHarnessFiles = Object.fromEntries(["measure.mjs", "metrics.mjs", "load-capture.mjs", "load-worker.mjs", "load-upstream.mjs", "upstream-ledger.mjs", "resources.mjs", "source-audit.mjs", "qualify-worker.mjs"].map((f) => [f, sha256(readFileSync(join(repo, "bench/mixed-production", f)))]));
-  const mount = ["-v", `${nativeBuildRoot}:/src:ro`, "-v", `${join(folder, "execution/dependencies")}:/src/node_modules:ro`, "-v", `${folder}:/out`, "-w", "/src"];
+  const mount = executionMountArgs(nativeBuildRoot, folder);
   const outputPath = (path) => `/out/${savedRelative(folder, path)}`;
   const env = options.profile === "matched" ? ["-e", "PROFILE=matched", "-e", `MAX_CONNECTIONS=${boundedQualificationSettings.maxConnections}`] : ["-e", "PROFILE="];
   const failure = (app, source, stage) => { result.failures.push({ app, source, stage }); save(); };
@@ -98,10 +100,10 @@ export async function measureNativeGroup(context) {
       await own(appArgs(appName, source, up, imageId), appName); await ready(appName, "/marketplace/en-US/item_1", probes, "app");
       const settings = { app, source, imageId, nativeProfile: options.profile, base: "http://127.0.0.1:8080", upstream: `http://${up}:8080`, output: outputPath(join(dir, "qualification.json")) };
       record(join(dir, "settings.json"), settings);
-      await own(["create", "--network", `container:${appName}`, ...cpus.load.args, "--memory", "1g", "--ulimit", "nofile=65536:65536", ...mount,
-        browserImage.Id, "node", "bench/mixed-production/qualify-worker.mjs", outputPath(join(dir, "settings.json"))], worker);
+      const startWorker = await createAttachedParticipant({ own, docker }, worker, ["--network", `container:${appName}`, ...cpus.load.args, "--memory", "1g", "--ulimit", "nofile=65536:65536", ...mount,
+        browserImage.Id, "node", "bench/mixed-production/qualify-worker.mjs", outputPath(join(dir, "settings.json"))]);
       let failed = false;
-      try { await docker(["start", "-a", worker], { timeout: 8 * 60000 }); } catch { failed = true; }
+      try { await startWorker({ timeout: 8 * 60000 }); } catch { failed = true; }
       const raw = JSON.parse(readFileSync(join(dir, "qualification.json"), "utf8"));
       assert.deepEqual([raw.schema, raw.app, raw.source, raw.imageId, raw.nativeProfile, raw.profile],
         ["mixed-native-qualification/v1", app, source, imageId, options.profile, boundedFeatureProfile]);

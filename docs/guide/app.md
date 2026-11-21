@@ -1506,9 +1506,10 @@ handler with what it reads, the render, the tag's hash and the compression, sinc
 coding's bytes are made once and stay with the page. A page's bytes are made once and sent many
 times, so its brotli is made once more, at level 5 (a request's is 1), on the thread that
 compresses held JSON. That is queued while the app compresses the page's second answer to a client
-that ranks brotli first or ties it for first among the codings it takes. An answer that is not
-compressed (a `304`, a client that takes none, a body too small) or one to a client that ranks
-another coding higher does not count, and when the thread's queue is full the next answer that
+that ranks brotli first or ties it for first among the codings it takes. An answer the store did
+not keep (in a full store, the first for a URL not asked for before), one that is not compressed
+(a `304`, a client that takes none, a body too small) or one to a client that ranks another
+coding higher does not count, and when the thread's queue is full the next answer that
 counts queues it. Neither answer waits: each, and every answer until the thread is done, gets the
 form made for its coding, as before. From then on a client that ranks brotli as high as any coding,
 as a browser does, gets it in the place of zstd: on the catalog benchmark's page 882 bytes where
@@ -1532,7 +1533,7 @@ else a page could differ by, and the answer nothing made for one request:
 | the handler | takes only Corten's own inputs for a page | takes an extractor of the app's own |
 | the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
-| the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound |
+| the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
 | what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key, a `Vary` of the app's own |
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
@@ -1580,7 +1581,17 @@ page stands is the app's to say. Give a page whose changes must show at once a s
 `App::kept_answers(bytes)` sets how much is kept: 32 MiB unless set, and `0` keeps none. What is
 counted is each page's key, headers and body and each compressed form made of it, with an
 allowance for what holds them. Past the bound, a page not read since room was last made goes
-first. Nothing is kept under `corten dev`,
+first. With room, every page is kept the first time it is made. Once the kept pages are within
+an eighth of the bound, keeping one may drop another, so a page is kept only when its URL was
+asked for before: a crawler's first walk over more URLs than there is room for, or searches no
+one repeats, are answered by the handler and all but a few of them take no kept page's room.
+The app remembers the URLs asked for as bits in a table, not as a list, and forgets them all
+once an eighth of the bits are set (after 131,072 new URLs at 32 MiB), so a crawler's second
+walk over the same URLs is kept as the first was before this rule. The price is one more run
+of a page's handler: in a full store the answer to the first request for a URL the app does
+not remember is not kept, whether the page is new, or was kept while there was room or before
+the bits were last cleared and has since passed its lifetime or been dropped. A store that has filled mostly stays full, since a page past its lifetime keeps
+its room until another needs it. Nothing is kept under `corten dev`,
 so a change shows on the next load. An app's tests keep pages as a deploy does (`App::test`,
 `App::router`): a test that changes what a `Public` page shows other than by a write through the
 app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can

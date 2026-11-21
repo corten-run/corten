@@ -968,7 +968,8 @@ async function validateNativeV2(input) {
     same(tools.browser, summary.browser?.executableSha256, "Native browser executable identity differs");
     const targets = root("targets", "targets"); validateTargets({ schema: "native-fullstack-browser-targets/v1", targets });
     same(sha256(JSON.stringify(targets)), summary.targetsSha256, "Bundled target manifest differs from run");
-    const executionValue = root("execution", "execution"), execution = replayExecution(reader, n.execution);
+    const executionValue = root("execution", "execution"),
+      execution = replayExecution(reader, n.execution, { isolated: summary.options?.isolated === true });
     same([executionValue.task, executionValue.commit], [summary.task, input.commit], "Native execution identity differs");
     need(Date.parse(summary.startedAt) <= execution.executionWindow.startedAt && execution.executionWindow.endedAt <= Date.parse(summary.finishedAt), "Native execution outside producer run");
     for (const reason of execution.blocked) block(`execution:${reason}`);
@@ -1078,9 +1079,11 @@ function replaySaved(input = {}, nativeProof = null) {
     same(summary.fixtureSha256, sha256(JSON.stringify(records)), "Fixture hash mismatch");
     const plan = createBrowserPlan({ records }); same(summary.effectivePlan, plan, "Plan/profile inventory differs from current contract"); same(summary.settings, settings, "Saved options/settings differ from current native settings");
     const options = summary.options;
-    need(object(options), "Missing run options"); exactKeys(options, ["round", "targets", "out", "apps", "cases", "build"], "Unknown/missing run option");
+    need(object(options), "Missing run options");
+    exactKeys(options, ["round", "targets", "out", "apps", "cases", "build", ...(nativeProof && options.isolated === true ? ["isolated"] : [])], "Unknown/missing run option");
     const args = [round, "--out", localPath(options.out), "--apps", list(options.apps) ? options.apps.join(",") : ""];
     if (options.build === true) args.push("--build"); else need(options.build === false, "Malformed build option");
+    if (options.isolated === true) args.push("--isolated");
     if (options.targets !== null) args.push("--targets", localPath(options.targets));
     if (options.cases !== null) { need(list(options.cases), "Malformed selected profiles"); args.push("--cases", options.cases.join(",")); }
     same(parseOptions(args), options, "Run options do not round-trip through current parser"); same(options.round, round, "Round mismatch");
