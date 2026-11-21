@@ -1046,13 +1046,13 @@ fn kept_routes(runs: &Runs) -> Table {
 async fn a_public_page_is_kept_and_given_again_in_its_handler_s_place() {
     let runs = Runs::default();
     let router = App::new(Routes::from(kept_routes(&runs))).router();
-    let (status, once, _) = fetch(&router, "GET", "/", &[]).await;
+    let (status, once, unkept) = fetch(&router, "GET", "/", &[]).await;
     assert_eq!((status, runs.count()), (StatusCode::OK, 1));
     let (status, first, body) = fetch(&router, "GET", "/", &[]).await;
     assert_eq!((status, runs.count()), (StatusCode::OK, 2), "a URL asked for once is made again, and kept then");
     assert!(!first.contains_key(header::AGE), "the handler's own answer: {first:?}");
     assert_eq!(first[header::CACHE_CONTROL], "public, max-age=60");
-    assert_eq!(once, first, "the answer that was not kept is the one that was, line for line");
+    assert!(once == first && unkept == body, "the answer that was not kept is the one that was, line for line");
 
     let (status, mut again, same) = fetch(&router, "GET", "/", &[]).await;
     assert_eq!((status, runs.count()), (StatusCode::OK, 2), "the kept page, not the handler");
@@ -1117,8 +1117,8 @@ async fn a_public_page_is_kept_and_given_again_in_its_handler_s_place() {
 }
 
 /// A page is kept from the second time its URL is asked for, by requests a kept page could
-/// answer: one it could not is not an ask. A page that went from the store (a write here) is kept
-/// again the next time it is asked for.
+/// answer: one it could not is not an ask. A page that was given to a request and then went from
+/// the store (a write here) is kept again the next time it is asked for.
 #[tokio::test]
 async fn a_page_is_kept_from_the_second_time_its_url_is_asked_for() {
     let runs = Runs::default();
@@ -1601,6 +1601,8 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
     // With the page kept, so each is a request the kept page would have answered.
     assert!(kept(router.clone(), "/").await);
     for asked in [("viewer", "ada"), ("x-rewrite", "1")] {
+        // Three times: were either kept, it would be from the second and given to the third.
+        fetch(&router, "GET", "/", &[asked]).await;
         fetch(&router, "GET", "/", &[asked]).await;
         let (status, headers, _) = fetch(&router, "GET", "/", &[asked]).await;
         assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{asked:?}: {headers:?}");
@@ -1638,6 +1640,9 @@ async fn a_kept_page_lasts_its_lifetime() {
     assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE) && runs.count() == 2, "kept for now");
     fetch(&router, "GET", "/long", &[]).await;
     fetch(&router, "GET", "/long", &[]).await;
+    // Another URL of the brief page, asked for once now and again after longer than it lasts.
+    let rare = |router: Router| async move { fetch(&router, "GET", "/?rare=1", &[]).await.1.contains_key(header::AGE) };
+    assert!(!rare(router.clone()).await);
     let making = tokio::spawn({
         let router = router.clone();
         async move {
@@ -1647,7 +1652,13 @@ async fn a_kept_page_lasts_its_lifetime() {
     });
     tokio::time::sleep(Duration::from_millis(1100)).await;
     let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
-    assert!(runs.count() == 3 && !headers.contains_key(header::AGE), "past the shared lifetime: {headers:?}");
+    assert!(runs.count() == 4 && !headers.contains_key(header::AGE), "past the shared lifetime: {headers:?}");
+    // The copy that ended was given to a request, so the one made now is kept without a second ask.
+    assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE) && runs.count() == 4, "kept again at once");
+    // Asked for last longer ago than it lasts: a copy kept then would have been given to no one,
+    // so this answer is not kept either. Asked for again within its lifetime, it is.
+    assert!(!rare(router.clone()).await && !rare(router.clone()).await, "not kept by an ask that came too late");
+    assert!(rare(router.clone()).await && runs.count() == 6, "kept by the one that came in time");
     // One still within its lifetime says how long ago its handler was asked.
     let (_, headers, _) = fetch(&router, "GET", "/long", &[]).await;
     let age: u64 = headers[header::AGE].to_str().unwrap().parse().unwrap();

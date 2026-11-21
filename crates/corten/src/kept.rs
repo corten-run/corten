@@ -6,12 +6,14 @@
 //! that lifetime (`s-maxage` where the answer has one, else `max-age`, RFC 9111 section 4.2.1)
 //! gives it to the next such request in the handler's place, with an `Age`.
 //!
-//! An answer is kept from the second time its URL is asked for by such a request. Keeping one
-//! costs a copy of it, and room that is taken from a page asked for again once the bound is
-//! reached, so a URL asked for once (a crawler's, a search no one repeats) is its handler's as
-//! if the app kept nothing, and leaves a mark by which the next request for it is known
-//! ([`Asked::asked_before`]). The handler of a page asked for often so runs twice where once
-//! would do, once in the life of its mark.
+//! An answer is kept when there is a sign its copy will be given to someone: its URL was asked
+//! for before by such a request, less than the answer's lifetime ago, or the copy it replaces
+//! was given to a request while it stood. Keeping one costs a copy of it, and room that is taken
+//! from another page once the bound is reached, so a URL asked for once (a crawler's, a search
+//! no one repeats) or less often than its page lasts (an app behind a CDN, which asks once a
+//! lifetime) is its handler's as if the app kept nothing. Each request no kept answer stood for
+//! leaves a mark that says when its URL was asked for ([`Store::asked`]). The handler of a page
+//! asked for often so runs once more than it had to, the first time.
 //!
 //! It stands where the handler does, after the app's middleware, so every stage still runs for
 //! every request: a middleware sees the `200` with the whole body, the security headers and
@@ -58,10 +60,8 @@
 //! it was until its lifetime ends.
 
 use std::collections::HashMap;
-#[cfg(not(test))]
-use std::hash::RandomState;
-use std::hash::{BuildHasher, DefaultHasher, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering};
+use std::hash::{BuildHasher, DefaultHasher, Hasher, RandomState};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
@@ -128,22 +128,14 @@ fn with_room(head: &HeaderMap) -> HeaderMap {
 }
 
 /// The counts of writes, one for the paths whose hash names it: enough of them (256 KiB, made
-/// when the first page is asked for) that an app's writes seldom share a count with a kept page.
+/// when a page's answer may first be kept) that an app's writes seldom share a count with a
+/// kept page.
 const WRITES: usize = 1 << 16;
 
-/// The marks of the URLs asked for ([`Asked::asked_before`]): 128 KiB of them, made when the
-/// first page is asked for. A URL's mark is still its own after about as many other URLs were
-/// asked for the first time as there are marks.
-const MARKS: usize = 1 << 16;
-
-/// The hash a URL's mark is found by: keyed for each process.
-#[cfg(not(test))]
-type Marked = RandomState;
-
-/// In this crate's own tests the key is the same in every run, so which of a test's URLs share
-/// a mark does not change from one run to the next.
-#[cfg(test)]
-type Marked = std::hash::BuildHasherDefault<DefaultHasher>;
+/// The marks of the URLs asked for ([`Store::asked`]): 32,768 of eight bytes (256 KiB), made
+/// when the first page is asked for. A URL's mark is likely still its own until about as many
+/// other URLs as there are marks were asked for with no kept answer standing for them.
+const MARKS: usize = 1 << 15;
 
 /// The app's kept answers, at most `bound` bytes of them.
 pub(crate) struct Answers(Arc<Store>);
@@ -157,11 +149,14 @@ struct Store {
     /// whatever its query, and a page whose handler was reading while the write was made is not
     /// kept, without a lock or a search.
     written: OnceLock<Box<[AtomicU32]>>,
-    /// The URL each mark was last left by, as sixteen bits of a hash of it, or 0 for none.
-    marks: OnceLock<Box<[AtomicU16]>>,
-    /// The key of that hash, which is this process's own: a client cannot choose the URLs that
-    /// take a page's mark.
-    marked: Marked,
+    /// For each mark, the URL that left it last and when ([`Store::asked`]), or 0 for none.
+    marks: OnceLock<Box<[AtomicU64]>>,
+    /// The key of the hash a URL's mark is found by, which is this process's own: which URLs
+    /// share a mark cannot be told from the URLs. (A client can still find two that do by
+    /// asking and watching for `Age`; what it gains is in [`Store::asked`].)
+    marked: RandomState,
+    /// When the store was made: the marks count their milliseconds from here.
+    began: Instant,
     inner: RwLock<Inner>,
 }
 
@@ -181,7 +176,7 @@ struct Written {
 
 impl Written {
     /// The count for `at` (a path, with or without a query) as it is now.
-    /// The counts are made here, before the first page's handler runs: a write answered before
+    /// The counts are made here, before the handler of the first answer that may be kept runs: a write answered before
     /// then found none to count in, and what it wrote is there for that handler to read.
     fn of(store: &Store, at: &str) -> Self {
         let count = count_of(at.split(['?', '#']).next().unwrap_or(at).as_bytes());
@@ -301,6 +296,8 @@ pub(crate) struct Entry {
     #[cfg(feature = "compress")]
     coded: [OnceLock<Bytes>; 3],
     used: AtomicBool,
+    /// Given to a request at least once: a sign the copy that takes its place will be too.
+    given: AtomicBool,
     /// What it counts for in the store's bytes, or [`GONE`].
     size: AtomicUsize,
 }
@@ -405,6 +402,32 @@ impl Entry {
 }
 
 impl Store {
+    /// How many milliseconds ago `at` (a path and query, for any host and language) was last
+    /// asked for by a request no kept answer stood for, when its mark still says; and leaves the
+    /// mark for `now`. Asked only for a request a kept answer can stand for, after none did.
+    ///
+    /// A mark holds half of a hash of the URL that left it last and the millisecond it did, and
+    /// the other half of the hash chooses the mark. So a URL is not known again once another
+    /// took its mark, which about as many such requests for other URLs as there are marks make
+    /// likely, and of two that share a mark, asked for in turn, neither is known. Each of those
+    /// is an answer made by its handler that could have been kept, never a wrong one, and a
+    /// client that finds two URLs sharing a page's mark buys with each request it sends at most
+    /// one more run of that page's handler, as a write to its path does. A URL that finds
+    /// another's half of a hash in its mark (one pair in two thousand million) is taken for
+    /// asked before. The milliseconds wrap after seven weeks, and a URL asked for a whole number
+    /// of those later is taken for asked just now; either way an answer is kept that might not
+    /// be given, as every answer was before there were marks.
+    fn asked(&self, at: &str, now: Instant) -> Option<u32> {
+        let hash = self.marked.hash_one(at);
+        let marks = self.marks.get_or_init(|| (0..MARKS).map(|_| AtomicU64::new(0)).collect());
+        // The URL's half is never 0, which is the mark no URL left.
+        let (url, ms) = ((hash >> 32) | 1, now.saturating_duration_since(self.began).as_millis() as u32);
+        // Two requests for a URL at once each find the other's mark or the one before: both
+        // say the URL was asked for.
+        let was = marks[hash as usize % MARKS].swap(url << 32 | u64::from(ms), Ordering::Relaxed);
+        (was >> 32 == url).then(|| ms.wrapping_sub(was as u32))
+    }
+
     /// Takes `entry` out of its slot and its URL's copies, and its size out of the bytes kept.
     fn drop_entry(&self, inner: &mut Inner, entry: &Arc<Entry>) {
         let slot = entry.place.slot;
@@ -455,7 +478,8 @@ impl Answers {
                 bytes: AtomicUsize::new(0),
                 written: OnceLock::new(),
                 marks: OnceLock::new(),
-                marked: Marked::default(),
+                marked: RandomState::new(),
+                began: Instant::now(),
                 inner: RwLock::default(),
             }))
         })
@@ -467,18 +491,27 @@ impl Answers {
         self.0.bytes.load(Ordering::Acquire)
     }
 
-    /// The answer kept for a request, while it stands, with its age in seconds.
-    fn find(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Option<(Arc<Entry>, u64)> {
+    /// The answer kept for a request, while it stands, with its age in seconds. With none, whether
+    /// a copy for the request that no longer stands (its lifetime ended, or a write) was given
+    /// to a request while it did.
+    fn find(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Result<(Arc<Entry>, u64), bool> {
         let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
+        let mut given = false;
         // The copy that stands: one that no longer does is in no other's way until it goes.
-        let entry = inner.at.get(at)?.iter().find(|entry| entry.is_for(host, language) && entry.stands(&self.0, now))?;
-        let age = entry.age(now);
-        // Stored only when it changes: a page read often is marked once for each pass of the hand.
-        if !entry.used.load(Ordering::Relaxed) {
-            entry.used.store(true, Ordering::Relaxed);
+        for entry in inner.at.get(at).into_iter().flatten().filter(|entry| entry.is_for(host, language)) {
+            if entry.stands(&self.0, now) {
+                // Stored only when it changes: a page read often is marked once for each pass of
+                // the hand.
+                if !entry.used.load(Ordering::Relaxed) {
+                    entry.used.store(true, Ordering::Relaxed);
+                    entry.given.store(true, Ordering::Relaxed);
+                }
+                return Ok((entry.clone(), entry.age(now)));
+            }
+            given |= entry.given.load(Ordering::Relaxed);
         }
-        Some((entry.clone(), age))
+        Err(given)
     }
 
     /// Keeps `entry`, in the place of the copy it stands for, and makes room for it.
@@ -530,7 +563,7 @@ impl Answers {
     /// query's (a named post is `?do=name` at its page's path) and one whose handler has yet to
     /// answer.
     pub(crate) fn count(&self, count: usize) {
-        // With no page asked for yet there is none to drop.
+        // With no answer that may be kept asked for yet there is none to drop.
         if let Some(counts) = self.0.written.get() {
             counts[count].fetch_add(1, Ordering::AcqRel);
         }
@@ -623,8 +656,9 @@ impl<'a> Asked<'a> {
         Some(Asked { answers, at, host, language })
     }
 
-    /// The kept answer for this request, as its handler gave it, with its age.
-    pub(crate) fn find(&self) -> Option<Response> {
+    /// The kept answer for this request, as its handler gave it, with its age. With none, what
+    /// [`Asked::missed`] is told: whether a copy that no longer stands was given to a request.
+    pub(crate) fn find(&self) -> Result<Response, bool> {
         let (entry, age) = self.answers.find(self.at, self.host, self.language)?;
         let mut res = Response::new(Body::from(entry.body.clone()));
         let mut head = with_room(&entry.head);
@@ -637,45 +671,22 @@ impl<'a> Asked<'a> {
             extensions.insert(style.clone());
         }
         extensions.insert(Kept(entry));
-        Some(res)
-    }
-
-    /// Whether this URL (its path and query, for any host and language) was asked for before
-    /// with no kept answer standing for the request, which is when its answer is kept: asked for
-    /// only by a request a kept page can stand for, and only after [`Asked::find`] found none.
-    /// The mark stays while the page is kept and after, so a page that went from the store (its
-    /// lifetime, a write, the bound) is kept again the next time it is asked for, and so is the
-    /// same URL's page for another host or language.
-    ///
-    /// One mark for the URLs whose hash names it, each leaving its own in the other's place. So
-    /// a URL is not known again once another took its mark, which about as many first asks as
-    /// there are marks make likely; and of two that share a mark, asked for in turn, neither is
-    /// kept until one is asked for twice running. Each of those is a page made by its handler
-    /// that could have been kept, never a wrong answer. A URL that finds another's sixteen bits
-    /// in its mark (one pair in two thousand million) is kept the first time, as every page was
-    /// before.
-    pub(crate) fn asked_before(&self) -> bool {
-        let store = &*self.answers.0;
-        let hash = store.marked.hash_one(self.at);
-        let marks = store.marks.get_or_init(|| (0..MARKS).map(|_| AtomicU16::new(0)).collect());
-        // The hash's low bits choose the mark and its high ones are what the URL leaves there:
-        // never 0, which no URL left.
-        let (mark, left) = (&marks[hash as usize % MARKS], (hash >> 48) as u16 | 1);
-        // Two first requests for a URL at once may each find the other's mark or neither: the
-        // answer is kept from one of them or from the next.
-        if mark.load(Ordering::Relaxed) == left {
-            return true;
-        }
-        mark.store(left, Ordering::Relaxed);
-        false
+        Ok(res)
     }
 
     /// What keeping the handler's answer needs of the request, once no kept one stood for it:
     /// taken before the handler runs, so the answer's age counts its making and a write made
-    /// meanwhile is seen.
-    pub(crate) fn missed(&self, req: &Request) -> Missed {
-        Missed {
-            asked: Instant::now(),
+    /// meanwhile is seen. `given` is what [`Asked::find`] said. None for a URL whose mark does not
+    /// say it was asked for before and whose last copy, if it had one, was given to no one: its
+    /// answer is the handler's, and nothing here is paid for it but the mark it leaves.
+    pub(crate) fn missed(&self, req: &Request, given: bool) -> Option<Missed> {
+        let asked = Instant::now();
+        let since = self.answers.0.asked(self.at, asked);
+        // A copy that was given says more than the mark does: the one made now will be too.
+        let since = if given { 0 } else { since? };
+        Some(Missed {
+            asked,
+            since,
             written: Written::of(&self.answers.0, self.at),
             signal: req.extensions().get::<crate::Signal>().cloned(),
             nonce: req.extensions().get::<crate::security::NonceSlot>().cloned(),
@@ -684,13 +695,16 @@ impl<'a> Asked<'a> {
             // buffer, which a kept one would hold whole.
             host: self.host.and_then(|host| HeaderValue::from_bytes(host.as_bytes()).ok()),
             language: self.language.and_then(|language| HeaderValue::from_bytes(language.as_bytes()).ok()),
-        }
+        })
     }
 }
 
 /// A request no kept answer stood for, whose handler's answer is kept if it may be.
 pub(crate) struct Missed {
     asked: Instant,
+    /// How many milliseconds before this request its URL was last asked for, or 0 when the copy
+    /// this answer would replace was given to a request.
+    since: u32,
     written: Written,
     signal: Option<crate::Signal>,
     nonce: Option<crate::security::NonceSlot>,
@@ -705,6 +719,11 @@ impl Missed {
         let shared = self.signal.as_ref().and_then(crate::Signal::shared);
         let Some(answers) = shared.and_then(|shared| shared.kept.as_ref()) else { return res };
         let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else { return res };
+        // Asked for last longer ago than this answer lasts: a copy kept then would have been
+        // given to no one, and so would this one.
+        if u64::from(self.since) >= lifetime.saturating_mul(1000) {
+            return res;
+        }
         // Whether the page varies on `Accept-Language`, or on something the key does not cover.
         let Some(language) = varies(res.headers()) else { return res };
         // A page in the language the request asked for, in an app whose answers do not say so
@@ -765,6 +784,7 @@ impl Missed {
             #[cfg(feature = "compress")]
             coded: Default::default(),
             used: AtomicBool::new(false),
+            given: AtomicBool::new(false),
             size: AtomicUsize::new(size),
         });
         // This answer's tag and compression are the kept one's first.
@@ -794,23 +814,26 @@ fn varies(headers: &HeaderMap) -> Option<bool> {
 mod tests {
     use super::*;
 
-    /// A URL is known the second time it is asked for and each time after, and one asked for
-    /// once is not. Of 4,000 URLs asked for in turn, the few that share a mark with a later one
-    /// are not known again; with as many marks as there are, that is about 240 of them.
+    /// A URL's mark says how long ago it was last asked for, and a URL never asked for has none.
+    /// Of 4,000 URLs asked for in turn, the ones that share a mark with another of them are not
+    /// known again: with as many marks as there are, about 460.
     #[test]
-    fn a_url_is_known_from_the_second_time_it_is_asked_for() {
+    fn a_url_s_mark_says_when_it_was_last_asked_for() {
         let answers = Answers::new(1 << 20).unwrap();
-        let asked = |at: &str| Asked { answers: &answers, at, host: None, language: None }.asked_before();
-        assert!(!asked("/items") && asked("/items") && asked("/items"));
-        assert!(!asked("/items?page=2") && asked("/items?page=2"), "another query is another URL");
-        assert!(asked("/items"), "and the first still has its mark");
+        let store = &*answers.0;
+        let at = |ms: u64| store.began + std::time::Duration::from_millis(ms);
+        assert_eq!(store.asked("/items", at(5)), None);
+        assert_eq!(store.asked("/items", at(60_005)), Some(60_000));
+        assert_eq!(store.asked("/items", at(60_005)), Some(0));
+        assert_eq!(store.asked("/items?page=2", at(60_010)), None, "another query is another URL");
         let urls: Vec<String> = (0..4000).map(|n| format!("/catalog/{n}")).collect();
-        assert_eq!(urls.iter().filter(|at| asked(at)).count(), 0, "none was asked for before");
-        let known = urls.iter().filter(|at| asked(at)).count();
-        assert!((3500..=3950).contains(&known), "{known} of 4,000 known again");
-        // The ones not known left their mark again, and are known now unless they share it.
-        let known = urls.iter().filter(|at| asked(at)).count();
-        assert!(known >= 3500, "{known} of 4,000 known the third time");
+        assert_eq!(urls.iter().filter(|url| store.asked(url, at(70_000)).is_some()).count(), 0, "none was asked for before");
+        let known = urls.iter().filter(|url| store.asked(url, at(71_500)) == Some(1_500)).count();
+        assert!((3300..=3750).contains(&known), "{known} of 4,000 known again");
+        // The milliseconds wrap: a mark is read as younger than it is only a whole wrap later.
+        let late = at(u64::from(u32::MAX) + 1 + 60_005 + 250);
+        assert_eq!(store.asked("/late", at(60_005)), None);
+        assert_eq!(store.asked("/late", late), Some(250));
     }
 
     /// What [`Sent::read`] reads, by a lookup of each header's name: the rule as the functions
@@ -983,6 +1006,7 @@ mod tests {
             #[cfg(feature = "compress")]
             coded: Default::default(),
             used: AtomicBool::new(false),
+            given: AtomicBool::new(false),
             size: AtomicUsize::new(body + OVERHEAD),
         }
     }
@@ -999,22 +1023,22 @@ mod tests {
         }
         assert_eq!(answers.bytes(), size * 3);
         // `/a` and `/c` are read; `/b` is not.
-        assert!(answers.find("/a", None, None).is_some() && answers.find("/c", None, None).is_some());
+        assert!(answers.find("/a", None, None).is_ok() && answers.find("/c", None, None).is_ok());
         answers.keep(entry(&answers, "/d", None, 60, 1000));
         assert_eq!(answers.bytes(), size * 3, "one went for the new one");
-        assert!(answers.find("/b", None, None).is_none(), "the one not read");
+        assert!(answers.find("/b", None, None).is_err(), "the one not read");
         for at in ["/a", "/c", "/d"] {
-            assert!(answers.find(at, None, None).is_some(), "{at}");
+            assert!(answers.find(at, None, None).is_ok(), "{at}");
         }
         // One past its lifetime is never given, and goes when the hand comes to it: before one
         // that was read since.
         let answers = Answers::new(size * 2).expect("a bound");
         answers.keep(entry(&answers, "/old", None, 0, 1000));
         answers.keep(entry(&answers, "/b", None, 60, 1000));
-        assert!(answers.find("/old", None, None).is_none(), "past its lifetime: never given");
-        assert!(answers.find("/b", None, None).is_some());
+        assert!(answers.find("/old", None, None).is_err(), "past its lifetime: never given");
+        assert!(answers.find("/b", None, None).is_ok());
         answers.keep(entry(&answers, "/c", None, 60, 1000));
-        assert!(answers.find("/b", None, None).is_some() && answers.find("/c", None, None).is_some());
+        assert!(answers.find("/b", None, None).is_ok() && answers.find("/c", None, None).is_ok());
         assert_eq!(answers.bytes(), size * 2);
     }
 
@@ -1032,8 +1056,8 @@ mod tests {
         let answers = Answers::new(1 << 20).expect("a bound");
         let (a, b) = (HeaderValue::from_static("a.example"), HeaderValue::from_static("b.example"));
         answers.keep(entry(&answers, "/p", Some("a.example"), 60, 10));
-        assert!(answers.find("/p", Some(&a), None).is_some());
-        assert!(answers.find("/p", Some(&b), None).is_none() && answers.find("/p", None, None).is_none());
+        assert!(answers.find("/p", Some(&a), None).is_ok());
+        assert!(answers.find("/p", Some(&b), None).is_err() && answers.find("/p", None, None).is_err());
         answers.keep(entry(&answers, "/p", Some("b.example"), 60, 10));
         answers.keep(entry(&answers, "/p", Some("a.example"), 60, 20));
         assert_eq!(answers.bytes(), 30 + OVERHEAD * 2, "the second for a.example took the first's place");
@@ -1044,8 +1068,8 @@ mod tests {
             let host: &'static str = Box::leak(format!("h{n}.example").into_boxed_str());
             answers.keep(entry(&answers, "/p", Some(host), 60, 10));
         }
-        assert!(answers.find("/p", Some(&b), None).is_none() && answers.find("/p", Some(&a), None).is_some());
-        assert!(answers.find("/p", Some(&HeaderValue::from_static("h0.example")), None).is_none());
+        assert!(answers.find("/p", Some(&b), None).is_err() && answers.find("/p", Some(&a), None).is_ok());
+        assert!(answers.find("/p", Some(&HeaderValue::from_static("h0.example")), None).is_err());
         assert_eq!(answers.bytes(), 20 + 10 * (COPIES - 1) + OVERHEAD * COPIES);
         let last = HeaderValue::from_static("h7.example");
         let mut res = Response::new(Body::empty());
@@ -1059,14 +1083,14 @@ mod tests {
         let read_before = entry(&answers, "/q", None, 60, 10);
         // A named post: `?do=save` at its page's path.
         write(&answers, "/p?do=save").answered(&res);
-        assert!(answers.find("/p", Some(&last), None).is_none(), "the path written, whatever the query");
-        assert!(answers.find("/q?x=2", None, None).is_none(), "and the path it redirects to");
-        assert!(answers.find("/made/1", None, None).is_none(), "and the one it says it made, named with this host");
+        assert!(answers.find("/p", Some(&last), None).is_err(), "the path written, whatever the query");
+        assert!(answers.find("/q?x=2", None, None).is_err(), "and the path it redirects to");
+        assert!(answers.find("/made/1", None, None).is_err(), "and the one it says it made, named with this host");
         answers.keep(read_before);
-        assert!(answers.find("/q", None, None).is_none(), "what was read before the write does not stand");
-        assert!(answers.find("/other", None, None).is_some());
+        assert!(answers.find("/q", None, None).is_err(), "what was read before the write does not stand");
+        assert!(answers.find("/other", None, None).is_ok());
         answers.keep(entry(&answers, "/p", Some("h7.example"), 60, 10));
-        assert!(answers.find("/p", Some(&last), None).is_some(), "made after the write, it stands");
+        assert!(answers.find("/p", Some(&last), None).is_ok(), "made after the write, it stands");
         assert!(Answers::new(0).is_none(), "no bound, none kept");
     }
 
@@ -1076,7 +1100,7 @@ mod tests {
     #[test]
     fn a_write_that_is_dropped_or_fails_late_drops_its_path_s_however_it_is_escaped() {
         let answers = Answers::new(1 << 20).expect("a bound");
-        let kept = |at| answers.find(at, None, None).is_some();
+        let kept = |at| answers.find(at, None, None).is_ok();
         answers.keep(entry(&answers, "/notes/a%7Eb", None, 60, 10));
         answers.keep(entry(&answers, "/other", None, 60, 10));
         drop(write(&answers, "/notes/a~b"));
@@ -1119,13 +1143,13 @@ mod tests {
         assert!(answers.0.written.get().is_none(), "an app that keeps no page holds no counts");
         answers.keep(entry(&answers, "/p", None, 60, 10));
         assert!(answers.0.written.get().is_some_and(|counts| counts.len() == WRITES));
-        assert!(answers.find("/p", None, None).is_some());
+        assert!(answers.find("/p", None, None).is_ok());
         early.answered(&res);
-        assert!(answers.find("/p", None, None).is_none(), "it counts where the counts now are");
+        assert!(answers.find("/p", None, None).is_err(), "it counts where the counts now are");
         answers.keep(entry(&answers, "/p", None, 60, 10));
-        assert!(answers.find("/p", None, None).is_some());
+        assert!(answers.find("/p", None, None).is_ok());
         write(&answers, "/p").answered(&res);
-        assert!(answers.find("/p", None, None).is_none());
+        assert!(answers.find("/p", None, None).is_err());
     }
 
     /// Threads that keep, read, grow and write at once leave the bytes counted equal to what the
@@ -1143,7 +1167,7 @@ mod tests {
                         match n % 4 {
                             0 | 1 => drop(answers.keep(entry(answers, &at, None, 60, 500 + n % 300))),
                             2 => {
-                                if let Some((found, _)) = answers.find(&at, None, None) {
+                                if let Ok((found, _)) = answers.find(&at, None, None) {
                                     #[cfg(feature = "compress")]
                                     found.grew(100);
                                     drop(found);
@@ -1191,7 +1215,7 @@ mod tests {
         let (french, asked) = (entry(&answers, "/p", None, 60, 20), fr.clone());
         answers.keep(move |place| Entry { language: Some(Some(asked)), ..french(place) });
         assert_eq!(answers.find("/p", None, Some(&fr)).expect("the one that stands").0.body.len(), 20);
-        assert!(answers.find("/p", None, Some(&en)).is_none());
+        assert!(answers.find("/p", None, Some(&en)).is_err());
         assert_eq!(answers.bytes(), 20 + OVERHEAD, "the one past its lifetime went when the URL was kept again");
     }
 
@@ -1272,7 +1296,7 @@ mod tests {
         let coded = Kept::coded(&extensions, &second.body, Coding::Zstd, || Bytes::from(vec![b'z'; 400]));
         assert_eq!(coded.len(), 400);
         assert_eq!(answers.bytes(), size + 400, "the other page went, and the bound holds");
-        assert!(answers.find("/a", None, None).is_none() && answers.find("/b", None, None).is_some());
+        assert!(answers.find("/a", None, None).is_err() && answers.find("/b", None, None).is_ok());
         assert_eq!(first.size.load(Ordering::Acquire), GONE);
     }
 }
