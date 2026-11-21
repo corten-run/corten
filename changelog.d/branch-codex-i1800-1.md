@@ -1,0 +1,1 @@
+- A page that reads messages with `req.t()` in an app without `App::messages` now says `Vary: accept-language`, so a cache in front keeps one copy per language rather than the first visitor's for everyone. [#1800 Messages read without App::messages follow Accept-Language, and the answer does not say so](https://github.com/corten-run/corten/issues/1800)

@@ -1587,8 +1587,8 @@ async fn a_kept_page_lasts_its_lifetime() {
     assert!((1..60).contains(&age), "counted from before its handler ran: {age}");
 }
 
-/// A page is kept for the `Host` it was asked with, and for the `Accept-Language` when the app
-/// has more than one language (its `Vary` names the header then).
+/// A page is kept for the `Host` it was asked with, and for the `Accept-Language` when its
+/// language follows the header (its `Vary` names the header then).
 #[tokio::test]
 async fn a_kept_page_is_for_the_host_and_the_language_it_was_asked_in() {
     crate::i18n::messages! { struct KeptMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
@@ -1634,8 +1634,8 @@ async fn a_kept_page_is_for_the_host_and_the_language_it_was_asked_in() {
     fetch(&two, "GET", "/", &[("accept-language", &asked(0))]).await;
     assert_eq!(runs.count(), 14, "the oldest went");
 
-    // Messages read with no `App::messages`: no answer says it varies on the header, and the
-    // page is still in the language asked for, so it is kept for each.
+    // Messages read with no `App::messages`: the page is in the language asked for, and its
+    // `Vary` says so, so it is kept for each.
     let runs = Runs::default();
     let counted = runs.clone();
     let page = move |req: Req| {
@@ -1652,6 +1652,49 @@ async fn a_kept_page_is_for_the_host_and_the_language_it_was_asked_in() {
         assert!(String::from_utf8_lossy(&body).contains(word), "{asked}");
         assert_eq!(runs.count(), ran, "{asked}");
     }
+}
+
+/// Messages read with no `App::messages` are in the language `Accept-Language` asks for, so the
+/// answer's `Vary` names the header, for a cache in front as for the app's own: in every mode the
+/// page answers, and on the kept copy. A page of the same app that reads none does not vary on it.
+#[tokio::test]
+async fn a_page_that_draws_messages_without_app_messages_varies_on_accept_language() {
+    crate::i18n::messages! { struct BareMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    let minute = Duration::from_secs(60);
+    let words = move |req: Req| async move {
+        let t: BareMsg = req.t();
+        let listings = t.item_listings().to_string();
+        Public::new(minute, req.test_page_for("Words", html! { <p>{listings}</p> }))
+    };
+    let plain = move |req: Req| async move { Public::new(minute, req.test_page_for("Plain", html! { <p>"plain"</p> })) };
+    let routes = Table::new().route("/words", crate::route::get(words).0).route("/plain", crate::route::get(plain).0);
+    let router = App::new(Routes::from(routes)).router();
+    let names = |headers: &HeaderMap| -> Vec<String> {
+        headers
+            .get_all(header::VARY)
+            .iter()
+            .flat_map(|line| line.to_str().unwrap().split(',').map(|name| name.trim().to_ascii_lowercase()).collect::<Vec<_>>())
+            .collect()
+    };
+    for mode in [None, Some("nav")] {
+        for (asked, word) in [("fr", "Annonces"), ("en", "Listings"), ("fr", "Annonces")] {
+            let mut sent = vec![("accept-language", asked)];
+            sent.extend(mode.map(|mode| ("corten", mode)));
+            let (status, headers, body) = fetch(&router, "GET", "/words", &sent).await;
+            assert_eq!(status, StatusCode::OK);
+            assert!(String::from_utf8_lossy(&body).contains(word), "{mode:?} {asked}");
+            let vary = names(&headers);
+            assert!(vary.iter().any(|name| name == "accept-language"), "{mode:?} {asked}: {vary:?}");
+        }
+        let mut sent = vec![("accept-language", "fr")];
+        sent.extend(mode.map(|mode| ("corten", mode)));
+        let (_, headers, _) = fetch(&router, "GET", "/plain", &sent).await;
+        let vary = names(&headers);
+        assert!(!vary.iter().any(|name| name == "accept-language"), "{mode:?}: {vary:?}");
+    }
+    let (_, kept, _) = fetch(&router, "GET", "/words", &[("accept-language", "fr")]).await;
+    assert!(kept.contains_key(header::AGE), "the kept copy");
+    assert!(names(&kept).iter().any(|name| name == "accept-language"), "{kept:?}");
 }
 
 /// A page whose styles come from data has a style block its `Content-Security-Policy` allows by

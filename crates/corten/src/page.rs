@@ -67,7 +67,7 @@ const NOTICE_MAX: usize = 500;
 
 /// Responses depend on the mode header and, for [`Mode::Data`], on `Accept`.
 const VARY: &str = "corten, accept";
-/// The same, for an app with [`crate::App::messages`]: the locale follows `Accept-Language`.
+/// The same, for an answer whose locale follows `Accept-Language`.
 const VARY_LANGUAGE: &str = "corten, accept, accept-language";
 
 /// How the client asked for this response.
@@ -1569,7 +1569,7 @@ impl Req {
             None => match self.signal.locale() {
                 Some(index) => M::from_index(index),
                 None => {
-                    // No answer of this app says it varies on the header: a kept page is told.
+                    // Nothing else says the answer depends on the header: noted for its `Vary`.
                     self.signal.ask_language();
                     M::negotiate(self.accept_language())
                 }
@@ -2296,13 +2296,15 @@ impl Req {
         res
     }
 
-    /// A page whose locale the handler chose from its URL does not vary on `Accept-Language`.
+    /// What the answer varies on. With [`crate::App::messages`] every answer is in the locale
+    /// `Accept-Language` asks for (its `Content-Language` says which) unless the handler chose it
+    /// from the URL; without, only one that read messages in the language the header asks for is.
     fn vary(&self) -> HeaderValue {
-        HeaderValue::from_static(if self.shared.locales.is_some() && self.signal.locale().is_none() {
-            VARY_LANGUAGE
-        } else {
-            VARY
-        })
+        let language = match self.shared.locales {
+            Some(_) => self.signal.locale().is_none(),
+            None => self.signal.asked_language(),
+        };
+        HeaderValue::from_static(if language { VARY_LANGUAGE } else { VARY })
     }
 
     /// `Content-Language`: the locale the answer is in, in an app with messages.

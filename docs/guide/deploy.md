@@ -245,7 +245,7 @@ A page route can answer several clients at one URL: the whole document, a client
 (`corten: nav`), a form's answer, and JSON for `Accept: application/json`. Only the document may be
 shared, and only from a `Public` handler ([Caching](app.md#caching)); its answers say `Vary: corten,
 accept, accept-encoding`, `cookie` when the request had none, and `accept-language` with
-`App::messages`. A cache that keys on the URL alone hands the stored document to every request for
+`App::messages` or on a page that read messages with `req.t()` without it. A cache that keys on the URL alone hands the stored document to every request for
 it. Measured on 2026-11-20 with nginx 1.31.9's `proxy_cache`: in front of `examples/card-market`,
 the second document request was a `HIT`, and a navigation and a Brotli request got their own
 answers. With `proxy_ignore_headers Vary`, both got the stored document (no `corten-page`, no

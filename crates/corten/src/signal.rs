@@ -585,7 +585,7 @@ impl Signal {
     }
 
     /// A message was read in the language the request's `Accept-Language` asks for, in an app
-    /// whose answers do not say they vary on it.
+    /// without [`crate::App::messages`]: the answer's `Vary` names the header.
     pub(crate) fn ask_language(&self) {
         self.0.asked_language.store(true, Ordering::Relaxed);
     }

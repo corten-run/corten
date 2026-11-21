@@ -7228,7 +7228,7 @@ rules something out.
     an extractor of the app's own cannot claim it); a page whose handler takes another is made
     for every request. What those inputs read of the whole document's `GET` is the key:
     the `Host`, the path and the query, and the `Accept-Language` when the page's `Vary` names
-    it or a message was read in the language it asks for. The header is compared as it was
+    it (`App::messages`, or a message read in the language it asks for). The header is compared as it was
     sent, as a CDN compares it ([Choice 22](#choice-locale-in-url)), with at most eight copies
     for a URL, a new one in the place of one not read since it was kept or since room was last
     made. The request must be at the URL the router matched (a route's parameters are read
