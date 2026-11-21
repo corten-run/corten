@@ -24,9 +24,9 @@ pub(crate) trait Set {
     fn word(x: u64) -> bool;
 
     /// [`Set::word`] of sixteen bytes: both words are tested and the two answers joined before
-    /// the one branch on them, so clean text costs half the branches of a word at a time, and a
-    /// compiler that has vector operations for the target can test the two words in one. Where it
-    /// does not (a build made for size, a target with none), this is the word test twice.
+    /// the one branch on them. Text with nothing to escape, which most is, takes half the
+    /// branches of a word at a time; text with a byte of the set in the first word takes one
+    /// word test more than stopping there would.
     #[inline(always)]
     fn block(block: &[u8; 16]) -> bool {
         Self::word(word(&block[..8])) | Self::word(word(&block[8..]))
@@ -70,9 +70,9 @@ fn half(bytes: &[u8]) -> u64 {
 
 /// Whether `bytes` may have a byte of the set `S`, as [`Set::word`] finds them. Text of sixteen
 /// bytes or more is tested sixteen at a time ([`Set::block`]) and shorter text in one or two
-/// words, so no text takes more word tests than its length in eights, rounded up. The last (or
-/// only) bytes are read overlapping, so no length loops over single bytes. A string shorter than
-/// four is padded with spaces, which neither set has.
+/// words, so text with none takes as many word tests as its length in eights, rounded up. The
+/// last (or only) bytes are read overlapping, so no length loops over single bytes. A string
+/// shorter than four is padded with spaces, which neither set has.
 #[inline(always)]
 pub(crate) fn any<S: Set>(bytes: &[u8]) -> bool {
     let n = bytes.len();
@@ -169,8 +169,8 @@ mod tests {
         b < 0x20 || b == b'"' || b == b'\\'
     }
 
-    /// Every byte value at every place in sixteen bytes, and in a word: the sixteen-byte test
-    /// finds the set and nothing else, and the word test the set and no more than it says.
+    /// Every byte value at every place in sixteen bytes, and in a word: each test finds the set
+    /// and no more than the word test says it may (`#`, for HTML).
     #[test]
     fn each_test_finds_its_set_at_every_place() {
         for b in 0..=255u8 {
@@ -198,7 +198,7 @@ mod tests {
 
     /// `any` against the set's bytes one by one: every byte value at every place of every length
     /// to past four blocks, so each branch by length, the loop and the overlapping end are met.
-    /// Text of sixteen bytes or more is exact; shorter HTML text may also stop at a `#`.
+    /// HTML text of any length may also stop at a `#`.
     #[test]
     fn any_finds_a_byte_of_the_set_at_every_position_and_length() {
         for len in 0..70 {

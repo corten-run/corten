@@ -1,2 +1,2 @@
-- Text is tested for a byte to escape sixteen bytes at a time where it was eight, so `html!` and the JSON writer take fewer instructions for text of sixteen bytes or more; what they write is unchanged.
-  ([#1809 Text is tested for a byte to escape eight bytes at a time: sixteen at a time, in safe Rust the compiler vectorizes, takes 6 to 20% fewer instructions a request for the catalog page and its JSON](https://github.com/corten-run/corten/issues/1809))
+- Text is tested for a byte to escape sixteen bytes at a time where it was eight, so `html!` and the JSON writer take fewer instructions for text with nothing to escape; what they write is unchanged.
+  ([#1809 Text is tested for a byte to escape eight bytes at a time: sixteen at a time, as two word tests joined, takes 5 to 20% fewer instructions a request for the catalog page and its JSON](https://github.com/corten-run/corten/issues/1809))

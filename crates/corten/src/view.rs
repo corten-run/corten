@@ -1938,8 +1938,8 @@ fn escape_each(text: &str, out: &mut String) {
     out.push_str(&text[start..]);
 }
 
-/// The index of the first byte from `from` on that `escape_into` replaces. Most text has none, so
-/// it skips sixteen bytes at a time while none of them is one, then eight, and finds it in those
+/// The index of the first byte from `from` on that `escape_into` replaces. It skips sixteen bytes
+/// at a time while none of them is one, then eight if as many are left, and finds it in those
 /// with the table.
 #[inline]
 fn next_escaped(bytes: &[u8], from: usize) -> Option<usize> {
@@ -1947,7 +1947,7 @@ fn next_escaped(bytes: &[u8], from: usize) -> Option<usize> {
     let escaped = |chunk: &[u8]| chunk.iter().position(|&byte| ESCAPES[byte as usize] != 0);
     let mut i = from;
     // Either test can also stop at a `#`; the table then finds nothing and the skip goes on.
-    while let Some(block) = bytes.get(i..).and_then(<[u8]>::first_chunk::<16>) {
+    while let Some(block) = bytes[i..].first_chunk::<16>() {
         if Html::block(block) {
             if let Some(at) = escaped(block) {
                 return Some(i + at);
@@ -1955,8 +1955,8 @@ fn next_escaped(bytes: &[u8], from: usize) -> Option<usize> {
         }
         i += 16;
     }
-    while let Some(chunk) = bytes.get(i..i + 8) {
-        if Html::word(u64::from_le_bytes(chunk.try_into().expect("eight bytes"))) {
+    if let Some(chunk) = bytes[i..].first_chunk::<8>() {
+        if Html::word(u64::from_le_bytes(*chunk)) {
             if let Some(at) = escaped(chunk) {
                 return Some(i + at);
             }
