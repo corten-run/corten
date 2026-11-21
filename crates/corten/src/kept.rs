@@ -29,9 +29,11 @@
 //! written in UTC), no `Authorization`, no caller read by a middleware, no `corten` header, JSON
 //! not asked for first, no notice sent back, no body, and the URL the router matched (a
 //! middleware that changed it since leaves the request to the handler). The key is the `Host`,
-//! the path and query, and `Accept-Language` when the page's `Vary` names it or a message was
-//! read in the language it asks for: a page for `/items?page=2` is not the one for `/items`. The
-//! headers are compared as they were sent, so `fr` and `fr-FR` each have a copy. An answer is
+//! the path and query, and `Accept-Language` when the page's `Vary` names it (`App::messages`, or
+//! a locale negotiated from it, before or after the page was made, which a copy given says again
+//! as it leaves the app, whatever `Vary` a middleware put on it): a page for `/items?page=2` is
+//! not the one for `/items`. The headers are compared as they were sent, so `fr` and `fr-FR`
+//! each have a copy. An answer is
 //! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
 //! and no value made for this request alone, and varies on nothing but what the key covers.
 //!
@@ -571,6 +573,7 @@ impl Answers {
 /// about who is asking, read as the handler would see it (after the app's middleware).
 pub(crate) struct Asked<'a> {
     answers: &'a Answers,
+    signal: &'a crate::Signal,
     at: &'a str,
     host: Option<&'a HeaderValue>,
     language: Option<&'a HeaderValue>,
@@ -650,12 +653,17 @@ impl<'a> Asked<'a> {
             return None;
         }
         let at = at.as_str();
-        Some(Asked { answers, at, host, language })
+        Some(Asked { answers, signal, at, host, language })
     }
 
     /// The kept answer for this request, as its handler gave it, with its age.
     pub(crate) fn find(&self) -> Option<Response> {
         let (entry, age) = self.answers.find(self.at, self.host, self.language)?;
+        // Kept for the language it was asked in: the answer names `Accept-Language` as it leaves
+        // the app, whatever `Vary` a middleware puts on it after this (`crate::page::vary_on_language`).
+        if entry.language.is_some() {
+            self.signal.ask_language();
+        }
         let mut res = Response::new(Body::from(entry.body.clone()));
         let mut head = with_room(&entry.head);
         // So a cache after this one, the browser's too, does not start the lifetime over.
@@ -707,15 +715,19 @@ pub(crate) struct Missed {
 
 impl Missed {
     /// `res`, kept when it is the same for everyone and for how long: see the module.
-    pub(crate) async fn keep(self, res: Response) -> Response {
-        let shared = self.signal.as_ref().and_then(crate::Signal::shared);
-        let Some(answers) = shared.and_then(|shared| shared.kept.as_ref()) else { return res };
+    pub(crate) async fn keep(self, mut res: Response) -> Response {
+        let Some(signal) = &self.signal else { return res };
+        let Some(answers) = signal.shared().and_then(|shared| shared.kept.as_ref()) else { return res };
         let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else { return res };
-        // Whether the page varies on `Accept-Language`, or on something the key does not cover.
-        let Some(language) = varies(res.headers()) else { return res };
-        // A page in the language the request asked for, in an app whose answers do not say so
-        // (messages read with no `App::messages`): one copy for each `Accept-Language` too.
-        let language = language || self.signal.as_ref().is_some_and(crate::Signal::asked_language);
+        // Whether the page varies on `Accept-Language` (`App::messages`, or a locale negotiated
+        // from it), or on something the key does not cover.
+        let Some(mut language) = varies(res.headers()) else { return res };
+        // A locale negotiated after the page set its headers is named now, so the key below
+        // and the header the app sends agree.
+        if !language && signal.asked_language() {
+            crate::page::add_language(res.headers_mut());
+            language = true;
+        }
         let style = res.extensions().get::<crate::security::StyleBlock>().cloned();
         // Only what is put back on a kept answer: a mark this does not know is not replayed.
         let known = 2 + usize::from(style.is_some());

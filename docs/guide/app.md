@@ -1412,7 +1412,7 @@ except that the last row applies to it, and a caller read makes it private. An e
 so, so a public answer cannot read a credential through one by accident. An `App::api` route has one form only, so its public responses
 stay public for clients without credentials. A cache in front of the app must key on `Vary`
 (`corten`, `accept`, `accept-encoding`, `cookie` on an answer to a request without one, and
-`accept-language` with `App::messages`, unless the handler took the page's locale from its URL); the [deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
+`accept-language` with `App::messages`, unless the handler took the page's locale from its URL, and on any other answer whose handler, error page or middleware read messages in the language the header asks for (`req.t()`) before the answer left the app: a page, built before or after the read, a screen's JSON, an `App::api` answer, a redirect, the error page of a refused cross-site write). Messages read while a streamed body is written come after its headers: negotiate before answering, or keep that answer out of shared caches. A middleware may change the request's `Accept-Language` only before any extractor that reads the request runs: a `Req` keeps the header as it was when extracted, with `App::messages` the locale first chosen holds for the whole request, and a kept page is keyed on the header the handler sees, so once any `Req` has been extracted, leave the header alone. An answer that depends on another header the middleware read needs that header in `Vary` from the middleware, or a private policy. The [deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
 A `Public` page in an app with several locales is one copy per `Accept-Language` string in a cache that keys on it, and one language for everyone in one that ignores `Vary`: put its locale in its URL ([Views](views.md#a-locale-in-the-url)), so the cache keys on the URL alone.
 `NoStore<..>` keeps an answer out of every cache, the browser's back/forward cache included:
 `async fn statement(req: Req) -> NoStore<HtmlResult>`. A failure it returns is not kept either:
@@ -1526,8 +1526,9 @@ else a page could differ by, and the answer nothing made for one request:
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
-with `req.t()` without it) it is also kept for the `Accept-Language` it was asked with, as the
-header was sent, so `fr` and `fr-FR` are two copies of one page; a page whose locale is in its
+with `req.t()` without it, before or after the page was built) it is also kept for the `Accept-Language` it was asked with, as the
+header was sent, so `fr` and `fr-FR` are two copies of one page, and a copy given for it names
+`accept-language` in `Vary` as it leaves the app, whatever `Vary` a middleware put on it; a page whose locale is in its
 URL ([Views](views.md#a-locale-in-the-url)) is one. A URL has at most eight copies, and a new
 one takes the place of one not read since it was kept or since room was last made (the oldest
 of those, else the oldest of all), so a way of asking seen once does not push out one seen
