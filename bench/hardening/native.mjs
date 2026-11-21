@@ -81,7 +81,17 @@ export function assessNative(report, qualification, deployment = "direct") {
     assert.deepEqual(Object.keys(byName), ["mutated-json", "mutated-page", "fault-json-503", "fault-page-503", ...(expectedLive ? ["live-503"] : []), "fault-json-302", "fault-page-302", "restored-json"]);
     assert.equal(api.responses.length, Object.keys(byName).length, "duplicate API control response");
     const counters = (step) => jsonOf(api.controllers.find((r) => r.step === step).response);
-    const exactReads = ["count-json", "count-page"].every((step) => isDeepStrictEqual(counters(step).requests, { item_1: 1 }));
+    const countMap = (map, key) => map !== null && typeof map === "object" && !Array.isArray(map)
+      && Object.entries(map).every(([k, v]) => key.test(k) && Number.isSafeInteger(v) && v > 0);
+    const reads = ["count-json", "count-page"].map(step => {
+      const c = counters(step);
+      assert.ok(c?.status === 200 && countMap(c.requests, /^item_[1-9]\d*$/) && countMap(c.answers, /^(200|404)$/),
+        `invalid controller counters: ${step}`);
+      const total = map => Object.values(map).reduce((a, b) => a + b, 0);
+      assert.equal(total(c.requests), total(c.answers), `inconsistent controller counters: ${step}`);
+      return c.requests;
+    });
+    const exactReads = reads.every(map => isDeepStrictEqual(map, { item_1: 1 }));
     const reset = counters("verify-reset"); assert.equal(reset.status, 200); assert.deepEqual(reset.answers, {}); assert.deepEqual(reset.requests, {});
     const errorResponse = (row) => row.complete && row.status >= 500 && row.status <= 599;
     const valid = exactReads && healthy(byName["mutated-json"]) && isDeepStrictEqual(jsonOf(byName["mutated-json"]), api.expected)

@@ -215,7 +215,7 @@ function apiQualification(missingLive) {
 function apiControls(missingLive) {
   const nonce = "a".repeat(24), changed = { ...expected, title: nonce };
   const controllers = ["reset-before", "mutate", "count-json", "reset-count", "count-page", "fault-503", "fault-302", "reset-after", "verify-reset"]
-    .map((step) => ({ step, response: response(200, JSON.stringify(step.startsWith("count-") ? { requests: { item_1: 1 } } : { status: 200, answers: {}, requests: {} })) }));
+    .map((step) => ({ step, response: response(200, JSON.stringify(step.startsWith("count-") ? { status: 200, answers: { 200: 1 }, requests: { item_1: 1 } } : { status: 200, answers: {}, requests: {} })) }));
   const responses = [["mutated-json", 200, JSON.stringify(changed)], ["mutated-page", 200, nonce], ["fault-json-503", 503], ["fault-page-503", 503],
     ...(missingLive ? [] : [["live-503", 200]]), ["fault-json-302", 502], ["fault-page-302", 502], ["restored-json", 200, JSON.stringify(expected)]]
     .map(([step, status, body]) => ({ step, response: response(status, body) }));
@@ -223,6 +223,17 @@ function apiControls(missingLive) {
     liveness: { path: missingLive ? null : healthPath, baseline: missingLive ? null : response(200), negative: response(404) },
     api: { nonce, expected: changed, original: expected, controllers, responses } };
 }
+
+test("malformed controller counts are not an app failure; valid empty counters still are", () => {
+  const q = apiQualification(true), raw = apiControls(true);
+  const set = (step, data) => { raw.api.controllers.find(r => r.step === step).response = response(200, JSON.stringify(data)); };
+  set("count-json", { requests: {}, answers: {}, status: 200 });
+  assert.equal(assessNative(raw, q).sourceControl, "target-functional-failure");
+  for (const malformed of [{}, { requests: [], answers: {}, status: 200 }, { requests: { item_1: -1 }, answers: {}, status: 200 }]) {
+    set("count-page", malformed);
+    assert.throws(() => assessNative(raw, q), /controller counter/);
+  }
+});
 
 test("a server error during health discovery is not an absent endpoint", () => {
   const q = apiQualification(true), raw = apiControls(true);

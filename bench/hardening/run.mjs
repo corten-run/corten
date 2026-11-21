@@ -9,7 +9,7 @@ import { hostname, platform, release } from "node:os";
 import { budgets, validateBudget, parseArgs, schema, matrix, selected, groupReady, nativeGroup, registryDigest,
   boundedRequestsVersion, deploymentQualificationVersion } from "./plan.mjs";
 import { artifacts, verifyArtifacts, verifyParity, verifyNativeLimits, digest, usesDelayUpstream, upstreamSourcePath, probeSourcePath, phaseInputs,
-  savedProofVersion, committedInputs, savedFiles, snapshotDependencies, readyScript, buildNativeImage } from "./evidence.mjs";
+  savedProofVersion, committedInputs, savedFiles, snapshotDependencies, readyScript, buildNativeImage, proxyConfig } from "./evidence.mjs";
 import { assembleRecovery } from "./dependency-recovery-capture.mjs";
 import { assembleBounded, boundedProbeConfig } from "./request-capture.mjs";
 import { assessNative } from "./native.mjs";
@@ -18,7 +18,7 @@ import { trackedImageBuild, trackedNetworkCreate, requireSourceControl, failureK
 import { nativeBuildContext } from "../mixed-production/build-context.mjs";
 import { records, writeFixture } from "../marketplace/fixtures.mjs";
 import { featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
-import { nginxConf, edgeImage, edgeCertImage, edgeOffset } from "../fullstack/edge.mjs";
+import { edgeImage, edgeCertImage } from "../fullstack/edge.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -178,7 +178,7 @@ export async function run(args) {
         await owned(certName, ["create", "--network", "none", ...limits(budget.resources.apparatus), "-v", `${cert}:/cert`, tools.cert.Id,
           "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "/cert/key.pem", "-out", "/cert/cert.pem", "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"]);
         try { await docker(["start", "-a", certName], { file: join(out, "certificate.log") }); } finally { await remove(certName); }
-        const config = nginxConf([["target", { port: 8080 - edgeOffset }]], 1); writeFileSync(join(out, "nginx.conf"), config);
+        writeFileSync(join(out, "nginx.conf"), proxyConfig());
         const edge = await owned(edgeName, ["run", "-d", "--network", network, ...limits(budget.resources.proxy), "-v", `${cert}:/cert:ro`, "-v", `${join(out, "nginx.conf")}:/etc/nginx/nginx.conf:ro`, tools.edge.Id]);
         targets.push({ id: "proxy", role: "proxy", name: edgeName, info: edge, source: summary.commit + ":bench/fullstack/edge.mjs:nginxConf" });
         target = { host: "127.0.0.1", port: 8080, authority: "localhost:8080", origin: "https://localhost:8080", tls: true, caPem: readFileSync(join(cert, "cert.pem"), "utf8") }; namespace = edgeName;

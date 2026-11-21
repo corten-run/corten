@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { budgets } from "./plan.mjs";
+import { nginxConf, edgeOffset } from "../fullstack/edge.mjs";
 import { qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { committedInputs, sourceGit, savedFiles, snapshotDependencies, verifyOwnedReceipts, verifyRunInputs, readyScript, buildNativeImage, digest, savedProofVersion, verifyNativeLimits, phaseInputs } from "./evidence.mjs";
 import { ownedCleanupObservation, verifyOwnedCleanup, ownedContainerRecorder } from "./lifecycle.mjs";
@@ -129,10 +130,17 @@ test(`ordinary ${mode} preflight failure (${discovery ? "discovery" : "allowed h
   Object.assign(cell, { status: "invalid", failedStage: prefix + "native-controls", failureKind: "target-functional-failure",
     [edge ? "edgeAssessment" : "nativeAssessment"]: assessment });
   writeFileSync(join(out, "failure.json"), JSON.stringify({ stage: cell.failedStage, kind: cell.failureKind }));
+  const config = join(out, "nginx.conf"), expectedConfig = nginxConf([["target", { port: 8080 - edgeOffset }]], 1);
+  if (edge) writeFileSync(config, expectedConfig);
   const paths = new Set(savedFiles(dir).map(f => f.path)), launches = edge ? receipts : receipts.slice(0, 5), control = launches.at(-1);
   control.start.stdout = stdout;
   const replay = (list) => verifyFailedControl(dir, cell, paths, summary, list);
   assert.equal(replay(launches), true);
+  if (edge) {
+    rmSync(config); assert.equal(replay(launches), false);
+    writeFileSync(config, "# different deployment"); assert.throws(() => replay(launches), /edge configuration/);
+    writeFileSync(config, expectedConfig);
+  }
   assert.equal(replay([]), false);
   assert.equal(replay(launches.slice(0, -1)), false);
   delete raw.host.allowed.host; writeFileSync(capture, JSON.stringify(raw));

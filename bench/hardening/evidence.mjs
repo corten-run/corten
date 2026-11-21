@@ -7,7 +7,9 @@ import { dirname, join, resolve, relative, isAbsolute, posix, win32 } from "node
 import { validateBudget, phases } from "./plan.mjs";
 import { verifyContainerCommands, requireCommandAcknowledgement } from "./lifecycle.mjs";
 import { qualificationSettings, featureProfile } from "../marketplace/feature-contract.mjs";
+import { edgeOffset, nginxConf } from "../fullstack/edge.mjs";
 
+export const proxyConfig = () => nginxConf([["target", { port: 8080 - edgeOffset }]], 1);
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export const savedProofVersion = 2;
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -457,6 +459,8 @@ export function verifyOwnedReceipts(receipts, summary, folder, preflight) {
     const cell = summary.cells.find((c) => c.key === r.intent.cell); assert.ok(cell);
     verifyContainerCommands(r, summary.runId);
     const trigger = verifyWorker(r, cell, summary, receipts);
+    if (folder && r.intent.step === "proxy")
+      assert.ok(readFileSync(join(folder, cell.key, "nginx.conf")).equals(Buffer.from(proxyConfig())), "saved edge configuration differs");
     if (trigger !== undefined) {
       const key = win32.isAbsolute(trigger) && !posix.isAbsolute(trigger) ? trigger.toLowerCase() : trigger;
       assert.equal(triggerByCell.get(cell.key) ?? trigger, trigger, "recovery workers do not share the same trigger directory");
