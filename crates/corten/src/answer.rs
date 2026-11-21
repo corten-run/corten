@@ -2423,6 +2423,14 @@ pub trait Anonymous {
     ///     const KEYED: bool = true;
     /// }
     /// ```
+    ///
+    /// ```compile_fail,E0603
+    /// struct Device;
+    ///
+    /// impl corten::answer::Anonymous for Device {
+    ///     const KEYED: corten::answer::sealed::Keyed = corten::answer::sealed::Keyed(true);
+    /// }
+    /// ```
     #[doc(hidden)]
     const KEYED: sealed::Keyed = sealed::Keyed(false);
 }

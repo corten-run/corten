@@ -37,8 +37,14 @@
 //! reading while a write went through is not kept. Nothing else drops a page before its lifetime
 //! ends: the lifetime is how stale the app said the page may be. Off under `corten dev`. The
 //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
-//! the compressed forms made for it, each held in an allocation of its own size, with an
-//! allowance for what holds them.
+//! the compressed forms made for it, with an allowance for what holds them; the body, the key
+//! and each compressed form are held in allocations of their own size
+//! (`tests/kept_memory.rs` holds the count to what the allocator is asked for).
+//!
+//! A write is counted when it is answered or dropped, so what it changes must be there for a
+//! reader by then, or be made under `Signal::finish`. One that lands later (a task the handler
+//! started and did not wait for, a store whose readers lag its writers) can leave the page as
+//! it was until its lifetime ends.
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, DefaultHasher, Hasher};
@@ -68,16 +74,16 @@ const COPIES: usize = 8;
 
 /// What an entry counts for beside its key, its headers and its bytes: itself, its header map
 /// and its places in the maps.
-const OVERHEAD: usize = 768;
+const OVERHEAD: usize = 1024;
 
 /// What a header counts for beside its name and value: its place in the header map.
-const HEADER: usize = 96;
+const HEADER: usize = 112;
 
 /// An entry's size once it is no longer kept: nothing made for it counts from then on.
 const GONE: usize = usize::MAX;
 
-/// The counts of writes, one for the paths whose hash names it: enough of them (256 KiB) that
-/// an app's writes seldom share a count with a kept page.
+/// The counts of writes, one for the paths whose hash names it: enough of them (256 KiB, made
+/// when the first page is asked for) that an app's writes seldom share a count with a kept page.
 const WRITES: usize = 1 << 16;
 
 /// The app's kept answers, at most `bound` bytes of them.
@@ -91,7 +97,7 @@ struct Store {
     /// its request found before its handler ran. So a write drops every page at its path,
     /// whatever its query, and a page whose handler was reading while the write was made is not
     /// kept, without a lock or a search.
-    written: Box<[AtomicU32]>,
+    written: OnceLock<Box<[AtomicU32]>>,
     inner: RwLock<Inner>,
 }
 
@@ -111,14 +117,17 @@ struct Written {
 
 impl Written {
     /// The count for `at` (a path, with or without a query) as it is now.
+    /// The counts are made here, before the first page's handler runs: a write answered before
+    /// then found none to count in, and what it wrote is there for that handler to read.
     fn of(store: &Store, at: &str) -> Self {
         let count = count_of(at.split(['?', '#']).next().unwrap_or(at).as_bytes());
-        Written { count, was: store.written[count].load(Ordering::Acquire) }
+        let counts = store.written.get_or_init(|| (0..WRITES).map(|_| AtomicU32::new(0)).collect());
+        Written { count, was: counts[count].load(Ordering::Acquire) }
     }
 
     /// No write to the path since.
     fn stands(self, store: &Store) -> bool {
-        store.written[self.count].load(Ordering::Acquire) == self.was
+        store.written.get().is_none_or(|counts| counts[self.count].load(Ordering::Acquire) == self.was)
     }
 }
 
@@ -135,11 +144,13 @@ pub(crate) struct Writing<'a> {
 impl Writing<'_> {
     /// The write was answered: counts it for its path and for the places on this site its answer
     /// names (RFC 9111 section 4.4), so nothing kept there stands. Not for a `4xx`, which says
-    /// the request was refused for what it asked. A `5xx` counts for its path: the handler may
-    /// have written before it failed, or be writing still past its deadline.
+    /// the request was refused for what it asked, nor for a `501`, which says no handler has
+    /// its method. Any other `5xx` counts for its path: the handler may have written before it
+    /// failed or passed its deadline (work it left under `Signal::finish` counts again when it
+    /// ends).
     pub(crate) fn answered(mut self, res: &Response) {
         self.answered = true;
-        if res.status().is_client_error() {
+        if res.status().is_client_error() || res.status() == StatusCode::NOT_IMPLEMENTED {
             return;
         }
         self.answers.count(self.count);
@@ -377,8 +388,7 @@ impl Answers {
     /// Room for `bound` bytes of answers; none for a bound of 0.
     pub(crate) fn new(bound: usize) -> Option<Self> {
         (bound > 0).then(|| {
-            let written = (0..WRITES).map(|_| AtomicU32::new(0)).collect();
-            Answers(Arc::new(Store { bound, bytes: AtomicUsize::new(0), written, inner: RwLock::default() }))
+            Answers(Arc::new(Store { bound, bytes: AtomicUsize::new(0), written: OnceLock::new(), inner: RwLock::default() }))
         })
     }
 
@@ -451,7 +461,10 @@ impl Answers {
     /// query's (a named post is `?do=name` at its page's path) and one whose handler has yet to
     /// answer.
     pub(crate) fn count(&self, count: usize) {
-        self.0.written[count].fetch_add(1, Ordering::AcqRel);
+        // With no page asked for yet there is none to drop.
+        if let Some(counts) = self.0.written.get() {
+            counts[count].fetch_add(1, Ordering::AcqRel);
+        }
     }
 }
 
@@ -477,6 +490,10 @@ impl<'a> Asked<'a> {
             return None;
         }
         let headers = req.headers();
+        // First, since it is what most requests a page is not kept for carry.
+        if crate::cache::Credentials::read(headers).personal(|| headers.contains_key(header::AUTHORIZATION)) {
+            return None;
+        }
         // The document a browser loads: not what the runtime asks for (`corten`, whatever it
         // says), not a data client's JSON.
         if headers.contains_key(crate::page::MODE_HEADER) || Mode::asked(headers) != (Mode::Document, false) {
@@ -491,9 +508,6 @@ impl<'a> Asked<'a> {
             header::TRANSFER_ENCODING,
         ];
         if READ.iter().any(|name| headers.contains_key(name)) {
-            return None;
-        }
-        if crate::cache::Credentials::read(headers).personal(|| headers.contains_key(header::AUTHORIZATION)) {
             return None;
         }
         // In origin form: a URL that names its own host is a proxy's.
@@ -535,7 +549,6 @@ impl<'a> Asked<'a> {
         Missed {
             asked: Instant::now(),
             written: Written::of(&self.answers.0, self.at),
-            shared: req.extensions().get::<crate::Signal>().and_then(crate::Signal::shared).cloned(),
             signal: req.extensions().get::<crate::Signal>().cloned(),
             nonce: req.extensions().get::<crate::security::NonceSlot>().cloned(),
             at: self.at.into(),
@@ -551,7 +564,6 @@ impl<'a> Asked<'a> {
 pub(crate) struct Missed {
     asked: Instant,
     written: Written,
-    shared: Option<Arc<crate::page::Shared>>,
     signal: Option<crate::Signal>,
     nonce: Option<crate::security::NonceSlot>,
     at: Box<str>,
@@ -562,7 +574,8 @@ pub(crate) struct Missed {
 impl Missed {
     /// `res`, kept when it is the same for everyone and for how long: see the module.
     pub(crate) async fn keep(self, res: Response) -> Response {
-        let Some(answers) = self.shared.as_ref().and_then(|shared| shared.kept.as_ref()) else { return res };
+        let shared = self.signal.as_ref().and_then(crate::Signal::shared);
+        let Some(answers) = shared.and_then(|shared| shared.kept.as_ref()) else { return res };
         let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else { return res };
         // Whether the page varies on `Accept-Language`, or on something the key does not cover.
         let Some(language) = varies(res.headers()) else { return res };
@@ -781,6 +794,49 @@ mod tests {
         write(&answers, "/notes/a%7eb").answered(&res);
         assert!(!kept("/notes/a%7Eb"), "a handler that failed, or passed its deadline, may have written");
         assert!(kept("/other"), "and what a failure names is not a place it wrote");
+        // A method no handler has ran nothing.
+        answers.keep(entry(&answers, "/notes/a%7Eb", None, 60, 10));
+        *res.status_mut() = StatusCode::NOT_IMPLEMENTED;
+        write(&answers, "/notes/a~b").answered(&res);
+        assert!(kept("/notes/a%7Eb"));
+        // An escaped `/` is part of its segment, in either case of its digits.
+        assert_eq!(count_of(b"/files/a%2Fb"), count_of(b"/files/a%2fb"));
+        assert_ne!(count_of(b"/files/a%2Fb"), count_of(b"/files/a/b"));
+    }
+
+    /// Threads that keep, read, grow and write at once leave the bytes counted equal to what the
+    /// entries count for, each entry in one slot and one URL's copies, within the bound.
+    #[test]
+    fn the_bytes_counted_are_the_entries_whatever_threads_did_at_once() {
+        const BOUND: usize = 64 << 10;
+        let answers = Answers::new(BOUND).expect("a bound");
+        std::thread::scope(|scope| {
+            for thread in 0..4_usize {
+                let answers = &answers;
+                scope.spawn(move || {
+                    for n in 0..4000_usize {
+                        let at = format!("/p{}", (n * 7 + thread * 13) % 97);
+                        match n % 4 {
+                            0 | 1 => drop(answers.keep(entry(answers, &at, None, 60, 500 + n % 300))),
+                            2 => {
+                                if let Some((found, _)) = answers.find(&at, None, None) {
+                                    #[cfg(feature = "compress")]
+                                    found.grew(100);
+                                    drop(found);
+                                }
+                            }
+                            _ => answers.count(count_of(at.as_bytes())),
+                        }
+                    }
+                });
+            }
+        });
+        let inner = answers.0.inner.read().unwrap_or_else(PoisonError::into_inner);
+        let sizes: Vec<usize> = inner.slots.iter().flatten().map(|entry| entry.size.load(Ordering::Acquire)).collect();
+        assert!(!sizes.is_empty() && sizes.iter().all(|&size| size != GONE));
+        assert_eq!(answers.bytes(), sizes.iter().sum::<usize>());
+        assert_eq!(inner.at.values().map(Vec::len).sum::<usize>(), sizes.len());
+        assert!(answers.bytes() <= BOUND, "{}", answers.bytes());
     }
 
     #[test]

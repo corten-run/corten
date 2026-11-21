@@ -1009,6 +1009,42 @@ async fn a_handler_reads_the_visitors_time_zone_once_the_app_asks_for_it() {
     }
 }
 
+/// A `Public` page first asked for by a visitor whose zone is known is not given to the next one
+/// in that zone: it is written in UTC, which is what the app keeps (`crate::kept`).
+#[cfg(feature = "zones")]
+#[tokio::test]
+async fn a_kept_public_page_is_not_in_its_first_visitor_s_zone() {
+    use crate::i18n::{DateStyle, TimeStyle};
+    use std::time::{Duration, UNIX_EPOCH};
+    crate::i18n::messages! { struct KeptZoneMsg { "en" => "src/i18n/en.json" } }
+    let at = UNIX_EPOCH + Duration::from_secs(1_774_191_845);
+    let page = move |req: Req| async move {
+        let t: KeptZoneMsg = req.t();
+        let when = t.date_time(at, DateStyle::Medium, TimeStyle::Short);
+        crate::Public::new(Duration::from_secs(60), req.test_page_for("Zone", html! { <p>{when}</p> }))
+    };
+    let router = App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).client_zone().zoned_dates().router();
+    let get_with = |cookie: Option<&'static str>| {
+        let router = router.clone();
+        async move {
+            let mut req = Request::builder().uri("/");
+            if let Some(cookie) = cookie {
+                req = req.header("cookie", cookie);
+            }
+            let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            let kept = res.headers().contains_key("age");
+            (kept, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
+        }
+    };
+    let utc = "<p>Mar 22, 2026, 3:04 PM UTC</p>";
+    get_with(Some("corten-zone=America/Chicago")).await;
+    for cookie in [None, Some("corten-zone=Asia/Tokyo"), None] {
+        let (_, page) = get_with(cookie).await;
+        assert!(page.contains(utc), "{cookie:?}: {page}");
+    }
+    assert!(get_with(None).await.0, "and the page is one the app kept");
+}
+
 /// With the `zones` feature and `App::zoned_dates`, a date is written in the visitor's zone while
 /// Corten renders the request's answer, which is then private; the first page, before the browser has reported its
 /// zone, is in UTC and says so (`zone_unknown`); `.zone(..)` still chooses. `req.zone()` is the

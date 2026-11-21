@@ -1424,6 +1424,8 @@ pub(crate) fn path_hash(bytes: &[u8]) -> u64 {
                 i += 2;
                 (hi * 16 + lo) as u8
             }
+            // In one case of its digits, so `%2f` and `%2F` are one segment's.
+            (b'f', ..) if i >= 2 && bytes[i - 2] == b'%' && bytes[i - 1] == b'2' => b'F',
             (byte, ..) => byte,
         };
         hash = crate::fnv::extend(hash, &[byte]);

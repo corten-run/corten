@@ -1528,8 +1528,19 @@ async fn a_kept_page_lasts_its_lifetime() {
         }
     };
     let long = |req: Req| async move { Public::new(Duration::from_secs(60), req.test_page_for("Long", html! { <p>"long"</p> })) };
-    let routes = Table::new().route("/", crate::route::get(brief).0).route("/long", crate::route::get(long).0);
+    let slow = |req: Req| async move {
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        Public::new(Duration::from_secs(60), req.test_page_for("Slow", html! { <p>"slow"</p> }))
+    };
+    let routes = Table::new()
+        .route("/", crate::route::get(brief).0)
+        .route("/long", crate::route::get(long).0)
+        .route("/slow", crate::route::get(slow).0);
     let router = App::new(Routes::from(routes)).router();
+    let making = tokio::spawn({
+        let router = router.clone();
+        async move { fetch(&router, "GET", "/slow", &[]).await }
+    });
     let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
     assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=600, s-maxage=1");
     fetch(&router, "GET", "/long", &[]).await;
@@ -1540,6 +1551,11 @@ async fn a_kept_page_lasts_its_lifetime() {
     let (_, headers, _) = fetch(&router, "GET", "/long", &[]).await;
     let age: u64 = headers[header::AGE].to_str().unwrap().parse().unwrap();
     assert!((1..60).contains(&age), "{age}");
+    // And the time its handler took is part of its age: the page is as old as what was read.
+    assert!(!making.await.unwrap().1.contains_key(header::AGE));
+    let (_, headers, _) = fetch(&router, "GET", "/slow", &[]).await;
+    let age: u64 = headers[header::AGE].to_str().unwrap().parse().unwrap();
+    assert!((1..60).contains(&age), "counted from before its handler ran: {age}");
 }
 
 /// A page is kept for the `Host` it was asked with, and for the `Accept-Language` when the app

@@ -958,8 +958,8 @@ impl<M: Middleware> App<M> {
     ///
     /// Past the bound, a page not read since the last time room was made goes first, and one
     /// larger than an eighth of the bound is not kept. A write to a page's path drops what is
-    /// kept there unless it is answered `4xx`, and so does one that redirects to it; a change
-    /// made any other way (a task, another instance) shows when the lifetime ends. None is kept
+    /// kept there unless it is refused (a `4xx`, a `501`), and so does one that redirects to
+    /// it; a change made any other way (a task, another instance) shows when the lifetime ends. None is kept
     /// under `corten dev`. The bytes counted are each page's key, its headers, its body and each
     /// compressed form made of it.
     pub fn kept_answers(mut self, bytes: usize) -> Self {
