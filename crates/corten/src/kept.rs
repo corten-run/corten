@@ -446,43 +446,41 @@ impl Answers {
         self.0.bytes.load(Ordering::Acquire)
     }
 
-    /// The answer kept for a request, while it stands, with its age in seconds; else the copy
-    /// kept for it that no longer stands, if there is one.
+    /// The answer kept for a request, while it stands, with its age in seconds. Where none does,
+    /// the copy kept for it that no longer stands is put in `stale`, so a request that misses
+    /// looks the URL up once.
     fn look(
         &self,
         at: &str,
         host: Option<&HeaderValue>,
         language: Option<&HeaderValue>,
-    ) -> Result<(Arc<Entry>, u64), Option<Arc<Entry>>> {
+        stale: &mut Option<Arc<Entry>>,
+    ) -> Option<(Arc<Entry>, u64)> {
         let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
-        let Some(copies) = inner.at.get(at) else { return Err(None) };
-        let mut stale = None;
+        let copies = inner.at.get(at)?;
         // The copy that stands: one that no longer does is in no other's way until it goes.
-        for entry in copies.iter().filter(|entry| entry.is_for(host, language)) {
-            if !entry.stands(&self.0, now) {
-                stale = Some(entry);
-                continue;
-            }
-            let age = entry.age(now);
-            // Stored only when it changes: a page read often is marked once for each pass of the hand.
-            if !entry.used.load(Ordering::Relaxed) {
-                entry.used.store(true, Ordering::Relaxed);
-            }
-            return Ok((entry.clone(), age));
+        let Some(entry) = copies.iter().find(|entry| entry.is_for(host, language) && entry.stands(&self.0, now)) else {
+            *stale = copies.iter().find(|entry| entry.is_for(host, language)).cloned();
+            return None;
+        };
+        let age = entry.age(now);
+        // Stored only when it changes: a page read often is marked once for each pass of the hand.
+        if !entry.used.load(Ordering::Relaxed) {
+            entry.used.store(true, Ordering::Relaxed);
         }
-        Err(stale.cloned())
+        Some((entry.clone(), age))
     }
 
     /// The answer kept for a request, while it stands, with its age in seconds.
     #[cfg(test)]
     fn find(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Option<(Arc<Entry>, u64)> {
-        self.look(at, host, language).ok()
+        self.look(at, host, language, &mut None)
     }
 
     /// Makes a request the one that makes `stale`'s page again, or gives it the request that
     /// already is. Under the copy's own lock, held for no wait.
-    fn lead(&self, stale: Arc<Entry>) -> Result<Leading, Making> {
+    fn lead(&self, stale: Arc<Entry>) -> Result<Box<Leading>, Making> {
         let mut making = stale.making.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(now) = making.as_ref() {
             return Err(Making(now.clone()));
@@ -490,7 +488,7 @@ impl Answers {
         let now = Arc::new(Semaphore::new(0));
         *making = Some(now.clone());
         drop(making);
-        Ok(Leading { store: self.0.clone(), stale, making: now })
+        Ok(Box::new(Leading { store: self.0.clone(), stale, making: now, forget: false }))
     }
 
     /// Keeps `entry`, in the place of the copy it stands for, and makes room for it.
@@ -635,36 +633,46 @@ impl<'a> Asked<'a> {
         Some(Asked { answers, at, host, language })
     }
 
-    /// What this request is given: the kept answer while it stands; else, where the copy kept for
-    /// it no longer stands and another request is making its page again, that request to wait
-    /// for; else its handler's answer, which the others that find the same copy wait for.
-    pub(crate) fn find(&self, req: &Request) -> Found {
-        let stale = match self.answers.look(self.at, self.host, self.language) {
-            Ok((entry, age)) => return Found::Kept(given(entry, age)),
-            Err(stale) => stale,
-        };
-        let leading = match stale.map(|stale| self.answers.lead(stale)) {
-            Some(Err(making)) => return Found::Making(making),
-            Some(Ok(leading)) => Some(leading),
+    /// The kept answer for this request, as its handler gave it, with its age. Where none stands,
+    /// the copy kept for it that no longer does is put in `stale`, for [`Asked::missed`].
+    pub(crate) fn find(&self, stale: &mut Stale) -> Option<Response> {
+        let (entry, age) = self.answers.look(self.at, self.host, self.language, &mut stale.0)?;
+        let mut res = Response::new(Body::from(entry.body.clone()));
+        let mut head = with_room(&entry.head);
+        // So a cache after this one, the browser's too, does not start the lifetime over.
+        head.insert(header::AGE, HeaderValue::from(age));
+        *res.headers_mut() = head;
+        let extensions = res.extensions_mut();
+        extensions.insert(entry.cache);
+        if let Some(style) = &entry.style {
+            extensions.insert(style.clone());
+        }
+        extensions.insert(Kept(entry));
+        Some(res)
+    }
+
+    /// Once no kept answer stood for this request: what keeping its handler's answer needs of it;
+    /// or, where the copy kept for it no longer stands and another request is making its page
+    /// again, that request, to wait for ([`Making::ended`]). The others that find the same copy
+    /// wait for this one's.
+    pub(crate) fn missed(&self, req: &Request, stale: Stale) -> Result<Missed, Making> {
+        let leading = match stale.0 {
+            Some(stale) => Some(self.answers.lead(stale)?),
             None => None,
         };
-        Found::Missed(self.missing(req, leading))
+        Ok(self.missing(req, leading))
     }
 
-    /// The kept answer for this request while it stands, as its handler gave it, with its age.
-    pub(crate) fn kept(&self) -> Option<Response> {
-        self.answers.look(self.at, self.host, self.language).ok().map(|(entry, age)| given(entry, age))
-    }
-
-    /// What keeping the handler's answer needs of the request, for a request no other waits for.
-    pub(crate) fn missed(&self, req: &Request) -> Missed {
+    /// After waiting for another request whose page was not kept for this one: what keeping its
+    /// own handler's answer needs of it, which no other request waits for.
+    pub(crate) fn missed_again(&self, req: &Request) -> Missed {
         self.missing(req, None)
     }
 
     /// What keeping the handler's answer needs of the request, once no kept one stood for it:
     /// taken before the handler runs, so the answer's age counts its making and a write made
     /// meanwhile is seen.
-    fn missing(&self, req: &Request, leading: Option<Leading>) -> Missed {
+    fn missing(&self, req: &Request, leading: Option<Box<Leading>>) -> Missed {
         Missed {
             asked: Instant::now(),
             written: Written::of(&self.answers.0, self.at),
@@ -680,35 +688,13 @@ impl<'a> Asked<'a> {
     }
 }
 
-/// `entry`'s answer, as its handler gave it, `age` seconds old.
-fn given(entry: Arc<Entry>, age: u64) -> Response {
-    let mut res = Response::new(Body::from(entry.body.clone()));
-    let mut head = with_room(&entry.head);
-    // So a cache after this one, the browser's too, does not start the lifetime over.
-    head.insert(header::AGE, HeaderValue::from(age));
-    *res.headers_mut() = head;
-    let extensions = res.extensions_mut();
-    extensions.insert(entry.cache);
-    if let Some(style) = &entry.style {
-        extensions.insert(style.clone());
-    }
-    extensions.insert(Kept(entry));
-    res
-}
+/// The copy kept for a request that no longer stands, which [`Asked::find`] found in its place.
+#[derive(Default)]
+pub(crate) struct Stale(Option<Arc<Entry>>);
 
-/// What a request a kept answer can stand for is given ([`Asked::find`]).
-pub(crate) enum Found {
-    /// The kept answer, as its handler gave it, with its age.
-    Kept(Response),
-    /// Its handler's answer, kept if it may be ([`Missed::keep`]).
-    Missed(Missed),
-    /// Another request that found the same copy no longer standing is making its page again:
-    /// this one waits for it ([`Making::ended`]), then is given the page if it was kept for it
-    /// ([`Asked::kept`]), else runs its own handler.
-    Making(Making),
-}
-
-/// The page another request is making again in the place of a copy that no longer stands.
+/// The page another request is making again in the place of a copy that no longer stands: a
+/// request that found the same copy waits for it, then is given the page if it was kept for it
+/// ([`Asked::find`]), else runs its own handler ([`Asked::missed_again`]).
 pub(crate) struct Making(Arc<Semaphore>);
 
 impl Making {
@@ -721,28 +707,24 @@ impl Making {
 }
 
 /// The request making a page again in the place of `stale`, which the others that find that
-/// copy wait for until it is answered or dropped.
+/// copy wait for until it is answered or dropped. Held in a box of its own, so a request that
+/// makes no page again carries a pointer for it.
 struct Leading {
     store: Arc<Store>,
     stale: Arc<Entry>,
     making: Arc<Semaphore>,
-}
-
-impl Leading {
-    /// Its answer was kept, in the place of the copy, or not: then the copy goes, so the next
-    /// requests that miss the page (one that failed, or is drawn for each request) do not wait
-    /// for each other again.
-    fn answered(self, kept: bool) {
-        if !kept {
-            let mut inner = self.store.inner.write().unwrap_or_else(PoisonError::into_inner);
-            self.store.drop_entry(&mut inner, &self.stale);
-        }
-    }
+    /// Answered with a page that is not kept (one that failed, or was drawn for this request):
+    /// the copy goes too, so the next requests that miss the page do not wait for each other.
+    forget: bool,
 }
 
 impl Drop for Leading {
     /// Answered or dropped: the requests waiting for it look again.
     fn drop(&mut self) {
+        if self.forget {
+            let mut inner = self.store.inner.write().unwrap_or_else(PoisonError::into_inner);
+            self.store.drop_entry(&mut inner, &self.stale);
+        }
         let mut making = self.stale.making.lock().unwrap_or_else(PoisonError::into_inner);
         if making.as_ref().is_some_and(|now| Arc::ptr_eq(now, &self.making)) {
             *making = None;
@@ -762,22 +744,17 @@ pub(crate) struct Missed {
     host: Option<HeaderValue>,
     language: Option<HeaderValue>,
     /// Where it makes a page again in the place of a copy that no longer stands.
-    leading: Option<Leading>,
+    leading: Option<Box<Leading>>,
 }
 
 impl Missed {
     /// `res`, kept when it is the same for everyone and for how long: see the module. The
     /// requests waiting for it look again once it is kept, or not.
     pub(crate) async fn keep(mut self, res: Response) -> Response {
-        let leading = self.leading.take();
-        let res = self.store(res).await;
-        if let Some(leading) = leading {
-            leading.answered(res.extensions().get::<Kept>().is_some());
+        // Until it is kept below.
+        if let Some(leading) = &mut self.leading {
+            leading.forget = true;
         }
-        res
-    }
-
-    async fn store(self, res: Response) -> Response {
         let shared = self.signal.as_ref().and_then(crate::Signal::shared);
         let Some(answers) = shared.and_then(|shared| shared.kept.as_ref()) else { return res };
         let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else { return res };
@@ -824,7 +801,7 @@ impl Missed {
         // A copy of its own length: a page's buffer is sized for the last page rendered, and the
         // bytes made from it hold all of that for as long as they are kept.
         let body = Bytes::copy_from_slice(&body);
-        let Missed { at, host, language: asked, asked: made, written, .. } = self;
+        let Missed { at, host, language: asked, asked: made, written, mut leading, .. } = self;
         let entry = answers.keep(|place| Entry {
             at,
             place,
@@ -844,6 +821,10 @@ impl Missed {
             size: AtomicUsize::new(size),
             making: Mutex::default(),
         });
+        // Kept in the place of the copy it made again.
+        if let Some(leading) = &mut leading {
+            leading.forget = false;
+        }
         // This answer's tag and compression are the kept one's first.
         parts.extensions.insert(Kept(entry));
         Response::from_parts(parts, Body::from(body))
