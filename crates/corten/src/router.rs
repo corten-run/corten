@@ -135,6 +135,9 @@ impl Endpoint for Keeping {
         // Any other request (a navigation, one with a cookie, a write) is the handler's as before.
         let Some(asked) = crate::kept::Asked::of(&req, self.shape) else { return self.inner.call(req) };
         if let Some(kept) = asked.find() {
+            if let Some(small) = &self.small {
+                small.found();
+            }
             return Box::pin(std::future::ready(kept));
         }
         // In a full store a URL not asked for before is the handler's as any other request.
