@@ -1133,8 +1133,9 @@ for: a page, a patch, the layout's reads, and a `Rendered` placed in one. Text c
 live stream's fragment
 (rendered after the stream's headers went out), `Rendered::into_string` and `raw`. A live
 stream whose fragments may draw a key is never `Public`, says `Cache-Control: private` itself and
-carries no CDN caching header ([live data](live-data.md)); under `corten dev` one sent without
-them is logged when a fragment it gives draws a key.
+carries no CDN caching header ([live data](live-data.md)). Under `corten dev`, a stream is logged
+when a fragment it gives draws a key and its settled answer has no bare `private` in
+`Cache-Control` or carries one of the CDN caching headers [caching](app.md#caching) lists.
 
 An MCP tool's input takes the same field (`submit: SubmitKey` in the struct `Tools::tool`
 reads): its `inputSchema` shows a UUID string described as an idempotency key to send again on
