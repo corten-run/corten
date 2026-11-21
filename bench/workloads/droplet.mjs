@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertFleetCensus, bootstrapWorkspaceScript, ownedDroplet, reservation, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
+import { assertFleetCensus, bootstrapWorkspaceScript, fleetCatalogCommand, fleetRegion, ownedDroplet, reservation, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash, withVerifiedArchive } from "./cloud-local.mjs";
 import { campaignOutcome, controllerFailure, controllerState, full, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
@@ -537,6 +537,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           if (fleet) {
             const present = existing.filter((d) => fleet.jobs.some((row) => row.name === d.name)).length;
             assert.ok(existing.length + fleet.jobs.length - present <= limit, "account capacity cannot cover the reserved fleet");
+            const { stdout } = await execute("doctl", fleetCatalogCommand);
+            fleetRegion(JSON.parse(stdout), fleet.host.region);
           }
           state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
           const created = await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,

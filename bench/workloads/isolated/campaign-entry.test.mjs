@@ -23,10 +23,13 @@ test("fixed entry accepts one exact registry group, never app filters or overrid
   for (const tail of [["--group", "foreign"], ["--group", ""], ["--group"], ["--apps", "corten"],
     ["--group", "catalog-page", "--group", "json-api"], ["--group", "catalog-page", "--apps", "corten"],
     ["--group", "catalog-page", "--recipe", "native-defaults"], ["--load-layout", "c16-generator-v1"],
-    ["--group", "catalog-page", "--load-layout", "arbitrary"], ["--group", "json-api", "--load-layout", "c16-generator-v1"]])
+    ["--group", "catalog-page", "--load-layout", "arbitrary"], ["--group", "json-api", "--load-layout", "c16-generator-v1"],
+    ["--group", "catalog-page", "--placement", "dedicated-sfo2"], ["--group", "json-api", "--placement", "nyc1"]])
     assert.throws(() => parseCampaignArgs([...args, ...tail]));
   assert.deepEqual(parseCampaignArgs([...args, "--group", "catalog-page", "--load-layout", "c16-generator-v1"]),
     { round: "r17", commit, stateRoot: "/bench/campaign", group: "catalog-page", loadLayout: "c16-generator-v1" });
+  assert.deepEqual(parseCampaignArgs([...args, "--group", "json-api", "--placement", "dedicated-sfo2"]),
+    { round: "r17", commit, stateRoot: "/bench/campaign", group: "json-api", placement: "dedicated-sfo2" });
 });
 test("private inbox has bounded physical bytes, never follows producer hardlinks", () => {
   for (const group of ["json-api", "mixed-production"]) {

@@ -9,7 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { debuglog } from "node:util";
 import { url as inspectorUrl } from "node:inspector";
 import { controlCheckpoint, controlEnvironment } from "./cloud-transport.mjs";
-import { providerCreateHost } from "./cloud-contract.mjs";
+import { fleetCatalogCommand, fleetCatalogSlugs, providerCreateHost } from "./cloud-contract.mjs";
 import { providerDiagnostic, providerFailure, unsentDelete } from "./cloud-options.mjs";
 
 const origin = "https://api.digitalocean.com";
@@ -17,6 +17,44 @@ const stopped = (uncertain = false, diagnostic) => Object.assign(new Error("prov
   uncertain ? { controlUncertain: true } : {}, diagnostic ? { providerDiagnostic: diagnostic } : {});
 const positive = (value) => Number.isSafeInteger(value) && value > 0;
 const validContext = (value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value);
+
+async function placementCatalog(call) {
+  const catalog = {};
+  for (const kind of ["sizes", "regions"]) {
+    const membership = kind === "sizes" ? "regions" : "sizes";
+    const rows = [], seen = new Set(); let total;
+    for (let page = 1; page <= 10; page++) {
+      // Never follow a provider-supplied link. It can only indicate the next
+      // page of this one fixed listing under the original command deadline.
+      const result = await call("catalog", "GET", `/v2/${kind}?page=${page}&per_page=200`);
+      const batch = result?.[kind], count = result?.meta?.total;
+      assert.ok(Array.isArray(batch) && batch.length <= 200 && Number.isSafeInteger(count) && count >= 0 && count <= 2000
+        && (total === undefined || total === count), "incomplete fleet catalog");
+      total = count;
+      for (const row of batch) {
+        const slug = row?.slug;
+        assert.ok(typeof slug === "string" && !seen.has(slug), "invalid fleet catalog slug");
+        seen.add(slug);
+        if (!fleetCatalogSlugs[kind].includes(slug)) continue;
+        assert.ok(typeof row.available === "boolean" && Array.isArray(row[membership])
+          && row[membership].every((value) => typeof value === "string"), "incomplete fleet catalog entry");
+        rows.push({ slug, available: row.available, [membership]: fleetCatalogSlugs[membership].filter((value) => row[membership].includes(value)) });
+      }
+      assert.ok(result.links === undefined || result.links && typeof result.links === "object" && !Array.isArray(result.links));
+      const pages = result.links?.pages;
+      assert.ok(pages === undefined || pages && typeof pages === "object" && !Array.isArray(pages));
+      const next = pages?.next;
+      if (next === undefined) { assert.equal(seen.size, total, "incomplete fleet catalog"); break; }
+      assert.ok(typeof next === "string" && seen.size < total && batch.length > 0 && page < 10, "incomplete fleet catalog pagination");
+      const url = new URL(next);
+      assert.ok(url.origin === origin && url.pathname === `/v2/${kind}` && !url.username && !url.password && !url.hash
+        && url.searchParams.size === 2 && url.searchParams.get("page") === String(page + 1)
+        && url.searchParams.get("per_page") === "200", "invalid fleet catalog pagination");
+    }
+    catalog[kind] = rows;
+  }
+  return catalog;
+}
 // Private object identity, never a caller-supplied property or public diagnostic.
 const closedAccountRequests = new WeakMap(), settledAccountFailures = new WeakSet();
 const unsentDeletes = new WeakSet();
@@ -276,7 +314,8 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     };
     const call = async (phase, method, path, body, expected = 200) => {
       await controlCheckpoint(interrupted);
-      const remaining = phase === "account" || phase === "list" || phase === "get" ? readRemaining() : Math.ceil(deadline - now());
+      const read = ["account", "list", "get", "catalog"].includes(phase);
+      const remaining = read ? readRemaining() : Math.ceil(deadline - now());
       if (interrupted() || remaining <= 0) throw stopped(true);
       code = `${phase}-request`;
       let response;
@@ -295,7 +334,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         throw failure;
       }
       try { await controlCheckpoint(interrupted); } catch { throw stopped(); }
-      if (phase === "list" || phase === "get") readRemaining();
+      if (read && phase !== "account") readRemaining();
       if (response?.status !== expected) {
         const diagnostic = providerDiagnostic({ code: `${phase}-http`, httpStatus: response?.status }) ?? { code: `${phase}-http` };
         const failure = Object.assign(stopped(false, diagnostic), { httpFailure: true });
@@ -320,6 +359,13 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       if (command[0] === "account") {
         assert.deepEqual(command, ["account", "get", "--output", "json"]);
         value = (await call("account", "GET", "/v2/account"))?.account ?? null;
+      } else if (command[1] === "placement") {
+        assert.deepEqual(command, fleetCatalogCommand);
+        value = await placementCatalog(async (...args) => {
+          const result = await call(...args);
+          code = "catalog-response";
+          return result;
+        });
       } else if (command[2] === "list") {
         assert.deepEqual(command, ["compute", "droplet", "list", "--output", "json"]);
         let requests = 0;
@@ -424,7 +470,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       code = "provider-output";
       const stdout = value === null ? "" : JSON.stringify(value);
       assert.ok(!stdout.includes(credential), "private provider response refused");
-      if (command[0] === "account" || command[2] === "list" || command[2] === "get") readRemaining();
+      if (command[0] === "account" || command[1] === "placement" || command[2] === "list" || command[2] === "get") readRemaining();
       if (command[2] === "create" || command[2] === "delete") {
         const current = now();
         if (current >= started && current < deadline && !interrupted()) mutationPending = false;

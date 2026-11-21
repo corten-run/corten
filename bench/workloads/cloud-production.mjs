@@ -129,8 +129,7 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
 export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log, compiler } = {}) {
   const { options, approval, preview } = parseProductionArgs(args);
   const processRun = shellTransport({ repo, spawn, streamSpawn });
-  const createMode = options.detach ? options.group === undefined ? "legacy" : fleetCreateMode(options.group) : null;
-  const providerRun = providerFactory({ repo, interrupted, createMode });
+  let providerRun;
   let stage = "source-plan";
   const mark = (error, value) => {
     // Keep the original internal failure and uncertainty flags. Only this closed
@@ -193,6 +192,13 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   const repeated = await productionPlan(options, { repo, run, compiler });
   assert.equal(repeated.approvalSha256, approval, "source/state/delivery changed after approval");
   assert.deepEqual(repeated.missing, []);
+  let createMode = options.detach ? "legacy" : null;
+  if (options.group !== undefined) {
+    const bytes = regular(resolve(options.fleet), 1024 * 1024);
+    assert.equal(digest(bytes), plan.subject.fleetSha256, "approved fleet bytes changed");
+    createMode = fleetCreateMode(options.group, validateLaunchFleet(JSON.parse(bytes)));
+  }
+  providerRun = providerFactory({ repo, interrupted, createMode });
   let entered = false;
   const authorizeLocked = async () => {
     assert.ok(!interrupted(), "cancelled before provider access");
@@ -229,7 +235,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   return result;
   } catch (error) { throw mark(error, stage); }
   finally {
-    try { await providerRun.close(); }
+    try { await providerRun?.close(); }
     catch (error) { throw mark(error, "provider-settlement"); }
   }
 }

@@ -10,8 +10,8 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { createProviderEngine as providerTransport, isSettledAccountFailure } from "./cloud-engine-test-fixture.mjs";
 import { providerTransport as workerTransport } from "./cloud-provider.mjs";
-import { context, harness } from "./cloud-fixtures.mjs";
-import { tags } from "./cloud-contract.mjs";
+import { context, harness, syntheticPlacement } from "./cloud-fixtures.mjs";
+import { fleetCatalogCommand, tags } from "./cloud-contract.mjs";
 
 const credential = "SYNTHETIC_ONLY_CREDENTIAL_A";
 const account = ["account", "get", "--output", "json", "--context", context];
@@ -38,6 +38,32 @@ test("provider engine refuses cross-mode or unbound create before consuming cred
       spawn() { consumes++; return spawn(); }, request() { requests++; return empty; } });
     await assert.rejects(run(args, 60000, true), /placement differs from authorized mode/);
     assert.equal(consumes, 0); assert.equal(requests, 0);
+  }
+});
+
+test("placement catalog uses bounded fixed GETs, projects facts and rejects incomplete or foreign pages", async () => {
+  const command = [...fleetCatalogCommand, "--context", context];
+  for (const mode of ["complete", "foreign-next", "missing-page", "changed-count", "duplicate"]) {
+    const calls = [], { sizes, regions } = syntheticPlacement(["sfo2"]);
+    const first = { sizes: [{ ...sizes[0], price: credential }], meta: { total: 2 }, links: {
+      pages: { next: mode === "foreign-next" ? `https://foreign.invalid/${credential}` : "https://api.digitalocean.com/v2/sizes?page=2&per_page=200" },
+    } };
+    if (mode === "missing-page") delete first.links;
+    const run = providerTransport({ repo: resolve("."), createMode: null, spawn, request({ method, path, body, credential: token }) {
+      assert.equal(method, "GET"); assert.equal(body, undefined); assert.equal(token, credential);
+      calls.push(path);
+      if (path === "/v2/sizes?page=1&per_page=200") return { status: 200, value: first };
+      if (path === "/v2/sizes?page=2&per_page=200") return { status: 200, value: {
+        sizes: [mode === "duplicate" ? sizes[0] : sizes[1]], meta: { total: mode === "changed-count" ? 3 : 2 },
+      } };
+      assert.equal(path, "/v2/regions?page=1&per_page=200");
+      return { status: 200, value: { regions, meta: { total: regions.length } } };
+    } });
+    if (mode === "complete") assert.deepEqual(JSON.parse((await run(command)).stdout), { sizes, regions });
+    else await assert.rejects(run(command), { providerDiagnostic: { code: "catalog-response" } });
+    assert.deepEqual(calls, ["/v2/sizes?page=1&per_page=200",
+      ...(["foreign-next", "missing-page"].includes(mode) ? [] : ["/v2/sizes?page=2&per_page=200"]),
+      ...(mode === "complete" ? ["/v2/regions?page=1&per_page=200"] : [])]);
   }
 });
 

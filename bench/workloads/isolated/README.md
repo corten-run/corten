@@ -122,8 +122,10 @@ Requested overrides are always separate from recorded native defaults.
 ## Resources and validation
 
 The binding uses the provider placement for its campaign mode: c-8 in sfo3 for
-the default dedicated group and c-8 in sfo2 for the legacy nonfleet campaign.
-The current fleet binds only catalog-page to c-16 in sfo2 with
+the default dedicated group and c-8 in sfo2 for either the legacy nonfleet
+campaign or the dedicated fleet's reserved `dedicated-sfo2` mode. Native
+replay reports the latter explicitly so the collector can match the saved fleet.
+The fleet binds only catalog-page to c-16 in sfo2 with
 [`c16-generator-v1`](CAMPAIGN.md#parent-interface), which widens the load generator
 without changing the app, upstream or probes. Allocation and isolation remain
 unobserved by an offline binding. Other timed HTTP roles retain native 1/2/4 CPU quotas and explicitly

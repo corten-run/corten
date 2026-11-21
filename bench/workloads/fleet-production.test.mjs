@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-import { accountId, archive, commit, context, harness, syntheticInspection, userId } from "./cloud-fixtures.mjs";
+import { accountId, archive, commit, context, harness, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
@@ -89,6 +89,7 @@ const synthetic = (${syntheticDependencies.toString()})({
     return h.run(binary, argv, 60000);
   };
   const deps = { repo: h.repo, spawn, WorkerClass: SnapshotWorker, write: (value) => output.push(JSON.parse(value)) };
+  deps.catalogProvider = syntheticCatalogProvider(syntheticPlacement([mode === "overlap" ? "sfo2" : "sfo3"]));
   const args = ["r21", "--fleet-root", h.base];
   const saved = (group = groupNames[0]) => JSON.parse(fs.readFileSync(path.join(h.base, group, "groups-r21/state.json")));
   const events = () => fs.readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -222,11 +223,14 @@ test("second exact approval dispatches all remaining captured production workers
   const events = p.events(), posts = events.filter((row) => row.method === "POST");
   assert.deepEqual(posts.map((row) => row.group), groupNames);
   assert.deepEqual(posts.map(({ body }) => [body.size, body.region]),
-    [["c-16", "sfo2"], ...groupNames.slice(1).map(() => ["c-8", "sfo3"])]);
+    [["c-16", "sfo2"], ...groupNames.slice(1).map(() => ["c-8", "sfo2"])]);
   const ids = new Set(), ips = new Set();
   for (const group of groupNames) {
     const saved = p.saved(group); ids.add(saved.id); ips.add(saved.ip);
     assert.equal(saved.group, group); assert.equal(saved.status, group === groupNames[0] ? "collected" : "running");
+    assert.equal(saved.host.region, "sfo2");
+    const job = events.find((row) => row.group === group && row.boundary === "upload" && row.to === "/bench/job.sh");
+    assert.equal(job.content.includes("--placement 'dedicated-sfo2'"), group !== groupNames[0]);
     const start = events.findIndex((row) => row.group === group && row.boundary === "provider-child-start");
     const exit = events.findIndex((row) => row.group === group && row.boundary === "provider-child-exit");
     assert.ok(start >= 0 && exit > start);

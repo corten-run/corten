@@ -9,7 +9,7 @@ import { isDeepStrictEqual } from "node:util";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
-import { accountId, archive, commit, context, harness, syntheticInspection } from "./cloud-fixtures.mjs";
+import { accountId, archive, commit, context, harness, syntheticCatalogProvider, syntheticInspection, syntheticPlacement } from "./cloud-fixtures.mjs";
 import { fleetMain, fleetWorkerPaths, parseFleetArgs, productionChild, stagedChildIntent, watchSupervisedHost } from "./fleet.mjs";
 import { fleetPlan, reservation, savedLoadLayout, tags } from "./cloud-contract.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
@@ -25,7 +25,7 @@ import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 const committedSources = new Map(fleetWorkerPaths.map((path) => [path, readFileSync(resolve(path), "utf8").replaceAll("\r\n", "\n")]));
 
 function fixture(t, flags = {}) {
-  const h = harness(t), output = [], calls = [], children = [], completions = [];
+  const h = harness(t), output = [], calls = [], children = [], completions = [], catalogCalls = [];
   let firstReport, firstJob;
   const args = (mode) => ["r21", "--fleet-root", flags.root ?? h.base, mode];
   const prepare = () => [...args("--prepare"), "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
@@ -37,6 +37,7 @@ function fixture(t, flags = {}) {
     return h.run(binary, argv, 60000);
   };
   const deps = { repo: h.repo, spawn, interrupted: () => !!flags.cancelled, write: (value) => output.push(JSON.parse(value)),
+    catalogProvider: syntheticCatalogProvider(() => flags.placement ?? syntheticPlacement(), catalogCalls),
     main: async (argv, { onReady }) => {
       const { options, approval } = parseProductionArgs(argv), group = options.group ?? groupNames.find((g) => options.stateDir === join(h.base, g));
       children.push(group); assert.ok(approval);
@@ -103,20 +104,80 @@ function fixture(t, flags = {}) {
     children.length = 0; completions.length = 0;
     return approve("--admit-remaining");
   }
-  return { h, flags, args, prepare, deps, output, calls, children, completions, manifest, seed, approve, finishFirst, remaining,
+  return { h, flags, args, prepare, deps, output, calls, children, completions, catalogCalls, manifest, seed, approve, finishFirst, remaining,
     get first() { return firstJob; } };
 }
 
-test("prepare reserves cryptorandom complete fleet once, using only local Git", async (t) => {
+test("prepare reserves cryptorandom complete fleet once, using local Git and read-only scoped catalogs", async (t) => {
   const p = fixture(t);
   assert.equal(await fleetMain(p.prepare(), p.deps), 3);
   const f = p.manifest(); assert.deepEqual(f.jobs.map((j) => j.group), groupNames);
   assert.equal(new Set([f.token, ...f.jobs.map((j) => j.token)]).size, groupNames.length + 1);
   assert.ok(p.calls.every(([binary, argv]) => binary === "git" && argv[0] !== "fetch"));
+  assert.deepEqual(p.catalogCalls.map((args) => args.slice(0, 3)),
+    [["account", "get", "--output"], ["compute", "placement", "catalog"], ["account", "get", "--output"]]);
   assert.deepEqual(p.children, []); assert.ok(!existsSync(join(p.h.base, ".fleet-operation.lock")));
   const bytes = readFileSync(join(p.h.base, "fleet-r21.json"));
   await assert.rejects(fleetMain(p.prepare(), p.deps));
   assert.deepEqual(readFileSync(join(p.h.base, "fleet-r21.json")), bytes);
+});
+
+test("both reversed catalogs bind the whole roster; a later reversal cannot consume the fleet intent", async (t) => {
+  for (const [region, other] of [["sfo2", "sfo3"], ["sfo3", "sfo2"]]) await t.test(region, async (t) => {
+    const flags = { placement: syntheticPlacement([region]) }, p = fixture(t, flags);
+    await fleetMain(p.prepare(), p.deps);
+    assert.equal(p.manifest().host.region, region);
+    const path = join(p.h.base, "fleet-r21.json"), bytes = readFileSync(path);
+    const approved = await p.approve("--detach");
+    flags.placement = syntheticPlacement([other]);
+    await assert.rejects(fleetMain(approved, p.deps), /reserved fleet placement not advertised/);
+    assert.deepEqual(p.children, []);
+    assert.deepEqual(readdirSync(p.h.base), ["fleet-r21.json"]);
+    assert.deepEqual(readFileSync(path), bytes);
+    flags.placement = syntheticPlacement([region]);
+    assert.equal(await fleetMain(approved, p.deps), 3);
+    assert.deepEqual(p.children, ["catalog-page"]);
+    assert.deepEqual(readFileSync(path), bytes);
+    p.finishFirst();
+    const remaining = await p.approve("--admit-remaining");
+    flags.placement = syntheticPlacement([other]);
+    await assert.rejects(fleetMain(remaining, p.deps), /reserved fleet placement not advertised/);
+    assert.deepEqual(p.children, ["catalog-page"]);
+    assert.equal(existsSync(join(p.h.base, "remaining-intent.json")), false);
+    assert.deepEqual(readFileSync(path), bytes);
+  });
+});
+
+test("unusable wider placement, disagreement and missing facts stop before reservation", async (t) => {
+  for (const alter of [
+    ({ sizes, regions }) => { sizes[1].regions = []; regions[0].sizes = ["c-8"]; },
+    ({ regions }) => { regions[1].sizes = []; },
+    ({ sizes }) => { sizes.pop(); },
+    ({ regions }) => { regions.pop(); },
+    ({ sizes }) => { sizes[0].available = false; },
+    ({ regions }) => { regions[0].available = false; },
+  ]) {
+    const placement = syntheticPlacement();
+    alter(placement);
+    const p = fixture(t, { placement });
+    await assert.rejects(fleetMain(p.prepare(), p.deps), /fleet (catalog|placement)|no supported c-8/);
+    assert.deepEqual(readdirSync(p.h.base), []);
+    assert.deepEqual(p.children, []);
+  }
+});
+
+test("placement observation cannot reserve against a different account", async (t) => {
+  const p = fixture(t), factory = p.deps.catalogProvider;
+  let reads = 0, closed = false;
+  p.deps.catalogProvider = (options) => {
+    const run = factory(options);
+    return Object.assign(async (args) => args[0] === "account" && ++reads === 2
+      ? { status: 0, stdout: '{"uuid":"different-user"}' } : run(args),
+    { close: async () => { await run.close(); closed = true; } });
+  };
+  await assert.rejects(fleetMain(p.prepare(), p.deps), /fleet catalog account differs/);
+  assert.equal(closed, true);
+  assert.deepEqual(readdirSync(p.h.base), []);
 });
 
 test("historical roster is inspectable but never opens either fleet launch stage", async (t) => {

@@ -28,6 +28,14 @@ serveProviderWorker({
     record({ boundary: "provider", method, path, body });
     if (path === "/v2/account") return mode === "provider-failure" ? { status: 403, value: null }
       : { status: 200, value: { account: { uuid: userId, droplet_limit: 20 } } };
+    if (method === "GET" && path === "/v2/sizes?page=1&per_page=200") {
+      const sizes = [{ slug: "c-8", available: true, regions: ["sfo2", "sfo3"] }, { slug: "c-16", available: true, regions: ["sfo2"] }];
+      return { status: 200, value: { sizes, meta: { total: sizes.length } } };
+    }
+    if (method === "GET" && path === "/v2/regions?page=1&per_page=200") {
+      const regions = [{ slug: "sfo2", available: true, sizes: ["c-8", "c-16"] }, { slug: "sfo3", available: true, sizes: ["c-8"] }];
+      return { status: 200, value: { regions, meta: { total: regions.length } } };
+    }
     if (method === "GET" && path.startsWith("/v2/droplets?")) {
       const droplets = hosts(); return { status: 200, value: { droplets, meta: { total: droplets.length }, links: {} } };
     }
