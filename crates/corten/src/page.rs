@@ -1736,9 +1736,7 @@ impl Req {
             unruled_vars(&out, &vars)?;
         }
         let key = self.key(crate::view::SHELL.get());
-        // Written apart and then put in place, in a buffer the thread keeps from page to page.
-        let mut tags = TAGS.take();
-        tags.clear();
+        let mut tags = String::new();
         if swap {
             self.section_links(&mut tags);
             self.swap_preloads(&modules, &mut tags);
@@ -1755,10 +1753,6 @@ impl Req {
         if !tags.is_empty() {
             out.insert_str(at, &tags);
         }
-        let added = tags.len();
-        if tags.capacity() <= TAGS_KEPT {
-            TAGS.set(tags);
-        }
         // Each place for a layout read, where it is now; filled after the handler answers, or
         // removed now for a page Corten does not fill.
         let mut places = places;
@@ -1768,7 +1762,7 @@ impl Req {
             let head_end = if swap { None } else { out.find("</head>") };
             for slot in &mut places.slots {
                 if slot.at >= at {
-                    slot.at += added;
+                    slot.at += tags.len();
                 }
             }
             // One rendered through a string of its own is found where its mark is now.
@@ -3935,14 +3929,7 @@ fn waited_until<T>(
 thread_local! {
     /// Where `<Corten />` was written in the document being rendered.
     static HEAD_AT: Cell<Option<usize>> = const { Cell::new(None) };
-    /// The room a page's head tags are written in before they are put in place, kept by the
-    /// thread so a page does not allocate it (#1779).
-    static TAGS: Cell<String> = const { Cell::new(String::new()) };
 }
-
-/// The most room for head tags a thread keeps: a page with more style values than this gives its
-/// room back.
-const TAGS_KEPT: usize = 16 * 1024;
 
 /// Where Corten writes its tags in a document's `<head>`: the import map, the runtime, the
 /// page's script modules, the app's configured tags (manifest, theme color) and the key that

@@ -3,7 +3,11 @@
 //! headers, a layout and an `html!` body of about 4.5 KB, after warm-up (#1779). It counts through
 //! this file's global allocator, so it runs in a process of its own and is the only test here.
 //! Only the server's thread is counted: the app runs on a current-thread runtime there, and the
-//! client, this test's own thread, is not.
+//! client, this test's own thread, is not. It pins the mean over the counted requests, not a
+//! per-request maximum: one request above the bound passes if the others make up for it.
+//!
+//! The client's reads and writes time out and the server is shut down and waited for, each within
+//! [`WAIT`], so a server that stalls fails the test rather than holding it open.
 //!
 //! Most of what it counts is not Corten's to take out: hyper's read buffer and its share of it, the
 //! answer's header map, the page itself, the boxed futures of the stages and the handler. A change
@@ -16,10 +20,13 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use corten::prelude::*;
 
-/// The most allocations a request may make, in a release build and in a debug build alike. With
-/// feature `compress` a page's `Vary` gets `accept-encoding` as a second value, which the header
-/// map holds apart, so it is one more.
-const MOST: usize = if cfg!(feature = "compress") { 19 } else { 18 };
+/// The most allocations a request may make on average, in a release build and in a debug build
+/// alike. With feature `compress` a page's `Vary` gets `accept-encoding` as a second value, which
+/// the header map holds apart, so it is one more.
+const MOST: usize = if cfg!(feature = "compress") { 20 } else { 19 };
+
+/// How long the client waits for one read or write, and the test for the server to stop.
+const WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 static ON: AtomicBool = AtomicBool::new(false);
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
@@ -214,16 +221,20 @@ fn a_page_request_allocates_within_its_bound() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
+    let (stopped, stop) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         SERVER.set(true);
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        runtime.block_on(async move {
+        let served = runtime.block_on(async move {
             let listener = tokio::net::TcpListener::from_std(listener).unwrap();
-            corten::serve_on(vec![listener], App::new(url::router())).await.unwrap();
+            corten::serve_on(vec![listener], App::new(url::router())).await
         });
+        let _ = stopped.send(served);
     });
     let mut stream = std::net::TcpStream::connect(addr).unwrap();
     stream.set_nodelay(true).unwrap();
+    stream.set_read_timeout(Some(WAIT)).unwrap();
+    stream.set_write_timeout(Some(WAIT)).unwrap();
     let request = format!("GET /records/first HTTP/1.1\r\nHost: {addr}\r\nAccept-Encoding: identity\r\n\r\n").into_bytes();
     let mut buf = vec![0; 1 << 16];
     for _ in 0..200 {
@@ -237,6 +248,13 @@ fn a_page_request_allocates_within_its_bound() {
     }
     ON.store(false, Ordering::SeqCst);
     let (allocations, bytes) = (ALLOCATIONS.load(Ordering::Relaxed), BYTES.load(Ordering::Relaxed));
+    // The only server in this process (the only test in this file), so stopping every one is safe.
+    drop(stream);
+    corten::shutdown();
+    match stop.recv_timeout(WAIT) {
+        Ok(served) => served.expect("the server stops cleanly"),
+        Err(error) => panic!("the server did not stop: {error}"),
+    }
     // The figure #1779 and the request path's notes cite:
     // `cargo test --release -p corten-run --test page_allocations -- --nocapture`.
     println!(
@@ -246,7 +264,7 @@ fn a_page_request_allocates_within_its_bound() {
     );
     assert!(
         allocations <= MOST * REQUESTS,
-        "a page request allocates {} times, more than {MOST}",
+        "a page request allocates {} times on average over {REQUESTS}, more than {MOST}",
         allocations as f64 / REQUESTS as f64
     );
 }
