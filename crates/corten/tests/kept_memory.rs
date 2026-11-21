@@ -135,10 +135,17 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
         assert!(made, "page {n} was asked for the first time");
         for (asked, coding) in CODINGS.iter().enumerate() {
             let given = get(&mut stream, &mut read, &format!("/kept?n={n}"), coding).await;
-            // In a full store a new URL's bit is now and then another's, and its page was kept
-            // the first time after all.
-            twice += usize::from(asked == 0 && !given);
-            assert!(given || (asked == 0 && twice > 0), "page {n} in {coding}: kept by its second request at the latest");
+            if asked == 0 && !given {
+                // No store is full before it holds seven answers, the largest being an eighth
+                // of the bound. In a full one a new URL's bit is now and then another's, and
+                // its page was kept the first time after all.
+                assert!(n >= 7, "page {n} was not kept the first time, in a store with room");
+                twice += 1;
+                let third = get(&mut stream, &mut read, &format!("/kept?n={n}"), coding).await;
+                assert!(third, "page {n}: kept by its second request at the latest");
+            } else {
+                assert!(given, "page {n} in {coding}");
+            }
             // The counts are made here, inside what is counted, or taking them off below is wrong.
             if (n, asked) == (0, 0) {
                 let first = LIVE.load(Ordering::Relaxed).saturating_sub(before);

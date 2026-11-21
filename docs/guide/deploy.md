@@ -265,7 +265,8 @@ reach the app: the cache is sent the kept page again until its lifetime ends or 
 the app drops it, so a page that must change at once on a purge takes a short lifetime in the app
 and a long one nowhere. The pages are held in the process's memory, 32 MiB of them unless
 `App::kept_answers` says otherwise, with 256 KiB beside them once a `Public` page is asked for
-and a 256th of the bound more (128 KiB) once they fill it.
+and 128 KiB more once they fill it (a 256th of the bound, or up to a 128th where that is not a
+power of two).
 The bound counts the bytes asked of the allocator, and an allocator holds more than it is asked
 for when pages come and go: the benchmark app's resident memory settled 35 MiB above where it
 began with jemalloc and 58 MiB above with glibc's allocator

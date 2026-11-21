@@ -1132,13 +1132,27 @@ async fn a_full_store_keeps_a_page_from_the_second_time_its_url_is_asked_for() {
     // The store is full: the URL just asked for twice was made twice, and is kept now.
     assert_eq!(runs.count(), room + 2);
     assert!(kept(format!("/?n={room}")).await && runs.count() == room + 2, "kept from its second ask");
-    // URLs asked for once are made and not kept: the page kept last is still there after them.
-    for once in 0..3 {
-        assert!(!kept(format!("/?once={once}")).await);
+    // URLs asked for once are made and not kept, but for one whose mark is another's: twice as
+    // many as the store holds, which kept one by one would drop every page, drop next to none.
+    for once in 0..room * 2 {
+        kept(format!("/?once={once}")).await;
     }
-    assert!(kept(format!("/?n={room}")).await && runs.count() == room + 5, "a walk over new URLs dropped no page");
-    // And one of them asked for again is kept then.
-    assert!(!kept("/?once=0".into()).await && kept("/?once=0".into()).await && runs.count() == room + 6);
+    assert_eq!(runs.count(), room * 3 + 2);
+    let mut still = 0;
+    for n in 0..=room {
+        still += usize::from(kept(format!("/?n={n}")).await);
+    }
+    assert!(still + 2 > room, "{still} of {} pages are kept after a walk over new URLs", room + 1);
+    // And a new URL is kept by its second request: the third is given the page.
+    let made = runs.count();
+    for again in 0..8 {
+        let uri = format!("/?again={again}");
+        kept(uri.clone()).await;
+        kept(uri.clone()).await;
+        assert!(kept(uri).await, "kept by its second request at the latest");
+    }
+    let twice = runs.count() - made - 8;
+    assert!(twice >= 6, "{twice} of 8 new URLs were made twice");
 }
 
 /// A kept page stands where the handler does: every middleware runs for the request it answers,

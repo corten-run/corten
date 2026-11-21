@@ -6,11 +6,12 @@
 //! that lifetime (`s-maxage` where the answer has one, else `max-age`, RFC 9111 section 4.2.1)
 //! gives it to the next such request in the handler's place, with an `Age`.
 //!
-//! While the store has room every such answer is kept. Once it is full, keeping an answer drops
-//! another page, so an answer is kept then only when its URL was asked for before
-//! ([`Store::asked`]): a crawler walking more URLs than the bound has room for, or searches no
-//! one repeats, are answered by the handler without a copy into the store, and take no room
-//! from the pages that are asked for again.
+//! While the store has room every such answer is kept. Once it is full, keeping an answer may
+//! drop another page, so an answer is kept then only when its URL was asked for before, as far
+//! back as the marks that say so go ([`Store::asked`]): a crawler's first walk over more URLs
+//! than the bound has room for, or searches no one repeats, are answered by the handler without
+//! a copy into the store, and all but the few whose mark is another's take no room from the
+//! pages that are asked for again.
 //!
 //! It stands where the handler does, after the app's middleware, so every stage still runs for
 //! every request: a middleware sees the `200` with the whole body, the security headers and
@@ -397,13 +398,15 @@ impl Entry {
 impl Store {
     /// Whether keeping an answer may have to drop a page: the bytes kept are within the largest
     /// answer that is kept ([`SHARE`]) of the bound. The pages that no longer stand count too,
-    /// since nothing removes them until room is made, so a store that filled once stays full.
+    /// since most stay until room is made: a store that filled once is seldom not full again,
+    /// and when it is, answers are kept the first time until it fills.
     fn full(&self) -> bool {
         self.bytes.load(Ordering::Relaxed) > self.bound - self.bound / SHARE
     }
 
     /// Whether the URL `at` (a path and query), asked for with `host` in any language, was asked
-    /// for before by a request no kept answer stood for, in a full store; and marks it.
+    /// for before by a request no kept answer stood for, in a full store, since the marks were
+    /// last cleared; and marks it.
     ///
     /// A mark is one bit, found by a hash of the URL, and no other URL unsets it. So a URL
     /// asked for before is known, and one not asked for before is taken for known when its
@@ -983,6 +986,7 @@ mod tests {
         while !store.full() {
             answers.keep(entry(&answers, &format!("/kept/{pages}"), None, 60, 1000));
             pages += 1;
+            assert!(pages < 100, "the store never filled");
         }
         let held = answers.bytes();
         assert!(held > BOUND - BOUND / SHARE && held <= BOUND, "{pages} pages hold {held} bytes");
@@ -992,13 +996,18 @@ mod tests {
         let host = HeaderValue::from_static("a.example");
         assert!(!store.asked(Some(&host), "/items") && store.asked(Some(&host), "/items"), "and so is another host's");
         assert_eq!(store.marks.get().map(|marks| marks.len() * 64), Some(2048));
-        // 2,048 marks: cleared when the 257th is set, so a URL asked for before then is new again.
-        let new = (0..300).filter(|n| !store.asked(None, &format!("/catalog/{n}"))).count();
-        assert!(new > 256, "{new} of 300 URLs were new");
-        assert!(store.marked.load(Ordering::Relaxed) < 100, "the marks were cleared");
-        assert!(store.asked(None, "/catalog/299"), "the last is marked after the clearing");
-        let known = (0..250).filter(|n| store.asked(None, &format!("/catalog/{n}"))).count();
-        assert!(known < 30, "{known} of the 250 asked for before the clearing are known by another's mark");
+        // 2,048 marks: a URL is known while no more than 256 are set, whatever was asked for since.
+        let mut urls = (0..400).map(|n| format!("/catalog/{n}"));
+        while store.marked.load(Ordering::Relaxed) < 256 {
+            store.asked(None, &urls.next().expect("the marks were cleared early"));
+        }
+        assert!(store.asked(None, "/items") && store.asked(None, "/catalog/0"), "known with 256 marks set");
+        // The next new URL clears them all, its own with them.
+        let clearing = urls.find(|url| !store.asked(None, url)).expect("a new URL");
+        assert_eq!(store.marked.load(Ordering::Relaxed), 0);
+        assert!(!store.asked(None, &clearing) && store.asked(None, &clearing), "the one that cleared them is new again");
+        assert!(!store.asked(None, "/items"), "and so is one asked for before");
+        assert_eq!(store.marked.load(Ordering::Relaxed), 2);
     }
 
     /// The bound holds after every answer kept: the one not read since the hand last passed goes
