@@ -66,7 +66,11 @@ fn app(source: Source, lean: bool) -> App {
         .api(|routes| api::api(routes, source))
         .assets(views::Static)
         .components(&[views::SiteHeader]);
-    let app = if std::env::var("CORTEN_KO").as_deref() == Ok("1") { app.kept_answers(0) } else { app };
+    let app = match std::env::var("CORTEN_KEPT").ok().and_then(|kept| kept.parse().ok()) {
+        Some(kept) => app.kept_answers(kept),
+        None if std::env::var("CORTEN_KO").as_deref() == Ok("1") => app.kept_answers(0),
+        None => app,
+    };
     if lean {
         app.deadline(None).header_timeout(None).send_timeout(None)
     } else {
