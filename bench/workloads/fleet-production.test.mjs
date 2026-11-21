@@ -46,6 +46,9 @@ function fixture(t, mode = "success") {
   fs.symlinkSync(fs.realpathSync("bench/node_modules/typescript"), path.join(repo, "bench/node_modules/typescript"), "junction");
   fs.mkdirSync(path.join(repo, "node_modules"));
   fs.symlinkSync(fs.realpathSync("node_modules/semver"), path.join(repo, "node_modules/semver"), "junction");
+  // The captured validator reads this contract data relative to its modules.
+  fs.mkdirSync(path.join(repo, "bench/marketplace"), { recursive: true });
+  fs.copyFileSync(new URL("../marketplace/labels.json", import.meta.url), path.join(repo, "bench/marketplace/labels.json"));
   fs.copyFileSync(new URL("./fleet-provider-test-worker.mjs", import.meta.url), path.join(repo, "bench/workloads/fleet-provider-test-worker.mjs"));
   const sources = fleetWorkerPaths.map((file) => {
     const target = path.join(repo, file); fs.mkdirSync(path.dirname(target), { recursive: true });
