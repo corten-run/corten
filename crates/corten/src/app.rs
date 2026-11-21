@@ -2588,7 +2588,13 @@ impl<S: Steps> Layer<S> {
             if mount.is_none() {
                 self.policy.document(&mut refused, csp, mode.swaps());
             }
-            refused.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
+            // An error page that drew a submit key keeps the rule every such page has.
+            let policy = if refused.extensions().get::<cache::Unrepeatable>().is_some() {
+                cache::drawn_unsettled(refused.headers_mut())
+            } else {
+                cache::PRIVATE
+            };
+            refused.headers_mut().insert(header::CACHE_CONTROL, policy);
             pending.discard();
             return refused;
         }

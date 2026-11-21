@@ -226,8 +226,9 @@ pub(crate) const PRIVATE_NO_STORE: HeaderValue = HeaderValue::from_static("priva
 /// The caching headers a CDN or proxy reads before `Cache-Control`, by exact name: RFC 9213's
 /// `CDN-Cache-Control`, Cloudflare's and Vercel's own, `Surrogate-Control`, Akamai's `Edge-Control`
 /// and nginx's `X-Accel-Expires`. [`settle`] removes them from a page that draws a submit key, an
-/// unstaged route's answer that sets a cookie loses them, and a [`crate::Public`] answer may not
-/// set one. A name a deployment configures for itself (RFC 9213 allows one) is the deployment's.
+/// unstaged route's answer that sets a cookie loses them and any other `*cache-control`, and a
+/// [`crate::Public`] answer may not set one. A name a deployment configures for itself (RFC 9213
+/// allows one) is the deployment's.
 pub(crate) const CDN_CACHING: [&str; 6] = [
     "cdn-cache-control",
     "cloudflare-cdn-cache-control",
@@ -445,6 +446,18 @@ pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
         for name in &CDN_HEADERS {
             headers.remove(name);
         }
+    }
+}
+
+/// The `Cache-Control` for a page that drew a submit key and goes out without [`settle`] (a
+/// refused write's error page), with the CDN caching headers it had removed: `private, no-store`
+/// where it names `no-store`, as [`settle`] gives one, and the default otherwise.
+pub(crate) fn drawn_unsettled(headers: &mut HeaderMap) -> HeaderValue {
+    drop_cdn_caching(headers);
+    if headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes())) {
+        PRIVATE_NO_STORE
+    } else {
+        PRIVATE
     }
 }
 

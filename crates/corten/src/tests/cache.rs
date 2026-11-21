@@ -710,6 +710,55 @@ async fn a_page_that_draws_a_submit_key_keeps_no_cdn_caching_header() {
     }
 }
 
+/// A refused cross-site write gets the app's error page, which goes out before the cache rules
+/// run. One that draws a submit key goes out as any page that draws one does: a `no-store` it
+/// says as `private, no-store`, and none of the CDN caching headers it wrote. One that draws none
+/// is sent `private, no-cache`, whatever it said, as before.
+#[tokio::test]
+async fn a_refusal_page_that_draws_a_submit_key_is_not_shared() {
+    let refused = |keyed: bool, cache: &'static str| {
+        let router = App::new(Routes::from(Table::new().route("/", get(|| async { "home" }).post(|| async { "saved" }))))
+            .error_page(
+                move |_: Failure, req: Req| async move {
+                    let form = html! {
+                        <form method="post">if keyed { {crate::SubmitKey::field(KeyedWrite::FIELDS.submit)} }</form>
+                    };
+                    req.test_page("Not allowed", form).map(|mut page| {
+                        let headers = page.headers_mut();
+                        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+                        for name in CDN_OVERRIDES {
+                            headers.insert(name, HeaderValue::from_static("max-age=60"));
+                        }
+                        page
+                    })
+                },
+                (),
+            )
+            .router();
+        async move {
+            let req = Request::post("/")
+                .header("origin", "https://evil.example")
+                .header("sec-fetch-site", "cross-site")
+                .header("accept", "text/html")
+                .body(Body::empty())
+                .unwrap();
+            let res = router.oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::FORBIDDEN);
+            res.headers().clone()
+        }
+    };
+    for (keyed, cache, sent) in [
+        (true, "no-store", "private, no-store"),
+        (true, "public, max-age=60", "private, no-cache"),
+        (false, "no-store", "private, no-cache"),
+        (false, "public, max-age=60", "private, no-cache"),
+    ] {
+        let headers = refused(keyed, cache).await;
+        let cdn: Vec<_> = CDN_OVERRIDES.into_iter().filter(|name| keyed && headers.contains_key(*name)).collect();
+        assert_eq!((headers[header::CACHE_CONTROL].to_str().unwrap(), cdn), (sent, vec![]), "keyed {keyed}, {cache}");
+    }
+}
+
 #[tokio::test]
 async fn cache_stages_keep_incoming_headers_while_the_handler_sees_middleware_edits() {
     struct Rewrite;
