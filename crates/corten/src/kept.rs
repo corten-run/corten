@@ -318,7 +318,8 @@ pub(crate) struct Entry {
 /// A kept answer's body compressed: in each coding at the per-request level, made by the first
 /// request that asks for that coding, and in brotli at [`Level::Kept`], queued on the second
 /// answer to a client that ranks brotli as high as any coding and made on the thread that
-/// compresses held values, so no request waits for it. From then on such a client gets it.
+/// compresses held values, so no request waits for it. From then on such a client gets it, unless
+/// the form made for the coding it takes now is no larger.
 #[cfg(feature = "compress")]
 #[derive(Default)]
 struct Coded {
@@ -394,11 +395,14 @@ impl Kept {
             // skipped (`Entry::make_brotli`).
             if coded.asked.fetch_add(1, Ordering::Relaxed) >= 1 && !coded.started.swap(true, Ordering::AcqRel) {
                 let page = Arc::downgrade(entry);
-                let made = crate::compress::later(Turn::Kept, Box::new(move || {
-                    if let Some(entry) = page.upgrade() {
-                        entry.make_brotli();
-                    }
-                }));
+                let made = crate::compress::later(
+                    Turn::Kept,
+                    Box::new(move || {
+                        if let Some(entry) = page.upgrade() {
+                            entry.make_brotli();
+                        }
+                    }),
+                );
                 if !made {
                     // Full, or no thread to be had: a later answer asks again.
                     coded.started.store(false, Ordering::Release);
@@ -1642,7 +1646,8 @@ mod tests {
         let given = |page: Arc<Entry>, asked: &'static str, now: Coding| {
             let mut extensions = http::Extensions::new();
             extensions.insert(Kept(page.clone()));
-            let (bytes, coding) = Kept::coded(&extensions, &page.body, accepts(asked), now, || unreachable!("{asked}: compressed"));
+            let (bytes, coding) =
+                Kept::coded(&extensions, &page.body, accepts(asked), now, || unreachable!("{asked}: compressed"));
             (bytes.len(), coding)
         };
         let browser = "gzip, deflate, br, zstd";

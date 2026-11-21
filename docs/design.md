@@ -7328,15 +7328,28 @@ rules something out.
     The request that makes the copy is still a visitor's, so nothing more is made on it: while
     the page's second compressed answer to a client that ranks brotli first or ties it for first
     is finished (a page asked for once is compressed once, as a held value is), its brotli at level
-    5 is queued for the one thread that already compresses held JSON, which takes it in turn from
-    its bounded queue, holding the page weakly while it waits, and makes and counts it only while
-    the page still stands, asked again under the store's lock when the bytes are put with it; a
-    full queue leaves it to the next such answer. From then on a client that ranks brotli as high
-    as any coding, as a browser
-    that also takes zstd does, gets it in the place of zstd 1; one that prefers zstd, or takes
+    5 is queued for the one thread that already compresses held JSON, in a bounded queue of its
+    own that the thread comes to only when no held value waits, so a burst of kept pages neither
+    takes a held value's place in its queue nor makes it wait for more than the one job running.
+    The job holds the page weakly while it waits, and makes and counts it only while the page
+    still stands, asked again under the store's lock when the bytes are put with it; a full queue
+    leaves it to the next such answer. From then on a client that ranks brotli as high as any
+    coding, as a browser that also takes zstd does, gets it in the place of zstd 1, unless the form
+    already made for the coding it would get otherwise is no larger: the levels' and codings' sizes
+    are not in the same order on every page (a review's probe with Node's brotli 1.2.0 and zstd
+    1.5.7, not Corten's build, encoded a 32,808-byte page that repeats a 640-character block to
+    5,207 bytes at brotli 5 and 670 at zstd 1), a tie lets the server choose (RFC 9110 section
+    12.5.3), and nothing is compressed on the request to compare. One that prefers zstd, or takes
     only gzip, gets the per-request form as before, and until it is made so does everyone. It
     counts toward the bound, and each compressed form now counts the 24-byte record its bytes
-    are shared by as well. Level 5 is where the bytes stop falling until brotli's slowest levels:
+    are shared by as well, but it is a form the page does without, so it takes only the room the
+    bound has left and never runs the clock: no page is dropped for it, so a write or the end of
+    a lifetime that lands once the thread found the page kept costs no other page (the writes'
+    counts take no lock, so no check can rule that out while a promotion may drop a page), and in
+    a store at its bound a page has it only when there was room for it then. In
+    `tests/kept_memory.rs`, whose store is at its bound, 201 of the 227 and 231 of the 232 newest
+    pages kept had it in two runs.
+    Level 5 is where the bytes stop falling until brotli's slowest levels:
     on the catalog benchmark's record page (4,424 bytes) zstd 1 sends 1,078 bytes, brotli 5 882
     (18.2% fewer), brotli 9 884, brotli 10 778 and brotli 11 761; on card-market's item pages
     (4,013 bytes on average) 1,564, 1,293 (17.3% fewer), 1,291, 1,188 and 1,170, and on the same
@@ -7369,7 +7382,11 @@ rules something out.
     set on the ones it refuses, each of which left a page stale in a case a review found; a
     kept page's higher level made on the request that makes the copy, which a visitor would wait
     for, or at brotli 9 to 11, or with brotli's window sized to the page, which took longer for the
-    same bytes; off unless asked for, which leaves the cost on every app that already said its
+    same bytes; making room for it as for the page's other forms, by dropping the pages the clock
+    finds, which let a write that landed while the thread put it in drop a page that stood for one
+    that no longer did; its job in the queue held values wait in, where a burst of kept pages kept
+    a held value out or made it wait behind all of them; off unless asked for, which leaves the
+    cost on every app that already said its
     pages are public; a page for one visitor kept by caller, where a mistake in the key shows
     one user's page to another ([architecture](architecture.md#what-belongs-in-the-framework));
     honoring a request's `no-cache`; removing a written path's pages by a search of the store or
@@ -7411,22 +7428,31 @@ rules something out.
     under a 32 MiB bound and three passes over 40,000 URLs the process settled 57.8 MiB above where
     it began with glibc's and 35.2 MiB above with jemalloc, so what an allocator holds beyond the
     bytes asked of it is beside the bound; `tests/kept_memory.rs` holds the bytes asked to the
-    bound, 4,172,888 of 4,194,304 for its page in every coding and its brotli 5, each page asked
-    for until it was given in brotli so that the count is read with every brotli made, and
-    4,050,606 with no compression. A kept page's brotli 5 (`0d96aa8b3` against main's
-    `68ce3f1e6`, the request counts of `tests/kept_coding_cost.rs` for a page of 3,052 bytes,
-    callgrind's count for 1,200 requests less its count for 200, three alternated rounds that
-    agreed within 4 instructions, each answer's body checked and the two builds' bodies identical
-    byte for byte but for brotli's): a kept page given again to a browser's codings ran 29,604
-    instructions for 542 bytes of brotli 5 against 29,468 for 640 of zstd 1, and 28,885 against
-    28,813 asked for zstd alone, which this change does not alter; a page made and kept 146,048
-    against 145,929, a kept page given again uncompressed 23,794 against 23,791 and one made
-    uncompressed 45,350 against 45,500, and in gzip alone 29,386 against 29,230 given again and
-    625,990 against 625,955 made. Both builds call `malloc` 31 times for each answer given again
-    in a browser's codings; the difference is in glibc's own work for those calls, as the
-    allocations of a store with another layout fall in its bins: with its fast bins off
-    (`GLIBC_TUNABLES=glibc.malloc.mxfast=0`) the counts are 29,451 against 29,473 to a browser,
-    28,818 against 28,818 for zstd alone and 28,998 against 29,127 for gzip alone. The levels'
+    bound, 4,151,648 and 4,164,307 of 4,194,304 in two runs for its page in every coding and its
+    brotli 5 where the bound had room for it when the thread came to it (the thread waited for
+    before the count; 201 of the 227 newest pages kept were given in brotli in the first and 231
+    of 232 in the second), and 4,050,606 with no compression. A kept page's brotli 5 (`9831ef711`, this
+    change merged with main, against main's `564034b86`, the request counts of
+    `tests/kept_coding_cost.rs` for a page of 3,052 bytes, callgrind's count for 1,200 requests
+    less its count for 200, three alternated rounds, given as the median with the rounds' range,
+    which is at most 8 instructions, each answer's body checked and the two builds' bodies
+    identical byte for byte but for the tied browser's): a kept page given again to a browser's
+    codings ran 29,664 instructions (29,664 to 29,665) for 542 bytes of brotli 5 against 29,509
+    (all three) for 640 of zstd 1, +155 (+0.53%); asked for zstd alone, which this change does not
+    give another form, 28,924 (28,924 to 28,925) against 28,854, +70; given again uncompressed
+    23,841 against 23,832 (23,832 to 23,833), +9, and in gzip alone 29,429 (29,429 to 29,430)
+    against 29,265, +164; a page made and kept 146,105 (146,100 to 146,106) against 146,027
+    (146,024 to 146,029), +78, made uncompressed 45,407 (45,402 to 45,410) against 45,614 (45,612
+    to 45,617), -207, and made in gzip 626,068 (626,068 to 626,076) against 626,062 (626,057 to
+    626,064). Answers whose work this change leaves alike, or adds two comparisons to, differ by
+    -207 to +164, so these counts move with something beside that work; it is the allocator's in
+    part: with
+    glibc's fast bins off (`GLIBC_TUNABLES=glibc.malloc.mxfast=0`, one run each) the browser's
+    difference is +27 (29,531 against 29,504), zstd's alone +11, gzip's alone -126 and the page
+    made uncompressed -168. At `0d96aa8b3` against `68ce3f1e6` callgrind's caller trees showed
+    both builds calling `malloc` 31 times for each answer given again in a browser's codings.
+    What changes the allocator's paths (the entry's added fields, the sizes of what is held, or
+    another difference in layout or warm-up) these runs do not separate. The levels'
     bytes and instructions above are a probe's that compresses as `compress::encode` does, whose
     level-1 bytes matched the app's answers, on the catalog benchmark's ten record pages and
     card-market's twelve demo item pages as served at `b5324cbae`, its instructions by callgrind
@@ -7519,8 +7545,10 @@ rules something out.
     workstation, with other builds running, gave +1.5% (bound +2.8%) and is set aside as noise. Historical, a parent and child from
     before main changed the reading of a request's mode that a write runs: 16,292.0 a write at
     `30b39d455` against 15,210.8 at `45489ced9`, and with a `Public` page 16,308.7 against 16,310.7.
-    Not measured: the time a held value waits behind a kept page's brotli on the thread they
-    share; how the URLs of an app in use are spread,
+    Not measured: the time a held value waits for the kept page's brotli the thread is making when
+    it is queued, which is one job at most (reasoned from the queues; its instructions are above);
+    how often a page in an app's store at its bound goes without its brotli for want of room; how
+    the URLs of an app in use are spread,
     so how often one first asked for in a full store is asked for again (the simulation's
     spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
     kept page in those rounds is the rule, two builds of the same code having differed by
@@ -7557,8 +7585,9 @@ rules something out.
     become most of a kept page's cost on a measured app, so a place further out is worth its
     rules; a multi-core measurement shows requests waiting on the store's lock; writes no
     handler takes (a scanner's `POST /`) make kept pages again often enough to show, so the
-    router's own refusals are worth leaving out where the request met no middleware; a kept
-    page's brotli is seen delaying held values on the thread they share, or most clients of a
+    router's own refusals are worth leaving out where the request met no middleware; a measured
+    app's store at its bound keeps most of its pages without their brotli for want of room, or a
+    kept page's brotli is seen delaying held values on the thread they share, or most clients of a
     measured app prefer zstd to brotli, so a level made after the answer is worth having for zstd;
     or the connection speaks HTTP/2, where a request's target carries its authority.
 
@@ -7596,8 +7625,8 @@ rules something out.
     compressed, the tag. The commits after `f7e53a594` up to `24e61b4b0` change which writes count
     and nothing a page's `GET` runs. 2026-11-21, a kept page's brotli 5 with rustc 1.100.0, brotli
     9.1.3, zstd 0.14.4 (libzstd 1.5.7) and flate2 1.1.11 (miniz_oxide 0.9.1): the probe on
-    `b5324cbae`, `tests/kept_coding_cost.rs` under callgrind on `0d96aa8b3` and `68ce3f1e6` in
-    rust:1-trixie with glibc's allocator, and `tests/kept_memory.rs` at `0d96aa8b3`, with all
+    `b5324cbae`, `tests/kept_coding_cost.rs` under callgrind on `9831ef711` and `564034b86` in
+    rust:1-trixie with glibc's allocator, and `tests/kept_memory.rs` at `9831ef711`, with all
     features and with none.
 
 ## Rules

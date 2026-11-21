@@ -1523,17 +1523,21 @@ answer; and a request that names the page's tag gets its `304`. What a kept page
 handler with what it reads, the render, the tag's hash and the compression, since the hash and each
 coding's bytes are made once and stay with the page. A page's bytes are made once and sent many
 times, so its brotli is made once more, at level 5 (a request's is 1), on the thread that
-compresses held JSON. That is queued while the app compresses the page's second answer to a client
-that ranks brotli first or ties it for first among the codings it takes. An answer the store did
-not keep (in a full store, the first for a URL not asked for before), one that is not compressed
-(a `304`, a client that takes none, a body too small) or one to a client that ranks another
-coding higher does not count, and when the thread's queue is full the next answer that
-counts queues it. Neither answer waits: each, and every answer until the thread is done, gets the
-form made for its coding, as before. From then on a client that ranks brotli as high as any coding,
-as a browser does, gets it in the place of zstd: on the catalog benchmark's page 882 bytes where
-zstd sends 1,078. It is not made for a page written to or past its lifetime by the time the thread
-comes to it, and it counts toward the bound like the page's other forms
-([design Choice 70](../design.md#choice-kept-pages) has the levels measured). On the catalog benchmark's page, marked
+compresses held JSON, after any held JSON waiting there. That is queued while the app compresses
+the page's second answer to a client that ranks brotli first or ties it for first among the
+codings it takes. An answer the store did not keep (in a full store, the first for a URL not asked
+for before), one that is not compressed (a `304`, a client that takes none, a body too small) or
+one to a client that ranks another coding higher does not count, and when the queue for kept pages
+is full the next answer that counts tries again. Neither answer waits for the encoding: each, and
+every answer until the thread is done, gets the form made for its coding, as before (a lookup may
+wait the moment the thread takes the store's lock to put the bytes in). From then on a client that
+ranks brotli as high as any coding, as a browser does, gets it in the place of zstd (on the catalog
+benchmark's page 882 bytes where zstd sends 1,078) unless the form made for the coding it would get
+otherwise is no larger, as on a page that repeats long runs of text, where zstd can be the smaller.
+It is not made for a page written to or past its lifetime by the time the thread comes to it. It
+counts toward the bound like the page's other forms, but takes only the room the bound has left:
+no page is dropped for it, so in a store at its bound a page has it only when there was room for
+it then ([design Choice 70](../design.md#choice-kept-pages) has the levels measured). On the catalog benchmark's page, marked
 `Public` for a minute, a kept page took 14.5% fewer CPU cycles a request where nothing is compressed
 and 46.3% fewer where each answer is, at the medians of 12 paired rounds
 ([design Choice 70](../design.md#choice-kept-pages) has the rounds and what they did not resolve).

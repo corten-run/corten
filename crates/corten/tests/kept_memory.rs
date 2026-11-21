@@ -161,7 +161,8 @@ async fn drained(stream: &mut TcpStream, read: &mut Vec<u8>) {
         assert!(stream.read_buf(read).await.unwrap() > 0, "the connection closed");
     };
     let text = std::str::from_utf8(&read[..head]).unwrap().to_ascii_lowercase();
-    let length: usize = text.lines().find_map(|line| line.strip_prefix("content-length: ")).map_or(0, |n| n.trim().parse().unwrap());
+    let length: usize =
+        text.lines().find_map(|line| line.strip_prefix("content-length: ")).map_or(0, |n| n.trim().parse().unwrap());
     while read.len() < head + length {
         assert!(stream.read_buf(read).await.unwrap() > 0, "the connection closed");
     }

@@ -19,9 +19,9 @@
 //! about 194 ms (one run on Windows), too long for a value that changes while the app runs.
 //! A page the app keeps ([`crate::kept`]) has each coding made once at the per-request level, by
 //! the first request that asks for it, and brotli 5 made on that same thread, queued on its second
-//! compressed answer to a client that ranks brotli first: from then on such a client gets brotli 5
-//! in the place of zstd 1, 18% fewer bytes on a 4.4 KB page, and no request waits for it
-//! ([`Level::Kept`]).
+//! compressed answer to a client that ranks brotli first, when no held value waits: from then on
+//! such a client gets brotli 5 in the place of zstd 1 when it is smaller, 18% fewer bytes on a
+//! 4.4 KB page, and no request waits for it ([`Level::Kept`]).
 //!
 //! Event streams ([`crate::live`], feeds) are compressed as one stream per connection, flushed
 //! after every event so it arrives at once, with the context kept between events: a redraw that
@@ -185,11 +185,12 @@ pub(crate) enum Level {
     /// (1,516 to 2,153; 12.7 million) for 6,939.
     Held,
     /// Once per page the app keeps ([`crate::kept`]), after its second answer that could use it,
-    /// on the thread that compresses held values: brotli 5, which a client that ranks brotli as
-    /// high as any coding gets in the place of zstd 1. On the catalog benchmark's record page
-    /// (4,424 bytes) it gives 882 bytes where zstd 1 gives 1,078, and on card-market's item pages
-    /// (4,013 bytes on average) 1,293 where zstd 1 gives 1,564; it takes 1.01 and 1.25 million
-    /// instructions once (callgrind), where zstd 1 takes 0.12 and 0.16 million. brotli 9 gives
+    /// on the thread that compresses held values, after them: brotli 5, which a client that ranks
+    /// brotli as high as any coding gets in the place of zstd 1 when it is smaller. On the catalog
+    /// benchmark's record page (4,424 bytes) it gives 882 bytes where zstd 1 gives 1,078, and on
+    /// card-market's item pages (4,013 bytes on average) 1,293 where zstd 1 gives 1,564; it takes
+    /// 1.01 and 1.25 million instructions once (callgrind), where zstd 1 takes 0.12 and 0.16
+    /// million. brotli 9 gives
     /// the same bytes for 1.47 and 1.89 million instructions but 14 to 18 times the time (it
     /// clears larger tables), and brotli 11 gives 761 and 1,170 bytes for 84 and 56 million: too
     /// much for a page made again each time its lifetime ends, on a thread held values share.
