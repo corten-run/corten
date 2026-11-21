@@ -17,10 +17,10 @@ use tokio::{
 /// The bound the app is given, and more pages than it has room for.
 const BOUND: usize = 4 << 20;
 const PAGES: usize = 3000;
-/// The counts of writes and the marks of the URLs asked for: 65,536 of four bytes and 32,768 of
-/// eight, each made once (the marks with the first page asked for, the counts with the first one
-/// asked for again) and held beside the bound.
-const COUNTS: usize = (4 << 16) + (8 << 15);
+/// The counts of writes and the marks of the URLs asked for: 65,536 of four bytes, and a mark of
+/// eight for each KiB of the bound, each made once (the marks with the first page asked for, the
+/// counts with the first one asked for again) and held beside the bound.
+const COUNTS: usize = (4 << 16) + 8 * (BOUND / 1024);
 
 #[cfg(feature = "compress")]
 const CODINGS: &[&str] = &["identity", "zstd", "br", "gzip"];

@@ -125,13 +125,12 @@ impl Endpoint for Keeping {
     fn call(&self, req: Request) -> Answering {
         // Any other request (a navigation, one with a cookie, a write) is the handler's as before.
         let Some(asked) = crate::kept::Asked::of(&req) else { return self.inner.call(req) };
-        let given = match asked.find() {
-            Ok(kept) => return Box::pin(std::future::ready(kept)),
-            Err(given) => given,
-        };
+        if let Some(kept) = asked.find() {
+            return Box::pin(std::future::ready(kept));
+        }
         // A URL not asked for before is the handler's as any other request: no one is known to
         // ask for its answer again.
-        let Some(missed) = asked.missed(&req, given) else { return self.inner.call(req) };
+        let Some(missed) = asked.missed(&req) else { return self.inner.call(req) };
         let here = req.extensions().get::<crate::layout::StartHere>().cloned();
         let answer = self.inner.call(req);
         Box::pin(async move {
