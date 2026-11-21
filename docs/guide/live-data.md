@@ -16,6 +16,12 @@ stream: the page's own handler answers it ([A slow part](#a-slow-part)).
 
 A value that keeps changing is the next section's `corten::live_watch`.
 
+A stream's headers go out before its fragments are rendered, and a fragment is text, so a form's
+new submit key (`SubmitKey::field`) in one cannot make the stream private as it makes a page: a
+stream whose fragments may draw a key keeps its own caching, never `Public`, or a shared cache
+gives every visitor the same key ([forms](requests-and-forms.md#forms)). Under `corten dev`, a
+stream marked for shared caches is logged when a fragment it renders draws one.
+
 ### Resuming
 
 A part whose data changes rarely should not be drawn again on every page view and reconnect. Give

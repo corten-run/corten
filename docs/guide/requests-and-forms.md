@@ -1125,8 +1125,13 @@ a page whose only key fields are a template's keeps its `ETag`, which `SubmitKey
 away. A page that draws a key with `SubmitKey::field` is also never shared, whatever its route
 says: a cache that gave one visitor's page to the next would have the second visitor's submit
 taken for a repeat of the first. A `Public` page with such a form goes out `private, no-cache`,
+without the CDN caching headers a middleware wrote (`CDN-Cache-Control`, `Surrogate-Control`),
 so the browser asks again before reusing it, the app does not keep it, and `corten dev` logs it
-([caching](app.md#caching)).
+([caching](app.md#caching)). The render marks the answer it is drawn for: a page, a patch, the
+layout's reads, and a `Rendered` placed in one. Text carries no mark: a live stream's fragment
+(rendered after the stream's headers went out), `Rendered::into_string` and `raw`. A live
+stream whose fragments may draw a key keeps its own caching, never `Public`; under `corten dev`
+one marked for shared caches is logged when a fragment it renders draws one.
 
 An MCP tool's input takes the same field (`submit: SubmitKey` in the struct `Tools::tool`
 reads): its `inputSchema` shows a UUID string described as an idempotency key to send again on

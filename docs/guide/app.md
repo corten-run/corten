@@ -1396,6 +1396,13 @@ but an unstaged one):
 | a client navigation, a form answer or a data client's JSON from a page route | `private`, same lifetime: only the document is shared |
 | a response that sets a cookie, HTML with the request's nonce, or a page that draws a form's new submit key (`SubmitKey::field`) | `private, no-cache`, logged under `corten dev` |
 
+A page that draws a submit key also goes out without a CDN's own caching header a middleware
+wrote (`CDN-Cache-Control`, `Surrogate-Control`, any other `*-Cache-Control`), which a CDN reads
+before `Cache-Control`, even when its `Cache-Control` already says `private` or `no-store`. The
+key's render marks the answer: a page, a patch, the layout's reads, and a `Rendered` placed in one.
+A live stream's fragments are text rendered after its headers went out and carry no mark, so a
+stream that may draw a key is not `Public` ([forms](requests-and-forms.md#forms)).
+
 A `Public` answer cannot set a cookie the way a private one does: the page inside
 `Public<HtmlResult>` is made for everyone (`HtmlResponse<ForAll>`), and `with_cookie` on it does
 not compile. `req.page`, `req.redirect` and the other `Req` methods take who the page is for from
