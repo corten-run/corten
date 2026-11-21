@@ -680,6 +680,10 @@ pub(crate) mod sealed {
     pub trait Sealed {}
     impl Sealed for super::ForOne {}
 
+    /// What [`super::Anonymous::KEYED`] says. Only Corten can name it, so only Corten's own
+    /// inputs say yes.
+    pub struct Keyed(pub(crate) bool);
+
     pub trait Kind {}
     impl Kind for AnyAnswer {}
     impl Kind for Patches {}
@@ -2409,34 +2413,43 @@ pub trait Anonymous {
     /// Whether all it reads of a page's request is what the app keeps a `Public` page by
     /// (`crate::kept`): the URL, the `Host` and the language asked for. Not so for an extractor
     /// of the app's own, which may read another header and still not tell who is asking, so a
-    /// page whose handler takes one is made for every request.
+    /// page whose handler takes one is made for every request. An app cannot say otherwise: the
+    /// constant's type is one it cannot name.
+    ///
+    /// ```compile_fail,E0326
+    /// struct Device;
+    ///
+    /// impl corten::answer::Anonymous for Device {
+    ///     const KEYED: bool = true;
+    /// }
+    /// ```
     #[doc(hidden)]
-    const KEYED: bool = false;
+    const KEYED: sealed::Keyed = sealed::Keyed(false);
 }
 
 impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R> {
-    const KEYED: bool = true;
+    const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
 impl<T> Anonymous for crate::Form<T> {
-    const KEYED: bool = true;
+    const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
 impl<T> Anonymous for State<T> {
-    const KEYED: bool = true;
+    const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
 impl Anonymous for Req {
-    const KEYED: bool = true;
+    const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
 impl Anonymous for Signal {
-    const KEYED: bool = true;
+    const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
 impl Anonymous for Method {
-    const KEYED: bool = true;
+    const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
 impl Anonymous for Uri {
-    const KEYED: bool = true;
+    const KEYED: sealed::Keyed = sealed::Keyed(true);
 }
 impl<T: Anonymous> Anonymous for Option<T> {
-    const KEYED: bool = T::KEYED;
+    const KEYED: sealed::Keyed = T::KEYED;
 }
 // What these read is not in the key (a body, where a stream stopped): a page whose handler takes
 // one is not kept.
@@ -2537,7 +2550,7 @@ macro_rules! arities {
         }
 
         impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {
-            const KEYED: bool = true $(&& $ty::KEYED)*;
+            const KEYED: bool = true $(&& $ty::KEYED.0)*;
         }
         impl<$($ty: Unstaged,)*> AllUnstaged for ($($ty,)*) {}
 

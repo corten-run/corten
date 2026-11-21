@@ -28,16 +28,21 @@
 //! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
 //! and no value made for this request alone, and varies on nothing but what the key covers.
 //!
-//! A write that did not fail drops what is kept at its path, whatever the query (a named post is
-//! `?do=name` at its page's path), and at the path of a place on this site it redirects to (RFC
-//! 9111 section 4.4); a page whose handler was reading while the write went through is not kept.
-//! Nothing else drops a page before its lifetime ends: the lifetime is how stale the app said
-//! the page may be. Off under `corten dev`. The bound is [`crate::App::kept_answers`], and
-//! counts each page's bytes, its headers, its key and the compressed forms made for it.
+//! A write drops what is kept at its path, whatever the query (a named post is `?do=name` at its
+//! page's path) and however the path is escaped, unless its answer says it was refused (a
+//! `4xx`): one that failed later, passed its deadline or lost its client may have written
+//! first, and work that outlives its request ([`crate::Signal::finish`]) counts again when it
+//! ends. A write that went through also drops what is kept at the place on this site its answer
+//! names (`Location`, `Content-Location`; RFC 9111 section 4.4). A page whose handler was
+//! reading while a write went through is not kept. Nothing else drops a page before its lifetime
+//! ends: the lifetime is how stale the app said the page may be. Off under `corten dev`. The
+//! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
+//! the compressed forms made for it, each held in an allocation of its own size, with an
+//! allowance for what holds them.
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, DefaultHasher, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
@@ -61,14 +66,19 @@ const SHARE: usize = 8;
 /// new one past this takes the place of the oldest.
 const COPIES: usize = 8;
 
-/// What an entry counts for beside its headers and bytes: itself and its places in the maps.
-const OVERHEAD: usize = 256;
+/// What an entry counts for beside its key, its headers and its bytes: itself, its header map
+/// and its places in the maps.
+const OVERHEAD: usize = 768;
+
+/// What a header counts for beside its name and value: its place in the header map.
+const HEADER: usize = 96;
 
 /// An entry's size once it is no longer kept: nothing made for it counts from then on.
 const GONE: usize = usize::MAX;
 
-/// The counts of writes, one for the paths whose hash names it.
-const WRITES: usize = 256;
+/// The counts of writes, one for the paths whose hash names it: enough of them (256 KiB) that
+/// an app's writes seldom share a count with a kept page.
+const WRITES: usize = 1 << 16;
 
 /// The app's kept answers, at most `bound` bytes of them.
 pub(crate) struct Answers(Arc<Store>);
@@ -77,36 +87,103 @@ struct Store {
     bound: usize,
     /// The bytes kept: every entry's size, with what was made for it since it was kept.
     bytes: AtomicUsize,
-    /// The writes that did not fail, counted by path ([`Written`]): a page stands only while the
-    /// count is the one its request found before its handler ran. So a write drops every page at
-    /// its path, whatever its query, and a page whose handler was reading while the write was
-    /// made is not kept, without a lock or a search.
-    written: [AtomicUsize; WRITES],
+    /// The writes, counted by path ([`Written`]): a page stands only while the count is the one
+    /// its request found before its handler ran. So a write drops every page at its path,
+    /// whatever its query, and a page whose handler was reading while the write was made is not
+    /// kept, without a lock or a search.
+    written: Box<[AtomicU32]>,
     inner: RwLock<Inner>,
+}
+
+/// Which of the store's counts is a path's: by a hash of the path with its escapes decoded
+/// ([`crate::page::path_hash`]), so `/a%7Eb` and `/a~b` are one page's. Two paths may share a
+/// count, and then a write to either drops the other's pages early.
+fn count_of(path: &[u8]) -> usize {
+    (crate::page::path_hash(path) >> 32) as usize % WRITES
 }
 
 /// A path's count of writes, as a request found it.
 #[derive(Clone, Copy)]
 struct Written {
     count: usize,
-    was: usize,
+    was: u32,
 }
 
 impl Written {
-    /// The count for `at` (a path, with or without a query) as it is now. Two paths may share
-    /// one, and then a write to either drops the other's pages early.
+    /// The count for `at` (a path, with or without a query) as it is now.
     fn of(store: &Store, at: &str) -> Self {
-        let path = at.split(['?', '#']).next().unwrap_or(at);
-        // FNV-1a: a few bytes, read once for a request that missed.
-        let hash =
-            path.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3));
-        let count = (hash >> 32) as usize % WRITES;
+        let count = count_of(at.split(['?', '#']).next().unwrap_or(at).as_bytes());
         Written { count, was: store.written[count].load(Ordering::Acquire) }
     }
 
     /// No write to the path since.
     fn stands(self, store: &Store) -> bool {
         store.written[self.count].load(Ordering::Acquire) == self.was
+    }
+}
+
+/// A request that may change what its path shows (a method that is not safe), from before its
+/// handler can start until it is answered or dropped: its path's count goes up either way, unless
+/// the answer says the request was refused.
+pub(crate) struct Writing<'a> {
+    answers: &'a Answers,
+    count: usize,
+    host: Option<HeaderValue>,
+    answered: bool,
+}
+
+impl Writing<'_> {
+    /// The write was answered: counts it for its path and for the places on this site its answer
+    /// names (RFC 9111 section 4.4), so nothing kept there stands. Not for a `4xx`, which says
+    /// the request was refused for what it asked. A `5xx` counts for its path: the handler may
+    /// have written before it failed, or be writing still past its deadline.
+    pub(crate) fn answered(mut self, res: &Response) {
+        self.answered = true;
+        if res.status().is_client_error() {
+            return;
+        }
+        self.answers.count(self.count);
+        if res.status().is_server_error() {
+            return;
+        }
+        for name in [header::LOCATION, header::CONTENT_LOCATION, crate::page::LOCATION_HEADER] {
+            let to = res.headers().get(name).and_then(|to| on_site(to.as_bytes(), self.host.as_ref()));
+            if let Some(path) = to {
+                self.answers.count(count_of(path));
+            }
+        }
+    }
+}
+
+impl Drop for Writing<'_> {
+    /// Dropped before its answer (the client left): what its handler wrote by then is written.
+    fn drop(&mut self) {
+        if !self.answered {
+            self.answers.count(self.count);
+        }
+    }
+}
+
+/// The path of a place on this site that `to` (a `Location`) names: one that starts at the
+/// root, or a whole URL with the request's `Host`. Another site's page is not kept here, and a
+/// reference relative to the request's path is not followed.
+fn on_site<'a>(to: &'a [u8], host: Option<&HeaderValue>) -> Option<&'a [u8]> {
+    let path = |rest: &'a [u8]| rest.split(|byte| matches!(byte, b'?' | b'#')).next().unwrap_or(rest);
+    let schemes: [&[u8]; 3] = [b"https://", b"http://", b"//"];
+    let named = schemes.iter().find_map(|scheme| {
+        let start = to.get(..scheme.len()).filter(|start| start.eq_ignore_ascii_case(scheme))?;
+        Some(&to[start.len()..])
+    });
+    match named {
+        Some(rest) => {
+            let end = rest.iter().position(|byte| matches!(byte, b'/' | b'?' | b'#')).unwrap_or(rest.len());
+            let (authority, rest) = rest.split_at(end);
+            host.filter(|host| host.as_bytes().eq_ignore_ascii_case(authority)).map(|_| match rest.first() {
+                Some(b'/') => path(rest),
+                _ => &b"/"[..],
+            })
+        }
+        None => to.starts_with(b"/").then(|| path(to)),
     }
 }
 
@@ -203,7 +280,9 @@ impl Kept {
             return coded.clone();
         }
         // Made outside the cell: two first requests each compress it, and neither waits.
-        let coded = encode();
+        // A copy of its own length: an encoder's buffer is sized for the worst case, and the
+        // bytes made from it hold all of that for as long as they are kept.
+        let coded = Bytes::copy_from_slice(&encode());
         if slot.set(coded.clone()).is_ok() {
             entry.grew(coded.len());
         }
@@ -298,7 +377,7 @@ impl Answers {
     /// Room for `bound` bytes of answers; none for a bound of 0.
     pub(crate) fn new(bound: usize) -> Option<Self> {
         (bound > 0).then(|| {
-            let written = [const { AtomicUsize::new(0) }; WRITES];
+            let written = (0..WRITES).map(|_| AtomicU32::new(0)).collect();
             Answers(Arc::new(Store { bound, bytes: AtomicUsize::new(0), written, inner: RwLock::default() }))
         })
     }
@@ -312,11 +391,10 @@ impl Answers {
     /// The answer kept for a request, while it stands, with its age in seconds.
     fn find(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Option<(Arc<Entry>, u64)> {
         let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
-        let entry = inner.at.get(at)?.iter().find(|entry| entry.is_for(host, language))?;
-        let age = entry.age(Instant::now());
-        if age >= entry.lifetime || !entry.written.stands(&self.0) {
-            return None;
-        }
+        let now = Instant::now();
+        // The copy that stands: one that no longer does is in no other's way until it goes.
+        let entry = inner.at.get(at)?.iter().find(|entry| entry.is_for(host, language) && entry.stands(&self.0, now))?;
+        let age = entry.age(now);
         // Stored only when it changes: a page read often is marked once for each pass of the hand.
         if !entry.used.load(Ordering::Relaxed) {
             entry.used.store(true, Ordering::Relaxed);
@@ -334,15 +412,22 @@ impl Answers {
             #[cfg(feature = "compress")]
             store: Arc::downgrade(&self.0),
         }));
+        let now = Instant::now();
         let copies = inner.at.get(&entry.at).map(Vec::as_slice).unwrap_or_default();
-        // The copy this one stands for: asked the same way. With none, the oldest of a full set.
-        let replaced = copies
+        // The copies this one takes the place of: the one asked the same way, and those that no
+        // longer stand. With none of either in a full set, the oldest not read since it was kept
+        // (or since the hand passed it), so a way of asking seen once does not take the place of
+        // one seen often; else the oldest.
+        let mut replaced: Vec<_> = copies
             .iter()
-            .find(|copy| copy.host == entry.host && copy.language == entry.language)
-            .or_else(|| copies.first().filter(|_| copies.len() >= COPIES))
-            .cloned();
-        if let Some(replaced) = replaced {
-            store.drop_entry(&mut inner, &replaced);
+            .filter(|copy| (copy.host == entry.host && copy.language == entry.language) || !copy.stands(store, now))
+            .cloned()
+            .collect();
+        if replaced.is_empty() && copies.len() >= COPIES {
+            replaced.extend(copies.iter().find(|copy| !copy.used.load(Ordering::Relaxed)).or(copies.first()).cloned());
+        }
+        for replaced in &replaced {
+            store.drop_entry(&mut inner, replaced);
         }
         if slot == inner.slots.len() {
             inner.slots.push(None);
@@ -354,28 +439,19 @@ impl Answers {
         entry
     }
 
-    /// Counts a write to `at`'s path, so no page kept for it stands: every query's (a named
-    /// post is `?do=name` at its page's path) and one whose handler has yet to answer.
-    fn forget(&self, at: &str) {
-        let written = Written::of(&self.0, at);
-        self.0.written[written.count].fetch_add(1, Ordering::AcqRel);
+    /// A request that may change what its path shows is about to reach its handler. `signal` is
+    /// told which count is the path's, for work that outlives the request ([`crate::Signal::finish`]).
+    pub(crate) fn writing(&self, req: &Request, signal: &crate::Signal) -> Writing<'_> {
+        let count = count_of(req.uri().path().as_bytes());
+        signal.writes(count);
+        Writing { answers: self, count, host: req.headers().get(header::HOST).cloned(), answered: false }
     }
 
-    /// After an answer to a request that may have changed what a URL shows (an unsafe method
-    /// that did not fail): drops what is kept for the request's path and for a place on this
-    /// site its answer redirects to (RFC 9111 section 4.4).
-    pub(crate) fn wrote(&self, at: &str, res: &Response) {
-        if res.status().is_client_error() || res.status().is_server_error() {
-            return;
-        }
-        self.forget(at);
-        for name in [header::LOCATION, crate::page::LOCATION_HEADER] {
-            let to = res.headers().get(name).and_then(|to| to.to_str().ok());
-            // A path on this site: another site's page is not kept here.
-            if let Some(to) = to.filter(|to| to.starts_with('/') && !to.starts_with("//")) {
-                self.forget(to);
-            }
-        }
+    /// Counts a write to the paths `count` is for, so no page kept for them stands: every
+    /// query's (a named post is `?do=name` at its page's path) and one whose handler has yet to
+    /// answer.
+    pub(crate) fn count(&self, count: usize) {
+        self.0.written[count].fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -463,8 +539,10 @@ impl<'a> Asked<'a> {
             signal: req.extensions().get::<crate::Signal>().cloned(),
             nonce: req.extensions().get::<crate::security::NonceSlot>().cloned(),
             at: self.at.into(),
-            host: self.host.cloned(),
-            language: self.language.cloned(),
+            // Copies of their own: a request's header values are slices of the connection's read
+            // buffer, which a kept one would hold whole.
+            host: self.host.and_then(|host| HeaderValue::from_bytes(host.as_bytes()).ok()),
+            language: self.language.and_then(|language| HeaderValue::from_bytes(language.as_bytes()).ok()),
         }
     }
 }
@@ -505,11 +583,13 @@ impl Missed {
             || self.signal.as_ref().is_none_or(crate::Signal::is_personal)
             // A write to the path while the handler read: the page may show what was there before.
             || !self.written.stands(&answers.0)
+            // Made over a time longer than it lasts: it would never be given.
+            || self.asked.elapsed().as_secs() >= lifetime
         {
             return res;
         }
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
-        let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + 32).sum();
+        let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
         // The URL is held twice, by the entry and by the map.
         let key = self.at.len() * 2
             + self.host.as_ref().map_or(0, HeaderValue::len)
@@ -521,7 +601,8 @@ impl Missed {
         let (mut parts, body) = res.into_parts();
         // Exact size: one held `Bytes`.
         let Ok(body) = crate::body::to_bytes(body, usize::MAX).await else {
-            return Response::from_parts(parts, Body::empty());
+            // A body of an exact size that could not be read: not a page to send as it is.
+            return crate::response::IntoResponse::into_response(StatusCode::INTERNAL_SERVER_ERROR);
         };
         // A copy of its own length: a page's buffer is sized for the last page rendered, and the
         // bytes made from it hold all of that for as long as they are kept.
@@ -627,9 +708,15 @@ mod tests {
         assert_eq!(answers.bytes(), size * 2);
     }
 
+    /// A request that may change what `at` shows, as the app's layer meets it.
+    fn write<'a>(answers: &'a Answers, at: &str) -> Writing<'a> {
+        let req = http::Request::builder().method("POST").uri(at).header("host", "h7.example").body(Body::empty());
+        answers.writing(&req.expect("a request"), &crate::Signal::default())
+    }
+
     /// A URL's answer is one copy for each `Host` it was asked with, a new one in the place of the
-    /// one it stands for. A write that did not fail drops every page at its path and at the path
-    /// it redirects to, whatever their queries, and one whose handler read before it.
+    /// one it stands for. A write that was not refused drops every page at its path and at the
+    /// path it redirects to, whatever their queries, and one whose handler read before it.
     #[test]
     fn a_url_has_a_copy_for_each_host_and_a_write_drops_its_path_s() {
         let answers = Answers::new(1 << 20).expect("a bound");
@@ -641,34 +728,91 @@ mod tests {
         answers.keep(entry(&answers, "/p", Some("a.example"), 60, 20));
         assert_eq!(answers.bytes(), 30 + OVERHEAD * 2, "the second for a.example took the first's place");
         assert_eq!(answers.find("/p", Some(&a), None).expect("kept").0.body.len(), 20);
-        // More hosts than a URL keeps copies for: the oldest goes.
+        // More hosts than a URL keeps copies for: the oldest not read since it was kept goes, so
+        // the one read stays.
         for n in 0..COPIES {
             let host: &'static str = Box::leak(format!("h{n}.example").into_boxed_str());
             answers.keep(entry(&answers, "/p", Some(host), 60, 10));
         }
-        assert!(answers.find("/p", Some(&b), None).is_none() && answers.find("/p", Some(&a), None).is_none());
-        assert_eq!(answers.bytes(), (10 + OVERHEAD) * COPIES);
+        assert!(answers.find("/p", Some(&b), None).is_none() && answers.find("/p", Some(&a), None).is_some());
+        assert!(answers.find("/p", Some(&HeaderValue::from_static("h0.example")), None).is_none());
+        assert_eq!(answers.bytes(), 20 + 10 * (COPIES - 1) + OVERHEAD * COPIES);
         let last = HeaderValue::from_static("h7.example");
         let mut res = Response::new(Body::empty());
         *res.status_mut() = StatusCode::NOT_FOUND;
-        answers.wrote("/p", &res);
-        assert!(answers.find("/p", Some(&last), None).is_some(), "a write that failed changed nothing");
+        write(&answers, "/p").answered(&res);
+        assert!(answers.find("/p", Some(&last), None).is_some(), "a write that was refused changed nothing");
         *res.status_mut() = StatusCode::SEE_OTHER;
         res.headers_mut().insert(header::LOCATION, HeaderValue::from_static("/q?x=1#top"));
+        res.headers_mut().insert(header::CONTENT_LOCATION, HeaderValue::from_static("https://H7.example/made/1"));
         answers.keep(entry(&answers, "/q?x=2", None, 60, 10));
+        answers.keep(entry(&answers, "/made/1", None, 60, 10));
         answers.keep(entry(&answers, "/other", None, 60, 10));
         // A page whose handler is reading while the write is made.
         let read_before = entry(&answers, "/q", None, 60, 10);
         // A named post: `?do=save` at its page's path.
-        answers.wrote("/p?do=save", &res);
+        write(&answers, "/p?do=save").answered(&res);
         assert!(answers.find("/p", Some(&last), None).is_none(), "the path written, whatever the query");
         assert!(answers.find("/q?x=2", None, None).is_none(), "and the path it redirects to");
+        assert!(answers.find("/made/1", None, None).is_none(), "and the one it says it made, named with this host");
         answers.keep(read_before);
         assert!(answers.find("/q", None, None).is_none(), "what was read before the write does not stand");
         assert!(answers.find("/other", None, None).is_some());
         answers.keep(entry(&answers, "/p", Some("h7.example"), 60, 10));
         assert!(answers.find("/p", Some(&last), None).is_some(), "made after the write, it stands");
         assert!(Answers::new(0).is_none(), "no bound, none kept");
+    }
+
+    /// A write counts for its path however it ends, unless its answer says it was refused: the
+    /// handler may have written before the client left or before it failed. The path is the same
+    /// page's however it is escaped.
+    #[test]
+    fn a_write_that_is_dropped_or_fails_late_drops_its_path_s_however_it_is_escaped() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let kept = |at| answers.find(at, None, None).is_some();
+        answers.keep(entry(&answers, "/notes/a%7Eb", None, 60, 10));
+        answers.keep(entry(&answers, "/other", None, 60, 10));
+        drop(write(&answers, "/notes/a~b"));
+        assert!(!kept("/notes/a%7Eb"), "dropped before its answer, under another escaping");
+        answers.keep(entry(&answers, "/notes/a%7Eb", None, 60, 10));
+        let mut res = Response::new(Body::empty());
+        *res.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+        res.headers_mut().insert(header::LOCATION, HeaderValue::from_static("/other"));
+        write(&answers, "/notes/a%7eb").answered(&res);
+        assert!(!kept("/notes/a%7Eb"), "a handler that failed, or passed its deadline, may have written");
+        assert!(kept("/other"), "and what a failure names is not a place it wrote");
+    }
+
+    #[test]
+    fn a_write_s_answer_names_a_place_on_this_site_by_its_path_or_with_its_host() {
+        let host = HeaderValue::from_static("shop.example:8443");
+        let on = |to: &'static str| on_site(to.as_bytes(), Some(&host)).map(|path| std::str::from_utf8(path).expect("a path"));
+        assert_eq!(on("/q?x=1#top"), Some("/q"));
+        assert_eq!(on("/"), Some("/"));
+        assert_eq!(on("https://shop.example:8443/q/r?x"), Some("/q/r"));
+        assert_eq!(on("HTTP://SHOP.example:8443"), Some("/"));
+        assert_eq!(on("//shop.example:8443/q#top"), Some("/q"));
+        assert_eq!(on("https://shop.example:8443?x=1"), Some("/"));
+        for elsewhere in ["https://other.example/q", "//other.example/q", "https://shop.example/q", "q", "../q", "", "mailto:a@b"]
+        {
+            assert_eq!(on(elsewhere), None, "{elsewhere}");
+        }
+        assert_eq!(on_site(b"https://shop.example:8443/q", None), None, "no host to hold it to");
+        assert_eq!(on_site("/caf\u{e9}".as_bytes(), None), Some("/caf\u{e9}".as_bytes()), "a path that is not ASCII");
+    }
+
+    /// A copy that no longer stands is in no other's way, and goes when its URL is kept again.
+    #[test]
+    fn a_copy_that_no_longer_stands_is_not_in_another_s_way() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let (fr, en) = (HeaderValue::from_static("fr"), HeaderValue::from_static("en"));
+        // For every language, and past its lifetime.
+        answers.keep(entry(&answers, "/p", None, 0, 10));
+        let (french, asked) = (entry(&answers, "/p", None, 60, 20), fr.clone());
+        answers.keep(move |place| Entry { language: Some(Some(asked)), ..french(place) });
+        assert_eq!(answers.find("/p", None, Some(&fr)).expect("the one that stands").0.body.len(), 20);
+        assert!(answers.find("/p", None, Some(&en)).is_none());
+        assert_eq!(answers.bytes(), 20 + OVERHEAD, "the one past its lifetime went when the URL was kept again");
     }
 
     #[test]

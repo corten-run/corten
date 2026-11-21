@@ -957,9 +957,10 @@ impl<M: Middleware> App<M> {
     /// kept page's key does not cover.
     ///
     /// Past the bound, a page not read since the last time room was made goes first, and one
-    /// larger than an eighth of the bound is not kept. A write to a page's path that does not
-    /// fail, or one that redirects to it, drops what is kept there. None is kept under
-    /// `corten dev`. The bytes counted are each page's key, its headers, its body and each
+    /// larger than an eighth of the bound is not kept. A write to a page's path drops what is
+    /// kept there unless it is answered `4xx`, and so does one that redirects to it; a change
+    /// made any other way (a task, another instance) shows when the lifetime ends. None is kept
+    /// under `corten dev`. The bytes counted are each page's key, its headers, its body and each
     /// compressed form made of it.
     pub fn kept_answers(mut self, bytes: usize) -> Self {
         self.kept = bytes;
@@ -2625,10 +2626,10 @@ impl<S: Steps> Layer<S> {
             req.extensions_mut().remove::<crate::router::MatchedPath>();
         }
         let path = self.shared.dev.then(|| req.uri().path().to_string());
-        // A write may change what a kept page shows: its URL is kept until the answer says whether
-        // it went through. Only for a method that is not safe, in an app that keeps answers.
-        let wrote =
-            (self.shared.kept.is_some() && !req.method().is_safe()).then(|| req.uri().path_and_query().cloned()).flatten();
+        // A write may change what a kept page shows: it is counted for its path when it is
+        // answered, and when it is dropped before that. Only for a method that is not safe, in
+        // an app that keeps answers.
+        let wrote = self.shared.kept.as_ref().filter(|_| !req.method().is_safe()).map(|kept| kept.writing(req, &watch.0));
         // A debug build times the runtime's hover prefetch, so a page that grew slow is named
         // before someone has to measure every screen. It is timed until it is dropped, so a
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
@@ -2639,8 +2640,8 @@ impl<S: Steps> Layer<S> {
         let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
         let caller = watch.0.is_personal();
         let mut res = signal::follow(res, watch, self.zoned());
-        if let (Some(at), Some(kept)) = (&wrote, &self.shared.kept) {
-            kept.wrote(at.as_str(), &res);
+        if let Some(wrote) = wrote {
+            wrote.answered(&res);
         }
         #[cfg(debug_assertions)]
         if let Some(prefetched) = &mut prefetched {

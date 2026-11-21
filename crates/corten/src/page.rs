@@ -1410,7 +1410,12 @@ pub(crate) fn plain_origin(headers: &HeaderMap) -> bool {
 /// the browser asks for (which escapes the `{`) name one page, in 16 characters however long it is.
 /// An escaped `/` is kept as written, since it is part of one segment.
 pub(crate) fn path_key(path: &str) -> String {
-    let (bytes, mut hash, mut i) = (path.as_bytes(), crate::fnv::OFFSET, 0);
+    crate::ascii::hex(path_hash(path.as_bytes()), &mut [0; 16]).to_string()
+}
+
+/// The hash [`path_key`] writes: of the path with its escapes decoded, an escaped `/` kept.
+pub(crate) fn path_hash(bytes: &[u8]) -> u64 {
+    let (mut hash, mut i) = (crate::fnv::OFFSET, 0);
     while i < bytes.len() {
         let hex = |b: u8| (b as char).to_digit(16);
         let byte = match (bytes[i], bytes.get(i + 1).copied().and_then(hex), bytes.get(i + 2).copied().and_then(hex)) {
@@ -1424,7 +1429,7 @@ pub(crate) fn path_key(path: &str) -> String {
         hash = crate::fnv::extend(hash, &[byte]);
         i += 1;
     }
-    crate::ascii::hex(hash, &mut [0; 16]).to_string()
+    hash
 }
 
 impl Render for Notice {
