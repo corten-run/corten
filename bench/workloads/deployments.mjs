@@ -209,7 +209,7 @@ function candidates(group, app, baseline) {
     candidate("express-bun", { runtime: "Bun", framework, buildMode: "ordinary runtime",
       ...(isLive ? { supportScope: "upstream Express runtime compatibility only", doubts: "no native live-port Bun build/runtime receipt; the fullstack Express/Bun lane is not this SSE application" }
         : { implementationPath: "bench/deployments/express-bun" }) }, [optionSources.bunExpress]);
-    if (!isLive) choices.at(-1).configurationTemplate = { framework: baseline.configuration.framework, runtime: "Bun 1.4.4 (exact binary and dependencies in native receipt)",
+    if (!isLive) choices.at(-1).configurationTemplate = { framework: baseline.configuration.framework, runtime: "Bun 1.4.5 (exact binary and dependencies in native receipt)",
       build: { context: ".", dockerfile: "bench/deployments/express-bun/Dockerfile", argsFrom: "bench/deployments/express-bun/pins.json", args: ["NODE_IMAGE", "BUN_IMAGE"] },
       command: ["bun", "server.mjs"], workers: "one application process; same image and npm tree as Node comparator", server: "Bun node:http compatibility running Express, not Bun.serve",
       middleware: baseline.configuration.middleware, environment: baseline.configuration.environment,
