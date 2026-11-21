@@ -1293,6 +1293,95 @@ async fn a_write_drops_the_pages_kept_at_its_path() {
     assert!(fetch(&router, "GET", "/read", &[]).await.1.contains_key(header::AGE), "and no other path's page");
 }
 
+/// What a write's handler finds: whether the app has a store of kept pages, and whether the
+/// write is counted for its path.
+async fn store_and_count(signal: crate::Signal) -> String {
+    let store = signal.shared().is_some_and(|shared| shared.kept.is_some());
+    format!("store={store} counted={}", signal.counts_a_write())
+}
+
+/// Whether an app keeps pages is known when its router is made: one with no `Public` page has no
+/// store, so its writes are not counted, while one with a `Public` page in its own routes or in an
+/// area counts every write and still drops the page a write goes to.
+#[tokio::test]
+async fn only_an_app_with_a_public_page_counts_its_writes() {
+    let same_origin = [("sec-fetch-site", "same-origin")];
+    let edit = || Table::new().route("/items/{id}/edit", crate::router::get(|| async { "edit" }).post(store_and_count));
+    let write = |router: Router| async move {
+        let (status, _, body) = fetch(&router, "POST", "/items/7/edit", &same_origin).await;
+        assert_eq!(status, StatusCode::OK);
+        String::from_utf8(body.to_vec()).unwrap()
+    };
+    let none = App::new(Routes::from(edit())).router();
+    assert_eq!(write(none).await, "store=false counted=false", "no Public page");
+
+    let runs = Runs::default();
+    let router = App::new(Routes::from(edit().merge(kept_routes(&runs)))).router();
+    assert_eq!(write(router.clone()).await, "store=true counted=true", "a Public page in the app's routes");
+    fetch(&router, "GET", "/", &[]).await;
+    assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE));
+    assert_eq!(fetch(&router, "POST", "/", &same_origin).await.0, StatusCode::NO_CONTENT);
+    assert!(!fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE), "the write dropped it");
+    assert_eq!(runs.count(), 2);
+
+    let area = App::new(Routes::from(edit())).area(shelf_url::area).router();
+    assert_eq!(write(area).await, "store=true counted=true", "a Public page in an area");
+    let off = App::new(Routes::from(edit().merge(kept_routes(&runs)))).kept_answers(0).router();
+    assert_eq!(write(off).await, "store=false counted=false", "an app that keeps none");
+    let dev = App::new(Routes::from(edit().merge(kept_routes(&runs)))).dev(true).router();
+    assert_eq!(write(dev).await, "store=false counted=false", "under corten dev");
+}
+
+static COUNTER_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A layout read the counter's route says its page gives, so none is started for it.
+struct CounterCount;
+
+impl crate::LayoutRead for CounterCount {
+    type Value = u32;
+
+    fn start(&self, _: &http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
+        None::<std::future::Ready<u32>>
+    }
+
+    fn view(count: &u32) -> impl Render + '_ {
+        html! { {*count} }
+    }
+}
+
+#[crate::routes]
+mod counter_url {
+    #[route("/counter", any = counter_page, gives(CounterCount))]
+    pub struct Counter;
+}
+
+async fn counter_page(req: Req) -> Public<HtmlResult> {
+    COUNTER_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Public::new(Duration::from_secs(60), req.test_page_for("Counter", html! { <p>"counter"</p> }))
+}
+
+/// The only page an app keeps can be one an `any = ..` route that gives a layout read answers,
+/// at the path of a write that keeps none: the two are one route, which still keeps the page
+/// (`GET` reaches the `any` handler) and counts the write, which drops it.
+#[tokio::test]
+async fn a_kept_page_from_any_with_gives_merged_beside_a_write_is_kept_and_dropped() {
+    use std::sync::atomic::Ordering;
+    let typed = counter_url::router();
+    // The write on the left and the kept page's route on the right, as `Table::merge` places them.
+    let table = Table::new().route("/counter", crate::router::post(store_and_count)).merge(typed.0);
+    let router = App::new(Routes(table, typed.1, typed.2)).router();
+    fetch(&router, "GET", "/counter", &[]).await;
+    let (status, headers, _) = fetch(&router, "GET", "/counter", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(headers.contains_key(header::AGE), "kept: {headers:?}");
+    assert_eq!(COUNTER_RUNS.load(Ordering::Relaxed), 1);
+    let (status, _, body) = fetch(&router, "POST", "/counter", &[("sec-fetch-site", "same-origin")]).await;
+    assert_eq!((status, &body[..]), (StatusCode::OK, &b"store=true counted=true"[..]));
+    let (_, headers, _) = fetch(&router, "GET", "/counter", &[]).await;
+    assert!(!headers.contains_key(header::AGE), "the write dropped it: {headers:?}");
+    assert_eq!(COUNTER_RUNS.load(Ordering::Relaxed), 2, "made again");
+}
+
 /// A write counts for its path however it ends: one that
 /// failed after it may have written, one whose client left, and work that outlived its request.
 /// The path is the same page's however it is escaped.

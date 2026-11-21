@@ -7218,7 +7218,9 @@ rules something out.
     `Cache-Control`, the tag and the compression treat a kept page as the handler's answer, so no
     rule about what may be shared is written twice. Only a route typed `Public` whose answer is
     a page asks the store at all, which is known when the route is made, so no other route's
-    `GET` pays for it; a write pays a hash of its path and a count.
+    `GET` pays for it. A write pays a hash of its path and a count, and only in an app with such
+    a route: whether one has any is known when the router is made, and an app with none makes no
+    store and counts no writes.
 
     "Cannot tell who asks" is less than a key needs: an extractor of the app's own may be
     `Anonymous` and read the browser's `User-Agent` or a country header a proxy set. So a page
@@ -7554,7 +7556,24 @@ rules something out.
     under +1%; the first 40 pairs alone did not (+0.4%, bound +1.7%), so 100 more were run the
     same way and all 140 are counted. The host was not quiet: the workstation's other work kept
     its CPUs 95 to 100% busy, and one pair's change ranged from -7.7% to +16.1%.
-    Not measured: what a write pays for its count; how the URLs of an app in use are spread,
+    What a write pays for its count, under callgrind (valgrind 3.24.0, rustc 1.99.1, release with
+    debuginfo) on an app with one route whose `GET` and `POST` each answer text, sent
+    `POST /items/7/edit` in process with `oneshot`, as (instructions at 1,200 writes less those at
+    200) over 1,000, the same totals in each of 4 rounds that alternated the two builds: at
+    `fc86d8eff` (main) 16,870.7 a write against 15,790.0 with `kept_answers(0)`, so 1,080.7
+    (6.4%) went to a count no page could use; at `6984b2ac4`, where an app with no route that
+    keeps a page makes no store, 15,787.4 with or without `kept_answers(0)`, 1,083.3 (6.4%)
+    fewer. With a `Public` page at another path a write still pays for its count, 16,872.0 at
+    `6984b2ac4` against 16,875.0 at `fc86d8eff`, and 15,790.7 against 15,797.0 with
+    `kept_answers(0)`. Under load on a quiet host, the same write to the app with no `Public` page in 140 pairs of
+    turns ran 21,265.5 user instructions a request against 22,424.4 (-5.0% at the median of the
+    pairs, one-sided 95% bound -4.7%), and its user and kernel cycles a request fell by 2.8% at
+    the median with a bound of -2.6% (user cycles -6.5%, bound -5.8%; kernel -0.6%, bound
+    +0.2%): the margin set before the run, a bound under +1%, was met. A first run on a shared
+    workstation, with other builds running, gave +1.5% (bound +2.8%) and is set aside as noise. Historical, a parent and child from
+    before main changed the reading of a request's mode that a write runs: 16,292.0 a write at
+    `30b39d455` against 15,210.8 at `45489ced9`, and with a `Public` page 16,308.7 against 16,310.7.
+    Not measured: how the URLs of an app in use are spread,
     so how often one first asked for in a full store is asked for again (the simulation's
     spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
     kept page in those rounds is the rule, two builds of the same code having differed by
@@ -7597,8 +7616,14 @@ rules something out.
     speaks HTTP/2, where a request's target carries its authority.
 
     Last checked: 2026-11-21, the two rules together with rustc 1.100.0, release builds of
-    `cb9195a49` and `68ce3f1e6` counted by valgrind 3.24.0's callgrind. 2026-11-21, the rule for
-    a full store with rustc 1.100.0: each count the
+    `cb9195a49` and `68ce3f1e6` counted by valgrind 3.24.0's callgrind.
+    2026-11-21 for a write's count, the callgrind rounds above at `fc86d8eff` and
+    `6984b2ac4`, and the cycles of the same write from the two builds, built with rustc 1.100.0
+    on a dedicated 8-CPU cloud host (Xeon Platinum 8358, one thread a core) with nothing else
+    running, started once on one CPU, loaded in turn for three seconds each by `wrk` with 64
+    connections on two other CPUs, the order of the two turned about from each pair to the next,
+    the app's cycles counted by `perf stat` over each turn and divided by the requests answered; 2026-11-21, the
+    historical pair `30b39d455` and `45489ced9`, by callgrind alone; 2026-11-21, the rule for a full store with rustc 1.100.0: each count the
     difference of a run of 1,300 requests and one of 300 under callgrind, a new URL each, of
     which the first 28 or so fill a bound of 256 KiB, and for the second request the
     difference of such runs over 1,000 URLs less its 700 first requests, the simulation with
