@@ -698,9 +698,12 @@ function readbackEntries(e) {
     [m?.otherContext?.after, "other-final", "mutation-other"], ...(m?.attempts ?? []).map((r) => [r.readback, `rejection-${r.kind}`, "application"])];
 }
 
-export function nativeToolIdentities(tools, canonicalLock) {
-  need([tools?.node, tools?.browser, tools?.lockSha256, canonicalLock].every((v) => typeof v === "string" && hash.test(v)), "Missing native tool/lock identity");
+// The bench lock (the binding parser's compiler) is proved here; the handoff keeps the root lock.
+export function nativeToolIdentities(tools, canonicalLock, canonicalBenchLock) {
+  need([tools?.node, tools?.browser, tools?.lockSha256, tools?.benchLockSha256, canonicalLock, canonicalBenchLock]
+    .every((v) => typeof v === "string" && hash.test(v)), "Missing native tool/lock identity");
   same(tools.lockSha256, canonicalLock, "Native tool lock differs from immutable source");
+  same(tools.benchLockSha256, canonicalBenchLock, "Native bench tool lock differs from immutable source");
   return { node: tools.node, browser: tools.browser, lockSha256: tools.lockSha256 };
 }
 
@@ -961,7 +964,7 @@ async function validateNativeV2(input) {
     const toolsBefore = root("toolsBefore", "tools-before"), toolsAfter = root("toolsAfter", "tools-after");
     const tools = replayTools(reader, toolsBefore); same(replayTools(reader, toolsAfter), tools, "Native tools changed during execution");
     same(toolsBefore, toolsAfter, "Native installed tool/package bytes changed");
-    const toolIdentities = nativeToolIdentities(tools, sourceMap.get("package-lock.json")?.sha256);
+    const toolIdentities = nativeToolIdentities(tools, sourceMap.get("package-lock.json")?.sha256, sourceMap.get("bench/package-lock.json")?.sha256);
     same(tools.browser, summary.browser?.executableSha256, "Native browser executable identity differs");
     const targets = root("targets", "targets"); validateTargets({ schema: "native-fullstack-browser-targets/v1", targets });
     same(sha256(JSON.stringify(targets)), summary.targetsSha256, "Bundled target manifest differs from run");

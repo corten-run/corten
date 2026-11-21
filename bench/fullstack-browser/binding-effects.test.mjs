@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { readFileSync } from "node:fs";
-import ts from "typescript";
+import ts from "../typescript.mjs";
 import { chromium } from "@playwright/test";
 import { records } from "../marketplace/fixtures.mjs";
 import { createBindingArtifact, bindingHash, validateBindingArtifact } from "./binding-artifact.mjs";

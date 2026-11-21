@@ -3,19 +3,21 @@ import assert from "node:assert/strict";
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { controller, publicError } from "./droplet.mjs";
+import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
-import { controllerState, full, parseDropletArgs, providerFailure } from "./cloud-options.mjs";
+import { controllerState, full, parseDropletArgs, providerFailure, unsentDelete } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, validateLaunchFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { failedNativePolicy, failedNativeRoots, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
+import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
+import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
-  "cloud-control-runtime.mjs", "cloud-control-session.mjs", "cloud-control-stream.mjs", "isolated/control-admission.mjs",
+  "cloud-control-runtime.mjs", "cloud-control-session.mjs", "cloud-control-stream.mjs", "cloud-sealed-collection.mjs", "isolated/control-admission.mjs",
   "isolated/control-session-source.mjs", "isolated/control-stream-source.mjs", "isolated/control-stream.mjs", "isolated/host-observation.mjs",
   "deployments.mjs", "../marketplace/feature-contract.mjs", "../marketplace/run-contract.mjs", "../marketplace/groups.mjs",
   "../fullstack/conformance.mjs"].map((p) => posix.normalize(`bench/workloads/${p}`));
@@ -34,7 +36,8 @@ export function parseProductionArgs(args) {
   return { options: parseDropletArgs(core), approval, preview };
 }
 
-export async function productionPlan(options, { repo = checkout, run } = {}) {
+// compiler is a code-only synthetic TEST seam for the local bench install check.
+export async function productionPlan(options, { repo = checkout, run, compiler = localCompiler } = {}) {
   // All checks here are local/read-only. Missing integration stays visible, not imported.
   repo = realpathSync(repo);
   assert.ok(!/["$%\r\n\0]/.test(options.stateDir), "SSH config expansion in state path refused");
@@ -51,6 +54,11 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   const missing = [];
   for (const path of nativePaths)
     if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
+  // Seen before the reservation is saved: the launched job installs the bench package.
+  if (options.detach) for (const path of benchPackagePaths)
+    if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
+  // Native replay (ordinary collection, and so a launch's) reads this checkout's bench compiler.
+  if ((options.detach || options.collect && options.unusedBootstrapKnownHosts === undefined && !options.r21MeasuredCheckout) && !compiler()) missing.push(localCompilerMissing);
   let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery;
   if (options.group !== undefined) {
     const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = validateLaunchFleet(JSON.parse(bytes));
@@ -62,7 +70,22 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   else {
     const bytes = regular(join(physicalRequest, `groups-${options.round}`, "state.json"), 1024 * 1024);
     const saved = controllerState(JSON.parse(bytes), options.round);
-    if (options.unusedBootstrapKnownHosts !== undefined) {
+    if (options.r21MeasuredCheckout) {
+      ownedR21(saved);
+      assert.notEqual(head, saved.commit); await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
+      assert.equal((await run("git", ["-C", options.r21MeasuredCheckout, "rev-parse", "HEAD"])).stdout.trim(), saved.commit);
+      assert.equal((await run("git", ["-C", options.r21MeasuredCheckout, "status", "--porcelain", "--untracked-files=all"])).stdout, "");
+      (await r21Validator(options.r21MeasuredCheckout)).captureValidation(saved.commit);
+      const local = join(physicalRequest, "groups-r21"), key = regular(join(local, "known_hosts"), 1024 * 1024);
+      assert.ok(key.length); if (saved.archiveSha256) assert.equal(saved.archiveSha256, options.exitArchiveSha256);
+      const { stagedChildIntent } = await import("./fleet.mjs");
+      const { sealedMonitor } = await import("./cloud-control-stream.mjs");
+      const { terminal } = sealedMonitor(local, saved);
+      recovery = { measuredCommit: saved.commit, group: saved.group, hostId: saved.id, ip: saved.ip, unit: saved.unit,
+        fleetSha256: saved.fleet.fleetSha256, intent: stagedChildIntent(physicalRequest, saved), knownHostsSha256: digest(key),
+        registrationSha256: saved.control.monitor.registrationSha256, sealSha256: terminal.sealSha256, campaign: terminal.campaign,
+        archiveSha256: options.exitArchiveSha256, policy: "collect-one-sealed-exit-archive-with-measured-replay" };
+    } else if (options.unusedBootstrapKnownHosts !== undefined) {
       const settled = settledBootstrap(saved, join(physicalRequest, `groups-${options.round}`));
       assert.ok(settled || unusedBootstrap(saved), "unused bootstrap requires no dispatch or only an unacknowledged first SSH no-op, unless the upload prefix is settled");
       if (settled) assert.equal(saved.commit, head, "settled uploads require the measured checkout");
@@ -97,12 +120,13 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
     declaration: options.unusedBootstrapKnownHosts !== undefined
       ? "operator-confirmed-original-local-process-tree-gone-and-exact-host-key-verified-for-unused-bootstrap-retirement-only"
       : options.cancelMixedWait ? "operator-approved-after-merged-independent-review-for-one-owned-mixed-wait-cancellation-not-audit-or-delete"
+      : options.r21MeasuredCheckout ? "operator-approved-after-merged-independent-review-for-one-sealed-child-collection"
       : recovery ? "operator-approved-after-merged-independent-review-for-failed-native-custody-and-terminal-retirement-not-a-baseline"
       : "operator-approved-after-merged-independent-review-and-full-native-readiness" };
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
 }
 
-export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log } = {}) {
+export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log, compiler } = {}) {
   const { options, approval, preview } = parseProductionArgs(args);
   const processRun = shellTransport({ repo, spawn, streamSpawn });
   const createMode = options.detach ? options.group === undefined ? "legacy" : fleetCreateMode(options.group) : null;
@@ -128,18 +152,22 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   };
   try {
   const run = async (...args) => {
-    await controlCheckpoint(interrupted);
+    const fencedDelete = args[0] === "doctl" && args[1][2] === "delete" && args[3] && args[4] !== undefined;
+    try { await controlCheckpoint(interrupted); } catch (error) {
+      if (fencedDelete) return unsentDelete; // This invocation never reached the provider.
+      throw error;
+    }
     let result, failure;
     try { result = args[0] === "doctl" ? await providerRun(...args.slice(1)) : await processRun(...args); } catch (error) { failure = error; }
-    // The controller performs this post-command checkpoint after taking the
-    // registered handle. Throwing here would orphan a live SSH stream.
-    if (args[5]?.stream && result?.monitor) return result;
+    // Hand custody back before cancellation: take the stream handle, record
+    // the acknowledged command exit, or clear a positively unsent DELETE.
+    if (args[5]?.stream && result?.monitor || args[5]?.request && result || fencedDelete && result?.deleteNotDispatched === true) return result;
     try { await controlCheckpoint(interrupted); }
     catch (error) { if (!failure?.controlTreeUncertain && !failure?.controlUncertain) throw error; }
     if (failure) throw failure;
     return result;
   };
-  const plan = await productionPlan(options, { repo, run });
+  const plan = await productionPlan(options, { repo, run, compiler });
   if (preview) {
     write(JSON.stringify({ action: plan.subject.action, controllerCommit: plan.subject.controllerCommit, round: options.round,
       ...(plan.subject.recovery ? { recovery: plan.subject.recovery, reservationSha256: plan.subject.reservationSha256 } : {}),
@@ -162,14 +190,16 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   stage = "remote-main-ancestry";
   await run("git", ["merge-base", "--is-ancestor", plan.subject.controllerCommit, remoteHead]);
   stage = "source-recheck";
-  const repeated = await productionPlan(options, { repo, run });
+  const repeated = await productionPlan(options, { repo, run, compiler });
   assert.equal(repeated.approvalSha256, approval, "source/state/delivery changed after approval");
   assert.deepEqual(repeated.missing, []);
   let entered = false;
   const authorizeLocked = async () => {
     assert.ok(!interrupted(), "cancelled before provider access");
-    const locked = await productionPlan(options, { repo, run });
+    const locked = await productionPlan(options, { repo, run, compiler });
     assert.equal(locked.approvalSha256, approval, "locked action changed after approval");
+    // The approval hash excludes missing inputs, such as a bench install removed since the recheck.
+    assert.deepEqual(locked.missing, [], "native campaign integration missing; do not allocate");
     return locked.subject;
   };
   const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration) => {
@@ -186,8 +216,9 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked, approvedFleetSha256: plan.subject.fleetSha256,
     ...(options.unusedBootstrapKnownHosts === undefined ? {} : { unusedBootstrapApproval: {
       reservationSha256: plan.subject.reservationSha256, knownHostsSha256: plan.subject.recovery.knownHostsSha256,
-    } }), ...(options.retireFailedNative || options.cancelMixedWait ? {
-      recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256 },
+    } }), ...(options.retireFailedNative || options.cancelMixedWait || options.r21MeasuredCheckout ? {
+      recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256,
+        ...(options.r21MeasuredCheckout ? plan.subject.recovery : {}) },
     } : {}) });
   let result;
   stage = options.detach ? "controller-launch" : options.collect ? "controller-collect" : options.cancelMixedWait ? "controller-cancellation" : options.retireFailedNative ? "controller-retirement" : "controller-audit";

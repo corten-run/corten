@@ -9,6 +9,7 @@ import { fleetPlan, reservation } from "./cloud-contract.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { groupNames } from "./registry.mjs";
 import { readFleet, recheckCollectedGroup, verifyCollectedGroup, verifyFleet, verifyFleetCli } from "./fleet-verify.mjs";
+import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
 
 function fixture(t) {
@@ -175,6 +176,19 @@ test("bounded default worker rejects synthetic artifacts instead of trusting inj
   const before = treeHash(p.h.base), result = await verifyFleet(p.input);
   assert.equal(result.status, "incomplete"); assert.equal(result.evidenceMode, "native-replay");
   assert.equal(result.groups[0].error, "group-evidence-invalid"); assert.equal(treeHash(p.h.base), before);
+});
+
+test("native replay without the local bench install names it before reading any group", async (t) => {
+  const p = fixture(t); p.seedAll();
+  let checks = 0;
+  const before = treeHash(p.h.base), result = await verifyFleet(p.input, { compiler: () => { checks++; return false; } });
+  assert.deepEqual(result, { schema: "benchmark-group-fleet-inspection/v1", scope: "intrinsic-evidence", status: "incomplete",
+    evidenceMode: "native-replay", nativeReadiness: false, publishableBaseline: false, comparisonScope: "within-group-host-only",
+    error: localCompilerMissing, groups: [] });
+  assert.match(result.error, /npm --prefix bench ci/); assert.equal(checks, 1); assert.equal(treeHash(p.h.base), before);
+  // A synthetic inspection replays nothing locally, so it needs no compiler.
+  const synthetic = await p.verify({ compiler: () => { checks++; return false; } });
+  assert.equal(synthetic.status, "verified"); assert.equal(checks, 1);
 });
 
 test("cancelled pending inspection cannot qualify or expose late/private reports", async (t) => {

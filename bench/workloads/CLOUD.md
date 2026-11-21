@@ -157,8 +157,11 @@ hashes, complete selection, source/provenance and confirmed host deletion. Only
 the authoritative `verified` campaign can open it; valid failed or unsupported
 competitor outcomes are still retained under that contract. A synthetic inspector,
 bootstrap marker, status string or diagnostic receipt cannot substitute for native
-replay. The new approval binds the first evidence snapshot and every remaining
-child subject. Execution rechecks the snapshot under the fleet lock, consumes an
+replay. That replay reads this checkout's bench install: without it, the preview
+lists the first group as `replay-blocked`, missing
+`local bench install missing or differs: run npm --prefix bench ci`, returns 2
+and does not replay. The new approval binds the first evidence snapshot and every
+remaining child subject. Execution rechecks the snapshot under the fleet lock, consumes an
 exclusive remaining intent and rechecks before each child dispatch. Consumed or
 legacy launch intents cannot acquire this new admission authority.
 
@@ -195,6 +198,54 @@ Review the exact child collection action. Do not clear a lock or infer remote
 termination from a lost local connection. A pending result preserves the host;
 verify the terminal evidence, saved archive and confirmed deletion separately
 for each group before reporting the fleet as complete.
+
+**Collection after systemd forgets an exit.** For a closed supervised run, the
+acknowledged start, registered terminal monitor and native seal prove the run
+started and finished. An inactive, dead unit with no retained start time or
+exit type does not prove that by itself. The collector checks the expected unit
+and boot, no queued job, PID, populated service cgroup, running container or
+benchmark process, then downloads the existing exit archive without repacking.
+Only ordinary collection with positive systemd exit history may run `pack.sh`
+when the archive entry is definitely absent. Expired history and pinned r21
+recovery always require the original exit archive. Local native replay must
+agree with the monitor. The collector rehashes the archive, then checks the
+same inode and timestamps, idle host and unit in a fresh 60-second window.
+Account and ownership reads precede that final observation. Immediately before
+writing delete intent the collector also checks that the local archive is still
+the same unchanged file it hashed. A unit query's acknowledged exit is recorded
+even on cancellation; a nonzero exit stops collection, and a missing guardian
+acknowledgement retains uncertain custody.
+
+The controller persists delete intent before dispatch. Only positive proof
+that this very DELETE was never sent clears that intent for a separately
+approved collection; HTTP errors, timeouts after send, lost replies and
+crashes with an intent permit absence reconciliation only. There is no
+automatic retry. A live, never-started, unsupervised
+or invalid-monitor run cannot use this proof. Target failures remain results,
+not successful timings or a publishable baseline.
+
+**Pinned r21 only.** Use a separately reviewed, merged successor for one
+closed child of the original staged fleet at a time. Keep the original fleet
+in place. Keep a separate clean checkout at the measured revision
+`4225a2837e04795c11c1b45b3d6af72b7eb5ddc3` with its original root `npm ci`.
+The successor reads that revision's validator, dependency bytes and native
+inputs, not its own compiler. The successor allows 15 minutes per local replay.
+First independently verify the pre-existing exit archive's SHA-256.
+
+```sh
+node bench/workloads/cloud-production.mjs r21 --collect --state-dir ABSOLUTE_CHILD_ROOT --r21-measured-checkout ABSOLUTE_MEASURED_CHECKOUT --exit-archive-sha256 REVIEWED_ARCHIVE_DIGEST --print-approval
+```
+
+Review the preview against the exact group, host, unit, saved SSH host key,
+monitor registration, terminal campaign/seal, archive and staged intent. Only
+after independent authorization replace `--print-approval` with
+`--approve-reviewed-merged-ready REVIEWED_EXACT_HASH`. Approval is neither
+transferable across children nor reusable after state changes. An unadmitted
+child cannot be recovered. The first group's admission replay, remaining
+launches and fleet verification still use the **measured checkout**, whose
+replay deadline remains 60 seconds. Collection alone does not establish
+admission. A replay timeout or mismatch before delete intent retains the host;
+do not substitute a remote report, change the measured state or retry a DELETE.
 
 Failed worker results and fleet receipts retain only the existing allowlisted
 `providerDiagnostic` code and optional HTTP status or code-specific finite detail,
@@ -265,7 +316,8 @@ node bench/workloads/fleet-verify.mjs ROUND --fleet-root ABSOLUTE_ROOT --commit 
 Missing, ambiguous or locked child state stays visible and never triggers another
 launch. Both successful and failed native inspections must match the host's exact
 reserved selection before campaign cleanup. Batch receipts are diagnostics, not proof.
-The read-only fleet verifier replays every saved native archive, rechecks its
+The read-only fleet verifier needs the same local `npm --prefix bench ci`; without it,
+it reports that hint as its `error` before reading any group. It replays every saved native archive, rechecks its
 immutable hashes and confirmed cleanup, and requires unique host identities for
 the entire roster. Its intrinsic `verified` status is not publication approval:
 `publishableBaseline` remains false until the separate review/results workflow
@@ -737,6 +789,17 @@ so collect/delivery must use that same integrated source commit, not a newer
 collector checkout. This compatibility limit must be revisited with the agreed
 intrinsic API, not misreported as failed native evidence after allocation.
 
+Native replay runs on the operator's checkout, never on the host: run
+`npm --prefix bench ci` there after `npm ci`, before a launch or collection. The
+host's job installs its own bench package, which collection does not read.
+Detach also lists `bench/package.json` or `bench/package-lock.json` when either is
+absent at the measured commit. Detach and ordinary collection previews list
+`local bench install missing or differs: run npm --prefix bench ci` when this
+checkout's `bench/node_modules/typescript/lib/typescript.js` is absent or is not
+the pinned 6.0.3 bytes, so neither allocates a host nor collects one it cannot
+validate. The plan repeated under the operation lock checks that list again before
+any provider access. Evidence-derived validation failures stay generic.
+
 ```text
 node bench/workloads/cloud-production.mjs rN --detach --commit SHA --ssh-key ID --account-id SCOPED_ACCOUNT_ID --context NAMED_CONTEXT --state-dir ABSOLUTE_LOCAL_ROOT --print-approval
 node bench/workloads/cloud-production.mjs rN --detach --commit SHA --ssh-key ID --account-id SCOPED_ACCOUNT_ID --context NAMED_CONTEXT --state-dir ABSOLUTE_LOCAL_ROOT --approve-reviewed-merged-ready EXACT_ACTION_SHA256
@@ -790,10 +853,13 @@ reports one fixed reason: `timed out`, `process error`, `unsuccessful exit`, or
 environment values. Replay and evidence validation failures remain generic.
 The closure includes the observer's durable writer; transitive observer
 imports use those captured bytes under the same deny-unlisted loader.
-The fixed TypeScript bundle and the semver library are captured once and checked
-against their pinned package-file hashes. Semver's exact tooling declaration and
-npm archive integrity must also match the installed commit's manifest and lock.
-Its extensionless CommonJS imports resolve only within the captured library;
+The fixed TypeScript bundle (the bench package's 6.0.3, `bench/package.json`) and the
+semver library are captured once and checked against their pinned package-file hashes.
+Each one's exact tooling declaration, resolved archive URL and npm archive integrity
+must also match the installed commit's manifests and locks: the root's for semver,
+`bench/package.json` and `bench/package-lock.json` for TypeScript. The harness
+loads TypeScript only through `bench/typescript.mjs`, itself a captured closure member.
+Semver's extensionless CommonJS imports resolve only within the captured library;
 the CLI, preload entry and unlisted files cannot execute. This adds no package
 resolver or filesystem fallback and retains the existing source-count limit.
 The nested worker executes captured entry bytes and installs a
@@ -811,8 +877,12 @@ function name. `folder` is the extracted `campaign/` root containing
 the pinned base, so normal validation fails closed. Tests inject a synthetic
 report with the current API shape; no synthetic report is native proof.
 
-Each inspection has a fixed 60-second deadline, including snapshot setup, and a 25-millisecond cancellation
-check. The default worker is terminated on completion, timeout or cancellation;
+Each local inspection has a fixed 15-minute deadline including snapshot setup.
+On the r21 catalog archive from `4225a2837`, one Windows scan of 9,131 campaign
+entries took 62 seconds. A complete replay also checks the journal, group results,
+and final tree. This is a limit on reading evidence, not on a workload, a provider
+request, or how recently the host must have been observed for deletion.
+Cancellation is checked every 25 milliseconds. The default worker is terminated on completion, timeout or cancellation;
 no successful report is consumed before its exit is confirmed. Worker stdout,
 stderr and exceptions are not forwarded. Termination confirmation gets at most
 one additional second. If stopping is uncertain, the operation fails while
@@ -894,7 +964,10 @@ campaign module. Immediately before entry the job exclusively creates
 `/bench/campaign` with mode 0700, under its 0077 umask and the entry's UID. Any
 existing directory, file or symlink fails instead of being reused, chmodded or
 removed. The native `begin()` requires this existing physical private root; it
-creates the durable reservation inside it. Each uploaded job/packer/unit is
+creates the durable reservation inside it. A launch saves `benchPackage: true`
+in its reservation and its job runs `npm --prefix bench ci` (the binding parser's
+classic TypeScript) after the root install; a state saved without it regenerates
+the job bytes it uploaded. Each uploaded job/packer/unit is
 SHA256-checked on the owned host before installation/start. The packer requires terminal metadata, keeps an existing
 regular archive instead of overwriting it, and publishes a fresh private GNU tar
 archive with exclusive hard-link creation; a collision does not replace evidence.

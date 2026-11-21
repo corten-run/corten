@@ -112,6 +112,13 @@ test("failed-native absolute DELETE expiry crosses real worker IPC unchanged and
   });
   assert.equal((await good.run(deletion, 120000, false, expires)).status, 0);
   assert.equal(received, expires); assert.equal(good.state().calls.filter((v) => v.method === "DELETE").length, 1);
+  const unsent = harness(t, "success");
+  assert.deepEqual(await unsent.run(deletion, 120000, true, Date.now() - 1),
+    { status: 1, stdout: "", stderr: "", deleteNotDispatched: true });
+  assert.equal(unsent.state().requests, 0);
+  const foreign = harness(t, "success", undefined, undefined, message => message.sequence === 1
+    ? { ...message, result: { status: 1, stdout: "", stderr: "", deleteNotDispatched: true } } : message);
+  await assert.rejects(foreign.run(account, 120000, true), error => error.controlTreeUncertain === true);
   for (const value of [Date.now() - 1, Date.now() + 120000, null, "expired"]) {
     const bad = harness(t, "success", (message) => message.schema === "cloud-provider-action/v1"
       ? { ...message, deleteProofExpiresAtMs: value } : message);

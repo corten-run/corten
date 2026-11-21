@@ -7,6 +7,7 @@ import { roundName, validateFleet } from "./cloud-contract.mjs";
 import { campaignOutcome, controllerState, full } from "./cloud-options.mjs";
 import { digest, fileHash, physical, regular, resolveStateRoot, treeHash } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
+import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
@@ -99,12 +100,14 @@ export async function verifyCollectedGroup(fleet, group, { inspect, interrupted 
   return { evidenceMode: inspect ? "synthetic-inspection" : "native-replay", row, snapshot };
 }
 
-// inspect is an in-process synthetic TEST seam only. The CLI never accepts code,
+// inspect and compiler are in-process synthetic TEST seams only. The CLI never accepts code,
 // module paths, reports or commands from JSON. Default replay imports fixed code.
-export async function verifyFleet({ root, round, commit }, { inspect, interrupted = () => false } = {}) {
+export async function verifyFleet({ root, round, commit }, { inspect, interrupted = () => false, compiler = localCompiler } = {}) {
   const base = { schema: "benchmark-group-fleet-inspection/v1", scope: "intrinsic-evidence", status: "incomplete",
     evidenceMode: inspect ? "synthetic-inspection" : "native-replay", nativeReadiness: false,
     publishableBaseline: false, comparisonScope: "within-group-host-only" };
+  // Native replay needs this checkout's bench install; say so before reading any group.
+  if (inspect === undefined && !compiler()) return { ...base, error: localCompilerMissing, groups: [] };
   let fleet;
   try {
     full(commit, /[a-f0-9]{40}/, "fleet-source");

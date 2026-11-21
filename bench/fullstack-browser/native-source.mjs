@@ -14,8 +14,11 @@ import { sourceRoots as clientSourceRoots } from "../client-heavy/contract.mjs";
 import { exact, sha256 } from "./native-evidence.mjs";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
-const roots = ["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", "crates", "bench/fullstack-browser", "bench/fullstack", "bench/marketplace", "bench/workloads"];
+const roots = ["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", "bench/package.json", "bench/package-lock.json", "bench/typescript.mjs", "crates", "bench/fullstack-browser", "bench/fullstack", "bench/marketplace", "bench/workloads"];
 const tools = ["@playwright/test", "playwright", "playwright-core", "typescript"];
+// The binding parser's classic TypeScript compiler is the bench package's lock and install
+// (bench/package.json); the other tools are the root's.
+const home = (name) => name === "typescript" ? "bench" : "";
 function commitId(commit) {
   assert.match(commit, /^[a-f0-9]{40}$/);
   assert.equal(immutableGit(repo, ["rev-parse", "--verify", `${commit}^{commit}`]).toString().trim(), commit);
@@ -209,28 +212,29 @@ export function replayExecutableBytes(reader, receipt) {
 export function captureTools(store, { browserExecutable }) {
   assert.ok(["win32", "linux"].includes(process.platform), "native browser tool closure currently covers Windows/Linux only");
   assert.ok(typeof browserExecutable === "string" && !browserExecutable.replaceAll("\\", "/").startsWith("//"));
-  const lockBody = readRegular(join(repo, "package-lock.json")), lock = JSON.parse(lockBody);
+  const lockBody = readRegular(join(repo, "package-lock.json")), benchLockBody = readRegular(join(repo, "bench/package-lock.json"));
+  const locks = { "": JSON.parse(lockBody), bench: JSON.parse(benchLockBody) };
   const packages = tools.map((name) => {
-    const entry = lock.packages[`node_modules/${name}`]; assert.ok(entry);
+    const entry = locks[home(name)].packages[`node_modules/${name}`]; assert.ok(entry);
     const compressed = cached(entry), expected = packageFiles(compressed, entry.integrity);
     const manifest = JSON.parse(expected.find((f) => f.path === "package.json").body);
     assert.deepEqual([manifest.name, manifest.version], [name, entry.version]);
     for (const dependency of Object.keys(manifest.dependencies ?? {})) assert.ok(tools.includes(dependency), "unbundled runtime tool dependency");
-    const actual = installed(realpathSync(join(repo, "node_modules", name)));
+    const actual = installed(realpathSync(join(repo, home(name), "node_modules", name)));
     assert.deepEqual(actual.map((f) => [f.path, sha256(f.body)]), expected.map((f) => [f.path, sha256(f.body)]), "installed tool differs from locked package");
     return { name, version: entry.version, archive: store.blob(compressed), files: actual.map((f) => ({ path: f.path, body: store.blob(f.body) })) };
   });
-  return { schema: "native-browser-tools/v3", lock: store.blob(lockBody), node: captureExecutableBytes(store, realpathSync(process.execPath)),
+  return { schema: "native-browser-tools/v4", lock: store.blob(lockBody), benchLock: store.blob(benchLockBody), node: captureExecutableBytes(store, realpathSync(process.execPath)),
     browser: captureExecutableBytes(store, realpathSync(resolve(browserExecutable))), packages };
 }
 export function replayTools(reader, receipt) {
-  exact(receipt, ["schema", "lock", "node", "browser", "packages"]);
-  assert.equal(receipt.schema, "native-browser-tools/v3", "unsupported tool receipt; regenerate unpublished v2 development evidence");
-  const lock = JSON.parse(reader.read(receipt.lock));
+  assert.equal(receipt?.schema, "native-browser-tools/v4", "unsupported tool receipt; regenerate unpublished v2/v3 development evidence");
+  exact(receipt, ["schema", "lock", "benchLock", "node", "browser", "packages"]);
+  const locks = { "": JSON.parse(reader.read(receipt.lock)), bench: JSON.parse(reader.read(receipt.benchLock)) };
   assert.deepEqual(receipt.packages.map((p) => p.name), tools);
   for (const pkg of receipt.packages) {
     exact(pkg, ["name", "version", "archive", "files"]);
-    const entry = lock.packages[`node_modules/${pkg.name}`]; assert.equal(pkg.version, entry.version);
+    const entry = locks[home(pkg.name)].packages[`node_modules/${pkg.name}`]; assert.equal(pkg.version, entry.version);
     const expected = packageFiles(reader.read(pkg.archive), entry.integrity);
     const manifest = JSON.parse(expected.find((f) => f.path === "package.json").body);
     assert.deepEqual([manifest.name, manifest.version], [pkg.name, entry.version]);
@@ -238,5 +242,6 @@ export function replayTools(reader, receipt) {
     assert.deepEqual(pkg.files.map((f) => f.path), expected.map((f) => f.path));
     pkg.files.forEach((f, i) => { exact(f, ["path", "body"]); assert.ok(reader.read(f.body).equals(expected[i].body)); });
   }
-  return { node: replayExecutableBytes(reader, receipt.node), browser: replayExecutableBytes(reader, receipt.browser), lockSha256: receipt.lock.sha256 };
+  return { node: replayExecutableBytes(reader, receipt.node), browser: replayExecutableBytes(reader, receipt.browser),
+    lockSha256: receipt.lock.sha256, benchLockSha256: receipt.benchLock.sha256 };
 }

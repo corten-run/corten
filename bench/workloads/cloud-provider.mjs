@@ -6,7 +6,7 @@ import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { controlEnvironment } from "./cloud-transport.mjs";
-import { providerDiagnostic } from "./cloud-options.mjs";
+import { providerDiagnostic, unsentDelete } from "./cloud-options.mjs";
 import { providerCreateHost } from "./cloud-contract.mjs";
 
 const directory = dirname(fileURLToPath(import.meta.url));
@@ -85,6 +85,9 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
       const permittedDiagnostic = value?.status === 1 ? providerDiagnostic(value.providerDiagnostic) : undefined;
       if (slot.sequence === 0) {
         if (value !== "ready") { fail(); slot.reject(uncertain()); } else slot.resolve();
+      } else if (slot.fencedDelete && slot.allowFail && keys(value, ["status", "stdout", "stderr", "deleteNotDispatched"])
+        && value.status === 1 && value.stdout === "" && value.stderr === "" && value.deleteNotDispatched === true) {
+        slot.resolve(value);
       } else if (!(keys(value, ["status", "stdout", "stderr"])
         || permittedDiagnostic && keys(value, ["status", "stdout", "stderr", "providerDiagnostic"]) && value.stdout === "") || ![0, 1].includes(value.status)
         || value.status === 1 && (!slot.allowFail || slot.get && !(permittedDiagnostic?.code === "get-http" && permittedDiagnostic.httpStatus === 404))
@@ -131,7 +134,11 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
     return closing;
   }
   const run = async (args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs) => {
-    if (closed || failed || interrupted()) throw uncertain();
+    if (closed || failed) throw uncertain();
+    if (interrupted()) {
+      if (allowFail && args?.[2] === "delete" && deleteProofExpiresAtMs !== undefined && !pending) return unsentDelete;
+      throw uncertain();
+    }
     assert.ok(!pending, "provider action already pending");
     assert.ok(Array.isArray(args) && args.length <= 20 && args.every((value) => typeof value === "string" && value.length <= 512 && !value.includes("\0")));
     assert.ok(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 900000 && typeof allowFail === "boolean");
@@ -143,7 +150,8 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
       const account = JSON.stringify(args.slice(0, -2)) === JSON.stringify(["account", "get", "--output", "json"])
         && args.at(-2) === "--context" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(args.at(-1));
       const started = Date.now();
-      const result = new Promise((resolve, reject) => { pending = { sequence: id, resolve, reject, allowFail, get: args[2] === "get", account, last: started, deadline: started + timeout }; });
+      const result = new Promise((resolve, reject) => { pending = { sequence: id, resolve, reject, allowFail, get: args[2] === "get", account,
+        fencedDelete: args[2] === "delete" && deleteProofExpiresAtMs !== undefined, last: started, deadline: started + timeout }; });
       child.send({ schema: "cloud-provider-action/v1", sequence: id, args, timeout, allowFail,
         ...(deleteProofExpiresAtMs === undefined ? {} : { deleteProofExpiresAtMs }) }, (error) => { if (error) fail(); });
       return await bounded(result, timeout + 1000);

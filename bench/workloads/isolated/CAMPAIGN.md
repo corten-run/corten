@@ -192,7 +192,7 @@ cpusets or memory budgets and never moves the wrapper or an unrelated process. I
 closed when delegation/accounting is absent. This is not an approved new finite client
 budget or mandatory isolated CPU partition.
 
-The fixed cloud bootstrap prepares Node 26, both root and bench/browser npm lockfile
+The fixed cloud bootstrap prepares Node 26, the root, bench and bench/browser npm lockfile
 installations, Playwright Chromium, the native runner's digest-pinned Node tool image,
 and the ordinary Rust generator toolchain. Native commands keep a sanitized fixed PATH
 including /root/.cargo/bin; inherited PATH, NODE_OPTIONS and credentials are not forwarded.

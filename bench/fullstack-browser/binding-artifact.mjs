@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import ts from "typescript";
+import ts from "../typescript.mjs";
 
 export const bindingArtifactSchema = "native-binding-code/v1";
 export const bindingHash = (value) => createHash("sha256").update(value).digest("hex");

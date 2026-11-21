@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { accountId, commit, context, harness, syntheticDelivery, syntheticProviderRequest } from "./cloud-fixtures.mjs";
 import { controllerPaths, nativePaths, parseProductionArgs, productionMain } from "./cloud-production.mjs";
+import { benchPackagePaths } from "./droplet.mjs";
+import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { createProviderEngine } from "./cloud-engine-test-fixture.mjs";
 import { fleetPlan } from "./cloud-contract.mjs";
 import { groupNames } from "./registry.mjs";
@@ -26,7 +28,7 @@ function productionHarness(t, flags = {}) {
         const path = argv[1].slice(41);
         return { status: 0, stdout: flags.wrongSource ? "wrong" : readFileSync(resolve(path), "utf8").replaceAll("\r\n", "\n") };
       }
-      if (argv[0] === "cat-file" && flags.missingNative) return { status: 1, stderr: "private" };
+      if (argv[0] === "cat-file" && (flags.missingNative || flags.missingPaths?.includes(argv[2].slice(41)))) return { status: 1, stderr: "private" };
       if (argv[0] === "merge-base" && flags.unmerged) return { status: 1, stderr: "private" };
       if (argv[0] === "merge-base" && flags.staleTracking && argv.at(-1) === "origin/main") return { status: 1, stderr: "private" };
       if (argv[0] === "fetch" && flags.fetchError) return { status: 1, stderr: "private" };
@@ -536,6 +538,32 @@ test("production entry forwards source-bound stream registration and settles asy
   assert.ok(existsSync(join(p.h.local, "monitor-invalid.json"))); assert.equal(p.h.deletes, 0);
 });
 
+for (const acknowledged of [true, false]) test("cancelled unit query records only an acknowledged exit: " + acknowledged, async t => {
+  const flags = { active: true }, p = productionHarness(t, flags);
+  await p.h.launch().launch(); flags.active = false;
+  const closed = JSON.parse(readFileSync(join(p.h.local, "monitor-local-closed.json")));
+  t.mock.timers.enable({ apis: ["Date"], now: closed.recoverAfterMs + 1 });
+  const spawn = p.deps.spawn;
+  p.deps.spawn = (binary, argv, options) => {
+    const result = spawn(binary, argv, options);
+    if (binary === "ssh" && options.input?.includes("--property=ControlPID")) {
+      assert.equal(result.status, 0); flags.cancelled = true;
+      if (!acknowledged) return { ...result, stderr: "" };
+    }
+    return result;
+  };
+  await assert.rejects(productionMain(await p.approve("--collect"), p.deps),
+    e => acknowledged ? /controller cancelled/.test(e.message) : e.controlTreeUncertain === true);
+  const row = p.h.saved().control.ledger.at(-1);
+  assert.ok(flags.cancelled); assert.equal(p.h.deletes, 0);
+  assert.equal(row.localTerminal, acknowledged); assert.equal(row.code, acknowledged ? 0 : undefined);
+  assert.equal(existsSync(join(p.h.local, "operation.lock")), !acknowledged);
+  if (acknowledged) {
+    p.deps.spawn = spawn; flags.cancelled = false;
+    assert.equal(await productionMain(await p.approve("--collect"), p.deps), 1); assert.equal(p.h.deletes, 1);
+  }
+});
+
 for (const phase of ["pending", "live"]) test("wire registration survives launch cancellation while " + phase, async (t) => {
   const p = productionHarness(t, { active: true }), local = p.h.local, registration = join(local, "monitor-registration.json");
   let atCancel;
@@ -605,11 +633,54 @@ test("production failed bootstrap seal settles its already-ready stream and reta
 test("preview is local/read-only, missing isolated integration is explicit and cannot allocate", async (t) => {
   const p = productionHarness(t, { missingNative: true });
   assert.equal(await productionMain([...p.args("--detach"), "--print-approval"], p.deps), 2);
-  assert.deepEqual(p.stdout[0].missing, nativePaths); assert.equal(p.stdout[0].fullGroupQualified, false);
+  assert.deepEqual(p.stdout[0].missing, [...nativePaths, ...benchPackagePaths]); assert.equal(p.stdout[0].fullGroupQualified, false);
   assert.ok(p.calls.every(([b, a]) => b === "git" && a[0] !== "fetch")); assert.ok(!existsSync(p.h.local));
   await assert.rejects(productionMain(await p.approve("--detach"), p.deps), /integration missing/); assert.equal(p.h.creates, 0);
 });
 
+test("detach preview requires both committed bench package files before any reservation", async (t) => {
+  for (const absent of [benchPackagePaths, [benchPackagePaths[0]], [benchPackagePaths[1]]]) {
+    const p = productionHarness(t, { missingPaths: absent });
+    assert.equal(await productionMain([...p.args("--detach"), "--print-approval"], p.deps), 2);
+    assert.deepEqual(p.stdout[0].missing, absent);
+    await assert.rejects(productionMain(await p.approve("--detach"), p.deps), /integration missing/);
+    assert.ok(p.calls.every(([b, a]) => b === "git" && a[0] !== "fetch")); assert.equal(p.h.creates, 0); assert.ok(!existsSync(p.h.local));
+  }
+  // Collection keeps its saved reservation; only a new launch installs the bench package.
+  const p = productionHarness(t, { missingPaths: benchPackagePaths }); p.h.seed();
+  assert.equal(await productionMain([...p.args(), "--print-approval"], p.deps), 3); assert.deepEqual(p.stdout[0].missing, []);
+});
+
+test("detach and native collection previews name a missing local bench install before allocation or collection", async (t) => {
+  const launch = productionHarness(t); launch.deps.compiler = () => false;
+  assert.equal(await productionMain([...launch.args("--detach"), "--print-approval"], launch.deps), 2);
+  assert.deepEqual(launch.stdout[0].missing, [localCompilerMissing]); assert.match(localCompilerMissing, /run npm --prefix bench ci/);
+  await assert.rejects(productionMain(await launch.approve("--detach"), launch.deps), /integration missing/);
+  assert.ok(launch.calls.every(([b, a]) => b === "git" && a[0] !== "fetch")); assert.equal(launch.h.creates, 0); assert.ok(!existsSync(launch.h.local));
+  const collect = productionHarness(t); collect.h.seed(); collect.deps.compiler = () => false;
+  const saved = readFileSync(collect.h.statePath);
+  assert.equal(await productionMain([...collect.args(), "--print-approval"], collect.deps), 2);
+  assert.deepEqual(collect.stdout[0].missing, [localCompilerMissing]);
+  await assert.rejects(productionMain(await collect.approve(), collect.deps), /integration missing/);
+  assert.ok(collect.calls.every(([b, a]) => b === "git" && a[0] !== "fetch")); assert.ok(readFileSync(collect.h.statePath).equals(saved));
+  assert.equal(collect.h.deletes, 0);
+  // Unused-host retirement replays no native evidence, so it does not need the install.
+  const unused = unusedBootstrapAttempt(t); unused.deps.compiler = () => false;
+  await unused.approve(); assert.deepEqual(unused.stdout.at(-1).missing, []);
+});
+
+// The approval hash excludes missing inputs, so the locked plan must check them itself.
+test("a bench install lost after the source recheck stops launch and collection at the locked plan, before provider access", async (t) => {
+  for (const mode of ["--detach", undefined]) {
+    const p = productionHarness(t); if (!mode) p.h.seed();
+    const approved = await p.approve(mode), calls = p.calls.length;
+    let checks = 0; p.deps.compiler = () => ++checks < 3; // Approved plan and source recheck ready, locked plan missing.
+    await assert.rejects(productionMain(approved, p.deps), /integration missing/);
+    assert.equal(checks, 3, "the third check is the locked plan's");
+    assert.ok(p.calls.slice(calls).every(([binary]) => binary === "git"), "no provider or host access");
+    assert.equal(p.h.creates, 0); assert.equal(p.h.deletes, 0);
+  }
+});
 test("state aliases with resolved SSH expansion characters refuse preview and approved launch before provider access", async (t) => {
   for (const approved of [false, true]) {
     for (const nested of [false, true]) {
@@ -839,13 +910,18 @@ test("retargeting an ordinary alias invalidates the approved physical root befor
 });
 
 test("production grammar permits authorization only, never arbitrary settings/adapters", () => {
-  assert.equal(controllerPaths.length, 32);
+  assert.equal(controllerPaths.length, 33);
+  assert.ok(controllerPaths.includes("bench/workloads/cloud-sealed-collection.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-cancellation.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-retirement.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-validation-snapshot.mjs"));
   for (const path of ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs", "cloud-control-stream.mjs", "isolated/control-stream-source.mjs"])
     assert.ok(controllerPaths.includes(`bench/workloads/${path}`));
   const args = ["r21", "--collect", "--state-dir", resolve("outside")];
+  const pin = ["--r21-measured-checkout", resolve("measured")], sha = ["--exit-archive-sha256", "a".repeat(64)];
+  for (const suffix of [pin, sha, [...pin, ...sha, "--unused-bootstrap-known-hosts", resolve("verified")]])
+    assert.throws(() => parseProductionArgs([...args, ...suffix]));
+  assert.equal(parseProductionArgs([...args, ...pin, ...sha]).options.exitArchiveSha256, sha[1]);
   for (const suffix of [["--adapter", "evil"], ["--duration", "1"], ["--print-approval", "--print-approval"], ["--approve-reviewed-merged-ready", "not-a-hash"]])
     assert.throws(() => parseProductionArgs([...args, ...suffix]));
 });

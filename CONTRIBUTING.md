@@ -48,20 +48,20 @@ the framework itself.
 
 ## Tooling
 
-Corten apps require TypeScript 6.0 or later. Framework CI pins TypeScript 7.0.2, npm's
-`latest` verified on 2026-11-14, as the exact `typescript7` npm alias. Root `typescript`
-5.9.3 remains only for benchmark harness consumers of the classic compiler API.
-`npm run check:types` invokes the alias directly, not npm's colliding `tsc` bin.
-CI also type-checks `jsconfig.json` with TypeScript 6.0.3 installed outside the repository.
-`corten check` selects the alias only from the local Corten checkout supplying its runtime;
-standalone registry apps use their own local compiler or PATH, with the minimum checked.
-The parser checks use the alias's unstable native API
-([Choice 5](docs/design.md#choice-handlers-checked-where-called)).
+Corten apps require TypeScript 6.0 or later. Framework CI pins the root `typescript` to 7.0.2,
+npm's `latest` verified on 2026-11-20, and also type-checks `jsconfig.json` with TypeScript
+6.0.3 installed outside the repository. `corten check` finds the compiler as it does for any
+app: `node_modules/.bin/tsc`, then the PATH, with the minimum checked. The parser checks use
+7.0.2's unstable native API ([Choice 5](docs/design.md#choice-handlers-checked-where-called)).
+The benchmark harness's classic compiler API consumers (`bench/fullstack-browser` and
+`bench/workloads`) use TypeScript 6.0.3 from `bench/package.json`, loaded only through
+`bench/typescript.mjs`: run `npm --prefix bench ci` before `npm run check:workloads`,
+`check:catalog`, `check:json-api` and the `check:groups` suites, which otherwise stop at import
+naming that command.
 
 After `npm ci` and the benchmark's normal build has generated `out/_gen/view/views.d.ts`,
 type-check the browser benchmark's view apps with the repository's pinned
-compiler: `node node_modules/typescript7/bin/tsc -p bench/browser/jsconfig.json`.
-The bare `npx tsc` command may select the benchmark harness's classic 5.9.3 compiler instead.
+compiler: `npx tsc -p bench/browser/jsconfig.json`.
 
 - Rust (stable; the supported floor is 1.89), with the `clippy`, `rustfmt` and `llvm-tools` components (`rustup component add llvm-tools`: the `corten` command's tests run a profile-guided build, which merges its profile with the toolchain's `llvm-profdata`). On Windows the tests run in Docker, because the host cannot link `windows-sys`.
 - Node (use the framework CI version in [`.node-version`](.node-version)), for the runtime's
@@ -101,7 +101,8 @@ The native Linux job scopes separately to benchmark, scripts, tooling and workfl
 A push with no usable base commit runs all Evidence jobs.
 Evidence is not a publication gate; Release calls CI only.
 They need Node 24 or later, the installed pinned Playwright Chromium, current Git,
-the full repository history and the integrity-checked npm cache used by `npm ci`.
+the full repository history and the integrity-checked npm cache used by `npm ci` and
+`npm --prefix bench ci`.
 The portable jobs use the existing Git-capable Playwright image and serial test files;
 they do not mount a Docker socket or qualify native framework images. A separate
 required native Linux job runs disposable kernel fixtures on the runner host, not

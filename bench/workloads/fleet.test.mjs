@@ -10,11 +10,12 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, syntheticInspection } from "./cloud-fixtures.mjs";
-import { fleetMain, fleetWorkerPaths, parseFleetArgs, productionChild, watchSupervisedHost } from "./fleet.mjs";
+import { fleetMain, fleetWorkerPaths, parseFleetArgs, productionChild, stagedChildIntent, watchSupervisedHost } from "./fleet.mjs";
 import { fleetPlan, reservation, savedLoadLayout, tags } from "./cloud-contract.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { groupNames } from "./registry.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
@@ -56,7 +57,9 @@ function fixture(t, flags = {}) {
       const reg = { ...registration, binding, id: state.token.repeat(2) };
       state.control = { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: ["bootstrap"],
         monitor: { schema: "benchmark-supervised-control/v1", id: reg.id, phase: "closed", registrationSha256: digest(JSON.stringify(reg)) } };
-      state.control.ledger.push({ request: controlRequest(state, "ssh", [":"], 60000, "bootstrap", []), localTerminal: true, code: 0 });
+      const start = controlRequest(state, "ssh", [`systemctl start ${state.unit}`], 60000, "bootstrap");
+      state.control.ledger.push({ request: start, localTerminal: true, code: 0 });
+      state.control.ledger.push({ request: controlRequest(state, "ssh", [":"], 60000, "bootstrap", [start.invocation]), localTerminal: true, code: 0 });
       writeFileSync(join(local, "monitor-registration.json"), JSON.stringify(reg));
       const closedAtMs = Date.now(), terminal = { id: reg.id, binding, nativeTerminal: true, localClosed: true, remoteDrained: false,
         campaign: `r21-${state.token}`, sealSha256: digest("synthetic native seal") };
@@ -318,9 +321,12 @@ test("a finished child can be collected with its own approval while a sibling ke
     const result = (stdout) => ({ status: 0, stdout, stderr: "" });
     const opts = { repo: p.h.repo, write() {}, inspect: async () => report, spawn(binary, args, options) {
       if (binary === "git") return p.deps.spawn(binary, args);
-      assert.equal(binary, "ssh"); assert.ok(options.input.includes("systemctl show " + state.unit));
+      assert.equal(binary, "ssh");
+      const idle = options.input.includes("CORTEN_IDLE");
+      assert.ok(idle || options.input.includes("systemctl show " + state.unit));
       const id = saved().control.ledger.at(-1).request.invocation.id;
-      return { ...result(`Id=${state.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${state.unit}\nRestart=no\nActiveState=inactive\nMainPID=0\nExecMainCode=1\nExecMainStartTimestamp=synthetic\n`),
+      return { ...result(idle && !options.input.includes("systemctl show") ? `${state.archiveSha256}  /bench/results.tgz\n${digest("archive stat")}  -\n`
+        : `Id=${state.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${state.unit}\nRestart=no\nActiveState=inactive\nMainPID=0\nControlPID=0\nJob=\nSubState=dead\nExecMainCode=0\nExecMainStartTimestamp=\n`),
         stderr: `CORTEN_CONTROL ${id} ${"d".repeat(64)}\nCORTEN_RESULT ${id} 0\n` };
     }, providerFactory: () => Object.assign(async (args, timeout) => {
       if (args[2] !== "delete") return p.h.run("doctl", args, timeout);
@@ -565,6 +571,22 @@ test("synthetic inspection cannot be selected as admission's native authority", 
   assert.equal(p.children.length, 0);
 });
 
+test("remaining admission names a missing bench install before native replay of the first group", async (t) => {
+  const p = fixture(t); await p.remaining();
+  const verify = p.deps.verify; let replays = 0;
+  p.deps.verify = (...args) => { replays++; return verify(...args); };
+  p.deps.compiler = () => false;
+  assert.equal(await fleetMain([...p.args("--admit-remaining"), "--print-approval"], p.deps), 2);
+  const { subject, approvalSha256 } = p.output.at(-1);
+  assert.deepEqual(subject.jobs[0], { group: groupNames[0], outcome: "replay-blocked", missing: [localCompilerMissing] });
+  assert.equal(subject.firstGroup, undefined); assert.equal(replays, 0, "replay is not entered");
+  await assert.rejects(fleetMain([...p.args("--admit-remaining"), "--approve-reviewed-merged-ready", approvalSha256], p.deps), /fleet-integration-missing/);
+  assert.equal(replays, 0); assert.equal(p.children.length, 0); assert.ok(!existsSync(join(p.h.base, "remaining-intent.json")));
+  // Control: the same preview with the install present replays the first group.
+  p.deps.compiler = () => true;
+  assert.equal(await fleetMain([...p.args("--admit-remaining"), "--print-approval"], p.deps), 3);
+  assert.equal(replays, 1); assert.equal(p.output.at(-1).subject.jobs[0].outcome, "verified");
+});
 test("remaining intent is consumed before cancellation or uncertain child admission; it is never replayed", async (t) => {
   for (const uncertain of [false, true]) {
     const p = fixture(t); const approved = await p.remaining();
@@ -580,6 +602,22 @@ test("remaining intent is consumed before cancellation or uncertain child admiss
     assert.equal(p.children.length, 1);
     assert.equal(existsSync(join(p.h.base, ".fleet-operation.lock")), uncertain);
   }
+});
+
+test("single-child recovery requires its original staged root, roster and consumed child intent", async (t) => {
+  const p = fixture(t), approved = await p.remaining(), [first, second] = groupNames;
+  const intent = (group, saved) => stagedChildIntent(join(p.h.base, group), saved);
+  const saved = { round: "r21", group: second, commit, fleet: p.manifest() };
+  const launch = intent(first, p.first.state).launch;
+  assert.throws(() => intent(second, saved)); // Not admitted yet.
+  assert.throws(() => intent(second, p.first.state));
+  assert.throws(() => intent(first, { ...p.first.state, fleet: {} }));
+  await fleetMain(approved, p.deps);
+  const path = join(p.h.base, "remaining-intent.json"), bytes = readFileSync(path);
+  assert.deepEqual(intent(second, saved), { launch, remaining: digest(bytes) });
+  const bad = JSON.parse(bytes); bad.subject.jobs[1].options = bad.subject.jobs[2].options;
+  bad.approvalSha256 = digest(JSON.stringify(bad.subject)); writeFileSync(path, JSON.stringify(bad));
+  assert.throws(() => intent(second, saved));
 });
 
 test("first evidence changed after locked replay stops subsequent remaining children without reopening intent", async (t) => {

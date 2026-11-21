@@ -128,6 +128,7 @@ export const validationPaths = Object.freeze([
   "bench/mixed-production/stats.mjs",
   "bench/mixed-production/upstream-ledger.mjs",
   "bench/mixed-production/verify.mjs",
+  "bench/typescript.mjs",
   "bench/workloads/browser.mjs",
   "bench/workloads/client.mjs",
   "bench/workloads/cloud-audit.mjs",
@@ -176,9 +177,12 @@ export const validationPaths = Object.freeze([
   "bench/workloads/run.mjs",
   "scripts/steady.mjs"
 ]);
-export const typescriptPath = "node_modules/typescript/lib/typescript.js";
-// typescript@5.9.3, verified against the package-lock SHA-512 npm archive.
-export const typescriptSha256 = "3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675";
+// The bench package's classic compiler (bench/package.json), not the root's TypeScript.
+export const typescriptPath = "bench/node_modules/typescript/lib/typescript.js";
+// typescript@6.0.3, verified against bench/package-lock.json's SHA-512 npm archive.
+export const typescriptSha256 = "569177652966bd528c319171c7dd22860dbf72bde116cbc4f644f1d02bb12e39";
+// The measured commit's bench manifest and lock must pin exactly that archive.
+export const typescriptIntegrity = "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==";
 // semver@7.8.6 library closure, checked against the integrity-pinned npm archive.
 // The CLI and preload entry are not validator dependencies.
 export const semverIntegrity = "sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw==";
@@ -257,6 +261,17 @@ function head(root, readGit = spawnSync) {
 // Only this import exposes the fixed HEAD diagnostic; captureValidation masks it.
 const installedCommit = head(checkout);
 
+// Root metadata pins semver; the bench package's pins the classic compiler.
+const packageMetadata = ["package.json", "package-lock.json", "bench/package.json", "bench/package-lock.json"];
+function pinnedPackage(manifest, lock, name, version, integrity) {
+  assert.equal(manifest.devDependencies[name], version);
+  assert.equal(lock.packages[""].devDependencies[name], version);
+  const pinned = lock.packages[`node_modules/${name}`];
+  assert.equal(pinned.version, version); assert.equal(pinned.integrity, integrity);
+  assert.equal(pinned.resolved, `https://registry.npmjs.org/${name}/-/${name}-${version}.tgz`);
+  assert.equal(Object.keys(pinned.dependencies ?? {}).length, 0);
+}
+
 function dependency(root, path, sha256, limit) {
   const fd = openSync(realpathSync(join(root, path)), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   let bytes;
@@ -269,6 +284,15 @@ function dependency(root, path, sha256, limit) {
   return { path, source: text(bytes), sha256 };
 }
 
+// Collection and fleet verification replay with this checkout's own bench compiler,
+// which only `npm --prefix bench ci` installs here; a host's install is not the
+// operator's. Preflights report this fixed hint, never an evidence-derived detail.
+export const localCompilerMissing = "local bench install missing or differs: run npm --prefix bench ci";
+export function localCompiler(root = checkout) {
+  try { dependency(realpathSync(root), typescriptPath, typescriptSha256, 16 * 1024 * 1024); return true; }
+  catch { return false; }
+}
+
 // Reading immutable Git objects, not checkout files, binds the entire executable
 // closure to the already-approved measured commit, including nested worker entry.
 // One process, bounded time/output, no fetch, filters, hooks or working-tree writes.
@@ -278,7 +302,7 @@ export function captureValidation(commit, { root = checkout, readGit = spawnSync
     assert.match(commit, /^[a-f0-9]{40}$/);
     root = realpathSync(root);
     assert.equal(commit, root === checkout ? installedCommit : head(root, readGit));
-    const paths = [...validationPaths, "package.json", "package-lock.json"];
+    const paths = [...validationPaths, ...packageMetadata];
     const result = readGit("git", ["--no-replace-objects", "-C", root, "cat-file", "--batch"], {
       input: paths.map((path) => `${commit}:${path}\n`).join(""),
       encoding: null, timeout: 5000, maxBuffer: 32 * 1024 * 1024,
@@ -301,16 +325,12 @@ export function captureValidation(commit, { root = checkout, readGit = spawnSync
       return { path, source: text(bytes), sha256: hash(bytes) };
     });
     assert.equal(offset, result.stdout.length);
-    const manifest = JSON.parse(objects.at(-2).source), lock = JSON.parse(objects.at(-1).source);
-    assert.equal(manifest.devDependencies.semver, "7.8.6");
-    assert.equal(lock.packages[""].devDependencies.semver, "7.8.6");
-    const pinned = lock.packages["node_modules/semver"];
-    assert.equal(pinned.version, "7.8.6"); assert.equal(pinned.integrity, semverIntegrity);
-    assert.equal(pinned.resolved, "https://registry.npmjs.org/semver/-/semver-7.8.6.tgz");
-    assert.equal(Object.keys(pinned.dependencies ?? {}).length, 0);
+    const [manifest, lock, benchManifest, benchLock] = objects.slice(-packageMetadata.length).map((row) => JSON.parse(row.source));
+    pinnedPackage(manifest, lock, "semver", "7.8.6", semverIntegrity);
+    pinnedPackage(benchManifest, benchLock, "typescript", "6.0.3", typescriptIntegrity);
     // Metadata comes from the measured commit; executable dependencies come
     // from pinned same-read bytes, never a package resolver or mutable manifest.
-    const sources = objects.slice(0, -2);
+    const sources = objects.slice(0, -packageMetadata.length);
     sources.push(dependency(root, typescriptPath, typescriptSha256, 16 * 1024 * 1024));
     for (const [path, sha256] of Object.entries(semverSources)) sources.push(dependency(root, path, sha256, 64 * 1024));
     return { root: pathToFileURL(root + "/").href, sources };

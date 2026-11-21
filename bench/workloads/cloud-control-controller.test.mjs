@@ -1,9 +1,9 @@
 // Real controller with fake argv transport/provider responses. No host operations.
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { harness } from "./cloud-fixtures.mjs";
+import { archive, harness, metadata } from "./cloud-fixtures.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 import { reservation, validateState } from "./cloud-contract.mjs";
@@ -140,6 +140,125 @@ test("terminal monitor and archived native campaign must agree before deletion",
     await assert.rejects(h.task().collect()); assert.equal(h.deletes, 0); assert.equal(h.saved().deletionIntentAt, undefined);
     assert.ok(h.saved().archiveSha256 && h.saved().evidenceSha256);
   }
+});
+
+test("settled unit-query failure records the exit and permits a fresh collection; missing acknowledgement does not", async t => {
+  for (const lost of [false, true]) {
+    const h = harness(t, { active: true }); await h.launch().launch(); h.flags.active = false;
+    const path = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(path));
+    closed.closedAtMs -= 31000; closed.recoverAfterMs -= 31000; writeFileSync(path, JSON.stringify(closed));
+    await assert.rejects(h.task({ run(...args) {
+      if (args[0] !== "ssh") return h.run(...args);
+      assert.match(args[1].at(-1), /systemctl show/);
+      if (lost) throw Object.assign(new Error("guardian result missing"), { controlTreeUncertain: true });
+      return { status: 9, stdout: "", stderr: "" };
+    } }).collect());
+    const row = h.saved().control.ledger.at(-1);
+    assert.equal(row.localTerminal, !lost); assert.equal(row.code, lost ? undefined : 9); assert.equal(h.deletes, 0);
+    if (lost) assert.ok(existsSync(join(h.local, "operation.lock")));
+    else { assert.equal(await h.task().collect(), 1); assert.equal(h.deletes, 1); }
+  }
+});
+
+test("ordinary collection can reconstruct an absent archive only with retained exit history", async t => {
+  for (const expired of [false, true]) {
+    const h = harness(t, { active: true }); await h.launch().launch();
+    const path = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(path));
+    closed.closedAtMs -= 31000; closed.recoverAfterMs -= 31000; writeFileSync(path, JSON.stringify(closed));
+    Object.assign(h.flags, { active: false, expired });
+    let missing = true, packed = 0;
+    const task = h.task({ run(...args) {
+      if (args[0] === "ssh" && args[1].at(-1).includes("CORTEN_IDLE") && missing) {
+        if (!args[1].at(-1).includes("timeout 600 /bin/bash /bench/pack.sh")) return { status: 1, stdout: "", stderr: "" };
+        missing = false; packed++;
+      }
+      return h.run(...args);
+    } });
+    if (expired) await assert.rejects(task.collect(), /archive or idle-host proof unavailable/);
+    else assert.equal(await task.collect(), 1);
+    assert.equal(packed, expired ? 0 : 1); assert.equal(h.deletes, packed);
+  }
+});
+
+test("expired systemd history collects the sealed exit archive once, even after a lost DELETE acknowledgement", async (t) => {
+  const h = harness(t, { active: true, reportStatus: "verified" }); await h.launch().launch();
+  const path = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(path));
+  closed.closedAtMs -= 31000; closed.recoverAfterMs -= 31000; writeFileSync(path, JSON.stringify(closed));
+  Object.assign(h.flags, { active: false, expired: true, deleteLost: true, packError: true });
+  h.setArchive(archive([...metadata().filter(e => e.name !== "exit-code"), { name: "exit-code", body: "0\n" }, { name: "campaign/" }]));
+  const report = h.report(), target = report.groups.find(g => g.group === "catalog-page").appOutcomes.find(a => a.app === "fastapi");
+  Object.assign(target, { outcome: "failed", comparisonEligible: false });
+  const task = () => h.task({ inspect: async () => report });
+  const before = h.calls.length;
+  await assert.rejects(task().collect(), /acknowledgement lost/);
+  assert.equal(h.deletes, 1); assert.ok(h.saved().deletionIntentAt && !h.saved().destroyedAt);
+  assert.equal(await task().collect(), 0); assert.equal(h.deletes, 1); assert.ok(h.saved().destroyedAt);
+  assert.equal(h.saved().evidenceOutcome, "validated"); assert.equal(h.saved().fullGroupQualified, false);
+  assert.deepEqual(target, { app: "fastapi", outcome: "failed", comparisonEligible: false });
+  assert.ok(!h.calls.slice(before).some(([bin, ...args]) => bin === "ssh" && args.at(-1).includes("pack.sh")));
+});
+
+test("expired history without a sealed start, or with a PID, pending job, foreign unit or host work cannot delete", async (t) => {
+  const h = harness(t, { active: true }); await h.launch().launch();
+  const path = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(path));
+  closed.closedAtMs -= 31000; closed.recoverAfterMs -= 31000; writeFileSync(path, JSON.stringify(closed));
+  Object.assign(h.flags, { active: false, expired: true });
+  for (const flags of [{ livePid: true }, { controlPid: 17 }, { job: "42" }, { wrongUnit: true }, { busyHost: true }]) {
+    Object.assign(h.flags, flags);
+    await assert.rejects(h.task().collect());
+    assert.equal(h.deletes, 0); assert.equal(h.saved().archiveSha256, undefined);
+    for (const key of Object.keys(flags)) delete h.flags[key];
+  }
+  h.change(s => { s.control.ledger.find(r => r.request.invocation.requestSha256 === digest(`set -euo pipefail\nsystemctl start ${s.unit}\n`)).code = 1; });
+  await assert.rejects(h.task().collect(), /acknowledged unit start/);
+  assert.equal(h.deletes, 0);
+});
+
+for (const change of ["edit", "replace"]) test("local archive " + change + " during the final remote hash cannot spend delete intent", async t => {
+  const h = harness(t, { active: true }); await h.launch().launch();
+  const closed = JSON.parse(readFileSync(join(h.local, "monitor-local-closed.json")));
+  t.mock.timers.enable({ apis: ["Date"], now: closed.recoverAfterMs + 1 });
+  Object.assign(h.flags, { active: false, expired: true });
+  const path = join(h.local, "results.tgz");
+  let changed = false;
+  await assert.rejects(h.task({ run(...args) {
+    if (args[0] === "ssh" && args[1].at(-1).includes("sha256sum <&3") && h.saved().collectedAt) {
+      const bytes = readFileSync(path);
+      if (change === "edit") { bytes[0] ^= 1; writeFileSync(path, bytes); }
+      else { renameSync(path, path + ".original"); writeFileSync(path, bytes); }
+      changed = true;
+    }
+    return h.run(...args);
+  } }).collect(), /file changed while reading/);
+  assert.ok(changed); assert.equal(h.deletes, 0); assert.equal(h.saved().deletionIntentAt, undefined);
+});
+
+test("slow archive hash and account reads precede the short fence; only an unsent DELETE is retryable", async t => {
+  const h = harness(t, { active: true }); await h.launch().launch();
+  const path = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(path));
+  closed.closedAtMs -= 31000; closed.recoverAfterMs -= 31000; writeFileSync(path, JSON.stringify(closed));
+  Object.assign(h.flags, { active: false, expired: true });
+  let clock = Date.now(), hashes = 0, attempts = 0, delayFence = true;
+  t.mock.method(Date, "now", () => clock);
+  const task = () => h.task({ run(...args) {
+    const [binary, argv, timeout, , expiry] = args, script = argv.at(-1);
+    if (binary === "ssh" && script.includes("sha256sum <&3")) {
+      hashes++; clock += 75000; assert.ok(timeout > 75000, "hash deadline independent of 60s deletion fence");
+    }
+    if (binary === "doctl" && argv[0] === "account" && !h.deletes) clock += 65000;
+    if (binary === "ssh" && script.includes("CORTEN_IDLE") && !script.includes("sha256sum <&3") && delayFence)
+      clock += 60001;
+    if (binary === "doctl" && argv[2] === "delete") {
+      assert.ok(h.saved().deletionIntentAt && expiry > clock && expiry <= clock + 60000);
+      if (++attempts === 1) return { status: 1, stdout: "", stderr: "", deleteNotDispatched: true };
+    }
+    return h.run(...args);
+  } });
+  await assert.rejects(task().collect(), /expired/);
+  assert.ok(hashes >= 2); assert.equal(h.saved().deletionIntentAt, undefined); assert.equal(attempts, 0);
+  delayFence = false; await assert.rejects(task().collect(), /not dispatched/);
+  assert.equal(h.saved().deletionIntentAt, undefined); assert.equal(h.deletes, 0);
+  assert.equal(await task().collect(), 1); assert.equal(h.deletes, 1);
 });
 
 test("a closed supervised reservation refuses legacy or differently registered inspections", async (t) => {

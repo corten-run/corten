@@ -1,0 +1,9 @@
+{
+  "//": "Benchmark harness tooling only. TypeScript 6.0.3 is the newest release with the classic compiler API (createSourceFile, forEachChild, transpileModule) that bench/fullstack-browser and bench/workloads parse with; Corten's own checks use the root's TypeScript. Install with npm --prefix bench ci.",
+  "name": "corten-bench-tooling",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}

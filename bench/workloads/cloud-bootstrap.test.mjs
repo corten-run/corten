@@ -20,12 +20,16 @@ test("bootstrap prepares upstream stable Git and proves required immutable-query
     { encoding: "utf8", windowsHide: true, timeout: 10000, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" } }), /^git version /);
 });
 test("bootstrap prepares the actual client dependency roots and Node 26 before the fixed entry", () => {
-  const job = remoteFiles(state)["job.sh"];
+  // A launch records the bench package; states saved before it keep their uploaded bytes.
+  const job = remoteFiles({ ...state, benchPackage: true })["job.sh"];
+  assert.ok(!remoteFiles(state)["job.sh"].includes("npm --prefix bench ci"));
   assert.match(job, /nodesource.com\/setup_26\.x/);
   const root = job.indexOf("npm ci --no-audit --no-fund");
+  // The harness's classic compiler is the bench package's, not the root's.
+  const bench = job.indexOf("npm --prefix bench ci --no-audit --no-fund");
   const browser = job.indexOf("npm --prefix bench/browser ci --no-audit --no-fund");
   const entry = job.indexOf("node bench/workloads/isolated/campaign-entry.mjs");
-  assert.ok(root >= 0 && browser > root && entry > browser);
+  assert.ok(root >= 0 && bench > root && browser > bench && entry > browser);
   assert.ok(job.includes("node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1"));
   assert.ok(!job.includes("setup_24.x"));
   assert.ok(job.includes('node -e \'if (process.versions.node.split(".")[0] !== "26") process.exit(1)\''));

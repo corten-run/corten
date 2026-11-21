@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { API } from "typescript7/unstable/sync";
+import { API } from "typescript/unstable/sync";
 
 // The scripts of compile_fail doctests that TypeScript refuses too, which jsconfig.json leaves
 // out: each is compiled here with jsconfig.json's options and has exactly its one error, and

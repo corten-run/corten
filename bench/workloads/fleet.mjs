@@ -14,6 +14,7 @@ import { providerFiles } from "./cloud-provider.mjs";
 import { streamRecoveryReady } from "./cloud-control-stream.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { fleetRoot, present, readFleet, readGroup, recheckCollectedGroup, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const ownPaths = ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"].map((name) => `bench/workloads/${name}`);
@@ -184,7 +185,7 @@ export function productionChild(args, { cancellation, WorkerClass = Worker, sour
 }
 
 function stagedIntent(fleet) {
-  const intent = JSON.parse(regular(join(fleet.root, "launch-intent.json"), 1024 * 1024));
+  const bytes = regular(join(fleet.root, "launch-intent.json"), 1024 * 1024), intent = JSON.parse(bytes);
   assert.deepEqual(Object.keys(intent).sort(), ["approvalSha256", "schema", "subject"]);
   assert.equal(intent.schema, "benchmark-group-fleet-staged-launch-intent/v1", "fleet-legacy-launch-cannot-admit");
   const s = intent.subject, first = fleet.manifest.jobs[0].group;
@@ -208,11 +209,37 @@ function stagedIntent(fleet) {
       assert.equal(job.approvalSha256, digest(JSON.stringify(job.subject))); assert.deepEqual(job.missing, []);
     }
   }
+  return digest(bytes);
 }
 
-// verify is a code-only synthetic TEST seam, never selected by argv/JSON.
+// Bind a successor's single-child collection to the consumed launch, never
+// grant launch/admission authority or move a reservation to a different root.
+export function stagedChildIntent(stateRoot, saved) {
+  const fleet = readFleet(dirname(stateRoot), saved.round), first = fleet.manifest.jobs[0].group;
+  assert.equal(stateRoot, join(fleet.root, saved.group)); assert.deepEqual(fleet.manifest, saved.fleet);
+  const launch = stagedIntent(fleet);
+  if (saved.group === first) return { launch };
+  const bytes = regular(join(fleet.root, "remaining-intent.json"), 1024 * 1024), intent = JSON.parse(bytes), s = intent.subject;
+  assert.equal(intent.schema, "benchmark-group-fleet-remaining-intent/v1"); assert.equal(intent.approvalSha256, digest(JSON.stringify(s)));
+  assert.equal(s.schema, "benchmark-group-fleet-staged-approval/v1"); assert.equal(s.action, "admit-remaining");
+  assert.equal(s.stateRoot, fleet.root); assert.equal(fleetRoot(s.requestedRoot), fleet.root);
+  assert.deepEqual(s.fleet, fleet.manifest); assert.equal(s.manifestSha256, fleet.manifestSha256);
+  assert.equal(s.controllerCommit, saved.commit); assert.equal(s.round, saved.round);
+  assert.equal(s.records["launch-intent.json"], launch);
+  assert.deepEqual(s.admission, { mode: "remaining-once", firstGroup: first, gate: "collected-verified-deleted", nativeReadiness: false });
+  assert.equal(s.firstGroup.evidenceMode, "native-replay"); assert.equal(s.firstGroup.row.outcome, "verified");
+  assert.equal(s.firstGroup.row.group, first);
+  assert.deepEqual(s.jobs.map(j => j.group), fleet.manifest.jobs.map(j => j.group));
+  const job = s.jobs.find(j => j.group === saved.group);
+  assert.equal(job.outcome, "planned"); assert.deepEqual(job.missing, []);
+  assert.deepEqual(job.options, childOptions(fleet, saved.group, "detach")); assert.deepEqual(job.options, job.subject.options);
+  assert.equal(job.subject.controllerCommit, saved.commit); assert.equal(job.approvalSha256, digest(JSON.stringify(job.subject)));
+  return { launch, remaining: digest(bytes) };
+}
+
+// verify and compiler are code-only synthetic TEST seams, never selected by argv/JSON.
 export async function fleetOperationPlan(options, { repo = checkout, run, plan = productionPlan, verify = verifyCollectedGroup,
-  inspect, interrupted = () => false } = {}) {
+  inspect, interrupted = () => false, compiler = localCompiler } = {}) {
   repo = realpathSync(repo);
   const root = fleetRoot(options.root, repo), head = await exactSource(repo, run), fleet = readFleet(root, options.round);
   assert.equal(fleet.manifest.commit, head, "fleet-source-mismatch");
@@ -233,10 +260,13 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
   if (mode === "admit-remaining") {
     stagedIntent(fleet);
     assert.ok(!present(join(root, "remaining-intent.json")), "fleet-remaining-already-attempted");
-    firstGroup = await verify(fleet, first, { inspect, interrupted });
-    assert.equal(firstGroup.evidenceMode, "native-replay", "fleet-native-first-group-replay-required");
-    assert.equal(firstGroup.row.outcome, "verified", "fleet-first-group-not-verified-and-deleted");
-    recheckCollectedGroup(fleet, firstGroup.snapshot);
+    // Native replay reads this checkout's bench compiler: without it, name the install instead of replaying.
+    if (inspect !== undefined || compiler()) {
+      firstGroup = await verify(fleet, first, { inspect, interrupted });
+      assert.equal(firstGroup.evidenceMode, "native-replay", "fleet-native-first-group-replay-required");
+      assert.equal(firstGroup.row.outcome, "verified", "fleet-first-group-not-verified-and-deleted");
+      recheckCollectedGroup(fleet, firstGroup.snapshot);
+    }
   }
   const jobs = [], ids = new Set(), ips = new Set();
   for (const { group } of fleet.manifest.jobs) {
@@ -244,7 +274,8 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
     if (mode === "admit-remaining" && group === first) {
       const saved = readGroup(fleet, first);
       ids.add(saved.state.id); ips.add(saved.state.ip);
-      jobs.push({ group, outcome: "verified", snapshot: firstGroup.snapshot }); continue;
+      jobs.push(firstGroup ? { group, outcome: "verified", snapshot: firstGroup.snapshot }
+        : { group, outcome: "replay-blocked", missing: [localCompilerMissing] }); continue;
     }
     if (launching) {
       assert.ok(!present(child.stateDir), "fleet-child-already-reserved");
@@ -294,7 +325,7 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
 // plan/main injection is a synthetic TEST seam at the existing production
 // boundaries. Neither the CLI nor saved JSON can select implementations.
 export async function fleetMain(args, { repo = checkout, spawn, providerFactory, inspect, sleep,
-  interrupted = () => false, write = console.log, plan = productionPlan, verify = verifyCollectedGroup, main, WorkerClass } = {}) {
+  interrupted = () => false, write = console.log, plan = productionPlan, verify = verifyCollectedGroup, compiler, main, WorkerClass } = {}) {
   const options = parseFleetArgs(args); repo = realpathSync(repo);
   const transport = shellTransport({ repo, spawn });
   const run = async (...args) => {
@@ -324,7 +355,7 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
       return 3;
     } finally { physical(root); unlinkSync(lock); syncDirectory(root); }
   }
-  const deps = { repo, run, plan, verify, inspect, interrupted }, preview = await fleetOperationPlan(options, deps);
+  const deps = { repo, run, plan, verify, inspect, interrupted, compiler }, preview = await fleetOperationPlan(options, deps);
   if (options["print-approval"]) {
     write(JSON.stringify({ subject: preview.subject, approvalSha256: preview.approvalSha256, fullGroupQualified: false }));
     return preview.subject.jobs.some((j) => j.missing?.length) ? 2 : 3;

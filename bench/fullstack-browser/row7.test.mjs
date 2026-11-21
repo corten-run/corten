@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { performance } from "node:perf_hooks";
 import { readFileSync } from "node:fs";
-import ts from "typescript";
+import ts from "../typescript.mjs";
 import { chromium } from "@playwright/test";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
 import { discoverReactEndpoint, reactHandlerSources } from "./bindings.mjs";

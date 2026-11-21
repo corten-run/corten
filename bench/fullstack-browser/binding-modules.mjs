@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import ts from "typescript";
+import ts from "../typescript.mjs";
 import { bindingHash } from "./binding-artifact.mjs";
 
 const unwrap = (n) => { while (ts.isParenthesizedExpression(n)) n = n.expression; return n; };

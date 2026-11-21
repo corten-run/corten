@@ -6,6 +6,8 @@ const tooling = ["package.json", "package-lock.json", ".dockerignore", ".gitattr
   "scripts/benchmark-scope.mjs", "scripts/benchmark-scope.test.mjs", "scripts/steady.mjs"];
 const rustInputs = ["Cargo.toml", "Cargo.lock", ".cargo", "rust-toolchain", "rust-toolchain.toml", "crates"];
 const catalogShared = [...tooling, ".github/workflows/catalog.yml", "bench/load-tool.mjs",
+  // The classic TypeScript compiler native replay's binding parser loads, and its package.
+  "bench/typescript.mjs", "bench/package.json", "bench/package-lock.json",
   "bench/catalog", "bench/client-heavy", "bench/fullstack-browser", "bench/hardening",
   "bench/json-api", "bench/live", "bench/marketplace", "bench/mixed-production", "bench/workloads",
   // The catalog and marketplace checkers read these for every app.

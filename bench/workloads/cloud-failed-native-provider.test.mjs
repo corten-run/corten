@@ -11,7 +11,7 @@ const args = ["compute", "droplet", "delete", "123", "--force", "--context", "sy
 const spawn = () => ({ status: 0, stdout: Buffer.from("SYNTHETIC_ONLY_EXPIRY_CREDENTIAL\n") });
 
 test("absolute retirement expiry gates a real ClientRequest after asynchronous Agent setup", async () => {
-  for (const phase of ["fresh", "agent", "connect", "secureConnect", "tls-fresh"]) {
+  for (const phase of ["fresh", "agent", "connect", "secureConnect", "tls-fresh", "receipt", "sent-no-reply"]) {
     const realNow = Date.now, start = realNow();
     let offset = 0, wireAt, writes = 0;
     Date.now = () => realNow() + offset;
@@ -19,14 +19,14 @@ test("absolute retirement expiry gates a real ClientRequest after asynchronous A
     const socket = new Duplex({ read() {}, write(bytes, encoding, done) {
       writes++; wireAt = Date.now();
       assert.match(bytes.toString("ascii"), /^DELETE \/v2\/droplets\/123 HTTP\/1\.1\r\n/);
-      done(); queueMicrotask(() => socket.push("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"));
+      done(); queueMicrotask(() => phase === "sent-no-reply" ? socket.destroy() : socket.push("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"));
     } });
     socket.connecting = ["connect", "secureConnect", "tls-fresh"].includes(phase);
     socket.encrypted = ["secureConnect", "tls-fresh"].includes(phase);
     socket.authorized = false;
     agent.createConnection = (_options, callback) => {
       setImmediate(() => {
-        if (phase === "agent") offset = 61001;
+        if (["agent", "receipt"].includes(phase)) offset = 61001;
         callback(null, socket);
         if (socket.connecting) setImmediate(() => {
           if (phase !== "tls-fresh") offset = 61001;
@@ -43,7 +43,12 @@ test("absolute retirement expiry gates a real ClientRequest after asynchronous A
         return httpsRequest(url, { ...options, agent, headers: { host: "synthetic.invalid" } }, callback);
       } });
       const expiry = start + 60000;
-      if (!["fresh", "tls-fresh"].includes(phase)) {
+      if (phase === "receipt") {
+        assert.deepEqual(await run(args, 120000, true, expiry), { status: 1, stdout: "", stderr: "", deleteNotDispatched: true });
+        assert.equal(writes, 0);
+      } else if (phase === "sent-no-reply") {
+        await assert.rejects(run(args, 120000, true, expiry)); assert.equal(writes, 1);
+      } else if (!["fresh", "tls-fresh"].includes(phase)) {
         await assert.rejects(run(args, 120000, false, expiry));
         assert.equal(writes, 0, phase);
       } else {

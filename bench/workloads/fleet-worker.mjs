@@ -40,7 +40,7 @@ try {
   const { parseProductionArgs, productionMain } = await import(new URL("./cloud-production.mjs", workerData.entry).href);
   booted = true;
   const { options, approval, preview } = parseProductionArgs(workerData.args);
-  assert.ok(approval && !preview && !options.deliverAudit);
+  assert.ok(approval && !preview && !options.deliverAudit && !options.r21MeasuredCheckout);
   assert.ok(options.collect || options.detach && options.group && options.fleet);
   const cancelled = new Int32Array(workerData.cancellation);
   if (workerData.admission) {
