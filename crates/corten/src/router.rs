@@ -116,6 +116,7 @@ impl Endpoint for Giving {
 /// A handler whose answer is a page that is the same for everyone (`Public`): a kept answer is
 /// given in its place, and the one it makes is kept ([`crate::kept`]). Its page is filled here,
 /// as [`crate::middleware`] would after it, so what is kept is the page as it leaves the route.
+/// Requests that miss a copy that no longer stands together wait for the first to make it again.
 struct Keeping {
     inner: Route,
 }
@@ -123,27 +124,46 @@ struct Keeping {
 impl Endpoint for Keeping {
     #[inline]
     fn call(&self, req: Request) -> Answering {
+        use crate::kept::{Asked, Found};
         // Any other request (a navigation, one with a cookie, a write) is the handler's as before.
-        let Some(asked) = crate::kept::Asked::of(&req) else { return self.inner.call(req) };
-        if let Some(kept) = asked.find() {
-            return Box::pin(std::future::ready(kept));
+        let Some(asked) = Asked::of(&req) else { return self.inner.call(req) };
+        match asked.find(&req) {
+            Found::Kept(kept) => Box::pin(std::future::ready(kept)),
+            Found::Missed(missed) => made(&self.inner, req, missed),
+            // Another request is making the page again: the page it keeps is this one's too.
+            Found::Making(making) => {
+                let inner = self.inner.clone();
+                Box::pin(async move {
+                    making.ended().await;
+                    let Some(asked) = Asked::of(&req) else { return inner.call(req).await };
+                    if let Some(kept) = asked.kept() {
+                        return kept;
+                    }
+                    let missed = asked.missed(&req);
+                    made(&inner, req, missed).await
+                })
+            }
         }
-        let missed = asked.missed(&req);
-        let here = req.extensions().get::<crate::layout::StartHere>().cloned();
-        let answer = self.inner.call(req);
-        Box::pin(async move {
-            let res = answer.await;
-            let res = match here {
-                Some(here) => here.fill(res).await,
-                None => res,
-            };
-            missed.keep(res).await
-        })
     }
 
     fn action_patches(&self) -> bool {
         self.inner.action_patches()
     }
+}
+
+/// `inner`'s answer to `req`, its page filled here as [`crate::middleware`] would after it, and
+/// kept if it may be.
+fn made(inner: &Route, req: Request, missed: crate::kept::Missed) -> Answering {
+    let here = req.extensions().get::<crate::layout::StartHere>().cloned();
+    let answer = inner.call(req);
+    Box::pin(async move {
+        let res = answer.await;
+        let res = match here {
+            Some(here) => here.fill(res).await,
+            None => res,
+        };
+        missed.keep(res).await
+    })
 }
 
 /// A page's `POST` handler when it has named posts (`post(hold) = ..`): the one the `do` of the

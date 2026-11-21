@@ -49,17 +49,28 @@
 //! reader by then, or be made under `Signal::finish`. One that lands later (a task the handler
 //! started and did not wait for, a store whose readers lag its writers) can leave the page as
 //! it was until its lifetime ends.
+//!
+//! Requests that miss a page together where the copy kept for them no longer stands (its
+//! lifetime ended, or a write dropped it) run its handler once: the first makes the page again,
+//! and the others that find the same copy wait for it ([`Making`]) and are given the page when
+//! it is kept for them. When it is not (an error, a page drawn for that request), or that request
+//! is dropped (its client left, its deadline passed) or panics, each runs its own handler then,
+//! and none waits again. A request waits no longer than its own deadline, which drops its wait as
+//! it would its handler. Where no copy is kept (the first request for a page, one never kept)
+//! each request runs its handler at once: a page never kept would otherwise have every request
+//! wait for another's handler before running its own.
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, DefaultHasher, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
-use std::sync::{Arc, OnceLock, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 use std::time::Instant;
 
 use bytes::Bytes;
 use http::{header, HeaderMap, HeaderValue, StatusCode};
+use tokio::sync::Semaphore;
 
 use crate::body::Body;
 use crate::handler::Request;
@@ -275,6 +286,9 @@ pub(crate) struct Entry {
     used: AtomicBool,
     /// What it counts for in the store's bytes, or [`GONE`].
     size: AtomicUsize,
+    /// The request making its page again once it no longer stands, which the others that find
+    /// it wait for ([`Answers::lead`]).
+    making: Mutex<Option<Arc<Semaphore>>>,
 }
 
 /// On a response whose body is a kept answer's: the stages after the handler find the body's
@@ -432,18 +446,51 @@ impl Answers {
         self.0.bytes.load(Ordering::Acquire)
     }
 
-    /// The answer kept for a request, while it stands, with its age in seconds.
-    fn find(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Option<(Arc<Entry>, u64)> {
+    /// The answer kept for a request, while it stands, with its age in seconds; else the copy
+    /// kept for it that no longer stands, if there is one.
+    fn look(
+        &self,
+        at: &str,
+        host: Option<&HeaderValue>,
+        language: Option<&HeaderValue>,
+    ) -> Result<(Arc<Entry>, u64), Option<Arc<Entry>>> {
         let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
+        let Some(copies) = inner.at.get(at) else { return Err(None) };
+        let mut stale = None;
         // The copy that stands: one that no longer does is in no other's way until it goes.
-        let entry = inner.at.get(at)?.iter().find(|entry| entry.is_for(host, language) && entry.stands(&self.0, now))?;
-        let age = entry.age(now);
-        // Stored only when it changes: a page read often is marked once for each pass of the hand.
-        if !entry.used.load(Ordering::Relaxed) {
-            entry.used.store(true, Ordering::Relaxed);
+        for entry in copies.iter().filter(|entry| entry.is_for(host, language)) {
+            if !entry.stands(&self.0, now) {
+                stale = Some(entry);
+                continue;
+            }
+            let age = entry.age(now);
+            // Stored only when it changes: a page read often is marked once for each pass of the hand.
+            if !entry.used.load(Ordering::Relaxed) {
+                entry.used.store(true, Ordering::Relaxed);
+            }
+            return Ok((entry.clone(), age));
         }
-        Some((entry.clone(), age))
+        Err(stale.cloned())
+    }
+
+    /// The answer kept for a request, while it stands, with its age in seconds.
+    #[cfg(test)]
+    fn find(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Option<(Arc<Entry>, u64)> {
+        self.look(at, host, language).ok()
+    }
+
+    /// Makes a request the one that makes `stale`'s page again, or gives it the request that
+    /// already is. Under the copy's own lock, held for no wait.
+    fn lead(&self, stale: Arc<Entry>) -> Result<Leading, Making> {
+        let mut making = stale.making.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(now) = making.as_ref() {
+            return Err(Making(now.clone()));
+        }
+        let now = Arc::new(Semaphore::new(0));
+        *making = Some(now.clone());
+        drop(making);
+        Ok(Leading { store: self.0.clone(), stale, making: now })
     }
 
     /// Keeps `entry`, in the place of the copy it stands for, and makes room for it.
@@ -588,27 +635,36 @@ impl<'a> Asked<'a> {
         Some(Asked { answers, at, host, language })
     }
 
-    /// The kept answer for this request, as its handler gave it, with its age.
-    pub(crate) fn find(&self) -> Option<Response> {
-        let (entry, age) = self.answers.find(self.at, self.host, self.language)?;
-        let mut res = Response::new(Body::from(entry.body.clone()));
-        let mut head = with_room(&entry.head);
-        // So a cache after this one, the browser's too, does not start the lifetime over.
-        head.insert(header::AGE, HeaderValue::from(age));
-        *res.headers_mut() = head;
-        let extensions = res.extensions_mut();
-        extensions.insert(entry.cache);
-        if let Some(style) = &entry.style {
-            extensions.insert(style.clone());
-        }
-        extensions.insert(Kept(entry));
-        Some(res)
+    /// What this request is given: the kept answer while it stands; else, where the copy kept for
+    /// it no longer stands and another request is making its page again, that request to wait
+    /// for; else its handler's answer, which the others that find the same copy wait for.
+    pub(crate) fn find(&self, req: &Request) -> Found {
+        let stale = match self.answers.look(self.at, self.host, self.language) {
+            Ok((entry, age)) => return Found::Kept(given(entry, age)),
+            Err(stale) => stale,
+        };
+        let leading = match stale.map(|stale| self.answers.lead(stale)) {
+            Some(Err(making)) => return Found::Making(making),
+            Some(Ok(leading)) => Some(leading),
+            None => None,
+        };
+        Found::Missed(self.missing(req, leading))
+    }
+
+    /// The kept answer for this request while it stands, as its handler gave it, with its age.
+    pub(crate) fn kept(&self) -> Option<Response> {
+        self.answers.look(self.at, self.host, self.language).ok().map(|(entry, age)| given(entry, age))
+    }
+
+    /// What keeping the handler's answer needs of the request, for a request no other waits for.
+    pub(crate) fn missed(&self, req: &Request) -> Missed {
+        self.missing(req, None)
     }
 
     /// What keeping the handler's answer needs of the request, once no kept one stood for it:
     /// taken before the handler runs, so the answer's age counts its making and a write made
     /// meanwhile is seen.
-    pub(crate) fn missed(&self, req: &Request) -> Missed {
+    fn missing(&self, req: &Request, leading: Option<Leading>) -> Missed {
         Missed {
             asked: Instant::now(),
             written: Written::of(&self.answers.0, self.at),
@@ -619,7 +675,80 @@ impl<'a> Asked<'a> {
             // buffer, which a kept one would hold whole.
             host: self.host.and_then(|host| HeaderValue::from_bytes(host.as_bytes()).ok()),
             language: self.language.and_then(|language| HeaderValue::from_bytes(language.as_bytes()).ok()),
+            leading,
         }
+    }
+}
+
+/// `entry`'s answer, as its handler gave it, `age` seconds old.
+fn given(entry: Arc<Entry>, age: u64) -> Response {
+    let mut res = Response::new(Body::from(entry.body.clone()));
+    let mut head = with_room(&entry.head);
+    // So a cache after this one, the browser's too, does not start the lifetime over.
+    head.insert(header::AGE, HeaderValue::from(age));
+    *res.headers_mut() = head;
+    let extensions = res.extensions_mut();
+    extensions.insert(entry.cache);
+    if let Some(style) = &entry.style {
+        extensions.insert(style.clone());
+    }
+    extensions.insert(Kept(entry));
+    res
+}
+
+/// What a request a kept answer can stand for is given ([`Asked::find`]).
+pub(crate) enum Found {
+    /// The kept answer, as its handler gave it, with its age.
+    Kept(Response),
+    /// Its handler's answer, kept if it may be ([`Missed::keep`]).
+    Missed(Missed),
+    /// Another request that found the same copy no longer standing is making its page again:
+    /// this one waits for it ([`Making::ended`]), then is given the page if it was kept for it
+    /// ([`Asked::kept`]), else runs its own handler.
+    Making(Making),
+}
+
+/// The page another request is making again in the place of a copy that no longer stands.
+pub(crate) struct Making(Arc<Semaphore>);
+
+impl Making {
+    /// Ends when the request making the page has been answered, or dropped (its client left,
+    /// its deadline passed, its handler panicked). Dropped itself, the wait leaves nothing behind.
+    pub(crate) async fn ended(self) {
+        // No permit is ever added: the request making the page closes it.
+        let _ = self.0.acquire().await;
+    }
+}
+
+/// The request making a page again in the place of `stale`, which the others that find that
+/// copy wait for until it is answered or dropped.
+struct Leading {
+    store: Arc<Store>,
+    stale: Arc<Entry>,
+    making: Arc<Semaphore>,
+}
+
+impl Leading {
+    /// Its answer was kept, in the place of the copy, or not: then the copy goes, so the next
+    /// requests that miss the page (one that failed, or is drawn for each request) do not wait
+    /// for each other again.
+    fn answered(self, kept: bool) {
+        if !kept {
+            let mut inner = self.store.inner.write().unwrap_or_else(PoisonError::into_inner);
+            self.store.drop_entry(&mut inner, &self.stale);
+        }
+    }
+}
+
+impl Drop for Leading {
+    /// Answered or dropped: the requests waiting for it look again.
+    fn drop(&mut self) {
+        let mut making = self.stale.making.lock().unwrap_or_else(PoisonError::into_inner);
+        if making.as_ref().is_some_and(|now| Arc::ptr_eq(now, &self.making)) {
+            *making = None;
+        }
+        drop(making);
+        self.making.close();
     }
 }
 
@@ -632,11 +761,23 @@ pub(crate) struct Missed {
     at: Box<str>,
     host: Option<HeaderValue>,
     language: Option<HeaderValue>,
+    /// Where it makes a page again in the place of a copy that no longer stands.
+    leading: Option<Leading>,
 }
 
 impl Missed {
-    /// `res`, kept when it is the same for everyone and for how long: see the module.
-    pub(crate) async fn keep(self, res: Response) -> Response {
+    /// `res`, kept when it is the same for everyone and for how long: see the module. The
+    /// requests waiting for it look again once it is kept, or not.
+    pub(crate) async fn keep(mut self, res: Response) -> Response {
+        let leading = self.leading.take();
+        let res = self.store(res).await;
+        if let Some(leading) = leading {
+            leading.answered(res.extensions().get::<Kept>().is_some());
+        }
+        res
+    }
+
+    async fn store(self, res: Response) -> Response {
         let shared = self.signal.as_ref().and_then(crate::Signal::shared);
         let Some(answers) = shared.and_then(|shared| shared.kept.as_ref()) else { return res };
         let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else { return res };
@@ -701,6 +842,7 @@ impl Missed {
             coded: Default::default(),
             used: AtomicBool::new(false),
             size: AtomicUsize::new(size),
+            making: Mutex::default(),
         });
         // This answer's tag and compression are the kept one's first.
         parts.extensions.insert(Kept(entry));
@@ -900,6 +1042,7 @@ mod tests {
             coded: Default::default(),
             used: AtomicBool::new(false),
             size: AtomicUsize::new(body + OVERHEAD),
+            making: Mutex::default(),
         }
     }
 

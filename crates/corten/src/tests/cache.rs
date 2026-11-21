@@ -1682,27 +1682,35 @@ async fn a_kept_page_keeps_the_hash_its_policy_allows_its_style_block_by() {
 
 // ---- Requests that miss a kept page together ----
 
-/// Holds a page's handlers where they are until it is opened, as a slow source would.
+/// Holds a page's handlers where they are, as a slow source would, until it is opened or lets
+/// one through: each handler that passes takes a permit.
 #[derive(Clone)]
-struct Gate(tokio::sync::watch::Sender<bool>);
+struct Gate(std::sync::Arc<tokio::sync::Semaphore>);
 
 impl Gate {
+    const OPEN: usize = 1 << 20;
+
     fn new() -> Self {
-        Gate(tokio::sync::watch::channel(true).0)
+        Gate(std::sync::Arc::new(tokio::sync::Semaphore::new(Self::OPEN)))
     }
 
     fn hold(&self) {
-        self.0.send_replace(false);
+        self.0.forget_permits(self.0.available_permits());
     }
 
     fn open(&self) {
-        self.0.send_replace(true);
+        self.0.add_permits(Self::OPEN);
+    }
+
+    /// Lets the handler that has waited longest through.
+    fn one(&self) {
+        self.0.add_permits(1);
     }
 
     fn pass(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
-        let mut open = self.0.subscribe();
+        let gate = self.0.clone();
         async move {
-            let _ = open.wait_for(|open| *open).await;
+            gate.acquire().await.expect("never closed").forget();
         }
     }
 }
@@ -1804,13 +1812,16 @@ async fn when_the_first_request_s_page_is_not_kept_the_others_make_their_own() {
     let others: Vec<_> = (0..7).map(|_| sent(&router, "GET", "/", &[])).collect();
     settle().await;
     assert_eq!(runs.count(), 2, "the others wait");
-    gate.open();
+    gate.one();
     assert_eq!(first.await.unwrap().0, StatusCode::NOT_FOUND);
+    ran(&runs, 9).await;
+    settle().await;
+    assert_eq!(runs.count(), 9, "each of the others runs its own, at once");
+    gate.open();
     for other in others {
         let (status, headers, _) = other.await.unwrap();
         assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "its own page: {headers:?}");
     }
-    assert_eq!(runs.count(), 9, "each ran its own");
     assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE), "and one of them is kept");
 
     // A page that failed again: what was kept before is no longer a reason to wait.
@@ -1856,10 +1867,13 @@ async fn when_the_first_request_is_dropped_or_panics_the_others_make_their_own()
     let others: Vec<_> = (0..3).map(|_| sent(&router, "GET", "/", &[])).collect();
     settle().await;
     assert_eq!(runs.count(), 6, "the others wait");
-    gate.open();
+    gate.one();
     assert_eq!(first.await.unwrap().0, StatusCode::INTERNAL_SERVER_ERROR, "the handler panicked");
+    ran(&runs, 9).await;
+    gate.open();
     for other in others {
-        assert_eq!(other.await.unwrap().0, StatusCode::OK);
+        let (status, headers, _) = other.await.unwrap();
+        assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "its own page: {headers:?}");
     }
     assert_eq!(runs.count(), 9);
 }
