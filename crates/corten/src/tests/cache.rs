@@ -2938,16 +2938,22 @@ async fn a_kept_body_is_for_the_language_its_handler_read() {
             let before = runs.count();
             for (asked, word, ran) in [("fr", "Annonces", 1), ("en", "Listings", 2), ("fr", "Annonces", 2), ("en", "Listings", 2)]
             {
-                let (_, _, body) = fetch(app, "GET", path, &[("accept-language", asked)]).await;
+                let (_, headers, body) = fetch(app, "GET", path, &[("accept-language", asked)]).await;
                 let said = if *path == "/lang" { format!("\"{}\"", asked.repeat(REPEATED)) } else { word.repeat(REPEATED) };
                 assert_eq!(String::from_utf8_lossy(&body), said, "{path} asked in {asked}");
                 assert_eq!(runs.count() - before, ran, "{path} asked in {asked}");
+                // Made or given again, the answer says which header chose it.
+                let vary: Vec<_> = headers.get_all(header::VARY).iter().filter_map(|value| value.to_str().ok()).collect();
+                assert!(vary.iter().any(|value| value.contains("accept-language")), "{path} asked in {asked}: {vary:?}");
             }
         }
         let before = runs.count();
         for asked in ["fr", "en", "de"] {
-            let (_, _, body) = fetch(app, "GET", "/same", &[("accept-language", asked)]).await;
+            let (_, headers, body) = fetch(app, "GET", "/same", &[("accept-language", asked)]).await;
             assert_eq!(body.len(), 4 * REPEATED);
+            let named =
+                headers.get_all(header::VARY).iter().any(|value| value.as_bytes().windows(15).any(|w| w == b"accept-language"));
+            assert!(!named, "a body whose handler read no language names none");
         }
         assert_eq!(runs.count() - before, 1, "the header is not read, so one copy");
     }

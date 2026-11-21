@@ -1507,7 +1507,7 @@ mistake, the runtime loads the URL as a whole page instead of swapping it in.
 ### The pages the app keeps
 
 The app is the first shared cache of its own `Public` pages, and of its `Public` JSON and
-text (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
+text where it compresses them (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
 such request in the handler's place until the answer's shared lifetime ends: `s-maxage` where
 the answer has `.shared(..)`, else `max_age`. So a `Public` page's handler does not run for
 every request, and what it read may be that old when a visitor sees it, as it already may be
@@ -1606,11 +1606,19 @@ app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a 
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page
 only in the instance that answered it, and a restart starts empty.
 
-A `Public` route that answers JSON (`Public<JsonResult<T>>`) or text is kept the same way: its
-whole body, under every rule above and by the same key (the language too, where the handler
-reads it with `req.t()` or `req.lang()`), with each coding's bytes made once and, outside an API
-(whose answers are not tagged), the tag's hash. What it saves is the handler with what it reads, the writing of the JSON, the
-hash and the compression. Such a route has one answer at its URL, where a page route has the
+A `Public` route that answers JSON (`Public<JsonResult<T>>`) or text is kept the same way where
+the app compresses the answer: its whole body, when that is 1,024 bytes or more and the build has
+the `compress` feature, under every rule above and by the same key (the language too, where the
+handler reads it with `req.t()` or `req.lang()`), with each coding's bytes made once and, outside
+an API (whose answers are not tagged), the tag's hash. What it saves is the handler with what it
+reads, the writing of the JSON, the hash and the compression, and once kept it is given to a
+request that accepts no coding as well. A smaller body, and any body in a build without
+`compress`, is its handler's for every request: on the benchmark, whose handler reads only
+memory, keeping one cost more than making it
+([design Choice 70](../design.md#choice-kept-pages)). A route whose bodies are all under the size
+stops asking the store after 64 of them in a row, but for one request in 256, so it costs what
+it did before bodies were kept and is found out if its bodies grow; a route that answers few
+large bodies among many small ones leaves the store out most of the time. Such a route has one answer at its URL, where a page route has the
 document, its swap and its data, so a data client's request (`Accept: application/json` first) is
 kept too, as a copy apart from a request that does not ask for JSON first: a handler that takes
 `Req` can read which of the two asked. What an API adds for the site that asks
@@ -1621,8 +1629,7 @@ lifetime ends.
 
 A file (`Media`), a sitemap or `robots.txt` (`seo::File`), a relay, a live stream and a feed are
 not kept: each is its handler's for every request, and so is JSON the app holds as bytes
-(`Json<json::Raw>`) in a build with the `compress` feature, which already keeps its compressed
-forms. One file is kept: a file of a known size that a page route
+(`Json<json::Raw>`), which already keeps its compressed forms. One file is kept: a file of a known size that a page route
 answers in its page's place (`PageOr<Media>`), as that page would be. Neither is anything that is not `Public`: a
 page for one visitor runs its handler for every request, because a key that had to cover the
 caller is where a mistake shows one user's page to another. Cache the data such a page reads in

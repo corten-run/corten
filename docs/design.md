@@ -7293,9 +7293,26 @@ rules something out.
     which no round here shows; the simulation below gives it for some spreads, and the one
     where the rule loses.
 
-    A route whose answer is JSON or text is kept the same way
+    A route whose answer is JSON or text is kept the same way where the app compresses the
+    answer
     ([#1794 `Public` text, JSON and files are not kept](https://github.com/corten-run/corten/issues/1794)):
-    its whole body, by a page's key and under a page's rules. Which answers those are is known
+    its whole body, by a page's key and under a page's rules, in a build with the `compress`
+    feature, when it is one the app would compress (1,024 bytes or more, of a type it
+    compresses, with no `no-transform` and no coding of its own). What a kept body saves is its
+    handler, its writing and its compression, and the benchmark's handler reads only memory, so
+    there the compression is most of it: a body the app does not compress cost more cycles
+    kept than made (below), and the rule keeps a body where the saving is one the app can
+    count on whatever its handler does. Once kept, a body is given to a request that accepts
+    no coding too, which saves that request less. A build that does not compress keeps no body
+    and its body routes ask the store nothing, which is known when the route is made. In a
+    build that does, a body's size is known only once it is made, so a route whose bodies are
+    all too small would ask the store and have each refused: after 64 such bodies in a row,
+    with none between that was large enough or was given from the store, the route's requests
+    are its handler's as before, but for one in 256 on each thread, which asks and so finds out
+    a route whose bodies grew. A route that answers some of each keeps asking while a body
+    worth keeping comes between; one that answers few of them (fewer than about one in ten,
+    by the run's length) leaves most of the time and gives up what those would have saved.
+    Which answers are whole bodies is known
     when the route is made (`Answer::WHOLE`, of a type an app cannot name, as `KEYED` is), so the
     route of a file, a relay, a stream, a feed or an answer type of the app's own asks the store
     nothing. What a page route answers in a page's place is kept as the page would be, as it was
@@ -7306,13 +7323,9 @@ rules something out.
     that asks for JSON first is kept too. A handler that takes `Req` can read which of the two
     asked (`req.mode`), and whether it does is not in its type, so the two are kept apart and a
     route asked both ways holds its body twice. It can read the request's language too
-    (`req.t()`, `req.lang()`), so reading `Accept-Language` tells the request's signal and the
-    body is kept for the header as it was sent. That such a body leaves the app with no
-    `Vary: accept-language`, where a page has one, is a fault this does not mend: a cache in
-    front still keeps one language for all
-    ([#1800 Messages read without `App::messages` follow `Accept-Language`, and the answer does not say so](https://github.com/corten-run/corten/issues/1800)).
-    With both, a URL's eight copies are shared by the ways of asking times the languages asked
-    in. An answer may hold markup its handler rendered, and one with a form's new submit key is
+    (`req.t()`, `req.lang()`), and a body is kept for the header as it was sent and names it
+    in `Vary`, as a page is. With both, a URL's eight copies are shared by the ways of asking
+    times the languages asked in. An answer may hold markup its handler rendered, and one with a form's new submit key is
     not kept. A page's render marks the key it drew; markup rendered any other way (into JSON
     or text, or into a file a page route answers) carries no mark, so the route watches the handler's own polls for one being drawn, and a render that reads
     the mark for itself (a page's, a patch's, one made with `req.rendered`) leaves a key drawn
@@ -7321,8 +7334,8 @@ rules something out.
     (by a task it spawned, a render it handed to a blocking task, a thread of its own), is not
     seen, and such an answer is kept with it, as every cache in front already
     keeps it for the lifetime its route wrote. `Json` of bytes the app holds (`json::Raw`) is
-    left out by its type in a build that compresses, where it keeps its compressed forms
-    itself and the store would refuse every one. An API's `Access-Control-Allow-Origin` is
+    left out by its type: it keeps its compressed forms itself, so the store would refuse
+    every one. An API's `Access-Control-Allow-Origin` is
     written from the request's `Origin` by the stage after the handler, so it is no part of a
     kept answer and no site is sent another's. Outside an API the stages send a request that
     asks for JSON first for the browser alone (`private`), as one form of a page's URL; the app
