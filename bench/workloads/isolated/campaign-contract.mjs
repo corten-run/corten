@@ -6,6 +6,7 @@ import { catalogFleetPlacement } from "../cloud-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { parseArgs } from "../../json-api/contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
+import { nativeControlPartition } from "./native-roles.mjs";
 
 export const campaignSchema = "benchmark-isolated-campaign/v1";
 export const groupCampaignSchema = "benchmark-isolated-group-campaign/v1";
@@ -56,6 +57,17 @@ export function validateCampaign(plan) {
   // A full plan includes every group's source manifest. Keep exact comparison
   // without constructing a potentially enormous assertion diff on rejection.
   assert.ok(isDeepStrictEqual(plan, expected), "campaign differs from fixed native bindings");
+}
+
+// The input is the generated plan, not a controller-side substitute for it.
+export function campaignRoleBlockers(plan) {
+  return plan.bindings.flatMap((binding) => {
+    try { nativeControlPartition(binding); return []; }
+    catch {
+      const group = binding.request.group;
+      return [group + ": native actor-role compatibility unavailable"];
+    }
+  });
 }
 
 // These are operational phases, not arbitrary overrides or a replacement native parser.

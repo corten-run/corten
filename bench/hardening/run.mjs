@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { hostname, platform, release } from "node:os";
 import { budgets, validateBudget, parseArgs, schema, matrix, selected, groupReady, nativeGroup, registryDigest,
   boundedRequestsVersion, deploymentQualificationVersion, connectionFloodResistance } from "./plan.mjs";
-import { artifacts, verifyArtifacts, verifyParity, verifyNativeLimits, digest, usesDelayUpstream, upstreamSourcePath, probeSourcePath, phaseInputs,
+import { artifacts, verifyArtifacts, verifyParity, verifyNativeLimits, verifyHardeningCpuRoles, verifyHardeningCpuScope, digest, usesDelayUpstream, upstreamSourcePath, probeSourcePath, phaseInputs,
   savedProofVersion, committedInputs, savedFiles, snapshotDependencies, readyScript, buildNativeImage, proxyConfig } from "./evidence.mjs";
 import { assembleRecovery } from "./dependency-recovery-capture.mjs";
 import { assembleBounded, boundedProbeConfig } from "./request-capture.mjs";
@@ -19,12 +19,33 @@ import { nativeBuildContext } from "../mixed-production/build-context.mjs";
 import { records, writeFixture } from "../marketplace/fixtures.mjs";
 import { featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { edgeImage, edgeCertImage } from "../fullstack/edge.mjs";
+import { captureNativeCpuScope, requireNativeCommandCpuSet } from "../workloads/isolated/host-lifetime.mjs";
+import { hardeningActorCpus, hardeningCpuGate, hardeningGateMs, hardeningRoleCpu } from "../workloads/isolated/native-roles.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const json = (file, value) => writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
+
+export function finalizeCell(out, cell, isolated, ownedReceipts, input) {
+  if (isolated) verifyHardeningCpuRoles(JSON.parse(readFileSync(join(out, "cpu-roles.json"), "utf8")),
+    cell, ownedReceipts.filter((r) => r.intent.cell === cell.key), input.raw);
+  const manifest = artifacts(out); json(join(out, "manifest.json"), manifest); verifyArtifacts(out, manifest);
+  const recovery = cell.phase === "dependency-recovery";
+  const capture = (recovery ? assembleRecovery : assembleBounded)(input);
+  json(join(out, "capture.json"), capture); cell.status = "observed"; cell.apparatusValid = true;
+  cell.capture = `${cell.key}/capture.json`;
+  if (recovery) {
+    cell.dependencyRecovery = capture.assessment;
+    cell.dependencyTerminalHealthy = capture.terminal.healthy;
+  } else {
+    cell.boundedRequests = capture.assessment;
+    cell.boundedTerminalHealthy = capture.terminal.healthy;
+  }
+}
+
 export async function run(args) {
   const options = parseArgs(args);
+  if (options.isolated) requireNativeCommandCpuSet(hardeningActorCpus.command);
   const folder = resolve(options.out), budget = validateBudget(budgets(options.profile));
   assert.ok(!folder.startsWith("\\\\"), "local results required");
   const scoped = relative(join(repo, "bench/hardening/results"), folder);
@@ -66,10 +87,12 @@ export async function run(args) {
     } finally { clearTimeout(timer); children.delete(child); settling.delete(child); }
   }
   const containers = ownedContainerRecorder({ folder, runId, command: (args, opts) => command("docker", args, opts), cell: () => currentCell, tools: () => tools });
-  const { docker, owned, remove, active } = containers;
+  const { docker, owned, remove, active, records: ownedReceipts } = containers;
   const inspect = async (name) => JSON.parse(await docker(["inspect", name], { cleanup: true }))[0];
   const labels = ["--label", `${label}=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`];
-  const limits = (role) => ["--cpus", String(role.cpu), "--memory", String(role.memory), "--memory-swap", String(role.memory), "--pids-limit", "512", "--ulimit", "nofile=65536:65536"];
+  const limits = (role, limit = budget.resources[role]) => ["--cpus", String(limit.cpu), "--memory", String(limit.memory),
+    "--memory-swap", String(limit.memory), "--pids-limit", "512", "--ulimit", "nofile=65536:65536",
+    ...(options.isolated ? ["--cpuset-cpus", hardeningRoleCpu(role)] : [])];
   let mounted, checkMounts;
   // Mount leaves separately: a missing node_modules mountpoint cannot be created
   // beneath a read-only repository mount in an otherwise clean worktree.
@@ -106,7 +129,7 @@ export async function run(args) {
   }
   async function sidecar(name, namespace, args, out, file, timeout, memory = budget.resources.qualification.memory) {
     const cert = join(out, "cert/cert.pem");
-    await owned(name, ["create", "--network", `container:${namespace}`, ...limits({ cpu: 2, memory }), "--shm-size", "1g", ...checkMounts,
+    await owned(name, ["create", "--network", `container:${namespace}`, ...limits("qualification", { cpu: 2, memory }), "--shm-size", "1g", ...checkMounts,
       "-v", `${dependencies}:/repo/node_modules:ro`, ...fixture, "-v", `${out}:/results`,
       ...(existsSync(cert) ? ["-e", "NODE_EXTRA_CA_CERTS=/results/cert/cert.pem", "-e", "BENCH_EDGE_CERT=/results/cert/cert.pem"] : []),
       "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", tools.checker.Id, "node", ...args]);
@@ -115,7 +138,7 @@ export async function run(args) {
   }
   async function ready(namespace, out, image) {
     const name = `${runId}-ready`;
-    await owned(name, ["create", "--network", `container:${namespace}`, ...limits(budget.resources.apparatus), tools.node.Id, "node", "--input-type=module", "-e",
+    await owned(name, ["create", "--network", `container:${namespace}`, ...limits("apparatus"), tools.node.Id, "node", "--input-type=module", "-e",
       readyScript]);
     try { await docker(["start", "-a", name], { timeout: 50000, file: join(out, "ready.log") }); }
     finally { await remove(name); }
@@ -131,7 +154,7 @@ export async function run(args) {
     let startedWall, probeEndedWall, raw, settings, provenance, lifecycle, parity, processList, recoveryDir, config, error, stage = "image-provenance";
     const targets = [], snapshot = {};
     try {
-      for (const path of phaseInputs(cell.phase)) {
+      for (const path of [...phaseInputs(cell.phase), ...(options.isolated ? [hardeningCpuGate] : [])]) {
         const input = inputFiles.find((f) => f.path === path);
         assert.ok(input && digest(readFileSync(join(sourceRoot, path))) === input.sha256, `unbound native hardening input: ${path}`);
       }
@@ -142,7 +165,7 @@ export async function run(args) {
       const { image, source } = await appImage(cell.app);
       stage = "native-startup";
       const upstreamCommand = ["node", "/repo/" + upstreamSource];
-      const upstream = await owned(upstreamName, ["run", "-d", "--network", network, ...limits(budget.resources.upstream), ...mounted, ...fixture,
+      const upstream = await owned(upstreamName, ["run", "-d", "--network", network, ...limits("upstream"), ...mounted, ...fixture,
         ...(delayed ? ["-e", "RECOVERY_TRIGGER_DIR=/recovery", "-v", `${recoveryDir}:/recovery:ro`] : []), tools.node.Id, ...upstreamCommand]);
       targets.push({ id: "upstream", role: "upstream", name: upstreamName, info: upstream, source: `${summary.commit}:${upstreamSource}` });
       if (delayed) {
@@ -152,7 +175,7 @@ export async function run(args) {
         const trigger = upstream.Mounts.find((m) => m.Destination === "/recovery");
         assert.ok(trigger?.Type === "bind" && trigger.RW === false, "recovery upstream trigger must be read-only");
       }
-      const app = await owned(appName, ["run", "-d", "--network", network, "--network-alias", "fsw-target", ...limits(budget.resources[cell.mode === "direct" ? "applicationDirect" : "applicationEdge"]), ...fixture,
+      const app = await owned(appName, ["run", "-d", "--network", network, "--network-alias", "fsw-target", ...limits(cell.mode === "direct" ? "applicationDirect" : "applicationEdge"), ...fixture,
         "-e", `MARKETPLACE_SOURCE=${cell.source}`, "-e", "MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json", "-e", `API_BASE=http://${upstreamName}:8080`,
         "-e", "PORT=8080", "-e", "HOSTS=fsw-target,localhost,127.0.0.1", "-e", `PROFILE=${qualificationSettings.nativeProfile}`, "-e", `MAX_CONNECTIONS=${qualificationSettings.maxConnections}`, image.Id]);
       targets.push({ id: "application", role: "application", name: appName, info: app, source: `${summary.commit}:sha256:${source}` });
@@ -176,11 +199,11 @@ export async function run(args) {
         stage = "edge-deployment";
         const cert = join(out, "cert"); mkdirSync(cert);
         const certName = `${prefix}-certificate`;
-        await owned(certName, ["create", "--network", "none", ...limits(budget.resources.apparatus), "-v", `${cert}:/cert`, tools.cert.Id,
+        await owned(certName, ["create", "--network", "none", ...limits("apparatus"), "-v", `${cert}:/cert`, tools.cert.Id,
           "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "/cert/key.pem", "-out", "/cert/cert.pem", "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"]);
         try { await docker(["start", "-a", certName], { file: join(out, "certificate.log") }); } finally { await remove(certName); }
         writeFileSync(join(out, "nginx.conf"), proxyConfig());
-        const edge = await owned(edgeName, ["run", "-d", "--network", network, ...limits(budget.resources.proxy), "-v", `${cert}:/cert:ro`, "-v", `${join(out, "nginx.conf")}:/etc/nginx/nginx.conf:ro`, tools.edge.Id]);
+        const edge = await owned(edgeName, ["run", "-d", "--network", network, ...limits("proxy"), "-v", `${cert}:/cert:ro`, "-v", `${join(out, "nginx.conf")}:/etc/nginx/nginx.conf:ro`, tools.edge.Id]);
         targets.push({ id: "proxy", role: "proxy", name: edgeName, info: edge, source: summary.commit + ":bench/fullstack/edge.mjs:nginxConf" });
         target = { host: "127.0.0.1", port: 8080, authority: "localhost:8080", origin: "https://localhost:8080", tls: true, caPem: readFileSync(join(cert, "cert.pem"), "utf8") }; namespace = edgeName;
         stage = "edge-production-qualification";
@@ -216,10 +239,11 @@ export async function run(args) {
         : boundedProbeConfig(cell, budget, runId, target.caPem);
       json(join(out, "probe.json"), config);
       stage = cell.phase;
-      const probe = await owned(probeName, ["create", "--network", `container:${namespace}`, ...limits(budget.resources.apparatus),
+      const probe = await owned(probeName, ["create", "--network", `container:${namespace}`, ...limits("apparatus"),
         ...(recovery ? ["--cgroupns=host", "--pid=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro"] : []), ...mounted, "-v", `${out}:/results`,
         ...(delayed ? ["-e", "RECOVERY_TRIGGER_DIR=/recovery", "-v", `${recoveryDir}:/recovery:rw`] : []), tools.node.Id,
-        "node", "/repo/" + probeSource, "/results/probe.json", "/results/raw.jsonl"]);
+        "node", ...(options.isolated ? ["--import", "/repo/" + hardeningCpuGate] : []),
+        "/repo/" + probeSource, "/results/probe.json", "/results/raw.jsonl"]);
       if (delayed) {
         const upstreamTrigger = upstream.Mounts.find((m) => m.Destination === "/recovery");
         const probeTrigger = probe.Mounts.find((m) => m.Destination === "/recovery");
@@ -229,7 +253,47 @@ export async function run(args) {
       startedWall = new Date().toISOString();
       const { beforeMs, duringMs, afterMs, timeoutMs } = budget.dependencyRecovery;
       const probeTimeout = delayed ? beforeMs + duringMs + afterMs + timeoutMs + 20000 : 10000;
-      try { await docker(["start", "-a", probeName], { timeout: probeTimeout, file: join(out, "probe.log") }); }
+      const startProbe = () => docker(["start", "-a", probeName], {
+        timeout: probeTimeout + (options.isolated ? 2 * hardeningGateMs : 0), file: join(out, "probe.log"),
+      });
+      try {
+        if (!options.isolated) await startProbe();
+        else {
+          const marker = (name) => join(out, ".cpu-" + name);
+          let settled = false;
+          const running = startProbe().catch((e) => { error ??= e; }).finally(() => { settled = true; });
+          const until = async (check, description, waitMs = hardeningGateMs) => {
+            const deadline = performance.now() + waitMs;
+            while (!settled && !interrupted && performance.now() < deadline) {
+              const result = await check();
+              if (result) return result;
+              await sleep(20);
+            }
+            throw error ?? new Error("native CPU gate: missing " + description);
+          };
+          const sample = async (probeInfo) => Object.fromEntries([
+            ["probe", captureNativeCpuScope(probeInfo)],
+            ...await Promise.all(targets.map(async (t) => [t.role, captureNativeCpuScope(await inspect(t.info.Id))])),
+          ]);
+          try {
+            const info = await until(async () => {
+              const row = await inspect(probe.Id);
+              return row.State.Running && row;
+            }, "running probe");
+            const before = await sample(info);
+            for (const [role, row] of Object.entries(before)) verifyHardeningCpuScope(row, hardeningRoleCpu(role === "probe" ? "apparatus" : role));
+            writeFileSync(marker("enter"), "", { flag: "wx" });
+            await until(() => existsSync(marker("drained")), "drained probe", probeTimeout + hardeningGateMs);
+            const after = await sample(await inspect(probe.Id));
+            json(join(out, "cpu-roles.json"), { schema: "native-hardening-cpu-roles/v1", before, after });
+            writeFileSync(marker("leave"), "", { flag: "wx" });
+          } catch (e) { error ??= e; }
+          finally {
+            await running;
+            for (const name of ["enter", "drained", "leave"]) rmSync(marker(name), { force: true });
+          }
+        }
+      }
       catch (e) { error = e; }
       finally {
         probeEndedWall = Date.now();
@@ -244,7 +308,7 @@ export async function run(args) {
       stage = "native-lifecycle";
       const terminalClock = async () => {
         const name = `${prefix}-terminal-clock`;
-        await owned(name, ["create", "--network", "none", ...limits(budget.resources.apparatus), ...mounted, tools.node.Id, "node", "/repo/bench/hardening/clock.mjs"]);
+        await owned(name, ["create", "--network", "none", ...limits("apparatus"), ...mounted, tools.node.Id, "node", "/repo/bench/hardening/clock.mjs"]);
         try { return JSON.parse(await docker(["start", "-a", name])); }
         finally { await remove(name); }
       };
@@ -287,31 +351,22 @@ export async function run(args) {
       if (raw) {
         const name = `${prefix}-cleanup-clock`;
         try {
-          await owned(name, ["create", "--network", "none", ...limits(budget.resources.apparatus), ...mounted, tools.node.Id, "node", "/repo/bench/hardening/clock.mjs"]);
+          await owned(name, ["create", "--network", "none", ...limits("apparatus"), ...mounted, tools.node.Id, "node", "/repo/bench/hardening/clock.mjs"]);
           nativeClock = JSON.parse(await docker(["start", "-a", name], { cleanup: true }));
         } catch (e) { failures.push(e.message); }
         finally { try { await remove(name); } catch (e) { failures.push(e.message); } }
       }
-      const containers = (await docker(["ps", "-aq", "--filter", `label=${label}=${runId}`], { cleanup: true })).split("\n").filter(Boolean);
+      const remainingContainers = (await docker(["ps", "-aq", "--filter", `label=${label}=${runId}`], { cleanup: true })).split("\n").filter(Boolean);
       const volumes = (await docker(["volume", "ls", "-q", "--filter", `label=${label}=${runId}`], { cleanup: true })).split("\n").filter(Boolean);
-      const cleanup = { complete: failures.length === 0 && containers.length === 0 && volumes.length === 0 && children.size === 0,
-        containers, volumes, commandClients: children.size, failures, nativeClock, elapsedAfterProbeMs: probeEndedWall ? Date.now() - probeEndedWall : null, finishedAt: new Date().toISOString() };
+      const cleanup = { complete: failures.length === 0 && remainingContainers.length === 0 && volumes.length === 0 && children.size === 0,
+        containers: remainingContainers, volumes, commandClients: children.size, failures, nativeClock,
+        elapsedAfterProbeMs: probeEndedWall ? Date.now() - probeEndedWall : null, finishedAt: new Date().toISOString() };
       json(join(out, "cleanup.json"), cleanup);
       if (!cleanup.complete) { summary.cleanupFailures.push({ key: cell.key, cleanup }); error ??= new Error("owned cleanup failed"); stage = "owned-cleanup"; }
       if (!error) {
         try {
           stage = "evidence-validation";
-          const manifest = artifacts(out); json(join(out, "manifest.json"), manifest); verifyArtifacts(out, manifest);
-          const capture = (recovery ? assembleRecovery : assembleBounded)({ settings, raw, parity, source: cell.source, config, cleanup, provenance, lifecycle });
-          json(join(out, "capture.json"), capture); cell.status = "observed"; cell.apparatusValid = true;
-          cell.capture = `${cell.key}/capture.json`;
-          if (recovery) {
-            cell.dependencyRecovery = capture.assessment;
-            cell.dependencyTerminalHealthy = capture.terminal.healthy;
-          } else {
-            cell.boundedRequests = capture.assessment;
-            cell.boundedTerminalHealthy = capture.terminal.healthy;
-          }
+          finalizeCell(out, cell, options.isolated, ownedReceipts, { settings, raw, parity, source: cell.source, config, cleanup, provenance, lifecycle });
         } catch (e) { error = e; }
       }
       if (error) { cell.status = "invalid"; cell.apparatusValid = false; cell.error = error.message; cell.failedStage = stage;

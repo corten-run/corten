@@ -9,7 +9,8 @@ try {
   assert.deepEqual(Object.keys(workerData).sort(), ["input", "root", "sources"]);
   const { input, root, sources } = workerData, base = new URL(root);
   assert.equal(base.protocol, "file:"); assert.ok(base.href.endsWith("/"));
-  assert.deepEqual(Object.keys(input).sort(), ["commit", "folder", "round"]);
+  const preflight = input.action === "actor-role-preflight";
+  assert.deepEqual(Object.keys(input).sort(), preflight ? ["action", "commit", "group", "mode", "round"] : ["commit", "folder", "round"]);
   assert.match(input.commit, /^[a-f0-9]{40}$/);
   // Grow the source budget only for the exact new replay dependencies.
   const additionalSources = new Set([
@@ -19,6 +20,7 @@ try {
     "bench/hardening/dependency-recovery-capture.mjs",
     "bench/hardening/dependency-recovery-contract.mjs",
     "bench/typescript.mjs",
+    "bench/workloads/isolated/native-roles.mjs",
   ]);
   let remaining = 211;
   assert.ok(Array.isArray(sources) && sources.length > 0 && sources.length <= remaining + additionalSources.size);
@@ -53,8 +55,16 @@ try {
     assert.ok(approved.has(url), "validation-unapproved-import");
     return { format: url === typescript || url.startsWith(semver) ? "commonjs" : "module", source: approved.get(url), shortCircuit: true };
   } });
-  const native = await import(new URL("bench/workloads/isolated/campaign-verify.mjs", base).href);
-  if (typeof native.validateCampaign !== "function") throw new Error("validator unavailable");
-  const report = await native.validateCampaign(Object.freeze(input));
+  let report;
+  if (preflight) {
+    const { bindCampaign, bindGroupCampaign, campaignRoleBlockers } = await import(new URL("bench/workloads/isolated/campaign-contract.mjs", base).href);
+    const { round, commit, group, mode } = input;
+    assert.ok(group === null ? mode === null : typeof group === "string" && typeof mode === "string");
+    report = campaignRoleBlockers(group === null ? bindCampaign({ round, commit }) : bindGroupCampaign({ round, commit, group }, mode));
+  } else {
+    const native = await import(new URL("bench/workloads/isolated/campaign-verify.mjs", base).href);
+    if (typeof native.validateCampaign !== "function") throw new Error("validator unavailable");
+    report = await native.validateCampaign(Object.freeze(input));
+  }
   parentPort.postMessage({ ok: true, report });
 } catch { parentPort.postMessage({ ok: false }); }

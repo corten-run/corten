@@ -2606,7 +2606,13 @@ impl<S: Steps> Layer<S> {
             if mount.is_none() {
                 self.policy.document(&mut refused, csp, mode.swaps());
             }
-            refused.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
+            // An error page that drew a submit key keeps the rule every such page has.
+            let policy = if refused.extensions().get::<cache::Unrepeatable>().is_some() {
+                cache::drawn_unsettled(refused.headers_mut())
+            } else {
+                cache::PRIVATE
+            };
+            refused.headers_mut().insert(header::CACHE_CONTROL, policy);
             pending.discard();
             return refused;
         }
@@ -2692,6 +2698,12 @@ impl<S: Steps> Layer<S> {
         // Corten's own routes (assets, the runtime) are settled the same way: they say what they
         // are, and anything that does not gets the default.
         cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
+        // A live stream's fragments carry no mark, so under `corten dev` it logs a key one draws
+        // when its headers as sent let a shared cache keep it.
+        #[cfg(debug_assertions)]
+        if let Some(path) = &path {
+            crate::LiveShared::note(&res, path);
+        }
         // A body with this request's nonce differs every time, so its tag would never match.
         if !nonced {
             if let Some(has) = has {
