@@ -134,6 +134,10 @@ export function liveActorWindow(a, app) {
     const { timeOrigin, capturedAt } = a.costs;
     assert.ok(Number.isFinite(timeOrigin) && Number.isFinite(capturedAt) && capturedAt > 0
       && timeOrigin >= renderer.startedAt - 2 && timeOrigin + capturedAt <= renderer.endedAt + 2, "functional browser clock outside scenario activity");
+    const start = Math.max(renderer.startedAt, Math.ceil(timeOrigin));
+    const end = Math.min(renderer.endedAt, Math.floor(timeOrigin + capturedAt) + 1);
+    assert.ok(start < end, "functional scenario has no captured activity interval");
+    return { app, startedAt, endedAt, renderer: { startedAt: start, endedAt: end } };
   }
   if (measured) {
     const start = Math.ceil(a.host.timeOrigin + a.interval.startedAt), end = Math.floor(a.host.timeOrigin + a.interval.finishedAt);
@@ -335,13 +339,13 @@ export async function inspectLiveSaved(binding, folder, group) {
       let proof;
       try { proof = phaseProof(binding, folder, plan.startedAt, actors); }
       catch (error) { if (error?.code !== "ENOENT") throw error; }
+      if (proof) assert.equal(proof.code, passed ? 0 : 1, "observed exit contradicts native outcomes");
       if (proof?.complete) {
-        assert.equal(proof.code, passed ? 0 : 1, "observed exit contradicts native outcomes");
         result.cleanupComplete = true; result.resources = "verified"; result.blockers = [...missing];
-        if (!failedEvidenceComplete) {
-          result.status = "blocked"; result.attemptComplete = false; result.blockers.push("native-failed-attempt-raw-observation-missing");
-        }
       } else if (proof && !failed) result.status = "blocked";
+      if (proof && !failedEvidenceComplete) {
+        result.status = "blocked"; result.attemptComplete = false; result.blockers.push("native-failed-attempt-raw-observation-missing");
+      }
     }
     return result;
   } catch (error) {

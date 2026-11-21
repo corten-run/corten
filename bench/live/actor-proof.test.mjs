@@ -22,7 +22,9 @@ test("functional actor proof requires a real scenario window and a matching brow
   const valid = { schema: "native-live-evidence/v1",
     actorWindow: { startedAt: 10, endedAt: 80, renderer: { startedAt: 20, endedAt: 70 } },
     costs: { timeOrigin: 23, capturedAt: 42 } };
-  assert.deepEqual(liveActorWindow(valid, "app"), { app: "app", ...valid.actorWindow });
+  assert.deepEqual(liveActorWindow(valid, "app"), {
+    app: "app", ...valid.actorWindow, renderer: { startedAt: 23, endedAt: 66 },
+  });
   for (const a of [
     { ...valid, costs: { timeOrigin: 1, capturedAt: 9 } },
     { ...valid, actorWindow: { ...valid.actorWindow, renderer: null } },
@@ -31,4 +33,7 @@ test("functional actor proof requires a real scenario window and a matching brow
   const early = { schema: "native-live-failure/v1", actorWindow: { ...valid.actorWindow, renderer: null } };
   assert.equal(liveActorWindow(early, "app").renderer, null);
   assert.throws(() => liveActorWindow({ ...early, network: [{ kind: "response" }] }, "app"));
+  const brief = { ...early, actorWindow: { startedAt: 10, endedAt: 12, renderer: { startedAt: 11, endedAt: 11 } } };
+  assert.deepEqual(liveActorWindow(brief, "app").renderer, brief.actorWindow.renderer,
+    "retain a failed attempt's actual window without claiming it proves placement");
 });
