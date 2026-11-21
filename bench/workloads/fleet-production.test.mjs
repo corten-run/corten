@@ -371,8 +371,10 @@ test("continuation appends authorized retries after no-create and retirement whi
   fs.mkdirSync(local, { recursive: true });
   const saved = (fleet) => ({ ...reservation({ round: fleet.round, commit, token: fleet.jobs[0].token, group, fleet }),
     provider: fleet.provider, fullGroupQualified: false });
-  fs.writeFileSync(statePath, JSON.stringify({ ...saved(fleet), status: "creating", createIntentAt: new Date().toISOString() }));
-  await assert.rejects(prepare("r20", group), /unresolved custody/);
+  for (const status of ["creating", "reserved"]) {
+    fs.writeFileSync(statePath, JSON.stringify({ ...saved(fleet), status, createIntentAt: new Date().toISOString() }));
+    await assert.rejects(prepare("r20", group), /unresolved custody/);
+  }
   fs.writeFileSync(statePath, JSON.stringify(saved(fleet)));
   const oldTree = treeHash(oldSlot);
   assert.equal(await prepare("r20", group), 3);

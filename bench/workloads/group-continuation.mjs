@@ -6,7 +6,7 @@ import { isBuiltin, registerHooks } from "node:module";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { roundName, selection } from "./cloud-contract.mjs";
-import { digest, fileHash, physical } from "./cloud-local.mjs";
+import { digest, physical, regular } from "./cloud-local.mjs";
 import { full } from "./cloud-options.mjs";
 import { continuationIndex, continuationIndexSha256, fleetLockSnapshot, fleetRoot, outside, present, readFleet, readGroup, readLaunchIntent,
   recheckCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
@@ -61,6 +61,7 @@ const acceptable = (row) => ["missing", "prepared", "verified"].includes(row.out
 function notCreated(fleet, saved, lock) {
   if (!fleet.manifest.single || lock !== null || !present(join(fleet.root, "launch-intent.json"))) return false;
   if (saved.outcome !== "missing" && (saved.state?.status !== "reserved" || saved.outcome !== "ambiguous"
+      || saved.state.createIntentAt || saved.state.id || saved.state.ip
       || present(join(saved.stateRoot, ".groups-launch.lock")) || present(join(saved.local, "stream-recovery.lock")))) return false;
   readLaunchIntent(fleet);
   // Create requires a durable binding before any provider dispatch. A settled
@@ -89,7 +90,7 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
     return { name, group, round };
   });
   const attempts = new Map(names.map((group) => [group, []])), slots = new Map(), ids = new Set();
-  const proofs = [], manifests = [], states = [], needsCensus = new Set();
+  const proofs = [], retryEvidence = [], manifests = [], states = [], needsCensus = new Set();
   const read = async (fleet, checkout, archives) => {
     const { manifest, manifestSha256 } = fleet, { round, commit } = manifest;
     const lock = fleetLockSnapshot(fleet.root);
@@ -123,9 +124,9 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
       if (row.id) {
         assert.ok(!ids.has(row.id), "duplicate continuation host identity"); ids.add(row.id);
       }
-      if (verified) {
+      if (verified || manifest.single && ["failed", "blocked"].includes(outcome) && row.destroyedAt) {
         const { stateSha256, archiveSha256, evidenceSha256 } = row;
-        proofs.push({ fleet, snapshot: { group, stateSha256, archiveSha256, evidenceSha256 } });
+        (verified ? proofs : retryEvidence).push({ fleet, snapshot: { group, stateSha256, archiveSha256, evidenceSha256 } });
       }
       // A historic host can have preserved failure bytes behind an invalid
       // monitor, without deletion confirmation. A bound host cannot be created
@@ -200,10 +201,11 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
       assert.equal(current.stateSha256, stateSha256, "continuation state changed");
       assert.equal(current.outcome, outcome, "continuation custody changed");
       if (noCreate) assert.ok(notCreated(fleet, current, fleetLockSnapshot(fleet.root)), "no-create custody changed");
-      if (retirementFile) assert.equal(fileHash(join(current.local, retirementFile)), current.state.retirement.evidenceSha256,
-        "continuation retirement changed");
+      if (retirementFile) assert.equal(digest(regular(join(current.local, retirementFile),
+        retirementFile === "failed-native-host.json" ? undefined : 4096)), current.state.retirement.evidenceSha256, "continuation retirement changed");
     }
     for (const { fleet, snapshot } of proofs) recheckCollectedGroup(fleet, snapshot);
+    for (const { fleet, snapshot } of retryEvidence) recheckCollectedGroup(fleet, snapshot);
   };
   recheck();
   const subject = { indexSha256, verified: proofs.map(({ fleet, snapshot }) => ({ root: fleet.root, round: fleet.manifest.round,
