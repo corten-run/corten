@@ -12,7 +12,7 @@ import { inspectJson } from "../../json-api/report.mjs";
 import { producerSources } from "../../json-api/production.mjs";
 import { timedSummarySchema } from "../../json-api/timed-outcomes.mjs";
 import { validateSummary } from "../../marketplace/report.mjs";
-import { admitted } from "../../marketplace/feature-contract.mjs";
+import { admitted, boundedFeatureProfile } from "../../marketplace/feature-contract.mjs";
 import { inspectRawSupport } from "./raw-support.mjs";
 import { portableEvidenceSegment } from "../cloud-contract.mjs";
 
@@ -153,6 +153,7 @@ export function inspectEvidence(binding, root) {
     assert.equal(report.attemptComplete, true, "strict JSON native attempt incomplete");
   } else {
     validateSummary(summary);
+    assert.equal(summary.measurement.featureProfile, boundedFeatureProfile, "current group requires bounded qualification");
     assert.equal(summary.split, undefined, "split evidence is not this isolated native command");
     report = rawProofBlocked(group, { outcomes: Object.fromEntries(binding.selection.apps.map((app) => [app,
       admitted(summary.apps[app]) ? "admitted-native-outcome" : "excluded-not-timed"])) }, inspectRawSupport(group, summary, root, before));

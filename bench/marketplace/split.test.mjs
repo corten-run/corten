@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url";
 import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupApps, groupNames } from "./groups.mjs";
-import { featureProfile, qualification, qualificationSettings } from "./feature-contract.mjs";
-import { qualificationProbes } from "./qualification-fixture.mjs";
+import { boundedFeatureProfile, boundedQualificationSettings, featureProfile, produceBoundedQualification, qualification, qualificationSettings } from "./feature-contract.mjs";
+import { boundedQualificationProbes, qualificationProbes } from "./qualification-fixture.mjs";
 import { appStop, cpuSettings, inventory, maxDroplets, parseArgs, parsePart, partName, phases, resultSchema, sources, splitApps, splitSubject, stageAggregate, timedProfiles } from "./run-contract.mjs";
 import { leftoverDroplets, nightly, parseDropletArgs, remoteFiles, safeArchive, splitExit, splitPlan, validatePlan, validateState } from "./droplet-contract.mjs";
 import { report, validateSummary } from "./report.mjs";
@@ -213,6 +213,23 @@ test("droplets' parts merge into one round of the group, each candidate from its
     const bad = structuredClone(s); change(bad); assert.throws(() => validateSummary(bad));
   }
   assert.throws(() => validateSummary({ ...parts[1], apps: { ...parts[1].apps, aspnet: undefined } }));
+});
+
+test("bounded split parts merge only with the same qualification contract", () => {
+  const archived = [part(1, 2), part(2, 2)];
+  const active = structuredClone(archived);
+  for (const s of active) {
+    s.measurement.featureProfile = boundedFeatureProfile;
+    s.measurement.qualificationSettings = boundedQualificationSettings;
+    for (const a of Object.values(s.apps)) a.qualification = Object.fromEntries(sources.map((source) =>
+      [source, produceBoundedQualification(boundedQualificationProbes(source), source)]));
+    validateSummary(s);
+  }
+  assert.throws(() => mergeParts("r17", [active[0], archived[1]]), /measurement differs/);
+  const mergedActive = structuredClone(mergeParts("r17", active));
+  assert.match(report(mergedActive), /^Connection-flood resistance: not measured\.$/m);
+  mergedActive.split.parts[1].corten.qualification.api = archived[1].apps.corten.qualification.api;
+  assert.throws(() => validateSummary(mergedActive));
 });
 
 test("every candidate is accounted for once, timed when admitted and kept with its evidence when excluded", () => {

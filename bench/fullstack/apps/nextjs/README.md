@@ -37,15 +37,15 @@ Checks from this directory:
 1. `npm run test:marketplace` runs the bounded unit/deadline tests.
 2. With `PROFILE` unset, run `npm run build` and `npm run test:production`.
    Then set `PROFILE=matched` and run both commands again on a fresh matched build.
-   The production suite runs the unchanged marketplace qualifier for fixture and
-   API sources, plus a stalled request body and script nonce checks. These real
-   deadline/connection probes are intentionally separate from the unit suite.
+   The production suite runs the bounded marketplace qualifier for fixture and
+   API sources, checks script nonces, and checks liveness after qualification.
+   Connection-flood resistance: not measured.
    Each artifact checks its prerender manifest, rejects the opposite runtime
    profile, checks the normal start entry with `NODE_ENV` absent, and captures
    actual Chromium `securitypolicyviolation` events on
    native 404 pages, hydration, and valid navigation. It uses the repository's
    Playwright installation and Chromium browser.
-   Raw qualification evidence is saved under ignored `work/`, not published.
+   Raw qualification evidence is saved as `work/bounded-qualification-*.json`, not published.
 3. Run `bench/marketplace/check.mjs` from the repository against the running app
    for browser parity, using the repository's Playwright installation.
 

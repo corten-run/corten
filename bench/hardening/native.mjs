@@ -7,6 +7,7 @@ import { request as https } from "node:https";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { validateQualification } from "../marketplace/feature-contract.mjs";
+import { validateBoundedQualification } from "./qualification.mjs";
 
 const hash = (body) => createHash("sha256").update(body).digest("hex");
 export function observe(url, { host, method = "GET", body, timeoutMs = 5000, ca } = {}) {
@@ -36,6 +37,8 @@ export function observe(url, { host, method = "GET", body, timeoutMs = 5000, ca 
 }
 const jsonOf = (row) => { try { return JSON.parse(row.body); } catch { return null; } };
 const healthy = (row) => row?.complete === true && !row.error && !row.timedOut && row.status === 200;
+const completedHttp = (row) => row.complete === true && !row.error && !row.timedOut && Number.isInteger(row.status)
+  && row.status >= 100 && row.status <= 599;
 const receipt = (row) => {
   assert.ok(row && typeof row.body === "string" && typeof row.complete === "boolean" && Number.isFinite(row.ms) && row.ms >= 0);
   assert.equal(row.bytes, Buffer.byteLength(row.body)); assert.equal(row.sha256, hash(row.body));
@@ -43,36 +46,52 @@ const receipt = (row) => {
 
 export function assessNative(report, qualification, deployment = "direct") {
   assert.ok(["direct", "deployed-edge"].includes(deployment));
-  validateQualification(qualification);
+  if (qualification.schema === "native-bounded-qualification/v1") validateBoundedQualification(qualification);
+  else validateQualification(qualification);
   assert.equal(report.schema, "native-hardening-controls/v1"); assert.equal(report.source, qualification.source);
   const { host, liveness } = report;
   receipt(host.allowed); receipt(host.denied); receipt(liveness.negative);
   const targetFunctionalFailures = [];
   const baseline = (row, label) => {
-    assert.ok(row.complete && !row.error && !row.timedOut && Number.isInteger(row.status) && row.status >= 100 && row.status <= 599,
-      `${label}: incomplete native control transport`);
+    assert.ok(completedHttp(row), `${label}: incomplete native control transport`);
     if (!healthy(row)) targetFunctionalFailures.push({ control: label, status: row.status });
   };
   baseline(host.allowed, "allowed-host");
   const hostState = !healthy(host.allowed) ? "inconclusive" : host.denied.complete && !host.denied.error && !host.denied.timedOut && host.denied.status >= 400 && host.denied.status < 500 ? "observed"
     : healthy(host.denied) ? "missing" : "inconclusive";
   const expectedLive = qualification.probes.live?.path ?? null;
+  const discoveryErrors = !expectedLive && qualification.schema === "native-bounded-qualification/v1"
+    ? qualification.probes.liveness.filter(row => row.status >= 500) : [];
+  for (const { path, status } of discoveryErrors) targetFunctionalFailures.push({ control: "liveness-discovery", path, status });
   assert.equal(liveness.path, expectedLive);
   if (expectedLive) { receipt(liveness.baseline); baseline(liveness.baseline, "liveness-baseline"); }
-  const livenessState = !expectedLive ? "missing" : !healthy(liveness.baseline) ? "inconclusive" : liveness.negative.complete && !liveness.negative.error && !liveness.negative.timedOut
+  const livenessState = !expectedLive ? (discoveryErrors.length ? "inconclusive" : "missing") : !healthy(liveness.baseline) ? "inconclusive" : liveness.negative.complete && !liveness.negative.error && !liveness.negative.timedOut
     && liveness.negative.status >= 400 && liveness.negative.status < 500 ? "observed" : "inconclusive";
   let sourceControl = "not-applicable";
   if (report.source === "api") {
     const api = report.api; assert.ok(api); assert.match(api.nonce, /^[a-f0-9]{24}$/);
     assert.ok(api.expected.title.includes(api.nonce));
-    for (const row of api.responses) receipt(row.response);
+    for (const row of api.responses) {
+      receipt(row.response);
+      assert.ok(completedHttp(row.response), "incomplete native API transport");
+    }
     for (const row of api.controllers) { receipt(row.response); assert.ok(healthy(row.response), "broken API control channel"); }
     assert.deepEqual(api.controllers.map((r) => r.step), ["reset-before", "mutate", "count-json", "reset-count", "count-page", "fault-503", "fault-302", "reset-after", "verify-reset"]);
     const byName = Object.fromEntries(api.responses.map((r) => [r.step, r.response]));
     assert.deepEqual(Object.keys(byName), ["mutated-json", "mutated-page", "fault-json-503", "fault-page-503", ...(expectedLive ? ["live-503"] : []), "fault-json-302", "fault-page-302", "restored-json"]);
     assert.equal(api.responses.length, Object.keys(byName).length, "duplicate API control response");
     const counters = (step) => jsonOf(api.controllers.find((r) => r.step === step).response);
-    const exactReads = ["count-json", "count-page"].every((step) => isDeepStrictEqual(counters(step).requests, { item_1: 1 }));
+    const countMap = (map, key) => map !== null && typeof map === "object" && !Array.isArray(map)
+      && Object.entries(map).every(([k, v]) => key.test(k) && Number.isSafeInteger(v) && v > 0);
+    const reads = ["count-json", "count-page"].map(step => {
+      const c = counters(step);
+      assert.ok(c?.status === 200 && countMap(c.requests, /^item_[1-9]\d*$/) && countMap(c.answers, /^(200|404)$/),
+        `invalid controller counters: ${step}`);
+      const total = map => Object.values(map).reduce((a, b) => a + b, 0);
+      assert.equal(total(c.requests), total(c.answers), `inconsistent controller counters: ${step}`);
+      return c.requests;
+    });
+    const exactReads = reads.every(map => isDeepStrictEqual(map, { item_1: 1 }));
     const reset = counters("verify-reset"); assert.equal(reset.status, 200); assert.deepEqual(reset.answers, {}); assert.deepEqual(reset.requests, {});
     const errorResponse = (row) => row.complete && row.status >= 500 && row.status <= 599;
     const valid = exactReads && healthy(byName["mutated-json"]) && isDeepStrictEqual(jsonOf(byName["mutated-json"]), api.expected)
@@ -88,28 +107,12 @@ export function assessNative(report, qualification, deployment = "direct") {
   return { schema: "native-hardening-assessment/v1", representative: "existing-native-marketplace-production-matched", productionQualified,
     productionQualificationScope: deployment === "direct" ? "direct native production probes plus explicit deployment host/liveness/source controls; not inferred edge defense equivalence"
       : "effective TLS deployment production probes plus explicit deployment host/liveness/source controls; not inferred native/proxy mechanism attribution",
-    missingProductionFeatures: qualification.missing,
+    missingProductionFeatures: qualification.missing, ...(qualification.unmeasured ? { unmeasuredProductionFeatures: qualification.unmeasured } : {}),
     hostValidation: hostState, liveness: livenessState, sourceControl,
     ...(targetFunctionalFailures.length ? { targetFunctionalFailures } : {}),
     livenessDuringUpstreamFailure: liveDuringFailure,
     qualificationPurpose: productionQualified ? "qualified-native-hardening-observation" : "explicit-native-defense-gap-observation-not-qualified-performance",
     alternatives: [] };
-}
-
-export function assessTimedSource(raw) {
-  const one = (type) => { const rows = raw.filter((r) => r.type === type); assert.equal(rows.length, 1, `missing/duplicate ${type}`); receipt(rows[0].response); return rows[0].response; };
-  const before = one("upstream-control-before"), after = one("upstream-control-after");
-  assert.ok(healthy(before), "API upstream reset failed before timed injection"); assert.deepEqual(jsonOf(before), {});
-  if (!healthy(after)) return { state: "unavailable", status: after.status ?? null, error: after.error ?? (after.timedOut ? "timeout" : "incomplete response"), counts: null };
-  const counts = jsonOf(after); assert.deepEqual(Object.keys(counts).sort(), ["answers", "requests", "status"]); assert.equal(counts.status, 200, "upstream control state changed during injection");
-  for (const map of [counts.requests, counts.answers]) {
-    assert.ok(map && typeof map === "object" && !Array.isArray(map));
-    assert.ok(Object.values(map).every((value) => Number.isSafeInteger(value) && value >= 0), "invalid upstream counters");
-  }
-  const successes = raw.filter((row) => row.type === "legitimate" && row.ok === true).length;
-  assert.ok((counts.requests.item_1 ?? 0) >= successes && (counts.answers[200] ?? 0) >= successes, "timed API counters contradict completed successful native reads");
-  assert.ok(Object.values(counts.answers).reduce((a, n) => a + n, 0) <= Object.values(counts.requests).reduce((a, n) => a + n, 0), "timed API answers exceed actual requests");
-  return { state: "observed", status: 200, counts, attribution: "all native upstream reads including attacks; not assigned to individual legitimate requests" };
 }
 
 export async function nativeControls({ base, source, upstream, qualification, original, request = observe }) {
@@ -141,7 +144,7 @@ export async function nativeControls({ base, source, upstream, qualification, or
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [base, source, upstream, qualificationFile, output, deployment = "direct"] = process.argv.slice(2);
-  const qualification = validateQualification(JSON.parse(readFileSync(qualificationFile)));
+  const qualification = validateBoundedQualification(JSON.parse(readFileSync(qualificationFile)));
   const original = JSON.parse(readFileSync("/fixtures/marketplace.json")).item_1;
   const raw = await nativeControls({ base, source, upstream, qualification, original });
   writeFileSync(output, JSON.stringify(raw, null, 2));

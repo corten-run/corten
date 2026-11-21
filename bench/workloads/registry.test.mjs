@@ -32,6 +32,14 @@ test("approved membership is independent of current qualification and includes e
   assert.throws(() => groups["catalog-page"].popular.pop());
 });
 
+test("hardening keeps both deployments and cannot reuse the old pressure workload's evidence", () => {
+  assert.notEqual(contractSha256("hardening"), "651c5f73eda0cc5030fc80e85d6ead2b0021ed36161830a08dc8410e387bd33c");
+  assert.deepEqual(definition("hardening").cases.map(c => c.key), ["direct", "deployed-edge"]);
+  const capabilities = definition("hardening").capabilities;
+  for (const required of ["bounded-client-deadline", "bounded-request-limit", "dependency-recovery"]) assert.ok(capabilities.includes(required), required);
+  for (const retired of ["slow-headers-bodies-readers", "oversized-requests"]) assert.ok(!capabilities.includes(retired), retired);
+});
+
 test("locale/source/target work is explicit, numeric JSON is not repeated under locales", () => {
   const pages = definition("localized-marketplace").cases;
   assert.equal(pages.filter((c) => c.target === "page").length, 6);
