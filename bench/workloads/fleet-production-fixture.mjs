@@ -6,6 +6,18 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
   const local = path.join(config.stateDir, "groups-r21");
   const state = () => JSON.parse(fs.readFileSync(path.join(local, "state.json")));
   const record = (event) => fs.appendFileSync(config.trace, `${JSON.stringify({ group: config.group, ...event })}\n`);
+  const launchKey = "synthetic launch SSH host key\n", known = path.join(local, "known_hosts");
+  const hostKeyFile = (argv, mode) => {
+    const entry = argv.find((arg) => arg.startsWith("UserKnownHostsFile="));
+    const file = /^UserKnownHostsFile="([^"]+)"$/.exec(entry)?.[1];
+    if (!file || !argv.includes(`StrictHostKeyChecking=${mode}`) || !argv.includes("GlobalKnownHostsFile=none")
+        || !argv.includes("UpdateHostKeys=no")) throw new Error("unexpected SSH host-key options");
+    return path.normalize(file);
+  };
+  const requirePinnedKey = (argv) => {
+    const file = hostKeyFile(argv, "yes");
+    if (file === known || fs.readFileSync(file, "utf8") !== launchKey) throw new Error("SSH must use the pinned launch key");
+  };
   let readiness = 0;
   const spawn = (binary, argv, options) => {
     let input = options.input, reply = good;
@@ -13,6 +25,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     if (readinessProbe) {
       if (state().control.ledger.length || input !== "set -euo pipefail\ntrue\n") throw new Error("unexpected untracked SSH");
     } else if (["ssh", "sftp"].includes(binary)) {
+      requirePinnedKey(argv);
       const request = state().control.ledger.at(-1).request, control = controlRegistration(request);
       if ((binary === "ssh" ? argv.at(-1) : argv.at(-2)) !== control.command) throw new Error("unregistered synthetic command");
       if (binary === "ssh") {
@@ -32,7 +45,13 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     }
     if (binary === "ssh") {
       const script = input.slice("set -euo pipefail\n".length, -1), saved = state();
-      if (readinessProbe && ++readiness === 1 && config.mode === "ssh-late") return { ...good(), status: 255 };
+      if (readinessProbe) {
+        const file = hostKeyFile(argv, "accept-new");
+        if (file !== known) throw new Error("unexpected launch SSH host-key file");
+        if (++readiness === 1 && config.mode === "ssh-late") return { ...good(), status: 255 };
+        fs.writeFileSync(file, launchKey, { flag: "wx" });
+        return good();
+      }
       if (script === bootstrapReadScript) {
         const marker = bootstrapMarker(saved);
         if (config.mode === "marker") marker.commit = "b".repeat(40);
@@ -54,6 +73,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
   };
   const streamSpawn = (binary, argv, options) => {
     if (binary !== "ssh" || options.shell !== false) throw new Error("unexpected monitor boundary");
+    requirePinnedKey(argv);
     const expected = JSON.parse(Buffer.from(argv.at(-1).split(" ").at(-1), "hex"));
     record({ boundary: "monitor", argv, options: { shell: options.shell, windowsHide: options.windowsHide } });
     const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
@@ -67,7 +87,8 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     child.stdin.on("close", () => setImmediate(() => close(255)));
     setImmediate(() => {
       record({ boundary: "monitor-registered" });
-      frame("registered", { ...registration, ...expected }); frame("progress", { state: "active" });
+      frame("registered", { ...registration, ...expected, host: { ...registration.host, hostname: state().name } });
+      frame("progress", { state: "active" });
     });
     const deadline = Date.now() + 5000, timer = setInterval(() => {
       const peer = !config.holdUntilGroup || fs.existsSync(path.join(path.dirname(config.stateDir), config.holdUntilGroup, "groups-r21/monitor-registration.json"));

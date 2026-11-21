@@ -127,19 +127,22 @@ export function harness(t, flags = {}) {
     }
     if (binary === "ssh") {
       if (registration?.stream) {
-        const apparatus = { ...structuredClone(streamRegistration), binding: registration.expected.binding, id: registration.expected.id };
+        const apparatus = { ...structuredClone(streamRegistration), binding: registration.expected.binding, id: registration.expected.id,
+          host: { ...streamRegistration.host, hostname: JSON.parse(readFileSync(statePath)).name } };
         writeFileSync(join(local, "monitor-registration.json"), JSON.stringify(apparatus));
         writeFileSync(join(local, "monitor-journal.jsonl"), JSON.stringify({ kind: "progress", id: apparatus.id, payload: { state: "active" } }) + "\n");
         const done = new Promise((resolve) => {
           flags.completeMonitor = (terminal = true) => {
+            const closedAtMs = Date.now(), recoverAfterMs = closedAtMs + 30000;
             if (terminal) supervisedTerminal = { registrationSha256: digest(JSON.stringify(apparatus)), sealSha256: digest("synthetic native seal") };
-            const value = { id: apparatus.id, binding: apparatus.binding, nativeTerminal: terminal, localClosed: true, remoteDrained: false,
-              ...(terminal ? { campaign, sealSha256: supervisedTerminal.sealSha256 } : { publicationRevoked: true }) };
+            const identity = { id: apparatus.id, binding: apparatus.binding };
+            const value = terminal
+              ? { ...identity, nativeTerminal: true, localClosed: true, remoteDrained: false, campaign, sealSha256: supervisedTerminal.sealSha256 }
+              : { ...identity, at: new Date(closedAtMs).toISOString(), recoverAfterMs, publicationRevoked: true, remoteTerminal: false };
             writeFileSync(join(local, "monitor-" + (terminal ? "terminal" : "invalid") + ".json"), JSON.stringify(value));
-            const closedAtMs = Date.now();
-            writeFileSync(join(local, "monitor-local-closed.json"), JSON.stringify({ id: apparatus.id, binding: apparatus.binding,
-              code: terminal ? 0 : 255, signal: null, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 30000 }));
-            resolve({ ...value, terminal });
+            writeFileSync(join(local, "monitor-local-closed.json"), JSON.stringify({ ...identity,
+              code: terminal ? 0 : 255, signal: null, remoteDrained: false, closedAtMs, recoverAfterMs }));
+            resolve({ ...value, terminal, remoteDrained: false });
           };
           if (!flags.monitorHold) flags.completeMonitor();
         });

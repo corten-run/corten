@@ -36,7 +36,8 @@ function fixture(t, group, flags = {}) {
     ...(!flags.fleetLayout ? { remainingPlacement: { region, intentSha256: "a".repeat(64) } } : {}) }), provider: child.provider, status: "running",
     ...(!flags.legacyKey ? { launchHostKeySha256: digest(establishedKey) } : {}) };
   const binding = { round, commit, token, helperSha256: guardianSha256 };
-  const reg = { ...structuredClone(registration), binding, host: { ...registration.host, hostname: saved.name } };
+  const reg = { ...structuredClone(registration), binding,
+    host: { ...registration.host, hostname: flags.foreignHostname ? "different-host" : saved.name } };
   const boot = { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: ["bootstrap"] };
   saved.control = { ...boot, monitor: { schema: "benchmark-supervised-control/v1", phase, id: reg.id,
     registrationSha256: digest(JSON.stringify(reg)) } };
@@ -184,9 +185,9 @@ test("uncertain delete reconciles by exact ID without another delete or SSH", as
   assert.ok(calls.every(([bin]) => bin === "doctl"));
 });
 
-test("an old or replaced key cannot authorize failed custody or DELETE", async (t) => {
+test("an old or replaced key or a foreign registration cannot authorize failed custody or DELETE", async (t) => {
   for (const [flags, reason] of [[{ replaceKey: true }, /saved host key differs from launch/],
-    [{ legacyKey: true }, /no launch-established host key/]]) {
+    [{ legacyKey: true }, /no launch-established host key/], [{ foreignHostname: true }, /registered host differs/]]) {
     const f = fixture(t, "fullstack-browser", flags), state = readFileSync(f.h.statePath);
     await assert.rejects(f.task().collect(), reason);
     assert.deepEqual(readFileSync(f.h.statePath), state);
