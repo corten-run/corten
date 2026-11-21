@@ -7390,24 +7390,38 @@ rules something out.
     kept, about 6 in 100 at that bound's 8,192 marks. So a URL asked for once in a full store
     costs 9,070 instructions fewer, and one asked for twice 38,767 more where main still had
     its page for the second, and 9,627 fewer where main had dropped it.
-    In cycles, on a cloud host with eight dedicated CPUs and nothing else running, the same
-    two builds each started once on one CPU and loaded in turn for three seconds by `wrk`
-    with 64 connections on two others, 40 alternated pairs: a stream of new URLs, which
-    fills the store at once, took 72,301 cycles a request against 87,109 at the medians,
-    17.1% fewer within a pair at the median and fewer in 39 of 40, with 16.6% the one-sided
-    95% bound; against the store off (`kept_answers(0)`) it took 5.2% more, more in 37 of
-    40; and each new URL asked for twice, the spread where the rule loses, took 11.2% more,
-    more in all 40. A kept page took 0.9% more, more in 26 of 40, with its instructions the
-    same. In 30 pairs each, an earlier build of each side (`95816e954` with the rule,
-    `39d99b051` without) put the rule at 1.4% and 1.6% more, the two builds without the
-    rule, whose kept-page code is the same, differed by 0.6%, the two with it by 0.4%, and
-    with room, where the rule adds a load and a compare to a new URL, its build took 1.2%
-    fewer than main's. So these binaries differ by about a hundredth either way where they
-    run the same instructions, and whether a kept page's share of that is the rule or where
-    its code was put is not shown. While the store still has room (a bound of 6 GiB, so
-    that no turn fills it), a new URL took 108,731 cycles on main against 68,006 with the
-    store off, 59.7% more and more in all of 30 pairs, 50,977 of them in the kernel against
-    29,559: memory the store touches for the first time, which a full store no longer pays.
+    In cycles, on a cloud host with eight dedicated CPUs that ran nothing else of its own
+    (idle but for the test, with no stolen time, though an eighth of the turns, half of
+    them in one start, cost up to 45% more than their build's median, both builds alike,
+    which the pairs carry), the same two builds were each started four times on one CPU
+    and loaded in turn for three seconds by `wrk` with 64 connections on two others, ten
+    alternated pairs a start: a stream of new URLs, which fills the store at once, took
+    72,301 cycles a request against 87,109 at the medians, 17.1% fewer within a pair at the
+    median, fewer in 39 of 40 and 16.6% to 17.5% fewer by start; against the store off
+    (`kept_answers(0)`) it took 5.2% more, more in 37 of 40 and 3.8% to 7.3% more by
+    start; and each new URL asked for twice, the spread where the rule loses, took 11.2%
+    more, more in all 40 and 8.6% to 13.1% more by start. A kept page took 0.9% more at
+    the median of the 40, with its instructions the same at the median, and by start 2.5%
+    and 1.5% more, 0.8% and 0.1% fewer. In three starts of ten pairs each, an earlier build
+    of each side (`95816e954` with the rule, `39d99b051` without) put the rule at 1.4% and
+    1.6% more, more in 17 and 23 of 30; the two builds without the rule, whose kept-page
+    code is the same, differed by 0.6% over the three and by 1.2% to 1.8% either way
+    within one, the two with it by 0.4% and by 1.1% to 5.2%; and with room, where the rule
+    adds a load and a compare to a new URL, its build took 1.2% fewer than main's over ten
+    starts of three pairs, from 4.4% fewer to 3.8% more by start. So two builds that run
+    the same instructions differ by one to five hundredths from one start to the next, the
+    same way through a start's pairs, and a kept page's difference is inside that. The
+    rule's builds took more in 7 of their 10 starts and two builds of the same code in 2
+    of 6, which does not tell them apart: no cost of the rule to a kept page is shown, and
+    one of a hundredth or two is not ruled out. While the store still has room (a bound
+    of 6 GiB, so that no turn fills it), a new URL took 108,731 cycles on main against
+    68,006 with the store off, 59.7% more, more in all of 30 pairs and 57.1% to 78.1% more
+    by start: 50,977 against 29,559 in the kernel and 58,099 against 38,421 in user mode.
+    The kernel's part goes with memory the store touches for the first time: 1.6 page
+    faults a request for a page of 4,944 bytes, where the store off takes none and a full
+    store 0.03 at most (counted by `perf stat` on a machine that ran other work, which a
+    count of faults does not depend on), and a full store spends 31,863 cycles in the
+    kernel.
     By simulation from these counts (`bench/catalog/sim-kept-store.mjs` at `16f2f5480`: the
     store's clock with and without the rule, 5,461 pages of 6 KiB in 32 MiB, four million
     requests of which the second two million are counted, drawn from a Zipf law over the
@@ -7435,8 +7449,11 @@ rules something out.
     a page's handler for 61 requests in 100 where keeping every answer runs it for 50.
     Not measured: what a write pays for its count; how the URLs of an app in use are spread,
     so how often one first asked for in a full store is asked for again (the simulation's
-    spreads are a law, not a log); whether the 0.9% to 1.6% more cycles for a kept page on
-    that host is the rule or the layout of its binary; a store read from more
+    spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
+    kept page in those rounds is the rule, two builds of the same code having differed by
+    more from one start to the next; a miss kept with room in memory the store has used
+    before (room made by a write or by a page's lifetime ending), in cycles; a store read
+    from more
     than one core; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
@@ -7472,13 +7489,17 @@ rules something out.
     difference of a run of 1,300 requests and one of 300 under callgrind, a new URL each, of
     which the first 28 or so fill a bound of 256 KiB, and for the second request the
     difference of such runs over 1,000 URLs less its 700 first requests, the simulation with
-    Node.js 24, and the cycles on a cloud host with eight dedicated CPUs (Xeon Platinum 8280, Linux 6.12,
-    `wrk` 4.1.0) that ran nothing else, the app on one CPU and `wrk` with 64 connections on
-    two others, each pair of builds started once for ten pairs of three seconds (for three
-    where the store was to keep its room), the order turned about from each pair to the
-    next, the app's cycles and instructions counted by `perf stat` and divided by the
-    requests answered, with a new URL for every request or for every second one, and the
-    store off by `kept_answers(0)`.
+    Node.js 24, and the cycles on a cloud host with eight dedicated CPUs (Xeon Platinum
+    8280, Linux 6.12, `wrk` 4.1.0) that ran nothing else of its own, the app on one CPU and
+    `wrk` with 64 connections on two others, each pair of builds started four times for ten
+    pairs of three seconds (three times for the builds set beside earlier ones, and ten
+    times for three pairs where the store was to keep its room), the order turned about
+    from each pair to the next within a start, which began with the build compared
+    against, so that 20 of the 30 pairs with room ran it first, the app's cycles and
+    instructions counted by `perf stat` and divided by the requests answered, with a new
+    URL for every request or for every second one or with one of 500 kept pages, the store
+    off by `kept_answers(0)`, and the page faults counted the same way on the machine of
+    the counts above.
     2026-11-21, the pass over the headers with rustc 1.100.0: the counts under
     callgrind, and the cycles from the two builds started once on one CPU, its core's other thread
     left idle, and loaded in turn for three seconds each by `wrk` with 64 connections on the two
