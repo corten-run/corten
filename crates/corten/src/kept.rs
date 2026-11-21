@@ -61,7 +61,7 @@
 //! its wait as it would its handler.
 
 use std::collections::{hash_map, HashMap};
-use std::hash::{BuildHasher, DefaultHasher, Hasher, RandomState};
+use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher, RandomState};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
@@ -261,7 +261,28 @@ fn on_site<'a>(to: &'a [u8], host: Option<&HeaderValue>) -> Option<&'a [u8]> {
 /// are made one after the other: each request still looks its own copy up once it has waited.
 struct Flights {
     keys: RandomState,
-    at: Mutex<HashMap<u64, Flight>>,
+    at: Mutex<HashMap<u64, Flight, BuildHasherDefault<Same>>>,
+}
+
+/// A key of [`Flights`] as it is: one is a hash already, of a key this process chose.
+#[derive(Default)]
+struct Same(u64);
+
+impl Hasher for Same {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write_u64(&mut self, key: u64) {
+        self.0 = key;
+    }
+
+    /// Not called for a `u64`.
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.0 = self.0.rotate_left(8) ^ u64::from(byte);
+        }
+    }
 }
 
 enum Flight {
@@ -273,9 +294,29 @@ enum Flight {
 }
 
 impl Flights {
+    /// The key of the copy asked for at `at` with this `Host` and `Accept-Language`, by
+    /// requests that found the path's count of writes at `was`.
+    fn key(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>, was: u32) -> u64 {
+        let mut hasher = self.keys.build_hasher();
+        hasher.write(at.as_bytes());
+        // Where each part ends, so no two ways of asking read as one (a part sent empty is not
+        // one not sent).
+        let mut ends = at.len() as u64;
+        for part in [host, language] {
+            ends = ends.rotate_left(24);
+            if let Some(part) = part {
+                hasher.write(part.as_bytes());
+                ends ^= part.len() as u64 + 1;
+            }
+        }
+        hasher.write_u64(ends);
+        // The writes the requests found: unknown to anyone who does not know the hash.
+        hasher.finish() ^ u64::from(was).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+    }
+
     /// Makes room for a page remembered as not kept: the ones whose time is up go, then the others
     /// if that was not enough. Pages being made stay.
-    fn prune(at: &mut HashMap<u64, Flight>, now: Instant) {
+    fn prune(at: &mut HashMap<u64, Flight, BuildHasherDefault<Same>>, now: Instant) {
         at.retain(|_, flight| match flight {
             Flight::Making(_) => true,
             Flight::NotKept(until) => *until > now,
@@ -681,7 +722,7 @@ impl<'a> Asked<'a> {
     pub(crate) fn missed(&self, req: &Request) -> Result<Missed, Making> {
         let (store, asked) = (&self.answers.0, Instant::now());
         let written = Written::of(store, self.at);
-        let key = store.flights.keys.hash_one((self.at, self.host, self.language, written.was));
+        let key = store.flights.key(self.at, self.host, self.language, written.was);
         let mut flights = store.flights.at.lock().unwrap_or_else(PoisonError::into_inner);
         let leads = match flights.entry(key) {
             hash_map::Entry::Vacant(flight) => {
@@ -828,10 +869,16 @@ impl Missed {
             return res;
         }
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
+        // A `Date` the handler set is its own answer's, and is not kept (below).
+        let mut dated = false;
         let head: usize = res
             .headers()
             .iter()
-            .filter(|(name, _)| *name != header::DATE)
+            .filter(|(name, _)| {
+                let date = *name == header::DATE;
+                dated |= date;
+                !date
+            })
             .map(|(name, value)| name.as_str().len() + value.len() + HEADER)
             .sum();
         // The URL is held twice, by the entry and by the map.
@@ -853,9 +900,10 @@ impl Missed {
         let body = Bytes::copy_from_slice(&body);
         let Missed { at, host, language: asked, asked: made, written, mut leading, .. } = self;
         let mut head = parts.headers.clone();
-        // A `Date` the handler set is its own answer's: each answer given in its place is dated
-        // when it is sent, as any other is.
-        head.remove(header::DATE);
+        // Each answer given in its place is dated when it is sent, as any other is.
+        if dated {
+            head.remove(header::DATE);
+        }
         let entry = answers.keep(|place| Entry {
             at,
             place,
@@ -1286,6 +1334,28 @@ mod tests {
         assert_eq!(answers.find("/p", None, Some(&fr)).expect("the one that stands").0.body.len(), 20);
         assert!(answers.find("/p", None, Some(&en)).is_none());
         assert_eq!(answers.bytes(), 20 + OVERHEAD, "the one past its lifetime went when the URL was kept again");
+    }
+
+    /// The pages remembered as not kept are at most [`NOT_KEPT`] with those being made, and one
+    /// being made is never put out to make room for them.
+    #[test]
+    fn the_pages_remembered_as_not_kept_are_bounded() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let store = &answers.0;
+        let written = Written::of(store, "/p");
+        let flights = || store.flights.at.lock().unwrap_or_else(PoisonError::into_inner);
+        flights().insert(u64::MAX, Flight::Making(None));
+        let making = Leading { store: store.clone(), key: u64::MAX, written, answered: false };
+        for key in 0..NOT_KEPT as u64 * 3 {
+            flights().insert(key, Flight::Making(None));
+            // Answered, and not kept.
+            drop(Leading { store: store.clone(), key, written, answered: true });
+            assert!(flights().len() <= NOT_KEPT, "{key}: {}", flights().len());
+            assert!(matches!(flights().get(&key), Some(Flight::NotKept(_))), "{key}: the latest is remembered");
+        }
+        assert!(matches!(flights().get(&u64::MAX), Some(Flight::Making(None))), "the page being made stays");
+        drop(making);
+        assert!(flights().get(&u64::MAX).is_none(), "until it is answered or dropped");
     }
 
     #[test]
