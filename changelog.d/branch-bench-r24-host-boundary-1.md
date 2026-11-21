@@ -1,0 +1,1 @@
+-   The supervised marketplace benchmark now checks once more after cleanup for verified post-command udev workers. It keeps the original host evidence and still rejects persistent or unexplained processes. [#1834 Benchmark r24: marketplace host cleanup stops on 16 new udev worker processes](https://github.com/corten-run/corten/issues/1834)

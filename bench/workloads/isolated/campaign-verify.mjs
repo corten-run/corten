@@ -12,7 +12,7 @@ import { inspectLifetime, composeHostProof } from "./host-lifetime.mjs";
 import { commandResult, composePhase } from "./composition.mjs";
 import { registrySchema } from "../registry.mjs";
 import { alternateCampaignPlacements } from "./contract.mjs";
-import { verifyHostBoundary } from "./host-observation.mjs";
+import { verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -127,7 +127,19 @@ export async function validateCampaign(input) {
           }
         }
         if (controlHost) for (const field of ["hostname", "bootId"]) assert.equal(hostBefore[field], controlHost[field]);
-        try { boundary = verifyHostBoundary(hostBefore, read(`${id}/${entry.path}/host-after.json`)); }
+        try {
+          const after = read(`${id}/${entry.path}/host-after.json`);
+          const settlePath = `${entry.path}/host-after-settled.json`;
+          if (subtree.entries.some((e) => e.path === settlePath)) {
+            const last = recorded.results.at(-1);
+            assert.ok(status.executionVersion === 5 && group === "localized-marketplace" && phase === "timing"
+              && recorded.results.length === recorded.invocations.length && last.terminal && !last.cancelled && !last.forced
+              && last.hostManifestSha256, "udev settle lacks a terminal marketplace command");
+            const settled = read(`${id}/${settlePath}`);
+            if (streamSeal) assert.ok(BigInt(settled.controlApparatus.sample.monoNs) <= BigInt(streamSeal.sealedMonoNs));
+            boundary = verifySettledHostBoundary(hostBefore, after, settled, last.hostTerminalClock);
+          } else boundary = verifyHostBoundary(hostBefore, after);
+        }
         catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
         if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.ok(isDeepStrictEqual(status.outcomes[index].cleanup, boundary), "cleanup boundary differs"); }
       }

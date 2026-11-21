@@ -20,7 +20,7 @@ import { composePhase } from "./composition.mjs";
 import * as actualLifetime from "./host-lifetime.mjs";
 import { samplingControl } from "./test-fixtures/host-lifetime-storage.mjs";
 import { ioError } from "./test-fixtures/host-durable-writer-control.mjs";
-import { processStat } from "./host-observation.mjs";
+import * as actualHost from "./host-observation.mjs";
 import * as controlAdmission from "./control-admission.mjs";
 import { guardianSource } from "../cloud-control-runtime.mjs";
 
@@ -33,7 +33,7 @@ let admittedHost, admittedApparatus, controlWindows;
 mock.module("./control-admission.mjs", { exports: { ...controlAdmission,
   beginControlWindow(binding) {
     assert.equal(binding.round, "r21"); controlWindows.push("open");
-    return () => { assert.ok(existsSync(join(controlWindows.directory, "00-client-heavy-timing", "host-after.json"))); controlWindows.push("close"); };
+    return () => { assert.ok(existsSync(join(controlWindows.directory, controlWindows.phase ?? "00-client-heavy-timing", "host-after.json"))); controlWindows.push("close"); };
   },
 } });
 const cpu = { app: { cpuset: "1", quota: 1 } };
@@ -83,10 +83,39 @@ mock.module("./mixed-staging.mjs", { exports: {
 const host = () => ({ hostname: admittedHost?.hostname ?? "test-host", bootId: admittedHost?.bootId ?? "boot", containers: [], networks: ["bridge"], processes: [],
   ...(admittedApparatus ? { controlApparatus: { registration: structuredClone(admittedApparatus), sample: { host: admittedApparatus.host,
     monoNs: "2000000", members: admittedApparatus.members, listener: admittedApparatus.listener } } } : {}) });
+const udevPath = "0::/system.slice/systemd-udevd.service/udev\n";
+const udevExecutable = { path: "/usr/lib/systemd/systemd-udevd", device: "2049", inode: "10" };
+function rawProcess({ pid, startTicks, cgroup, parentPid }, comm = "ordinary") {
+  const fields = Array(49).fill("0"); fields[0] = parentPid; fields[5] = "4194304"; fields[18] = startTicks;
+  return { pid, startTicks, cgroup, stat: `${pid} (${comm}) S ${fields.join(" ")}\n` };
+}
+function udevHost(observation) {
+  const value = host();
+  value.processes = [...admittedApparatus.members, admittedApparatus.listener].map((p) => rawProcess(p));
+  value.processes.push({ ...rawProcess({ pid: 846, startTicks: "812", cgroup: udevPath, parentPid: 1 }, "systemd-udevd"), udevExecutable });
+  if (observation === 3) value.processes.push({ ...rawProcess({ pid: 62274, startTicks: "10601", cgroup: udevPath, parentPid: 846 }, "(udev-worker)"), udevExecutable });
+  value.uptime = `${["100.00", "101.00", "106.15", "111.16"][observation - 1]} 1280.13\n`;
+  value.controlApparatus.sample.monoNs = observation === 4 ? "5012000000" : "2000000";
+  return value;
+}
 mock.module("./host-observation.mjs", { namedExports: {
-  processStat,
-  observeHost() { observations++; const value = host(); if (mode === "leak" && observations > 2) value.containers = ["leak"]; return value; },
-  verifyHostBoundary(before, after) { assert.deepEqual(after, before, "host cleanup uncertain"); return { cleanup: "observed-boundary-matched", isolation: "unverified" }; },
+  ...actualHost, udevSettleMs: 0,
+  hostTerminalClock() {
+    assert.equal(mode, "udev-settle"); assert.equal(observations, 2);
+    return { bootId: admittedHost.bootId, uptime: "106.00 1280.00\n", ticksPerSecond: 100 };
+  },
+  observeHost(_apparatus, retainUdev = false) {
+    observations++;
+    if (mode === "udev-settle") {
+      assert.equal(retainUdev, observations > 1);
+      return udevHost(observations);
+    }
+    const value = host(); if (mode === "leak" && observations > 2) value.containers = ["leak"]; return value;
+  },
+  verifyHostBoundary(before, after) {
+    if (mode === "udev-settle") return actualHost.verifyHostBoundary(before, after);
+    assert.deepEqual(after, before, "host cleanup uncertain"); return { cleanup: "observed-boundary-matched", isolation: "unverified" };
+  },
 } });
 mock.module("./host-lifetime.mjs", { exports: {
   beginLifetime(args) {
@@ -796,6 +825,58 @@ test("audit wait mutation and image replacement halt before timing", async () =>
     await assert.rejects(s.campaign.submitJsonAudit(h, delivery(h))); assert.equal(calls.length, 4);
   }
 });
+
+test("v5 localized-marketplace keeps and replays the post-command udev settle", async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
+    { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024, windowsHide: true });
+  assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
+  const proof = JSON.parse(result.stdout), s = setupGroup("localized-marketplace"); s.plan.round = "r21"; admittedHost = proof.admission.host;
+  mode = "udev-settle";
+  const { registration: fixture } = await import("../test-fixtures/control-stream-fixture.mjs");
+  const { streamHash } = await import("./control-stream.mjs");
+  const { deploymentSha256 } = await import("../deployments.mjs");
+  admittedApparatus = { ...structuredClone(fixture), binding: proof.binding, host: proof.admission.host };
+  proof.admission.apparatus = admittedApparatus;
+  proof.admission.apparatusSample = { host: admittedHost, monoNs: "2000000", members: admittedApparatus.members, listener: admittedApparatus.listener };
+  s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2-3" }, load: { cpuset: "4-7" } };
+  const calls = [], stream = { registration: admittedApparatus, check() { calls.push("check"); },
+    open(cpus) { assert.deepEqual(cpus, { app: "1", api: "2-3", load: "4-7" }); calls.push("open"); },
+    close() { calls.push("close"); }, async seal() {
+      calls.push("seal"); return { schema: "benchmark-control-stream-seal/v1", registration: admittedApparatus,
+        observations: Array.from({ length: 21 }, (_, i) => ({ sequence: i + 1,
+          monoNs: String(2000000 + i * 250500000), registrationSha256: streamHash(admittedApparatus) })),
+        sealedMonoNs: "5013000000",
+        lease: { id: admittedApparatus.id, host: admittedHost, expiresMonoNs: "15000000000" } };
+    } };
+  const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding: proof.binding, admission: proof.admission, stream } });
+  controlWindows.directory = handle.directory; controlWindows.phase = "00-localized-marketplace-timing";
+  const status = await s.campaign.advance(handle);
+  assert.equal(status.state, "finished"); assert.ok(calls.indexOf("open") < calls.indexOf("close") && calls.indexOf("close") < calls.indexOf("seal"));
+  const phase = join(handle.directory, controlWindows.phase), first = JSON.parse(readFileSync(join(phase, "host-after.json")));
+  assert.equal(observations, 4);
+  assert.deepEqual(first, { ...udevHost(3), terminalClock: { bootId: admittedHost.bootId, uptime: "106.00 1280.00\n", ticksPerSecond: 100 } });
+  assert.deepEqual(JSON.parse(readFileSync(join(phase, "host-after-settled.json"))), udevHost(4));
+  assert.deepEqual(status.outcomes[0].cleanup.settledUdevWorkers, [{ pid: 62274, startTicks: "10601" }]);
+  const drain = { schema: "benchmark-control-stream-drain/v1", id: admittedApparatus.id, registrationSha256: streamHash(admittedApparatus),
+    host: admittedHost, monoNs: "5014000000", identitiesAbsent: true, listener: admittedApparatus.listener,
+    scopes: [{ path: "/user.slice/session-1.scope", exists: false, members: [], events: null }] };
+  writeFileSync(join(handle.directory, "control-stream-drain.json"), JSON.stringify(drain));
+  writeFileSync(join(handle.directory, "collection-manifest.json"), JSON.stringify(s.campaign.collect(handle)));
+  const request = { folder: root, round: "r21", commit: s.plan.commit };
+  const inspected = await validateSavedCampaign(request);
+  assert.notEqual(inspected.status, "invalid");
+  assert.deepEqual(inspected.supervisedTerminal, { registrationSha256: streamHash(admittedApparatus),
+    sealSha256: evidence.digest(readFileSync(join(handle.directory, "control-stream-seal.json"))) });
+  const receipt = join(phase, "host-after-settled.json");
+  writeFileSync(receipt, JSON.stringify(first));
+  const collection = join(handle.directory, "collection-manifest.json"), previous = JSON.parse(readFileSync(collection));
+  const entries = evidence.tree(handle.directory).entries.filter((e) => e.path !== "collection-manifest.json");
+  writeFileSync(collection, JSON.stringify({ ...previous, manifest: { entries, sha256: deploymentSha256(entries) } }));
+  assert.equal((await validateSavedCampaign(request)).status, "invalid", "an outer rehash cannot change the sealed first or settled boundary");
+});
+
 test("a timing audit mismatch halts after sealed collection without leaking native diagnostics", async () => {
   const s = setup(), h = await begin(s); await s.campaign.advance(h); await s.campaign.advance(h);
   await s.campaign.submitJsonAudit(h, delivery(h)); mode = "audit-mismatch";

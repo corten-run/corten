@@ -10,7 +10,7 @@ import { validateCampaign, freeze, jsonPhase, mixedPhase } from "./campaign-cont
 import { verifyWorkingSources } from "./worker.mjs";
 import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, readRegular, syncDirectory, tree } from "./evidence.mjs";
 import { supervise } from "./process.mjs";
-import { observeHost, verifyHostBoundary } from "./host-observation.mjs";
+import { hostTerminalClock, observeHost, udevSettleCandidates, udevSettleMs, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { inspectNative } from "./native-replay.mjs";
 import { beginLifetime, composeHostProof, inspectLifetime } from "./host-lifetime.mjs";
@@ -122,7 +122,10 @@ export function createCampaign({ authorize }) {
       for (const file of manifest.entries.filter((e) => e.type === "file")) c.files.push({
         path: `${directory}/command-${number}-host/${file.path}`, sha256: file.sha256 });
     }
-    event(c, "command-exited", { ...result, ...(hostManifestSha256 ? { hostManifestSha256 } : {}) });
+    const terminalClock = c.stream && binding.request.group === "localized-marketplace" && invocation === binding.execution.invocation
+      && result.terminal && !result.cancelled && !result.forced ? hostTerminalClock() : undefined;
+    const terminalEvidence = terminalClock ? { hostTerminalClock: terminalClock } : {};
+    event(c, "command-exited", { ...result, ...(hostManifestSha256 ? { hostManifestSha256 } : {}), ...terminalEvidence });
     assert.equal(result.terminal, true, "native process is not observed terminal");
     const lifetime = hostManifestSha256 ? inspectLifetime(binding, invocation,
       join(c.directory, directory, `command-${number}-host`), { campaign: c.handle.id, command: number, pid, result }) : null;
@@ -133,7 +136,7 @@ export function createCampaign({ authorize }) {
       && ["accounting", "terminal", "empty", "observer", "leader"].every((key) => lifetime.checks?.[key] === true);
     assert.ok((lifetime?.status === "verified" && lifetime.cleanupComplete === true) || drainedCancellation,
       "command lifetime or cleanup unproven; retain pending native root");
-    return { ...result, number, pid, hostManifestSha256 };
+    return { ...result, number, pid, hostManifestSha256, ...terminalEvidence };
   }
   async function phase(c, binding, phaseName, signal) {
     verifyWorkingSources(c.plan.bindings[0]);
@@ -145,7 +148,8 @@ export function createCampaign({ authorize }) {
     c.pendingNative.push(pending); event(c, "native-output-reserved", pending);
     c.stream?.open(Object.fromEntries(Object.entries(binding.resources.expectedCpus ?? binding.resources.measurement?.cpu ?? {}).map(([role, value]) => [role, value.cpuset])));
     const closeControlWindow = c.control ? beginControlWindow(c.control) : null;
-    const before = observeHost(c.stream?.registration); save(c, `${relative}/host-before.json`, before);
+    const retainUdev = !!c.stream && binding.request.group === "localized-marketplace" && phaseName === "timing";
+    const before = observeHost(c.stream?.registration, retainUdev); save(c, `${relative}/host-before.json`, before);
     if (c.stream) verifyHostBoundary(before, before);
     const commands = [];
     for (const invocation of [...binding.preparation.fixtures, binding.execution.invocation]) {
@@ -154,9 +158,18 @@ export function createCampaign({ authorize }) {
       const result = await command(c, binding, invocation, relative, signal); commands.push(result);
       if (!result.success) break;
     }
-    let after, boundaryError;
+    let after, settled, boundaryError;
+    const terminalClock = commands.at(-1)?.hostTerminalClock;
     try {
-      verifyWorkingSources(c.plan.bindings[0]); after = observeHost(c.stream?.registration); save(c, `${relative}/host-after.json`, after);
+      verifyWorkingSources(c.plan.bindings[0]); after = observeHost(c.stream?.registration, retainUdev);
+      if (terminalClock) after.terminalClock = terminalClock;
+      save(c, `${relative}/host-after.json`, after);
+      if (retainUdev && terminalClock && !signal?.aborted && udevSettleCandidates(before, after, terminalClock)) {
+        await new Promise((resolve) => setTimeout(resolve, udevSettleMs));
+        c.stream.check();
+        settled = observeHost(c.stream.registration, true);
+        save(c, `${relative}/host-after-settled.json`, settled);
+      }
     } catch (error) { boundaryError = error; }
     const native = join(directory, "native"), present = !!lstatSync(original, { throwIfNoEntry: false });
     let manifest;
@@ -170,7 +183,7 @@ export function createCampaign({ authorize }) {
     if (boundaryError) throw boundaryError;
     closeControlWindow?.();
     c.stream?.close();
-    p.cleanup = verifyHostBoundary(before, after);
+    p.cleanup = settled ? verifySettledHostBoundary(before, after, settled, terminalClock) : verifyHostBoundary(before, after);
     return p;
   }
   function cancelled(c, phase, signal) {
@@ -291,7 +304,7 @@ export function createCampaign({ authorize }) {
             catch { throw new Error("timing-audit-does-not-match-accepted-subject"); }
           }
           const native = await inspectNative(effective, p.native);
-          const last = p.commands.at(-1), { number, pid, hostManifestSha256, ...result } = last;
+          const last = p.commands.at(-1), { number, pid, hostManifestSha256, hostTerminalClock: _clock, ...result } = last;
           let host = { resources: "blocked", cleanupComplete: false };
           if (hostManifestSha256) {
             const invocation = [...effective.preparation.fixtures, effective.execution.invocation][p.commands.length - 1];
