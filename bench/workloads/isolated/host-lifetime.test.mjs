@@ -159,6 +159,30 @@ test("saved browser CPU proof requires the driver/Chromium scope and both timed 
   assert.deepEqual(browserResourceResults(f), ["blocked", "blocked"], "the upstream cannot disappear from both inventories");
 });
 
+for (const [role, id, allowed, escaped] of [
+  ["browser", 102, "4,6-7", "0,4,6-7"],
+  ["upstream", 302, "3", "0,3"],
+  ["application", 303, "1", "1-2"],
+]) test(`saved browser CPU proof bounds the ${role} child's own effective CPU set`, (t) => {
+  const f = browserFixture(t, "app", true), timed = f.observation.samples[1], control = "cpuset.cpus.effective";
+  const participant = f.native.hostSubject.participants.find((p) => p.role === role);
+  const scope = role === "browser" ? timed : timed.docker.participants.find((r) => r.container.id === participant.id).kernel;
+  const root = scope.groups[0], child = group(`${root.path}/workers`, [id]);
+  child.files[control] = `${allowed}\n`;
+  scope.groups.push(child);
+  const cgroup = `0::${child.path}\n`;
+  if (role === "browser") {
+    root.files["cgroup.procs"] = "100\n101\n";
+    scope.processes.find((p) => processIdentity(p.stat).pid === id).cgroup = cgroup;
+  } else {
+    scope.processes.push({ stat: stat(id, "worker"), cgroup, executableSha256: "4".repeat(64), type: null });
+  }
+  assert.deepEqual(browserResourceResults(f), ["verified", "verified"]);
+  child.files[control] = `${escaped}\n`;
+  assert.deepEqual(browserResourceResults(f), ["blocked", "blocked"]);
+  if (role === "browser") assert.equal(replayBrowser(f).checks.accounting, false);
+});
+
 function lifecycleBoundaryFixture(t, { created = false, exited = false, rootAbsent = true } = {}) {
   const f = browserFixture(t, "corten"), template = f.observation.samples[1], p = f.native.hostSubject.participants[0];
   f.observation.samples = Array.from({ length: 41 }, (_, i) => {

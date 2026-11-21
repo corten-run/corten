@@ -59,6 +59,33 @@ function scopeCpuSetMatches(groups, path, cpuset) {
   return groups?.find((g) => g.path === path)?.files[cpusetField]?.trim() === cpuset;
 }
 
+function cpuRanges(cpus) {
+  assert.match(cpus, /^(0|[1-9]\d*)(?:-(0|[1-9]\d*))?(?:,(0|[1-9]\d*)(?:-(0|[1-9]\d*))?)*\n?$/);
+  const ranges = [];
+  for (const range of cpus.trim().split(",")) {
+    const [start, end = start] = range.split("-").map(Number), previous = ranges.at(-1);
+    assert.ok(Number.isSafeInteger(start) && Number.isSafeInteger(end) && start > (previous?.[1] ?? -1) && end >= start);
+    if (previous && start - previous[1] === 1) previous[1] = end;
+    else ranges.push([start, end]);
+  }
+  return ranges;
+}
+
+function participantCpuSetsWithin({ groups, processes }, root, cpuset) {
+  // The root is checked exactly. Each process in a child has its own effective
+  // set, which can be narrower but cannot include a CPU outside its role.
+  const children = new Set(processes.map((p) => groupPath(p.cgroup)));
+  children.delete(root);
+  if (!children.size) return true;
+  const effective = new Map(groups.map((g) => [g.path, g.files[cpusetField]]));
+  const allowed = cpuRanges(cpuset);
+  return [...children].every((path) => {
+    const actual = effective.get(path);
+    return actual != null && cpuRanges(actual).every(([start, end]) =>
+      allowed.some(([first, last]) => start >= first && end <= last));
+  });
+}
+
 export function requireBrowserCommandCpuSet(cpuset) {
   assert.equal(process.platform, "linux", "isolated browser requires Linux cgroup v2");
   const path = groupPath(readFileSync("/proc/self/cgroup", "utf8"));
@@ -80,18 +107,10 @@ function parents(path) {
   for (;;) { values.push(readGroup(path)); if (path === "/") return values; path = posix.dirname(path); }
 }
 function effectiveControls(files) {
-  const cpu = files["cpu.max"], cpus = files["cpuset.cpus.effective"], memory = files["memory.max"];
+  const cpu = files["cpu.max"], cpus = files[cpusetField], memory = files["memory.max"];
   if (cpu !== null) assert.match(cpu, /^(max|[1-9]\d*) [1-9]\d*\n?$/);
   if (memory !== null) assert.match(memory, /^(max|0|[1-9]\d*)\n?$/);
-  if (cpus !== null) {
-    assert.match(cpus, /^(0|[1-9]\d*)(?:-(0|[1-9]\d*))?(?:,(0|[1-9]\d*)(?:-(0|[1-9]\d*))?)*\n?$/);
-    let previous = -1;
-    for (const range of cpus.trim().split(",")) {
-      const [start, end = start] = range.split("-").map(Number);
-      assert.ok(Number.isSafeInteger(start) && Number.isSafeInteger(end) && start > previous && end >= start);
-      previous = end;
-    }
-  }
+  if (cpus !== null) cpuRanges(cpus);
   return cpu !== null && cpus !== null && memory !== null;
 }
 function executableHash(at, executables) {
@@ -576,6 +595,7 @@ export function inspectLifetime(binding, invocation, directory, expected) {
       identities.set(key, { ...identity, executableSha256: p.executableSha256, type: p.type });
     }
     assert.equal(seen.size, members.size);
+    if (commandCpus && !participantCpuSetsWithin(sample, context.path, commandCpus)) controlsComplete = false;
   }
   assert.deepEqual(samples[0].processes, []);
   assert.ok(isDeepStrictEqual(tree(directory), before), "host lifetime evidence mutated during inspection");
@@ -756,6 +776,7 @@ export function inspectBrowserParticipants(subject, observation, cpus) {
       assert.ok(Number.isSafeInteger(limits.Memory) && limits.Memory > 0);
       assert.equal(controls["memory.max"].trim(), String(limits.Memory));
       if (limits.CpusetCpus) assert.equal(controls["cpuset.cpus.effective"].trim(), limits.CpusetCpus);
+      if (cpus && !participantCpuSetsWithin(k, path, cpus[p.role])) return false;
     }
   }
   return true;
@@ -787,7 +808,8 @@ export function composeHostProof(binding, native, observation) {
   assert.ok(Array.isArray(subject.processWindows));
   if (!subject.processWindows.length && (browserCpus || !browser || native.qualificationPassed || native.outcomes.some((r) => r.outcome !== "failed"))) return incomplete;
   if (browser && (!native.cleanupComplete || !Array.isArray(observation.context.dockerBaseline)
-    || browserCpus && samples.some((s) => !scopeCpuSetMatches(s.groups, observation.context.path, browserCpus.browser))
+    || browserCpus && samples.some((s) => !scopeCpuSetMatches(s.groups, observation.context.path, browserCpus.browser)
+      || !participantCpuSetsWithin(s, observation.context.path, browserCpus.browser))
     || !inspectBrowserParticipants(subject, observation, browserCpus))) return incomplete;
   for (const window of subject.processWindows) {
     assert.ok((browser ? ["browser"] : ["compiler", "browser"]).includes(window.kind));
