@@ -422,13 +422,12 @@ impl Store {
         if word.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
             return true;
         }
-        // 64 marks a word, so this is an eighth of them. Requests that get here at once may
-        // each clear or count one too many, and then a URL is asked for once more than it had
-        // to be.
+        // 64 marks a word, so this is an eighth of them. The URL that clears them is unmarked
+        // with the rest, and requests that get here at once may each clear or count one too
+        // many: a URL is then asked for once more than it had to be.
         if self.marked.fetch_add(1, Ordering::Relaxed) >= marks.len() * 8 {
             marks.iter().for_each(|word| word.store(0, Ordering::Relaxed));
-            self.marked.store(1, Ordering::Relaxed);
-            word.fetch_or(bit, Ordering::Relaxed);
+            self.marked.store(0, Ordering::Relaxed);
         }
         false
     }

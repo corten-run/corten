@@ -1498,15 +1498,6 @@ must show at once a short lifetime, or leave it private. An answer given again c
 counted from when the request it was made for reached the handler, so a browser and a CDN count
 the lifetime from when the page was made.
 
-An answer is kept once its URL was asked for before. Keeping one costs a copy of it and, once
-the bound is reached, the room of another page, and a URL asked for once never earns that back.
-So a crawler walking a catalog and a search no one repeats are answered by the handler without
-the copy into the store, and the pages visitors ask for again stay kept. A page's handler runs
-for the first two requests for a URL, and after that once each time the page's lifetime ends or
-a write drops it. The app holds no list of the URLs asked for, only a mark for each in a table
-of a fixed size (128 KiB), so now and then a URL is not known again and its page is made once
-more than it had to be.
-
 A kept page stands where the handler does, after [your own middleware](#your-own-middleware). Every
 stage runs for every request: a middleware that refuses, counts or stamps a header still does, and
 sees the `200` with the whole body; the security headers and `Cache-Control` are written as for any
@@ -1530,7 +1521,7 @@ else a page could differ by, and the answer nothing made for one request:
 | the handler | takes only Corten's own inputs for a page | takes an extractor of the app's own |
 | the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
-| the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound |
+| the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages fill the bound |
 | what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key, a `Vary` of the app's own |
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
@@ -1578,7 +1569,12 @@ page stands is the app's to say. Give a page whose changes must show at once a s
 `App::kept_answers(bytes)` sets how much is kept: 32 MiB unless set, and `0` keeps none. What is
 counted is each page's key, headers and body and each compressed form made of it, with an
 allowance for what holds them. Past the bound, a page not read since room was last made goes
-first. Nothing is kept under `corten dev`,
+first. With room, every page is kept the first time it is made. Once the kept pages are within
+an eighth of the bound, keeping one drops another, so a page is kept only from the second
+request for its URL: a crawler walking more URLs than there is room for, or searches no one
+repeats, are answered by the handler and take no kept page's room, and a new page's handler
+runs for its first two requests. A store that has filled stays full, since a page past its
+lifetime keeps its room until another needs it. Nothing is kept under `corten dev`,
 so a change shows on the next load. An app's tests keep pages as a deploy does (`App::test`,
 `App::router`): a test that changes what a `Public` page shows other than by a write through the
 app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can
