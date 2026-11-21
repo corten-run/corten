@@ -36,6 +36,6 @@ serveProviderWorker({
     }
     assert.equal(path, "/v2/droplets/123");
     configured = A; // The trailing account read would see A again.
-    return credential === B || !live ? { status: 404 } : { status: 200, value: { droplet: { id: 123, tags: [] } } };
+    return credential === B || !live ? { status: 404 } : { status: 200, value: { droplet: mode === "resume" ? { id: 123, tags: [] } : host } };
   },
 });

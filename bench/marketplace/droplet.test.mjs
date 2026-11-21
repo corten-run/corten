@@ -86,8 +86,10 @@ function harness(t, { active = false, activates = false, corrupt = false, missin
         const matches = droplets.filter((d) => String(d.id) === args[3]);
         const found = getResponse ?? (matches.length ? good(JSON.stringify(matches))
           : { status: 1, stdout: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } });
-        observedAfterDelete.push(matches.map((d) => d.id));
-        if (delayedDelete && !failDelete) droplets = [];
+        if (deleted) {
+          observedAfterDelete.push(matches.map((d) => d.id));
+          if (delayedDelete && !failDelete) droplets = [];
+        }
         afterGet();
         return found;
       }
@@ -176,7 +178,7 @@ test("wrong host identity refuses any SSH or delete", async (t) => {
   for (const change of [{ id: 124 }, { name: "unrelated" }, { tags: ["corten-bench"] },
     { networks: { v4: [{ type: "public", ip_address: "192.0.2.2" }] } }]) {
     const h = harness(t); h.reserve(); h.changeHost(change);
-    await assert.rejects(h.task().collect(), /owned droplet missing|Expected values|ownership tag|public IP differs/);
+    await assert.rejects(h.task().collect(), /absence unconfirmed|Expected values|ownership tag|public IP differs/);
     assert.equal(h.deleted, 0); assert.ok(!h.calls.some((c) => c[0] === "ssh"));
   }
 });
@@ -408,6 +410,27 @@ test("launch reserves once even when create response is ambiguous", async (t) =>
   const h = harness(t, { active: true, failCreate: true }); h.empty();
   assert.equal((await h.task().launch()).status, "running"); assert.equal(h.creates, 1);
   await assert.rejects(h.task().launch(), /already reserved/); assert.equal(h.creates, 1);
+});
+test("an unsupported durable publisher refuses an ordinary launch before any cloud command", async (t) => {
+  const h = harness(t, { active: true }); h.empty();
+  const publishIntent = () => { throw new Error("scripts are disabled on this system"); };
+  await assert.rejects(h.task({}, { publishIntent }).launch(), /publisher preflight failed.*no droplet created.*scripts are disabled/);
+  assert.ok(!h.calls.some((c) => c[0] === "doctl" || c[0] === "ssh"));
+  assert.equal(h.creates, 0);
+  assert.equal(existsSync(join(h.local, "state.json")), false);
+});
+test("Windows Restricted policy refuses before provisioning without a policy override", { skip: process.platform !== "win32" }, async (t) => {
+  const h = harness(t, { active: true }); h.empty();
+  const prior = process.env.PSExecutionPolicyPreference;
+  process.env.PSExecutionPolicyPreference = "Restricted";
+  try {
+    await assert.rejects(h.task().launch(), /publisher preflight failed.*no droplet created.*running scripts is disabled/is);
+  } finally {
+    if (prior === undefined) delete process.env.PSExecutionPolicyPreference;
+    else process.env.PSExecutionPolicyPreference = prior;
+  }
+  assert.ok(!h.calls.some((c) => c[0] === "doctl" || c[0] === "ssh"));
+  assert.equal(existsSync(join(h.local, "state.json")), false);
 });
 test("dirty checkout and existing benchmark prevent create", async (t) => {
   const h = harness(t, { dirty: true }); h.empty();

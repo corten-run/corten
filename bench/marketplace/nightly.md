@@ -153,6 +153,10 @@ local NTFS, with no administrator access required. If durable publication fails,
 reports exit 2 without sending DELETE. Keep the archive, state and any staged intent for
 operator review; the host may still be billed.
 
+Before allocating, both launchers exercise the same publisher in a disposable directory on
+the control filesystem. If local storage or Windows execution policy blocks it, launch
+stops before making a provider request. It does not override execution policy.
+
 For up to two minutes the collector looks for an authenticated HTTP 404 on the exact ID,
 checking the saved account before and after the GET. An ID that is still present, even
 without its tags, does not prove deletion. If acknowledgement is lost and the worker cannot
@@ -229,7 +233,7 @@ process, and never remove a live lock. A lock whose pid is not running is a kill
 collect removes it and collects the stopped launch. The launcher ignores SIGHUP, so a closed
 terminal does not stop it. Exit codes are as above, for the round: 3 while any droplet
 runs (finished droplets are already collected and deleted), 2 for a collection error on any
-droplet or a leftover `corten-marketplace-rN-d*` droplet (reported with its delete command, never
+droplet or a leftover `corten-marketplace-rN-d*` droplet (reported for ownership review, never
 deleted), 1 when a droplet did not finish its part or the parts do not merge, 0 when every
 droplet finished, was deleted and merged into `round/rN/` in the state directory. Exit 2 wins
 over 3: a droplet can still be running when collect exits 2. Then fix what it names and collect
@@ -244,8 +248,13 @@ left doing, and saves it as `launch-stopped.txt` in the state directory; stop a 
 with the `ssh` command it prints, then collect. A droplet whose launch stopped before
 `systemctl start` (`creating` or `preparing`) never ran its round: the launch and collect both
 print what to delete (collect finds a droplet whose create returned no id by name and run tag,
-and checks its ownership tags before printing a `doctl` delete command); run it. A `starting` droplet is collected, never deleted on a
-guess. A split round compares only with a round split the same way, droplet by droplet, so
+and checks its exact ID and ownership tags before printing a `doctl` delete command). A
+`starting` droplet is collected, never deleted on a guess. For an interrupted launch, a
+missing inventory row is not proof of absence. Collection can confirm an exact ID is gone
+only with an authenticated 404 in its saved account. It binds that account when it first
+verifies an owned ID; if it cannot do that and no binding exists, the state remains
+unconfirmed. The final inventory reports extra IDs but does not override exact-ID proof.
+A split round compares only with a round split the same way, droplet by droplet, so
 droplets that land on different CPU models refuse comparison with a baseline whose droplets
 differ (see the README); its report's Between droplets section flags stages where Corten's own
 numbers differ between droplets, and a flagged stage is reported, not hidden. A split splits the

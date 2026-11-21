@@ -158,7 +158,7 @@ export function splitPlan(round, group, droplets, commit, createdAt = new Date()
 /**
  * The exit code of a split round's collection from each droplet's (#816). Each is a collect()
  * code (0 done, 1 partial, 3 still running), 2 for a collection error, or "missing" for a part
- * that was never created. A collection error, a leftover droplet or any other code is 2, like one
+ * never reserved or confirmed absent after an interrupted launch. A collection error, a leftover droplet or any other code is 2, like one
  * droplet's; then 3 while any still runs; then 1 when any is partial or missing. 0 only when every
  * droplet finished, was collected and deleted: the round can merge.
  * @param {(number | "missing")[]} codes @param {number} leftovers droplets reported by leftoverDroplets
