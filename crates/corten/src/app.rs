@@ -963,7 +963,8 @@ impl<M: Middleware> App<M> {
     /// its page is kept. A write to a page's path drops what is
     /// kept there, whatever it is answered, and so does one that redirects to it; a
     /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
-    /// under `corten dev`. The bytes counted are each page's key, its headers, its body and each
+    /// under `corten dev`, and an app with no `Public` page keeps none and counts no writes,
+    /// whatever the bound. The bytes counted are each page's key, its headers, its body and each
     /// compressed form made of it.
     pub fn kept_answers(mut self, bytes: usize) -> Self {
         self.kept = bytes;
@@ -1542,8 +1543,6 @@ impl<M: Middleware> App<M> {
             shared.zoned_dates = self.zoned_dates;
         }
         shared.dev = dev;
-        // Under `corten dev` every load is the handler's, so a change shows on the next one.
-        shared.kept = if dev { None } else { crate::kept::Answers::new(self.kept) };
         shared.layout_reads = self.layout_reads.into();
         // The same path routed in two places (the app's routes and an area's) is one route to the router,
         // with the methods of both.
@@ -1623,6 +1622,10 @@ impl<M: Middleware> App<M> {
         if let Some(unstaged) = unstaged {
             table = table.merge(unstaged);
         }
+        // Under `corten dev` every load is the handler's, so a change shows on the next one. An app
+        // with no route eligible to keep a page has none for a write to drop, so its writes are not
+        // counted.
+        shared.kept = if dev || !table.keeps() { None } else { crate::kept::Answers::new(self.kept) };
         // An app whose areas and APIs have no middleware of their own runs the app's alone.
         let plain = scopes.prefixed.iter().all(|(_, scope)| scope.middleware.is_empty());
         let shared = Arc::new(shared);
