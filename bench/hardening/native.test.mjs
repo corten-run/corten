@@ -40,6 +40,11 @@ test("real API control receipts detect cache, double reads, passthrough and swal
     for (mode of ["correct", "cache", "double", "passthrough", "swallow", "health-depends"]) {
       const raw = await nativeControls({ base, source: "api", upstream, qualification: q, original: fixture.item_1 });
       assert.equal(assessNative(raw, q).sourceControl, ["correct", "health-depends"].includes(mode) ? "passed" : "target-functional-failure");
+      if (mode === "correct") {
+        const interrupted = structuredClone(raw);
+        Object.assign(interrupted.api.responses.find(r => r.step === "mutated-json").response, { complete: false, error: "EMFILE" });
+        assert.throws(() => assessNative(interrupted, q), /incomplete native API transport/);
+      }
       if (mode === "health-depends") { assert.equal(assessNative(raw, q).livenessDuringUpstreamFailure, "not-live"); assert.equal(assessNative(raw, q).productionQualified, false); }
       const restored = JSON.parse((await observe(upstream + "/marketplace/records/item_1")).body); assert.deepEqual(restored, fixture.item_1);
       if (mode === "correct") {

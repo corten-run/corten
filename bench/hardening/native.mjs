@@ -37,6 +37,8 @@ export function observe(url, { host, method = "GET", body, timeoutMs = 5000, ca 
 }
 const jsonOf = (row) => { try { return JSON.parse(row.body); } catch { return null; } };
 const healthy = (row) => row?.complete === true && !row.error && !row.timedOut && row.status === 200;
+const completedHttp = (row) => row.complete === true && !row.error && !row.timedOut && Number.isInteger(row.status)
+  && row.status >= 100 && row.status <= 599;
 const receipt = (row) => {
   assert.ok(row && typeof row.body === "string" && typeof row.complete === "boolean" && Number.isFinite(row.ms) && row.ms >= 0);
   assert.equal(row.bytes, Buffer.byteLength(row.body)); assert.equal(row.sha256, hash(row.body));
@@ -51,8 +53,7 @@ export function assessNative(report, qualification, deployment = "direct") {
   receipt(host.allowed); receipt(host.denied); receipt(liveness.negative);
   const targetFunctionalFailures = [];
   const baseline = (row, label) => {
-    assert.ok(row.complete && !row.error && !row.timedOut && Number.isInteger(row.status) && row.status >= 100 && row.status <= 599,
-      `${label}: incomplete native control transport`);
+    assert.ok(completedHttp(row), `${label}: incomplete native control transport`);
     if (!healthy(row)) targetFunctionalFailures.push({ control: label, status: row.status });
   };
   baseline(host.allowed, "allowed-host");
@@ -70,7 +71,10 @@ export function assessNative(report, qualification, deployment = "direct") {
   if (report.source === "api") {
     const api = report.api; assert.ok(api); assert.match(api.nonce, /^[a-f0-9]{24}$/);
     assert.ok(api.expected.title.includes(api.nonce));
-    for (const row of api.responses) receipt(row.response);
+    for (const row of api.responses) {
+      receipt(row.response);
+      assert.ok(completedHttp(row.response), "incomplete native API transport");
+    }
     for (const row of api.controllers) { receipt(row.response); assert.ok(healthy(row.response), "broken API control channel"); }
     assert.deepEqual(api.controllers.map((r) => r.step), ["reset-before", "mutate", "count-json", "reset-count", "count-page", "fault-503", "fault-302", "reset-after", "verify-reset"]);
     const byName = Object.fromEntries(api.responses.map((r) => [r.step, r.response]));
