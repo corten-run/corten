@@ -454,10 +454,12 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
         return;
     }
     // With `must-understand`, a `no-store` any reader could find (`no-store=1` too) is one a cache
-    // that knows the status may ignore: `private` alone does not keep the browser out.
+    // that knows the status may ignore, and a partial keeps any such `no-store` (below): `private`
+    // alone does not keep the browser out.
     if is_private
         && plain
-        && !(must_understand && headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes())))
+        && !((must_understand || partial)
+            && headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes())))
     {
         return;
     }

@@ -1117,6 +1117,9 @@ async fn a_public_page_in_a_partial_mode_keeps_no_cdn_caching_header_whatever_a_
         (&["must-understand, no-store"], "private, no-store", "must-understand, no-store"),
         (&["public, max-age=60", "no-store"], "private, no-store", "public, max-age=60, no-store"),
         (&["public, max-age=60, no-store=1"], "private, no-store", "public, max-age=60, no-store=1"),
+        // Already private, with a `no-store` a reader could find: a private cache that ignores the
+        // malformed directive would keep the partial.
+        (&["private, max-age=60, no-store=1"], "private, no-store", "private, max-age=60, no-store=1"),
     ] {
         let router = App::new(Routes::from(routes())).middleware(Recached(lines)).router();
         for asked in [
