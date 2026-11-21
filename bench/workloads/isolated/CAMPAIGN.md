@@ -400,6 +400,10 @@ they are not unsafe archive path names. Environment values are not forwarded fro
 `json-audit-subject.json` binds those images, 36 identities, source/commit and both native
 and source manifests. It explicitly has qualified:false and a review-needed blocker.
 The retained image list includes the 18 app images and both actual Node/k6 tool images.
+If Docker omits `Config.WorkingDir`, the image evidence omits `config.workingDir` in both
+the live audit subject and saved JSON. If Docker reports it, the subject binds the exact
+value, including an empty string. Omission alone does not block review or authorize timing.
+
 The fixed k6 image/version is prepared before functional checks, even in check-only mode;
 this runs no load. Staging independently inspects both tool image execution configurations.
 App and tool image-default entrypoint/command observations are compared with actual Docker
