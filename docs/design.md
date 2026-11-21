@@ -7317,12 +7317,20 @@ rules something out.
     What a write pays for its count, under callgrind (valgrind 3.24.0, rustc 1.99.1, release with
     debuginfo) on an app with one route whose `GET` and `POST` each answer text, sent
     `POST /items/7/edit` in process with `oneshot`, as (instructions at 1,200 writes less those at
-    200) over 1,000, the same totals in every round (6 at `30b39d455`, 4 of them alternated with
-    4 at `45489ced9`): at `30b39d455` 16,292.0 a write against 15,212.7 with
-    `kept_answers(0)`, so 1,079.3 (6.6%) went to a count no page could use; at `45489ced9`,
-    where an app with no `Public` page makes no store, 15,210.8 against 15,210.7. With a
-    `Public` page at another path a write still pays for its count, 16,310.7 at `45489ced9`
-    against 16,308.7 at `30b39d455`, and 15,230.7 against 15,216.4 with `kept_answers(0)`.
+    200) over 1,000, the same totals in each of 4 rounds that alternated the two builds: at
+    `fc86d8eff` (main) 16,870.7 a write against 15,790.0 with `kept_answers(0)`, so 1,080.7
+    (6.4%) went to a count no page could use; at `6984b2ac4`, where an app with no route that
+    keeps a page makes no store, 15,787.4 with or without `kept_answers(0)`, 1,083.3 (6.4%)
+    fewer. With a `Public` page at another path a write still pays for its count, 16,872.0 at
+    `6984b2ac4` against 16,875.0 at `fc86d8eff`, and 15,790.7 against 15,797.0 with
+    `kept_answers(0)`. Under load, the same write to the app with no `Public` page in 140 pairs of
+    turns ran 24,248 user instructions a request against 25,380 (-4.5% at the median of the
+    pairs), and its user and kernel cycles a request changed by +1.5% at the median with a
+    one-sided 95% bound of +2.8% (user cycles +1.0%, bound +2.0%; kernel +2.0%, bound +3.3%):
+    the margin set before the run, a bound under +1%, was not met, so the change is not shown to
+    cost no more cycles and no fall in cycles is claimed. Historical, a parent and child from
+    before main changed the reading of a request's mode that a write runs: 16,292.0 a write at
+    `30b39d455` against 15,210.8 at `45489ced9`, and with a `Public` page 16,308.7 against 16,310.7.
     Not measured: a miss that is kept against the same page
     made with nothing kept; a store read from more than one core; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
@@ -7350,8 +7358,14 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; or the
     connection speaks HTTP/2, where a request's target carries its authority.
 
-    Last checked: 2026-11-21 for a write's count, the callgrind rounds above at `30b39d455` and
-    `45489ced9`; 2026-11-21, the pass over the headers with rustc 1.100.0: the counts under
+    Last checked: 2026-11-21 for a write's count, the callgrind rounds above at `fc86d8eff` and
+    `6984b2ac4`, and the cycles of the same write from the two builds started once on one CPU,
+    its core's other thread given none of the run's work, loaded in turn for three seconds each
+    by `wrk` with 64 connections on the two CPUs of another core, the order of the two turned
+    about from each pair to the next, the app's cycles counted by `perf stat` over each turn and
+    divided by the requests answered, while other builds ran on the machine; the historical pair
+    `30b39d455` and `45489ced9` the same day, by callgrind alone. 2026-11-21, the pass over the
+    headers with rustc 1.100.0: the counts under
     callgrind, and the cycles from the two builds started once on one CPU, its core's other thread
     left idle, and loaded in turn for three seconds each by `wrk` with 64 connections on the two
     CPUs of another core, 500 URLs asked for unevenly and uncompressed, the order of the two
