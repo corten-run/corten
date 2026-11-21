@@ -145,6 +145,7 @@ export async function withoutJs(browser) {
   const discountMin = await prefill.getAttribute("min");
   const [prefilled] = await Promise.all([
     plain.waitForResponse((r) => new URL(r.url()).pathname === "/" && r.request().method() === "POST"),
+    plain.waitForEvent("load"),
     plain.getByRole("button", { name: "Try listing with this discount" }).click(),
   ]);
   const postedDiscount = new URLSearchParams(prefilled.request().postData() ?? "").get("discount");

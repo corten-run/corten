@@ -1052,6 +1052,15 @@ async fn a_public_page_is_kept_and_given_again_in_its_handler_s_place() {
 
     let (status, mut again, same) = fetch(&router, "GET", "/", &[]).await;
     assert_eq!((status, runs.count()), (StatusCode::OK, 1), "the kept page, not the handler");
+    // Line for line, in the order the handler's answer was written in.
+    let lines = |headers: &http::HeaderMap| {
+        headers
+            .iter()
+            .filter(|(name, _)| *name != header::AGE)
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(lines(&again), lines(&first));
     assert_eq!(again.remove(header::AGE).expect("a kept answer says how old it is"), "0");
     assert_eq!(again, first, "every other header as the handler's answer had it");
     assert_eq!(same, body);
