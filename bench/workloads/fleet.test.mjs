@@ -33,7 +33,6 @@ function fixture(t, flags = {}) {
     calls.push([binary, argv]); assert.equal(binary, "git", "synthetic local boundary only");
     if (argv[0] === "show") return { status: 0, stdout: flags.wrongSource ? "wrong" : committedSources.get(argv[1].slice(41)) };
     if (argv[0] === "status" && flags.dirty) return { status: 0, stdout: " M synthetic" };
-    if (argv[0] === "fetch" && flags.fetchError) return { status: 1, stdout: "", stderr: "PRIVATE_FETCH_ARGV" };
     return h.run(binary, argv, 60000);
   };
   const deps = { repo: h.repo, spawn, interrupted: () => !!flags.cancelled, write: (value) => output.push(JSON.parse(value)),
@@ -872,21 +871,27 @@ test("unconfirmed or wrong-code unused retirement cannot masquerade as collectio
   }
 });
 
-test("actual productionMain close uncertainty retains the fleet lock after all child worker settlements", async (t) => {
-  const flags = {}, p = fixture(t, flags), pending = [];
+test("actual productionMain close uncertainty retains the fleet lock after all child worker settlements", { timeout: 15000 }, async (t) => {
+  const flags = {}, p = fixture(t, flags);
   await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
-  flags.fetchError = true; p.deps.main = productionMain;
-  p.deps.providerFactory = () => Object.assign(async () => { assert.fail("no synthetic provider call expected"); }, {
-    close: () => new Promise((resolve, reject) => { pending.push({ resolve, reject }); }),
-  });
+  const reached = Promise.withResolvers(), settlement = Promise.withResolvers();
+  let workers = 0, requests = 0;
+  p.deps.main = productionMain;
+  p.deps.providerFactory = () => {
+    workers++;
+    flags.dirty = true; // Fail the source recheck after a worker is actually in custody.
+    return Object.assign(async () => { requests++; assert.fail("no synthetic provider call expected"); }, {
+      close() { reached.resolve(); return settlement.promise; },
+    });
+  };
   let finished = false;
   const result = fleetMain(approved, p.deps).then((v) => { finished = true; return v; });
-  while (pending.length < 1) await turn();
-  assert.equal(pending.length, 1); assert.equal(finished, false);
+  await Promise.race([reached.promise, result.then(() => assert.fail("fleet finished before worker close"))]);
+  assert.equal(workers, 1); assert.equal(finished, false);
   assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
-  pending[0].reject(Object.assign(new Error("PRIVATE_WORKER_CLOSE"), { controlUncertain: true, controlTreeUncertain: true }));
+  settlement.reject(Object.assign(new Error("PRIVATE_WORKER_CLOSE"), { controlUncertain: true, controlTreeUncertain: true }));
   assert.equal(await result, 2); assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
-  assert.equal(pending.length, 1);
+  assert.equal(workers, 1); assert.equal(requests, 0);
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
   assert.ok(!JSON.stringify(p.output).includes("PRIVATE"));
   assert.equal(p.calls.filter(([binary]) => binary !== "git").length, 0);
