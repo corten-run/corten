@@ -23,10 +23,13 @@ import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
 const checkout = fs.realpathSync(".");
 const checkoutCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim();
-const roleCheck = ({ round, commit: measured, group, mode }, interrupted) => {
-  assert.equal(measured, commit);
-  return inspectCampaign({ action: "actor-role-preflight", round, commit: checkoutCommit, group: group ?? null, mode: mode ?? null }, { interrupted });
-};
+function roleCheckFor(fixtureCommit, sourceCommit) {
+  return ({ round, commit: measured, group, mode }, interrupted) => {
+    assert.equal(measured, fixtureCommit);
+    return inspectCampaign({ action: "actor-role-preflight", round, commit: sourceCommit, group: group ?? null, mode: mode ?? null }, { interrupted });
+  };
+}
+const roleCheck = roleCheckFor(commit, checkoutCommit);
 
 function fixture(t, mode = "success") {
   t.after(() => {
@@ -44,40 +47,26 @@ function fixture(t, mode = "success") {
   // launch and collection preflights read. Linked, never copied or altered.
   fs.mkdirSync(path.join(repo, "bench/node_modules"));
   fs.symlinkSync(fs.realpathSync("bench/node_modules/typescript"), path.join(repo, "bench/node_modules/typescript"), "junction");
-  fs.mkdirSync(path.join(repo, "node_modules"));
-  fs.symlinkSync(fs.realpathSync("node_modules/semver"), path.join(repo, "node_modules/semver"), "junction");
-  // The captured validator reads this contract data relative to its modules.
-  fs.mkdirSync(path.join(repo, "bench/marketplace"), { recursive: true });
-  fs.copyFileSync(new URL("../marketplace/labels.json", import.meta.url), path.join(repo, "bench/marketplace/labels.json"));
   fs.copyFileSync(new URL("./fleet-provider-test-worker.mjs", import.meta.url), path.join(repo, "bench/workloads/fleet-provider-test-worker.mjs"));
   const sources = fleetWorkerPaths.map((file) => {
     const target = path.join(repo, file); fs.mkdirSync(path.dirname(target), { recursive: true });
     let source = committed.get(file);
     if (file === "bench/workloads/cloud-validation-snapshot.mjs") {
-      // Keep the controller's synthetic commit, but validate real committed role
-      // bindings. Translate only the validator's fixed Git reads in the fixture.
-      assert.equal(source.split("readGit = spawnSync").length, 3, "review eager Git seam when validation changes");
-      source = source.replaceAll("readGit = spawnSync", "readGit = syntheticReadGit") + `
-function syntheticReadGit(binary, [noReplace, at, root, ...args], options) {
-  assert.deepEqual([binary, noReplace, at, root], ["git", "--no-replace-objects", "-C", ${JSON.stringify(repo)}]);
-  if (args[0] === "rev-parse") {
-    assert.deepEqual(args, ["rev-parse", "--verify", "HEAD^{commit}"]);
-    return { status: 0, stdout: ${JSON.stringify(commit + "\n")} };
-  }
-  assert.deepEqual(args, ["cat-file", "--batch"]);
-  assert.ok(options.input.trimEnd().split("\\n").every((line) => line.startsWith("${commit}:")));
-  return spawnSync(binary, [noReplace, at, ${JSON.stringify(checkout)}, ...args],
-    { ...options, input: options.input.replaceAll("${commit}:", "${checkoutCommit}:") });
-}
-`;
+      // The synthetic controller tree has no Git repository. Use the same real
+      // validation checkout (and commit) as the parent-side role check.
+      const before = 'const checkout = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), "../.."));';
+      assert.equal(source.split(before).length, 2, "review validation checkout seam");
+      source = source.replace(before, `const checkout = ${JSON.stringify(checkout)};`);
     }
     if (file === "bench/workloads/cloud-production.mjs") {
       // Change defaults only. The actual productionMain body, approval gates,
       // transport, controller and worker protocol remain the production code.
       const before = "spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted";
       const after = "spawn = synthetic.spawn, streamSpawn = synthetic.streamSpawn, providerFactory = synthetic.providerFactory, repo = synthetic.repo, inspect, sleep = synthetic.sleep, interrupted";
+      const roleDefault = "compiler, roleCheck, remainingAdmission = false";
       assert.equal(source.split(before).length, 2, "review fixture injection when production signature changes");
-      source = source.replace(before, after) + `\nimport * as syntheticFs from 'node:fs';
+      assert.equal(source.split(roleDefault).length, 2, "review role-check fixture default");
+      source = source.replace(before, after).replace(roleDefault, "compiler, roleCheck = syntheticRoleCheck, remainingAdmission = false") + `\nimport * as syntheticFs from 'node:fs';
 import * as syntheticPath from 'node:path';
 import { workerData as syntheticData } from 'node:worker_threads';
 import { fork as syntheticFork } from 'node:child_process';
@@ -88,6 +77,7 @@ import { bootstrapMarker as syntheticMarker, bootstrapReadScript as syntheticRea
 import { bootstrapWorkspaceScript } from './cloud-contract.mjs';
 const syntheticArgs = syntheticData.args;
 const syntheticGroup = syntheticArgs[syntheticArgs.indexOf('--group') + 1];
+const syntheticRoleCheck = (${roleCheckFor.toString()})(${JSON.stringify(commit)}, ${JSON.stringify(checkoutCommit)});
 const synthetic = (${syntheticDependencies.toString()})({
   repo: ${JSON.stringify(repo)}, trace: ${JSON.stringify(trace)}, hosts: ${JSON.stringify(hosts)},
   stateDir: syntheticArgs[syntheticArgs.indexOf('--state-dir') + 1], group: syntheticGroup,
