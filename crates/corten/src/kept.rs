@@ -6,6 +6,13 @@
 //! that lifetime (`s-maxage` where the answer has one, else `max-age`, RFC 9111 section 4.2.1)
 //! gives it to the next such request in the handler's place, with an `Age`.
 //!
+//! While the store has room every such answer is kept. Once it is full, keeping an answer may
+//! drop another page, so an answer is kept then only when its URL was asked for before, as far
+//! back as the marks that say so go ([`Store::asked`]): a crawler's first walk over more URLs
+//! than the bound has room for, or searches no one repeats, are answered by the handler without
+//! a copy into the store, and all but the few whose mark is another's take no room from the
+//! pages that are asked for again.
+//!
 //! It stands where the handler does, after the app's middleware, so every stage still runs for
 //! every request: a middleware sees the `200` with the whole body, the security headers and
 //! `Cache-Control` are written as for any answer, and a request that names the page's tag is
@@ -70,7 +77,7 @@
 
 use std::collections::{hash_map, HashMap, VecDeque};
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher, RandomState};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
@@ -152,6 +159,14 @@ fn with_room(head: &HeaderMap) -> HeaderMap {
 /// when the first page is asked for) that an app's writes seldom share a count with a kept page.
 const WRITES: usize = 1 << 16;
 
+/// How many words of marks ([`Store::asked`]) a store of `bound` bytes has, made when it first
+/// fills: a mark is one bit, and there is one for every 32 bytes of the bound, rounded up to a
+/// power of two of words. That is 1,048,576 marks in 128 KiB for the 32 MiB an app keeps unless
+/// it says otherwise, a hundred and more for each page of a few thousand bytes it has room for.
+fn marks_for(bound: usize) -> usize {
+    (bound / 2048).max(1).next_power_of_two()
+}
+
 /// The app's kept answers, at most `bound` bytes of them.
 pub(crate) struct Answers(Arc<Store>);
 
@@ -164,6 +179,10 @@ struct Store {
     /// whatever its query, and a page whose handler was reading while the write was made is not
     /// kept, without a lock or a search.
     written: OnceLock<Box<[AtomicU32]>>,
+    /// One bit for each mark of a URL asked for since the store filled ([`Store::asked`]).
+    marks: OnceLock<Box<[AtomicU64]>>,
+    /// How many of the marks are set.
+    marked: AtomicUsize,
     inner: RwLock<Inner>,
     flights: Flights,
     /// The requests that have waited for another's page, so a test sees one wait.
@@ -625,6 +644,45 @@ impl Entry {
 }
 
 impl Store {
+    /// Whether keeping an answer may have to drop a page: the bytes kept are within the largest
+    /// answer that is kept ([`SHARE`]) of the bound. The pages that no longer stand count too,
+    /// since most stay until room is made: a store that filled once is seldom not full again,
+    /// and when it is, answers are kept the first time until it fills.
+    fn full(&self) -> bool {
+        self.bytes.load(Ordering::Relaxed) > self.bound - self.bound / SHARE
+    }
+
+    /// Whether the URL `at` (a path and query), asked for with `host` in any language, was asked
+    /// for before by a request no kept answer stood for, in a full store, since the marks were
+    /// last cleared; and marks it.
+    ///
+    /// A mark is one bit, found by a hash of the URL, and no other URL unsets it. So a URL
+    /// asked for before is known, and one not asked for before is taken for known when its
+    /// bit is another's: its answer is then kept the first time, as every answer is while the
+    /// store has room. Once an eighth of the marks are set they are all cleared, which holds
+    /// that to one new URL in eight at most, and costs each page that is asked for again after
+    /// its kept copy has gone one more run of its handler.
+    ///
+    /// The hash has no key of the process's. A client that chooses URLs sharing a mark gains
+    /// an answer kept the first time, and one that asks for enough new URLs to clear the marks
+    /// gains that one more run for each page, with requests that each ran a handler.
+    fn asked(&self, host: Option<&HeaderValue>, at: &str) -> bool {
+        let marks = self.marks.get_or_init(|| (0..marks_for(self.bound)).map(|_| AtomicU64::new(0)).collect());
+        let hash = BuildHasherDefault::<DefaultHasher>::default().hash_one((host.map(HeaderValue::as_bytes), at));
+        let (word, bit) = (&marks[(hash >> 6) as usize % marks.len()], 1 << (hash & 63));
+        if word.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
+            return true;
+        }
+        // 64 marks a word, so this is an eighth of them. The URL that clears them is unmarked
+        // with the rest, and requests that get here at once may each clear or count one too
+        // many: a URL is then asked for once more than it had to be.
+        if self.marked.fetch_add(1, Ordering::Relaxed) >= marks.len() * 8 {
+            marks.iter().for_each(|word| word.store(0, Ordering::Relaxed));
+            self.marked.store(0, Ordering::Relaxed);
+        }
+        false
+    }
+
     /// Takes `entry` out of its slot and its URL's copies, and its size out of the bytes kept.
     fn drop_entry(&self, inner: &mut Inner, entry: &Arc<Entry>) {
         let slot = entry.place.slot;
@@ -674,6 +732,8 @@ impl Answers {
                 bound,
                 bytes: AtomicUsize::new(0),
                 written: OnceLock::new(),
+                marks: OnceLock::new(),
+                marked: AtomicUsize::new(0),
                 inner: RwLock::default(),
                 flights: Flights { keys: RandomState::new(), at: Mutex::default() },
                 #[cfg(test)]
@@ -902,11 +962,18 @@ impl<'a> Asked<'a> {
 
     /// Once no kept answer stood for this request: what it is to do ([`Miss`]). Taken before the
     /// handler runs, so the answer's age counts its making and a write made meanwhile is seen; and
-    /// a request after a write makes the page again rather than wait for one read before it.
+    /// a request after a write makes the page again rather than wait for one read before it. In a
+    /// full store, a URL not asked for before is the handler's ([`Miss::Pass`]): keeping its
+    /// answer would drop a page for one no one is known to ask for again, so nothing here is paid
+    /// for it but the mark it leaves.
     pub(crate) fn missed(&self, req: &Request) -> Miss {
         #[cfg(test)]
         self.answers.0.stop(Stop::Missed);
-        let (store, asked) = (&self.answers.0, Instant::now());
+        let store = &self.answers.0;
+        if store.full() && !store.asked(self.host, self.at) {
+            return Miss::Pass;
+        }
+        let asked = Instant::now();
         let written = Written::of(store, self.at);
         let key = store.flights.key(self.at, self.host, self.language, written.was);
         let admitted = store.flights.table().admit(key, asked);
@@ -967,6 +1034,8 @@ pub(crate) enum Miss {
     Make(Missed),
     /// Wait for the request making the page.
     Wait(Making),
+    /// Be the handler's as any other request: in a full store, a URL not asked for before.
+    Pass,
 }
 
 /// The page another request is making for the same copy: a request waits for it, then is given
@@ -1365,6 +1434,42 @@ mod tests {
             used: AtomicBool::new(false),
             size: AtomicUsize::new(body + OVERHEAD),
         }
+    }
+
+    /// A store with room is not full and has no marks. Full, it knows a URL asked for before,
+    /// each host's apart, and clears its marks once an eighth of them are set.
+    #[test]
+    fn a_full_store_knows_the_urls_asked_for_before() {
+        const BOUND: usize = 64 << 10;
+        assert_eq!([1, 2048, BOUND, 3 << 20, 32 << 20].map(marks_for), [1, 1, 32, 2048, 16384]);
+        let answers = Answers::new(BOUND).expect("a bound");
+        let store = &*answers.0;
+        let mut pages = 0;
+        while !store.full() {
+            answers.keep(entry(&answers, &format!("/kept/{pages}"), None, 60, 1000));
+            pages += 1;
+            assert!(pages < 100, "the store never filled");
+        }
+        let held = answers.bytes();
+        assert!(held > BOUND - BOUND / SHARE && held <= BOUND, "{pages} pages hold {held} bytes");
+        assert!(store.marks.get().is_none(), "no marks until a full store is asked");
+        assert!(!store.asked(None, "/items") && store.asked(None, "/items") && store.asked(None, "/items"));
+        assert!(!store.asked(None, "/items?page=2"), "another query is another URL");
+        let host = HeaderValue::from_static("a.example");
+        assert!(!store.asked(Some(&host), "/items") && store.asked(Some(&host), "/items"), "and so is another host's");
+        assert_eq!(store.marks.get().map(|marks| marks.len() * 64), Some(2048));
+        // 2,048 marks: a URL is known while no more than 256 are set, whatever was asked for since.
+        let mut urls = (0..400).map(|n| format!("/catalog/{n}"));
+        while store.marked.load(Ordering::Relaxed) < 256 {
+            store.asked(None, &urls.next().expect("the marks were cleared early"));
+        }
+        assert!(store.asked(None, "/items") && store.asked(None, "/catalog/0"), "known with 256 marks set");
+        // The next new URL clears them all, its own with them.
+        let clearing = urls.find(|url| !store.asked(None, url)).expect("a new URL");
+        assert_eq!(store.marked.load(Ordering::Relaxed), 0);
+        assert!(!store.asked(None, &clearing) && store.asked(None, &clearing), "the one that cleared them is new again");
+        assert!(!store.asked(None, "/items"), "and so is one asked for before");
+        assert_eq!(store.marked.load(Ordering::Relaxed), 2);
     }
 
     /// The bound holds after every answer kept: the one not read since the hand last passed goes

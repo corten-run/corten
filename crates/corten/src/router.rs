@@ -133,6 +133,8 @@ impl Endpoint for Keeping {
             crate::kept::Miss::Kept(kept) => return Box::pin(std::future::ready(kept)),
             crate::kept::Miss::Make(missed) => return made(&self.inner, req, missed),
             crate::kept::Miss::Wait(making) => making,
+            // In a full store a URL not asked for before is the handler's as any other request.
+            crate::kept::Miss::Pass => return self.inner.call(req),
         };
         // Another request is making the page: the page it keeps is this one's too.
         let inner = self.inner.clone();
