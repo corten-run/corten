@@ -513,13 +513,11 @@ pub(crate) fn varies(content_type: &str, headers: &HeaderMap) -> bool {
 }
 
 /// Whether [`finish`] compresses a buffered `200` of `length` bytes under these headers, for a
-/// request that accepts a coding: what the app keeps a whole body by ([`crate::kept`]).
+/// request that accepts a coding: what the app keeps a whole body by ([`crate::kept`], which
+/// has left out an answer with a coding or a range of its own before it asks).
 pub(crate) fn compresses(headers: &HeaderMap, length: u64) -> bool {
     let content_type = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
-    length >= MIN_SIZE
-        && varies(content_type, headers)
-        && !headers.contains_key(header::CONTENT_ENCODING)
-        && !headers.contains_key(header::CONTENT_RANGE)
+    length >= MIN_SIZE && varies(content_type, headers)
 }
 
 /// Adds `accept-encoding` to `Vary`, so a cache keeps one copy per coding.
@@ -723,6 +721,26 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_str(value).unwrap());
         headers
+    }
+
+    /// What the app keeps a whole body by is what `finish` compresses: the size it starts at,
+    /// a type worth compressing, and no `no-transform`.
+    #[test]
+    fn a_body_is_one_the_app_compresses_by_its_size_its_type_and_no_transform() {
+        let of = |content_type: &'static str, cache: Option<&'static str>| {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+            if let Some(cache) = cache {
+                headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+            }
+            headers
+        };
+        let json = of("application/json", Some("public, max-age=60"));
+        assert!(compresses(&json, MIN_SIZE) && compresses(&json, MIN_SIZE + 1) && !compresses(&json, MIN_SIZE - 1));
+        assert!(compresses(&of("text/plain; charset=utf-8", None), MIN_SIZE));
+        assert!(!compresses(&of("image/png", None), 1 << 20), "a type that is compressed already");
+        assert!(!compresses(&of("application/json", Some("public, max-age=60, no-transform")), 1 << 20));
+        assert!(!compresses(&HeaderMap::new(), 1 << 20), "no type at all");
     }
 
     #[test]
