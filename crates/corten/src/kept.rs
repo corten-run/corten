@@ -39,7 +39,8 @@
 //! A write that went through also drops what is kept at the place on this site its
 //! answer names (`Location`, `Content-Location`; RFC 9111 section 4.4). A page whose handler
 //! was reading while a write went through is not kept. Nothing else drops a page before its
-//! lifetime ends: the lifetime is how stale the app said the page may be. Off under `corten dev`. The
+//! lifetime ends: the lifetime is how stale the app said the page may be. Off under `corten dev`,
+//! and in an app with no route that keeps a page, whose writes are then not counted. The
 //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
 //! the compressed forms made for it, with an allowance for what holds them; the body, the key
 //! and each compressed form are held in allocations of their own size
