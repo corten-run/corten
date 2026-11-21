@@ -119,18 +119,26 @@ impl Endpoint for Giving {
 /// route.
 struct Keeping {
     shape: crate::kept::Shape,
+    /// Of a route of whole bodies: whether those it made last were too small to be kept.
+    small: Option<Arc<crate::kept::Small>>,
     inner: Route,
 }
 
 impl Endpoint for Keeping {
     #[inline]
     fn call(&self, req: Request) -> Answering {
+        // A route whose bodies are too small to be kept is its handler's, as it was before the
+        // app kept bodies.
+        if self.small.as_ref().is_some_and(|small| small.leaves()) {
+            return self.inner.call(req);
+        }
         // Any other request (a navigation, one with a cookie, a write) is the handler's as before.
         let Some(asked) = crate::kept::Asked::of(&req, self.shape) else { return self.inner.call(req) };
         if let Some(kept) = asked.find() {
             return Box::pin(std::future::ready(kept));
         }
-        let missed = asked.missed(&req);
+        // In a full store a URL not asked for before is the handler's as any other request.
+        let Some(missed) = asked.missed(&req, self.small.clone()) else { return self.inner.call(req) };
         let here = req.extensions().get::<crate::layout::StartHere>().cloned();
         let answer = self.inner.call(req);
         Box::pin(async move {
@@ -287,7 +295,10 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
         Slot::Unbound(Arc::new(move |state| {
             let handled: Route = Arc::new(Handled { handler: handler.clone(), state, types: PhantomData });
             match keeps {
-                Some(shape) => Arc::new(Keeping { shape, inner: handled }),
+                Some(shape) => {
+                    let small = (shape == crate::kept::Shape::Body).then(Default::default);
+                    Arc::new(Keeping { shape, small, inner: handled })
+                }
                 None => handled,
             }
         }))
@@ -396,6 +407,8 @@ pub(crate) struct MethodSet<S = ()> {
     /// The page's named posts (`post(hold) = ..`), each chosen by the `do` of the post's
     /// address ([`Chooser`]).
     actions: Vec<(&'static str, Slot<S>)>,
+    /// One of its handlers answers with a page the app keeps (`Public`, [`Keeping`]).
+    keeps: bool,
 }
 
 impl<S> Clone for MethodSet<S> {
@@ -405,19 +418,27 @@ impl<S> Clone for MethodSet<S> {
             fallback: self.fallback.clone(),
             allow: self.allow.clone(),
             actions: self.actions.clone(),
+            keeps: self.keeps,
         }
     }
 }
 
 impl<S> Default for MethodSet<S> {
     fn default() -> Self {
-        MethodSet { slots: std::array::from_fn(|_| None), fallback: None, allow: Allow::Methods(Vec::new()), actions: Vec::new() }
+        MethodSet {
+            slots: std::array::from_fn(|_| None),
+            fallback: None,
+            allow: Allow::Methods(Vec::new()),
+            actions: Vec::new(),
+            keeps: false,
+        }
     }
 }
 
 impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
     fn on<H: Handler<T, S>, T: 'static>(mut self, at: usize, handler: H) -> Self {
         assert!(self.slots[at].is_none(), "corten: a route has two handlers for {}", NAMES[at]);
+        self.keeps |= handler.keeps().is_some();
         self.slots[at] = Some(Slot::handler(handler));
         let names: &[&'static str] = if at == GET { &["GET", "HEAD"] } else { &NAMES[at..=at] };
         if let Allow::Methods(allowed) = &mut self.allow {
@@ -434,6 +455,7 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
     /// (its answer still says, in `Allow`, the methods the route has).
     pub(crate) fn fallback<H: Handler<T, S>, T: 'static>(mut self, handler: H) -> Self {
         assert!(self.fallback.is_none(), "corten: a route has two handlers for any method");
+        self.keeps |= handler.keeps().is_some();
         self.fallback = Some(Slot::handler(handler));
         self
     }
@@ -449,6 +471,7 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
 
     /// The handlers of both, which have none for the same method.
     pub(crate) fn merge(mut self, other: MethodSet<S>) -> Self {
+        self.keeps |= other.keeps;
         for (at, (mine, theirs)) in self.slots.iter_mut().zip(other.slots).enumerate() {
             if theirs.is_some() {
                 assert!(mine.is_none(), "corten: a route has two handlers for {}", NAMES[at]);
@@ -484,6 +507,7 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
             fallback: self.fallback.map(|slot| slot.bind(&state)),
             allow: self.allow,
             actions: self.actions.into_iter().map(|(name, slot)| (name, slot.bind(&state))).collect(),
+            keeps: self.keeps,
         }
     }
 
@@ -494,6 +518,7 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
             fallback: self.fallback.map(|slot| slot.gives(gives)),
             allow: self.allow,
             actions: self.actions.into_iter().map(|(name, slot)| (name, slot.gives(gives))).collect(),
+            keeps: self.keeps,
         }
     }
 }
@@ -629,6 +654,12 @@ impl<S: Clone + Send + Sync + 'static> Table<S> {
             self = self.place(&path, methods, written, through);
         }
         self
+    }
+
+    /// Whether a route's answer is a page the app keeps (`Public`): an app with none has no page
+    /// a write could drop, so it counts no writes ([`crate::kept`]).
+    pub(crate) fn keeps(&self) -> bool {
+        self.routes.iter().any(|placed| placed.methods.keeps)
     }
 
     /// The routes with the state their handlers take.

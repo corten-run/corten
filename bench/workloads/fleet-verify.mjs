@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { roundName, validateFleet } from "./cloud-contract.mjs";
+import { fleetCreateMode, roundName, stagedFleet, validateFleet } from "./cloud-contract.mjs";
 import { campaignOutcome, controllerState, full } from "./cloud-options.mjs";
 import { digest, fileHash, physical, regular, resolveStateRoot, treeHash } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
-import { setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+import { retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function fleetRoot(path, repo) {
@@ -22,6 +22,21 @@ export function fleetRoot(path, repo) {
   return root;
 }
 export function present(path) { return lstatSync(path, { throwIfNoEntry: false }) !== undefined; }
+// For inspection only. A dead original batch owner does not unlock the fleet.
+function fleetLockSnapshot(root) {
+  const path = join(root, ".fleet-operation.lock");
+  try {
+    if (!present(path)) return null;
+    const bytes = regular(path, 1024), { pid, approvalSha256, ...rest } = JSON.parse(bytes);
+    assert.deepEqual(rest, {});
+    assert.ok(Number.isSafeInteger(pid) && pid > 0);
+    full(approvalSha256, /[a-f0-9]{64}/, "fleet lock approval");
+    try { process.kill(pid, 0); }
+    catch (error) { if (error.code === "ESRCH") return digest(bytes); }
+  } catch { /* Unreadable, foreign and prepare locks are not settled batch locks. */ }
+  return "busy";
+}
+
 export function readFleet(root, round) {
   roundName(round); physical(root);
   const path = join(root, `fleet-${round}.json`), bytes = regular(path, 1024 * 1024), manifest = validateFleet(JSON.parse(bytes));
@@ -29,6 +44,77 @@ export function readFleet(root, round) {
   const allowed = new Set([`fleet-${round}.json`, ".fleet-operation.lock", "launch-intent.json", "remaining-intent.json", "receipts", ...manifest.jobs.map((j) => j.group)]);
   assert.ok(readdirSync(root).every((name) => allowed.has(name)), "fleet-root-members");
   return { root, path, bytes, manifest, manifestSha256: digest(bytes) };
+}
+export function fleetChildOptions(fleet, group, mode) {
+  const f = fleet.manifest;
+  return { round: f.round, stateDir: join(fleet.root, group), [mode]: true,
+    ...(mode === "detach" ? { commit: f.commit, sshKey: f.sshKey, accountId: f.provider.accountId,
+      context: f.provider.context, group, fleet: fleet.path } : {}) };
+}
+function readIntent(fleet, file, schema, action) {
+  const bytes = regular(join(fleet.root, file), 1024 * 1024), intent = JSON.parse(bytes);
+  assert.deepEqual(Object.keys(intent).sort(), ["approvalSha256", "schema", "subject"]);
+  assert.equal(intent.schema, schema, "fleet-legacy-launch-cannot-admit");
+  const s = intent.subject;
+  assert.equal(intent.approvalSha256, digest(JSON.stringify(s)), "fleet-intent-changed");
+  assert.equal(s.schema, "benchmark-group-fleet-staged-approval/v1");
+  assert.equal(s.action, action); assert.equal(s.controllerCommit, fleet.manifest.commit);
+  assert.equal(s.stateRoot, fleet.root);
+  // A requested junction must still resolve to the approved physical root.
+  assert.equal(fleetRoot(s.requestedRoot), fleet.root, "fleet-requested-root-changed");
+  assert.equal(s.round, fleet.manifest.round);
+  assert.equal(s.manifestSha256, fleet.manifestSha256); assert.deepEqual(s.fleet, fleet.manifest);
+  assert.deepEqual(s.jobs.map(({ group }) => group), fleet.manifest.jobs.map(({ group }) => group));
+  return { subject: s, approvalSha256: intent.approvalSha256, sha256: digest(bytes) };
+}
+function validateIntentJob(fleet, job, remainingPlacement) {
+  assert.equal(job.outcome, "planned"); assert.deepEqual(job.missing, []);
+  assert.deepEqual(job.options, fleetChildOptions(fleet, job.group, "detach"));
+  assert.deepEqual(job.subject.options, job.options); assert.equal(job.subject.controllerCommit, fleet.manifest.commit);
+  assert.equal(job.approvalSha256, digest(JSON.stringify(job.subject)));
+  if (stagedFleet(fleet.manifest)) {
+    assert.equal(job.subject.action, "detach"); assert.equal(job.subject.stateRoot, job.options.stateDir);
+    assert.equal(job.subject.fleetSha256, fleet.manifestSha256);
+    assert.deepEqual(job.subject.remainingPlacement, remainingPlacement);
+  }
+}
+export function readLaunchIntent(fleet) {
+  const result = readIntent(fleet, "launch-intent.json", "benchmark-group-fleet-staged-launch-intent/v1", "detach");
+  const s = result.subject, first = fleet.manifest.jobs[0].group;
+  assert.deepEqual(s.records, {});
+  assert.deepEqual(s.admission, { mode: "first-group-only", firstGroup: first, gate: "collected-verified-deleted", nativeReadiness: false });
+  assert.equal(s.remainingRegion, undefined);
+  validateIntentJob(fleet, s.jobs[0]);
+  for (const job of s.jobs.slice(1)) assert.deepEqual(job, { group: job.group, outcome: "deferred" });
+  return result;
+}
+export function readRemainingIntent(fleet, legacyGroup) {
+  const launch = readLaunchIntent(fleet).sha256;
+  const result = readIntent(fleet, "remaining-intent.json", "benchmark-group-fleet-remaining-intent/v1", "admit-remaining");
+  const s = result.subject, first = fleet.manifest.jobs[0].group;
+  assert.equal(s.records["launch-intent.json"], launch);
+  assert.deepEqual(s.admission, { mode: "remaining-once", firstGroup: first, gate: "collected-verified-deleted", nativeReadiness: false });
+  assert.equal(s.firstGroup.evidenceMode, "native-replay"); assert.equal(s.firstGroup.row.outcome, "verified");
+  assert.equal(s.firstGroup.row.group, first);
+  let placement;
+  if (stagedFleet(fleet.manifest)) {
+    fleetCreateMode(fleet.manifest.jobs[1].group, fleet.manifest, s.remainingRegion); // Closed region list.
+    assert.deepEqual(s.firstGroup.row.host, fleet.manifest.jobs[0].host);
+    const snapshot = s.firstGroup.snapshot;
+    assert.deepEqual(Object.keys(snapshot).sort(), ["archiveSha256", "evidenceSha256", "group", "stateSha256"]);
+    assert.equal(snapshot.group, first);
+    for (const key of ["archiveSha256", "evidenceSha256", "stateSha256"]) {
+      full(snapshot[key], /[a-f0-9]{64}/, key);
+      assert.equal(s.firstGroup.row[key], snapshot[key]);
+    }
+    assert.deepEqual(s.jobs[0], { group: first, outcome: "verified", snapshot });
+    placement = { region: s.remainingRegion, firstGroup: snapshot };
+    for (const job of s.jobs.slice(1)) validateIntentJob(fleet, job, placement);
+  } else {
+    assert.equal(s.remainingRegion, undefined);
+    validateIntentJob(fleet, s.jobs.find((j) => j.group === legacyGroup));
+  }
+  return { ...result, launch, placement };
 }
 export function readGroup(fleet, group) {
   assert.ok(fleet.manifest.jobs.some((j) => j.group === group));
@@ -42,6 +128,11 @@ export function readGroup(fleet, group) {
   assert.equal(state.schema, "benchmark-dedicated-group-host/v1");
   assert.equal(state.group, group); assert.deepEqual(state.fleet, fleet.manifest);
   assert.deepEqual(state.provider, fleet.manifest.provider);
+  if (stagedFleet(fleet.manifest) && group !== fleet.manifest.jobs[0].group) {
+    const intent = readRemainingIntent(fleet);
+    assert.deepEqual(state.remainingPlacement, { region: intent.placement.region, intentSha256: intent.sha256 },
+      "group-state-remaining-placement-differs");
+  }
   return { group, stateRoot, local, state, stateSha256: digest(bytes), outcome: present(join(local, "operation.lock")) ? "busy"
     : ["creating", "preparing", "starting", "running", "collected", "retired"].includes(state.status) ? "available" : "ambiguous" };
 }
@@ -115,7 +206,16 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
   } catch { return { ...base, error: "fleet-invalid", groups: [] }; }
   const result = { ...base, round, commit, fleetSha256: fleet.manifest.fleetSha256,
     manifestSha256: fleet.manifestSha256, selection: fleet.manifest.selection, groups: [] };
-  const snapshots = [], identities = new Set();
+  const lock = fleetLockSnapshot(fleet.root);
+  const busy = () => ({ ...result, fleetLock: "busy", error: "fleet-operation-busy", groups: [] });
+  if (lock === "busy") return busy();
+  if (lock !== null) result.fleetLock = "retained";
+  const snapshots = [], retirements = [], identities = new Set();
+  let remaining;
+  if (stagedFleet(fleet.manifest) && present(join(fleet.root, "remaining-intent.json"))) {
+    try { remaining = readRemainingIntent(fleet); }
+    catch { return { ...result, error: "fleet-remaining-intent-invalid" }; }
+  }
   let duplicate = false;
   for (const { group } of fleet.manifest.jobs) {
     let job;
@@ -127,11 +227,20 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
           identities.add(key);
         }
       }
-      if (job.outcome !== "available") { result.groups.push({ group, outcome: job.outcome }); continue; }
       const s = job.state;
+      // Read-only exception: a fully verified retirement may keep the original
+      // invalid monitor locks. Do not make that child available for fleet work.
+      const safelyRetained = () => !present(join(job.local, "stream-recovery.lock")) && !retainedInvalidOwner(job.local, s);
+      const retained = job.outcome === "busy" && s.status === "retired" && s.retirement.kind === "native-failed"
+        && s.control?.monitor?.phase === "invalid" && s.launchHostKeySha256 !== undefined && safelyRetained();
+      if (job.outcome !== "available" && !retained) { result.groups.push({ group, outcome: job.outcome }); continue; }
       if (s.status === "retired") {
         if (s.retirement.kind === "native-failed") {
+          if (present(join(job.local, "stream-recovery.lock"))) { result.groups.push({ group, outcome: "busy" }); continue; }
           verifyFailedNativeRetirement(job.local, s);
+          assert.equal(digest(regular(join(job.local, "state.json"), 1024 * 1024)), job.stateSha256, "retirement changed during verification");
+          if (retained) assert.ok(safelyRetained(), "retained lock owner changed during verification");
+          retirements.push({ group, index: result.groups.length, stateSha256: job.stateSha256, retained });
           result.groups.push({ group, outcome: s.destroyedAt ? "native-failed-retired" : "cleanup-pending", id: s.id }); continue;
         }
         const setup = s.retirement.kind === "setup-failed";
@@ -155,14 +264,34 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
       snapshots.push(verified.snapshot); result.groups.push(verified.row);
     } catch { result.groups.push({ group, outcome: "error", error: "group-evidence-invalid" }); }
   }
+  let evidenceError;
   try {
     assert.ok(!interrupted());
-    assert.ok(!present(join(fleet.root, ".fleet-operation.lock")), "fleet-operation-active");
     assert.equal(readFleet(fleet.root, round).manifestSha256, fleet.manifestSha256);
+    if (remaining) {
+      assert.equal(readRemainingIntent(fleet).sha256, remaining.sha256);
+      assert.deepEqual(snapshots.find(({ group }) => group === fleet.manifest.jobs[0].group), remaining.placement.firstGroup);
+    }
     for (const snapshot of snapshots) recheckCollectedGroup(fleet, snapshot);
     assert.ok(!duplicate);
-  } catch { return { ...result, error: "fleet-evidence-changed-or-duplicated" }; }
-  if (result.groups.every((g) => g.outcome === "verified")) result.status = "verified";
+  } catch { evidenceError = "fleet-evidence-changed-or-duplicated"; }
+  // A later sibling's replay may have overlapped failed-host recovery. Rebind
+  // the status to the verified state and receipt, not the earlier display row.
+  for (const { group, index, stateSha256, retained } of retirements) {
+    try {
+      const job = readGroup(fleet, group);
+      if (present(join(job.local, "stream-recovery.lock"))
+          || (job.outcome === "busy" && (!retained || retainedInvalidOwner(job.local, job.state)))) {
+        result.groups[index] = { group, outcome: "busy" }; continue;
+      }
+      assert.equal(job.outcome, retained ? "busy" : "available");
+      assert.equal(job.stateSha256, stateSha256);
+      assert.equal(digest(regular(join(job.local, "failed-native-host.json"))), job.state.retirement.evidenceSha256);
+    } catch { result.groups[index] = { group, outcome: "uncertain", error: "group-retirement-changed" }; }
+  }
+  if (fleetLockSnapshot(fleet.root) !== lock) return { ...busy(), ...(evidenceError ? { evidenceError } : {}) };
+  if (evidenceError) return { ...result, error: evidenceError };
+  if (lock === null && result.groups.every((g) => g.outcome === "verified")) result.status = "verified";
   return result;
 }
 

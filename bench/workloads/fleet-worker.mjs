@@ -50,7 +50,11 @@ try {
   }
   // productionMain's finally confirms credential-worker settlement. Its result
   // alone is insufficient: the parent also waits for this worker's clean exit.
-  const code = await productionMain(workerData.args, { interrupted: () => Atomics.load(cancelled, 0) !== 0, write: () => {} });
+  // The parent sets admission only when dispatching a remaining child from
+  // the consumed intent, after the first group's verification and deletion.
+  const code = await productionMain(workerData.args, {
+    interrupted: () => Atomics.load(cancelled, 0) !== 0, write: () => {}, remainingAdmission: workerData.admission === true,
+  });
   assert.ok([0, 1, 3].includes(code));
   parentPort.postMessage({ schema: "benchmark-group-fleet-worker-result/v1", code });
 } catch (error) {

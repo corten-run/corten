@@ -512,6 +512,16 @@ pub(crate) fn varies(content_type: &str, headers: &HeaderMap) -> bool {
         && !headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("no-transform"))
 }
 
+/// Whether [`finish`] compresses a buffered `200` of `length` bytes under these headers, for a
+/// request that accepts a coding: what the app keeps a whole body by ([`crate::kept`]).
+pub(crate) fn compresses(headers: &HeaderMap, length: u64) -> bool {
+    let content_type = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
+    length >= MIN_SIZE
+        && varies(content_type, headers)
+        && !headers.contains_key(header::CONTENT_ENCODING)
+        && !headers.contains_key(header::CONTENT_RANGE)
+}
+
 /// Adds `accept-encoding` to `Vary`, so a cache keeps one copy per coding.
 pub(crate) fn vary(headers: &mut HeaderMap) {
     let already = headers

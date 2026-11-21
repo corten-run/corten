@@ -1412,7 +1412,7 @@ except that the last row applies to it, and a caller read makes it private. An e
 so, so a public answer cannot read a credential through one by accident. An `App::api` route has one form only, so its public responses
 stay public for clients without credentials. A cache in front of the app must key on `Vary`
 (`corten`, `accept`, `accept-encoding`, `cookie` on an answer to a request without one, and
-`accept-language` with `App::messages`, unless the handler took the page's locale from its URL); the [deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
+`accept-language` with `App::messages`, unless the handler took the page's locale from its URL, and on any other answer whose handler, error page or middleware read messages in the language the header asks for (`req.t()`) before the answer left the app: a page, built before or after the read, a screen's JSON, an `App::api` answer, a redirect, the error page of a refused cross-site write). Messages read while a streamed body is written come after its headers: negotiate before answering, or keep that answer out of shared caches. A middleware may change the request's `Accept-Language` only before any extractor that reads the request runs: a `Req` keeps the header as it was when extracted, with `App::messages` the locale first chosen holds for the whole request, and a kept page is keyed on the header the handler sees, so once any `Req` has been extracted, leave the header alone. An answer that depends on another header the middleware read needs that header in `Vary` from the middleware, or a private policy. The [deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
 A `Public` page in an app with several locales is one copy per `Accept-Language` string in a cache that keys on it, and one language for everyone in one that ignores `Vary`: put its locale in its URL ([Views](views.md#a-locale-in-the-url)), so the cache keys on the URL alone.
 `NoStore<..>` keeps an answer out of every cache, the browser's back/forward cache included:
 `async fn statement(req: Req) -> NoStore<HtmlResult>`. A failure it returns is not kept either:
@@ -1521,13 +1521,14 @@ else a page could differ by, and the answer nothing made for one request:
 | the handler | takes only Corten's own inputs for a page | takes an extractor of the app's own |
 | the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
-| the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound |
+| the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
 | what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
-with `req.t()` without it) it is also kept for the `Accept-Language` it was asked with, as the
-header was sent, so `fr` and `fr-FR` are two copies of one page; a page whose locale is in its
+with `req.t()` without it, before or after the page was built) it is also kept for the `Accept-Language` it was asked with, as the
+header was sent, so `fr` and `fr-FR` are two copies of one page, and a copy given for it names
+`accept-language` in `Vary` as it leaves the app, whatever `Vary` a middleware put on it; a page whose locale is in its
 URL ([Views](views.md#a-locale-in-the-url)) is one. A URL has at most eight copies, and a new
 one takes the place of one not read since it was kept or since room was last made (the oldest
 of those, else the oldest of all), so a way of asking seen once does not push out one seen
@@ -1569,8 +1570,19 @@ page stands is the app's to say. Give a page whose changes must show at once a s
 `App::kept_answers(bytes)` sets how much is kept: 32 MiB unless set, and `0` keeps none. What is
 counted is each page's key, headers and body and each compressed form made of it, with an
 allowance for what holds them. Past the bound, a page not read since room was last made goes
-first. Nothing is kept under `corten dev`,
-so a change shows on the next load. An app's tests keep pages as a deploy does (`App::test`,
+first. With room, every page is kept the first time it is made. Once the kept pages are within
+an eighth of the bound, keeping one may drop another, so a page is kept only when its URL was
+asked for before: a crawler's first walk over more URLs than there is room for, or searches no
+one repeats, are answered by the handler and all but a few of them take no kept page's room.
+The app remembers the URLs asked for as bits in a table, not as a list, and forgets them all
+once an eighth of the bits are set (after 131,072 new URLs at 32 MiB), so a crawler's second
+walk over the same URLs is kept as the first was before this rule. The price is one more run
+of a page's handler: in a full store the answer to the first request for a URL the app does
+not remember is not kept, whether the page is new, or was kept while there was room or before
+the bits were last cleared and has since passed its lifetime or been dropped. A store that has filled mostly stays full, since a page past its lifetime keeps
+its room until another needs it. Nothing is kept under `corten dev`,
+so a change shows on the next load. An app with no `Public` page keeps nothing whatever the
+bound, and its writes are not counted, so it pays nothing for pages it cannot keep. An app's tests keep pages as a deploy does (`App::test`,
 `App::router`): a test that changes what a `Public` page shows other than by a write through the
 app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page

@@ -124,9 +124,10 @@ test("mixed keeps native functional defaults separate from explicit measurement"
   assert.equal(measured.resources.measurement.loadSharedMemoryBytes, 512 * 2 ** 20);
 });
 
-test("browser recipe supplies only required build/output options, not subset or target manifests", () => {
+test("browser recipe supplies build, output, and isolation, not subset or target manifests", () => {
   const b = bind("fullstack-browser"), e = b.execution;
   assert.deepEqual(e.effectiveOptions, browserOptions(e.invocation.argv.slice(1)));
+  assert.equal(e.effectiveOptions.isolated, true);
   assert.equal(e.effectiveOptions.apps.length, 10); assert.equal(e.effectiveOptions.cases, null);
   assert.equal(e.effectiveOptions.targets, null); assert.equal(b.coverage.cells.length, 240);
   assert.equal(e.settings.profiles.mobile.cpu, 4); assert.equal(e.settings.actionTimeoutMs, 15000);

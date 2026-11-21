@@ -1052,6 +1052,15 @@ async fn a_public_page_is_kept_and_given_again_in_its_handler_s_place() {
 
     let (status, mut again, same) = fetch(&router, "GET", "/", &[]).await;
     assert_eq!((status, runs.count()), (StatusCode::OK, 1), "the kept page, not the handler");
+    // Line for line, in the order the handler's answer was written in.
+    let lines = |headers: &http::HeaderMap| {
+        headers
+            .iter()
+            .filter(|(name, _)| *name != header::AGE)
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(lines(&again), lines(&first));
     assert_eq!(again.remove(header::AGE).expect("a kept answer says how old it is"), "0");
     assert_eq!(again, first, "every other header as the handler's answer had it");
     assert_eq!(same, body);
@@ -1100,6 +1109,50 @@ async fn a_public_page_is_kept_and_given_again_in_its_handler_s_place() {
     fetch(&router, "GET", "/?page=2", &[]).await;
     fetch(&router, "GET", "/?page=2", &[]).await;
     assert_eq!(runs.count(), ran + 1);
+}
+
+/// While the store has room a page is kept the first time it is made. Once it is full, keeping
+/// one drops another, so a page is kept from the second time its URL is asked for and a URL
+/// asked for once takes no page's room.
+#[tokio::test]
+async fn a_full_store_keeps_a_page_from_the_second_time_its_url_is_asked_for() {
+    let runs = Runs::default();
+    let router = App::new(Routes::from(kept_routes(&runs))).kept_answers(64 << 10).router();
+    let kept = |uri: String| {
+        let router = router.clone();
+        async move { fetch(&router, "GET", &uri, &[]).await.1.contains_key(header::AGE) }
+    };
+    // With room, the second request for each URL is given the page the first one made.
+    let mut room = 0;
+    while kept(format!("/?n={room}")).await || kept(format!("/?n={room}")).await {
+        room += 1;
+        assert!(room < 100, "the store never filled");
+    }
+    assert!(room > 5, "{room} pages were kept the first time");
+    // The store is full: the URL just asked for twice was made twice, and is kept now.
+    assert_eq!(runs.count(), room + 2);
+    assert!(kept(format!("/?n={room}")).await && runs.count() == room + 2, "kept from its second ask");
+    // URLs asked for once are made and not kept, but for one whose mark is another's: twice as
+    // many as the store holds, which kept one by one would drop every page, drop next to none.
+    for once in 0..room * 2 {
+        kept(format!("/?once={once}")).await;
+    }
+    assert_eq!(runs.count(), room * 3 + 2);
+    let mut still = 0;
+    for n in 0..=room {
+        still += usize::from(kept(format!("/?n={n}")).await);
+    }
+    assert!(still + 2 > room, "{still} of {} pages are kept after a walk over new URLs", room + 1);
+    // And a new URL is kept by its second request: the third is given the page.
+    let made = runs.count();
+    for again in 0..8 {
+        let uri = format!("/?again={again}");
+        kept(uri.clone()).await;
+        kept(uri.clone()).await;
+        assert!(kept(uri).await, "kept by its second request at the latest");
+    }
+    let twice = runs.count() - made - 8;
+    assert!(twice >= 6, "{twice} of 8 new URLs were made twice");
 }
 
 /// A kept page stands where the handler does: every middleware runs for the request it answers,
@@ -1238,6 +1291,95 @@ async fn a_write_drops_the_pages_kept_at_its_path() {
     reads(router.clone()).await;
     assert_eq!(runs.count(), 9, "the page and its other query, both made again");
     assert!(fetch(&router, "GET", "/read", &[]).await.1.contains_key(header::AGE), "and no other path's page");
+}
+
+/// What a write's handler finds: whether the app has a store of kept pages, and whether the
+/// write is counted for its path.
+async fn store_and_count(signal: crate::Signal) -> String {
+    let store = signal.shared().is_some_and(|shared| shared.kept.is_some());
+    format!("store={store} counted={}", signal.counts_a_write())
+}
+
+/// Whether an app keeps pages is known when its router is made: one with no `Public` page has no
+/// store, so its writes are not counted, while one with a `Public` page in its own routes or in an
+/// area counts every write and still drops the page a write goes to.
+#[tokio::test]
+async fn only_an_app_with_a_public_page_counts_its_writes() {
+    let same_origin = [("sec-fetch-site", "same-origin")];
+    let edit = || Table::new().route("/items/{id}/edit", crate::router::get(|| async { "edit" }).post(store_and_count));
+    let write = |router: Router| async move {
+        let (status, _, body) = fetch(&router, "POST", "/items/7/edit", &same_origin).await;
+        assert_eq!(status, StatusCode::OK);
+        String::from_utf8(body.to_vec()).unwrap()
+    };
+    let none = App::new(Routes::from(edit())).router();
+    assert_eq!(write(none).await, "store=false counted=false", "no Public page");
+
+    let runs = Runs::default();
+    let router = App::new(Routes::from(edit().merge(kept_routes(&runs)))).router();
+    assert_eq!(write(router.clone()).await, "store=true counted=true", "a Public page in the app's routes");
+    fetch(&router, "GET", "/", &[]).await;
+    assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE));
+    assert_eq!(fetch(&router, "POST", "/", &same_origin).await.0, StatusCode::NO_CONTENT);
+    assert!(!fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE), "the write dropped it");
+    assert_eq!(runs.count(), 2);
+
+    let area = App::new(Routes::from(edit())).area(shelf_url::area).router();
+    assert_eq!(write(area).await, "store=true counted=true", "a Public page in an area");
+    let off = App::new(Routes::from(edit().merge(kept_routes(&runs)))).kept_answers(0).router();
+    assert_eq!(write(off).await, "store=false counted=false", "an app that keeps none");
+    let dev = App::new(Routes::from(edit().merge(kept_routes(&runs)))).dev(true).router();
+    assert_eq!(write(dev).await, "store=false counted=false", "under corten dev");
+}
+
+static COUNTER_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A layout read the counter's route says its page gives, so none is started for it.
+struct CounterCount;
+
+impl crate::LayoutRead for CounterCount {
+    type Value = u32;
+
+    fn start(&self, _: &http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
+        None::<std::future::Ready<u32>>
+    }
+
+    fn view(count: &u32) -> impl Render + '_ {
+        html! { {*count} }
+    }
+}
+
+#[crate::routes]
+mod counter_url {
+    #[route("/counter", any = counter_page, gives(CounterCount))]
+    pub struct Counter;
+}
+
+async fn counter_page(req: Req) -> Public<HtmlResult> {
+    COUNTER_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Public::new(Duration::from_secs(60), req.test_page_for("Counter", html! { <p>"counter"</p> }))
+}
+
+/// The only page an app keeps can be one an `any = ..` route that gives a layout read answers,
+/// at the path of a write that keeps none: the two are one route, which still keeps the page
+/// (`GET` reaches the `any` handler) and counts the write, which drops it.
+#[tokio::test]
+async fn a_kept_page_from_any_with_gives_merged_beside_a_write_is_kept_and_dropped() {
+    use std::sync::atomic::Ordering;
+    let typed = counter_url::router();
+    // The write on the left and the kept page's route on the right, as `Table::merge` places them.
+    let table = Table::new().route("/counter", crate::router::post(store_and_count)).merge(typed.0);
+    let router = App::new(Routes(table, typed.1, typed.2)).router();
+    fetch(&router, "GET", "/counter", &[]).await;
+    let (status, headers, _) = fetch(&router, "GET", "/counter", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(headers.contains_key(header::AGE), "kept: {headers:?}");
+    assert_eq!(COUNTER_RUNS.load(Ordering::Relaxed), 1);
+    let (status, _, body) = fetch(&router, "POST", "/counter", &[("sec-fetch-site", "same-origin")]).await;
+    assert_eq!((status, &body[..]), (StatusCode::OK, &b"store=true counted=true"[..]));
+    let (_, headers, _) = fetch(&router, "GET", "/counter", &[]).await;
+    assert!(!headers.contains_key(header::AGE), "the write dropped it: {headers:?}");
+    assert_eq!(COUNTER_RUNS.load(Ordering::Relaxed), 2, "made again");
 }
 
 /// A write counts for its path however it ends: one that
@@ -1471,6 +1613,7 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
             .route("/now", typed(move |req: Req| async move { Public::new(Duration::ZERO, req.test_page_for("Now", home())) }).0)
             .route("/moved", typed(move |req: Req| async move { Public::new(minute, req.redirect(&Root)) }).0)
             .route("/text", typed(move || async move { Public::new(minute, "text") }).0)
+            .route("/long", typed(move || async move { Public::new(minute, "text ".repeat(300)) }).0)
             .route(
                 "/file",
                 typed(move || async move { Public::new(minute, Ok::<_, Error>(Media::new("image/png", &b"\x89PNG"[..]))) }).0,
@@ -1530,6 +1673,7 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
         ("/gone", "an error page"),
         ("/now", "no lifetime"),
         ("/moved", "a redirect"),
+        ("/text", "a whole body too small for the app to compress"),
         ("/file", "a file, which is neither a page nor a whole body its type names"),
         ("/status", "a status alone has no body to keep"),
         ("/keyed", "a submit key drawn for this request"),
@@ -1540,9 +1684,11 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
     ] {
         assert!(!kept(router.clone(), uri).await, "{uri}: {why}");
     }
-    for uri in ["/", "/catalog", "/inputs", "/text"] {
+    for uri in ["/", "/catalog", "/inputs"] {
         assert!(kept(router.clone(), uri).await, "{uri}");
     }
+    // A whole body, where the app compresses it: in a build that does not, it is its handler's.
+    assert_eq!(kept(router.clone(), "/long").await, cfg!(feature = "compress"));
     // The page that failed did fail, and each request's page has its own key.
     let recovered =
         |router: Router| async move { String::from_utf8(fetch(&router, "GET", "/recovered", &[]).await.2.to_vec()).unwrap() };
@@ -1639,8 +1785,8 @@ async fn a_kept_page_lasts_its_lifetime() {
     assert!((1..60).contains(&age), "counted from before its handler ran: {age}");
 }
 
-/// A page is kept for the `Host` it was asked with, and for the `Accept-Language` when the app
-/// has more than one language (its `Vary` names the header then).
+/// A page is kept for the `Host` it was asked with, and for the `Accept-Language` when its
+/// language follows the header (its `Vary` names the header then).
 #[tokio::test]
 async fn a_kept_page_is_for_the_host_and_the_language_it_was_asked_in() {
     crate::i18n::messages! { struct KeptMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
@@ -1686,8 +1832,8 @@ async fn a_kept_page_is_for_the_host_and_the_language_it_was_asked_in() {
     fetch(&two, "GET", "/", &[("accept-language", &asked(0))]).await;
     assert_eq!(runs.count(), 14, "the oldest went");
 
-    // Messages read with no `App::messages`: no answer says it varies on the header, and the
-    // page is still in the language asked for, so it is kept for each.
+    // Messages read with no `App::messages`: the page is in the language asked for, and its
+    // `Vary` says so, so it is kept for each.
     let runs = Runs::default();
     let counted = runs.clone();
     let page = move |req: Req| {
@@ -1706,6 +1852,447 @@ async fn a_kept_page_is_for_the_host_and_the_language_it_was_asked_in() {
     }
 }
 
+/// Messages read with no `App::messages` are in the language `Accept-Language` asks for, so the
+/// answer's `Vary` names the header, for a cache in front as for the app's own: in the document
+/// and in a navigation's swap, and on the kept copy. A page of the same app that reads none does
+/// not vary on it.
+#[tokio::test]
+async fn a_page_that_draws_messages_without_app_messages_varies_on_accept_language() {
+    let minute = Duration::from_secs(60);
+    let words = move |req: Req| async move {
+        let t: WordsMsg = req.t();
+        let listings = t.item_listings().to_string();
+        Public::new(minute, req.test_page_for("Words", html! { <p>{listings}</p> }))
+    };
+    let plain = move |req: Req| async move { Public::new(minute, req.test_page_for("Plain", html! { <p>"plain"</p> })) };
+    let routes = Table::new().route("/words", crate::route::get(words).0).route("/plain", crate::route::get(plain).0);
+    let router = App::new(Routes::from(routes)).router();
+    for mode in [None, Some("nav")] {
+        for (asked, word) in [("fr", "Annonces"), ("en", "Listings"), ("fr", "Annonces")] {
+            let mut sent = vec![("accept-language", asked)];
+            sent.extend(mode.map(|mode| ("corten", mode)));
+            let (status, headers, body) = fetch(&router, "GET", "/words", &sent).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(headers.contains_key("corten-page"), mode.is_some(), "{mode:?}: swapped in by the runtime");
+            assert!(String::from_utf8_lossy(&body).contains(word), "{mode:?} {asked}");
+            let vary = vary_names(&headers);
+            assert!(vary.iter().any(|name| name == "accept-language"), "{mode:?} {asked}: {vary:?}");
+        }
+        let mut sent = vec![("accept-language", "fr")];
+        sent.extend(mode.map(|mode| ("corten", mode)));
+        let (_, headers, _) = fetch(&router, "GET", "/plain", &sent).await;
+        let vary = vary_names(&headers);
+        assert!(!vary.iter().any(|name| name == "accept-language"), "{mode:?}: {vary:?}");
+    }
+    let (_, kept, _) = fetch(&router, "GET", "/words", &[("accept-language", "fr")]).await;
+    assert!(kept.contains_key(header::AGE), "the kept copy");
+    assert!(vary_names(&kept).iter().any(|name| name == "accept-language"), "{kept:?}");
+}
+
+/// A handler that reads its messages after it built its page (here, to choose which of two to
+/// give) still answers in the language asked for: the dependency is settled when its answer is
+/// finished, so the kept copy is keyed on `Accept-Language` and its `Vary` names it on the wire.
+#[tokio::test]
+async fn a_late_message_read_is_kept_and_sent_for_its_language() {
+    let runs = Runs::default();
+    let counted = runs.clone();
+    let page = move |req: Req| {
+        counted.ran();
+        async move {
+            let english = req.test_page_for("Words", html! { <p>"Listings"</p> });
+            let french = req.test_page_for("Words", html! { <p>"Annonces"</p> });
+            // Negotiated only now, after both pages set their headers.
+            let t: WordsMsg = req.t();
+            let page = if t.item_listings() == "Annonces" { french } else { english };
+            Public::new(Duration::from_secs(60), page)
+        }
+    };
+    let router = App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).router();
+    let mut sent = Vec::new();
+    for (asked, word, ran) in [("fr", "Annonces", 1), ("en", "Listings", 2), ("fr", "Annonces", 2), ("en", "Listings", 2)] {
+        let (status, headers, body) = fetch(&router, "GET", "/", &[("accept-language", asked)]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(String::from_utf8_lossy(&body).contains(word), "{asked}: {}", String::from_utf8_lossy(&body));
+        assert_eq!(runs.count(), ran, "{asked}");
+        sent.push(headers);
+    }
+    // And a cache in front is told, on the answer made and on the kept copy given, beside the
+    // fields the page named itself.
+    for headers in sent {
+        let vary = vary_names(&headers);
+        for name in ["corten", "accept", "accept-language"] {
+            assert!(vary.iter().any(|named| named == name), "{name}: {vary:?}");
+        }
+    }
+}
+
+/// A middleware that puts its own `Vary` on the answer after `next`, without reading messages,
+/// does not take the language away from a kept page: the kept copy says it was made for its
+/// `Accept-Language`, so the last stage names the header again, on the hit as on the miss. A
+/// language not kept yet is made for itself.
+#[tokio::test]
+async fn a_kept_page_names_its_language_after_a_middleware_replaced_vary() {
+    struct Replaces;
+
+    impl crate::Middleware for Replaces {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            res.headers_mut().insert(header::VARY, HeaderValue::from_static("corten, accept"));
+            res
+        }
+    }
+
+    let runs = Runs::default();
+    let counted = runs.clone();
+    let page = move |req: Req| {
+        counted.ran();
+        async move {
+            let t: WordsMsg = req.t();
+            let listings = t.item_listings().to_string();
+            Public::new(Duration::from_secs(60), req.test_page_for("Words", html! { <p>{listings}</p> }))
+        }
+    };
+    let router = App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).middleware(Replaces).router();
+    for (asked, word, ran, hit) in [("fr", "Annonces", 1, false), ("fr", "Annonces", 1, true), ("en", "Listings", 2, false)] {
+        let (status, headers, body) = fetch(&router, "GET", "/", &[("accept-language", asked)]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(String::from_utf8_lossy(&body).contains(word), "{asked}: {}", String::from_utf8_lossy(&body));
+        assert_eq!((runs.count(), headers.contains_key(header::AGE)), (ran, hit), "{asked}: {headers:?}");
+        names_once(&headers, &["corten", "accept", "accept-language"], &format!("{asked}, kept {hit}"));
+    }
+}
+
+/// A middleware that reads messages after `next` makes the answer depend on the language, on the
+/// kept page given in the handler's place as on the one made, though the page itself is one for
+/// every language: its `Vary` names `Accept-Language` once, beside the page's own fields.
+#[tokio::test]
+async fn a_middleware_that_reads_messages_after_next_names_the_language_on_a_kept_page() {
+    struct Labels;
+
+    impl crate::Middleware for Labels {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            use crate::extract::FromRequestParts;
+            let (mut parts, body) = req.into_parts();
+            let words = Req::from_request_parts(&mut parts, &()).await.unwrap();
+            let mut res = next.run(Request::from_parts(parts, body)).await;
+            let t: WordsMsg = words.t();
+            res.headers_mut().insert("x-listings", HeaderValue::from_str(t.item_listings()).unwrap());
+            res
+        }
+    }
+
+    let runs = Runs::default();
+    let counted = runs.clone();
+    let page = move |req: Req| {
+        counted.ran();
+        async move { Public::new(Duration::from_secs(60), req.test_page_for("Plain", html! { <p>"plain"</p> })) }
+    };
+    let router = App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).middleware(Labels).router();
+    for (asked, word, hit) in [("fr", "Annonces", false), ("fr", "Annonces", true), ("en", "Listings", true)] {
+        let (status, headers, _) = fetch(&router, "GET", "/", &[("accept-language", asked)]).await;
+        assert_eq!((status, runs.count(), headers.contains_key(header::AGE)), (StatusCode::OK, 1, hit), "{asked}: {headers:?}");
+        assert_eq!(headers["x-listings"], word);
+        names_once(&headers, &["corten", "accept", "accept-language"], &format!("{asked}, kept {hit}"));
+    }
+}
+
+/// A page that read its messages after it was built, asked for with `HEAD` and revalidated with
+/// the tag it was given (here from its kept copy), names `Accept-Language` on each: a `HEAD`
+/// has its `GET`'s headers and a `304` varies as its `200`.
+#[tokio::test]
+async fn a_localized_head_and_its_304_name_accept_language() {
+    let page = |req: Req| async move { Public::new(Duration::from_secs(60), late_words(&req)) };
+    let router = App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).router();
+    let french = ("accept-language", "fr");
+    // A tag the page does not have, so the answer is tagged without being compressed.
+    let (status, got, body) = fetch(&router, "GET", "/", &[french, ("if-none-match", "\"other\"")]).await;
+    assert!(status == StatusCode::OK && String::from_utf8_lossy(&body).contains("Annonces"), "{got:?}");
+    let tag = got[header::ETAG].to_str().unwrap().to_string();
+    let (status, head, body) = fetch(&router, "HEAD", "/", &[french]).await;
+    assert_eq!((status, body.len()), (StatusCode::OK, 0), "{head:?}");
+    let (status, revalidated, body) = fetch(&router, "GET", "/", &[french, ("if-none-match", &tag)]).await;
+    assert_eq!((status, body.len()), (StatusCode::NOT_MODIFIED, 0), "{revalidated:?}");
+    assert!(revalidated.contains_key(header::AGE), "revalidated against the kept copy: {revalidated:?}");
+    for (case, headers) in [("GET", &got), ("HEAD", &head), ("304", &revalidated)] {
+        names_once(headers, &["corten", "accept", "accept-language"], case);
+    }
+}
+
+/// `accept-language` is added once, on a line of its own, beside the `Vary` lines the answer
+/// already has, and not at all when one of them names it in another case or padded with spaces
+/// and tabs among other names. A `Vary: *` is left as it is. A patch and a streamed answer that
+/// negotiated their messages before answering name it too.
+#[tokio::test]
+async fn the_language_is_named_once_beside_the_answer_s_own_vary() {
+    let with = |extra: &'static str| {
+        move |req: Req| async move {
+            let page: HtmlResult = late_words(&req).map(|mut page| {
+                page.headers_mut().append(header::VARY, HeaderValue::from_static(extra));
+                page
+            });
+            page
+        }
+    };
+    let patch = |req: Req| async move {
+        let t: WordsMsg = req.t();
+        let listings = t.item_listings().to_string();
+        let patched: HtmlResult = req.action().ok_or_else(crate::Error::not_found)?.patch(html! { <p id={MsgId}>{listings}</p> });
+        patched
+    };
+    let stream = |req: Req| async move {
+        let t: WordsMsg = req.t();
+        let chunk = Ok::<_, std::convert::Infallible>(bytes::Bytes::from(format!("<p>{}</p>", t.item_listings())));
+        ([(header::CONTENT_TYPE, "text/html")], Body::from_stream(futures_util::stream::iter([chunk])))
+    };
+    let star = |req: Req| async move {
+        let page: HtmlResult = late_words(&req).map(|mut page| {
+            page.headers_mut().insert(header::VARY, HeaderValue::from_static("*"));
+            page
+        });
+        page
+    };
+    let routes = Table::new()
+        .route("/tenant", crate::route::get(with("X-Tenant")).0)
+        .route("/mixed", crate::route::get(with("Accept-Language")).0)
+        .route("/padded", crate::route::get(with("X-Tenant , \tAccept-LANGUAGE\t ")).0)
+        .route("/star", get(star))
+        .route("/patch", get(patch))
+        .route("/stream", get(stream));
+    let router = App::new(Routes::from(routes)).router();
+    for (uri, mode, lines) in [
+        ("/tenant", None, &["corten, accept", "X-Tenant", "accept-language"][..]),
+        ("/mixed", None, &["corten, accept", "Accept-Language"][..]),
+        ("/padded", None, &["corten, accept", "X-Tenant , \tAccept-LANGUAGE\t "][..]),
+        ("/patch", Some("action"), &[][..]),
+        ("/stream", None, &[][..]),
+    ] {
+        let mut sent = vec![("accept-language", "fr")];
+        sent.extend(mode.map(|mode| ("corten", mode)));
+        let (status, headers, body) = fetch(&router, "GET", uri, &sent).await;
+        assert!(status == StatusCode::OK && String::from_utf8_lossy(&body).contains("Annonces"), "{uri}: {headers:?}");
+        let had: Vec<_> = headers.get_all(header::VARY).iter().map(|line| line.to_str().unwrap()).collect();
+        assert_eq!(&had[..lines.len()], lines, "{uri}");
+        names_once(&headers, &["accept-language"], uri);
+    }
+    // A negotiated answer that varies on everything says nothing more.
+    let (status, headers, body) = fetch(&router, "GET", "/star", &[("accept-language", "fr")]).await;
+    assert!(status == StatusCode::OK && String::from_utf8_lossy(&body).contains("Annonces"), "{headers:?}");
+    let had: Vec<_> = headers.get_all(header::VARY).iter().map(|line| line.to_str().unwrap()).collect();
+    assert_eq!(had, ["*"]);
+}
+
+/// A `Public` page that read its messages before it was built names the language on its own first
+/// line, which is left as it is; a line the page added after it (`X-Tenant`) still reaches the
+/// wire, and keeps the page from being kept, since its key does not cover the app's header.
+#[tokio::test]
+async fn a_later_vary_line_after_the_page_s_own_survives_and_is_not_kept() {
+    let runs = Runs::default();
+    let counted = runs.clone();
+    let page = move |req: Req| {
+        counted.ran();
+        async move {
+            let t: WordsMsg = req.t();
+            let listings = t.item_listings().to_string();
+            let page = req.test_page_for("Words", html! { <p>{listings}</p> }).map(|mut page| {
+                page.headers_mut().append(header::VARY, HeaderValue::from_static("X-Tenant"));
+                page
+            });
+            Public::new(Duration::from_secs(60), page)
+        }
+    };
+    let router = App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).router();
+    for ran in [1, 2] {
+        let (status, headers, body) = fetch(&router, "GET", "/", &[("accept-language", "fr")]).await;
+        assert!(status == StatusCode::OK && String::from_utf8_lossy(&body).contains("Annonces"), "{headers:?}");
+        assert_eq!((runs.count(), headers.contains_key(header::AGE)), (ran, false), "{headers:?}");
+        let had: Vec<_> = headers.get_all(header::VARY).iter().map(|line| line.to_str().unwrap()).collect();
+        assert_eq!(&had[..2], ["corten, accept, accept-language", "X-Tenant"], "run {ran}");
+        names_once(&headers, &["corten", "accept", "accept-language", "x-tenant"], &format!("run {ran}"));
+    }
+}
+
+/// A cross-site write refused with the app's error page, which reads its messages after it built
+/// its page, names `Accept-Language` as any other answer does.
+#[tokio::test]
+async fn a_refused_write_s_error_page_names_the_language_it_read_late() {
+    async fn late_error_page(_: Failure, req: Req) -> HtmlResult {
+        late_words(&req)
+    }
+    let routes = Table::new().route(
+        "/",
+        get(|req: Req| async move { req.test_page("Home", html! { <p>"home"</p> }) }).post(|| async { StatusCode::OK }),
+    );
+    let router = App::new(Routes::from(routes)).error_page(late_error_page, ()).router();
+    for (asked, word) in [("fr", "Annonces"), ("en", "Listings")] {
+        let sent = [
+            ("origin", "https://evil.example"),
+            ("sec-fetch-site", "cross-site"),
+            ("accept", "text/html"),
+            ("accept-language", asked),
+        ];
+        let (status, headers, body) = fetch(&router, "POST", "/", &sent).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(String::from_utf8_lossy(&body).contains(word), "{asked}: {}", String::from_utf8_lossy(&body));
+        names_once(&headers, &["corten", "accept", "accept-language"], asked);
+    }
+}
+
+/// Both pages built before the messages are read, then the one in the language asked for.
+fn late_words<For>(req: &Req) -> crate::Result<HtmlResponse<For>> {
+    let english = req.test_page_for("Words", html! { <p>"Listings"</p> });
+    let french = req.test_page_for("Words", html! { <p>"Annonces"</p> });
+    let t: WordsMsg = req.t();
+    if t.item_listings() == "Annonces" {
+        french
+    } else {
+        english
+    }
+}
+
+/// Each of `names` is on the answer's `Vary` exactly once, in any case, over all its lines.
+fn names_once(headers: &HeaderMap, names: &[&str], case: &str) {
+    let vary = vary_names(headers);
+    for name in names {
+        assert_eq!(vary.iter().filter(|named| named.as_str() == *name).count(), 1, "{case} {name}: {vary:?}");
+    }
+}
+
+/// Answers other than a `Public` page that negotiate their messages from `Accept-Language` in an
+/// app without `App::messages` say so too: the error page, a page drawn with a notice it was sent
+/// back, and a redirect chosen by the language (which says so with `App::messages` as well).
+#[tokio::test]
+async fn other_answers_that_negotiate_messages_vary_on_accept_language() {
+    let noticed = |req: Req| async move {
+        let notice = req.notice();
+        let t: WordsMsg = req.t();
+        let listings = t.item_listings().to_string();
+        req.test_page("Done", html! { <p>{notice}" "{listings}</p> })
+    };
+    let go = |req: Req| async move {
+        let t: WordsMsg = req.t();
+        let moved: HtmlResult = if t.item_listings() == "Annonces" { req.moved(&FrenchWords) } else { req.moved(&EnglishWords) };
+        moved
+    };
+    let routes = Table::new().route("/done", get(noticed)).route("/go", get(go));
+    let router = App::new(Routes::from(routes)).error_page(words_error_page, ()).router();
+
+    let (status, headers, body) = fetch(&router, "GET", "/nope", &[("accept-language", "fr")]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(String::from_utf8_lossy(&body).contains("Annonces"), "the error page in French");
+    assert!(vary_names(&headers).iter().any(|name| name == "accept-language"), "{headers:?}");
+
+    let sent = [("accept-language", "fr"), ("corten-notice", "p=%2Fdone&m=Saved"), ("sec-fetch-site", "same-origin")];
+    let (_, headers, body) = fetch(&router, "GET", "/done", &sent).await;
+    assert!(String::from_utf8_lossy(&body).contains("<p>Saved Annonces</p>"), "{}", String::from_utf8_lossy(&body));
+    let vary = vary_names(&headers);
+    for name in ["corten", "accept", "accept-language", "corten-notice"] {
+        assert!(vary.iter().any(|named| named == name), "{name}: {vary:?}");
+    }
+
+    // With `App::messages` as without: a redirect is not a page, so nothing else names it.
+    let with = App::new(Routes::from(Table::new().route("/go", get(go)))).messages::<WordsMsg>().router();
+    for router in [&router, &with] {
+        for (asked, to) in [("fr", "/fr/words"), ("en", "/en/words")] {
+            let (status, headers, _) = fetch(router, "GET", "/go", &[("accept-language", asked)]).await;
+            assert_eq!((status, headers[header::LOCATION].to_str().unwrap()), (StatusCode::MOVED_PERMANENTLY, to));
+            let vary = vary_names(&headers);
+            assert!(vary.iter().any(|name| name == "corten") && vary.iter().any(|name| name == "accept-language"), "{vary:?}");
+        }
+    }
+}
+
+/// A screen's JSON for a data client, and a `Public` JSON answer of an `App::api` mount, name
+/// `Accept-Language` when they read messages in its language, with `App::messages` or without.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn json_that_negotiates_messages_varies_on_accept_language() {
+    let routes = || Table::new().route("/screen", get(words_screen));
+    let bare = App::new(Routes::from(routes())).api(words_api::api).router();
+    let with = App::new(Routes::from(routes())).messages::<WordsMsg>().api(words_api::api).router();
+    for router in [&bare, &with] {
+        for (asked, word) in [("fr", "Annonces"), ("en", "Listings")] {
+            let sent = [("accept-language", asked), ("accept", "application/json")];
+            let (status, headers, body) = fetch(router, "GET", "/screen", &sent).await;
+            assert_eq!((status, headers[header::CONTENT_TYPE].to_str().unwrap()), (StatusCode::OK, "application/json"));
+            assert_eq!(body, format!(r#"{{"title":"Words","data":{{"listings":"{word}"}}}}"#));
+            assert!(vary_names(&headers).iter().any(|name| name == "accept-language"), "{headers:?}");
+
+            let (status, headers, body) = fetch(router, "GET", "/words-api/listings", &[("accept-language", asked)]).await;
+            assert_eq!((status, body), (StatusCode::OK, bytes::Bytes::from(format!(r#""{word}""#))));
+            assert!(headers[header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), "{headers:?}");
+            assert!(vary_names(&headers).iter().any(|name| name == "accept-language"), "{asked}: {headers:?}");
+        }
+    }
+}
+
+/// The names an answer's `Vary` lines list, lowercased.
+fn vary_names(headers: &HeaderMap) -> Vec<String> {
+    headers
+        .get_all(header::VARY)
+        .iter()
+        .flat_map(|line| line.to_str().unwrap().split(',').map(|name| name.trim().to_ascii_lowercase()).collect::<Vec<_>>())
+        .collect()
+}
+
+crate::i18n::messages! { struct WordsMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+
+/// Where a redirect chosen by the language goes.
+#[derive(crate::Route)]
+#[route("/fr/words")]
+struct FrenchWords;
+
+#[derive(crate::Route)]
+#[route("/en/words")]
+struct EnglishWords;
+
+/// An error page in the language asked for.
+async fn words_error_page(_: Failure, req: Req) -> HtmlResult {
+    let t: WordsMsg = req.t();
+    let listings = t.item_listings().to_string();
+    req.test_page("Missing", html! { <p>{listings}</p> })
+}
+
+#[cfg(feature = "json")]
+#[derive(crate::json::ToJson)]
+struct ShownWords {
+    listings: String,
+}
+
+/// A screen whose data is in the language asked for.
+#[cfg(feature = "json")]
+async fn words_screen(req: Req) -> HtmlResult<crate::Screen<ShownWords>> {
+    let t: WordsMsg = req.t();
+    let shown = ShownWords { listings: t.item_listings().to_string() };
+    let main = shown.listings.clone();
+    let doc = html! {
+        <html>
+            <head>
+                <title>"Words"</title>
+                <Corten />
+            </head>
+            <body><main>{main}</main></body>
+        </html>
+    };
+    req.screen(&shown, doc)
+}
+
+/// A `Public` JSON answer in the language asked for.
+#[cfg(feature = "json")]
+#[crate::routes(api = WordsApi)]
+mod words_api {
+    #[route("/words-api")]
+    pub struct WordsApi;
+
+    #[route("/words-api/listings", get = api_listings)]
+    pub struct ApiListings;
+}
+
+#[cfg(feature = "json")]
+async fn api_listings(req: Req) -> Public<crate::JsonResult<String>> {
+    let t: WordsMsg = req.t();
+    let listings: crate::JsonResult<String> = Ok(crate::Json(t.item_listings().to_string()));
+    Public::new(Duration::from_secs(60), listings)
+}
 /// A page whose styles come from data has a style block its `Content-Security-Policy` allows by
 /// hash: the kept page is sent with the same policy, so the block still applies.
 #[tokio::test]
@@ -1741,16 +2328,18 @@ fn an_answer_s_type_says_whether_its_body_is_kept() {
     assert!(!whole::<StatusCode>() && !whole::<Media>() && !whole::<Public<crate::Result<Media>>>());
     assert!(!whole::<crate::Relay>() && !whole::<HtmlResult>() && !whole::<Public<HtmlResult>>());
     assert!(!whole::<NoStore<String>>(), "an answer no cache may store");
-    // Bytes the app holds keep their own compressed forms where the build compresses.
+    // Bytes the app holds keep their own compressed forms where the build compresses, which is
+    // where a body is kept at all.
     #[cfg(feature = "json")]
-    assert_eq!(whole::<Json<crate::json::Raw>>(), !cfg!(feature = "compress"));
+    assert!(!whole::<Json<crate::json::Raw>>());
 }
 
 /// A `Public` JSON answer and a `Public` text answer are made once for their lifetime, as a
 /// page is: the next request that shows nothing about who asks gets the same bytes with their
 /// age, with the tag and the coded bytes made once, and a write to the path drops them. A
 /// request that asks for JSON first is kept too, apart: its handler can read which client asked.
-#[cfg(feature = "json")]
+/// Each body here is one the app compresses (1,024 bytes or more), which is what is kept.
+#[cfg(all(feature = "json", feature = "compress"))]
 #[tokio::test]
 async fn a_public_json_or_text_answer_is_kept_and_given_again() {
     let minute = Duration::from_secs(60);
@@ -1767,7 +2356,7 @@ async fn a_public_json_or_text_answer_is_kept_and_given_again() {
     // Says which client asked, as a handler that takes `Req` can.
     let mode = move |req: Req| {
         mode_ran.ran();
-        async move { Public::new(minute, Ok::<_, JsonError>(Json(req.mode == crate::Mode::Data))) }
+        async move { Public::new(minute, Ok::<_, JsonError>(Json((req.mode == crate::Mode::Data, "mode ".repeat(300))))) }
     };
     let routes = Table::new()
         .route("/items", crate::route::get(items).0.post(|| async { StatusCode::NO_CONTENT }))
@@ -1798,7 +2387,7 @@ async fn a_public_json_or_text_answer_is_kept_and_given_again() {
     for _ in 0..2 {
         let (_, _, plain) = fetch(&router, "GET", "/mode", &[]).await;
         let (_, _, asked) = fetch(&router, "GET", "/mode", &data).await;
-        assert_eq!((&plain[..], &asked[..]), (&b"false"[..], &b"true"[..]), "each as its handler answered that client");
+        assert!(plain.starts_with(b"[false,") && asked.starts_with(b"[true,"), "each as its handler answered that client");
     }
     assert_eq!(modes.count(), 2, "one run for each way of asking");
 
@@ -1842,23 +2431,114 @@ async fn a_public_json_or_text_answer_is_kept_and_given_again() {
     assert!(again == first && same == body, "{again:?}");
     let (_, _, third) = fetch(&router, "GET", "/text", &coded).await;
     assert_eq!(third.as_ptr(), same.as_ptr(), "the coded bytes made once");
-    #[cfg(feature = "compress")]
     assert_eq!(first[header::CONTENT_ENCODING], "gzip");
     let tag = first[header::ETAG].to_str().unwrap();
     let (status, _, none) = fetch(&router, "GET", "/text", &[("accept-encoding", "gzip"), ("if-none-match", tag)]).await;
     assert!(status == StatusCode::NOT_MODIFIED && none.is_empty() && texts.count() == 1);
 }
 
+/// A whole body is kept where the app compresses it: from 1,024 bytes, in a build that
+/// compresses. One byte under, and in a build that does not, the route is its handler's for
+/// every request. A kept body is given to a request that accepts no coding too.
+#[tokio::test]
+async fn a_whole_body_is_kept_from_the_size_the_app_compresses() {
+    let minute = Duration::from_secs(60);
+    let runs = Runs::default();
+    let (under, at) = (runs.clone(), runs.clone());
+    let under = move || {
+        under.ran();
+        async move { Public::new(minute, "a".repeat(1023)) }
+    };
+    let at = move || {
+        at.ran();
+        async move { Public::new(minute, "a".repeat(1024)) }
+    };
+    let routes = Table::new().route("/under", crate::route::get(under).0).route("/at", crate::route::get(at).0);
+    let router = App::new(Routes::from(routes)).router();
+    for (path, kept) in [("/under", false), ("/at", cfg!(feature = "compress"))] {
+        for asked in [&[][..], &[("accept-encoding", "gzip")][..]] {
+            let before = runs.count();
+            let (_, first, body) = fetch(&router, "GET", path, asked).await;
+            let (_, again, same) = fetch(&router, "GET", path, asked).await;
+            // The first request of all is the handler's; where the body is kept, every one after.
+            assert_eq!(first.contains_key(header::AGE), kept && !asked.is_empty(), "{path} {asked:?}: {first:?}");
+            assert_eq!(again.contains_key(header::AGE), kept, "{path} {asked:?}: {again:?}");
+            assert_eq!(body, same, "{path} {asked:?}");
+            // One copy for both ways of asking: the second pair runs no handler where it is kept.
+            let ran = if !kept { 2 } else { usize::from(asked.is_empty()) };
+            assert_eq!(runs.count() - before, ran, "{path} {asked:?}");
+            #[cfg(feature = "compress")]
+            assert_eq!(again.contains_key(header::CONTENT_ENCODING), path == "/at" && !asked.is_empty(), "{path}: {again:?}");
+        }
+    }
+}
+
+/// A route whose bodies are all too small to keep stops asking the store after sixteen in a
+/// row, and is its handler's as it was before the app kept bodies, but for one request in 256
+/// on a thread, which asks as before: so a route whose bodies grew is found out, and kept
+/// again. One body large enough ends a run, so a route that answers both sizes keeps asking.
+#[cfg(feature = "compress")]
+#[tokio::test]
+async fn a_route_of_small_bodies_leaves_the_store_out_until_one_is_large_enough() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let minute = Duration::from_secs(60);
+    let size = std::sync::Arc::new(AtomicUsize::new(8));
+    let runs = Runs::default();
+    let (ran, sized) = (runs.clone(), size.clone());
+    let body = move || {
+        ran.ran();
+        let size = sized.load(Ordering::Relaxed);
+        async move { Public::new(minute, "a".repeat(size)) }
+    };
+    let routes = Table::new().route("/body", crate::route::get(body).0);
+    let router = App::new(Routes::from(routes)).router();
+    let asked = |router: Router| async move { fetch(&router, "GET", "/body", &[]).await.1.contains_key(header::AGE) };
+    // This thread's count of requests left to their handlers starts here, whatever ran before.
+    crate::kept::Small::none_left();
+
+    // Fifteen small bodies and a large one: the run ended, and the large one is kept and given.
+    for _ in 0..15 {
+        assert!(!asked(router.clone()).await);
+    }
+    size.store(2048, Ordering::Relaxed);
+    assert!(!asked(router.clone()).await && asked(router.clone()).await, "kept, after fifteen small bodies");
+    assert_eq!(runs.count(), 16);
+    // Sixteen small bodies in a row follow, at other URLs of the route: the kept body stands.
+    size.store(8, Ordering::Relaxed);
+    let other = |router: Router, n: usize| async move {
+        fetch(&router, "GET", &format!("/body?n={n}"), &[]).await.1.contains_key(header::AGE)
+    };
+    for n in 0..16 {
+        assert!(!other(router.clone(), n).await);
+    }
+    // From here the store is left out: a large body is made for each request and not kept, and
+    // the one kept before is not given.
+    size.store(2048, Ordering::Relaxed);
+    let before = runs.count();
+    assert!(!other(router.clone(), 99).await && !other(router.clone(), 99).await, "the store is not asked");
+    assert!(!asked(router.clone()).await, "nor is the body kept before given");
+    assert_eq!(runs.count() - before, 3);
+    // Until the one request in 256 on this thread that asks: three were left above, so the
+    // 253rd from here asks, finds nothing, and its body is kept, which ends the run.
+    for left in 3..255 {
+        assert!(!other(router.clone(), 99).await, "left to the handler: request {left}");
+    }
+    assert!(!other(router.clone(), 99).await, "the one that asks: made by its handler, and kept");
+    assert!(other(router.clone(), 99).await, "given from here on");
+    assert!(asked(router.clone()).await, "as is the body kept before");
+}
+
 /// A kept answer in an API is the handler's part alone: what the API adds for the site that asks
 /// (`Access-Control-Allow-Origin`) is written for each request, so no site is sent another's.
-#[cfg(feature = "json")]
+#[cfg(all(feature = "json", feature = "compress"))]
 #[tokio::test]
 async fn a_kept_api_answer_is_sent_with_each_request_s_own_cors() {
     let runs = Runs::default();
     let ran = runs.clone();
     let rates = move || {
         ran.ran();
-        async move { Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json(vec![1.5_f64, 2.5]))) }
+        // Of a size the app compresses, which is what it keeps.
+        async move { Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json(vec![1.5_f64; 400]))) }
     };
     struct Counted(Runs);
 
@@ -1880,9 +2560,10 @@ async fn a_kept_api_answer_is_sent_with_each_request_s_own_cors() {
     let partner = [("origin", "https://partner.example")];
     let allowed = |headers: &HeaderMap| headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).map(|v| v.to_str().unwrap().to_string());
     let (status, first, body) = fetch(&router, "GET", "/api/rates", &partner).await;
+    let rates = format!("[{}]", vec!["1.5"; 400].join(","));
     assert_eq!(
         (status, &body[..], allowed(&first).as_deref()),
-        (StatusCode::OK, &b"[1.5,2.5]"[..], Some("https://partner.example"))
+        (StatusCode::OK, rates.as_bytes(), Some("https://partner.example"))
     );
     let (_, plain, same) = fetch(&router, "GET", "/api/rates", &[]).await;
     assert!(plain.contains_key(header::AGE) && same == body, "{plain:?}");
@@ -1962,10 +2643,11 @@ fn a_submit_key_is_seen_wherever_the_handler_s_poll_ran() {
             for _ in 0..8 {
                 tokio::task::yield_now().await;
             }
-            Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json(field)))
+            // Of a size the app keeps, so the key is what keeps it out.
+            Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json((field, "keyed ".repeat(200)))))
         }
     };
-    let plain = || async { Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json("plain".repeat(20)))) };
+    let plain = || async { Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json("plain".repeat(300)))) };
     let routes = Table::new().route("/keyed", crate::route::get(keyed).0).route("/plain", crate::route::get(plain).0);
     let router = App::new(Routes::from(routes)).router();
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
@@ -1990,15 +2672,17 @@ fn a_submit_key_is_seen_wherever_the_handler_s_poll_ran() {
     });
 }
 
-/// A kept body is for the language its handler read. No body says it varies on
-/// `Accept-Language`, so the header is part of its key once the handler reads it (`req.t()`,
-/// `req.lang()`): in an app with messages, with a messages type that is not the app's, and with
-/// none. A body whose handler does not read it is one copy for every language.
-#[cfg(feature = "json")]
+/// A kept body is for the language its handler read: the header is part of its key once the
+/// handler reads it (`req.t()`, `req.lang()`), in an app with messages, with a messages type
+/// that is not the app's, and with none. A body whose handler does not read it is one copy for
+/// every language.
+#[cfg(all(feature = "json", feature = "compress"))]
 #[tokio::test]
 async fn a_kept_body_is_for_the_language_its_handler_read() {
     crate::i18n::messages! { struct BodyMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
     crate::i18n::messages! { struct OtherMsg { "fr" => "src/i18n/fr.json", "en" => "src/i18n/en.json" } }
+    /// Each body is its word this many times: of a size the app compresses, which is what it keeps.
+    const REPEATED: usize = 600;
     let minute = Duration::from_secs(60);
     let runs = Runs::default();
     let routes = || {
@@ -2007,23 +2691,23 @@ async fn a_kept_body_is_for_the_language_its_handler_read() {
             words.ran();
             async move {
                 let t: BodyMsg = req.t();
-                Public::new(minute, t.item_listings().to_string())
+                Public::new(minute, t.item_listings().to_string().repeat(REPEATED))
             }
         };
         let lang = move |req: Req| {
             lang.ran();
-            async move { Public::new(minute, Ok::<_, JsonError>(Json(req.lang().to_string()))) }
+            async move { Public::new(minute, Ok::<_, JsonError>(Json(req.lang().repeat(REPEATED)))) }
         };
         let other = move |req: Req| {
             other.ran();
             async move {
                 let t: OtherMsg = req.t();
-                Public::new(minute, t.item_listings().to_string())
+                Public::new(minute, t.item_listings().to_string().repeat(REPEATED))
             }
         };
         let same = move || {
             same.ran();
-            async move { Public::new(minute, "same".to_string()) }
+            async move { Public::new(minute, "same".repeat(REPEATED)) }
         };
         Table::new()
             .route("/words", crate::route::get(words).0)
@@ -2040,7 +2724,7 @@ async fn a_kept_body_is_for_the_language_its_handler_read() {
             for (asked, word, ran) in [("fr", "Annonces", 1), ("en", "Listings", 2), ("fr", "Annonces", 2), ("en", "Listings", 2)]
             {
                 let (_, _, body) = fetch(app, "GET", path, &[("accept-language", asked)]).await;
-                let said = if *path == "/lang" { format!("\"{asked}\"") } else { word.to_string() };
+                let said = if *path == "/lang" { format!("\"{}\"", asked.repeat(REPEATED)) } else { word.repeat(REPEATED) };
                 assert_eq!(String::from_utf8_lossy(&body), said, "{path} asked in {asked}");
                 assert_eq!(runs.count() - before, ran, "{path} asked in {asked}");
             }
@@ -2048,16 +2732,16 @@ async fn a_kept_body_is_for_the_language_its_handler_read() {
         let before = runs.count();
         for asked in ["fr", "en", "de"] {
             let (_, _, body) = fetch(app, "GET", "/same", &[("accept-language", asked)]).await;
-            assert_eq!(&body[..], b"same");
+            assert_eq!(body.len(), 4 * REPEATED);
         }
         assert_eq!(runs.count() - before, 1, "the header is not read, so one copy");
     }
 }
 
-/// What is not kept of a route that answers JSON for everyone: a failure, JSON the app holds as
-/// bytes where the app compresses (it carries its own coded forms, a mark the store does not
-/// replay), and a body with a form's new submit key in markup its handler rendered, also where
-/// the handler waited after rendering it.
+/// What is not kept of a route that answers JSON for everyone, each of a size the app keeps: a
+/// failure, JSON the app holds as bytes (it carries its own coded forms, a mark the store does
+/// not replay), and a body with a form's new submit key in markup its handler rendered, also
+/// where the handler waited after rendering it.
 #[cfg(feature = "json")]
 #[tokio::test]
 async fn a_json_answer_that_failed_or_is_one_request_s_alone_is_not_kept() {
@@ -2071,19 +2755,21 @@ async fn a_json_answer_that_failed_or_is_one_request_s_alone_is_not_kept() {
     };
     let raw = move || {
         raw.ran();
-        let held = crate::json::Raw::new(r#"{"ladders":[]}"#).expect("JSON");
+        let held = crate::json::Raw::new(format!(r#"{{"ladders":"{}"}}"#, "rung ".repeat(300))).expect("JSON");
         async move { Public::new(minute, Ok::<_, JsonError>(Json(held))) }
     };
     let keyed = move || {
         keyed.ran();
-        async move { Public::new(minute, Ok::<_, JsonError>(Json(crate::form::SubmitKey::field(SUBMIT).to_html()))) }
+        async move {
+            Public::new(minute, Ok::<_, JsonError>(Json((crate::form::SubmitKey::field(SUBMIT).to_html(), "keyed ".repeat(200)))))
+        }
     };
     let waited = move |req: Req| {
         waited.ran();
         async move {
             let field = req.rendered(crate::form::SubmitKey::field(SUBMIT)).into_string();
             tokio::task::yield_now().await;
-            Public::new(minute, Ok::<_, JsonError>(Json(field)))
+            Public::new(minute, Ok::<_, JsonError>(Json((field, "keyed ".repeat(200)))))
         }
     };
     let routes = Table::new()
@@ -2094,7 +2780,7 @@ async fn a_json_answer_that_failed_or_is_one_request_s_alone_is_not_kept() {
     let router = App::new(Routes::from(routes)).router();
     for (path, status, kept) in [
         ("/missing", StatusCode::NOT_FOUND, false),
-        ("/raw", StatusCode::OK, !cfg!(feature = "compress")),
+        ("/raw", StatusCode::OK, false),
         ("/keyed", StatusCode::OK, false),
         ("/waited", StatusCode::OK, false),
     ] {

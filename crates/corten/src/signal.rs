@@ -114,9 +114,8 @@ struct Inner {
     callers: AtomicU64,
     /// The app's error page is answering it.
     error_page: AtomicBool,
-    /// The answer's language was chosen from the request's `Accept-Language`, whether or not
-    /// the answer says it varies on the header (JSON and text do not, nor does a page of an app
-    /// with no [`crate::App::messages`]).
+    /// Something negotiated the request's locale from its `Accept-Language` (`req.t()`,
+    /// `req.lang()`), so the answer's `Vary` names the header (`crate::page::vary_on_language`).
     asked_language: AtomicBool,
     /// For a request that may change what its path shows, in an app that keeps pages: which of
     /// the store's counts of writes is its path's, plus one (`crate::kept`).
@@ -585,8 +584,8 @@ impl Signal {
         self.0.error_page.load(Ordering::Relaxed)
     }
 
-    /// The request's `Accept-Language` was read to choose the answer's language: an answer the
-    /// app keeps is kept for the header as it was sent (`crate::kept`).
+    /// The request's locale was negotiated from its `Accept-Language`: the answer's `Vary` names
+    /// the header, however late it was read (`crate::page::vary_on_language`).
     pub(crate) fn ask_language(&self) {
         self.0.asked_language.store(true, Ordering::Relaxed);
     }
@@ -599,6 +598,12 @@ impl Signal {
     /// count its path's writes.
     pub(crate) fn writes(&self, count: usize) {
         self.0.write.store(count + 1, Ordering::Relaxed);
+    }
+
+    /// Whether the request is counted as a write to its path ([`Signal::writes`]).
+    #[cfg(test)]
+    pub(crate) fn counts_a_write(&self) -> bool {
+        self.0.write.load(Ordering::Relaxed) != 0
     }
 
     /// Work that outlived the request's handler has ended ([`Signal::finish`]): what it wrote

@@ -6,6 +6,13 @@
 //! that lifetime (`s-maxage` where the answer has one, else `max-age`, RFC 9111 section 4.2.1)
 //! gives it to the next such request in the handler's place, with an `Age`.
 //!
+//! While the store has room every such answer is kept. Once it is full, keeping an answer may
+//! drop another page, so an answer is kept then only when its URL was asked for before, as far
+//! back as the marks that say so go ([`Store::asked`]): a crawler's first walk over more URLs
+//! than the bound has room for, or searches no one repeats, are answered by the handler without
+//! a copy into the store, and all but the few whose mark is another's take no room from the
+//! pages that are asked for again.
+//!
 //! It stands where the handler does, after the app's middleware, so every stage still runs for
 //! every request: a middleware sees the `200` with the whole body, the security headers and
 //! `Cache-Control` are written as for any answer, and a request that names the page's tag is
@@ -22,9 +29,11 @@
 //! written in UTC), no `Authorization`, no caller read by a middleware, no `corten` header, JSON
 //! not asked for first, no notice sent back, no body, and the URL the router matched (a
 //! middleware that changed it since leaves the request to the handler). The key is the `Host`,
-//! the path and query, and `Accept-Language` when the page's `Vary` names it or the handler
-//! read the language it asks for (`req.t()`, `req.lang()`): a page for `/items?page=2` is not the one for `/items`. The
-//! headers are compared as they were sent, so `fr` and `fr-FR` each have a copy. An answer is
+//! the path and query, and `Accept-Language` when the page's `Vary` names it (`App::messages`, or
+//! a locale negotiated from it, before or after the page was made, which a copy given says again
+//! as it leaves the app, whatever `Vary` a middleware put on it): a page for `/items?page=2` is
+//! not the one for `/items`. The headers are compared as they were sent, so `fr` and `fr-FR`
+//! each have a copy. An answer is
 //! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
 //! and no value made for this request alone, and varies on nothing but what the key covers.
 //!
@@ -58,7 +67,8 @@
 //! A write that went through also drops what is kept at the place on this site its
 //! answer names (`Location`, `Content-Location`; RFC 9111 section 4.4). A page whose handler
 //! was reading while a write went through is not kept. Nothing else drops a page before its
-//! lifetime ends: the lifetime is how stale the app said the page may be. Off under `corten dev`. The
+//! lifetime ends: the lifetime is how stale the app said the page may be. Off under `corten dev`,
+//! and in an app with no route that keeps a page, whose writes are then not counted. The
 //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
 //! the compressed forms made for it, with an allowance for what holds them; the body, the key
 //! and each compressed form are held in allocations of their own size
@@ -69,9 +79,10 @@
 //! started and did not wait for, a store whose readers lag its writers) can leave the page as
 //! it was until its lifetime ends.
 
+use std::cell::Cell;
 use std::collections::HashMap;
-use std::hash::{BuildHasher, DefaultHasher, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
@@ -106,6 +117,38 @@ const HEADER: usize = 112;
 /// An entry's size once it is no longer kept: nothing made for it counts from then on.
 const GONE: usize = usize::MAX;
 
+/// Room for the names the stages after the handler add to a kept answer's head, so it does not
+/// grow as they are written: `Age`, the tag, the security headers, the reporting endpoints and
+/// what compression writes are twelve at most. A middleware of the app that adds more grows it as
+/// it would any other.
+const ADDED: usize = 12;
+
+/// The most names a kept answer's head is given that room beside. One with more is copied as it
+/// is, so no head is too large for the map the room asks for.
+const ROOMY: usize = 64;
+
+/// `Last-Event-ID`, held once: a comparison with a name that is not the `http` crate's own
+/// would make the name each time.
+static LAST_EVENT_ID: header::HeaderName = header::HeaderName::from_static("last-event-id");
+/// [`crate::page::NOTICE_HEADER`], held once for the same reason.
+static NOTICE: header::HeaderName = crate::page::NOTICE_HEADER;
+
+/// A copy of a kept answer's `head`, each line where it was, with room for [`ADDED`] more
+/// names: a copy made by `clone` holds its lines in a vector as long as they are, which grows on
+/// the first name a stage adds. (A head with more than four lines beyond the first of their
+/// names pays for this copy once more than for a `clone`, as the map's room for those is not
+/// asked for.)
+fn with_room(head: &HeaderMap) -> HeaderMap {
+    if head.keys_len() > ROOMY {
+        return head.clone();
+    }
+    let mut copy = HeaderMap::with_capacity(head.keys_len() + ADDED);
+    for (name, value) in head {
+        copy.append(name.clone(), value.clone());
+    }
+    copy
+}
+
 /// The counts of writes, one for the paths whose hash names it: enough of them (256 KiB, made
 /// when the first page is asked for) that an app's writes seldom share a count with a kept page.
 const WRITES: usize = 1 << 16;
@@ -117,6 +160,82 @@ const WRITES: usize = 1 << 16;
 pub enum Shape {
     Page,
     Body,
+}
+
+/// How many whole bodies too small to be kept a route makes in a row before it stops asking the
+/// store ([`Small`]).
+const SMALL_RUN: u8 = 16;
+
+thread_local! {
+    /// The requests on this thread that a route of small bodies left to its handler unasked, as
+    /// far as a byte counts them: when it comes round, one asks the store all the same.
+    static LEFT: Cell<u8> = const { Cell::new(0) };
+}
+
+/// A route of whole bodies, by those it made last. A body is kept where the app compresses it
+/// ([`compresses`]), which its size decides and no type shows, so a route whose bodies are all
+/// under that size would ask the store, find nothing, and have every answer refused: about as
+/// much again as a handler that answers a constant costs. After [`SMALL_RUN`] such bodies in a
+/// row, with none between that was large enough, the route's requests are its handler's, as
+/// they were before the app kept bodies, but one in 256 on each thread, which asks as before
+/// and so finds out a route whose bodies grew. A route that answers both sizes keeps asking:
+/// one body large enough ends the run. While a route leaves the store out, a body it kept
+/// earlier is not given; it is made again, as it would be had it not been kept.
+#[derive(Default)]
+pub(crate) struct Small(AtomicU8);
+
+impl Small {
+    /// Whether this request is the handler's without the store being asked.
+    #[inline]
+    pub(crate) fn leaves(&self) -> bool {
+        if self.0.load(Ordering::Relaxed) < SMALL_RUN {
+            return false;
+        }
+        LEFT.with(|left| {
+            let count = left.get().wrapping_add(1);
+            left.set(count);
+            count != 0
+        })
+    }
+
+    /// The route made a body the store refused for its size, or one it did not.
+    fn made(&self, small: bool) {
+        // Two requests at once may count one body: the run is a little longer then.
+        let run = self.0.load(Ordering::Relaxed);
+        let next = if small { run.saturating_add(1).min(SMALL_RUN) } else { 0 };
+        if next != run {
+            self.0.store(next, Ordering::Relaxed);
+        }
+    }
+
+    /// This thread's count of requests left starts again, for a test that counts them.
+    #[cfg(all(test, feature = "compress"))]
+    pub(crate) fn none_left() {
+        LEFT.set(0);
+    }
+}
+
+/// Whether the app compresses a `200` of `length` bytes under these headers for a request that
+/// accepts a coding (1,024 bytes or more of a type worth it, in a build that compresses): a
+/// whole body is kept only then. Kept, it saves its handler, its writing and its compression,
+/// and a body the app does not compress saves so little of the first two on the benchmark's
+/// JSON that a handler which does next to nothing is slower kept than made.
+fn compresses(headers: &HeaderMap, length: u64) -> bool {
+    #[cfg(feature = "compress")]
+    return crate::compress::compresses(headers, length);
+    #[cfg(not(feature = "compress"))]
+    {
+        let _ = (headers, length);
+        false
+    }
+}
+
+/// How many words of marks ([`Store::asked`]) a store of `bound` bytes has, made when it first
+/// fills: a mark is one bit, and there is one for every 32 bytes of the bound, rounded up to a
+/// power of two of words. That is 1,048,576 marks in 128 KiB for the 32 MiB an app keeps unless
+/// it says otherwise, a hundred and more for each page of a few thousand bytes it has room for.
+fn marks_for(bound: usize) -> usize {
+    (bound / 2048).max(1).next_power_of_two()
 }
 
 /// The app's kept answers, at most `bound` bytes of them.
@@ -131,6 +250,10 @@ struct Store {
     /// whatever its query, and a page whose handler was reading while the write was made is not
     /// kept, without a lock or a search.
     written: OnceLock<Box<[AtomicU32]>>,
+    /// One bit for each mark of a URL asked for since the store filled ([`Store::asked`]).
+    marks: OnceLock<Box<[AtomicU64]>>,
+    /// How many of the marks are set.
+    marked: AtomicUsize,
     inner: RwLock<Inner>,
 }
 
@@ -377,6 +500,45 @@ impl Entry {
 }
 
 impl Store {
+    /// Whether keeping an answer may have to drop a page: the bytes kept are within the largest
+    /// answer that is kept ([`SHARE`]) of the bound. The pages that no longer stand count too,
+    /// since most stay until room is made: a store that filled once is seldom not full again,
+    /// and when it is, answers are kept the first time until it fills.
+    fn full(&self) -> bool {
+        self.bytes.load(Ordering::Relaxed) > self.bound - self.bound / SHARE
+    }
+
+    /// Whether the URL `at` (a path and query), asked for with `host` in any language, was asked
+    /// for before by a request no kept answer stood for, in a full store, since the marks were
+    /// last cleared; and marks it.
+    ///
+    /// A mark is one bit, found by a hash of the URL, and no other URL unsets it. So a URL
+    /// asked for before is known, and one not asked for before is taken for known when its
+    /// bit is another's: its answer is then kept the first time, as every answer is while the
+    /// store has room. Once an eighth of the marks are set they are all cleared, which holds
+    /// that to one new URL in eight at most, and costs each page that is asked for again after
+    /// its kept copy has gone one more run of its handler.
+    ///
+    /// The hash has no key of the process's. A client that chooses URLs sharing a mark gains
+    /// an answer kept the first time, and one that asks for enough new URLs to clear the marks
+    /// gains that one more run for each page, with requests that each ran a handler.
+    fn asked(&self, host: Option<&HeaderValue>, at: &str) -> bool {
+        let marks = self.marks.get_or_init(|| (0..marks_for(self.bound)).map(|_| AtomicU64::new(0)).collect());
+        let hash = BuildHasherDefault::<DefaultHasher>::default().hash_one((host.map(HeaderValue::as_bytes), at));
+        let (word, bit) = (&marks[(hash >> 6) as usize % marks.len()], 1 << (hash & 63));
+        if word.fetch_or(bit, Ordering::Relaxed) & bit != 0 {
+            return true;
+        }
+        // 64 marks a word, so this is an eighth of them. The URL that clears them is unmarked
+        // with the rest, and requests that get here at once may each clear or count one too
+        // many: a URL is then asked for once more than it had to be.
+        if self.marked.fetch_add(1, Ordering::Relaxed) >= marks.len() * 8 {
+            marks.iter().for_each(|word| word.store(0, Ordering::Relaxed));
+            self.marked.store(0, Ordering::Relaxed);
+        }
+        false
+    }
+
     /// Takes `entry` out of its slot and its URL's copies, and its size out of the bytes kept.
     fn drop_entry(&self, inner: &mut Inner, entry: &Arc<Entry>) {
         let slot = entry.place.slot;
@@ -422,7 +584,14 @@ impl Answers {
     /// Room for `bound` bytes of answers; none for a bound of 0.
     pub(crate) fn new(bound: usize) -> Option<Self> {
         (bound > 0).then(|| {
-            Answers(Arc::new(Store { bound, bytes: AtomicUsize::new(0), written: OnceLock::new(), inner: RwLock::default() }))
+            Answers(Arc::new(Store {
+                bound,
+                bytes: AtomicUsize::new(0),
+                written: OnceLock::new(),
+                marks: OnceLock::new(),
+                marked: AtomicUsize::new(0),
+                inner: RwLock::default(),
+            }))
         })
     }
 
@@ -516,10 +685,74 @@ impl Answers {
 /// the app's middleware).
 pub(crate) struct Asked<'a> {
     answers: &'a Answers,
+    signal: &'a crate::Signal,
     at: &'a str,
     host: Option<&'a HeaderValue>,
     language: Option<&'a HeaderValue>,
     data: bool,
+}
+
+/// What a request's headers say of whether a kept answer can stand for it, and what of them its
+/// key is made of.
+struct Sent<'a> {
+    host: Option<&'a HeaderValue>,
+    language: Option<&'a HeaderValue>,
+    /// A data client asks: a whole body is kept for it apart from the one a browser is given.
+    data: bool,
+}
+
+impl<'a> Sent<'a> {
+    /// `None` where the headers show something the answer could differ by beside its key: a
+    /// cookie but the time zone's, an `Authorization`, what the runtime asks for (`corten`,
+    /// whatever it says), a notice the page sends back when it is read again, where a stream
+    /// stopped, a body; and, of a page, a data client's JSON asked for first, which is another
+    /// answer at the same URL. A whole body is its route's one answer, so a data client's
+    /// request is kept too, apart: a handler that takes `Req` can read which of the two asked
+    /// (`req.mode`).
+    fn read(headers: &'a HeaderMap, shape: Shape) -> Option<Self> {
+        // By their names and first, since they are what most requests a page is not kept for
+        // carry: a session's cookie, and the runtime's header on a navigation inside the app.
+        if crate::cache::Credentials::read(headers).personal(|| headers.contains_key(header::AUTHORIZATION))
+            || headers.contains_key(crate::page::MODE_HEADER)
+        {
+            return None;
+        }
+        // The rest in one pass over the headers, where each would be a lookup by its name.
+        let (mut host, mut language, mut data) = (None, None, None);
+        // Who asks, by the rule for a request's mode ([`Mode::said`]) with no `corten` header,
+        // as none was found above: a browser for the document, or a data client where the route
+        // answers a whole body.
+        let asks = |accept: Option<&'a HeaderValue>| match (Mode::said(None, || accept).0, shape) {
+            ((Mode::Document, false), _) => Some(false),
+            ((Mode::Data, false), Shape::Body) => Some(true),
+            _ => None,
+        };
+        for (name, value) in headers {
+            // The first line of each, which is what a lookup gives.
+            if name == header::HOST {
+                host = host.or(Some(value));
+            } else if name == header::ACCEPT {
+                // A request no kept answer stands for leaves here, as it left before the rest
+                // was read.
+                if data.is_none() {
+                    data = Some(asks(Some(value))?);
+                }
+            } else if name == header::ACCEPT_LANGUAGE {
+                language = language.or(Some(value));
+            } else if name == header::CONTENT_LENGTH
+                || name == header::TRANSFER_ENCODING
+                || *name == NOTICE
+                || *name == LAST_EVENT_ID
+            {
+                return None;
+            }
+        }
+        let data = match data {
+            Some(data) => data,
+            None => asks(None)?,
+        };
+        Some(Sent { host, language, data })
+    }
 }
 
 impl<'a> Asked<'a> {
@@ -534,34 +767,7 @@ impl<'a> Asked<'a> {
         if signal.is_personal() || signal.is_error_page() {
             return None;
         }
-        let headers = req.headers();
-        // First, since it is what most requests a page is not kept for carry.
-        if crate::cache::Credentials::read(headers).personal(|| headers.contains_key(header::AUTHORIZATION)) {
-            return None;
-        }
-        // Not what the runtime asks for (`corten`, whatever it says). Of a page, the document a
-        // browser loads and not a data client's JSON, which is another answer at the same URL. A
-        // whole body is its route's one answer, so a data client's request is kept too, apart: a
-        // handler that takes `Req` can read which of the two asked (`req.mode`).
-        if headers.contains_key(crate::page::MODE_HEADER) {
-            return None;
-        }
-        let data = match (Mode::asked(headers), shape) {
-            ((Mode::Document, false), _) => false,
-            ((Mode::Data, false), Shape::Body) => true,
-            _ => return None,
-        };
-        // Nothing the handler could read beside the URL: a notice the page sends back when it is
-        // read again, where a stream stopped, a body.
-        const READ: [header::HeaderName; 4] = [
-            crate::page::NOTICE_HEADER,
-            header::HeaderName::from_static("last-event-id"),
-            header::CONTENT_LENGTH,
-            header::TRANSFER_ENCODING,
-        ];
-        if READ.iter().any(|name| headers.contains_key(name)) {
-            return None;
-        }
+        let Sent { host, language, data } = Sent::read(req.headers(), shape)?;
         // In origin form: a URL that names its own host is a proxy's.
         if req.uri().authority().is_some() {
             return None;
@@ -574,15 +780,19 @@ impl<'a> Asked<'a> {
             return None;
         }
         let at = at.as_str();
-        let (host, language) = (headers.get(header::HOST), headers.get(header::ACCEPT_LANGUAGE));
-        Some(Asked { answers, at, host, language, data })
+        Some(Asked { answers, signal, at, host, language, data })
     }
 
     /// The kept answer for this request, as its handler gave it, with its age.
     pub(crate) fn find(&self) -> Option<Response> {
         let (entry, age) = self.answers.find(self.at, self.host, self.language, self.data)?;
+        // Kept for the language it was asked in: the answer names `Accept-Language` as it leaves
+        // the app, whatever `Vary` a middleware puts on it after this (`crate::page::vary_on_language`).
+        if entry.language.is_some() {
+            self.signal.ask_language();
+        }
         let mut res = Response::new(Body::from(entry.body.clone()));
-        let mut head = entry.head.clone();
+        let mut head = with_room(&entry.head);
         // So a cache after this one, the browser's too, does not start the lifetime over.
         head.insert(header::AGE, HeaderValue::from(age));
         *res.headers_mut() = head;
@@ -597,9 +807,15 @@ impl<'a> Asked<'a> {
 
     /// What keeping the handler's answer needs of the request, once no kept one stood for it:
     /// taken before the handler runs, so the answer's age counts its making and a write made
-    /// meanwhile is seen.
-    pub(crate) fn missed(&self, req: &Request) -> Missed {
-        Missed {
+    /// meanwhile is seen. None in a full store for a URL not asked for before: keeping its
+    /// answer would drop a page for one no one is known to ask for again, so the answer is the
+    /// handler's and nothing here is paid for it but the mark it leaves.
+    pub(crate) fn missed(&self, req: &Request, small: Option<Arc<Small>>) -> Option<Missed> {
+        let store = &*self.answers.0;
+        if store.full() && !store.asked(self.host, self.at) {
+            return None;
+        }
+        Some(Missed {
             asked: Instant::now(),
             written: Written::of(&self.answers.0, self.at),
             signal: req.extensions().get::<crate::Signal>().cloned(),
@@ -610,7 +826,8 @@ impl<'a> Asked<'a> {
             host: self.host.and_then(|host| HeaderValue::from_bytes(host.as_bytes()).ok()),
             language: self.language.and_then(|language| HeaderValue::from_bytes(language.as_bytes()).ok()),
             data: self.data,
-        }
+            small,
+        })
     }
 }
 
@@ -624,20 +841,25 @@ pub(crate) struct Missed {
     host: Option<HeaderValue>,
     language: Option<HeaderValue>,
     data: bool,
+    /// Of a route of whole bodies, which is told whether this one was large enough to keep.
+    small: Option<Arc<Small>>,
 }
 
 impl Missed {
     /// `res`, kept when it is the same for everyone and for how long: see the module.
-    pub(crate) async fn keep(self, res: Response) -> Response {
-        let shared = self.signal.as_ref().and_then(crate::Signal::shared);
-        let Some(answers) = shared.and_then(|shared| shared.kept.as_ref()) else { return res };
+    pub(crate) async fn keep(self, mut res: Response) -> Response {
+        let Some(signal) = &self.signal else { return res };
+        let Some(answers) = signal.shared().and_then(|shared| shared.kept.as_ref()) else { return res };
         let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else { return res };
-        // Whether the page varies on `Accept-Language`, or on something the key does not cover.
-        let Some(language) = varies(res.headers()) else { return res };
-        // An answer in the language the request asked for that does not say so (JSON, text, a
-        // page whose messages were read with no `App::messages`): one copy for each
-        // `Accept-Language` too.
-        let language = language || self.signal.as_ref().is_some_and(crate::Signal::asked_language);
+        // Whether the page varies on `Accept-Language` (`App::messages`, or a locale negotiated
+        // from it), or on something the key does not cover.
+        let Some(mut language) = varies(res.headers()) else { return res };
+        // A locale negotiated after the page set its headers is named now, so the key below
+        // and the header the app sends agree.
+        if !language && signal.asked_language() {
+            crate::page::add_language(res.headers_mut());
+            language = true;
+        }
         let style = res.extensions().get::<crate::security::StyleBlock>().cloned();
         // Only what is put back on a kept answer: a mark this does not know is not replayed.
         let known = 2 + usize::from(style.is_some());
@@ -658,6 +880,14 @@ impl Missed {
             return res;
         }
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
+        // A whole body is kept where the app compresses it.
+        if let Some(small) = &self.small {
+            let worth = compresses(res.headers(), length);
+            small.made(!worth);
+            if !worth {
+                return res;
+            }
+        }
         let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
         // The URL is held twice, by the entry and by the map.
         let key = self.at.len() * 2
@@ -725,6 +955,166 @@ fn varies(headers: &HeaderMap) -> Option<bool> {
 mod tests {
     use super::*;
 
+    /// What [`Sent::read`] reads, by a lookup of each header's name: the rule as the functions
+    /// that own each part of it say it.
+    fn by_name(headers: &HeaderMap, shape: Shape) -> Option<(Option<&HeaderValue>, Option<&HeaderValue>, bool)> {
+        if crate::cache::Credentials::read(headers).personal(|| headers.contains_key(header::AUTHORIZATION)) {
+            return None;
+        }
+        if headers.contains_key(crate::page::MODE_HEADER) {
+            return None;
+        }
+        let data = match (Mode::asked(headers), shape) {
+            ((Mode::Document, false), _) => false,
+            ((Mode::Data, false), Shape::Body) => true,
+            _ => return None,
+        };
+        let read = [
+            crate::page::NOTICE_HEADER,
+            header::HeaderName::from_static("last-event-id"),
+            header::CONTENT_LENGTH,
+            header::TRANSFER_ENCODING,
+        ];
+        if read.iter().any(|name| headers.contains_key(name)) {
+            return None;
+        }
+        Some((headers.get(header::HOST), headers.get(header::ACCEPT_LANGUAGE), data))
+    }
+
+    /// Each line of `headers`, in the order a response is written in.
+    fn lines(headers: &HeaderMap) -> Vec<(&header::HeaderName, &HeaderValue)> {
+        headers.iter().collect()
+    }
+
+    #[test]
+    fn a_kept_head_is_copied_line_for_line_with_room_for_what_the_stages_add() {
+        // Made as a page's head is, with room in its table that a `clone` has as well.
+        let mut head = HeaderMap::new();
+        head.reserve(13);
+        for (name, value) in [
+            ("content-type", "text/html; charset=utf-8"),
+            ("link", "</a.css>; rel=preload; as=style"),
+            ("vary", "corten, accept"),
+            ("corten-shell", "f2858fac99b1c5e6"),
+            ("vary", "accept-language"),
+        ] {
+            head.append(header::HeaderName::from_static(name), HeaderValue::from_static(value));
+        }
+        // A name taken out and put back, so the map's own order is not the order it was filled in
+        // (`http` 1.5 moves the last name into the place of one taken out).
+        head.remove("link");
+        head.append("link", HeaderValue::from_static("</a.css>; rel=preload; as=style"));
+        head.append("link", HeaderValue::from_static("</b.js>; rel=modulepreload"));
+        let mut copy = with_room(&head);
+        assert_eq!(lines(&copy), lines(&head));
+        // As many more names as the stages add, and the map is the size it was made, with each
+        // line where it was put: the vector a `clone` holds them in grows on the first of these
+        // and moves them, which the size of the map's table does not show.
+        let first = |copy: &HeaderMap| std::ptr::from_ref(&copy[header::CONTENT_TYPE]);
+        let (room, at) = (copy.capacity(), first(&copy));
+        assert!(room >= head.keys_len() + ADDED, "{room}");
+        for added in 0..ADDED {
+            copy.insert(
+                header::HeaderName::from_bytes(format!("x-added-{added}").as_bytes()).unwrap(),
+                HeaderValue::from_static("1"),
+            );
+        }
+        assert_eq!(copy.capacity(), room);
+        assert_eq!(first(&copy), at);
+        assert_eq!(lines(&copy)[..head.len()], lines(&head)[..]);
+
+        // A head of more names than is given room, with two lines of one, is copied as it is: the
+        // copy is the size of the map it was copied from, which was made larger than the room.
+        let mut large = HeaderMap::with_capacity(4 * ROOMY);
+        for name in 0..=ROOMY {
+            large.append(header::HeaderName::from_bytes(format!("x-{name}").as_bytes()).unwrap(), HeaderValue::from(name));
+        }
+        large.append("x-0", HeaderValue::from_static("again"));
+        let roomy = HeaderMap::<HeaderValue>::with_capacity(ROOMY + ADDED).capacity();
+        assert!(large.capacity() > roomy, "{} {roomy}", large.capacity());
+        let copy = with_room(&large);
+        assert_eq!(lines(&copy), lines(&large));
+        assert_eq!(copy.capacity(), large.capacity());
+        // And the largest that is given room has that room and no more.
+        large.remove("x-1");
+        let copy = with_room(&large);
+        assert_eq!(lines(&copy), lines(&large));
+        assert_eq!(copy.capacity(), roomy);
+    }
+
+    #[test]
+    fn the_headers_read_in_one_pass_are_what_a_lookup_of_each_name_reads() {
+        // Each header not sent, sent, and sent on two lines, with each value that changes what is
+        // read of it.
+        let sent: [(header::HeaderName, &[&[&[u8]]]); 11] = [
+            (
+                header::COOKIE,
+                &[
+                    &[],
+                    &[b"corten-zone=UTC"],
+                    &[b"sid=1"],
+                    &[b"corten-zone=UTC", b"corten-zone=UTC"],
+                    &[b"corten-zone=UTC; sid=1"],
+                ],
+            ),
+            (header::AUTHORIZATION, &[&[], &[b"Bearer x"]]),
+            (crate::page::MODE_HEADER, &[&[], &[b"nav"], &[b"another"]]),
+            (
+                header::ACCEPT,
+                &[
+                    &[],
+                    &[b"application/json"],
+                    &[b"text/html,application/json"],
+                    &[b"text/html", b"application/json"],
+                    &[b"application/json", b"text/html"],
+                    &[b" application/json ; q=1, text/html"],
+                    &[b"\xff"],
+                ],
+            ),
+            (crate::page::NOTICE_HEADER, &[&[], &[b"saved"]]),
+            (header::HeaderName::from_static("last-event-id"), &[&[], &[b"7"]]),
+            (header::CONTENT_LENGTH, &[&[], &[b"0"]]),
+            (header::TRANSFER_ENCODING, &[&[], &[b"chunked"]]),
+            (header::HOST, &[&[], &[b"a.example"], &[b"a.example", b"b.example"]]),
+            (header::ACCEPT_LANGUAGE, &[&[], &[b"fr"], &[b"fr", b"en"]]),
+            // One the rule does not read, as most of a browser's are.
+            (header::USER_AGENT, &[&[], &[b"a browser"]]),
+        ];
+        let (mut kept, mut left, mut apart) = (0, 0, 0);
+        let mut choice = [0; 11];
+        loop {
+            for backwards in [false, true] {
+                let mut headers = HeaderMap::new();
+                let mut order: Vec<usize> = (0..sent.len()).collect();
+                if backwards {
+                    order.reverse();
+                }
+                for at in order {
+                    for line in sent[at].1[choice[at]] {
+                        headers.append(sent[at].0.clone(), HeaderValue::from_bytes(line).unwrap());
+                    }
+                }
+                let page = Sent::read(&headers, Shape::Page).map(|sent| (sent.host, sent.language, sent.data));
+                assert_eq!(page, by_name(&headers, Shape::Page), "{headers:?}");
+                match page {
+                    Some(_) => kept += 1,
+                    None => left += 1,
+                }
+                // A whole body is kept for a data client too, apart, and for no one a page is not.
+                let body = Sent::read(&headers, Shape::Body).map(|sent| (sent.host, sent.language, sent.data));
+                assert_eq!(body, by_name(&headers, Shape::Body), "{headers:?}");
+                assert!(page.is_none() || body == page, "{headers:?}");
+                apart += usize::from(matches!(body, Some((_, _, true))));
+            }
+            // The next choice of lines, as a number with a digit for each header.
+            let Some(at) = (0..sent.len()).find(|&at| choice[at] + 1 < sent[at].1.len()) else { break };
+            choice[at] += 1;
+            choice[..at].fill(0);
+        }
+        // Both answers were met, for more than the request with no header at all.
+        assert!(kept > 100 && left > 100 && apart > 100, "{kept} {left} {apart}");
+    }
+
     /// An answer for `at` whose request found the path's writes as they are now.
     fn entry(answers: &Answers, at: &str, host: Option<&'static str>, lifetime: u64, body: usize) -> impl FnOnce(Place) -> Entry {
         let written = Written::of(&answers.0, at);
@@ -748,6 +1138,42 @@ mod tests {
             used: AtomicBool::new(false),
             size: AtomicUsize::new(body + OVERHEAD),
         }
+    }
+
+    /// A store with room is not full and has no marks. Full, it knows a URL asked for before,
+    /// each host's apart, and clears its marks once an eighth of them are set.
+    #[test]
+    fn a_full_store_knows_the_urls_asked_for_before() {
+        const BOUND: usize = 64 << 10;
+        assert_eq!([1, 2048, BOUND, 3 << 20, 32 << 20].map(marks_for), [1, 1, 32, 2048, 16384]);
+        let answers = Answers::new(BOUND).expect("a bound");
+        let store = &*answers.0;
+        let mut pages = 0;
+        while !store.full() {
+            answers.keep(entry(&answers, &format!("/kept/{pages}"), None, 60, 1000));
+            pages += 1;
+            assert!(pages < 100, "the store never filled");
+        }
+        let held = answers.bytes();
+        assert!(held > BOUND - BOUND / SHARE && held <= BOUND, "{pages} pages hold {held} bytes");
+        assert!(store.marks.get().is_none(), "no marks until a full store is asked");
+        assert!(!store.asked(None, "/items") && store.asked(None, "/items") && store.asked(None, "/items"));
+        assert!(!store.asked(None, "/items?page=2"), "another query is another URL");
+        let host = HeaderValue::from_static("a.example");
+        assert!(!store.asked(Some(&host), "/items") && store.asked(Some(&host), "/items"), "and so is another host's");
+        assert_eq!(store.marks.get().map(|marks| marks.len() * 64), Some(2048));
+        // 2,048 marks: a URL is known while no more than 256 are set, whatever was asked for since.
+        let mut urls = (0..400).map(|n| format!("/catalog/{n}"));
+        while store.marked.load(Ordering::Relaxed) < 256 {
+            store.asked(None, &urls.next().expect("the marks were cleared early"));
+        }
+        assert!(store.asked(None, "/items") && store.asked(None, "/catalog/0"), "known with 256 marks set");
+        // The next new URL clears them all, its own with them.
+        let clearing = urls.find(|url| !store.asked(None, url)).expect("a new URL");
+        assert_eq!(store.marked.load(Ordering::Relaxed), 0);
+        assert!(!store.asked(None, &clearing) && store.asked(None, &clearing), "the one that cleared them is new again");
+        assert!(!store.asked(None, "/items"), "and so is one asked for before");
+        assert_eq!(store.marked.load(Ordering::Relaxed), 2);
     }
 
     /// The bound holds after every answer kept: the one not read since the hand last passed goes

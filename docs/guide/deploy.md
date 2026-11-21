@@ -245,7 +245,7 @@ A page route can answer several clients at one URL: the whole document, a client
 (`corten: nav`), a form's answer, and JSON for `Accept: application/json`. Only the document may be
 shared, and only from a `Public` handler ([Caching](app.md#caching)); its answers say `Vary: corten,
 accept, accept-encoding`, `cookie` when the request had none, and `accept-language` with
-`App::messages`. A cache that keys on the URL alone hands the stored document to every request for
+`App::messages` or on any answer that read messages in the header's language without it. A cache that keys on the URL alone hands the stored document to every request for
 it. Measured on 2026-11-20 with nginx 1.31.9's `proxy_cache`: in front of `examples/card-market`,
 the second document request was a `HIT`, and a navigation and a Brotli request got their own
 answers. With `proxy_ignore_headers Vary`, both got the stored document (no `corten-page`, no
@@ -266,7 +266,8 @@ reach the app: the cache is sent the kept page again until its lifetime ends or 
 the app drops it, so a page that must change at once on a purge takes a short lifetime in the app
 and a long one nowhere. What is kept is held in the process's memory, 32 MiB of it unless
 `App::kept_answers` says otherwise, with 256 KiB beside it once a `Public` page, JSON or text
-answer is asked for.
+answer is asked for and 128 KiB more once they fill it (a 256th of the bound, or up to a 128th
+where that is not a power of two).
 The bound counts the bytes asked of the allocator, and an allocator holds more than it is asked
 for when pages come and go: the benchmark app's resident memory settled 35 MiB above where it
 began with jemalloc and 58 MiB above with glibc's allocator
@@ -277,7 +278,7 @@ the container is given.
 |---|---|---|
 | nginx `proxy_cache` | when a location has `proxy_cache` | nothing: it honors `Vary` unless `proxy_ignore_headers Vary` |
 | Cloudflare | only under a Cache Rule that makes them eligible ([default cache behavior](https://developers.cloudflare.com/cache/concepts/default-cache-behavior/)) | the same rule's Vary setting ([Vary](https://developers.cloudflare.com/cache/concepts/vary/)): `corten`, `cookie` and `accept` passthrough (normalizing reorders `Accept`, and the app reads its first type), `accept-encoding` normalize, `accept-language` normalize with `languages` set to the app's locales (normalizing strips regions otherwise) |
-| CloudFront | by its cache policy | the cache policy lists `corten`, `accept` and, with messages, `accept-language` as headers and the cookies the app reads as cookies (CloudFront sends the app only the cookies its policies name), and turns on gzip and brotli ([cache key](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/controlling-the-cache-key.html)) |
+| CloudFront | by its cache policy | the cache policy lists `corten`, `accept` and, with `App::messages` or a public route that reads messages without it, `accept-language` as headers and the cookies the app reads as cookies (CloudFront sends the app only the cookies its policies name), and turns on gzip and brotli ([cache key](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/controlling-the-cache-key.html)) |
 
 A public page whose locale `Accept-Language` chooses is stored once per distinct header string
 where the cache keys on it raw (CloudFront's cache key, nginx): `en-US,en;q=0.9` and `en` are two
@@ -287,8 +288,11 @@ normalizing above keeps one per locale. Elsewhere, put the locale in the page's 
 does not vary on `accept-language`, so a cache keys it on the URL and keeps one copy per locale.
 A cache behavior whose pages all take their locale from the URL need not forward the header;
 one that still negotiates (the `/` that sends a visitor to their locale, a 404, a page without a
-locale in its URL) must, or CloudFront sends none and every visitor gets the default locale. Every
-page says its locale in `Content-Language`.
+locale in its URL) must, or CloudFront sends none and every visitor gets the default locale. So
+must one with a public route that reads messages (`req.t()`) in an app without `App::messages`:
+its answer is in the language the header asks for and says `Vary: accept-language`. Every page in
+an app with `App::messages` says its locale in `Content-Language`; without it an answer names the
+header in `Vary` but not the locale it chose.
 
 The Cloudflare and CloudFront rows are from their documentation, not run here. Check a deploy
 the way it was measured, on a location that caches: request a public page as a document twice and
@@ -751,15 +755,22 @@ with the default inputs runs the whole evidence suite. Verify the run's commit
 and the successful jobs before counting them. Neither mode starts a droplet or
 produces framework timings.
 
+Before reserving a new grouped fleet, its [placement preflight](../../bench/workloads/CLOUD.md#dedicated-group-hosts)
+checks the provider's size and region listings for all required hosts. The
+reservation fixes those locations; create never tries a different region.
+
 The grouped benchmark's [disposable-host preparation](../../bench/workloads/CLOUD.md#evidence-and-cleanup)
 holds firmware-update services outside the measurement boundary before baseline.
 On a fresh dedicated group host it also limits incoming SSH to the controller's
 authenticated provisioning IPv4 source. Keep that egress for collection and
 cleanup; do not make a separate login during measurement.
 Its cleanup check retains all process observations and exempts only kernel threads
-proved by saved Linux stat flags and matching PID/start identity. A new user-space
-daemon or application process still fails cleanup; later observations cannot repair
-an old failed run. This is benchmark-host preparation, not app deployment advice.
+proved by saved Linux stat flags and matching PID/start identity. The supervised marketplace
+run can [take one additional cleanup observation](../../bench/workloads/isolated/CAMPAIGN.md#post-command-udev-settle)
+if every new user-space identity is a proven systemd-udevd worker born after the sealed
+command-lifetime cutoff. Cleanup still fails unless the monotonic wait is proved, the
+workers are gone, and the ordinary boundary checks pass. This cannot repair an old failed run
+or discount activity during measurement. This is benchmark-host preparation, not app deployment advice.
 
 A new benchmark allocation launched from a commit that includes
 [pinned unused-host recovery](../../bench/workloads/CLOUD.md#failed-allocation-retirement)

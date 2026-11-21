@@ -393,8 +393,8 @@ pub trait ToJson {
     }
 
     /// Whether [`Json`] of the type is a whole body the app keeps for a `Public` route
-    /// (`Answer::WHOLE`): every type's but [`Raw`]'s in a build that compresses, where it holds
-    /// its compressed forms itself and its route is its handler's for every request. Not a
+    /// (`Answer::WHOLE`): every type's but [`Raw`]'s, which holds its compressed forms itself
+    /// where the build compresses, so its route is its handler's for every request. Not a
     /// public API: its type is one an app cannot name, as [`crate::Answer`]'s is.
     ///
     /// ```compile_fail,E0326
@@ -540,7 +540,9 @@ impl ToJson for Raw {
         out.extend_from_slice(self.as_bytes());
     }
 
-    const __KEPT: crate::answer::sealed::Whole = crate::answer::sealed::Whole(!cfg!(feature = "compress"));
+    // A body is kept where the build compresses, and there this holds its compressed forms
+    // itself: its route is its handler's.
+    const __KEPT: crate::answer::sealed::Whole = crate::answer::sealed::Whole(false);
 
     /// `Raw::new` parsed it.
     fn __well_formed() -> bool {

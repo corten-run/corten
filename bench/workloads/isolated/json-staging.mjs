@@ -53,6 +53,13 @@ export function inspectPreparation(binding, root) {
   return { summary, report };
 }
 
+function retainedImageConfig(config, execution) {
+  // Docker can omit WorkingDir. Preserve that omission in both the live subject and saved JSON.
+  const retained = { entrypoint: execution.Entrypoint, cmd: execution.Cmd };
+  if (Object.hasOwn(config, "WorkingDir")) retained.workingDir = config.WorkingDir;
+  return retained;
+}
+
 export function imageProof(summary) {
   const images = [];
   for (const app of descriptor().apps) for (const payload of descriptor().payloads) {
@@ -65,7 +72,7 @@ export function imageProof(summary) {
     assert.deepEqual(execution, saved.execution, "saved app execution differs from actual built image");
     // Preserve actual configuration without forwarding image Env, which may contain secrets.
     images.push({ app, payload, imageId: info.Id, created: info.Created, architecture: info.Architecture, os: info.Os,
-      rootFS: info.RootFS, config: { entrypoint: execution.Entrypoint, cmd: execution.Cmd, workingDir: info.Config.WorkingDir },
+      rootFS: info.RootFS, config: retainedImageConfig(info.Config, execution),
       labels: saved.labels });
   }
   for (const tool of ["node", "k6"]) {
@@ -74,7 +81,7 @@ export function imageProof(summary) {
     const execution = imageCommandEvidence(info);
     assert.deepEqual(execution, summary.toolExecutions[tool], "saved execution differs from actual tool image");
     images.push({ tool, imageId: info.Id, created: info.Created, architecture: info.Architecture, os: info.Os,
-      rootFS: info.RootFS, config: { entrypoint: execution.Entrypoint, cmd: execution.Cmd, workingDir: info.Config.WorkingDir } });
+      rootFS: info.RootFS, config: retainedImageConfig(info.Config, execution) });
   }
   return images;
 }

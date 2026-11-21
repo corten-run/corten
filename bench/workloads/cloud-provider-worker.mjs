@@ -12,7 +12,7 @@ const stdinEntry = process.argv[1] === "-" && process.argv.length === 3;
 const directory = stdinEntry ? dirname(resolve(process.argv[2])) : dirname(fileURLToPath(import.meta.url));
 const exact = (value, keys) => assert.deepEqual(Object.keys(value ?? {}).sort(), [...keys].sort());
 const diagnosticEnv = /^(?:NODE_|SSL|OPENSSL|LD_|DYLD_)/i;
-function action(message, host) {
+function action(message, host, catalogCommand) {
   exact(message, ["schema", "sequence", "args", "timeout", "allowFail", ...(Object.hasOwn(message, "deleteProofExpiresAtMs") ? ["deleteProofExpiresAtMs"] : [])]);
   assert.ok(Array.isArray(message.args) && message.args.length <= 20 && message.args.every((value) => typeof value === "string" && value.length <= 512 && !value.includes("\0")));
   assert.ok(Number.isSafeInteger(message.timeout) && message.timeout > 0 && message.timeout <= 900000 && typeof message.allowFail === "boolean");
@@ -22,6 +22,7 @@ function action(message, host) {
   if (Object.hasOwn(message, "deleteProofExpiresAtMs")) assert.ok(command[2] === "delete"
     && Number.isSafeInteger(message.deleteProofExpiresAtMs) && message.deleteProofExpiresAtMs > 0);
   if (command[0] === "account") assert.deepEqual(command, ["account", "get", "--output", "json"]);
+  else if (command[1] === "placement") assert.deepEqual(command, catalogCommand);
   else if (command[2] === "list") assert.deepEqual(command, ["compute", "droplet", "list", "--output", "json"]);
   else if (command[2] === "get") {
     assert.equal(command.length, 6); assert.deepEqual(command.slice(0, 3), ["compute", "droplet", "get"]);
@@ -49,7 +50,7 @@ export function serveProviderWorker(dependencies = {}) {
   assert.deepEqual(process.execArgv, stdinEntry ? ["--input-type=module"] : []);
   if (stdinEntry) assert.equal(process.argv[2], join(directory, "cloud-provider-worker.mjs"));
   assert.ok(Object.keys(process.env).every((name) => !diagnosticEnv.test(name) || name === "NODE_CHANNEL_FD" || name === "NODE_CHANNEL_SERIALIZATION_MODE"));
-  let nonce, sequence = 0, active = false, closing = false, failed = false, terminal = false, run, host, providerFailure, isSettledAccountFailure;
+  let nonce, sequence = 0, active = false, closing = false, failed = false, terminal = false, run, host, catalogCommand, providerFailure, isSettledAccountFailure;
   const stop = () => { closing = true; if (!active) process.exit(terminal ? 2 : 0); };
   process.on("disconnect", stop);
   process.on("SIGTERM", stop);
@@ -84,12 +85,13 @@ export function serveProviderWorker(dependencies = {}) {
         } });
         const engine = await import(pathToFileURL(join(directory, "cloud-provider-engine.mjs")).href);
         providerFailure = (await import(pathToFileURL(join(directory, "cloud-options.mjs")).href)).providerFailure;
-        host = (await import(pathToFileURL(join(directory, "cloud-contract.mjs")).href)).providerCreateHost(message.createMode);
+        const contract = await import(pathToFileURL(join(directory, "cloud-contract.mjs")).href);
+        host = contract.providerCreateHost(message.createMode); catalogCommand = contract.fleetCatalogCommand;
         const { createProviderEngine } = engine;
         isSettledAccountFailure = engine.isSettledAccountFailure;
         run = createProviderEngine({ ...dependencies, repo: process.cwd(), interrupted: () => closing, createMode: message.createMode }); result = "ready";
       } else {
-        action(message, host); assert.equal(message.schema, "cloud-provider-action/v1"); assert.equal(message.sequence, sequence + 1); sequence++;
+        action(message, host, catalogCommand); assert.equal(message.schema, "cloud-provider-action/v1"); assert.equal(message.sequence, sequence + 1); sequence++;
         account = message.args[0] === "account";
         deadline = Date.now() + message.timeout;
         result = await run(message.args, message.timeout, message.allowFail, message.deleteProofExpiresAtMs);

@@ -16,7 +16,7 @@ remain pending; the mixed-inbox/inspection bridge does not waive those gates.
 
 The controller is `droplet.mjs`, separate from catalog, marketplace, the dispatcher,
 registry, parity and runners. It imports the existing read-only `cloud-contract.mjs`
-for the complete nine-group selection, [pinned host placement](#dedicated-group-hosts), fixed remote files,
+for the complete nine-group selection, [reserved host placement](#dedicated-group-hosts), fixed remote files,
 systemd unit and archive namespace. There are no adapter, provider, workload,
 deployment, environment or numeric-settings CLI overrides. Popular/performance
 views share evidence; they do not launch a second campaign.
@@ -71,14 +71,30 @@ readiness; this repair still requires independent source review before merge.
 
 ## Dedicated Group Hosts
 
-A new dedicated fleet uses `benchmark-group-fleet/v3`. Its default host is
-`c-8` in sfo3; only the `catalog-page` job reserves `c-16` in sfo2 with
-`c16-generator-v1`. That layout gives the catalog load generator CPUs 4-15;
-app, upstream and probe placement and budgets do not change. Nonfleet all-group
-hosts still use `c-8` in sfo2. Saved v1 (sfo2) and v2 (sfo3) fleets keep
-their original `c-8` placement, roster and receipts. The current controller
-can read them for inspection and independently authorized recovery, never for
-detach or remaining admission. Ordinary
+A new dedicated fleet uses `benchmark-group-fleet/v5`. The `catalog-page`
+job still reserves `c-16/sfo2` with `c16-generator-v1`. That layout gives the
+catalog load generator CPUs 4-15; app, upstream and probe placement and budgets
+do not change. Before spending, the fleet checks that the catalog placement and
+at least one supported `c-8` placement are advertised in both the size and
+region listings. That first check does not set aside provider capacity.
+
+After catalog is verified and its host is deleted, the remaining preview
+checks again. It selects one common `c-8` region for all remaining groups,
+in preference order: `sfo3`, `sfo2`, `lon1`, then `blr1`. Review the actual
+region in that preview. If none is available, wait without starting a host or
+consuming the remaining attempt. If the proposed region changes before
+admission, obtain a fresh preview and approval. Once the remaining intent
+is recorded, do not substitute another region or retry a subset. Nonfleet
+all-group hosts still use `c-8/sfo2`.
+
+Saved v1 (sfo2), v2 (sfo3), v3 (catalog `c-16/sfo2`, siblings
+`c-8/sfo3`), and v4 (siblings pinned to one San Francisco region at
+preparation) fleets keep their original placements, rosters and receipts. The
+new controller can read them for inspection and independently authorized
+recovery, never for new detach or remaining admission. A fleet such as r23 or r24
+stays on its original measured controller and existing checks; it can only
+admit the remaining children at their recorded placement, if it returns and
+the existing approval gates pass. Ordinary
 collection still needs the original measured checkout; the existing
 merged-controller recovery actions still have their exact eligibility and
 approval requirements. Do not rewrite a saved reservation or reuse its approval.
@@ -95,10 +111,10 @@ Popular and performance views still share the same measurements.
 SSH key, host configuration and a unique ownership token for every registry group.
 The full roster and selection are hashed before launch. A host reservation retains
 that complete roster but has the distinct `benchmark-dedicated-group-host/v1`
-schema and exactly one group's selection. The fleet schema fixes placement
-and the catalog layout; the provider checks the launch mode before accepting
-create, and the collector checks the layout returned by native replay against
-the reservation. No operator size, region or layout override is accepted.
+schema and exactly one group's selection. The manifest binds the chosen
+placement and catalog layout; the provider checks the exact launch mode before
+accepting create, and the collector checks the placement and layout returned by
+native replay against the reservation. No operator size, region or layout override is accepted.
 Legacy all-group reservations remain readable and cannot
 acquire group-selection fields after reservation.
 
@@ -114,8 +130,15 @@ provision it.
 
 `fleet.mjs` is the complete-registry operator entry. Its root is a fresh physical
 directory outside the checkout, separate from legacy reservations. Preparation
-uses only local Git and exclusively saves `fleet-ROUND.json`; it neither allocates
-a host nor authorizes execution:
+checks clean committed source and reads the DigitalOcean size and region catalogs
+in the saved account/context, through a credential worker with create disabled.
+It needs `sizes:read` and `regions:read` in addition to the account read.
+The size and region entries must both list each advertised pair and both be
+marked available. An optional region absent in both directions is unavailable;
+incomplete listings, disagreement or no qualifying pair stop preparation
+without a saved fleet. This is
+advertised availability, not a stock or quota guarantee. It uses no trial
+create and neither allocates a host nor authorizes execution:
 
 ```sh
 node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --prepare --commit SHA --ssh-key KEY --account-id ACCOUNT --context CONTEXT
@@ -123,13 +146,26 @@ node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --detach --print
 node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --detach --approve-reviewed-merged-ready REVIEWED_EXACT_HASH
 ```
 
-Preparation returns 3 with a saved roster. A preview cannot execute: independently
+Preparation returns 3 with a saved `fleet-ROUND.json`. The detach preview uses
+no provider access. The remaining preview reads the provider catalog after
+catalog replay to propose a region; neither preview can create a host. Independently
 review its exact source, physical root, complete roster and every contained child
 subject before supplying the batch approval. Source review and merged native
 readiness remain prerequisites; never automatically feed a preview into execution.
 The launch intent is durable before any child starts and prevents a second launch,
-including after partial failure. Each child has an independent state directory,
-operation lock, private credential worker and remote systemd unit.
+including after partial failure. Initial detach rechecks both reserved sizes
+before consuming its intent and before the first create. Remaining admission
+and its children recheck only the exact `c-8` placement bound into the reviewed
+remaining approval. Those checks refuse a missing pair; they never substitute
+another region after approval.
+`fleet-placement-preflight-failed` means the saved account
+or placement could not be verified; inspect both listings rather than editing the
+manifest. An acknowledged catalog HTTP denial or a fully received but invalid
+listing stops without a create and releases settled locks. A truncated response,
+timeout or disconnected worker does not establish settlement; the lock stays.
+An already recorded launch intent still cannot be replayed. Each child has an
+independent state directory, operation lock, private credential worker and remote
+systemd unit.
 Every group in the roster uses the same commit. Merge the repairs needed by
 the entire round before preparing it: the first group's results cannot be
 carried into a new reservation for a different commit.
@@ -223,6 +259,40 @@ crashes with an intent permit absence reconciliation only. There is no
 automatic retry. A live, never-started, unsupervised
 or invalid-monitor run cannot use this proof. Target failures remain results,
 not successful timings or a publishable baseline.
+
+**Terminal native failures.** Ordinary approved child `--collect` at the measured
+checkout also handles a dedicated supervised run that ended with raw exit 2
+after native entry. It retains the original wrapper without repacking and saves
+`failed-native-results.tgz` plus a verified extraction. Custody covers the entire
+campaign and the fixed native output path (both prepare and timing for JSON),
+including a record of any output path proved absent. The archived plan and
+pending list are checked against the reservation; neither chooses what to copy
+or authorizes deletion. No failed data enters native replay or becomes timings.
+If native validation finished but sealing or later collection failed, raw
+exit 2 permits custody only. The collector keeps both archives, leaves the host
+in place and returns 3. It does not create a retirement intent.
+
+Use the per-child command above if an invalid monitor left locks behind. The
+original operation and launch locks remain unchanged. Collection requires
+local stream closure, lease expiry and an absent original owner PID. It uses
+the separate stream recovery lock and checks the registered boot and exact
+started unit. Read-only fleet inspection can verify a saved retirement behind
+those retained child locks, but not while their owner or a recovery collector
+may still be active. An unchanged root batch lock with a dead owner is reported
+as retained, not as changed evidence. A live, unrecognized or changing root
+lock is busy. Inspection never clears a lock or makes a locked fleet complete.
+Live or uncertain
+custody is preserved. The shared failed-native procedure below checks the
+download, rehashes the remote data, renews the idle-host proof and records a
+`native-failed` intent before one DELETE. Repeat collection after intent can only
+check exact-ID absence. Confirmed retirement returns 1, not success. This does
+not reopen old reservations from a different checkout or change sibling state.
+Launch saves the digest of the host key established by its acknowledged
+first SSH handshake. The collection approval binds that digest, and each
+subsequent SSH or SFTP uses a private snapshot of the matching key. A replaced
+key is refused; old reservations without a launch pin cannot use failed-native
+custody through ordinary collection. Existing explicit recovery policies are
+unchanged.
 
 **Pinned r21 only.** Use a separately reviewed, merged successor for one
 closed child of the original staged fleet at a time. Keep the original fleet
@@ -472,8 +542,8 @@ the archive and extracted-tree hashes. No native validator result, timings or
 successful exit is invented. Unsettled validation, any entry evidence, failed
 observations or a running unit preserves the host. Fleet output reports
 `setup-failed-retired`; repeat collection checks the same receipt and absence,
-without another DELETE. Native-started jobs retain the existing native collection
-and evidence gates. Neither retirement path can delete a running benchmark.
+without another DELETE. Native-started jobs use the separate collection and
+custody paths above. No retirement path can delete a running benchmark.
 
 The common-bootstrap marker precedes native entry. It is not native evidence or
 a reason to strand a terminal host whose entry failed before writing any data.

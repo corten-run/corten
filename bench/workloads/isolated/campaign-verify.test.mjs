@@ -151,9 +151,9 @@ function mutateEvent(request, kind, update) {
 }
 test("saved group scope comes only from the rebound plan; foreign, missing, edited or downgraded groups are invalid", async () => {
   const legacy = await validateCampaign(archive()); assert.equal(legacy.schema, "benchmark-isolated-campaign-inspection/v1");
-  function stoppedGroup(group, changePlan = () => {}, changeStatus = () => {}) {
+  function stoppedGroup(group, changePlan = () => {}, changeStatus = () => {}, campaignMode = "dedicated") {
     expectedPlan = { ...plan, schema: contracts.groupCampaignSchema, order: [group], bindings: plan.bindings.filter((b) => b.request.group === group)
-      .map((b) => ({ ...b, selection: { apps: selectedApps(group), contractSha256: "synthetic-contract" } })) };
+      .map((b) => ({ ...b, campaignMode, selection: { apps: selectedApps(group), contractSha256: "synthetic-contract" } })) };
     const folder = join(temporary, String(serial++)), directory = join(folder, id); mkdirSync(directory, { recursive: true });
     const save = (path, value) => writeFileSync(join(folder, path), JSON.stringify(value));
     const status = { schema: "benchmark-isolated-campaign-status/v1", campaign: id, round, campaignSha256: plan.campaignSha256,
@@ -179,6 +179,15 @@ test("saved group scope comes only from the rebound plan; foreign, missing, edit
       assert.deepEqual(result.selection.groups.map((r) => r.group), [group]); assert.deepEqual(result.groups, []);
       assert.equal(result.qualified, false); assert.equal(result.deletionAuthorized, false);
       assert.deepEqual(evidence.tree(request.folder), before);
+    }
+    for (const placement of ["dedicated-sfo2", "dedicated-lon1", "dedicated-blr1"]) {
+      const request = stoppedGroup("json-api", undefined, undefined, placement), before = evidence.tree(request.folder);
+      const result = await validateCampaign(request);
+      assert.equal(result.status, "blocked");
+      assert.equal(result.placement, placement);
+      assert.deepEqual(evidence.tree(request.folder), before);
+      const edited = stoppedGroup("json-api", (p) => { p.bindings[0].campaignMode = "dedicated-nyc1"; }, undefined, placement);
+      assert.equal((await validateCampaign(edited)).status, "invalid");
     }
     for (const change of [
       (p) => { p.schema = "benchmark-isolated-campaign/v1"; },

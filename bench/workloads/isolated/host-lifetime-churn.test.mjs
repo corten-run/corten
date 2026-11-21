@@ -12,10 +12,44 @@ import { join, resolve, sep } from "node:path";
 import { test } from "node:test";
 import { beginLifetime, captureBrowserParticipant, inspectBrowserParticipants, inspectLifetime, processIdentity } from "./host-lifetime.mjs";
 import { participantExecutables } from "./participant-executables.mjs";
+import { browserCpus } from "../../fullstack-browser/contract.mjs";
 
 const parent = "/system.slice/corten-bench-groups-r21-0123456789abcdef.service";
 const stat = (pid, name = "node", start = pid * 10, ppid = 1) => `${pid} (${name}) S ${[ppid, ...Array(17).fill(0), start, 0].join(" ")}`;
 const missing = (code = "ENOENT") => Object.assign(new Error("PRIVATE_NOT_RETAINED"), { code });
+
+test("browser startup sets the owned child cpuset and rejects a narrower kernel readback before attachment", async (t) => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+  t.after(() => { t.mock.restoreAll(); Object.defineProperty(process, "platform", platform); syncBuiltinESMExports(); });
+  const path = (value) => String(value).replaceAll("\\", "/");
+  const root = `/sys/fs/cgroup${parent}`, actions = [];
+  let owned;
+  t.mock.method(childProcess, "execFileSync", (_file, args) => {
+    assert.deepEqual(args, ["--host", "unix:///var/run/docker.sock", "container", "ls", "-aq", "--no-trunc"]); return "";
+  });
+  t.mock.method(fs, "readFileSync", (file) => {
+    switch (path(file)) {
+      case "/proc/self/cgroup": return `0::${parent}/supervisor\n`;
+      case `${root}/cgroup.procs`: return "";
+      case `${root}/cgroup.subtree_control`: return "cpu cpuset memory\n";
+      case `${owned}/cpuset.cpus.effective`: actions.push("readback"); return "4-5\n";
+      default: assert.fail("unexpected startup read");
+    }
+  });
+  t.mock.method(fs, "mkdirSync", (file) => {
+    owned = path(file); assert.match(owned, /\/native-0-[a-f0-9]{16}$/); assert.equal(owned.slice(0, owned.lastIndexOf("/")), root);
+  });
+  t.mock.method(fs, "lstatSync", (file) => { assert.equal(path(file), owned); return { isSymbolicLink: () => false }; });
+  t.mock.method(fs, "writeFileSync", (file, value) => {
+    assert.equal(path(file), `${owned}/cpuset.cpus`); assert.equal(value, "4-7"); actions.push("pin");
+  });
+  t.mock.method(fs, "rmdirSync", (file) => { assert.equal(path(file), owned); actions.push("removed-owned-empty-group"); });
+  syncBuiltinESMExports();
+  await assert.rejects(beginLifetime({ campaign: "r21-0123456789abcdef", binding: { request: { group: "fullstack-browser" },
+    resources: { browserCpus }, execution: { effectiveOptions: { isolated: true } } }, command: 0, pid: 4242 }), /effective cpuset differs/);
+  assert.deepEqual(actions, ["pin", "readback", "removed-owned-empty-group"]);
+});
 
 // Synthetic membership/Docker reads, real owned executable inodes/descriptors.
 // Linux runs the actual inherited-descriptor digest helper; Windows emulates it.
