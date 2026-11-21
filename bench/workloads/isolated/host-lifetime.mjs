@@ -9,6 +9,7 @@ import { hostDurableWriter } from "./host-durable-writer.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { executableReference, participantExecutables } from "./participant-executables.mjs";
 import { browserContainers } from "../../fullstack-browser/contract.mjs";
+import { commandCpuSet as boundCommandCpuSet, liveApplication, liveGroup, nativeControlPartition } from "./native-roles.mjs";
 
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const serial = (v) => `${JSON.stringify(v)}\n`;
@@ -45,16 +46,6 @@ function readGroup(path, keys = fields) {
 const cpusetField = "cpuset.cpus.effective";
 const effectiveCpuSet = (path) => readGroup(path, [cpusetField]).files[cpusetField]?.trim();
 
-function browserBindingCpus(binding) {
-  if (binding.request.group !== "fullstack-browser") return;
-  const cpus = binding.resources?.browserCpus;
-  if (binding.execution?.effectiveOptions?.isolated) {
-    assert.ok(cpus && ["application", "upstream", "browser"].every((role) => typeof cpus[role] === "string" && cpus[role]),
-      "native browser CPU partition absent");
-  }
-  return cpus;
-}
-
 function scopeCpuSetMatches(groups, path, cpuset) {
   return groups?.find((g) => g.path === path)?.files[cpusetField]?.trim() === cpuset;
 }
@@ -86,22 +77,23 @@ function participantCpuSetsWithin({ groups, processes }, root, cpuset) {
   });
 }
 
-export function requireBrowserCommandCpuSet(cpuset) {
-  assert.equal(process.platform, "linux", "isolated browser requires Linux cgroup v2");
+export function requireNativeCommandCpuSet(cpuset) {
+  assert.equal(process.platform, "linux", "isolated native work requires Linux cgroup v2");
   const path = groupPath(readFileSync("/proc/self/cgroup", "utf8"));
   assert.match(path, /\/corten-bench-groups-r[1-9]\d*-[a-f0-9]{16}\.service\/native-\d+-[a-f0-9]{16}$/,
-    "isolated browser requires the delegated native command cgroup");
-  assert.equal(effectiveCpuSet(path), cpuset, "browser command effective cpuset differs");
+    "isolated native work requires the delegated native command cgroup");
+  assert.equal(effectiveCpuSet(path), cpuset, "native command effective cpuset differs");
 }
 
-export function requireBrowserContainerCpuSet(info, cpuset) {
+export function requireNativeContainerCpuSet(info, cpuset) {
   const { Id: id, State: { Pid: pid, Running: running } } = info;
   assert.match(id, containerId); assert.ok(running && Number.isSafeInteger(pid) && pid > 0);
   const membership = `/proc/${pid}/cgroup`, cgroup = readFileSync(membership, "utf8"), path = groupPath(cgroup);
   participantGroup(path, id);
-  assert.equal(effectiveCpuSet(path), cpuset, "browser container effective cpuset differs");
-  assert.equal(readFileSync(membership, "utf8"), cgroup, "browser container left its cgroup");
+  assert.equal(effectiveCpuSet(path), cpuset, "native container effective cpuset differs");
+  assert.equal(readFileSync(membership, "utf8"), cgroup, "native container left its cgroup");
 }
+export { requireNativeCommandCpuSet as requireBrowserCommandCpuSet, requireNativeContainerCpuSet as requireBrowserContainerCpuSet };
 function parents(path) {
   const values = [];
   for (;;) { values.push(readGroup(path)); if (path === "/") return values; path = posix.dirname(path); }
@@ -259,7 +251,7 @@ function docker(args) {
   }).trim();
 }
 const containerId = /^[a-f0-9]{64}$/;
-function containerState(info) {
+export function containerState(info) {
   assert.match(info.Id, containerId); assert.match(info.Image, /^sha256:[a-f0-9]{64}$/);
   return { id: info.Id, imageId: info.Image, restartCount: info.RestartCount,
     state: Object.fromEntries(["Status", "Pid", "Running", "Paused", "Restarting", "OOMKilled", "Dead", "ExitCode", "StartedAt", "FinishedAt"].map((k) => [k, info.State[k]])) };
@@ -309,7 +301,7 @@ function browserDocker(excluded, executables, pending) {
   return { inventory, participants, gaps };
 }
 
-/** Own one fresh delegated child cgroup. Only the bound browser command cpuset is set here. */
+/** Own one fresh delegated child cgroup. Set only the bound command cpuset, never new quotas. */
 export async function beginLifetime({ campaign, binding, invocation, directory, command, pid, signal, startupSignal, onFault }) {
   function checkStartup() {
     signal?.throwIfAborted(); startupSignal?.throwIfAborted();
@@ -327,8 +319,10 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   const controllers = readFileSync(join(root, parent, "cgroup.subtree_control"), "utf8").trim().split(/\s+/);
   assert.ok(["cpu", "cpuset", "memory"].every((key) => controllers.includes(key)), "required accounting controllers must be delegated and enabled");
   const browser = binding.request.group === "fullstack-browser";
-  const commandCpus = browserBindingCpus(binding)?.browser;
-  const excluded = new Set(browser ? docker(["container", "ls", "-aq", "--no-trunc"]).split("\n").filter(Boolean) : []);
+  const commandCpus = boundCommandCpuSet(binding);
+  const captureDocker = browser || (commandCpus && liveGroup(binding.request.group));
+  const excluded = new Set(captureDocker ? docker(["container", "ls", "-aq", "--no-trunc"]).split("\n").filter(Boolean) : []);
+  if (liveGroup(binding.request.group) && captureDocker) assert.equal(excluded.size, 0, "live worker requires a clean Docker inventory");
   for (const id of excluded) assert.match(id, containerId);
   const path = `${parent}/native-${command}-${randomBytes(8).toString("hex")}`;
   mkdirSync(join(root, path)); // Exclusive creation. Never adopt a saved or existing cgroup.
@@ -342,17 +336,18 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   try {
     if (commandCpus) {
       writeFileSync(join(root, path, "cpuset.cpus"), commandCpus);
-      assert.equal(effectiveCpuSet(path), commandCpus, "browser command effective cpuset differs");
+      assert.equal(effectiveCpuSet(path), commandCpus, "native command effective cpuset differs");
     }
     mkdirSync(directory, { mode: 0o700 });
     mkdirSync(join(directory, "processes"), { mode: 0o700 });
     context = { schema: "benchmark-isolated-host-lifetime/v1", campaign, group: binding.request.group,
     round: binding.request.round, commit: binding.request.commit, bindingSha256: deploymentSha256(binding), invocation,
     bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), parent, path, command, leaderPid: pid,
-    policy: commandCpus ? "bound-browser-command-cpuset; external exclusive-host ownership is separate"
+    policy: commandCpus ? `bound-${browser ? "browser" : "native"}-command-cpuset; external exclusive-host ownership is separate`
       : "observed-inherited-native-defaults; external exclusive-host ownership is separate", ancestors: parents(parent),
     cpuInfo: readFileSync("/proc/cpuinfo", "utf8"), memoryInfo: readFileSync("/proc/meminfo", "utf8"),
-    ...(browser ? { dockerBaseline: [...excluded].sort(), leaderIdentity: processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")) } : {}) };
+    ...(captureDocker ? { dockerBaseline: [...excluded].sort() } : {}),
+    ...(browser || commandCpus ? { leaderIdentity: processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")) } : {}) };
     durable(join(directory, "binding.json"), `${JSON.stringify(context, null, 2)}\n`);
     writer = hostDurableWriter(directory); await writer.ready();
     checkStartup();
@@ -366,7 +361,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   const executables = new Map();
   // Catalog build commands introduce large CLI/plugin executables during live
   // sampling. Pin them now and seal their bytes after the final sample.
-  pending = browser || binding.request.group === "catalog-page" ? participantExecutables() : null;
+  pending = captureDocker || commandCpus || binding.request.group === "catalog-page" ? participantExecutables() : null;
   let samples = 0, observerError = null, attached = false, faultNotified = false;
   const observerFailures = { count: 0, first: null, last: null };
   let sampleOperation, lastSampleAt = null, previousCatalogProcesses = binding.request.group === "catalog-page" ? [] : null;
@@ -398,7 +393,8 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     sampleOperation = "snapshot";
     if (writer.error) throw writer.error;
     const observed = snapshot(path, executables, pending, lastSampleAt, timing, previousCatalogProcesses), initial = [], keys = new Set();
-    if (commandCpus) assert.ok(scopeCpuSetMatches(observed.groups, path, commandCpus), "browser command effective cpuset differs");
+    if (commandCpus) assert.ok(scopeCpuSetMatches(observed.groups, path, commandCpus)
+      && participantCpuSetsWithin(observed, path, commandCpus), "native command effective cpuset differs");
     const processes = observed.processes;
     // Keep initial raw PID/start/executable/type observations once. Every live
     // sample independently re-reads those identities and records their references;
@@ -410,7 +406,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       return key;
     });
     sampleOperation = "docker-inventory";
-    if (browser) observed.docker = browserDocker(excluded, executables, pending);
+    if (captureDocker) observed.docker = browserDocker(excluded, executables, pending);
     sampleOperation = "sample-write";
     writer.enqueue(initial, serial(observed));
     if (binding.request.group === "catalog-page") previousCatalogProcesses = processes;
@@ -432,7 +428,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         checkStartup(); assert.equal(closed, false);
         assert.equal(attached, false); assert.ok(Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid);
         assert.equal(pid, context.leaderPid);
-        if (browser) assert.deepEqual(processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")), context.leaderIdentity);
+        if (context.leaderIdentity) assert.deepEqual(processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")), context.leaderIdentity);
         // Only the just-spawned bootstrap PID from the live supervisor, before its start message.
         writeFileSync(join(root, path, "cgroup.procs"), String(pid)); attached = true; sample();
         checkStartup(); assert.equal(closed, false);
@@ -542,7 +538,7 @@ export function inspectLifetime(binding, invocation, directory, expected) {
   const executableProof = before.entries.some((e) => e.path === "executables.json") ? read("executables.json") : null;
   assert.equal(samples.length, terminal.samples); assert.ok(samples.length >= 3);
   let previous = -1, controlsComplete = true; const identities = new Map(), accounting = new Map(), records = new Map();
-  const commandCpus = browserBindingCpus(binding)?.browser;
+  const commandCpus = boundCommandCpuSet(binding);
   for (const sample of samples) {
     assert.ok(Number.isSafeInteger(sample.at) && sample.at >= previous);
     if (previous >= 0 && sample.at - previous > maximumSampleGapMs) controlsComplete = false;
@@ -613,6 +609,51 @@ export function inspectLifetime(binding, invocation, directory, expected) {
 
 export function inspectBrowserParticipants(subject, observation, cpus) {
   assert.equal(subject.schema, "native-browser-host-subject/v2");
+  return inspectContainerParticipants(subject, observation, cpus, browserContainers);
+}
+
+export function inspectLiveActors(binding, observation, tools, participants, windows) {
+  assert.ok(liveGroup(binding.request.group));
+  const { cpus } = nativeControlPartition(binding);
+  if (observation.status !== "verified" || !observation.cleanupComplete) return false;
+  const { context, samples } = observation;
+  if (!Array.isArray(context.dockerBaseline) || context.dockerBaseline.length || !participants.length) return false;
+  const leader = context.leaderIdentity;
+  if (!leader || leader.pid !== context.leaderPid) return false;
+  assert.deepEqual(Object.keys(tools).sort(), ["browser", "node"]);
+  for (const hash of Object.values(tools)) assert.match(hash, /^[a-f0-9]{64}$/);
+  if (samples.some((s) => !scopeCpuSetMatches(s.groups, context.path, cpus.browser)
+    || !participantCpuSetsWithin(s, context.path, cpus.browser))) return false;
+  const executionWindow = { startedAt: samples[0].at, endedAt: samples.at(-1).at };
+  const byApp = new Map();
+  let previousEnd = executionWindow.startedAt;
+  for (const p of participants) {
+    assert.equal(p.role, "application"); assert.ok(binding.selection.apps.includes(p.app) && !byApp.has(p.app));
+    if (!p.window || p.window.startedAt < previousEnd || p.window.endedAt > executionWindow.endedAt) return false;
+    previousEnd = p.window.endedAt;
+    byApp.set(p.app, p);
+  }
+  if (!inspectContainerParticipants({ executionWindow, participants }, observation, cpus, { application: liveApplication })) return false;
+  const observedBrowser = (s) => {
+    const processes = s.processes.map((p) => ({ ...p, ...processIdentity(p.stat) }));
+    return processes.some((p) => p.pid === leader.pid && p.startTicks === leader.startTicks && p.executableSha256 === tools.node)
+      && processes.some((p) => p.type === "--type=renderer" && p.executableSha256 === tools.browser);
+  };
+  const observed = new Set(), previous = new Map();
+  for (const { app, startedAt, endedAt, requireRenderer } of windows) {
+    const p = byApp.get(app);
+    if (!p || startedAt < p.window.startedAt || endedAt > p.window.endedAt || startedAt < (previous.get(app) ?? 0)) return false;
+    assert.ok(Number.isSafeInteger(startedAt) && Number.isSafeInteger(endedAt) && endedAt >= startedAt);
+    previous.set(app, endedAt);
+    if (!requireRenderer) continue; // Failed attempts retain their disposition without inventing a renderer.
+    if (!samples.some((s) => s.at >= startedAt && s.at <= endedAt && observedBrowser(s)
+      && s.docker.participants.some((r) => r.container.id === p.id && r.kernel?.at >= startedAt && r.kernel.at <= endedAt))) return false;
+    observed.add(app);
+  }
+  return byApp.size === observed.size;
+}
+
+function inspectContainerParticipants(subject, observation, cpus, containerBudgets) {
   assert.ok(Array.isArray(subject.participants));
   const ids = new Set(), { samples } = observation;
   const baseline = new Set(observation.context.dockerBaseline);
@@ -648,10 +689,11 @@ export function inspectBrowserParticipants(subject, observation, cpus) {
   for (const p of subject.participants) {
     assert.match(p.imageId, /^sha256:[a-f0-9]{64}$/);
     assert.ok(["application", "upstream", "artifact"].includes(p.role));
+    if (cpus && p.role !== "artifact") assert.ok(Object.hasOwn(containerBudgets, p.role), "unexpected native container role");
     assert.equal(p.terminal.id, p.id); assert.equal(p.terminal.imageId, p.imageId);
     assert.equal(p.terminal.restartCount, 0);
     if (cpus && p.role !== "artifact") {
-      const { cpu, memoryBytes } = browserContainers[p.role], limits = p.terminal.limits;
+      const { cpu, memoryBytes } = containerBudgets[p.role], limits = p.terminal.limits;
       if (limits.CpusetCpus !== cpus[p.role] || limits.NanoCpus !== cpu * 1000000000 || limits.Memory !== memoryBytes) return false;
     }
     for (const key of ["Paused", "Restarting", "Dead"]) assert.equal(p.terminal.state[key], false);
@@ -785,11 +827,11 @@ export function inspectBrowserParticipants(subject, observation, cpus) {
 export function composeHostProof(binding, native, observation) {
   const incomplete = { resources: "blocked", cleanupComplete: false, blockers: ["actual-host-subject-proof-incomplete"] };
   if (observation.status !== "verified") return incomplete;
-  // No native client OS caps exist. Preserve inherited whole-host controls, rather
-  // than inventing a finite quota or requiring an unapproved isolated partition.
-  // Exclusive ownership of that host remains the live controller's responsibility.
-  const browser = binding.request.group === "fullstack-browser";
-  const browserCpus = browserBindingCpus(binding);
+  // Keep inherited cpu.max/memory.max; pinned placement is not a new quota.
+  const group = binding.request.group, browser = group === "fullstack-browser";
+  const commandCpus = boundCommandCpuSet(binding), browserCpus = browser && commandCpus && binding.resources.browserCpus;
+  if (commandCpus && observation.samples.some((s) => !scopeCpuSetMatches(s.groups, observation.context.path, commandCpus)
+      || !participantCpuSetsWithin(s, observation.context.path, commandCpus))) return incomplete;
   if (binding.request.group !== "client-heavy" && !browser) return { resources: native.resources,
     cleanupComplete: observation.cleanupComplete && native.cleanupComplete,
     blockers: native.resources === "verified" && native.cleanupComplete ? [] : incomplete.blockers,
@@ -808,9 +850,9 @@ export function composeHostProof(binding, native, observation) {
   assert.ok(Array.isArray(subject.processWindows));
   if (!subject.processWindows.length && (browserCpus || !browser || native.qualificationPassed || native.outcomes.some((r) => r.outcome !== "failed"))) return incomplete;
   if (browser && (!native.cleanupComplete || !Array.isArray(observation.context.dockerBaseline)
-    || browserCpus && samples.some((s) => !scopeCpuSetMatches(s.groups, observation.context.path, browserCpus.browser)
-      || !participantCpuSetsWithin(s, observation.context.path, browserCpus.browser))
     || !inspectBrowserParticipants(subject, observation, browserCpus))) return incomplete;
+  const leader = observation.context.leaderIdentity;
+  if (commandCpus && leader?.pid !== observation.context.leaderPid) return incomplete;
   for (const window of subject.processWindows) {
     assert.ok((browser ? ["browser"] : ["compiler", "browser"]).includes(window.kind));
     assert.ok(Number.isFinite(window.startedAt) && Number.isFinite(window.endedAt) && window.endedAt >= window.startedAt);
@@ -826,13 +868,14 @@ export function composeHostProof(binding, native, observation) {
         && r.kernel.at >= window.startedAt && r.kernel.at <= window.endedAt))) return false;
       const processes = s.processes.map((p) => ({ ...p, ...processIdentity(p.stat) }));
       const node = processes.some((p) => p.executableSha256 === subject.toolIdentities.node
-        && (!browser || p.pid === observation.context.leaderPid && p.startTicks === observation.context.leaderIdentity.startTicks));
+        && (!(browser || commandCpus) || p.pid === leader.pid && p.startTicks === leader.startTicks));
       return node && (window.kind === "compiler" ? processes.some((p) => /^rustc/.test(p.comm))
         : processes.some((p) => p.executableSha256 === subject.toolIdentities.browser && p.type === "--type=renderer"));
     });
     if (!found) return incomplete;
   }
-  return { resources: "verified", cleanupComplete: true, blockers: [], policy: browserCpus ? "observed-browser-cpu-partition" : "actual-inherited-native-host-controls",
+  return { resources: "verified", cleanupComplete: true, blockers: [], policy: browserCpus ? "observed-browser-cpu-partition"
+    : commandCpus ? "observed-client-cpu-partition" : "actual-inherited-native-host-controls",
     nativeSubjectSha256: subject.subjectSha256, nativeFilesSha256: subject.filesSha256,
     observationManifestSha256: observation.manifestSha256 };
 }

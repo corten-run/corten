@@ -143,7 +143,8 @@ test("client-heavy keeps bounded sizes, fresh native generation and no --build/c
   const b = bind("client-heavy"), e = b.execution;
   assert.deepEqual(e.nativeDefaults, { rows: 14, large: 110, append: 7, cards: 24, seed: 7, cleanupMs: 2000, observationMs: 100, timeoutMs: 30000, cargo: "cargo" });
   assert.deepEqual(e.invocation.argv, ["bench/client-heavy/run.mjs", "w1", "--out", "bench/client-heavy/work/w1"]);
-  assert.equal(b.resources.app, null); assert.equal(b.resources.state, "blocked");
+  assert.equal(b.resources.app, null); assert.equal(b.resources.state, "unknown");
+  assert.deepEqual(b.resources.actorCpus, { client: "4-7" });
   assert.deepEqual(b.validation.required, ["result.json", "native/build.json"]);
 });
 
@@ -157,7 +158,7 @@ test("live preserves historical-mode guard, unchanged defaults, registered ports
     assert.deepEqual(measured.execution.nativeDefaults, { apps: selectedApps(group), build: false, profile: "bounded", measure: false });
     assert.deepEqual(measured.execution.effectiveOptions, { apps: selectedApps(group), build: true, profile: "native-feed", measure: true });
     assert.deepEqual(measured.execution.invocation.argv, [group === "live-delivery" ? "bench/live/run.mjs" : "bench/recoverable-live/run.mjs", "w1",
-      ...(group === "live-delivery" ? ["--group", group] : []), "--build", "--profile", "native-feed", "--measure"]);
+      ...(group === "live-delivery" ? ["--group", group] : []), "--build", "--isolated", "--profile", "native-feed", "--measure"]);
     assert.equal(measured.execution.settings.workload.seed, 17);
     assert.equal(measured.execution.settings.workload.initial.length, 5);
     assert.equal(measured.execution.settings.workload.eventCount, 1044);

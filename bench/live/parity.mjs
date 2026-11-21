@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { hostname, platform, release, arch, cpus } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -17,10 +18,37 @@ import { negativeRequests, verifyIdentity, verifyScenario } from "./admission.mj
 import { inspectFormat, kernelCommand } from "./measurement.mjs";
 import { verifyResources } from "./resources.mjs";
 import { fanoutJourney, fanoutProfile, kernelObservation, verifyFanout } from "./fanout.mjs";
+import { liveActorCpus, liveApplication } from "../workloads/isolated/native-roles.mjs";
+import { containerState, requireNativeCommandCpuSet, requireNativeContainerCpuSet } from "../workloads/isolated/host-lifetime.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)), root = resolve(here, "../..");
 const nativeInstanceFormat = '{"Id":{{json .Id}},"Image":{{json .Image}},"NetworkSettings":{"Ports":{{json .NetworkSettings.Ports}}}}';
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+async function executableHash(path) {
+  const digest = createHash("sha256");
+  for await (const bytes of createReadStream(path)) digest.update(bytes);
+  return digest.digest("hex");
+}
+async function actorTools(browser) {
+  const cdp = await browser.newBrowserCDPSession();
+  try {
+    // Headless Playwright can launch a different binary from executablePath().
+    const { processInfo } = await cdp.send("SystemInfo.getProcessInfo");
+    const [main, ...extra] = processInfo.filter((p) => p.type === "browser");
+    assert.ok(main && extra.length === 0 && Number.isSafeInteger(main.id) && main.id > 1);
+    assert.equal(await readFile(`/proc/${main.id}/cgroup`, "utf8"), await readFile("/proc/self/cgroup", "utf8"));
+    return { node: await executableHash("/proc/self/exe"), browser: await executableHash(`/proc/${main.id}/exe`) };
+  } finally { await cdp.detach(); }
+}
+function appActor(info, app, window) {
+  requireNativeContainerCpuSet(info, liveActorCpus.application);
+  const { NanoCpus, Memory, MemorySwap, CpusetCpus } = info.HostConfig;
+  assert.equal(NanoCpus, liveApplication.cpu * 1e9);
+  assert.equal(Memory, liveApplication.memoryBytes); assert.equal(MemorySwap, Memory);
+  assert.equal(CpusetCpus, liveActorCpus.application);
+  return { id: info.Id, imageId: info.Image, role: "application", app, window,
+    terminal: { ...containerState(info), limits: { NanoCpus, Memory, CpusetCpus } } };
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function command(program, args, options = {}) {
   const result = spawnSync(program, args, { cwd: root, encoding: "utf8", timeout: 180000, maxBuffer: 16 * 1024 * 1024, ...options });
@@ -205,7 +233,8 @@ export function verifyArtifact(artifact, expected) {
   return summary;
 }
 
-export async function run({ group, out, apps: requested, build = false, round, profile = "bounded", measure = false }) {
+export async function run({ group, out, apps: requested, build = false, round, profile = "bounded", measure = false, isolated = false }) {
+  if (isolated) requireNativeCommandCpuSet(liveActorCpus.browser);
   const apps = select(group, requested);
   const workload = workloadFor(profile);
   assert.ok(out, "output directory required");
@@ -222,7 +251,7 @@ export async function run({ group, out, apps: requested, build = false, round, p
     admission: hash(await readFile(join(here, "admission.mjs"))), measurement: hash(await readFile(join(here, "measurement.mjs"))),
     nativeHttp: hash(await readFile(join(here, "native-http.mjs"))) };
   const plan = { schema: "native-live-plan/v2", group, round: round ?? basename(out), startedAt: new Date().toISOString(), apps: selectedApps(group), requested: apps,
-    profile, measurement: measure ? fanoutProfile : null,
+    profile, measurement: measure ? fanoutProfile : null, ...(isolated ? { isolated: true } : {}),
     inventory: inventory(group, profile), workload, scenarios: scenarios(group), settings: scenarios(group).map((s) => settingsFor(group, s, profile)),
     commit, diffSha256: hash(diff), code, contractSha256: contractSha256(group),
     environment: { hostname: hostname(), platform: platform(), release: release(), arch: arch(), cpus: cpus().length, node: process.version },
@@ -237,11 +266,12 @@ export async function run({ group, out, apps: requested, build = false, round, p
   try {
     const { chromium } = await import("playwright");
     browser = await chromium.launch({ headless: true });
+    if (isolated) await writeFile(join(out, "host-actor-tools.json"), JSON.stringify(await actorTools(browser)), { flag: "wx" });
     for (const app of apps) {
       const port = portFor(app, profile);
       if (!port) continue;
       const name = `parity-live-${randomUUID()}`, context = join(here, "apps", port.directory);
-      let owned = false;
+      let owned = false, actorStart, actorId;
       const cases = [], files = [], qualified = [];
       try {
         const appSources = async () => port.rootContext ? {
@@ -259,9 +289,14 @@ export async function run({ group, out, apps: requested, build = false, round, p
         const imageId = built.Id, imageSourceSha256 = built.Config.Labels?.["bench.live.source-sha256"];
         assert.equal(imageSourceSha256, sourceSha256, "stale/unbound native image: rerun with --build");
         command("docker", ["run", "-d", "--name", name, "--label", "agent.owner=codex", "--label", "agent.task=bench-parity-live",
-          "--cpus", "1", "--memory", "1g", "--memory-swap", "1g", "-p", "127.0.0.1::8080", imageId]);
+          "--cpus", "1", "--memory", "1g", "--memory-swap", "1g",
+          ...(isolated ? ["--cpuset-cpus", liveActorCpus.application] : []), "-p", "127.0.0.1::8080", imageId]);
         owned = true;
         const inspect = JSON.parse(command("docker", ["inspect", name]))[0];
+        if (isolated) {
+          appActor(inspect, app, null);
+          actorStart = Date.now(); actorId = inspect.Id;
+        }
         const hostPort = inspect.NetworkSettings.Ports["8080/tcp"][0].HostPort;
         const base = `http://127.0.0.1:${hostPort}`;
         let up = false;
@@ -281,6 +316,7 @@ export async function run({ group, out, apps: requested, build = false, round, p
         for (const scenario of scenarios(group)) {
           const settings = settingsFor(group, scenario, profile), file = `${app}-${scenario}.json.gz`;
           let artifact;
+          const startedAt = isolated ? Date.now() : null;
           try {
             const journey = await browserJourney(browser, base, workload, settings, port);
             artifact = { schema: "native-live-evidence/v1", profile, app, group, scenario, provenance, workload, settings, ...journey };
@@ -288,6 +324,7 @@ export async function run({ group, out, apps: requested, build = false, round, p
           } catch (error) {
             artifact = { schema: "native-live-failure/v1", profile, app, group, scenario, provenance, workload, settings, error: error.message, ...error.evidence };
           }
+          if (isolated) artifact.actorWindow = { startedAt, endedAt: Date.now() };
           const bytes = gzipSync(JSON.stringify(artifact));
           await writeFile(join(out, file), bytes); files.push({ file, sha256: hash(bytes) });
           const saved = JSON.parse(gunzipSync(await readFile(join(out, file))));
@@ -319,6 +356,7 @@ export async function run({ group, out, apps: requested, build = false, round, p
           };
           for (const clients of fanoutProfile.clients) {
             let a;
+            const startedAt = isolated ? Date.now() : null;
             try {
               const observed = await fanoutJourney(browser, base, settingsFor(group, "normal", profile), clients, port, kernelCounters);
               a = { schema: "native-live-fanout/v3", profile: fanoutProfile, app, group, provenance, qualification: files,
@@ -329,6 +367,7 @@ export async function run({ group, out, apps: requested, build = false, round, p
               a = { schema: "native-live-fanout-failure/v1", app, group, clients, provenance, qualification: files, error: error.message, ...error.evidence };
               console.error(`${app}/fanout-${clients}: ${error.message}`);
             }
+            if (isolated) a.actorWindow = { startedAt, endedAt: Date.now() };
             const file = `${app}-fanout-${clients}.json.gz`, bytes = gzipSync(JSON.stringify(a));
             await writeFile(join(out, file), bytes); measurementFiles.push({ file, sha256: hash(bytes) });
           }
@@ -341,7 +380,16 @@ export async function run({ group, out, apps: requested, build = false, round, p
       } catch (error) {
         await writeFile(join(out, `${app}-failure.json`), JSON.stringify({ app, error: error.message, receipt: error.receipt }, null, 2));
         cells.push({ app, case: group === "live-delivery" ? "delivery" : "recovery", implementation: "implemented", parity: "failed", measurement: "not-run", reason: error.message });
-      } finally { if (owned) command("docker", ["rm", "-f", "-v", name]); }
+      } finally {
+        try {
+          if (actorId) {
+            const endedAt = Date.now(), info = JSON.parse(command("docker", ["inspect", name]))[0];
+            assert.equal(info.Id, actorId, "native live application changed");
+            const actor = appActor(info, app, { startedAt: actorStart, endedAt });
+            await writeFile(join(out, `${app}-host-actor.json`), JSON.stringify(actor), { flag: "wx" });
+          }
+        } finally { if (owned) command("docker", ["rm", "-f", "-v", name]); }
+      }
     }
   } finally {
     await browser?.close();
@@ -371,22 +419,23 @@ export async function main(group, argv = process.argv.slice(2)) {
   if (!passed) process.exitCode = 1; // A passing subset is not a passing group.
 }
 export async function runRound(group, args) {
-  let round, apps, build = false, out, profile = "bounded", measure = false;
+  let round, apps, build = false, out, profile = "bounded", measure = false, isolated = false;
   if (Array.isArray(args)) {
     [round, ...args] = args;
     for (let i = 0; i < args.length; i++) {
       if (args[i] === "--apps") { assert.ok(args[i + 1], "--apps needs a value"); apps = args[++i]; }
       else if (args[i] === "--build") build = true;
       else if (args[i] === "--measure") measure = true;
+      else if (args[i] === "--isolated") { assert.equal(isolated, false, "duplicate isolation flag"); isolated = true; }
       else if (args[i] === "--profile") { assert.ok(args[i + 1], "--profile needs a value"); profile = args[++i]; }
       else assert.fail(`unknown argument: ${args[i]}`);
     }
   } else {
     assert.ok(args && typeof args === "object", "run requires round arguments");
-    ({ round, apps, build = false, out, profile = "bounded", measure = false } = args);
+    ({ round, apps, build = false, out, profile = "bounded", measure = false, isolated = false } = args);
   }
   assert.ok(typeof round === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(round), "explicit safe round name required");
   const destination = out ?? resolve(here, group === "live-delivery" ? "results/parity" : "../recoverable-live/results", round);
-  return run({ group, out: destination, apps, build, round, profile, measure });
+  return run({ group, out: destination, apps, build, round, profile, measure, isolated });
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await main("live-delivery");

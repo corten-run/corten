@@ -13,13 +13,14 @@ import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { failedNativePolicy, failedNativeRoots, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
+import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
 import { readFleet, readGroup, readLaunchIntent, readRemainingIntent } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
   "cloud-control-runtime.mjs", "cloud-control-session.mjs", "cloud-control-stream.mjs", "cloud-sealed-collection.mjs", "isolated/control-admission.mjs",
-  "isolated/control-session-source.mjs", "isolated/control-stream-source.mjs", "isolated/control-stream.mjs", "isolated/host-observation.mjs",
+  "isolated/control-session-source.mjs", "isolated/control-stream-source.mjs", "isolated/control-stream.mjs", "isolated/host-observation.mjs", "isolated/native-roles.mjs",
   "deployments.mjs", "../marketplace/feature-contract.mjs", "../marketplace/run-contract.mjs", "../marketplace/groups.mjs",
   "../fullstack/conformance.mjs"].map((p) => posix.normalize(`bench/workloads/${p}`));
 export const nativePaths = ["campaign-entry.mjs", "campaign-verify.mjs", "campaign-contract.mjs", "campaign-journal.mjs", "campaign.mjs", "contract.mjs", "worker.mjs", "process.mjs", "evidence.mjs", "host-observation.mjs", "json-staging.mjs", "mixed-staging.mjs", "composition.mjs", "native-replay.mjs", "host-lifetime.mjs", "bootstrap.mjs", "raw-support.mjs"].map((p) => `bench/workloads/isolated/${p}`);
@@ -37,8 +38,13 @@ export function parseProductionArgs(args) {
   return { options: parseDropletArgs(core), approval, preview };
 }
 
-// compiler is a code-only synthetic TEST seam for the local bench install check.
-export async function productionPlan(options, { repo = checkout, run, compiler = localCompiler, remainingPlacement } = {}) {
+async function launchRoles({ round, commit, group, mode }, interrupted) {
+  return inspectCampaign({ action: "actor-role-preflight", round, commit, group: group ?? null, mode: mode ?? null }, { interrupted });
+}
+
+// compiler and roleCheck are synthetic TEST seams, never CLI options.
+export async function productionPlan(options, { repo = checkout, run, compiler = localCompiler, roleCheck = launchRoles,
+  interrupted, remainingPlacement } = {}) {
   // All checks here are local/read-only. Missing integration stays visible, not imported.
   repo = realpathSync(repo);
   assert.ok(!/["$%\r\n\0]/.test(options.stateDir), "SSH config expansion in state path refused");
@@ -60,7 +66,7 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
     if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
   // Native replay (ordinary collection, and so a launch's) reads this checkout's bench compiler.
   if ((options.detach || options.collect && options.unusedBootstrapKnownHosts === undefined && !options.r21MeasuredCheckout) && !compiler()) missing.push(localCompilerMissing);
-  let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery;
+  let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery, mode;
   if (options.group !== undefined) {
     const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = requireStagedFleet(JSON.parse(bytes));
     assert.equal(fleet.round, options.round); assert.equal(fleet.commit, head); assert.equal(fleet.sshKey, options.sshKey);
@@ -72,9 +78,12 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
     assert.equal(resolve(options.fleet), current.path);
     assert.equal(physicalRequest, join(root, options.group));
     assert.equal(current.manifestSha256, fleetSha256);
-    if (stagedSibling) fleetCreateMode(options.group, fleet, remainingPlacement.region);
+    mode = fleetCreateMode(options.group, fleet, remainingPlacement?.region);
   }
-  if (options.detach) assert.equal(options.commit, head, "launch must measure the approved controller source");
+  if (options.detach) {
+    assert.equal(options.commit, head, "launch must measure the approved controller source");
+    if (!missing.length) missing.push(...await roleCheck({ round: options.round, commit: head, group: options.group, mode }, interrupted));
+  }
   else {
     const bytes = regular(join(physicalRequest, `groups-${options.round}`, "state.json"), 1024 * 1024);
     const saved = controllerState(JSON.parse(bytes), options.round);
@@ -139,7 +148,7 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
 }
 
-export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log, compiler, remainingAdmission = false } = {}) {
+export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log, compiler, roleCheck, remainingAdmission = false } = {}) {
   const { options, approval, preview } = parseProductionArgs(args);
   const processRun = shellTransport({ repo, spawn, streamSpawn });
   // Construct the legacy/recovery transport at the original boundary. It
@@ -201,7 +210,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   };
   if (stagedSibling) assert.ok(remainingAdmission, "only fleet admission may launch a v5 sibling");
   const admission = manifest && !preview ? readAdmission() : undefined;
-  const deps = { repo, run, compiler, remainingPlacement: admission?.placement };
+  const deps = { repo, run, compiler, roleCheck, interrupted, remainingPlacement: admission?.placement };
   const plan = await productionPlan(options, deps);
   if (preview) {
     write(JSON.stringify({ action: plan.subject.action, controllerCommit: plan.subject.controllerCommit, round: options.round,

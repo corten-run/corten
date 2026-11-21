@@ -61,7 +61,7 @@ function productionHarness(t, flags = {}) {
       ? { status: 1, stdout: "", stderr: "" } : h.run(binary, args, options.timeout);
     return trackedSsh ? { ...result, stderr: "CORTEN_CONTROL " + request.invocation.id + " " + "d".repeat(64) + "\nCORTEN_RESULT " + request.invocation.id + " " + result.status + "\n" } : result;
   };
-  const deps = { spawn, providerRequest: syntheticProviderRequest(h, (binary, argv, timeout) => {
+  const deps = { spawn, roleCheck: flags.roleCheck ?? (() => []), providerRequest: syntheticProviderRequest(h, (binary, argv, timeout) => {
     calls.push([binary, argv, { timeout }]); return h.run(binary, argv, timeout, true);
   }), repo: h.repo, inspect: async () => h.report(), sleep: async () => {}, interrupted: () => flags.cancelled, write: (v) => stdout.push(JSON.parse(v)) };
   deps.streamSpawn = (binary, argv) => {
@@ -743,6 +743,25 @@ test("normal new state directories preview without writes and create a bounded c
   assert.ok(existsSync(stateDir)); assert.ok(!existsSync(join(stateDir, "groups-r21"))); assert.equal(p.h.creates, 0);
 });
 
+test("role preflight blocks preview and rechecks before the first provider operation under the launch lock", async (t) => {
+  const denied = "hardening: isolated benign service/recovery actor proof unavailable; connection-flood resistance not measured";
+  const blocked = productionHarness(t, { roleCheck: () => [denied] });
+  assert.equal(await productionMain([...blocked.args("--detach"), "--print-approval"], blocked.deps), 2);
+  assert.deepEqual(blocked.stdout.at(-1).missing, [denied]);
+  assert.ok(blocked.calls.every(([binary]) => binary === "git"));
+  assert.ok(!existsSync(blocked.h.local));
+
+  let checks = 0;
+  const locked = productionHarness(t, { roleCheck: ({ commit: measured, group, mode }) => {
+    assert.equal(measured, commit); assert.equal(group, undefined); assert.equal(mode, undefined);
+    return ++checks === 4 ? [denied] : [];
+  } });
+  const approved = await locked.approve("--detach");
+  await assert.rejects(productionMain(approved, locked.deps), /integration missing/);
+  assert.equal(checks, 4); assert.equal(locked.h.creates, 0);
+  assert.ok(locked.calls.every(([binary]) => binary === "git"));
+});
+
 test("no/mismatched approval, dirty/mismatched source, unmerged head and fetch failure make no cloud calls", async (t) => {
   for (const flags of [{}, { dirty: true }, { wrongSource: true }, { unmerged: true }, { fetchError: true }]) {
     const p = productionHarness(t, flags);
@@ -911,7 +930,7 @@ test("retargeting an ordinary alias invalidates the approved physical root befor
 });
 
 test("production grammar permits authorization only, never arbitrary settings/adapters", () => {
-  assert.equal(controllerPaths.length, 33);
+  assert.equal(controllerPaths.length, 34);
   assert.ok(controllerPaths.includes("bench/workloads/cloud-sealed-collection.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-cancellation.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-retirement.mjs"));

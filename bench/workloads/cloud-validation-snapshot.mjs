@@ -166,6 +166,7 @@ export const validationPaths = Object.freeze([
   "bench/workloads/isolated/json-staging.mjs",
   "bench/workloads/isolated/mixed-staging.mjs",
   "bench/workloads/isolated/native-replay.mjs",
+  "bench/workloads/isolated/native-roles.mjs",
   "bench/workloads/isolated/participant-executables.mjs",
   "bench/workloads/isolated/process.mjs",
   "bench/workloads/isolated/raw-support.mjs",
@@ -342,7 +343,8 @@ export function captureValidation(commit, { root = checkout, readGit = spawnSync
 // can supply a snapshot, worker implementation, module, command or package.
 export function validationTask(input, { snapshot = captureValidation(input.commit), WorkerClass = Worker } = {}) {
   try {
-    assert.deepEqual(Object.keys(input).sort(), ["commit", "folder", "round"]);
+    assert.deepEqual(Object.keys(input).sort(), input.action === "actor-role-preflight"
+      ? ["action", "commit", "group", "mode", "round"] : ["commit", "folder", "round"]);
     assert.match(input.commit, /^[a-f0-9]{40}$/);
     const { sources, root } = snapshot;
     assert.deepEqual(sources.map((row) => row.path), [...validationPaths, typescriptPath, ...Object.keys(semverSources)]);

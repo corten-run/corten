@@ -9,7 +9,8 @@ import { groupNames } from "../../registry.mjs";
 import { deploymentSha256 } from "../../deployments.mjs";
 import { campaignSchema, groupCampaignSchema } from "../campaign-contract.mjs";
 import { readRegular, tree } from "../evidence.mjs";
-import { inspectLifetime } from "../host-lifetime.mjs";
+import { inspectLifetime, inspectLiveActors } from "../host-lifetime.mjs";
+import { nativeControlPartition } from "../native-roles.mjs";
 import { verifyHostBoundary } from "../host-observation.mjs";
 import { liveCaptureSchema, liveContracts } from "../../live.mjs";
 import { negativeRequests } from "../../../live/admission.mjs";
@@ -47,7 +48,7 @@ function sourceHashes(files, entry) {
   sha(cargo); sha(lock); return { app, crates, cargo, lock };
 }
 
-function phaseProof(binding, folder, startedAt) {
+function phaseProof(binding, folder, startedAt, actors) {
   if (basename(folder) !== "native") return null;
   const phase = dirname(folder), campaignRoot = dirname(phase), campaign = basename(campaignRoot), { group, round, commit } = binding.request;
   assert.match(campaign, new RegExp(`^${round}-[a-f0-9]{16}$`));
@@ -88,7 +89,9 @@ function phaseProof(binding, folder, startedAt) {
   const result = terminal.command;
   assert.equal(result.error, null); assert.equal(result.signal, null);
   assert.ok([0, 1].includes(result.code)); assert.equal(result.success, result.code === 0 && !result.cancelled && !result.forced);
-  const browser = observation.identities.some((p) => p.type === "--type=renderer");
+  const browser = binding.execution.effectiveOptions.isolated
+    ? actors && inspectLiveActors(binding, observation, actors.tools, actors.participants, actors.windows)
+    : observation.identities.some((p) => p.type === "--type=renderer");
   assert.ok(isDeepStrictEqual(tree(phase), beforeTree), "external phase evidence mutated");
   assert.ok(readRegular(planPath).equals(planBytes) && readRegular(reservationPath).equals(reservationBytes), "campaign membership mutated");
   return { complete: observation.status === "verified" && observation.cleanupComplete && browser, code: result.code };
@@ -139,6 +142,13 @@ export async function inspectLiveSaved(binding, folder, group) {
       result.blockers = [...missing]; return result;
     }
     const plan = await json("plan.json"), ledger = await json("coverage.json");
+    const actorFiles = [...names].filter((name) => name.endsWith("-host-actor.json"));
+    assert.equal(plan.isolated ?? false, options.isolated ?? false, "live isolation differs from binding");
+    const actors = options.isolated ? { tools: null, participants: [], windows: [] } : null;
+    if (actors) {
+      nativeControlPartition(binding);
+      if (need(names.has("host-actor-tools.json"), "native-live-actor-tools-missing")) actors.tools = await json("host-actor-tools.json");
+    } else assert.ok(!actorFiles.length && !names.has("host-actor-tools.json"), "live actor receipt has no bound isolation");
     for (const key of ["schema", "group", "round", "commit", "apps", "requested", "inventory", "workload", "scenarios", "settings", "code", "contractSha256", "diffSha256", "startedAt"]) {
       present(plan[key], "native-plan-fields-missing");
     }
@@ -230,6 +240,14 @@ export async function inspectLiveSaved(binding, folder, group) {
         if (options.measure && qualificationPassed) { allAttempted = false; missing.add(`native-measurements-not-run:${app}`); }
         if (!options.measure) assert.equal(cell.measurement, "not-run");
       }
+      const actorName = `${app}-host-actor.json`;
+      if (actors && retained.length && need(names.has(actorName), `native-live-application-actor-missing:${app}`)) {
+        const actor = await json(actorName);
+        assert.equal(actor.app, app); assert.equal(actor.role, "application");
+        assert.equal(actor.id, retained[0].provenance.containerId); assert.equal(actor.imageId, retained[0].provenance.imageId);
+        actors.participants.push(actor);
+        actorFiles.splice(actorFiles.indexOf(actorName), 1);
+      }
       for (const a of retained) {
         failedEvidenceComplete &&= observedFailure(a, group, options.profile);
         const p = present(a.provenance, `native-provenance-missing:${app}`); assert.ok(p);
@@ -246,7 +264,25 @@ export async function inspectLiveSaved(binding, folder, group) {
         assert.equal(p.processTopology, entry.topology ?? "one application process; no broker, database or shared renderer");
         assert.ok(typeof p.processInventory === "string" && /^PID\s+PPID\s+COMMAND\r?\n/.test(p.processInventory));
         if (provenance.has(app)) assert.ok(isDeepStrictEqual(p, provenance.get(app)), "native build provenance differs"); else provenance.set(app, p);
+        if (actors && need(a.actorWindow !== undefined, `native-live-actor-window-missing:${app}`)) {
+          const { startedAt, endedAt } = a.actorWindow;
+          assert.ok(Number.isSafeInteger(startedAt) && Number.isSafeInteger(endedAt) && endedAt >= startedAt);
+          if (a.schema === "native-live-fanout/v3") {
+            // The retained measurement interval is monotonic relative to the Node origin.
+            assert.ok(startedAt <= Math.ceil(a.host.timeOrigin + a.interval.startedAt)
+              && endedAt >= Math.floor(a.host.timeOrigin + a.interval.finishedAt), "measurement outside native actor window");
+          }
+          actors.windows.push({ app, startedAt, endedAt,
+            requireRenderer: a.schema === "native-live-evidence/v1" || a.schema === "native-live-fanout/v3" });
+        }
       }
+    }
+    if (actorFiles.length) {
+      // A native startup/harness failure can leave a container receipt before
+      // any replayable browser work. Keep its failure, never clear resources.
+      assert.ok(actorFiles.every((name) => apps.some((app) => name === `${app}-host-actor.json` && names.has(`${app}-failure.json`))),
+        "unbound native live actor receipt");
+      missing.add("native-live-actor-without-browser-evidence");
     }
     // Run the committed native validator over the entire tree, not only passing cells.
     let native;
@@ -279,7 +315,7 @@ export async function inspectLiveSaved(binding, folder, group) {
       "native-actual-browser-driver-os-resource-proof-not-produced", "native-positive-os-terminal-cleanup-proof-not-produced"];
     if (result.attemptComplete) {
       let proof;
-      try { proof = phaseProof(binding, folder, plan.startedAt); }
+      try { proof = phaseProof(binding, folder, plan.startedAt, actors); }
       catch (error) { if (error?.code !== "ENOENT") throw error; }
       if (proof?.complete) {
         assert.equal(proof.code, passed ? 0 : 1, "observed exit contradicts native outcomes");

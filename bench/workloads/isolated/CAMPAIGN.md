@@ -195,11 +195,20 @@ driver/Chromium cgroup, role-specific Docker limits, and corresponding running c
 cgroups in the timing windows. This proves separation for those roles, not reserved physical
 cores, host service placement, or qualification of the native browser matrix.
 
-Stream open and replay use the same CPU-partition projection. Mixed production shares
-the throughput roles for its measured stage only; its separate functional capture has
-no pinning proof. Client-heavy, live delivery, recoverable live and hardening still
-lack supported timed-role partitions for this control check. They must not be treated
-as ready for a supervised launch. No live failure in those groups is inferred.
+Detach preview and its locked recheck generate the official plan from committed
+source. They use the same CPU-partition projection as stream open and replay.
+Client-heavy keeps its Node driver, Chromium, Rust compiler and loopback server in
+the delegated CPU 4-7 scope. Live delivery and recoverable live keep the existing
+host browser/driver (including publisher) on CPUs 4-7 and each sequential app
+container on CPU 1 at the existing one-CPU/1-GiB budget. Replay matches running app
+and browser identities within the retained work windows and checks observed
+processes' own effective sets, including child cgroups. It does not claim a trace
+of every short-lived process. Mixed production shares the throughput roles for its
+measured stage only; its separate functional capture has no pinning proof.
+
+Hardening is blocked before create pending an isolated adapter for its existing
+benign service and dependency-recovery actors. This also blocks a bundled launch
+that includes the unsupported group. Connection-flood resistance: not measured.
 
 ## Kernel lifetime observations
 
@@ -209,8 +218,9 @@ and enabled on the empty service root. A compatible systemd layout uses
 `Delegate=cpu cpuset memory pids` and `DelegateSubgroup=supervisor`; the parent must verify
 that layout on its actual systemd/kernel. Core does not change parent controllers, quotas,
 cpusets or memory budgets and never moves the wrapper or an unrelated process. It fails
-closed when delegation/accounting is absent. Only the full-stack browser command has a
-required child cpuset here; it does not set a new finite client CPU quota or memory budget.
+closed when delegation/accounting is absent. Full-stack browser, client-heavy and
+both live commands require their bound child cpuset, without setting a new finite
+host-process CPU quota or memory budget.
 
 The fixed cloud bootstrap prepares Node 26, the root, bench and bench/browser npm lockfile
 installations, Playwright Chromium, the native runner's digest-pinned Node tool image,

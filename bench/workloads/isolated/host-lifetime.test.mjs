@@ -9,7 +9,7 @@ import { deploymentSha256 } from "../deployments.mjs";
 import { definition } from "../registry.mjs";
 import { browserCpus } from "../../fullstack-browser/contract.mjs";
 import { participantSnapshot, replayExecution } from "../../fullstack-browser/native-execution.mjs";
-import { composeHostProof, inspectLifetime, processIdentity, inspectBrowserParticipants, resolveParticipantExecutables } from "./host-lifetime.mjs";
+import { composeHostProof, inspectLifetime, processIdentity, inspectBrowserParticipants, inspectLiveActors, resolveParticipantExecutables } from "./host-lifetime.mjs";
 import { executableIdentity, executableReference, hashExecutableDescriptor } from "./participant-executables.mjs";
 
 const campaign = "r17-0123456789abcdef", command = 0, pid = 100;
@@ -82,9 +82,13 @@ function fixture(t, change = () => {}, bound = binding) {
   return { directory, observation: () => inspectLifetime(bound, invocation, directory, { campaign, command, pid, result }) };
 }
 
-function browserFixture(t, selectedApp = "app", isolated = false) {
-  const bound = { ...binding, request: { ...binding.request, group: "fullstack-browser" }, selection: { apps: [selectedApp] } };
-  if (isolated) Object.assign(bound, { resources: { browserCpus }, execution: { effectiveOptions: { isolated: true } } });
+function browserFixture(t, selectedApp = "app", isolated = false, workload = "fullstack-browser") {
+  const bound = { ...binding, request: { ...binding.request, group: workload }, selection: { apps: [selectedApp] } };
+  if (isolated) Object.assign(bound, {
+    resources: workload === "fullstack-browser" ? { browserCpus }
+      : { actorCpus: { application: "1", browser: "4-7" }, app: { cpu: 1, memoryBytes: 2 ** 30 } },
+    execution: { effectiveOptions: { isolated: true } },
+  });
   const id = "f".repeat(64), imageId = `sha256:${"e".repeat(64)}`, dockerPath = `/system.slice/docker-${id}.scope`;
   const state = { Status: "running", Pid: 300, Running: true, Paused: false, Restarting: false, OOMKilled: false,
     Dead: false, ExitCode: 0, StartedAt: "2026-11-14T00:00:00Z", FinishedAt: "0001-01-01T00:00:00Z" };
@@ -101,6 +105,8 @@ function browserFixture(t, selectedApp = "app", isolated = false) {
   const participants = [participant], records = [record];
   if (isolated) {
     participant.terminal.limits.CpusetCpus = "1"; g.files["cpuset.cpus.effective"] = "1\n";
+  }
+  if (isolated && workload === "fullstack-browser") {
     const upstream = "8".repeat(64), upstreamPath = `/system.slice/docker-${upstream}.scope`, upstreamGroup = group(upstreamPath, [301]);
     Object.assign(upstreamGroup.files, { "cpu.max": "100000 100000\n", "memory.max": `${256 * 2 ** 20}\n`, "cpuset.cpus.effective": "2-3\n" });
     const upstreamState = { ...state, Pid: 301 };
@@ -157,6 +163,54 @@ test("saved browser CPU proof requires the driver/Chromium scope and both timed 
   assert.deepEqual(browserResourceResults(f), ["blocked", "blocked"]);
   timed.docker.participants.pop(); timed.docker.inventory.pop(); f.native.hostSubject.participants.pop();
   assert.deepEqual(browserResourceResults(f), ["blocked", "blocked"], "the upstream cannot disappear from both inventories");
+});
+
+test("saved client-heavy role requires the compiler and renderer under the pinned command", (t) => {
+  const bound = { ...binding, resources: { ...binding.resources, actorCpus: { client: "4-7" } } };
+  const childPath = `${path}/worker`;
+  const f = fixture(t, ({ context, samples }) => {
+    context.leaderIdentity = processIdentity(stat(100, "node"));
+    for (const sample of samples) sample.groups[0].files["cpuset.cpus.effective"] = "4-7\n";
+    const timed = samples[1], child = group(childPath, [101, 102]);
+    timed.groups[0].files["cgroup.procs"] = "100\n";
+    child.files["cpuset.cpus.effective"] = "5-6\n";
+    timed.groups.push(child);
+    for (const process of timed.processes.slice(1)) process.cgroup = `0::${childPath}\n`;
+  }, bound);
+  const native = { hostSubject: { executionWindow: { startedAt: 10, endedAt: 80 },
+    processWindows: ["compiler", "browser"].map((kind) => ({ kind, startedAt: 20, endedAt: 70 })),
+    subjectSha256: "d".repeat(64), filesSha256: "e".repeat(64),
+    toolIdentities: { node: "a".repeat(64), browser: "b".repeat(64) } } };
+  assert.equal(composeHostProof(bound, native, f.observation()).policy, "observed-client-cpu-partition");
+  const file = join(f.directory, "samples.jsonl"), rows = readFileSync(file, "utf8").trim().split("\n").map(JSON.parse);
+  for (const cpus of ["0,5-6\n", null]) {
+    rows[1].groups[1].files["cpuset.cpus.effective"] = cpus;
+    writeFileSync(file, rows.map((s) => JSON.stringify(s) + "\n").join(""));
+    const observed = f.observation();
+    assert.equal(observed.checks.accounting, false);
+    assert.equal(composeHostProof(bound, native, observed).resources, "blocked");
+  }
+});
+
+for (const workload of ["live-delivery", "recoverable-live"]) test(`saved ${workload} actor proof requires the actual app and renderer in the same window`, (t) => {
+  const f = browserFixture(t, "app", true, workload);
+  const [app] = f.native.hostSubject.participants, { node, browser } = f.native.hostSubject.toolIdentities;
+  const windows = [{ app: app.app, startedAt: 30, endedAt: 60, requireRenderer: true }];
+  const proof = (participants = [app], window = windows) => inspectLiveActors(f.bound, replayBrowser(f), { node, browser }, participants, window);
+  assert.equal(proof(), true);
+  assert.equal(proof([]), false);
+  assert.equal(proof([app], [{ ...windows[0], endedAt: 40 }]), false);
+  const timed = f.observation.samples[1], { kernel } = timed.docker.participants[0];
+  const child = group(`${kernel.groups[0].path}/worker`, [302]);
+  child.files["cpuset.cpus.effective"] = "1\n";
+  kernel.groups.push(child);
+  kernel.processes.push({ stat: stat(302, "worker"), cgroup: `0::${child.path}\n`, executableSha256: "4".repeat(64), type: null });
+  assert.equal(proof(), true);
+  child.files["cpuset.cpus.effective"] = "0-1\n";
+  assert.equal(proof(), false);
+  child.files["cpuset.cpus.effective"] = "1\n";
+  timed.processes.find((p) => p.type === "--type=renderer").executableSha256 = "0".repeat(64);
+  assert.equal(proof(), false);
 });
 
 for (const [role, id, allowed, escaped] of [
