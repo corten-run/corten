@@ -30,6 +30,9 @@ mod api {
 
     #[route("/api/ping", get = ping)]
     pub struct Ping;
+
+    #[route("/api/pong", get = pong)]
+    pub struct Pong;
 }
 
 #[derive(Clone, Default, Route, Fields)]
@@ -68,11 +71,44 @@ async fn ping() -> corten::Public<String> {
     corten::Public::new(std::time::Duration::from_secs(60), String::from("ok"))
 }
 
+/// The same with a body the app compresses: 2,000 bytes that are there already.
+async fn pong() -> corten::Public<&'static str> {
+    corten::Public::new(std::time::Duration::from_secs(60), PONG)
+}
+
+static PONG: &str = concat!(
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+);
+
 fn app(source: Source, lean: bool) -> App {
     let app = App::new(routes::router(source.clone()))
         .api(|routes| api::api(routes, source))
         .assets(views::Static)
         .components(&[views::SiteHeader]);
+    // How many bytes of answers the app keeps, for a measurement (0 keeps none).
+    let app = match std::env::var("CORTEN_KEPT").ok().and_then(|bytes| bytes.parse().ok()) {
+        Some(bytes) => app.kept_answers(bytes),
+        None => app,
+    };
     if lean {
         app.deadline(None).header_timeout(None).send_timeout(None)
     } else {
