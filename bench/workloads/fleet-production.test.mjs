@@ -302,6 +302,20 @@ test("continuation replays catalog, creates only the next whole group, and does 
   assert.equal(treeHash(retained), oldTree, "historical bytes untouched");
 });
 
+test("a settled continuation placement refusal leaves the unallocated slot available", async (t) => {
+  const p = fixture(t), group = "json-api";
+  fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
+  const args = ["r21", "--continuation-root", p.h.base, "--group", group, "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context];
+  const available = p.deps.catalogProvider;
+  p.deps.catalogProvider = syntheticCatalogProvider(syntheticPlacement([]));
+  await assert.rejects(fleetMain(args, p.deps), /no supported c-8/);
+  assert.deepEqual(fs.readdirSync(path.join(p.h.base, group)), []);
+  p.deps.catalogProvider = available;
+  assert.equal(await fleetMain(args, p.deps), 3);
+  assert.deepEqual(p.events(), []);
+});
+
 test("remaining approval moves from sfo2 to lon1 through captured workers and dispatches once", { timeout: 60000 }, async (t) => {
   const p = fixture(t, "overlap");
   assert.equal(await fleetMain(await p.prepare(), p.deps), 3);

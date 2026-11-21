@@ -123,7 +123,9 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
   for (const group of names.filter((name) => paths.includes(name))) {
     const slot = join(root, group);
     physical(slot);
-    const files = readdirSync(slot).filter((name) => /^fleet-r[1-9]\d{0,8}\.json$/.test(name));
+    const entries = readdirSync(slot);
+    if (!entries.length) continue; // A settled placement refusal has not made a reservation.
+    const files = entries.filter((name) => /^fleet-r[1-9]\d{0,8}\.json$/.test(name));
     assert.equal(files.length, 1, `ambiguous continuation slot: ${group}`);
     const fleet = readFleet(slot, files[0].slice(6, -5), { priorSelection: true });
     assert.equal(fleet.manifest.single?.group, group, "independent reservation required");
