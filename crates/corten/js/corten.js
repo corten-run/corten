@@ -868,7 +868,8 @@ export function subscribe(url, handlers, { signal } = {}) {
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timer;
   let seq = 0;
-  let failures = 0;
+  /** When the tries began failing in a row (`performance.now()`), or null. @type {number | null} */
+  let failing = null;
   // Snapshots in a row whose own cursor the stream refused as it opened.
   let refused = 0;
   // Snapshots in a row whose stream then sent a patch that is not one.
@@ -884,15 +885,21 @@ export function subscribe(url, handlers, { signal } = {}) {
     { once: true },
   );
 
-  /** Runs `next` after a backoff that grows with `times`. @param {() => void} next @param {number} times */
-  function wait(next, times) {
+  /** Runs `next` after `ms`, 30 s at most. @param {() => void} next @param {number} ms */
+  function wait(next, ms) {
     clearTimeout(timer);
-    timer = setTimeout(next, Math.min(30_000, 500 * 2 ** times));
+    timer = setTimeout(next, Math.min(30_000, ms));
   }
 
-  /** Runs `next` after a backoff that grows with each failure in a row. @param {() => void} next */
+  /**
+   * Runs `next` after half as long as the tries have been failing, 1 s at least, so a server that
+   * comes back is tried again within half its outage.
+   * @param {() => void} next
+   */
   function retry(next) {
-    wait(next, (failures += 1));
+    const now = performance.now();
+    failing ??= now;
+    wait(next, Math.max(1000, (now - failing) / 2));
   }
 
   /** @param {boolean} [shown] the status already says `syncing` */
@@ -908,7 +915,7 @@ export function subscribe(url, handlers, { signal } = {}) {
       if (!res.ok) throw new Error(`corten: feed ${url} answered ${res.status}`);
       const snap = snapshotOf(await res.json());
       if (!snap) throw new Error(`corten: feed ${url} sent no snapshot`);
-      failures = 0;
+      failing = null;
       seq = snap.seq;
       // The rows are the server's own type, which the runtime does not check (`Row` is erased).
       handlers.snapshot(/** @type {Row[]} */ (snap.rows), snap.seq, snap.epoch);
@@ -928,7 +935,7 @@ export function subscribe(url, handlers, { signal } = {}) {
     let opened = 0;
     let opens = 0;
     es.addEventListener("open", () => {
-      failures = 0;
+      failing = null;
       opened = performance.now();
       opens += 1;
       status("live");
@@ -952,7 +959,7 @@ export function subscribe(url, handlers, { signal } = {}) {
       es.close();
       source = null;
       status("syncing");
-      wait(() => sync(true), (refused += 1));
+      wait(() => sync(true), 500 * 2 ** (refused += 1));
     });
     es.addEventListener("patch", (event) => {
       const receivedAt = performance.now();
@@ -965,7 +972,7 @@ export function subscribe(url, handlers, { signal } = {}) {
         es.close();
         source = null;
         status("syncing");
-        return void wait(() => sync(true), (rejected += 1));
+        return void wait(() => sync(true), 500 * 2 ** (rejected += 1));
       }
       if (batch.seq <= seq) return;
       if (batch.seq !== seq + 1) return void sync();

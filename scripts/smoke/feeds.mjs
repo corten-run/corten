@@ -152,22 +152,25 @@ export async function feedRecovery(page, errors, located) {
     `${gapFeed.snapshots.length} snapshots, patches ${gapPatches.join(",")}, second stream since ${gapFeed.since[1]}; ${gapStates}`,
   );
   // A stream answered with an HTTP error ends EventSource for good: subscribe() listens again from
-  // the last patch's cursor, with no snapshot, waiting longer after each error in a row (1 s, 2 s),
-  // and a stream that opens starts the count again (1 s). The first stream sends seq 2 and ends;
-  // the browser reconnects (after 100 ms) to a 503, then subscribe() twice more, to a 503 and a
-  // stream that ends; the browser reconnects to a 503, and subscribe() to a stream.
+  // the last patch's cursor, with no snapshot, after half as long as the tries have been failing
+  // (1 s at least), and a stream that opens starts again (1 s). The first stream sends seq 2 and
+  // ends; the browser reconnects (after 100 ms) to a 503, then subscribe() four times to a 503 and
+  // once to a stream that ends; the browser reconnects to a 503, and subscribe() to a stream.
   const failedFeed = await feedTimes("failed", (n) =>
-    n === 1 ? `retry: 100\n\n${patchEvent(2)}` : n === 4 ? "retry: 100\n\n" : n <= 5 ? { status: 503 } : "retry: 60000\n\n",
+    n === 1 ? `retry: 100\n\n${patchEvent(2)}` : n === 7 ? "retry: 100\n\n" : n <= 8 ? { status: 503 } : "retry: 60000\n\n",
   );
   // Long enough for a loaded browser that runs each timer seconds late; it ends once live.
   const failedLive = await feedLive("failed", 3, 60_000);
   const failedStates = await stopFeed("failed");
   await unrouteFeed("failed");
-  // The runtime's three waits: after the first source closed (the browser's reconnect to a 503),
-  // after its own first try (a 503), and after the source that opened and then closed. Each is the
-  // timer the runtime set as that source closed, which must be 1 s, 2 s and 1 s, and the time from
-  // the close to the next source, at least that long. A loaded Firefox ran a 1 s timer about 6 s
-  // late (#1102), which says nothing of the runtime, so the time taken has no upper bound.
+  // The runtime's six waits, one as each source closed: the timer it set then, and the time from
+  // the close to the next source, at least that long. Each must be half the time since the first
+  // close of its run (the first source's, or the sixth's, which closed after a stream had opened),
+  // 1 s at least: 1, 1, 1, then 1.5 and about 2.25 s, then 1 s again. Both closes are read on the
+  // page's clock in the same dispatch as the runtime's, so 25 ms covers the listeners between. A
+  // loaded Firefox ran a 1 s timer about 6 s late (#1102), which says nothing of the runtime: a
+  // late timer makes the next wait longer by half as much, which the check follows, and the time
+  // taken has no upper bound.
   const failedAt = await page.evaluate(() => {
     const w = /** @type {any} */ (window);
     const sources = w.__sources
@@ -179,24 +182,30 @@ export async function feedRecovery(page, errors, located) {
     const asked = sources.map((s) => (s.next === undefined ? null : (timers[s.next] ?? null)));
     return { sources, asked };
   });
-  const failedAsked = failedAt.asked.slice(0, 3);
-  const failedGaps = [0, 1, 2].map((i) => Math.round((failedAt.sources[i + 1]?.opened ?? NaN) - (failedAt.sources[i]?.closed ?? NaN)));
-  const seenGaps = [2, 3, 5].map((i) => failedFeed.streamsAt[i] - failedFeed.streamsAt[i - 1]);
+  const waits = [0, 1, 2, 3, 4, 5];
+  const failedAsked = failedAt.asked.slice(0, 6);
+  const failedDue = waits.map((i) => Math.min(30_000, Math.max(1000, ((failedAt.sources[i]?.closed ?? NaN) - (failedAt.sources[i < 5 ? 0 : 5]?.closed ?? NaN)) / 2)));
+  const failedGaps = waits.map((i) => Math.round((failedAt.sources[i + 1]?.opened ?? NaN) - (failedAt.sources[i]?.closed ?? NaN)));
+  const seenGaps = [2, 3, 4, 5, 6, 8].map((i) => failedFeed.streamsAt[i] - failedFeed.streamsAt[i - 1]);
   check(
-    "a stream answered with an error is listened to again from the last patch, after 1 s then 2 s, and 1 s again after a stream opened, with no snapshot",
+    "a stream answered with an error is listened to again from the last patch, after half as long as the tries have failed (1 s at least), and 1 s again after a stream opened, with no snapshot",
     failedFeed.snapshots.length === 1 &&
-      failedFeed.streams === 6 &&
+      failedFeed.streams === 9 &&
       failedFeed.since.slice(2).every((since) => since === "a-2") &&
-      failedAsked.join() === "1000,2000,1000" &&
+      failedAt.sources.length >= 7 &&
+      waits.every((i) => typeof failedAsked[i] === "number" && Math.abs(/** @type {number} */ (failedAsked[i]) - failedDue[i]) <= 25) &&
+      failedAsked[0] === 1000 &&
+      failedAsked[5] === 1000 &&
+      /** @type {number} */ (failedAsked[4]) > /** @type {number} */ (failedAsked[3]) &&
+      /** @type {number} */ (failedAsked[3]) > 1000 &&
       // Each next source opened by the timer set as the one before it closed, and not sooner
       // (5 ms for the clocks' granularity). The runtime opens it inside that timer's callback
       // (`retry(() => listen(..))`); a wait added before it would fail this link, not the backoff.
-      failedAt.sources.length >= 4 &&
-      [0, 1, 2].every((i) => failedAt.sources[i + 1]?.by === failedAt.sources[i]?.next) &&
+      waits.every((i) => failedAt.sources[i + 1]?.by === failedAt.sources[i]?.next) &&
       failedGaps.every((gap, i) => gap >= /** @type {number} */ (failedAsked[i]) - 5) &&
       failedLive &&
       failedStates.includes("reconnecting live"),
-    `${failedLive ? "live 3 times" : "not live 3 times within 60 s"}, ${failedFeed.snapshots.length} snapshots, ${failedFeed.streams} streams since ${failedFeed.since.join(" ")}, ${failedAt.sources.length} sources, waits asked ${failedAsked.join(", ")} ms and taken ${failedGaps.map((g) => `${g} ms`).join(", ")} (as Playwright saw the requests: ${seenGaps.map((g) => `+${g} ms`).join(", ")}); ${failedStates}`,
+    `${failedLive ? "live 3 times" : "not live 3 times within 60 s"}, ${failedFeed.snapshots.length} snapshots, ${failedFeed.streams} streams since ${failedFeed.since.join(" ")}, ${failedAt.sources.length} sources, waits asked ${failedAsked.join(", ")} ms for ${failedDue.map((d) => Math.round(d)).join(", ")} due and taken ${failedGaps.map((g) => `${g} ms`).join(", ")} (as Playwright saw the requests: ${seenGaps.map((g) => `+${g} ms`).join(", ")}); ${failedStates}`,
   );
   // A snapshot that fails is fetched again after 1 s, and the feed goes live once one arrives.
   const retriedFeed = await feedTimes("retried", () => "retry: 60000\n\n", { snapshot: (n) => (n === 1 ? 500 : 200) });
