@@ -1471,7 +1471,10 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
             .route("/now", typed(move |req: Req| async move { Public::new(Duration::ZERO, req.test_page_for("Now", home())) }).0)
             .route("/moved", typed(move |req: Req| async move { Public::new(minute, req.redirect(&Root)) }).0)
             .route("/text", typed(move || async move { Public::new(minute, "text") }).0)
-            .route("/file", typed(move || async move { Public::new(minute, Ok::<_, Error>(Media::new("image/png", &b"\x89PNG"[..]))) }).0)
+            .route(
+                "/file",
+                typed(move || async move { Public::new(minute, Ok::<_, Error>(Media::new("image/png", &b"\x89PNG"[..]))) }).0,
+            )
             .route("/status", typed(move || async move { Public::new(minute, StatusCode::OK) }).0)
             .route(
                 "/device",
@@ -1826,7 +1829,10 @@ async fn a_kept_api_answer_is_sent_with_each_request_s_own_cors() {
     let partner = [("origin", "https://partner.example")];
     let allowed = |headers: &HeaderMap| headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).map(|v| v.to_str().unwrap().to_string());
     let (status, first, body) = fetch(&router, "GET", "/api/rates", &partner).await;
-    assert_eq!((status, &body[..], allowed(&first).as_deref()), (StatusCode::OK, &b"[1.5,2.5]"[..], Some("https://partner.example")));
+    assert_eq!(
+        (status, &body[..], allowed(&first).as_deref()),
+        (StatusCode::OK, &b"[1.5,2.5]"[..], Some("https://partner.example"))
+    );
     let (_, plain, same) = fetch(&router, "GET", "/api/rates", &[]).await;
     assert!(plain.contains_key(header::AGE) && same == body, "{plain:?}");
     assert_eq!(allowed(&plain), None, "not the first asker's");
@@ -1900,7 +1906,8 @@ async fn a_kept_body_is_for_the_language_its_handler_read() {
     for (app, paths) in [(&with, &["/words", "/lang", "/other"][..]), (&bare, &["/words", "/other"][..])] {
         for path in paths {
             let before = runs.count();
-            for (asked, word, ran) in [("fr", "Annonces", 1), ("en", "Listings", 2), ("fr", "Annonces", 2), ("en", "Listings", 2)] {
+            for (asked, word, ran) in [("fr", "Annonces", 1), ("en", "Listings", 2), ("fr", "Annonces", 2), ("en", "Listings", 2)]
+            {
                 let (_, _, body) = fetch(app, "GET", path, &[("accept-language", asked)]).await;
                 let said = if *path == "/lang" { format!("\"{asked}\"") } else { word.to_string() };
                 assert_eq!(String::from_utf8_lossy(&body), said, "{path} asked in {asked}");

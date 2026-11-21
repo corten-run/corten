@@ -367,9 +367,7 @@ impl Entry {
     }
 
     fn is_for(&self, host: Option<&HeaderValue>, language: Option<&HeaderValue>, data: bool) -> bool {
-        self.data == data
-            && self.host.as_ref() == host
-            && self.language.as_ref().is_none_or(|kept| kept.as_ref() == language)
+        self.data == data && self.host.as_ref() == host && self.language.as_ref().is_none_or(|kept| kept.as_ref() == language)
     }
 }
 
@@ -440,8 +438,7 @@ impl Answers {
         let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
         // The copy that stands: one that no longer does is in no other's way until it goes.
-        let entry =
-            inner.at.get(at)?.iter().find(|entry| entry.is_for(host, language, data) && entry.stands(&self.0, now))?;
+        let entry = inner.at.get(at)?.iter().find(|entry| entry.is_for(host, language, data) && entry.stands(&self.0, now))?;
         let age = entry.age(now);
         // Stored only when it changes: a page read often is marked once for each pass of the hand.
         if !entry.used.load(Ordering::Relaxed) {

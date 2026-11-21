@@ -1,2 +1,2 @@
 - **Breaking:** The app keeps a `Public` JSON or text answer as it keeps a `Public` page, and gives it again until its shared lifetime ends, so its handler no longer runs for every request without credentials; middleware still does, and an API's CORS headers are still written for each request. `App::kept_answers(0)` keeps none.
-  ([#1794 `Public` text, JSON and files are not kept](https://github.com/corten-run/corten/issues/1794))
+  ([#1794 Public text, JSON and files are not kept](https://github.com/corten-run/corten/issues/1794))
