@@ -5,6 +5,7 @@ import { recoveryProfile } from "./dependency-recovery-contract.mjs";
 import { boundedRequestProfile } from "./bounded-requests.mjs";
 
 export const schema = "native-hardening-run/v3";
+export const connectionFloodResistance = "Connection-flood resistance: not measured.";
 export const boundedRequestsVersion = boundedRequestProfile.version;
 export const deploymentQualificationVersion = 2;
 export const phases = ["request-timeout", "request-limit", "dependency-recovery"];

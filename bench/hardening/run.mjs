@@ -7,7 +7,7 @@ import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { hostname, platform, release } from "node:os";
 import { budgets, validateBudget, parseArgs, schema, matrix, selected, groupReady, nativeGroup, registryDigest,
-  boundedRequestsVersion, deploymentQualificationVersion } from "./plan.mjs";
+  boundedRequestsVersion, deploymentQualificationVersion, connectionFloodResistance } from "./plan.mjs";
 import { artifacts, verifyArtifacts, verifyParity, verifyNativeLimits, digest, usesDelayUpstream, upstreamSourcePath, probeSourcePath, phaseInputs,
   savedProofVersion, committedInputs, savedFiles, snapshotDependencies, readyScript, buildNativeImage, proxyConfig } from "./evidence.mjs";
 import { assembleRecovery } from "./dependency-recovery-capture.mjs";
@@ -39,6 +39,7 @@ export async function run(args) {
   const summary = { schema, runId, registryDigest, options, budget, startedAt: new Date().toISOString(), complete: false,
     groupReady: false, savedProofVersion, nativeControlsVersion: 1, deploymentQualificationVersion, boundedRequestsVersion, lifecycleVersion: 4,
     cells: matrix(), failures: [], cleanupFailures: [], builds: {}, originalFolder: folder, host: { hostname: hostname(), platform: platform(), release: release() },
+    connectionFloodResistance,
     scope: "Bounded HTTP/1.1 resilience observations; the TLS edge uses the pinned nginx deployment; not a stress or performance comparison" };
   const save = () => { summary.nativeGroup = nativeGroup(summary.cells); json(join(folder, "summary.json"), summary); };
   async function command(binary, args, { timeout, file, cleanup = false, settleOnInterrupt = false, input, receipt } = {}) {

@@ -203,7 +203,9 @@ the original profile, source, cells, missing and unmeasured features, and eligib
 The profile is bound to the timing summary and worker receipt. The producer's source
 proof binds the shared bounded acquisition module, not the retired probe scripts.
 Archived v1 journals remain read-only evidence for their own profile and cannot
-qualify a v2 measurement.
+qualify a v2 measurement. Full replay of a v1 run requires its original measured
+checkout and dependencies: the verifier checks that the source files match the
+run. Reading the archived journal in a newer checkout does not requalify it.
 Negative/unsupported features are retained, not turned into success. This is not an
 independent source audit or proof that arbitrary native code behaves correctly.
 The exact completed initial page/JSON unhealthy-response prefix can independently

@@ -303,7 +303,9 @@ test("real offline replay distinguishes an undiscovered endpoint from a terminal
     for (const [id, life] of Object.entries(input.lifecycle)) put(id + "-lifecycle.json", life);
     const capture = assembleRecovery(input); put("capture.json", capture); put("manifest.json", artifacts(out)); writeSummary(capture, q, controls);
     assert.equal(capture.assessment.status, "recovered");
-    assert.deepEqual(verify(folder).dependencyRecovery, [{ key: cell.key, assessment: capture.assessment, terminalHealthy, terminalDisposition }]);
+    const verified = verify(folder);
+    assert.equal(verified.connectionFloodResistance, "Connection-flood resistance: not measured.");
+    assert.deepEqual(verified.dependencyRecovery, [{ key: cell.key, assessment: capture.assessment, terminalHealthy, terminalDisposition }]);
     const result = await inspectSaved(binding, folder);
     assert.equal(result.status, "blocked", "one synthetic cell cannot qualify the native run");
     assert.deepEqual(result.outcomes.find((o) => o.app === cell.app), { app: cell.app, outcome: expectedOutcome });

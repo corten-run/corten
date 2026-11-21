@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { schema, registryDigest, groupReady, nativeGroup, matrix, validateBudget, boundedRequestsVersion, deploymentQualificationVersion } from "./plan.mjs";
+import { schema, registryDigest, groupReady, nativeGroup, matrix, validateBudget, boundedRequestsVersion, deploymentQualificationVersion, connectionFloodResistance } from "./plan.mjs";
 import { verifyArtifacts, verifyParity, digest, savedFiles, savedProofVersion, verifyRunInputs, verifyOwnedReceipts, upstreamSourcePath } from "./evidence.mjs";
 import { assembleRecovery } from "./dependency-recovery-capture.mjs";
 import { assembleBounded, boundedProbeConfig } from "./request-capture.mjs";
@@ -233,7 +233,7 @@ export function verify(folder) {
   assert.equal(summary.groupReady, ready);
   const proof = verifySavedProof(folder, summary, tree);
   assert.deepEqual(savedFiles(folder), tree, "saved native bytes changed during replay");
-  return { schema, observed, groupReady: ready, notRun: summary.cells.filter((c) => c.status === "not-run").length, proof,
+  return { schema, observed, connectionFloodResistance, groupReady: ready, notRun: summary.cells.filter((c) => c.status === "not-run").length, proof,
     dependencyRecovery, boundedRequests, qualifications };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) console.log(JSON.stringify(verify(resolve(process.argv[2]))));
