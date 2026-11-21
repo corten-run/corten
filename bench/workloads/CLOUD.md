@@ -199,6 +199,54 @@ termination from a lost local connection. A pending result preserves the host;
 verify the terminal evidence, saved archive and confirmed deletion separately
 for each group before reporting the fleet as complete.
 
+**Collection after systemd forgets an exit.** For a closed supervised run, the
+acknowledged start, registered terminal monitor and native seal prove the run
+started and finished. An inactive, dead unit with no retained start time or
+exit type does not prove that by itself. The collector checks the expected unit
+and boot, no queued job, PID, populated service cgroup, running container or
+benchmark process, then downloads the existing exit archive without repacking.
+Only ordinary collection with positive systemd exit history may run `pack.sh`
+when the archive entry is definitely absent. Expired history and pinned r21
+recovery always require the original exit archive. Local native replay must
+agree with the monitor. The collector rehashes the archive, then checks the
+same inode and timestamps, idle host and unit in a fresh 60-second window.
+Account and ownership reads precede that final observation. Immediately before
+writing delete intent the collector also checks that the local archive is still
+the same unchanged file it hashed. A unit query's acknowledged exit is recorded
+even on cancellation; a nonzero exit stops collection, and a missing guardian
+acknowledgement retains uncertain custody.
+
+The controller persists delete intent before dispatch. Only positive proof
+that this very DELETE was never sent clears that intent for a separately
+approved collection; HTTP errors, timeouts after send, lost replies and
+crashes with an intent permit absence reconciliation only. There is no
+automatic retry. A live, never-started, unsupervised
+or invalid-monitor run cannot use this proof. Target failures remain results,
+not successful timings or a publishable baseline.
+
+**Pinned r21 only.** Use a separately reviewed, merged successor for one
+closed child of the original staged fleet at a time. Keep the original fleet
+in place. Keep a separate clean checkout at the measured revision
+`4225a2837e04795c11c1b45b3d6af72b7eb5ddc3` with its original root `npm ci`.
+The successor reads that revision's validator, dependency bytes and native
+inputs, not its own compiler. The successor allows 15 minutes per local replay.
+First independently verify the pre-existing exit archive's SHA-256.
+
+```sh
+node bench/workloads/cloud-production.mjs r21 --collect --state-dir ABSOLUTE_CHILD_ROOT --r21-measured-checkout ABSOLUTE_MEASURED_CHECKOUT --exit-archive-sha256 REVIEWED_ARCHIVE_DIGEST --print-approval
+```
+
+Review the preview against the exact group, host, unit, saved SSH host key,
+monitor registration, terminal campaign/seal, archive and staged intent. Only
+after independent authorization replace `--print-approval` with
+`--approve-reviewed-merged-ready REVIEWED_EXACT_HASH`. Approval is neither
+transferable across children nor reusable after state changes. An unadmitted
+child cannot be recovered. The first group's admission replay, remaining
+launches and fleet verification still use the **measured checkout**, whose
+replay deadline remains 60 seconds. Collection alone does not establish
+admission. A replay timeout or mismatch before delete intent retains the host;
+do not substitute a remote report, change the measured state or retry a DELETE.
+
 Failed worker results and fleet receipts retain only the existing allowlisted
 `providerDiagnostic` code and optional HTTP status or code-specific finite detail,
 plus an explicit `uncertain`

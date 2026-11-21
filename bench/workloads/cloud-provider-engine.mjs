@@ -10,7 +10,7 @@ import { debuglog } from "node:util";
 import { url as inspectorUrl } from "node:inspector";
 import { controlCheckpoint, controlEnvironment } from "./cloud-transport.mjs";
 import { providerCreateHost } from "./cloud-contract.mjs";
-import { providerDiagnostic, providerFailure } from "./cloud-options.mjs";
+import { providerDiagnostic, providerFailure, unsentDelete } from "./cloud-options.mjs";
 
 const origin = "https://api.digitalocean.com";
 const stopped = (uncertain = false, diagnostic) => Object.assign(new Error("provider control failed; preserve state/evidence/host"),
@@ -19,6 +19,7 @@ const positive = (value) => Number.isSafeInteger(value) && value > 0;
 const validContext = (value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value);
 // Private object identity, never a caller-supplied property or public diagnostic.
 const closedAccountRequests = new WeakMap(), settledAccountFailures = new WeakSet();
+const unsentDeletes = new WeakSet();
 export const isSettledAccountFailure = (error) => settledAccountFailures.has(error);
 const diagnosticOption = /^--(?:inspect(?:-brk|-wait)?|trace-tls|tls-keylog|heapsnapshot-signal|heap-prof|cpu-prof|report-on-signal|report-on-fatalerror|report-uncaught-exception|trace-events-enabled|trace-event-categories|experimental-network-inspection)$/;
 function nodeOptionArgs(text) {
@@ -66,7 +67,7 @@ function accountClock(clock) {
 
 function restRequest({ method, path, credential, body, timeout, accountDeadline = Infinity, now = Date.now, interrupted = () => false, deleteProofExpiresAtMs }, connect, resources) {
   return new Promise((resolve, reject) => {
-    let settled = false, informationSeen = false, req, timer, cancellation, failureDetail = "internal-refusal";
+    let settled = false, informationSeen = false, connectEntered = false, sendEntered = false, req, timer, cancellation, failureDetail = "internal-refusal";
     const account = method === "GET" && path === "/v2/account";
     const started = now(), expires = Math.min(started + timeout, accountDeadline);
     if (account && !(started < expires)) {
@@ -91,6 +92,8 @@ function restRequest({ method, path, credential, body, timeout, accountDeadline 
       const { detail, result, reset } = outcome;
       if (detail) {
         const error = stopped(true, account ? { code: "account-request", detail } : undefined);
+        if (deleteProofExpiresAtMs !== undefined && method === "DELETE" && !sendEntered && !record.responseSeen
+          && (!connectEntered || req instanceof ClientRequest && req.destroyed && !req.headersSent)) unsentDeletes.add(error);
         if (proof) closedAccountRequests.set(error, { at: lastTime, reset });
         reject(error);
       } else {
@@ -137,6 +140,7 @@ function restRequest({ method, path, credential, body, timeout, accountDeadline 
       };
       fresh();
       failureDetail = "connect";
+      connectEntered = true;
       req = connect(new URL(path, origin), { method, agent: false, rejectUnauthorized: true,
         headers: { authorization: `Bearer ${credential}`, accept: "application/json", ...(input === undefined ? {} : { "content-type": "application/json", "content-length": Buffer.byteLength(input) }) } }, (res) => {
         record.responseSeen = true; record.native &&= res instanceof IncomingMessage;
@@ -185,7 +189,7 @@ function restRequest({ method, path, credential, body, timeout, accountDeadline 
         try {
           fresh(); detail = "cancelled"; assert.ok(!interrupted());
           if (account && !inTime()) { finish("deadline"); return; }
-          detail = "send"; req.end(input);
+          detail = "send"; sendEntered = true; req.end(input);
         } catch { finish(detail); }
       };
       if (deleteProofExpiresAtMs === undefined) send();
@@ -261,6 +265,8 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     consume(args.at(-1), consumptionBudget);
     assert.ok(!interrupted(), "controller cancelled");
     const command = args.slice(0, -2);
+    const reportUnsent = command[2] === "delete" && allowFail && deleteProofExpiresAtMs !== undefined && !unsafe && !mutationPending;
+    let requestEntered = false;
     let code = "provider-command";
     let listTime = deadline - timeout;
     const readRemaining = () => {
@@ -278,10 +284,11 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         const current = now();
         assert.ok(phase === "delete" && current < deleteProofExpiresAtMs && deleteProofExpiresAtMs - current <= 60000, "current retirement proof expired");
       }
-      try { response = await request({ method, path, body, credential, timeout: remaining, interrupted,
+      try { requestEntered = true; response = await request({ method, path, body, credential, timeout: remaining, interrupted,
         ...(phase === "account" ? { accountDeadline: deadline, now } : {}),
         ...(deleteProofExpiresAtMs === undefined ? {} : { deleteProofExpiresAtMs }) }); }
       catch (error) {
+        if (reportUnsent && unsentDeletes.has(error)) throw error;
         const diagnostic = phase === "account" ? providerFailure(error) : undefined;
         const failure = stopped(true, diagnostic?.code === "account-request" ? diagnostic : undefined);
         if (phase === "account" && closedAccountRequests.has(error)) closedAccountRequests.set(failure, closedAccountRequests.get(error));
@@ -424,6 +431,10 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       }
       return { status: 0, stdout, stderr: "" };
     } catch (error) {
+      if (reportUnsent && mutationPending && (!requestEntered || unsentDeletes.has(error))) {
+        mutationPending = false;
+        return unsentDelete;
+      }
       const diagnostic = providerFailure(error) ?? { code };
       const current = now();
       if (closedAccountRequests.has(error)) {
@@ -435,7 +446,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       }
       if (error?.controlUncertain) unsafe = true;
       if (error?.controlUncertain) throw stopped(true, diagnostic);
-      if (allowFail && (error?.createSemanticFailure === true || error?.httpFailure
+      if (allowFail && !reportUnsent && (error?.createSemanticFailure === true || error?.httpFailure
         && (command[2] !== "get" || diagnostic.code === "get-http" && diagnostic.httpStatus === 404)))
         return { status: 1, stdout: "", stderr: "", providerDiagnostic: diagnostic, error: stopped(false, diagnostic) };
       throw stopped(false, diagnostic);

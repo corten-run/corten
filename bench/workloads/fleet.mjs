@@ -185,7 +185,7 @@ export function productionChild(args, { cancellation, WorkerClass = Worker, sour
 }
 
 function stagedIntent(fleet) {
-  const intent = JSON.parse(regular(join(fleet.root, "launch-intent.json"), 1024 * 1024));
+  const bytes = regular(join(fleet.root, "launch-intent.json"), 1024 * 1024), intent = JSON.parse(bytes);
   assert.deepEqual(Object.keys(intent).sort(), ["approvalSha256", "schema", "subject"]);
   assert.equal(intent.schema, "benchmark-group-fleet-staged-launch-intent/v1", "fleet-legacy-launch-cannot-admit");
   const s = intent.subject, first = fleet.manifest.jobs[0].group;
@@ -209,6 +209,32 @@ function stagedIntent(fleet) {
       assert.equal(job.approvalSha256, digest(JSON.stringify(job.subject))); assert.deepEqual(job.missing, []);
     }
   }
+  return digest(bytes);
+}
+
+// Bind a successor's single-child collection to the consumed launch, never
+// grant launch/admission authority or move a reservation to a different root.
+export function stagedChildIntent(stateRoot, saved) {
+  const fleet = readFleet(dirname(stateRoot), saved.round), first = fleet.manifest.jobs[0].group;
+  assert.equal(stateRoot, join(fleet.root, saved.group)); assert.deepEqual(fleet.manifest, saved.fleet);
+  const launch = stagedIntent(fleet);
+  if (saved.group === first) return { launch };
+  const bytes = regular(join(fleet.root, "remaining-intent.json"), 1024 * 1024), intent = JSON.parse(bytes), s = intent.subject;
+  assert.equal(intent.schema, "benchmark-group-fleet-remaining-intent/v1"); assert.equal(intent.approvalSha256, digest(JSON.stringify(s)));
+  assert.equal(s.schema, "benchmark-group-fleet-staged-approval/v1"); assert.equal(s.action, "admit-remaining");
+  assert.equal(s.stateRoot, fleet.root); assert.equal(fleetRoot(s.requestedRoot), fleet.root);
+  assert.deepEqual(s.fleet, fleet.manifest); assert.equal(s.manifestSha256, fleet.manifestSha256);
+  assert.equal(s.controllerCommit, saved.commit); assert.equal(s.round, saved.round);
+  assert.equal(s.records["launch-intent.json"], launch);
+  assert.deepEqual(s.admission, { mode: "remaining-once", firstGroup: first, gate: "collected-verified-deleted", nativeReadiness: false });
+  assert.equal(s.firstGroup.evidenceMode, "native-replay"); assert.equal(s.firstGroup.row.outcome, "verified");
+  assert.equal(s.firstGroup.row.group, first);
+  assert.deepEqual(s.jobs.map(j => j.group), fleet.manifest.jobs.map(j => j.group));
+  const job = s.jobs.find(j => j.group === saved.group);
+  assert.equal(job.outcome, "planned"); assert.deepEqual(job.missing, []);
+  assert.deepEqual(job.options, childOptions(fleet, saved.group, "detach")); assert.deepEqual(job.options, job.subject.options);
+  assert.equal(job.subject.controllerCommit, saved.commit); assert.equal(job.approvalSha256, digest(JSON.stringify(job.subject)));
+  return { launch, remaining: digest(bytes) };
 }
 
 // verify and compiler are code-only synthetic TEST seams, never selected by argv/JSON.

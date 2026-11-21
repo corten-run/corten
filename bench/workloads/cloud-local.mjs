@@ -80,9 +80,20 @@ export function regular(path, limit = smallLimit) {
 }
 export function fileHash(path, limit = archiveLimit) {
   bounded(limit, archiveLimit);
-  const file = opened(path, limit), hash = createHash("sha256");
-  try { chunks(file, (bytes) => hash.update(bytes)); return hash.digest("hex"); }
+  const file = opened(path, limit);
+  try { return openedHash(file); }
   finally { closeSync(file.fd); }
+}
+function openedHash(file) {
+  const hash = createHash("sha256");
+  chunks(file, (bytes) => hash.update(bytes)); return hash.digest("hex");
+}
+export async function withVerifiedArchive(path, expected, action) {
+  const file = opened(path, archiveLimit);
+  try {
+    assert.equal(openedHash(file), expected, "archive changed; preserve host");
+    return await action(file.unchanged);
+  } finally { closeSync(file.fd); }
 }
 export function syncDirectory(path) {
   if (process.platform === "win32") return;

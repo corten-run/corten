@@ -19,6 +19,10 @@ export const controlEnvironment = (binary) => {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   return { ...env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" };
 };
+export function pinnedHostOptions(path) {
+  return ["-o", "StrictHostKeyChecking=yes", "-o", "GlobalKnownHostsFile=none", "-o", "UpdateHostKeys=no",
+    "-o", `UserKnownHostsFile=${process.platform === "win32" ? path.replaceAll("\\", "/") : path}`];
+}
 export function shellTransport({ repo, spawn = spawnSync, streamSpawn, sealExec = spawn === spawnSync ? execFile : undefined } = {}) {
   assert.ok(isAbsolute(repo));
   // Capture inherited credentials/config locations once, never re-read mutable

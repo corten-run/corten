@@ -244,7 +244,7 @@ export function ownedDroplet(droplets, s) {
     "owned host public IP differs");
   return d;
 }
-export function terminalUnit(output, s) {
+export function unitProperties(output, s) {
   validateState(s, s.round);
   const fields = {};
   for (const line of output.trimEnd().split(/\r?\n/)) {
@@ -256,6 +256,10 @@ export function terminalUnit(output, s) {
   assert.equal(fields.LoadState, "loaded", "unit missing; preserve host");
   assert.equal(fields.FragmentPath, `/etc/systemd/system/${s.unit}`);
   assert.equal(fields.Restart, "no", "unit restart policy differs");
+  return fields;
+}
+export function terminalUnit(output, s) {
+  const fields = unitProperties(output, s);
   if (!["inactive", "failed"].includes(fields.ActiveState)) return false;
   assert.equal(fields.MainPID, "0", "unit still has a process");
   full(fields.ExecMainCode, /[12]/, "terminal exit type");

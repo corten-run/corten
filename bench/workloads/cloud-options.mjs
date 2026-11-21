@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
 import { roundName, savedLoadLayout, selection, terminalUnit, validateState } from "./cloud-contract.mjs";
 
+// A disposition of one fenced DELETE, not a diagnostic or permission to retry.
+export const unsentDelete = Object.freeze({ status: 1, stdout: "", stderr: "", deleteNotDispatched: true });
 const providerCodes = ["provider-command", "provider-credential", "provider-output",
   "account-request", "account-http", "get-request", "get-http", "get-response", "list-request", "list-http", "list-response",
   "list-response-shape", "list-response-total", "list-response-id", "list-response-duplicate",
@@ -52,13 +54,18 @@ export function full(value, pattern, label) {
 }
 export function validateOptions(o) {
   assert.ok(o && typeof o === "object" && !Array.isArray(o));
-  const allowed = ["round", "stateDir", "detach", "collect", "unusedBootstrapKnownHosts", "cancelMixedWait", "retireFailedNative", "commit", "sshKey", "accountId", "context", "deliverAudit", "auditGroup", "campaign", "approveSubject", "group", "fleet"];
+  const allowed = ["round", "stateDir", "detach", "collect", "r21MeasuredCheckout", "exitArchiveSha256", "unusedBootstrapKnownHosts", "cancelMixedWait", "retireFailedNative", "commit", "sshKey", "accountId", "context", "deliverAudit", "auditGroup", "campaign", "approveSubject", "group", "fleet"];
   assert.ok(Object.keys(o).every((k) => allowed.includes(k)), "unknown option/override");
   roundName(o.round); assert.ok(Number(o.round.slice(1)) >= 17, "official campaigns start at r17");
   assert.ok(typeof o.stateDir === "string" && isAbsolute(o.stateDir) && !/[\r\n\0]/.test(o.stateDir)
     && !/^[\\/]{2}/.test(o.stateDir), "absolute local state root required");
   assert.equal([o.detach, o.collect, o.cancelMixedWait, o.retireFailedNative, o.deliverAudit !== undefined].filter(Boolean).length, 1, "choose exactly one controller action");
   for (const flag of ["detach", "collect", "cancelMixedWait", "retireFailedNative"]) if (o[flag] !== undefined) assert.equal(o[flag], true);
+  if (o.r21MeasuredCheckout !== undefined || o.exitArchiveSha256 !== undefined) {
+    full(o.exitArchiveSha256, /[a-f0-9]{64}/, "independently verified exit archive digest required");
+    assert.ok(o.collect && o.round === "r21" && o.unusedBootstrapKnownHosts === undefined);
+    assert.ok(isAbsolute(o.r21MeasuredCheckout) && !/^[\\/]{2}|["$%\r\n\0]/.test(o.r21MeasuredCheckout), "absolute local measured checkout required");
+  }
   if (o.unusedBootstrapKnownHosts !== undefined) {
     assert.equal(o.collect, true, "unused bootstrap proof is only for collection");
     assert.ok(typeof o.unusedBootstrapKnownHosts === "string" && isAbsolute(o.unusedBootstrapKnownHosts)
@@ -85,7 +92,8 @@ export function validateOptions(o) {
 }
 export function parseDropletArgs(args) {
   const o = { round: args[0] }, seen = new Set();
-  const values = { "--state-dir": "stateDir", "--commit": "commit", "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--deliver-audit": "deliverAudit", "--audit-group": "auditGroup", "--campaign": "campaign", "--approve-subject": "approveSubject", "--group": "group", "--fleet": "fleet", "--unused-bootstrap-known-hosts": "unusedBootstrapKnownHosts" };
+  const values = { "--state-dir": "stateDir", "--commit": "commit", "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--deliver-audit": "deliverAudit", "--audit-group": "auditGroup", "--campaign": "campaign", "--approve-subject": "approveSubject", "--group": "group", "--fleet": "fleet", "--unused-bootstrap-known-hosts": "unusedBootstrapKnownHosts",
+    "--r21-measured-checkout": "r21MeasuredCheckout", "--exit-archive-sha256": "exitArchiveSha256" };
   for (let i = 1; i < args.length; i++) {
     const flag = args[i]; assert.ok(!seen.has(flag), "duplicate option"); seen.add(flag);
     if (flag === "--retire-failed-native") o.retireFailedNative = true;

@@ -538,6 +538,32 @@ test("production entry forwards source-bound stream registration and settles asy
   assert.ok(existsSync(join(p.h.local, "monitor-invalid.json"))); assert.equal(p.h.deletes, 0);
 });
 
+for (const acknowledged of [true, false]) test("cancelled unit query records only an acknowledged exit: " + acknowledged, async t => {
+  const flags = { active: true }, p = productionHarness(t, flags);
+  await p.h.launch().launch(); flags.active = false;
+  const closed = JSON.parse(readFileSync(join(p.h.local, "monitor-local-closed.json")));
+  t.mock.timers.enable({ apis: ["Date"], now: closed.recoverAfterMs + 1 });
+  const spawn = p.deps.spawn;
+  p.deps.spawn = (binary, argv, options) => {
+    const result = spawn(binary, argv, options);
+    if (binary === "ssh" && options.input?.includes("--property=ControlPID")) {
+      assert.equal(result.status, 0); flags.cancelled = true;
+      if (!acknowledged) return { ...result, stderr: "" };
+    }
+    return result;
+  };
+  await assert.rejects(productionMain(await p.approve("--collect"), p.deps),
+    e => acknowledged ? /controller cancelled/.test(e.message) : e.controlTreeUncertain === true);
+  const row = p.h.saved().control.ledger.at(-1);
+  assert.ok(flags.cancelled); assert.equal(p.h.deletes, 0);
+  assert.equal(row.localTerminal, acknowledged); assert.equal(row.code, acknowledged ? 0 : undefined);
+  assert.equal(existsSync(join(p.h.local, "operation.lock")), !acknowledged);
+  if (acknowledged) {
+    p.deps.spawn = spawn; flags.cancelled = false;
+    assert.equal(await productionMain(await p.approve("--collect"), p.deps), 1); assert.equal(p.h.deletes, 1);
+  }
+});
+
 for (const phase of ["pending", "live"]) test("wire registration survives launch cancellation while " + phase, async (t) => {
   const p = productionHarness(t, { active: true }), local = p.h.local, registration = join(local, "monitor-registration.json");
   let atCancel;
@@ -884,13 +910,18 @@ test("retargeting an ordinary alias invalidates the approved physical root befor
 });
 
 test("production grammar permits authorization only, never arbitrary settings/adapters", () => {
-  assert.equal(controllerPaths.length, 32);
+  assert.equal(controllerPaths.length, 33);
+  assert.ok(controllerPaths.includes("bench/workloads/cloud-sealed-collection.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-cancellation.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-retirement.mjs"));
   assert.ok(controllerPaths.includes("bench/workloads/cloud-validation-snapshot.mjs"));
   for (const path of ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs", "cloud-control-stream.mjs", "isolated/control-stream-source.mjs"])
     assert.ok(controllerPaths.includes(`bench/workloads/${path}`));
   const args = ["r21", "--collect", "--state-dir", resolve("outside")];
+  const pin = ["--r21-measured-checkout", resolve("measured")], sha = ["--exit-archive-sha256", "a".repeat(64)];
+  for (const suffix of [pin, sha, [...pin, ...sha, "--unused-bootstrap-known-hosts", resolve("verified")]])
+    assert.throws(() => parseProductionArgs([...args, ...suffix]));
+  assert.equal(parseProductionArgs([...args, ...pin, ...sha]).options.exitArchiveSha256, sha[1]);
   for (const suffix of [["--adapter", "evil"], ["--duration", "1"], ["--print-approval", "--print-approval"], ["--approve-reviewed-merged-ready", "not-a-hash"]])
     assert.throws(() => parseProductionArgs([...args, ...suffix]));
 });
