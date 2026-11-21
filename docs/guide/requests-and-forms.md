@@ -1122,7 +1122,11 @@ inputs are checked as submit-key fields, not foreign elements named `input`. A s
 form already on the page, rather than a template, empties the copy's key field
 (`field.value = ""`) so the runtime gives it one. A field with no key draws nothing at random, so
 a page whose only key fields are a template's keeps its `ETag`, which `SubmitKey::field` takes
-away.
+away. A page that draws a key with `SubmitKey::field` is also never shared, whatever its route
+says: a cache that gave one visitor's page to the next would have the second visitor's submit
+taken for a repeat of the first. A `Public` page with such a form goes out `private, no-cache`,
+so the browser asks again before reusing it, the app does not keep it, and `corten dev` logs it
+([caching](app.md#caching)).
 
 An MCP tool's input takes the same field (`submit: SubmitKey` in the struct `Tools::tool`
 reads): its `inputSchema` shows a UUID string described as an idempotency key to send again on

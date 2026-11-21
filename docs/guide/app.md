@@ -1394,7 +1394,7 @@ but an unstaged one):
 | a full document, no `Cookie` or `Authorization`, nothing read a caller | as asked, plus `Vary: cookie` |
 | a request with a `Cookie` or `Authorization`, or one whose handler or middleware read a caller | `private, no-cache` |
 | a client navigation, a form answer or a data client's JSON from a page route | `private`, same lifetime: only the document is shared |
-| a response that sets a cookie, or HTML with the request's nonce | `private, no-cache`, logged under `corten dev` |
+| a response that sets a cookie, HTML with the request's nonce, or a page that draws a form's new submit key (`SubmitKey::field`) | `private, no-cache`, logged under `corten dev` |
 
 A `Public` answer cannot set a cookie the way a private one does: the page inside
 `Public<HtmlResult>` is made for everyone (`HtmlResponse<ForAll>`), and `with_cookie` on it does
@@ -1443,8 +1443,9 @@ shared cache keep the rest, or `no-store=1`) or inside a quoted value does not c
 ignore the `no-store`), which is left as written unless the answer is personal. A `no-store`
 goes out where every reader sees it: several lines are joined into one, and beside a quoted value
 or a byte that is not text it goes out alone (its other directives dropped, so no reader can find
-anything else). A personal answer (it sets a cookie, read a caller, has the CSP nonce, or is a
-`Cache` answer to a request with credentials) whose header does not count goes out
+anything else). A personal answer (it sets a cookie, read a caller, has the CSP nonce, draws a
+form's new submit key, or is a `Cache` answer to a request with credentials) whose header does
+not count goes out
 `private, no-cache`, or `no-store` if any reader could find one in its header.
 
 An answer at a URL that names its content (a hash of its bytes, as an uploaded picture's can be)
