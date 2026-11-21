@@ -84,11 +84,13 @@ version old enough meets a requirement. For an urgent fix, set
 diff. Cargo 1.89 ignores the setting; Cargo 1.99.1 ignores it with a warning.
 
 A workspace `Cargo.lock` refresh also moves the standalone Corten benchmark locks
-(`bench/catalog/corten`, `bench/marketplace/corten`, `bench/live/apps/corten` and `bench/nodelay/app`)
-to the workspace's versions of the crates they share, with
-`cargo update --manifest-path <app>/Cargo.toml -p <crate> --precise <version>` and
-`cargo check --locked` for each, so a benchmark times the tree CI tests. A crate a benchmark
-manifest pins exactly (`=`) keeps its pin; the HTTP/2 probe's lock stays with its recorded results.
+(`bench/catalog/corten`, `bench/marketplace/corten`, `bench/live/apps/corten` and `bench/nodelay/app`),
+so each uses the workspace's locked version of a registry crate their trees share where the app's
+own requirements allow it:
+`cargo update --manifest-path <app>/Cargo.toml -p <crate>@<locked version> --precise <version>`,
+then `cargo check --locked --manifest-path <app>/Cargo.toml`. A crate a benchmark manifest pins
+exactly (`=`) keeps its pin, and any other divergence is named in the pull request rather than
+forced. The HTTP/2 probe's lock stays with its recorded results.
 
 Fix Cargo's unused dependency warnings from the stable, all-feature, all-target check below.
 Cargo 1.100's `unused_dependencies` lint does not cover dev-dependencies. These Cargo lints
