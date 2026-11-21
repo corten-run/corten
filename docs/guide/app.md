@@ -985,6 +985,9 @@ before it (a route that says `unstaged` goes through none;
    has answered. Either way the page is filled with their values before its answer goes back out
    through 5: a middleware sees the filled page, and the time it measures around `next`
    includes the reads' wait ([design Choice 20](../design.md#choice-layout-reads)).
+   A `Public` page the app has kept is given here in the handler's place
+   ([Caching](#the-pages-the-app-keeps)): stages 1 to 5 ran for the request as for any other,
+   and 7 and 8 follow.
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
    page for a browser. For a failure the request is at fault for (an unknown URL, a wrong method,
    a method no route has (the router's 501, not one a handler or a middleware answers), a refusal other than a 429, a handler's `Refused` included, a request that does not parse),
@@ -1483,24 +1486,115 @@ success or a redirect; an error is the error page, without them.
 A full document never carries `corten-page`, so if a cache hands one to a client navigation by
 mistake, the runtime loads the URL as a whole page instead of swapping it in.
 
-There is no page cache on the server. Rendering is the cheap part of a page: the measured
-item page renders in about 15 µs and costs several times that to compress (see the
-`render_cost` test), and a server cache's key would have to cover the caller, the locale, the
-mode and the deploy, where a mistake shows one user's page to another. Cache the data a page
-reads in the app, where it knows when the data changes, and let a CDN keep public pages.
+### The pages the app keeps
+
+The app is the first shared cache of its own `Public` pages. The whole document a `Public`
+page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
+such request in the handler's place until the answer's shared lifetime ends: `s-maxage` where
+the answer has `.shared(..)`, else `max_age`. So a `Public` page's handler does not run for
+every request, and what it read may be that old when a visitor sees it, as it already may be
+behind a CDN. Count views in a middleware rather than in the handler, and give a page whose data
+must show at once a short lifetime, or leave it private. An answer given again carries `Age`,
+counted from when the request it was made for reached the handler, so a browser and a CDN count
+the lifetime from when the page was made.
+
+A kept page stands where the handler does, after [your own middleware](#your-own-middleware). Every
+stage runs for every request: a middleware that refuses, counts or stamps a header still does, and
+sees the `200` with the whole body; the security headers and `Cache-Control` are written as for any
+answer; and a request that names the page's tag gets its `304`. What a kept page saves is the
+handler with what it reads, the render, the tag's hash and the compression, since the hash and each
+coding's bytes are made once and stay with the page. On the catalog benchmark's page, marked
+`Public` for a minute, a kept page took 14.5% fewer CPU cycles a request where nothing is compressed
+and 46.3% fewer where each answer is, at the medians of 12 paired rounds
+([design Choice 70](../design.md#choice-kept-pages) has the rounds and what they did not resolve).
+
+What makes it safe is the rule above, checked when the app compiles: a `Public` handler takes
+only inputs that cannot tell who is asking. A page is kept when each of them is one of Corten's
+own for a page (`Params`, `Form`, `State`, `Req`, `Signal`, `Method`, `Uri`), since all those
+read of a page's request is in the key below. An extractor of the app's own that is `Anonymous`
+may read another header (a device, a country) and still not tell who asks, so a page whose
+handler takes one is made for every request, and an extractor has no way to say otherwise. The request must show nothing
+else a page could differ by, and the answer nothing made for one request:
+
+| | Kept and given again | The handler answers |
+|---|---|---|
+| the handler | takes only Corten's own inputs for a page | takes an extractor of the app's own |
+| the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
+| who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
+| the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound |
+| what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key, a `Vary` of the app's own |
+
+A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
+not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
+with `req.t()` without it) it is also kept for the `Accept-Language` it was asked with, as the
+header was sent, so `fr` and `fr-FR` are two copies of one page; a page whose locale is in its
+URL ([Views](views.md#a-locale-in-the-url)) is one. A URL has at most eight copies, and a new
+one takes the place of one not read since it was kept or since room was last made (the oldest
+of those, else the oldest of all), so a way of asking seen once does not push out one seen
+often.
+
+A write (any method but `GET`, `HEAD`, `OPTIONS` and `TRACE`) drops every page kept at its
+path, whatever the query (a named post is `?do=save` at its page's path) and however the path
+is escaped, whatever it is answered: a handler or a middleware that refused it (a `409`, a
+`422`), failed, passed its deadline or lost its client may have saved first, and a status does
+not say, so a `405` for a method the path has no handler for counts too. Work that outlives its
+request (`signal.finish`) drops the page again when it ends. So any client can have a kept page
+made again by sending a write to its path, and one such request drops every copy kept there, for
+every query, host and language. Each is made again when it is next asked for, which costs what
+the page cost before the app kept pages and the copy into the store. Only a write that does not
+reach the app's middleware is not counted: one another site sent, one for a host the app does
+not answer, or one a layer in front (`App::layer`) answered itself. A write
+that went through also drops the page at the place on the site its answer
+names (`Location` or `Content-Location`, as a path from the root or a whole URL with the
+request's `Host`;
+[RFC 9111 section 4.4](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.4)), and a page
+whose handler was reading while a write went through is sent and not kept. So the process that
+answered a form posted to its own page, or one that redirects to the list, shows what was saved
+on the next load. A write that fails before it names the list (it passes its deadline, or its
+client leaves) drops its own path alone.
+
+A write is counted when it is answered, so what it saves must be there for a reader by then, or
+be saved under `signal.finish`. One that lands later (a task the handler started and did not
+wait for, a database whose readers lag its writer) can leave the page as it was until its
+lifetime ends.
+
+Nothing else is meant to drop a page before its lifetime ends (a write to another path does
+once in 65,536 times, where two paths share a count). A write to another path does not drop the
+list, and neither does a change made outside a request to the app (a task, a script, another
+instance): the page shows it when its lifetime ends, which is what the lifetime says. Purging a
+CDN in front does not purge the app, which gives the CDN the kept page again with its `Age`.
+A request's own `Cache-Control: no-cache` (a hard reload) gets the kept page too: how long a
+page stands is the app's to say. Give a page whose changes must show at once a short lifetime.
+
+`App::kept_answers(bytes)` sets how much is kept: 32 MiB unless set, and `0` keeps none. What is
+counted is each page's key, headers and body and each compressed form made of it, with an
+allowance for what holds them. Past the bound, a page not read since room was last made goes
+first. Nothing is kept under `corten dev`,
+so a change shows on the next load. An app's tests keep pages as a deploy does (`App::test`,
+`App::router`): a test that changes what a `Public` page shows other than by a write through the
+app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can
+show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page
+only in the instance that answered it, and a restart starts empty.
+
+`Public` text, JSON and `Media` are not kept, and neither is anything that is not `Public`: a
+page for one visitor runs its handler for every request, because a key that had to cover the
+caller is where a mistake shows one user's page to another. Cache the data such a page reads in
+the app, where it knows when the data changes.
 
 A page route's answer to a `GET` or `HEAD` (the page, a navigation's swap, a patch read again, a
 data client's JSON, a `Media` file) carries a weak `ETag` made from the body it rendered, its type
 and its `corten-*` headers, and a request whose `If-None-Match` names it is answered `304 Not
-Modified`: the answer is still rendered, but not compressed or sent. The browser keeps a `private,
+Modified`: the answer is still rendered (unless it is a page the app kept), but not compressed
+or sent. The browser keeps a `private,
 no-cache` page and asks before reusing it, so this is what lets it reuse its copy: on a page loaded
 again by a typed URL or a link without the runtime (every browser), and on a reload and the
 runtime's navigations and prefetches (Chromium and Firefox; WebKit does not ask on those). Chromium
 keeps one copy per URL, so after the runtime fetched a page's swap a reload names the swap's tag and
 is sent the document whole, and the other way round. A `304` is the answer as the client has it,
-whoever is asking, since the tag is the hash of what this request rendered; it still carries the
-answer's headers and cookies. The runtime's headers count because a cache keeps a stored header the
-`304` leaves out: a copy that came with a notice must not stand in for an answer without one. The
+whoever is asking, since the tag is the hash of the answer this request would be sent; it still
+carries the answer's headers and cookies. The runtime's headers count because a cache keeps a
+stored header the `304` leaves out: a copy that came with a notice must not stand in for an
+answer without one. The
 tag costs about 3 instructions a byte of a page (2.5 of a file), and a `304` saves the compression
 and the body. A `GET` that does not explicitly accept a non-identity coding and sends no
 `If-None-Match` (a benchmark, `curl`) is not sent a tag: the hash would cost about a third of the

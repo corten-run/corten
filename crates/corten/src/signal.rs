@@ -29,7 +29,7 @@ use std::{
     convert::Infallible,
     pin::{pin, Pin},
     sync::{
-        atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, AtomicUsize, Ordering},
         Arc,
     },
     task::{Context, Poll},
@@ -114,6 +114,12 @@ struct Inner {
     callers: AtomicU64,
     /// The app's error page is answering it.
     error_page: AtomicBool,
+    /// A message was read in the language `Accept-Language` asks for where no answer says it
+    /// varies on the header: an app with no [`crate::App::messages`].
+    asked_language: AtomicBool,
+    /// For a request that may change what its path shows, in an app that keeps pages: which of
+    /// the store's counts of writes is its path's, plus one (`crate::kept`).
+    write: AtomicUsize,
     /// Its answer is `Public`, the same for everyone: written as for a visitor whose zone is not
     /// known, its live part's fragments too.
     #[cfg(feature = "zones")]
@@ -415,6 +421,8 @@ impl Signal {
         let handler = std::sync::Arc::downgrade(&awaiting);
         let task = tokio::spawn(async move {
             let _counted = counted;
+            // However the work ends, what it wrote is written by then.
+            let _wrote = Wrote(request.clone());
             // Passes on the request's abort, or shutdown's, then waits for `run` to end.
             let forward = async {
                 let reason = match &shutdown {
@@ -576,6 +584,31 @@ impl Signal {
         self.0.error_page.load(Ordering::Relaxed)
     }
 
+    /// A message was read in the language the request's `Accept-Language` asks for, in an app
+    /// whose answers do not say they vary on it.
+    pub(crate) fn ask_language(&self) {
+        self.0.asked_language.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn asked_language(&self) -> bool {
+        self.0.asked_language.load(Ordering::Relaxed)
+    }
+
+    /// The request may change what its path shows: `count` is where the pages the app keeps
+    /// count its path's writes.
+    pub(crate) fn writes(&self, count: usize) {
+        self.0.write.store(count + 1, Ordering::Relaxed);
+    }
+
+    /// Work that outlived the request's handler has ended ([`Signal::finish`]): what it wrote
+    /// after the request was answered or dropped counts as a write to the request's path too.
+    fn wrote(&self) {
+        let Some(count) = self.0.write.load(Ordering::Relaxed).checked_sub(1) else { return };
+        if let Some(kept) = self.shared().and_then(|shared| shared.kept.as_ref()) {
+            kept.count(count);
+        }
+    }
+
     /// True when something read who is asking.
     pub(crate) fn is_personal(&self) -> bool {
         self.0.personal.load(Ordering::Relaxed)
@@ -613,6 +646,15 @@ impl<S: Send + Sync> FromRequestParts<S> for Signal {
 /// Dropped before the body ended (the handler's future or the body was dropped: the client went
 /// away), it aborts with [`Abort::Disconnected`].
 pub(crate) struct Watch(pub(crate) Signal);
+
+/// Held by a request's [`Signal::finish`] work until it ends, however it ends.
+struct Wrote(Signal);
+
+impl Drop for Wrote {
+    fn drop(&mut self) {
+        self.0.wrote();
+    }
+}
 
 impl Drop for Watch {
     fn drop(&mut self) {

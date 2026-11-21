@@ -38,6 +38,11 @@
 //! [`crate::security::Nonce`]), and an answer to a request whose handler or middleware read a
 //! [`crate::Caller`]. They get `private, no-cache`, and `corten dev` logs the first two.
 //!
+//! The app is the first shared cache of its own `Public` pages: the whole document one made for a
+//! request without credentials is kept for its shared lifetime and given again in the handler's
+//! place ([`crate::App::kept_answers`], `docs/design.md#choice-kept-pages`), and goes out through
+//! the same checks as the handler's own answer.
+//!
 //! A `Public` handler cannot read a cookie or a header through an extractor of the app's own unless
 //! the app marks it [`crate::answer::Anonymous`]. A `Cache-Control` written by hand is the app's
 //! own choice apart from the rules above. A cache in front must key on `Vary` (`corten`, `accept`,
@@ -129,6 +134,15 @@ impl Cache {
         Cache { kind: Kind::Immutable }
     }
 
+    /// How long a shared cache may keep it, in seconds: `s-maxage` where it has one, else
+    /// `max-age` (RFC 9111 section 4.2.1). 0 for one nothing keeps, or that its URL names.
+    fn lifetime(self) -> u64 {
+        match self.kind {
+            Kind::Public { max_age, shared, .. } => shared.unwrap_or(max_age),
+            Kind::NoStore | Kind::Immutable => 0,
+        }
+    }
+
     fn header(self) -> HeaderValue {
         let (max_age, shared, stale, if_error) = match self.kind {
             Kind::Public { max_age, shared, stale, if_error } => (max_age, shared, stale, if_error),
@@ -158,7 +172,7 @@ impl Cache {
     /// Sets the response's `Cache-Control` to this, as [`settle`] reads it.
     pub(crate) fn apply(self, res: &mut Response) {
         res.headers_mut().insert(header::CACHE_CONTROL, self.header());
-        res.extensions_mut().insert(Typed { named: self.kind == Kind::Immutable });
+        res.extensions_mut().insert(Typed { named: self.kind == Kind::Immutable, lifetime: self.lifetime() });
     }
 }
 
@@ -167,7 +181,7 @@ impl IntoResponseParts for Cache {
 
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
         res.headers_mut().insert(header::CACHE_CONTROL, self.header());
-        res.extensions_mut().insert(Typed { named: false });
+        res.extensions_mut().insert(Typed { named: false, lifetime: self.lifetime() });
         Ok(res)
     }
 }
@@ -175,9 +189,25 @@ impl IntoResponseParts for Cache {
 /// Marks a `Cache-Control` that came from [`Cache`], which [`settle`] checks against the request.
 /// One extension, not two, since each costs a lookup.
 #[derive(Clone, Copy)]
-struct Typed {
+pub(crate) struct Typed {
     /// A [`Cache::immutable`] answer: its URL names it, so the request's cookies do not change it.
     named: bool,
+    /// [`Cache::lifetime`], for the app's own keeping of the answer ([`crate::kept`]).
+    lifetime: u64,
+}
+
+impl Typed {
+    /// `res`'s mark and its lifetime in seconds, when it is an answer a shared cache may keep for
+    /// one: what the app itself keeps ([`crate::kept`]).
+    pub(crate) fn shared(res: &Response) -> Option<(Typed, u64)> {
+        let typed = *res.extensions().get::<Typed>()?;
+        (!typed.named && typed.lifetime > 0).then_some((typed, typed.lifetime))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        Typed { named: false, lifetime: 60 }
+    }
 }
 
 /// The default for what the app renders.
@@ -382,7 +412,8 @@ pub(crate) struct Unrepeatable;
 
 /// A page's `200` to a `GET` or `HEAD` with a weak `ETag` from its body and its `corten-*`
 /// headers, or `304 Not Modified` in its place when the request's `If-None-Match` (`has`, each
-/// line) names that tag. The tag is made from what this request rendered, so a `304` says the
+/// line) names that tag. The tag is made from the answer this request would be sent (rendered
+/// for it, or the kept page given in its place, `crate::kept`), so a `304` says the
 /// client's copy is what it would get now, whoever is asking. The runtime's headers count because
 /// a cache keeps a stored header the `304` does not send (RFC 9111 4.3.4): a copy that came with a
 /// notice or a place to go must not be reused for an answer without one. Weak, since the body is
@@ -414,7 +445,8 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
     let Ok(bytes) = crate::body::to_bytes(body, usize::MAX).await else {
         return Response::from_parts(parts, Body::empty());
     };
-    let tag = weak_tag(&bytes, &parts.headers);
+    // A kept answer's body is read once, for its first tag.
+    let tag = tagged(crate::kept::Kept::hashed(&parts.extensions, &bytes, &*TAG_KEY), &parts.headers);
     if has.iter().any(|line| names(line.as_bytes(), &tag[2..])) {
         parts.status = StatusCode::NOT_MODIFIED;
         // What a cache updates its copy with (RFC 9110 15.4.5): not the body's type or length, and
@@ -458,12 +490,16 @@ impl http_body::Body for Unsized {
 
 /// `W/"..."`: 64 bits of the hash of the body (with its length), its `Content-Type` (a `304` leaves the stored one)
 /// and the `corten-*` headers (each name and value, with their lengths) under [`TAG_KEY`], in hex.
+#[cfg(test)]
 fn weak_tag(body: &[u8], headers: &HeaderMap) -> [u8; 20] {
-    use std::hash::{BuildHasher, Hasher};
-    let mut hasher = TAG_KEY.build_hasher();
-    // Its length first, so no body and headers read as another body and fewer headers.
-    hasher.write_usize(body.len());
-    hasher.write(body);
+    let body = bytes::Bytes::copy_from_slice(body);
+    tagged(crate::kept::Kept::hashed(&http::Extensions::new(), &body, &*TAG_KEY), headers)
+}
+
+/// The tag from `hasher`, which has read the body with its length
+/// ([`crate::kept::Kept::hashed`]), and the headers that count.
+fn tagged(mut hasher: std::hash::DefaultHasher, headers: &HeaderMap) -> [u8; 20] {
+    use std::hash::Hasher;
     for (name, value) in headers {
         if name == header::CONTENT_TYPE || name.as_str().starts_with("corten-") {
             hasher.write_usize(name.as_str().len());
@@ -647,7 +683,7 @@ mod tests {
             res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
         }
         if typed {
-            res.extensions_mut().insert(Typed { named: false });
+            res.extensions_mut().insert(Typed { named: false, lifetime: 60 });
         }
         if cookie {
             res.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_static("a=b"));

@@ -1896,6 +1896,19 @@ mod layout_reads {
         assert_eq!(count.started.load(Ordering::SeqCst), 0);
     }
 
+    /// A `Public` page in an app with layout reads is kept as it was filled: no one's values, and
+    /// the next request gets it without a read started.
+    #[tokio::test]
+    async fn a_public_page_is_kept_filled_in_an_app_with_layout_reads() {
+        let count = CartCount::default();
+        let router = shop(count.clone(), Duration::ZERO);
+        let (_, first, body) = call_with(router.clone(), "GET", "/public", None, None).await;
+        let (_, again, same) = call_with(router, "GET", "/public", None, None).await;
+        assert!(!first.contains_key(http::header::AGE) && again.contains_key(http::header::AGE), "{again:?}");
+        assert!(same == body && body.contains("<header>Cart </header>") && !body.contains("corten-later"), "{same}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
     #[tokio::test]
     async fn the_page_is_filled_before_the_app_s_middleware_sees_it() {
         let routes = Table::new().route(
