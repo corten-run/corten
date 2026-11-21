@@ -1915,8 +1915,8 @@ const ENTITIES: [&str; 5] = ["&amp;", "&lt;", "&gt;", "&quot;", "&#39;"];
 /// Appends `text` to `out`, escaped for HTML text and double-quoted attribute values.
 #[inline]
 pub fn escape_into(text: &str, out: &mut String) {
-    // Most text has nothing to escape; a short string is one test (`next_escaped` would check
-    // anything under eight bytes one byte at a time). The loop is a function of its own, so text
+    // Most text has nothing to escape; a short string is one test or two (`next_escaped` would
+    // check anything under eight bytes one byte at a time). The loop is a function of its own, so text
     // with nothing to escape does not save and restore the registers the loop needs.
     if crate::ascii::any::<crate::ascii::Html>(text.as_bytes()) {
         escape_each(text, out)
@@ -1946,6 +1946,7 @@ fn next_escaped(bytes: &[u8], from: usize) -> Option<usize> {
     use crate::ascii::{Html, Set};
     let escaped = |chunk: &[u8]| chunk.iter().position(|&byte| ESCAPES[byte as usize] != 0);
     let mut i = from;
+    // Either test can also stop at a `#`; the table then finds nothing and the skip goes on.
     while let Some(block) = bytes.get(i..).and_then(<[u8]>::first_chunk::<16>) {
         if Html::block(block) {
             if let Some(at) = escaped(block) {
@@ -1955,7 +1956,6 @@ fn next_escaped(bytes: &[u8], from: usize) -> Option<usize> {
         i += 16;
     }
     while let Some(chunk) = bytes.get(i..i + 8) {
-        // The word test can also stop at a `#`; the table then finds nothing and the skip goes on.
         if Html::word(u64::from_le_bytes(chunk.try_into().expect("eight bytes"))) {
             if let Some(at) = escaped(chunk) {
                 return Some(i + at);

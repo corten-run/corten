@@ -400,9 +400,9 @@ fn escaping_matches_the_one_byte_at_a_time_rule() {
         }
         out
     }
-    // Each escaped character, and its neighbours in ASCII (which neither the eight-byte test nor
-    // the sixteen-byte one may mistake for it), at every offset of strings up to six blocks long,
-    // among multibyte text.
+    // Each escaped character, and its neighbours in ASCII (of which the tests may stop at `#`
+    // alone, and write it as it is), at every offset of strings of up to 99 pieces, among
+    // multibyte text.
     let pieces = ["a", "&", "<", ">", "\"", "'", "%", "=", "?", ";", ":", "!", "#", "é", "★", "\u{7f}", "\u{80}", "\0"];
     let mut seed = 0x2545_f491_4f6c_dd1du64;
     for _ in 0..4000 {
