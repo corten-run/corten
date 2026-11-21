@@ -26,7 +26,9 @@
 //! read in the language it asks for: a page for `/items?page=2` is not the one for `/items`. The
 //! headers are compared as they were sent, so `fr` and `fr-FR` each have a copy. An answer is
 //! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
-//! and no value made for this request alone, and varies on nothing but what the key covers.
+//! and no value made for this request alone, and varies on nothing but what the key covers. A
+//! `Date` the handler set is not kept with it: each answer given in its place is dated when it
+//! is sent.
 //!
 //! A write drops what is kept at its path, whatever the query (a named post is `?do=name` at its
 //! page's path) and however the path is escaped, whatever it is answered: a handler or a

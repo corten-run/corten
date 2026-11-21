@@ -1524,6 +1524,9 @@ else a page could differ by, and the answer nothing made for one request:
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound |
 | what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key, a `Vary` of the app's own |
 
+A `Date` header the handler set is its own answer's and is not kept: each answer given in its
+place is dated when it is sent.
+
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
 with `req.t()` without it) it is also kept for the `Accept-Language` it was asked with, as the
@@ -1566,18 +1569,19 @@ CDN in front does not purge the app, which gives the CDN the kept page again wit
 A request's own `Cache-Control: no-cache` (a hard reload) gets the kept page too: how long a
 page stands is the app's to say. Give a page whose changes must show at once a short lifetime.
 
-When a page's lifetime ends or a write drops it, the requests that ask for it before it is made
-again run its handler once: the first makes the page, and the others wait for its answer and
-are given the page when it is kept for them. So a page whose handler reads a slow source does
-not send that source a request for each visitor who arrives meanwhile. When the first request's
-page is not kept (its handler failed, or drew something for that request), or that request is
-dropped or panics, each of the others then runs its own handler. A request waits no longer than
-its own deadline (`App::deadline`), which answers it as it would a slow handler. Only
-requests for one copy wait for each other: another query, host or language the page is made in
-does not wait. Neither does a page with no copy kept (its first request after a start, a page
-that is never kept, one whose copy went to make room): each request runs its handler at once,
-since every request that met another for a page never kept would otherwise wait for that one's
-handler and then run its own.
+When no kept copy stands for a page (its lifetime ended, a write dropped it, or the app has just
+started), the requests that ask for it before it is made run its handler once: the first makes
+the page, and the others wait for its answer and are given the page when it is kept for them. So
+a page whose handler reads a slow source does not send that source a request for each visitor
+who arrives meanwhile, after a deploy too. When the first request's page is not kept (its
+handler failed, or drew something for that request), each of the others then runs its own
+handler, and for a minute, or until a write to the page's path, requests for that page do not
+wait for each other; when the first request is dropped or panics, each of the others runs its
+own. A request waits no longer than its own deadline (`App::deadline`), which answers it as it
+would a slow handler. Only requests for one copy wait for each other: another query, host or
+`Accept-Language` does not wait, even for a page that is the same in every language, since what
+a page varies on is known only once it is made. A request that comes after a write to the
+page's path makes the page again rather than wait for one read before the write.
 
 `App::kept_answers(bytes)` sets how much is kept: 32 MiB unless set, and `0` keeps none. What is
 counted is each page's key, headers and body and each compressed form made of it, with an
