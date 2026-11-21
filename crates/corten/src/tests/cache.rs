@@ -2574,7 +2574,11 @@ async fn a_kept_page_keeps_the_hash_its_policy_allows_its_style_block_by() {
 /// `private`, the page with the key and no `Public`; `plain`, the page with neither (the default
 /// caching, the usual page); `caller`, the plain page to a request whose staged middleware read a
 /// caller; `cookie`, the page with neither, marked `public, max-age=60` and setting a cookie (sent
-/// `private, no-cache`). With `SETTLE_CDN` set, a staged middleware writes the six caching headers
+/// `private, no-cache`); `data`, the plain page asked for as JSON; `missing`, an unknown URL in the
+/// plain page's app (the router's `404` and the error page in its place). `unstaged` is an unstaged
+/// route's JSON (`Media`), and `control` the same JSON from a service of no framework (tower's
+/// `service_fn`), the control `docs/design.md`'s Choice counts an unstaged route against. With
+/// `SETTLE_CDN` set, a staged middleware writes the six caching headers
 /// a CDN reads first on every answer, and each answer is checked to keep them (`kept`) or not
 /// (`dropped`), so the count includes their removal. Counting it under callgrind at two numbers of
 /// requests gives the instructions per request. Run in release:
@@ -2608,10 +2612,41 @@ fn what_settling_a_page_costs() {
     let requests: usize = std::env::var("SETTLE_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
     let case = std::env::var("SETTLE_CASE").unwrap_or_else(|_| "public".to_string());
     let cdn = std::env::var("SETTLE_CDN").ok();
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    if case == "unstaged" || case == "control" {
+        let router = App::new(settle_unstaged::router()).router();
+        let control = tower::service_fn(|req: Request| async move {
+            let id: u32 = req.uri().path().strip_prefix("/items/").and_then(|id| id.parse().ok()).unwrap_or(0);
+            let res = crate::response::Response::builder()
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!("{{\"id\":{id}}}")))
+                .unwrap();
+            Ok::<_, std::convert::Infallible>(res)
+        });
+        runtime.block_on(async {
+            for _ in 0..requests {
+                let req = Request::get("/items/7").body(Body::empty()).unwrap();
+                let res = if case == "control" {
+                    control.clone().oneshot(req).await.unwrap()
+                } else {
+                    router.clone().oneshot(req).await.unwrap()
+                };
+                let (parts, body) = res.into_parts();
+                let body = body.collect().await.unwrap().to_bytes();
+                assert!(parts.status == StatusCode::OK && body == "{\"id\":7}", "{}: {body:?}", parts.status);
+                assert_eq!(parts.headers[header::CONTENT_TYPE], "application/json");
+                if case == "unstaged" {
+                    assert_eq!(parts.headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+                    assert!(!parts.headers.contains_key(header::CACHE_CONTROL), "{:?}", parts.headers);
+                }
+            }
+        });
+        return;
+    }
     let minute = Duration::from_secs(60);
     let keyed = case == "keyed" || case == "private";
     let form = move || html! { <form method="post">if keyed { {crate::SubmitKey::field(KeyedWrite::FIELDS.submit)} }</form> };
-    let routes = if case == "private" || case == "plain" || case == "caller" {
+    let routes = if ["private", "plain", "caller", "data", "missing"].contains(&case.as_str()) {
         Table::new().route("/", get(move |req: Req| async move { req.test_page("Form", form()) }))
     } else if case == "cookie" {
         Table::new().route(
@@ -2639,18 +2674,25 @@ fn what_settling_a_page_costs() {
         "dropped" => false,
         other => panic!("SETTLE_CDN is kept or dropped, not {other:?}"),
     });
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(async {
         for _ in 0..requests {
-            let mut req = Request::get("/");
+            let mut req = Request::get(if case == "missing" { "/nowhere" } else { "/" });
             if case == "caller" {
                 req = req.header("viewer", "ann");
             } else if case == "partial" {
                 req = req.header("corten", "nav");
+            } else if case == "data" {
+                req = req.header("accept", "application/json");
             }
             let (parts, body) = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap().into_parts();
             let body = String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap();
-            assert!(parts.status == StatusCode::OK && body.contains("<form method=\"post\">"), "{}: {body}", parts.status);
+            match case.as_str() {
+                "missing" => assert_eq!(parts.status, StatusCode::NOT_FOUND, "{body}"),
+                "data" => assert_eq!(parts.status, StatusCode::OK, "{body}"),
+                _ => {
+                    assert!(parts.status == StatusCode::OK && body.contains("<form method=\"post\">"), "{}: {body}", parts.status)
+                }
+            }
             assert_eq!(parts.headers[header::CACHE_CONTROL], expected);
             assert_eq!(parts.headers.contains_key(header::SET_COOKIE), case == "cookie");
             if let Some(kept) = kept {
@@ -2660,4 +2702,17 @@ fn what_settling_a_page_costs() {
             }
         }
     });
+}
+
+#[crate::routes]
+mod settle_unstaged {
+    #[route("/items/{id}", get = settle_unstaged_item, unstaged)]
+    pub struct Item {
+        pub id: u32,
+    }
+}
+
+/// The unstaged route [`what_settling_a_page_costs`] counts: the JSON its control answers.
+async fn settle_unstaged_item(at: crate::Params<settle_unstaged::Item>) -> crate::Media {
+    crate::Media::new("application/json", format!("{{\"id\":{}}}", at.id))
 }
