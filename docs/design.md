@@ -7409,15 +7409,22 @@ rules something out.
     under a 32 MiB bound and three passes over 40,000 URLs the process settled 57.8 MiB above where
     it began with glibc's and 35.2 MiB above with jemalloc, so what an allocator holds beyond the
     bytes asked of it is beside the bound; `tests/kept_memory.rs` holds the bytes asked to the
-    bound, 4,145,524 of 4,194,304 for its page in every coding and its brotli 5, and 4,050,606 with
-    no compression. A kept page's brotli 5 (`a14e58b22` against `512ebc1ef`, the request counts
-    of `tests/kept_coding_cost.rs` for a page of 3,052 bytes, callgrind's count for 1,200 requests
-    less its count for 200, two runs of each that agreed within 7 instructions): a kept page given
-    again to a browser's codings ran 29,403 instructions for 543 bytes of brotli 5 against 29,071
-    for 637 of zstd 1 (of the 332 more, 3 in `compress::finish` and the rest in glibc's `malloc`,
-    by callgrind's functions), a page made and kept 145,926 against 145,813, a kept page given again
-    uncompressed 23,750 against 23,753 and one made uncompressed 45,030 against 45,233, and in
-    gzip alone 29,227 against 29,199 given again and 625,901 against 625,804 made. The levels'
+    bound, 4,172,888 of 4,194,304 for its page in every coding and its brotli 5, each page asked
+    for until it was given in brotli so that the count is read with every brotli made, and
+    4,050,606 with no compression. A kept page's brotli 5 (`0d96aa8b3` against main's
+    `68ce3f1e6`, the request counts of `tests/kept_coding_cost.rs` for a page of 3,052 bytes,
+    callgrind's count for 1,200 requests less its count for 200, three alternated rounds that
+    agreed within 4 instructions, each answer's body checked and the two builds' bodies identical
+    byte for byte but for brotli's): a kept page given again to a browser's codings ran 29,604
+    instructions for 542 bytes of brotli 5 against 29,468 for 640 of zstd 1, and 28,885 against
+    28,813 asked for zstd alone, which this change does not alter; a page made and kept 146,048
+    against 145,929, a kept page given again uncompressed 23,794 against 23,791 and one made
+    uncompressed 45,350 against 45,500, and in gzip alone 29,386 against 29,230 given again and
+    625,990 against 625,955 made. Both builds call `malloc` 31 times for each answer given again
+    in a browser's codings; the difference is in glibc's own work for those calls, as the
+    allocations of a store with another layout fall in its bins: with its fast bins off
+    (`GLIBC_TUNABLES=glibc.malloc.mxfast=0`) the counts are 29,451 against 29,473 to a browser,
+    28,818 against 28,818 for zstd alone and 28,998 against 29,127 for gzip alone. The levels'
     bytes and instructions above are a probe's that compresses as `compress::encode` does, whose
     level-1 bytes matched the app's answers, on the catalog benchmark's ten record pages and
     card-market's twelve demo item pages as served at `b5324cbae`, its instructions by callgrind
@@ -7530,8 +7537,9 @@ rules something out.
     compressed, the tag. The commits after `f7e53a594` up to `24e61b4b0` change which writes count
     and nothing a page's `GET` runs. 2026-11-21, a kept page's brotli 5 with rustc 1.100.0, brotli
     9.1.3, zstd 0.14.4 (libzstd 1.5.7) and flate2 1.1.11 (miniz_oxide 0.9.1): the probe on
-    `b5324cbae`, and `tests/kept_coding_cost.rs` under callgrind on `a14e58b22` and `512ebc1ef`.
-    `tests/kept_memory.rs` at `512ebc1ef` with rustc 1.99.1, with all features and with none.
+    `b5324cbae`, `tests/kept_coding_cost.rs` under callgrind on `0d96aa8b3` and `68ce3f1e6` in
+    rust:1-trixie with glibc's allocator, and `tests/kept_memory.rs` at `0d96aa8b3`, with all
+    features and with none.
 
 ## Rules
 
