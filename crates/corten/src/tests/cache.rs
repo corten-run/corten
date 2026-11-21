@@ -710,6 +710,83 @@ async fn a_page_that_draws_a_submit_key_keeps_no_cdn_caching_header() {
     }
 }
 
+/// An answer Corten makes private because it is personal (it sets a cookie, carries the request's
+/// nonce, or answers a request whose middleware read a caller or that carried credentials) also
+/// loses the caching headers a CDN reads before `Cache-Control`, which staged middleware wrote:
+/// a CDN that obeys them would otherwise keep one visitor's answer and give it to the next. Other
+/// headers a CDN reads stay, and an answer that stays shared keeps what the middleware wrote.
+#[tokio::test]
+async fn a_personal_answer_made_private_keeps_no_cdn_caching_header() {
+    struct CdnHeaders;
+
+    impl crate::Middleware for CdnHeaders {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let (parts, body) = req.into_parts();
+            if parts.headers.contains_key("viewer") {
+                let _ = Caller::<Viewer>::find(&parts, &()).await;
+            }
+            let mut res = next.run(Request::from_parts(parts, body)).await;
+            let headers = res.headers_mut();
+            for name in CDN_OVERRIDES {
+                headers.insert(name, HeaderValue::from_static("public, max-age=60"));
+            }
+            for name in CDN_OTHERS {
+                headers.insert(name, HeaderValue::from_static("x"));
+            }
+            res
+        }
+    }
+
+    let minute = std::time::Duration::from_secs(60);
+    let home = || html! { <p>"home"</p> };
+    let routes = Table::new()
+        .route("/", get(move |req: Req| async move { Public::new(minute, req.test_page_for("Home", home())) }))
+        .route(
+            "/cookie",
+            get(move |req: Req| async move {
+                Ok::<_, Error>((Cache::public(minute), [(header::SET_COOKIE, "seen=1")], req.test_page("Home", home())?))
+            }),
+        )
+        .route("/nonce", get(inline_page));
+    let router = App::new(Routes::from(routes)).middleware(CdnHeaders).router();
+    let get = |uri: &'static str, asked: &'static [(&'static str, &'static str)]| {
+        let router = router.clone();
+        async move {
+            let mut req = Request::get(uri);
+            for (name, value) in asked {
+                req = req.header(*name, *value);
+            }
+            let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), StatusCode::OK, "{uri} {asked:?}");
+            res.headers().clone()
+        }
+    };
+    let mut left = Vec::new();
+    for (uri, asked, why) in [
+        ("/cookie", &[][..], "it sets a cookie"),
+        ("/nonce", &[], "it carries the nonce"),
+        ("/", &[("viewer", "ann")], "a middleware read a caller"),
+        ("/", &[("cookie", "session=abc")], "a request with a cookie"),
+        ("/", &[("authorization", "Bearer t")], "a request with credentials"),
+    ] {
+        let headers = get(uri, asked).await;
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{why}");
+        let kept: Vec<_> = CDN_OVERRIDES.into_iter().filter(|name| headers.contains_key(*name)).collect();
+        if !kept.is_empty() {
+            left.push(format!("{why}: {kept:?}"));
+        }
+        for other in CDN_OTHERS {
+            assert_eq!(headers[other], "x", "{why}: {other}");
+        }
+    }
+    assert!(left.is_empty(), "made private, and still sent to a CDN as shared: {left:#?}");
+    let headers = get("/", &[]).await;
+    assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60");
+    for name in CDN_OVERRIDES {
+        assert_eq!(headers[name], "public, max-age=60", "a shared answer keeps the middleware's {name}");
+    }
+}
+
 /// A refused cross-site write gets the app's error page, which goes out before the cache rules
 /// run. One that draws a submit key goes out as any page that draws one does: a `no-store` it
 /// says as `private, no-store`, and none of the CDN caching headers it wrote. One that draws none
@@ -1857,7 +1934,8 @@ async fn a_kept_page_keeps_the_hash_its_policy_allows_its_style_block_by() {
 /// in process, one at a time. `SETTLE_CASE` is the page: `keyed`, a `Public` page that draws a
 /// submit key (sent `private, no-cache`); `public` (the default), the same page without the key,
 /// which the app keeps; `private`, the page with the key and no `Public`; `plain`, the page with
-/// neither (the default caching, the usual page). Counting it under
+/// neither (the default caching, the usual page); `cookie`, the page with neither, marked
+/// `public, max-age=60` and setting a cookie (sent `private, no-cache`). Counting it under
 /// callgrind at two numbers of requests gives the instructions per request. Run in release:
 /// `cargo test --release -p corten-run --all-features --lib --no-run`, then
 /// `SETTLE_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::cache::what_settling_a_page_costs`
@@ -1872,6 +1950,13 @@ fn what_settling_a_page_costs() {
     let form = move || html! { <form method="post">if keyed { {crate::SubmitKey::field(KeyedWrite::FIELDS.submit)} }</form> };
     let routes = if case == "private" || case == "plain" {
         Table::new().route("/", get(move |req: Req| async move { req.test_page("Form", form()) }))
+    } else if case == "cookie" {
+        Table::new().route(
+            "/",
+            get(move |req: Req| async move {
+                Ok::<_, Error>((Cache::public(minute), [(header::SET_COOKIE, "seen=1")], req.test_page("Form", form())?))
+            }),
+        )
     } else {
         Table::new().route("/", get(move |req: Req| async move { Public::new(minute, req.test_page_for("Form", form())) }))
     };
@@ -1883,6 +1968,7 @@ fn what_settling_a_page_costs() {
             let (status, headers, body) = call_with(router.clone(), "GET", "/", None, None).await;
             assert!(status == StatusCode::OK && body.contains("<form method=\"post\">"), "{status}: {body}");
             assert_eq!(headers[header::CACHE_CONTROL], expected);
+            assert_eq!(headers.contains_key(header::SET_COOKIE), case == "cookie");
         }
     });
 }

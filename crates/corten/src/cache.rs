@@ -38,11 +38,12 @@
 //! [`crate::security::Nonce`]), a page that draws a form's new submit key
 //! ([`crate::SubmitKey::field`]: each visitor needs a key of their own), and an answer to a request
 //! whose handler or middleware read a [`crate::Caller`]. They get `private, no-cache`, and
-//! `corten dev` logs the first three. A page that draws a submit key also loses the caching headers
-//! a CDN reads first, by name ([`CDN_CACHING`]: `CDN-Cache-Control`, `Surrogate-Control`, ...),
-//! and its `no-store` goes out `private, no-store`, for a CDN that ignores a bare one. A
-//! [`crate::live`] stream's fragments are text rendered after its headers went out, so they carry
-//! no such mark.
+//! `corten dev` logs the first three. An answer made private in place of the shared caching it
+//! was marked with (by these rules or the request's credentials) also loses the caching headers a
+//! CDN reads first, by name ([`CDN_CACHING`]: `CDN-Cache-Control`, `Surrogate-Control`, ...); a
+//! page that draws a submit key loses them whatever its header says, and its `no-store` goes out
+//! `private, no-store`, for a CDN that ignores a bare one. A [`crate::live`] stream's fragments
+//! are text rendered after its headers went out, so they carry no such mark.
 //!
 //! The app is the first shared cache of its own `Public` pages: the whole document one made for a
 //! request without credentials is kept for its shared lifetime and given again in the handler's
@@ -225,10 +226,10 @@ pub(crate) const PRIVATE_NO_STORE: HeaderValue = HeaderValue::from_static("priva
 
 /// The caching headers a CDN or proxy reads before `Cache-Control`, by exact name: RFC 9213's
 /// `CDN-Cache-Control`, Cloudflare's and Vercel's own, `Surrogate-Control`, Akamai's `Edge-Control`
-/// and nginx's `X-Accel-Expires`. [`settle`] removes them from a page that draws a submit key, an
-/// unstaged route's answer that sets a cookie loses them and any other `*cache-control`, and a
-/// [`crate::Public`] answer may not set one. A name a deployment configures for itself (RFC 9213
-/// allows one) is the deployment's.
+/// and nginx's `X-Accel-Expires`. [`settle`] removes them from an answer it makes private in
+/// place of shared caching and from a page that draws a submit key, an unstaged route's answer that
+/// sets a cookie loses them and any other `*cache-control`, and a [`crate::Public`] answer may not
+/// set one. A name a deployment configures for itself (RFC 9213 allows one) is the deployment's.
 pub(crate) const CDN_CACHING: [&str; 6] = [
     "cdn-cache-control",
     "cloudflare-cdn-cache-control",
@@ -420,11 +421,14 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
         if seen.dev {
             tracing::warn!("corten: {path} is marked for shared caches, but {bug}, so it was sent private, no-cache (or no-store, if its header names it)");
         }
-        headers.insert(header::CACHE_CONTROL, personal(headers));
-        return;
     }
-    if seen.caller || typed.is_some_and(|typed| seen.credentials && !typed.named) {
+    if bug.is_some() || seen.caller || typed.is_some_and(|typed| seen.credentials && !typed.named) {
         headers.insert(header::CACHE_CONTROL, personal(headers));
+        // A CDN reads its own caching header before `Cache-Control`, so the answer made private
+        // keeps none of those Corten names (a page that drew a key lost them above).
+        if !drew_key {
+            drop_cdn_caching(headers);
+        }
         return;
     }
     let Some(typed) = typed else { return };
