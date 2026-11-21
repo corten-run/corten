@@ -2134,8 +2134,16 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
     }
 
     fn call(&mut self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
-        // Marks a read of the body that waits for the client, for the deadline (#1061).
-        let req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
+        // Marks a read of the body that waits for the client, for the deadline (#1061). A request
+        // hyper says has no body (no `Content-Length` or `Transfer-Encoding`, or a length of 0) has
+        // nothing to wait for, so it gets the empty body, which is not boxed.
+        let req = req.map(|body| {
+            if http_body::Body::is_end_stream(&body) {
+                crate::body::Body::empty()
+            } else {
+                crate::body::Body::new(crate::extract::Arriving(body))
+            }
+        });
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
         let connect = req.method() == http::Method::CONNECT;
         if let Some(bound) = &self.bound {
