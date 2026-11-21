@@ -46,9 +46,13 @@ async fn home(req: Req) -> HtmlResult {
     ))
 }
 
-async fn show(req: Req, State(source): State<Source>, Params(at): Params<routes::Catalog<'_>>) -> HtmlResult {
-    let record = source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?;
-    req.page(views::document(&req, &record.title, views::record(&record, at.query.field.as_deref().unwrap_or(""))))
+async fn show(req: Req, State(source): State<Source>, Params(at): Params<routes::Catalog<'_>>) -> corten::Public<HtmlResult> {
+    let page = async {
+        let record = source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?;
+        req.page(views::document(&req, &record.title, views::record(&record, at.query.field.as_deref().unwrap_or(""))))
+    }
+    .await;
+    corten::Public::new(std::time::Duration::from_secs(60), page)
 }
 
 async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>) -> JsonResult<Arc<Record>> {
