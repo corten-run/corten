@@ -47,6 +47,7 @@ function fixture(t, group) {
     execution: { effectiveOptions: {} }, resources: { expectedCpus: {}, requestedCpuEnv: {} } };
   const summary = { round: binding.request.round, commit: binding.request.commit, options: {}, measurement: { cpus: {} }, complete: true,
     apps: Object.fromEntries(binding.selection.apps.map((a) => [a, { qualification: { fixture: { eligible: true }, api: { eligible: true } }, runs: {} }])) };
+  if (group === "localized-marketplace") summary.measurement.featureProfile = "marketplace-production/v2";
   writeFileSync(join(folder, "summary.json"), JSON.stringify(summary)); writeFileSync(join(folder, "raw.log"), "synthetic\n");
   return { folder, binding, summary };
 }

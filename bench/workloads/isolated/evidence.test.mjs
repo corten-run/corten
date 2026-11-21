@@ -13,8 +13,8 @@ import { jsonSources, saveJsonFixture } from "./test-fixtures/json.mjs";
 import { marketplaceResult } from "./test-fixtures/marketplace.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
 import { selectedApps } from "../registry.mjs";
-import { qualification } from "../../marketplace/feature-contract.mjs";
-import { qualificationProbes } from "../../marketplace/qualification-fixture.mjs";
+import { featureProfile, qualification, qualificationSettings, produceBoundedQualification } from "../../marketplace/feature-contract.mjs";
+import { qualificationProbes, boundedQualificationProbes } from "../../marketplace/qualification-fixture.mjs";
 import { matchesWorkingSource } from "./worker.mjs";
 
 function temporary(t) {
@@ -148,6 +148,12 @@ test("marketplace uses its native schema, exact configuration and full excluded-
     execution: { effectiveOptions: marketplaceOptions(["w2", "--group", "localized-marketplace", "--build"], Object.fromEntries(apps.map((a) => [a, {}]))) },
     resources: { expectedCpus: catalogBinding().resources.expectedCpus } };
   const s = marketplaceResult(b), path = join(root, "summary.json");
+  const historical = structuredClone(s);
+  Object.assign(historical.measurement, { featureProfile, qualificationSettings });
+  for (const app of Object.values(historical.apps)) for (const source of ["fixture", "api"])
+    app.qualification[source] = qualification(qualificationProbes(), source);
+  fs.writeFileSync(path, JSON.stringify(historical));
+  assert.throws(() => inspectEvidence(b, root), /requires bounded qualification/);
   fs.writeFileSync(path, JSON.stringify(s));
   assert.equal(inspectEvidence(b, root).qualification, "blocked");
   assert.equal(inspectEvidence(b, root).rawCompleteness, "not-established");
@@ -155,8 +161,8 @@ test("marketplace uses its native schema, exact configuration and full excluded-
   for (const path of ["fixture/nextjs/qualification.json", "api/corten/checks.json", "api/corten/p3-neutral-json/sat256.json",
     "api/corten/p3-neutral-json/sat256-cpu.json", "api/corten/p3-neutral-json/sat256-stats.log.json"])
     assert.ok(support.required.includes(path), path);
-  const excluded = structuredClone(s), probes = qualificationProbes(); delete probes.page.headers["content-security-policy"];
-  excluded.apps.nextjs.qualification.api = qualification(probes, "api"); excluded.apps.nextjs.runs = {}; excluded.apps.nextjs.phases = {};
+  const excluded = structuredClone(s), probes = boundedQualificationProbes("api"); delete probes.page.headers["content-security-policy"];
+  excluded.apps.nextjs.qualification.api = produceBoundedQualification(probes, "api"); excluded.apps.nextjs.runs = {}; excluded.apps.nextjs.phases = {};
   fs.writeFileSync(path, JSON.stringify(excluded)); assert.equal(inspectEvidence(b, root).diagnosticNativeReport.outcomes.nextjs, "excluded-not-timed");
   for (const change of [(v) => { v.finishedCommit = "b".repeat(40); }, (v) => { v.options.duration = 1; },
     (v) => { v.apps.corten.builtDirty = true; }, (v) => { delete v.apps.nextjs; }, (v) => { v.cleanupFailures.push("busy"); }]) {

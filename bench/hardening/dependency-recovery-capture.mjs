@@ -120,7 +120,7 @@ function clockNs(value) {
   return BigInt(value);
 }
 
-function verifyLifecycle(clock, deployment, lifecycle, provenance, cleanup, completeAtMs) {
+export function verifyLifecycle(clock, deployment, lifecycle, provenance, cleanup, completeAtMs) {
   assert.equal(cleanup.complete, true); assert.deepEqual(cleanup.containers, []); assert.deepEqual(cleanup.volumes, []);
   assert.deepEqual(cleanup.failures, []); assert.equal(cleanup.commandClients, 0);
   assert.ok(Number.isFinite(Date.parse(clock.wallAtStart)), "missing recovery wall-clock origin");
@@ -199,7 +199,7 @@ export function assembleRecovery({ settings, raw, parity, source, cleanup, prove
   const cleanupProof = verifyLifecycle(clock, settings.deployment, lifecycle, provenance, cleanup, observation.upstream.after.observedAtMs);
   const resources = verifyResourceSamples(rows, settings.deployment.processes, lifecycle, clock);
   const { disposition, terminalServices } = terminalRecovery(true, settings.deployment.processes, resources.after, lifecycle, source, settings.terminalHealthPaths);
-  const terminal = { healthy: disposition === "recovered", services: terminalServices };
+  const terminal = { healthy: disposition === "recovered", disposition, services: terminalServices };
   return { schema: "native-dependency-recovery-capture/v1", case: settings.case, phase: settings.phase, assessment, resources, terminal,
     deployment: settings.deployment, effectiveBudgets: settings.effectiveBudgets, provenance,
     parity: { status: "passed", evidence: "parity.json" }, cleanup: cleanupProof, upstream: observation.upstream };

@@ -7,8 +7,8 @@ import { aggregate, appStop, cpuSettings, phases, resultSchema, sources, stageAg
 import { report, validateSummary } from "./report.mjs";
 import { compare, comparisonKey } from "./compare.mjs";
 import { groupApps } from "./groups.mjs";
-import { featureProfile, qualification, qualificationSettings } from "./feature-contract.mjs";
-import { qualificationProbes } from "./qualification-fixture.mjs";
+import { boundedFeatureProfile, boundedQualificationSettings, featureProfile, produceBoundedQualification, qualification, qualificationSettings } from "./feature-contract.mjs";
+import { boundedQualificationProbes, qualificationProbes } from "./qualification-fixture.mjs";
 function synthetic() {
   const s = { schema: resultSchema, workload, round: "r17", commit: "a".repeat(40), dirty: false, complete: true, checksPassed: true,
     failures: [], cleanupFailures: [], finishedCommit: "a".repeat(40), finishedDirty: false,
@@ -33,16 +33,18 @@ function synthetic() {
   return s;
 }
 
-test("named groups require exact evidence and compare only with the same group", () => {
-  const grouped = (group, round) => {
-    const s = synthetic(); s.round = round; s.options.round = round;
-    s.options.group = group; s.options.apps = groupApps(group);
-    s.apps = Object.fromEntries(s.options.apps.map((a) => [a, s.apps[a]]));
-    s.measurement.featureProfile = featureProfile;
-    s.measurement.qualificationSettings = qualificationSettings;
-    for (const a of Object.values(s.apps)) a.qualification = Object.fromEntries(sources.map((source) => [source, qualification(qualificationProbes(), source)]));
-    return s;
-  };
+function grouped(group, round, { historical = true } = {}) {
+  const s = synthetic(); s.round = round; s.options.round = round;
+  s.options.group = group; s.options.apps = groupApps(group);
+  s.apps = Object.fromEntries(s.options.apps.map((a) => [a, s.apps[a]]));
+  s.measurement.featureProfile = historical ? featureProfile : boundedFeatureProfile;
+  s.measurement.qualificationSettings = historical ? qualificationSettings : boundedQualificationSettings;
+  for (const a of Object.values(s.apps)) a.qualification = Object.fromEntries(sources.map((source) => [source, historical
+    ? qualification(qualificationProbes(), source) : produceBoundedQualification(boundedQualificationProbes(source), source)]));
+  return s;
+}
+
+test("historical named groups require exact evidence and compare only with the same group", () => {
   const s = grouped("production", "r24"); validateSummary(s);
   assert.match(report(s), /Group: production/);
   assert.equal(compare(s, grouped("production", "r20"), { unchangedApps: ["aspnet"] }).compatible, true);
@@ -72,6 +74,44 @@ test("named groups require exact evidence and compare only with the same group",
   assert.throws(() => validateSummary(lone));
   const missingEvidence = structuredClone(excluded); missingEvidence.apps.nextjs.qualification.api = qualification({}, "api");
   assert.throws(() => validateSummary(missingEvidence));
+});
+
+test("bounded qualification reports what is unmeasured and cannot mix with v1", () => {
+  const group = "production", previous = grouped(group, "r20");
+  const active = grouped(group, "r24", { historical: false });
+  const text = report(active);
+  assert.match(text, /Feature contract: marketplace-production\/v2\./);
+  assert.match(text, /^Connection-flood resistance: not measured\.$/m);
+  assert.match(report(previous), /Feature contract: marketplace-production\/v1\./);
+  assert.doesNotMatch(report(previous), /Connection-flood resistance: not measured/);
+  assert.equal(compare(active, grouped(group, "r23", { historical: false })).compatible, true);
+  const different = compare(active, previous);
+  assert.notEqual(comparisonKey(active), comparisonKey(previous));
+  assert.equal(different.compatible, false);
+  assert.deepEqual(different.rows, []);
+  assert.deepEqual(different.qualificationLosses, []);
+
+  const excluded = structuredClone(active), probes = boundedQualificationProbes("api");
+  delete probes.page.headers["content-security-policy"];
+  excluded.apps.nextjs.qualification.api = produceBoundedQualification(probes, "api");
+  excluded.apps.nextjs.runs = {}; excluded.apps.nextjs.phases = {};
+  assert.match(report(excluded), /^\| nextjs \| excluded, not timed \| api: .+ \|$/m);
+  assert.doesNotMatch(report(excluded), /^\| nextjs \| \d/m);
+
+  for (const [good, other] of [[active, previous], [previous, active]]) {
+    const wrongSettings = structuredClone(good);
+    wrongSettings.measurement.qualificationSettings = other.measurement.qualificationSettings;
+    assert.throws(() => validateSummary(wrongSettings), /qualification settings/);
+    const wrongSourceContract = structuredClone(good);
+    wrongSourceContract.apps.corten.qualification.api = other.apps.corten.qualification.api;
+    assert.throws(() => validateSummary(wrongSourceContract));
+  }
+  const tampered = structuredClone(active);
+  tampered.apps.corten.qualification.api.unmeasured = [];
+  assert.throws(() => validateSummary(tampered), /bounded qualification differs/);
+  const wrongSource = structuredClone(active);
+  wrongSource.apps.corten.qualification.api = wrongSource.apps.corten.qualification.fixture;
+  assert.throws(() => validateSummary(wrongSource));
 });
 test("read-only reporter requires every app, locale, source and three complete passes", () => {
   const s = synthetic(); validateSummary(s);

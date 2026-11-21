@@ -77,13 +77,13 @@ test("all nine group contracts are pinned independently of historical catalog re
   const hashes = {
     "catalog-page": "67e0bffbf6bc138c570b7d3855b9dc440c2d11526a1321269f14433155dd98f0",
     "json-api": "b0015ffc90e28f85823f1e7a392e8ed5a97f2f2a6e56cf6c9287934589325fb9",
-    "localized-marketplace": "ab61f28221d8abe1225f13816c438b90f79bd0d50a379eae7b1b5fb9275366b7",
-    "mixed-production": "65b1b953d9524aa7e72aaa4e04b8e5d2ce350930f46de874395a24ccbeea2676",
+    "localized-marketplace": "e7196bc53d5d9a48543dacdfa245c672d5dda68c514f43339779de58f022c9eb",
+    "mixed-production": "147a4689167b2bfa0edba103a5fdbe533f7f7b17126fe15e1d0f782983b9a894",
     "fullstack-browser": "d4c219c71546b7c8cfdeb8b0e9b4c44cacc30cd42837dcfa5580db9d125f62d4",
     "client-heavy": "29842bba6ec897e5a86a42cc7f8f777ac69f64b89f41d7c6f6774f9c067486d1",
     "live-delivery": "ca5d6010d1a3ea088849d5ac40ec9aa8d41791c4e316f47a86233ce829b33328",
     "recoverable-live": "b6d91c14ed20babdc0e56719826a6d01bb993de6b16224f5f9b0e2544f3e9eff",
-    hardening: "651c5f73eda0cc5030fc80e85d6ead2b0021ed36161830a08dc8410e387bd33c",
+    hardening: "635b2b9946a7fe96de1f2ab7eb49a2a16b397dbfb95f959790e94b2c9a114a03",
   };
   assert.equal(groupNames.length, 9);
   for (const group of groupNames) {

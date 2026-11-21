@@ -3,15 +3,15 @@ import { createHash } from "node:crypto";
 import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { cpuSettings, passPlan, resultSchema, sources, stageAggregate, timedProfiles } from "./run-contract.mjs";
-import { qualification, featureProfile, qualificationSettings } from "./feature-contract.mjs";
-import { qualificationProbes } from "./qualification-fixture.mjs";
+import { boundedFeatureProfile, boundedQualificationSettings, featureProfile, produceBoundedQualification, qualification, qualificationSettings } from "./feature-contract.mjs";
+import { boundedQualificationProbes, qualificationProbes } from "./qualification-fixture.mjs";
 import { splitApps } from "./run-contract.mjs";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { evidenceVersion, k6Image, loadEnvironment, nodeImage, upstreamInterpretation } from "./raw-contract.mjs";
 import { k6Provenance } from "../load-tool.mjs";
 
-export function summaryFixture(commit) {
+export function summaryFixture(commit, { historical = false } = {}) {
   const apps = splitApps("production-performant", 3)[0];
   const s = { schema: resultSchema, workload, round: "r17", runId: "marketplace-r17-0123456789", commit, dirty: false,
     finishedCommit: commit, finishedDirty: false, complete: true, checksPassed: true, failures: [], cleanupFailures: [],
@@ -22,10 +22,12 @@ export function summaryFixture(commit) {
     fixtureSha256: createHash("sha256").update(JSON.stringify(records())).digest("hex"),
     measurement: { profiles: timedProfiles, cpus: cpuSettings({ MARKETPLACE_APP_CPUS: "1", MARKETPLACE_API_CPUS: "2-3", MARKETPLACE_LOAD_CPUS: "4-7" }),
       encoding: "identity", fixedRate: 150, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20,
-      upstream: "Synthetic", cpuWindow: "Synthetic", coldClock: "Synthetic", featureProfile, qualificationSettings } };
+      upstream: "Synthetic", cpuWindow: "Synthetic", coldClock: "Synthetic", featureProfile: historical ? featureProfile : boundedFeatureProfile,
+      qualificationSettings: historical ? qualificationSettings : boundedQualificationSettings } };
   for (const app of apps) {
     const a = s.apps[app] = { imageId: `sha256:${"b".repeat(64)}`, builtCommit: commit, builtDirty: false, checks: {}, runs: {}, phases: {},
-      qualification: Object.fromEntries(sources.map((source) => [source, qualification(qualificationProbes(), source)])) };
+      qualification: Object.fromEntries(sources.map((source) => [source, historical ? qualification(qualificationProbes(), source)
+        : produceBoundedQualification(boundedQualificationProbes(source), source)])) };
     for (const source of sources) a.checks[source] = { workload, source, jsonRecords: 500, pages: 264,
       profiles: locales.flatMap((locale) => [false, true].flatMap((javaScriptEnabled) => [false, true].map((mobile) => ({ locale, javaScriptEnabled, mobile, passed: true })))),
       upstream: source === "api" ? { readsPerRequest: 1, uncachedPage: true, uncachedJson: true, jsonReserialized: true, errors: true } : null };
@@ -50,8 +52,9 @@ export function summaryFixture(commit) {
   return s;
 }
 
-export function writeSavedFixture(folder, commit, tree) {
-  const s = summaryFixture(commit); s.evidenceVersion = evidenceVersion;
+export function writeSavedFixture(folder, commit, tree, options) {
+  const s = summaryFixture(commit, options); s.evidenceVersion = evidenceVersion;
+  const { featureProfile: profile, qualificationSettings: settings } = s.measurement;
   s.tools.upstream.image = nodeImage;
   s.tools.k6 = k6Provenance({ Id: s.tools.k6.imageId, RepoDigests: [k6Image], Os: "linux", Architecture: "amd64" },
     "k6 v2.4.0 (synthetic test executable, not a native measurement)");
@@ -73,12 +76,12 @@ export function writeSavedFixture(folder, commit, tree) {
   const upstream = runtime("upstream", "api", 512 * 2 ** 20, { image: nodeImage, entrypoint: ["docker-entrypoint.sh"], cmd: ["node", "/bench/marketplace/upstream.mjs"], mounts: [mount("/fixtures"), mount("/bench")] });
   write("upstream-container.json", upstream);
   const images = Object.fromEntries(s.options.apps.map((app) => [app, { id: s.apps[app].imageId, cmd: ["native"], entrypoint: null,
-    labels: { "run.corten.marketplace.commit": commit, "run.corten.marketplace.dirty": "false", "run.corten.marketplace.profile": featureProfile } }]));
+    labels: { "run.corten.marketplace.commit": commit, "run.corten.marketplace.dirty": "false", "run.corten.marketplace.profile": profile } }]));
   write("images.json", images); write("tools.json", Object.fromEntries(Object.keys(s.tools).map((k) => [k, { id: s.tools[k].imageId, cmd: k === "upstream" ? ["node"] : k === "checker" ? ["/bin/bash"] : null,
     entrypoint: k === "k6" ? ["k6"] : k === "upstream" ? ["docker-entrypoint.sh"] : null, ...(k === "k6" ? { repoDigests: [k6Image], platform: s.tools.k6.platform, version: s.tools.k6.version, versionOutput: s.tools.k6.versionOutput } : {}) }])));
   const appRuntime = (app, source, extra = {}) => runtime(app, "app", 2 ** 30, { cmd: images[app].cmd,
     env: { MARKETPLACE_SOURCE: source, MARKETPLACE_FIXTURE_PATH: "/fixtures/marketplace.json", API_BASE: `http://${upstream.name}:8080`, PORT: "8080", HOSTS: `${s.runId}-${app},localhost,127.0.0.1`,
-      PROFILE: qualificationSettings.nativeProfile, MAX_CONNECTIONS: String(qualificationSettings.maxConnections) }, ulimits: [{ Name: "nofile", Soft: 65536, Hard: 65536 }], mounts: [mount("/fixtures")], ...extra });
+      PROFILE: settings.nativeProfile, MAX_CONNECTIONS: String(settings.maxConnections) }, ulimits: [{ Name: "nofile", Soft: 65536, Hard: 65536 }], mounts: [mount("/fixtures")], ...extra });
   let gateClock = Date.parse("2026-01-01T00:00:02.000Z");
   for (const source of sources) for (const app of s.options.apps) {
     const a = s.apps[app];

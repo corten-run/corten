@@ -16,7 +16,7 @@ test("actual cached Docker build, charged worker lifetime and final cleanup repl
   const folder = mkdtempSync(join(tmpdir(), "hardening-os-proof-")), repository = join(folder, "git"), result = join(folder, "saved");
   const runId = `hardening-proof-${randomBytes(6).toString("hex")}`, tag = `${runId}-corten`, target = `${runId}-control`;
   const summary = { runId, startedAt: new Date().toISOString(), budget: budgets(), originalFolder: result, cleanupFailures: [],
-    cells: [{ key: "corten/fixture/direct/slow-headers", app: "corten", source: "fixture", mode: "direct", status: "not-run" }] };
+    cells: [{ key: "corten/fixture/direct/request-limit", app: "corten", source: "fixture", phase: "request-limit", mode: "direct", status: "not-run" }] };
   mkdirSync(repository); mkdirSync(result);
   const execute = (binary, args, options = {}) => {
     const row = spawnSync(binary, args, { cwd: repository, input: options.input, windowsHide: true, timeout: Math.min(options.timeout ?? 20000, 60000),

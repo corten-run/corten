@@ -310,6 +310,7 @@ export async function run(args) {
     summary.finishedAt = new Date().toISOString(); save(); io.dispose();
   }
   console.log(`saved ${folder}; functionalPassed=${summary.functionalPassed}; timingBlocked=${summary.timingBlocked}`);
+  if (summary.timing?.connectionFloodResistance) console.log(summary.timing.connectionFloodResistance);
   return summary;
 }
 

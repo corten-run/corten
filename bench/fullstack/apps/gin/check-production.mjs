@@ -1,4 +1,4 @@
-// Functional direct-native qualification, not a load benchmark. The unchanged
+// Functional direct-native qualification, not a load benchmark. The bounded
 // marketplace probes supply the gates; no adapter imports this test apparatus.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -36,8 +36,13 @@ if (!isMainThread) {
     };
     res.once('finish', () => finish(false));
     res.once('close', () => finish(!res.writableFinished));
-    if (control.hang) return;
-    if (control.status) { res.writeHead(control.status); res.end('unavailable'); return; }
+    const { delay, status } = control;
+    if (delay && !res.destroyed) await new Promise(done => {
+      const timer = setTimeout(done, 5000);
+      res.once('close', () => { clearTimeout(timer); done(); });
+    });
+    if (res.destroyed) return;
+    if (status) { res.writeHead(status); res.end('unavailable'); return; }
     const item = fixtures[decodeURIComponent(path.split('/').at(-1))];
     res.setHeader('Content-Type', 'application/json');
     res.writeHead(item ? 200 : 404);
@@ -83,7 +88,8 @@ if (!isMainThread) {
     const identity = {
       image: docker('image', 'inspect', image, '--format', '{{.Id}}'),
       head: git('rev-parse', 'HEAD'), dirty: git('status', '--short'),
-      scope: 'direct HTTP functional qualification only; no TLS, load or groupReady claim',
+      scope: 'bounded direct HTTP functional qualification only; no TLS, load or groupReady claim',
+      connectionFloodResistance: 'not measured',
       resources: { cpus: 1, memory: '512m', maxConnections: 1000 },
     };
     await writeFile(join(output, 'identity.json'), JSON.stringify(identity, null, 2));
@@ -106,12 +112,11 @@ if (!isMainThread) {
       } catch (error) { throw startupFailure(docker, name, error); }
       const qualification = await qualify({ base, source, upstream });
       await writeFile(join(output, `${source}-qualification.json`), JSON.stringify(qualification, null, 2));
-      console.log(`${source}: eligible=${qualification.eligible} missing=${qualification.missing.join(',') || 'none'}`);
+      console.log(`${source}: bounded qualification eligible=${qualification.eligible} missing=${qualification.missing.join(',') || 'none'}`);
+      console.log('Connection-flood resistance: not measured.');
       assert.equal(qualification.eligible, true, `${source}: ${qualification.missing}`);
       if (source === 'api') {
-        await until(async () => (await stats()).pending === 0, 'deadline left native upstream pending');
-        const before = await stats();
-        assert.ok(before.cancelled >= 1, 'actual source deadline must close upstream');
+        await until(async () => (await stats()).pending === 0, 'qualification left native upstream pending');
         const page = base + '/marketplace/en-US/item_1';
         const body = 'email=native%40example.test&target_price=1.23';
         const accepted = await fetch(page, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body });
@@ -126,9 +131,10 @@ if (!isMainThread) {
         assert.deepEqual(await read(), expected);
         const aborts = [];
         for (const method of ['GET', 'POST']) {
-          await control({ hang: true });
+          await control({ delay: true });
           const start = await stats();
-          const pending = request(page, { method, headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' } });
+          const pending = request(page, { method, agent: false, signal: AbortSignal.timeout(5000),
+            headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' } });
           pending.on('error', () => {});
           pending.end(method === 'POST' ? body : undefined);
           try {
@@ -140,8 +146,8 @@ if (!isMainThread) {
           aborts.push({ method, before: start, after: await stats() });
         }
         await control({});
-        await writeFile(join(output, 'api-cleanup.json'), JSON.stringify({ deadline: before, aborts, readback: await read() }, null, 2));
-        console.log('api: real GET/POST aborts closed upstream; deadline cleanup and same-cookie alert readback passed');
+        await writeFile(join(output, 'api-cleanup.json'), JSON.stringify({ aborts, readback: await read() }, null, 2));
+        console.log('api: real GET/POST aborts closed upstream; same-cookie alert readback passed');
       }
       await writeFile(join(output, `${source}-container.log`), docker('logs', name));
       docker('rm', '-f', '-v', name); active = undefined;

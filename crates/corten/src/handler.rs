@@ -242,6 +242,12 @@ pub trait Handler<T, S>: Clone + Send + Sync + Sized + 'static {
     /// The typed route's answer is a patch in action mode.
     const ACTION_PATCHES: bool = false;
 
+    /// The typed route's answer is a page that is the same for everyone (`Public`), which the
+    /// app keeps and gives again in the handler's place ([`crate::kept`]).
+    fn keeps(&self) -> bool {
+        false
+    }
+
     /// The answer to `req`.
     fn call(self, req: Request, state: S) -> impl Future<Output = Response> + Send + 'static;
 }

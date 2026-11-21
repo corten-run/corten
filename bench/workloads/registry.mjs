@@ -25,10 +25,10 @@ export const groups = freeze({
     ["typed-complete-schema", "numeric-json", "tested-errors", "fetch-parse-reserialize", "no-output-cache"],
     ["catalog-v1", "marketplace-v2"].flatMap((payload) => records(payload, ["json"]))),
   "localized-marketplace": group("Localized marketplace", ["nextjs", "aspnet", "django"], ["topcoat", "leptos", "gin", "drogon"],
-    ["complete-marketplace", "request-time-localization", "filter-sort", "valid-invalid-forms", "js-and-no-js", "production-http"],
+    ["complete-marketplace", "request-time-localization", "filter-sort", "valid-invalid-forms", "js-and-no-js", "bounded-production-http/v2"],
     records("marketplace-v2", ["page", "json"], true)),
   "mixed-production": group("Mixed production traffic", ["aspnet", "spring", "django", "express", "fastapi"], ["topcoat", "gin", "drogon"],
-    ["localized-reads", "numeric-json", "listings", "accepted-rejected-writes", "write-readback", "slow-upstream", "production-http"],
+    ["localized-reads", "numeric-json", "listings", "accepted-rejected-writes", "write-readback", "slow-upstream", "bounded-production-http/v2"],
     sources.flatMap((source) => locales.map((locale) => ({ key: `${source}-${locale}-mix`, source, locale, target: "mix" })))),
   "fullstack-browser": group("Full-stack browser experience", ["nextjs", "nuxt", "react-router", "rails", "laravel"],
     ["sveltekit", "astro", "tanstack-start", "leptos"],
@@ -45,7 +45,7 @@ export const groups = freeze({
     ["equal-initial-state", "disconnect", "gap-detection", "replay-or-resnapshot", "no-duplicate-effects", "final-keyed-state", "bounded-slow-client", "cleanup"],
     [{ key: "recovery", target: "live" }]),
   hardening: group("Resilience and hardening", ["aspnet", "spring", "nextjs", "django", "express"], ["gin", "drogon", "topcoat"],
-    ["equal-legitimate-traffic", "declared-deployment-budget", "slow-headers-bodies-readers", "dependency-recovery", "oversized-requests", "useful-service", "recovery"],
+    ["equal-legitimate-traffic", "declared-deployment-budget", "bounded-client-deadline", "bounded-request-limit", "dependency-recovery", "useful-service", "recovery"],
     [{ key: "direct", target: "hardening" }, { key: "deployed-edge", target: "hardening" }]),
 });
 
