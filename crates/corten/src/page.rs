@@ -672,14 +672,33 @@ pub(crate) enum Cause {
 
 /// Marks a failure no handler answered: an extractor refused the request before the handler ran,
 /// or the deadline passed while it waited for the request's body. The error page in its place is
-/// never shared ([`page_or_error`]), as for a panic or a timeout ([`Cause`]).
+/// never shared ([`page_or_error`]), as for a panic or a timeout ([`Cause`]), and nor is the
+/// failure sent as it is or as JSON ([`unanswered_settled`]): its text may be about who is asking.
 #[derive(Clone, Copy)]
 pub(crate) struct Unanswered;
+
+/// Marks the router's own answer for a request no route's handler takes: the `404` of an unknown
+/// URL, the `405` of a method the route lacks, the `501` of one no route has. No handler said what
+/// the error page in its place is, and the app's can show who is asking, so it is never shared
+/// ([`page_or_error`]). A handler's own `404` has no mark. The failure itself is empty, so sent as
+/// it is or as JSON it shows no one.
+#[derive(Clone, Copy)]
+pub(crate) struct Unrouted;
 
 /// `res`, an extractor's refusal, marked [`Unanswered`].
 #[cold]
 pub(crate) fn unanswered(mut res: Response) -> Response {
     res.extensions_mut().insert(Unanswered);
+    res
+}
+
+/// `res`, a failure that goes out without the error page (as it is, or as JSON): one an extractor
+/// refused before its handler ran ([`Unanswered`]) is never shared, whatever a middleware wrote on
+/// it.
+fn unanswered_settled(mut res: Response) -> Response {
+    if res.extensions().get::<Unanswered>().is_some() {
+        crate::cache::settle_refused(&mut res);
+    }
     res
 }
 
@@ -3521,7 +3540,10 @@ async fn errors_rendered<S: crate::app::Steps>(
     let dispatch = |pending| within_deadline(pending, next, deadline);
     if json {
         let shape = api.and_then(|mount| mount.errors.as_ref());
-        return crate::api::json_failure(run(pending, dispatch, deadline, signal).await, shared.dev, shape).await;
+        let res = crate::api::json_failure(run(pending, dispatch, deadline, signal).await, shared.dev, shape).await;
+        // Only a failure can be marked.
+        let failed = res.status().is_client_error() || res.status().is_server_error();
+        return if failed { unanswered_settled(res) } else { res };
     }
     if shared.layout_reads.is_empty() || mode.swaps() {
         return page_or_error(shared, pending, dispatch, deadline, signal, page).await;
@@ -3606,7 +3628,7 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     if res.extensions().get::<crate::answer::Answered>().is_some() {
         // Not kept across the await, so the request's future stays as small as it was.
         drop(asked);
-        return crate::api::json_failure(res, shared.dev, None).await;
+        return unanswered_settled(crate::api::json_failure(res, shared.dev, None).await);
     }
     // A `NoStore` answer: the page that replaces it is one too.
     let no_store = crate::cache::Typed::is_no_store(&res);
@@ -3648,14 +3670,18 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     // under it in dev mode; any other client (probes, webhooks) still gets the text.
     let rejection = failed.is_none() && cause.is_none() && browser && crate::api::is_plain_text(res.headers());
     if failed.is_none() && cause.is_none() && !empty_error && !rejection {
-        return res;
+        // A refusal sent as it is: to a client that does not ask for HTML, or with a body that is
+        // not plain text.
+        return unanswered_settled(res);
     }
-    // No handler answered it: a refusal before the handler ran, a panic, the deadline. The error
-    // page can read the request's `Cookie` and `Authorization` without reading a caller, and a
-    // `NoStore` handler never said it, so it is never shared, as a refused write's page is not.
+    // No handler answered it: a refusal before the handler ran, a panic, the deadline, the router's
+    // own failure. The error page can read the request's `Cookie` and `Authorization` without
+    // reading a caller, and a `NoStore` handler never said it, so it is never shared, as a refused
+    // write's page is not.
     let unanswered = rejection
         || matches!(cause, Some(Cause::Panicked | Cause::TimedOut | Cause::Refused | Cause::Unidentified))
-        || res.extensions().get::<Unanswered>().is_some();
+        || res.extensions().get::<Unanswered>().is_some()
+        || res.extensions().get::<Unrouted>().is_some();
     // What the handler and the app's middleware said besides the body (a request id,
     // `Retry-After`, `WWW-Authenticate`, `Allow`) goes out with the error page.
     let kept = std::mem::take(res.headers_mut());
@@ -3666,8 +3692,14 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
         failed = Some(crate::Failed(Arc::from(text.trim())));
     }
     if offline && status == StatusCode::NOT_FOUND {
-        // The PWA's offline page, which the service worker keeps: a 200.
-        return carried(kept, no_store, error_page(shared, asked, Failure::Offline).await);
+        // The PWA's offline page, which the service worker keeps: a 200. It is the app's error page
+        // in place of the router's `404`, so it is settled as one too; the worker's own cache keeps
+        // it whatever its `Cache-Control` says.
+        let mut res = carried(kept, no_store, error_page(shared, asked, Failure::Offline).await);
+        if unanswered {
+            crate::cache::settle_refused(&mut res);
+        }
+        return res;
     }
     let detail = failed.map(|crate::Failed(message)| message);
     let failure = match cause {

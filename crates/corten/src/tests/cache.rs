@@ -1312,6 +1312,140 @@ async fn an_error_page_for_a_failure_no_handler_answered_is_not_shared() {
     assert!(wrong.is_empty(), "an error page no handler answered, open to a CDN: {wrong:#?}");
 }
 
+/// Who is asking, by the request's `Cookie` (`name=ann`), read by an extractor of the app's own
+/// with no caller: how an error page can show the visitor without marking the answer personal.
+struct CookieName(String);
+
+impl<S: Send + Sync> crate::extract::FromRequestParts<S> for CookieName {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut http::request::Parts, _: &S) -> std::result::Result<Self, Response> {
+        let cookie = parts.headers.get(header::COOKIE).and_then(|cookie| cookie.to_str().ok()).unwrap_or("");
+        Ok(CookieName(cookie.strip_prefix("name=").unwrap_or("stranger").to_string()))
+    }
+}
+
+/// An app's error page that greets the visitor its cookie names.
+async fn greeting_error_page(_: Failure, req: Req, name: CookieName) -> HtmlResult {
+    req.test_page("Sorry", html! { <p>"Sorry, "{name.0}"."</p> })
+}
+
+/// `method` `uri` through `router` from Ann (`name=ann`), asked with `asked`: its status, headers
+/// and body.
+async fn from_ann(
+    router: &Router,
+    method: &str,
+    uri: &str,
+    asked: &[(&'static str, &'static str)],
+) -> (StatusCode, http::HeaderMap, String) {
+    let mut req = Request::builder().method(method).uri(uri).header(header::COOKIE, "name=ann");
+    for (name, value) in asked {
+        req = req.header(*name, *value);
+    }
+    let (parts, body) = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap().into_parts();
+    let body = String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    (parts.status, parts.headers, body)
+}
+
+/// The router's own answer for a request no route's handler takes (the `404` of an unknown URL, the
+/// `405` of a method the route lacks, the `501` of one no route has, and the PWA's offline page in
+/// place of its `404`) becomes the app's error page, which can greet Ann by her cookie without
+/// reading a caller. No handler said what it is, so it is never shared, as for a failure no handler
+/// answered: `private` whatever a staged middleware made of its `Cache-Control` (`private,
+/// no-store` where it names `no-store`), and none of the caching headers a CDN reads first. A
+/// handler's own `404` is the handler's answer, settled by the usual rules: it keeps them.
+#[tokio::test]
+async fn the_router_s_own_failure_page_is_not_shared() {
+    let routes = || {
+        Table::new()
+            .route("/", get(|| async { "home" }))
+            .route("/form", crate::router::post(|| async { "saved" }))
+            .route("/gone", get(|| async { StatusCode::NOT_FOUND }))
+    };
+    let mut wrong = Vec::new();
+    for (cache, sent, own) in [
+        (None, "private, no-cache", "private, no-cache"),
+        (Some("public, max-age=60"), "private, no-cache", "private, no-cache"),
+        (Some("no-store"), "private, no-store", "no-store"),
+    ] {
+        let pwa = crate::pwa::Pwa::new(crate::pwa::Manifest::new("A", "A"));
+        let router =
+            App::new(Routes::from(routes())).middleware(CdnRecaches(cache)).error_page(greeting_error_page, ()).pwa(pwa).router();
+        for (method, uri, status) in [
+            ("GET", "/nowhere", StatusCode::NOT_FOUND),
+            ("GET", "/form", StatusCode::METHOD_NOT_ALLOWED),
+            ("PATCH", "/", StatusCode::NOT_IMPLEMENTED),
+            ("GET", "/offline", StatusCode::OK),
+        ] {
+            let (got, headers, body) = from_ann(&router, method, uri, &[("accept", "text/html")]).await;
+            assert_eq!(got, status, "{method} {uri} {cache:?}");
+            assert!(body.contains("Sorry, ann."), "{method} {uri} {cache:?}: {body}");
+            for what in kept_from_cdns(&headers, sent) {
+                wrong.push(format!("{method} {uri}, {cache:?}: {what}"));
+            }
+        }
+        let (status, headers) = asked_for(&router, "/gone", &[("accept", "text/html")]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{cache:?}");
+        assert_eq!(headers[header::CACHE_CONTROL], own, "{cache:?}: a handler's own 404");
+        for name in CDN_OVERRIDES {
+            assert_eq!(headers[name], "public, max-age=60", "{cache:?}: a handler's own 404 keeps {name}");
+        }
+    }
+    assert!(wrong.is_empty(), "the router's own failure page, open to a CDN: {wrong:#?}");
+}
+
+/// An extractor of the app's own that refuses Ann by her cookie, reading no caller: with no body at
+/// `/refused`, with the reason as plain text at `/refused/text`.
+struct RefusedByCookie;
+
+impl<S: Send + Sync> crate::extract::FromRequestParts<S> for RefusedByCookie {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut http::request::Parts, _: &S) -> std::result::Result<Self, Response> {
+        let cookie = parts.headers.get(header::COOKIE).and_then(|cookie| cookie.to_str().ok()).unwrap_or("");
+        let name = cookie.strip_prefix("name=").unwrap_or("stranger");
+        Err(match parts.uri.path() {
+            "/refused/text" => (StatusCode::FORBIDDEN, format!("Not for {name}.")).into_response(),
+            _ => StatusCode::FORBIDDEN.into_response(),
+        })
+    }
+}
+
+/// A request an extractor refused before its handler ran is never shared in any form it goes out
+/// in, whatever a staged middleware wrote on it: the app's error page (for a refusal with no body
+/// as well as one in plain text), the refusal as it is to a client that does not ask for HTML, and
+/// JSON. Each goes out `private` (`private, no-store` where the middleware named `no-store`), with
+/// none of the caching headers a CDN reads first.
+#[tokio::test]
+async fn a_refusal_before_the_handler_is_not_shared_in_any_form() {
+    let routes = || {
+        Table::new()
+            .route("/refused", get(|_: RefusedByCookie| async { "never" }))
+            .route("/refused/text", get(|_: RefusedByCookie| async { "never" }))
+    };
+    let mut wrong = Vec::new();
+    for (cache, sent) in
+        [(None, "private, no-cache"), (Some("public, max-age=60"), "private, no-cache"), (Some("no-store"), "private, no-store")]
+    {
+        let router = App::new(Routes::from(routes())).middleware(CdnRecaches(cache)).error_page(greeting_error_page, ()).router();
+        for (uri, asked, shows) in [
+            ("/refused", &[("accept", "text/html")][..], "Sorry, ann."),
+            ("/refused/text", &[("accept", "text/html")], "Sorry, ann."),
+            ("/refused/text", &[("accept", "text/plain")], "Not for ann."),
+            ("/refused/text", &[("accept", "application/json")], "Not for ann."),
+            ("/refused", &[("accept", "application/json")], "Forbidden"),
+        ] {
+            let (status, headers, body) = from_ann(&router, "GET", uri, asked).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{uri} {asked:?} {cache:?}");
+            assert!(body.contains(shows), "{uri} {asked:?} {cache:?}: {body}");
+            for what in kept_from_cdns(&headers, sent) {
+                wrong.push(format!("{uri} {asked:?}, {cache:?}: {what}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "a refusal before the handler, open to a CDN: {wrong:#?}");
+}
+
 /// A redirect's notice is removed by a `Set-Cookie` Corten writes on the page it was for, which
 /// alone does not make the page personal; a real cookie after it still does, and the page loses the
 /// caching headers a CDN reads first.

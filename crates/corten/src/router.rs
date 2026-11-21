@@ -72,17 +72,21 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
     }
 }
 
-/// An answer that is a status alone: the router's `404` and `405`.
+/// An answer that is a status alone: the router's `404` and `405`, marked as the router's own
+/// ([`crate::page::Unrouted`]), so the error page in its place is never shared.
 struct Status(StatusCode);
 
 impl Endpoint for Status {
     fn call(&self, _: Request) -> Answering {
-        Box::pin(std::future::ready(self.0.into_response()))
+        let mut res = self.0.into_response();
+        res.extensions_mut().insert(crate::page::Unrouted);
+        Box::pin(std::future::ready(res))
     }
 }
 
 /// The router's `501` for a method no route in the app has, marked so the error page tells it
-/// from a handler's or a middleware's own empty `501` ([`crate::Failure::UnknownMethod`]).
+/// from a handler's or a middleware's own empty `501` ([`crate::Failure::UnknownMethod`]), and as
+/// the router's own, as [`Status`] is.
 struct Unimplemented;
 
 impl Endpoint for Unimplemented {
@@ -90,6 +94,7 @@ impl Endpoint for Unimplemented {
     fn call(&self, _: Request) -> Answering {
         let mut res = StatusCode::NOT_IMPLEMENTED.into_response();
         res.extensions_mut().insert(crate::page::Cause::UnknownMethod);
+        res.extensions_mut().insert(crate::page::Unrouted);
         Box::pin(std::future::ready(res))
     }
 }
