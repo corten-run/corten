@@ -7281,9 +7281,8 @@ rules something out.
     request on. What the rule spares is the copy for a URL's first request, and for URLs
     that outnumber what the marks remember. The marks are each host's own, so one host's
     answers do not show what was asked of another, and a URL's in any language. No list of
-    URLs is held, a request whose answer is not kept takes no lock of the store's but the read
-    lock of the lookup (it meets the others that miss its page in the table below, which has a
-    lock of its own), and the hash needs no key of the process's: a client that chooses URLs sharing a
+    URLs is held, a request whose answer is not kept takes no lock but the read lock of the
+    lookup, and the hash needs no key of the process's: a client that chooses URLs sharing a
     mark gains an answer kept the first time, and one that asks for enough new URLs to clear
     the marks gains one more run of each page's handler, with requests that each ran a
     handler.
@@ -7363,24 +7362,19 @@ rules something out.
     start wait as the others do, so a deploy does not send a slow source a request for each
     visitor who comes while each page is first made.
 
-    The two rules meet at a full store's first request for a URL. That request makes the page for
-    the others that miss it meanwhile, as any first request does, and a request that comes to
-    wait for it is the URL's second request: the page is kept then, and the others are given it,
-    so the requests that miss a new URL together run its handler once. With none waiting the
-    page is the handler's and not copied, as above, and it is not remembered as not kept: the
-    store refused it, not the page, and a minute of that memory would have the URL's next
-    requests, which the store keeps the page for, each run the handler. So the others waiting for
-    a first request never run their own handlers because the store refused it; they do, as for
-    any page, when its page was not kept for another reason (an error, a page drawn for that
-    request), and then each keeps its own only where the store would have kept it at that
-    request's own ask. A request the store refuses that finds the table full, or the page
-    remembered as not kept, is the handler's at once, as in a store with room.
-    Whether any request waits is settled once the first request's page is made, before its
-    headers are read for its size and date, in one step under the table's lock with the end of
-    the wait for it: a request comes in time to have the page kept for it, or finds no page being
-    made and makes it itself, as the URL's second, for those that come after it. A refused first
-    request pays for the table and the second look as any miss does, and for the checks of its
-    answer that come before its headers are read, not for the copy (measured below).
+    The two rules meet at a full store's first request for a URL, and the rule for a full store
+    goes first: that request is the handler's as with nothing kept. It leaves its mark and takes
+    no part in the table, so it pays what it paid before requests met there (measured below), and
+    no other request waits for it. The requests that miss the URL while it is made find its mark,
+    so they are its second request, and meet in the table as any others do: the first of them
+    makes the page, which is kept, and the rest wait for that one and are given it. So requests
+    that miss a URL new to a full store together run its handler at most twice, the first
+    request's and one for the rest, where with room they run it once. Nothing is remembered of
+    the first request's answer, which was not made for any other, so an error there does not keep
+    the next requests from waiting for each other. The second run is the price of keeping the
+    first request for every URL in a full store as cheap as before: making its page for the
+    others (below) cost that request 18.6% more, on the stream of new URLs a crawler sends, which
+    the rule for a full store exists to make cheap.
 
     Not chosen: in front of the middleware, for the reasons above, though it would save the
     stages too; asking the marks whether or not the store has room, which spares the copy
@@ -7417,13 +7411,13 @@ rules something out.
     holds it to one each); no memory of pages not kept, which would cost each wave of requests for
     a page never kept one handler's time of waiting (31 of 64 requests past the deadline in every
     round of the wave below, against 28 with it) to save about 130 KB at most and no instruction
-    on a measured path; leaving a request a full store refuses out of the table, which ran a new
-    URL's handler twice for requests that miss it together, the first request's alone and then
-    one for the rest, and kept the page for those; remembering a page the store alone refused as
-    not kept, which had the requests that miss it together next each run the handler; settling
-    the refusal after the answer's headers were read and ending the wait apart from it, which a
-    review found let requests that came between the two wait for a page never kept and then each
-    run their own, and cost the refused request the reading of its headers; leaving a handler's `Date` out with nothing for its age, with which a cache
+    on a measured path; a full store's first request for a URL making the page for those that
+    miss it meanwhile, kept when one came to wait (`cb9195a49` to `895c9b630`), which ran their
+    handler once rather than twice and cost every first request in a full store the table, its
+    keyed hash, the second look and the future that keeps the answer, 4,338 instructions a
+    request (below), and needed its refusal settled in one step with the end of the wait, under
+    the table's lock, so that a request that came between the two did not wait for a page never
+    kept and then run its own; leaving a handler's `Date` out with nothing for its age, with which a cache
     after the app counted the first answer older than each given in its place, and not keeping a
     page that sets a `Date` at all, which loses the page for an input HTTP gives a meaning to; and,
     left for changes of their own, a call
@@ -7568,26 +7562,23 @@ rules something out.
     (+0.4%, bound +1.7%), and the 100 more run the same way were added after that was seen, with no
     rule for stopping set beforehand. The host was not quiet: the workstation's other work kept
     its CPUs 95 to 100% busy, and one pair's change ranged from -7.7% to +16.1%.
-    With the table, the refusal settled in one step with the end of its wait and before the
-    answer's headers are read, against main with its handling of a drawn submit key (`5fbe4e9ef`
-    against main's `564034b86`, `tests/kept_cost.rs` as above with a fifth case, a new URL in a
-    full store, the bound at 4 MiB and filled before the counted requests so that the store
-    refuses each of them, in 3 rounds that alternated the two builds): a new URL in a full store
-    ran 27,692 instructions against 23,354 at the median (18.6% more), where main gives the
-    request to the handler at once; a page made and kept at a new URL with room 35,954 against
-    34,853 (3.2% more), a write and the page made again 46,129 against 44,922 (2.7% more), a kept
-    page given again 19,227 against 19,226 and a page for one visitor 18,315 against 18,334, each
-    build's rounds within 11 instructions of each other. Of the 4,338 more for a new URL in a full
-    store, by callgrind's inclusive counts for the 1,000 requests counted (`35c98f2bc` against
-    `e388e070c`, main before the submit key's change), the table, its keyed hash, the count of
-    writes and the second look took about 1,800 a request, the future that keeps the answer and
-    its allocation about 860, and the answer's checks before the refusal most of the rest.
-    Settling the refusal before the answer's headers are read took 930 off (28,587 at `35c98f2bc`,
-    27,668 at `ec7f8b024` in one round), and settling it in one step with the end of the wait
-    about 220 off the reviewed head's (`f689a7132`, 28,810, its rounds alternated with those two
-    against `e388e070c`). That is what the first request for a URL in a full store pays so that
-    the requests that miss it together run its handler once; it is not shown that apps meet such
-    requests often enough to pay for it.
+    The first request for a URL in a full store left out of the table, as this Choice has it,
+    against main with its handling of a drawn submit key (`b1cfca825` against main's
+    `564034b86`, `tests/kept_cost.rs` as above with a fifth case, a new URL in a full store, the
+    bound at 4 MiB and filled before the counted requests so that the store refuses each of
+    them, in 3 rounds that alternated the two builds): a new URL in a full store ran 23,408
+    instructions against 23,357 at the median (51 more, 0.2%); a page made and kept at a new URL
+    with room 35,855 against 34,852 (2.9% more), a write and the page made again 46,086 against
+    44,922 (2.6% more), a kept page given again 19,227 against 19,226 and a page for one visitor
+    18,315 against 18,334, each build's rounds within 9 instructions of each other. The same
+    fixture and rounds with that first request making the page for the others (`5fbe4e9ef`
+    against `564034b86`, not chosen above) ran 27,692 for a new URL in a full store (4,338 more,
+    18.6%), 35,954 for a page made with room and 46,129 for a write and the page made again. Of
+    those 4,338, by callgrind's inclusive counts for the 1,000 requests counted (`35c98f2bc`
+    against `e388e070c`, main before the submit key's change), the table, its keyed hash, the
+    count of writes and the second look took about 1,800 a request, the future that keeps the
+    answer and its allocation about 860, and the answer's checks before the refusal most of the
+    rest.
     What a write pays for its count, under callgrind (valgrind 3.24.0, rustc 1.99.1, release with
     debuginfo) on an app with one route whose `GET` and `POST` each answer text, sent
     `POST /items/7/edit` in process with `oneshot`, as (instructions at 1,200 writes less those at
@@ -7612,8 +7603,8 @@ rules something out.
     more from one start to the next; a miss kept with room in memory the store has used
     before (room made by a write or by a page's lifetime ending), in cycles; a store read
     from more than one core; the cycles of a miss, and requests that miss together on a quiet
-    host or with a real source; the cycles of a new URL in a full store with the table, and how
-    often an app's first requests for a URL in a full store meet another; and the
+    host or with a real source; how often an app's first requests for a URL in a full store meet
+    another, and what the second run of its handler costs a source then; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
@@ -7644,16 +7635,19 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; requests for
     pages not kept are shown to wait for each other often enough to matter, or requests in many
     languages for a page the same in all of them to load its source; an app is shown to make more
-    than 1,024 pages at once, or to forget pages not kept within their minute; a profile shows the
-    table's cost to the first requests for URLs in a full store (4,338 instructions a request in
-    the fixture) where such requests seldom meet another, so they should make their pages with
-    none waiting; or the connection speaks HTTP/2, where a request's target carries its authority.
+    than 1,024 pages at once, or to forget pages not kept within their minute; requests that miss
+    a URL new to a full store together are shown to load a source with the second run of its
+    handler, so the first request should make the page for the others, at the table's cost to
+    every first request in a full store (4,338 instructions a request in the fixture); or the
+    connection speaks HTTP/2, where a request's target carries its authority.
 
     Last checked: 2026-11-21, the two rules together with rustc 1.100.0, release builds of
     `cb9195a49` and `68ce3f1e6` counted by valgrind 3.24.0's callgrind. 2026-11-21, a new URL in
     a full store with the table and the four cases beside it, rustc 1.100.0, release builds of
-    `5fbe4e9ef` and `564034b86`, and of `35c98f2bc`, `ec7f8b024` and `f689a7132` against
-    `e388e070c`, counted by valgrind 3.24.0's callgrind.
+    `5fbe4e9ef` and `564034b86`, and of `35c98f2bc` against `e388e070c`, counted by valgrind
+    3.24.0's callgrind. 2026-11-21, a new URL in a full store left out of the table and the four
+    cases beside it, rustc 1.100.0, release builds of `b1cfca825` and `564034b86` counted by
+    valgrind 3.24.0's callgrind.
     2026-11-21 for a write's count, the callgrind rounds above at `fc86d8eff` and
     `6984b2ac4`, and the cycles of the same write from the two builds, built with rustc 1.100.0
     on a dedicated 8-CPU cloud host (Xeon Platinum 8358, one thread a core) with nothing else
