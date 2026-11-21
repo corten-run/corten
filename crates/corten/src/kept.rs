@@ -23,8 +23,9 @@
 //! not asked for first, no notice sent back, no body, and the URL the router matched (a
 //! middleware that changed it since leaves the request to the handler). The key is the `Host`,
 //! the path and query, and `Accept-Language` when the page's `Vary` names it (`App::messages`, or
-//! a message read in the language it asks for): a page for `/items?page=2` is not the one for `/items`. The
-//! headers are compared as they were sent, so `fr` and `fr-FR` each have a copy. An answer is
+//! a locale negotiated from it, before or after the page was made): a page for `/items?page=2`
+//! is not the one for `/items`. The headers are compared as they were sent, so `fr` and `fr-FR`
+//! each have a copy. An answer is
 //! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
 //! and no value made for this request alone, and varies on nothing but what the key covers.
 //!
@@ -575,12 +576,15 @@ pub(crate) struct Missed {
 
 impl Missed {
     /// `res`, kept when it is the same for everyone and for how long: see the module.
-    pub(crate) async fn keep(self, res: Response) -> Response {
-        let shared = self.signal.as_ref().and_then(crate::Signal::shared);
-        let Some(answers) = shared.and_then(|shared| shared.kept.as_ref()) else { return res };
+    pub(crate) async fn keep(self, mut res: Response) -> Response {
+        let Some(signal) = &self.signal else { return res };
+        let Some(answers) = signal.shared().and_then(|shared| shared.kept.as_ref()) else { return res };
         let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else { return res };
-        // Whether the page varies on `Accept-Language` (`App::messages`, or messages read without
-        // it), or on something the key does not cover.
+        // A locale negotiated after the page set its headers is named now, so the key below
+        // and the header the app sends agree.
+        crate::page::vary_on_language(signal, res.headers_mut());
+        // Whether the page varies on `Accept-Language` (`App::messages`, or a locale negotiated
+        // from it), or on something the key does not cover.
         let Some(language) = varies(res.headers()) else { return res };
         let style = res.extensions().get::<crate::security::StyleBlock>().cloned();
         // Only what is put back on a kept answer: a mark this does not know is not replayed.

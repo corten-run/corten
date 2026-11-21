@@ -2637,8 +2637,11 @@ impl<S: Steps> Layer<S> {
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
         let next = Next { steps: &self.steps, scope: steps, route };
         // The signal ends when this future is dropped, then when the response is dropped.
-        let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
+        let mut res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
         let caller = watch.0.is_personal();
+        // Whatever answered (a page, JSON, a redirect, the error page, a middleware after
+        // `next`): a locale it negotiated from `Accept-Language` is in its `Vary`.
+        page::vary_on_language(&watch.0, res.headers_mut());
         let mut res = signal::follow(res, watch, self.zoned());
         if let Some(wrote) = wrote {
             wrote.answered(&res);

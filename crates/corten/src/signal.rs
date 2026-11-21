@@ -114,8 +114,8 @@ struct Inner {
     callers: AtomicU64,
     /// The app's error page is answering it.
     error_page: AtomicBool,
-    /// A message was read in the language `Accept-Language` asks for where no answer says it
-    /// varies on the header: an app with no [`crate::App::messages`].
+    /// Something negotiated the request's locale from its `Accept-Language` (`req.t()`,
+    /// `req.lang()`), so the answer's `Vary` names the header (`crate::page::vary_on_language`).
     asked_language: AtomicBool,
     /// For a request that may change what its path shows, in an app that keeps pages: which of
     /// the store's counts of writes is its path's, plus one (`crate::kept`).
@@ -584,8 +584,8 @@ impl Signal {
         self.0.error_page.load(Ordering::Relaxed)
     }
 
-    /// A message was read in the language the request's `Accept-Language` asks for, in an app
-    /// without [`crate::App::messages`]: the answer's `Vary` names the header.
+    /// The request's locale was negotiated from its `Accept-Language`: the answer's `Vary` names
+    /// the header, however late it was read (`crate::page::vary_on_language`).
     pub(crate) fn ask_language(&self) {
         self.0.asked_language.store(true, Ordering::Relaxed);
     }

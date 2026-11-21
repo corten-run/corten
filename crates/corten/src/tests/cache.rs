@@ -1655,48 +1655,215 @@ async fn a_kept_page_is_for_the_host_and_the_language_it_was_asked_in() {
 }
 
 /// Messages read with no `App::messages` are in the language `Accept-Language` asks for, so the
-/// answer's `Vary` names the header, for a cache in front as for the app's own: in every mode the
-/// page answers, and on the kept copy. A page of the same app that reads none does not vary on it.
+/// answer's `Vary` names the header, for a cache in front as for the app's own: in the document
+/// and in a navigation's swap, and on the kept copy. A page of the same app that reads none does
+/// not vary on it.
 #[tokio::test]
 async fn a_page_that_draws_messages_without_app_messages_varies_on_accept_language() {
-    crate::i18n::messages! { struct BareMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
     let minute = Duration::from_secs(60);
     let words = move |req: Req| async move {
-        let t: BareMsg = req.t();
+        let t: WordsMsg = req.t();
         let listings = t.item_listings().to_string();
         Public::new(minute, req.test_page_for("Words", html! { <p>{listings}</p> }))
     };
     let plain = move |req: Req| async move { Public::new(minute, req.test_page_for("Plain", html! { <p>"plain"</p> })) };
     let routes = Table::new().route("/words", crate::route::get(words).0).route("/plain", crate::route::get(plain).0);
     let router = App::new(Routes::from(routes)).router();
-    let names = |headers: &HeaderMap| -> Vec<String> {
-        headers
-            .get_all(header::VARY)
-            .iter()
-            .flat_map(|line| line.to_str().unwrap().split(',').map(|name| name.trim().to_ascii_lowercase()).collect::<Vec<_>>())
-            .collect()
-    };
     for mode in [None, Some("nav")] {
         for (asked, word) in [("fr", "Annonces"), ("en", "Listings"), ("fr", "Annonces")] {
             let mut sent = vec![("accept-language", asked)];
             sent.extend(mode.map(|mode| ("corten", mode)));
             let (status, headers, body) = fetch(&router, "GET", "/words", &sent).await;
             assert_eq!(status, StatusCode::OK);
+            assert_eq!(headers.contains_key("corten-page"), mode.is_some(), "{mode:?}: swapped in by the runtime");
             assert!(String::from_utf8_lossy(&body).contains(word), "{mode:?} {asked}");
-            let vary = names(&headers);
+            let vary = vary_names(&headers);
             assert!(vary.iter().any(|name| name == "accept-language"), "{mode:?} {asked}: {vary:?}");
         }
         let mut sent = vec![("accept-language", "fr")];
         sent.extend(mode.map(|mode| ("corten", mode)));
         let (_, headers, _) = fetch(&router, "GET", "/plain", &sent).await;
-        let vary = names(&headers);
+        let vary = vary_names(&headers);
         assert!(!vary.iter().any(|name| name == "accept-language"), "{mode:?}: {vary:?}");
     }
     let (_, kept, _) = fetch(&router, "GET", "/words", &[("accept-language", "fr")]).await;
     assert!(kept.contains_key(header::AGE), "the kept copy");
-    assert!(names(&kept).iter().any(|name| name == "accept-language"), "{kept:?}");
+    assert!(vary_names(&kept).iter().any(|name| name == "accept-language"), "{kept:?}");
 }
 
+/// A handler that reads its messages after it built its page (here, to choose which of two to
+/// give) still answers in the language asked for: the dependency is settled when its answer is
+/// finished, so the kept copy is keyed on `Accept-Language` and its `Vary` names it on the wire.
+#[tokio::test]
+async fn a_late_message_read_is_kept_and_sent_for_its_language() {
+    let runs = Runs::default();
+    let counted = runs.clone();
+    let page = move |req: Req| {
+        counted.ran();
+        async move {
+            let english = req.test_page_for("Words", html! { <p>"Listings"</p> });
+            let french = req.test_page_for("Words", html! { <p>"Annonces"</p> });
+            // Negotiated only now, after both pages set their headers.
+            let t: WordsMsg = req.t();
+            let page = if t.item_listings() == "Annonces" { french } else { english };
+            Public::new(Duration::from_secs(60), page)
+        }
+    };
+    let router = App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).router();
+    let mut sent = Vec::new();
+    for (asked, word, ran) in [("fr", "Annonces", 1), ("en", "Listings", 2), ("fr", "Annonces", 2), ("en", "Listings", 2)] {
+        let (status, headers, body) = fetch(&router, "GET", "/", &[("accept-language", asked)]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(String::from_utf8_lossy(&body).contains(word), "{asked}: {}", String::from_utf8_lossy(&body));
+        assert_eq!(runs.count(), ran, "{asked}");
+        sent.push(headers);
+    }
+    // And a cache in front is told, on the answer made and on the kept copy given, beside the
+    // fields the page named itself.
+    for headers in sent {
+        let vary = vary_names(&headers);
+        for name in ["corten", "accept", "accept-language"] {
+            assert!(vary.iter().any(|named| named == name), "{name}: {vary:?}");
+        }
+    }
+}
+
+/// Answers other than a `Public` page that negotiate their messages from `Accept-Language` in an
+/// app without `App::messages` say so too: the error page, a page drawn with a notice it was sent
+/// back, and a redirect chosen by the language (which says so with `App::messages` as well).
+#[tokio::test]
+async fn other_answers_that_negotiate_messages_vary_on_accept_language() {
+    let noticed = |req: Req| async move {
+        let notice = req.notice();
+        let t: WordsMsg = req.t();
+        let listings = t.item_listings().to_string();
+        req.test_page("Done", html! { <p>{notice}" "{listings}</p> })
+    };
+    let go = |req: Req| async move {
+        let t: WordsMsg = req.t();
+        let moved: HtmlResult = if t.item_listings() == "Annonces" { req.moved(&FrenchWords) } else { req.moved(&EnglishWords) };
+        moved
+    };
+    let routes = Table::new().route("/done", get(noticed)).route("/go", get(go));
+    let router = App::new(Routes::from(routes)).error_page(words_error_page, ()).router();
+
+    let (status, headers, body) = fetch(&router, "GET", "/nope", &[("accept-language", "fr")]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(String::from_utf8_lossy(&body).contains("Annonces"), "the error page in French");
+    assert!(vary_names(&headers).iter().any(|name| name == "accept-language"), "{headers:?}");
+
+    let sent = [("accept-language", "fr"), ("corten-notice", "p=%2Fdone&m=Saved"), ("sec-fetch-site", "same-origin")];
+    let (_, headers, body) = fetch(&router, "GET", "/done", &sent).await;
+    assert!(String::from_utf8_lossy(&body).contains("<p>Saved Annonces</p>"), "{}", String::from_utf8_lossy(&body));
+    let vary = vary_names(&headers);
+    for name in ["corten", "accept", "accept-language", "corten-notice"] {
+        assert!(vary.iter().any(|named| named == name), "{name}: {vary:?}");
+    }
+
+    // With `App::messages` as without: a redirect is not a page, so nothing else names it.
+    let with = App::new(Routes::from(Table::new().route("/go", get(go)))).messages::<WordsMsg>().router();
+    for router in [&router, &with] {
+        for (asked, to) in [("fr", "/fr/words"), ("en", "/en/words")] {
+            let (status, headers, _) = fetch(router, "GET", "/go", &[("accept-language", asked)]).await;
+            assert_eq!((status, headers[header::LOCATION].to_str().unwrap()), (StatusCode::MOVED_PERMANENTLY, to));
+            let vary = vary_names(&headers);
+            assert!(vary.iter().any(|name| name == "corten") && vary.iter().any(|name| name == "accept-language"), "{vary:?}");
+        }
+    }
+}
+
+/// A screen's JSON for a data client, and a `Public` JSON answer of an `App::api` mount, name
+/// `Accept-Language` when they read messages in its language, with `App::messages` or without.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn json_that_negotiates_messages_varies_on_accept_language() {
+    let routes = || Table::new().route("/screen", get(words_screen));
+    let bare = App::new(Routes::from(routes())).api(words_api::api).router();
+    let with = App::new(Routes::from(routes())).messages::<WordsMsg>().api(words_api::api).router();
+    for router in [&bare, &with] {
+        for (asked, word) in [("fr", "Annonces"), ("en", "Listings")] {
+            let sent = [("accept-language", asked), ("accept", "application/json")];
+            let (status, headers, body) = fetch(router, "GET", "/screen", &sent).await;
+            assert_eq!((status, headers[header::CONTENT_TYPE].to_str().unwrap()), (StatusCode::OK, "application/json"));
+            assert_eq!(body, format!(r#"{{"title":"Words","data":{{"listings":"{word}"}}}}"#));
+            assert!(vary_names(&headers).iter().any(|name| name == "accept-language"), "{headers:?}");
+
+            let (status, headers, body) = fetch(router, "GET", "/words-api/listings", &[("accept-language", asked)]).await;
+            assert_eq!((status, body), (StatusCode::OK, bytes::Bytes::from(format!(r#""{word}""#))));
+            assert!(headers[header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), "{headers:?}");
+            assert!(vary_names(&headers).iter().any(|name| name == "accept-language"), "{asked}: {headers:?}");
+        }
+    }
+}
+
+/// The names an answer's `Vary` lines list, lowercased.
+fn vary_names(headers: &HeaderMap) -> Vec<String> {
+    headers
+        .get_all(header::VARY)
+        .iter()
+        .flat_map(|line| line.to_str().unwrap().split(',').map(|name| name.trim().to_ascii_lowercase()).collect::<Vec<_>>())
+        .collect()
+}
+
+crate::i18n::messages! { struct WordsMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+
+/// Where a redirect chosen by the language goes.
+#[derive(crate::Route)]
+#[route("/fr/words")]
+struct FrenchWords;
+
+#[derive(crate::Route)]
+#[route("/en/words")]
+struct EnglishWords;
+
+/// An error page in the language asked for.
+async fn words_error_page(_: Failure, req: Req) -> HtmlResult {
+    let t: WordsMsg = req.t();
+    let listings = t.item_listings().to_string();
+    req.test_page("Missing", html! { <p>{listings}</p> })
+}
+
+#[cfg(feature = "json")]
+#[derive(crate::json::ToJson)]
+struct ShownWords {
+    listings: String,
+}
+
+/// A screen whose data is in the language asked for.
+#[cfg(feature = "json")]
+async fn words_screen(req: Req) -> HtmlResult<crate::Screen<ShownWords>> {
+    let t: WordsMsg = req.t();
+    let shown = ShownWords { listings: t.item_listings().to_string() };
+    let main = shown.listings.clone();
+    let doc = html! {
+        <html>
+            <head>
+                <title>"Words"</title>
+                <Corten />
+            </head>
+            <body><main>{main}</main></body>
+        </html>
+    };
+    req.screen(&shown, doc)
+}
+
+/// A `Public` JSON answer in the language asked for.
+#[cfg(feature = "json")]
+#[crate::routes(api = WordsApi)]
+mod words_api {
+    #[route("/words-api")]
+    pub struct WordsApi;
+
+    #[route("/words-api/listings", get = api_listings)]
+    pub struct ApiListings;
+}
+
+#[cfg(feature = "json")]
+async fn api_listings(req: Req) -> Public<crate::JsonResult<String>> {
+    let t: WordsMsg = req.t();
+    let listings: crate::JsonResult<String> = Ok(crate::Json(t.item_listings().to_string()));
+    Public::new(Duration::from_secs(60), listings)
+}
 /// A page whose styles come from data has a style block its `Content-Security-Policy` allows by
 /// hash: the kept page is sent with the same policy, so the block still applies.
 #[tokio::test]
