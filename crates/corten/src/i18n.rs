@@ -361,8 +361,9 @@ use crate::view::{escape_display, escape_into, AttrValue, Render};
 
 mod display_digits;
 mod format;
-#[cfg(feature = "log")]
-pub(crate) use format::{civil_from_days, days_from_civil};
+#[cfg(any(feature = "log", test))]
+pub(crate) use format::civil_from_days;
+pub(crate) use format::days_from_civil;
 mod local;
 mod visitor;
 
