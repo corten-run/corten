@@ -437,7 +437,7 @@ For an incomplete round, retain the original fleet and use a separate physical
 continuation root outside the checkout. Its `index.json` is an array of original
 fleet references. Each reference names an absolute fleet root, the original
 round and commit, a clean checkout at that commit with its original npm installs,
-and the reviewed SHA-256 of `results.tgz` for every compatible replayed group in
+and the reviewed SHA-256 of `results.tgz` for every verified replayed group in
 that fleet. Use `[]` when starting without retained evidence. For example:
 
 ```json
@@ -446,8 +446,12 @@ that fleet. Use `[]` when starting without retained evidence. For example:
 
 Use an unmodified index and the same continuation root for the entire set. The
 report replays each original attempt, checks the successful archives, the
-extracted trees against the pinned archive bytes and confirmed deletion, and checks each reusable group's own
-contract and roster. It does not use a cached report as evidence. The measured
+extracted trees against the pinned archive bytes and confirmed deletion, and
+verifies each group against its original contract and roster. It does not use a
+cached report as evidence. A changed current contract does not invalidate the
+original result or make it eligible to rerun in this root. The report shows the
+measured contract and roster, with `matchesCurrentContract: false` when they
+differ from today's matchup. The measured
 commits must be ancestors of the report checkout, but groups need not have the
 same commit, date, framework versions or host. Preserve target failures (including
 comparison-ineligibility) in verified group results; a failed or incomplete
@@ -483,17 +487,18 @@ The continuation does not grant approval; the existing exact merged-source,
 native readiness, independent review and operator approval requirements apply.
 
 For collection or audit delivery use the ordinary per-host commands at the
-measured checkout, with state root `ABSOLUTE_ROOT/json-api/json-api` in this
-example. Each group has one new reservation slot and no automatic retry. A
-settled `not-created` attempt does not stop other groups, but its consumed intent
-cannot be reused. To retry that group after `not-created` or confirmed retirement,
-use a new root with all previous index references and every reserved independent
-slot as a source. Point each slot entry's `root` at the old `ROOT/GROUP` and
-provide `archives: {}` for a settled failure or no-create attempt; pin every
-eligible success as usual. Use a fresh round, reservation and normal exact approval.
-Do not operate the previous root again. An ambiguous or active slot is refused;
-leave its failure evidence and locks in place and use the existing recovery
-procedure. Run the report after collection to select another missing group.
+measured checkout. For the first attempt use state root
+`ABSOLUTE_ROOT/json-api/json-api`. For a retry use the reported `attemptRoot`
+plus the group name, for example `ABSOLUTE_ROOT/json-api--r26/json-api`.
+There is no automatic retry. After a proven `not-created` attempt or confirmed
+retirement without a verified result, the report marks that group `retryable`.
+Repeat the same prepare, preview and approved detach commands in the **same
+root** with a higher round for that group. This appends a reservation without
+reusing a consumed intent, rewriting old attempt bytes or changing any
+prepared sibling. Do not move attempts to a new index or root. An ambiguous or
+active attempt is refused; leave its evidence and locks in place and use the
+existing recovery procedure. Run the report after collection to select another
+missing group.
 
 The report is an index of independently publishable group results, with each
 group's actual round, commit, dates, archive, attempts and `baseEffectiveOptions`.

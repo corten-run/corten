@@ -42,7 +42,8 @@ export function readFleet(root, round, { priorSelection = false } = {}) {
   const path = join(root, `fleet-${round}.json`), bytes = regular(path, 1024 * 1024), manifest = validateFleet(JSON.parse(bytes), { priorSelection });
   assert.equal(manifest.round, round);
   if (manifest.single) {
-    assert.equal(root, join(dirname(root), manifest.single.group), "continuation group slot differs");
+    assert.ok([manifest.single.group, `${manifest.single.group}--${round}`].some((name) => root === join(dirname(root), name)),
+      "continuation group slot differs");
     assert.ok(!present(join(root, "remaining-intent.json")), "independent group has no remaining admission");
   }
   const allowed = new Set([`fleet-${round}.json`, ".fleet-operation.lock", "launch-intent.json", "remaining-intent.json", "receipts", ...manifest.jobs.map((j) => j.group)]);

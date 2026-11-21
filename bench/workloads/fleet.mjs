@@ -328,29 +328,35 @@ export async function fleetMain(args, deps = {}) {
   const owner = json({ pid: process.pid, group: options.group });
   const locked = options.prepare || !!options.approval;
   if (locked) { physical(root); durable(lock, owner); }
-  let uncertain = false;
+  let uncertain = false, attemptRoot = options.root;
   try {
     if (!locked) assert.ok(!present(lock), "continuation operation busy");
     const continuation = await inspectContinuation(root, { repo, interrupted: deps.interrupted, inspect: deps.inspect });
     const row = continuation.report.groups.find(({ group }) => group === options.group);
     assert.ok(!row.result, "group already verified; never allocate again");
     assert.ok(!continuation.report.groups.some((r) => r.unresolved), "continuation has unresolved custody or invalid evidence");
-    if (options.prepare) assert.equal(row.outcome, "missing", "group already reserved; never allocate again");
-    else {
-      assert.equal(row.outcome, "prepared", "group not prepared or already attempted");
-      assert.equal(continuation.slots.get(options.group).manifest.round, options.round, "use the group's prepared round");
+    const slot = continuation.slots.get(options.group);
+    if (options.prepare) {
+      assert.ok(row.outcome === "missing" || row.retryable, "group already reserved; never allocate again");
+      if (slot) {
+        assert.ok(Number(options.round.slice(1)) > Number(slot.manifest.round.slice(1)), "use a new, higher round for this group");
+        attemptRoot = join(root, `${options.group}--${options.round}`);
+      }
+    } else {
+      assert.ok(row.outcome === "prepared" && slot.manifest.round === options.round, "group round not prepared or already attempted");
+      attemptRoot = slot.root;
     }
-    const accountId = options.prepare ? options.accountId : continuation.slots.get(options.group).manifest.provider.accountId;
+    const accountId = options.prepare ? options.accountId : slot.manifest.provider.accountId;
     assert.ok([...continuation.needsCensus].every((account) => account === accountId), "unconfirmed historical cleanup requires the same provider account");
     continuation.recheck();
-    return await runFleet(options, deps, continuation);
+    return await runFleet({ ...options, root: attemptRoot }, deps, continuation);
   } catch (error) {
     uncertain = error?.controlUncertain === true || error?.controlTreeUncertain === true;
     throw error;
   } finally {
     // A contained worker may leave its fleet lock even when the batch returns
     // a diagnostic status instead of throwing. Keep the continuation locked too.
-    if (locked && !uncertain && !present(join(options.root, ".fleet-operation.lock"))) {
+    if (locked && !uncertain && !present(join(attemptRoot, ".fleet-operation.lock"))) {
       assert.equal(regular(lock, 1024).toString(), owner); unlinkSync(lock); syncDirectory(root);
     }
   }
