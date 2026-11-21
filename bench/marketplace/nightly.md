@@ -144,7 +144,17 @@ The launcher verifies ID, exact name, both shared tags and unique ownership tag,
 terminal unit with Restart=no, before download and again before deletion. It saves and hashes
 complete or partial evidence first. Missing units/SSH failures/identity mismatches fail closed.
 Do not manually delete, restart or power-cycle running rounds, or touch another run's droplet.
-Retry collection after a cleanup failure using the same durable state, not another launch.
+The collector saves the exact droplet ID and DigitalOcean account with its deletion intent
+before one DELETE. It then checks that account's full droplet list for the exact ID for up to
+two minutes, including when the DELETE acknowledgement is lost. A listed ID is still
+unconfirmed even if its tags disappear. Confirmation requires a successful inventory that
+omits the ID, with the saved account verified before and after the read.
+
+Retry an unconfirmed cleanup using `--collect`, the same durable state and the same doctl
+account, not another launch. Once an intent exists, the collector only rechecks the local
+archive and reads the provider; it never sends another DELETE. If the ID remains listed or
+an older pending intent lacks an account binding, preserve the state and evidence for
+operator review. Do not clear the intent to force a retry.
 
 ## Evening Launch
 

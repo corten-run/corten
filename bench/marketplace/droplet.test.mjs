@@ -59,34 +59,59 @@ test("generated remote shell and systemd unit pass native syntax validation", { 
   }
 });
 
-function harness(t, { active = false, corrupt = false, missing = false, dirty = false, failCreate = false, failDelete = false, lostDelete = false, failExtract = false } = {}) {
+function harness(t, { active = false, activates = false, corrupt = false, missing = false, dirty = false,
+  failCreate = false, failDelete = false, lostDelete = false, failExtract = false, delayedDelete = false,
+  interruptDelete = false } = {}) {
   const temp = mkdtempSync(join(tmpdir(), "marketplace-droplet-test-"));
   t.after(() => rmSync(temp, { recursive: true, force: true }));
   const repo = join(temp, "repo"), local = join(temp, "control"), remote = join(temp, "remote");
   mkdirSync(repo); mkdirSync(local); mkdirSync(remote);
-  let s = state(), droplets = [droplet(s)], deleted = 0, creates = 0, extractions = 0;
-  const calls = [];
+  const statePath = join(local, "state.json");
+  let s = state(), droplets = [droplet(s)], deleted = 0, creates = 0, extractions = 0, unitChecks = 0;
+  let clock = 0, signal = null, team = "bench-team", inventory, afterList = () => {};
+  const calls = [], waits = [], observedAfterDelete = [];
+  const saved = () => JSON.parse(readFileSync(statePath, "utf8"));
   const run = (binary, args) => {
     calls.push([binary, ...args]);
     const good = (stdout = "") => ({ status: 0, stdout, stderr: "" });
     if (binary === "git") return good(args[0] === "rev-parse" ? commit : dirty ? " M README.md\n" : "");
     if (binary === "doctl") {
-      if (args[2] === "list") return good(JSON.stringify(droplets));
+      if (args[0] === "account") return good(JSON.stringify([{ uuid: "operator", team: { uuid: team } }]));
+      if (args[2] === "list") {
+        const found = inventory ?? good(JSON.stringify(droplets));
+        if (deleted) {
+          observedAfterDelete.push(droplets.map((d) => d.id));
+          if (delayedDelete && !failDelete) droplets = [];
+        }
+        afterList();
+        return found;
+      }
       if (args[2] === "create") {
         creates++;
         const saved = JSON.parse(readFileSync(join(local, "state.json"), "utf8")); s = { ...saved, id: "123", ip: "192.0.2.1" };
         droplets = [droplet(s)]; return failCreate ? { status: 1, stdout: "", stderr: "connection lost after create" } : good();
       }
       if (args[2] === "delete") {
-        deleted++; if (failDelete && deleted === 1) throw new Error("delete temporarily unavailable");
-        droplets = [];
-        if (lostDelete && deleted === 1) throw new Error("delete acknowledgement lost");
+        deleted++;
+        assert.equal(args[3], "123");
+        assert.equal(args[args.indexOf("--http-retry-max") + 1], "0");
+        assert.ok(existsSync(join(local, "collect.lock")));
+        assert.deepEqual(saved().deletionTarget, { id: "123", account: "team:bench-team" });
+        assert.ok(saved().deletionIntentAt && saved().collectedAt && !saved().destroyedAt);
+        if (failDelete) return { status: 1, stdout: "", stderr: "delete temporarily unavailable" };
+        if (!delayedDelete) droplets = [];
+        else droplets = droplets.map((d) => ({ ...d, tags: [] }));
+        if (interruptDelete) signal = "SIGINT";
+        if (lostDelete) throw new Error("delete acknowledgement lost");
         return good();
       }
     }
     if (binary === "ssh") {
       const script = args.at(-1);
-      if (script.startsWith("systemctl show")) return good(missing ? loaded.replace("loaded", "not-found") : active ? loaded.replace("inactive", "active") : loaded);
+      if (script.startsWith("systemctl show")) {
+        unitChecks++;
+        return good(missing ? loaded.replace("loaded", "not-found") : active || (activates && unitChecks > 1) ? loaded.replace("inactive", "active") : loaded);
+      }
       if (script === "sha256sum /bench/results.tgz") return good(`${createHash("sha256").update(readFileSync(join(remote, "results.tgz"))).digest("hex")}  /bench/results.tgz`);
       if (script.startsWith("tail")) return good("checking corten fixture\n");
       return good();
@@ -104,8 +129,14 @@ function harness(t, { active = false, corrupt = false, missing = false, dirty = 
     }
     throw new Error(`unexpected command ${binary} ${args.join(" ")}`);
   };
-  return { repo, local, remote, run, calls, get deleted() { return deleted; }, get creates() { return creates; },
-    reserve() { writeFileSync(join(local, "state.json"), JSON.stringify(s)); },
+  return { repo, local, remote, run, calls, waits, observedAfterDelete, saved, get deleted() { return deleted; }, get creates() { return creates; },
+    reserve(change = {}) { writeFileSync(statePath, JSON.stringify({ ...s, ...change })); },
+    changeHost(change) { droplets = droplets.map((d) => ({ ...d, ...change })); },
+    selectTeam(value) { team = value; },
+    listResponse(value, status = 0) { inventory = value === undefined ? undefined : { stdout: value, status }; },
+    onList(callback) { afterList = callback; },
+    tick(ms) { clock += ms; },
+    resume() { signal = null; },
     empty() { droplets = []; },
     archive({ beforeRun = false } = {}) {
       if (!beforeRun) {
@@ -115,7 +146,8 @@ function harness(t, { active = false, corrupt = false, missing = false, dirty = 
       writeFileSync(join(remote, "exit-code"), "1\n"); writeFileSync(join(remote, "run.log"), "checks failed\n");
       const r = spawnSync("tar", ["-czf", join(remote, "results.tgz"), "-C", remote, "run.log", "exit-code", ...(beforeRun ? [] : ["repo/bench/marketplace/results/r17"])], { encoding: "utf8" }); assert.equal(r.status, 0, r.stderr);
     },
-    task(extra = {}) { return controller({ round: "r17", stateDir: local, sshKey: "42", ...extra }, { run, repo, sleep: async () => {} }); },
+    task(extra = {}) { return controller({ round: "r17", stateDir: local, sshKey: "42", ...extra },
+      { run, repo, interrupted: () => signal, now: () => clock, sleep: async (ms) => { waits.push(ms); clock += ms; } }); },
   };
 }
 test("live unit: no pack, download, deletion or restart", async (t) => {
@@ -126,6 +158,25 @@ test("live unit: no pack, download, deletion or restart", async (t) => {
 test("missing unit preserves droplet and evidence", async (t) => {
   const h = harness(t, { missing: true }); h.reserve();
   await assert.rejects(h.task().collect(), /unit missing/); assert.equal(h.deleted, 0);
+});
+test("wrong host identity refuses any SSH or delete", async (t) => {
+  for (const change of [{ id: 124 }, { name: "unrelated" }, { tags: ["corten-bench"] },
+    { networks: { v4: [{ type: "public", ip_address: "192.0.2.2" }] } }]) {
+    const h = harness(t); h.reserve(); h.changeHost(change);
+    await assert.rejects(h.task().collect(), /owned droplet missing|Expected values|ownership tag|public IP differs/);
+    assert.equal(h.deleted, 0); assert.ok(!h.calls.some((c) => c[0] === "ssh"));
+  }
+});
+test("unit that becomes active after custody is not deleted", async (t) => {
+  const h = harness(t, { activates: true }); h.reserve(); h.archive();
+  await assert.rejects(h.task().collect(), /unit became active/);
+  assert.ok(h.saved().collectedAt); assert.equal(h.saved().deletionIntentAt, undefined); assert.equal(h.deleted, 0);
+});
+test("exclusive collect lock prevents even provider reads", async (t) => {
+  const h = harness(t); h.reserve();
+  const lock = join(h.local, "collect.lock"); writeFileSync(lock, "other collector");
+  await assert.rejects(h.task().collect(), { code: "EEXIST" });
+  assert.deepEqual(h.calls, []); assert.equal(readFileSync(lock, "utf8"), "other collector");
 });
 test("hash mismatch preserves droplet and downloaded archive", async (t) => {
   const h = harness(t, { corrupt: true }); h.reserve(); h.archive();
@@ -150,11 +201,22 @@ test("pre-measurement failure reports its actual preserved evidence directory", 
   assert.ok(existsSync(join(saved.resultFolder, "run.log")));
   assert.equal(existsSync(join(saved.resultFolder, "summary.json")), false);
 });
-test("cleanup failure is retried without overwriting or downloading artifacts again", async (t) => {
+test("failed DELETE and a still-listed ID time out; even a stale controller only reads", async (t) => {
   const h = harness(t, { failDelete: true }); h.reserve(); h.archive();
-  await assert.rejects(h.task().collect(), /temporarily unavailable/);
-  const downloads = h.calls.filter((c) => c[0] === "scp").length;
-  assert.equal(await h.task().collect(), 1); assert.equal(h.calls.filter((c) => c[0] === "scp").length, downloads);
+  const stale = h.task();
+  await assert.rejects(h.task().collect(), /deletion not confirmed \(DELETE acknowledgement unavailable\).*deadline elapsed/);
+  const pending = h.saved(), archive = readFileSync(pending.resultArchive);
+  assert.ok(pending.collectedAt && pending.deletionIntentAt); assert.equal(pending.destroyedAt, undefined);
+  assert.equal(h.waits.reduce((sum, n) => sum + n, 0), 120000);
+  const calls = h.calls.length;
+  await assert.rejects(stale.collect(), /saved intent, no DELETE attempted.*deadline elapsed/);
+  assert.deepEqual(h.saved(), pending);
+  h.empty();
+  assert.equal(await h.task().collect(), 1);
+  assert.ok(h.saved().destroyedAt);
+  assert.deepEqual(readFileSync(pending.resultArchive), archive);
+  assert.equal(h.deleted, 1);
+  assert.ok(h.calls.slice(calls).every((c) => c[0] === "doctl" && (c[1] === "account" || c[3] === "list")));
 });
 
 test("interrupted extraction retries independently and preserves the failed attempt", async (t) => {
@@ -172,13 +234,62 @@ test("interrupted extraction retries independently and preserves the failed atte
   assert.equal(existsSync(join(h.repo, "bench/marketplace/results/r17")), false);
 });
 
-test("lost deletion acknowledgement reconciles confirmed absence without a second delete", async (t) => {
-  const h = harness(t, { lostDelete: true }); h.reserve(); h.archive();
-  await assert.rejects(h.task().collect(), /acknowledgement lost/);
-  const before = JSON.parse(readFileSync(join(h.local, "state.json"), "utf8"));
-  assert.ok(before.collectedAt && before.deletionIntentAt); assert.equal(before.destroyedAt, undefined);
+test("one stale post-delete list does not fail terminal collection", async (t) => {
+  const h = harness(t, { delayedDelete: true }); h.reserve(); h.archive();
+  assert.equal(await h.task().collect(), 1);
+  assert.equal(h.deleted, 1);
+  assert.deepEqual(h.observedAfterDelete, [[123], []]);
+  assert.deepEqual(h.waits, [3000]);
+  assert.ok(h.saved().destroyedAt);
+});
+
+test("lost deletion acknowledgement is reconciled in the same call without a second delete", async (t) => {
+  const h = harness(t, { lostDelete: true, delayedDelete: true }); h.reserve(); h.archive();
   assert.equal(await h.task().collect(), 1); assert.equal(h.deleted, 1);
-  assert.ok(JSON.parse(readFileSync(join(h.local, "state.json"), "utf8")).destroyedAt);
+  assert.deepEqual(h.observedAfterDelete, [[123], []]); assert.ok(h.saved().destroyedAt);
+});
+test("interrupted after DELETE: recheck saved evidence and account, then confirm on resume", async (t) => {
+  const h = harness(t, { interruptDelete: true }); h.reserve(); h.archive();
+  await assert.rejects(h.task().collect(), /deletion not confirmed.*SIGINT received/);
+  const before = h.saved(), calls = h.calls.length, archive = readFileSync(before.resultArchive);
+  assert.ok(before.collectedAt && before.deletionIntentAt); assert.equal(before.destroyedAt, undefined);
+  assert.deepEqual(h.observedAfterDelete, []);
+  assert.equal(existsSync(join(h.local, "collect.lock")), false);
+  h.resume();
+  h.selectTeam("another-team"); // Same doctl user, different team, empty inventory.
+  await assert.rejects(h.task().collect(), /provider account changed/);
+  assert.deepEqual(h.saved(), before);
+  h.selectTeam("bench-team");
+  h.onList(() => h.selectTeam("another-team"));
+  await assert.rejects(h.task().collect(), /provider account changed/);
+  assert.deepEqual(h.saved(), before);
+  h.selectTeam("bench-team"); h.onList(() => {});
+  h.listResponse("[]", 1);
+  await assert.rejects(h.task().collect(), /droplet list did not succeed/);
+  assert.deepEqual(h.saved(), before);
+  for (const bad of ["[", "null", "[{}]", '[{"id":99},{"id":99}]']) {
+    h.listResponse(bad);
+    await assert.rejects(h.task().collect(), /invalid JSON|invalid droplet inventory/);
+    assert.deepEqual(h.saved(), before);
+  }
+  h.listResponse(undefined);
+  h.onList(() => h.tick(120000));
+  await assert.rejects(h.task().collect(), /confirmation deadline elapsed/);
+  assert.deepEqual(h.saved(), before);
+  h.onList(() => {});
+  writeFileSync(before.resultArchive, "tampered archive");
+  await assert.rejects(h.task().collect(), /saved archive hash mismatch/);
+  assert.deepEqual(h.saved(), before);
+  writeFileSync(before.resultArchive, archive);
+  assert.equal(await h.task().collect(), 1); assert.equal(h.deleted, 1);
+  assert.ok(h.saved().destroyedAt);
+  assert.ok(h.calls.slice(calls).every((c) => c[0] === "doctl" && (c[1] === "account" || c[3] === "list")));
+});
+test("unbound historical pending intent is not promoted, even on an empty inventory", async (t) => {
+  const h = harness(t); h.reserve({ deletionIntentAt: "2026-01-01T00:00:00.000Z", collectedAt: "2026-01-01T00:00:00.000Z" });
+  h.empty();
+  await assert.rejects(h.task().collect(), /no bound ID\/account.*never repeat DELETE/);
+  assert.deepEqual(h.calls, []); assert.equal(h.saved().destroyedAt, undefined);
 });
 test("launch reserves once even when create response is ambiguous", async (t) => {
   const h = harness(t, { active: true, failCreate: true }); h.empty();

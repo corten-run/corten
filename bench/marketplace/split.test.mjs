@@ -420,28 +420,33 @@ test("plan mode prints the split and every command without git, doctl or ssh", (
 
 // A fake DigitalOcean account and droplets for the split launcher: each droplet k answers SSH at
 // 192.0.2.k, runs its unit until finish(k), and serves the archive a part's job would pack.
-function fleet(t, { limit = 10, existing = [], failDelete = 0 } = {}) {
+function fleet(t, { limit = 10, existing = [], failDelete = 0, delayedDelete = false } = {}) {
   const temp = mkdtempSync(join(tmpdir(), "marketplace-split-test-"));
   t.after(() => rmSync(temp, { recursive: true, force: true }));
   const repo = join(temp, "repo"), local = join(temp, "control"), remote = join(temp, "remote");
   mkdirSync(repo); mkdirSync(remote);
   let droplets = [...existing];
-  const active = new Set(), installed = new Set(), calls = [], deleted = [];
+  const active = new Set(), installed = new Set(), calls = [], deleted = [], waits = [];
+  let clock = 0, stale;
   const good = (stdout = "") => ({ status: 0, stdout, stderr: "" });
   const host = (args) => Number(args.find((a) => /^root@/.test(a)).split(/[@:]/)[1].split(".").at(-1));
   const run = (binary, args) => {
     calls.push([binary, ...args]);
     if (binary === "git") return good(args[0] === "rev-parse" ? commit : "");
     if (binary === "doctl") {
-      if (args[0] === "account") return good(JSON.stringify({ droplet_limit: limit, email: "test" }));
-      if (args[2] === "list") return good(JSON.stringify(droplets));
+      if (args[0] === "account") return good(JSON.stringify({ droplet_limit: limit, uuid: "bench-account" }));
+      if (args[2] === "list") {
+        const listing = stale ?? droplets; stale = undefined;
+        return good(JSON.stringify(listing));
+      }
       if (args[2] === "create") {
         const k = Number(args[3].split("-d").at(-1));
         droplets.push({ id: 100 + k, name: args[3], tags: args[args.indexOf("--tag-names") + 1].split(","), networks: { v4: [{ type: "public", ip_address: `192.0.2.${k}` }] }, size: { price_hourly: 0.25 } });
         return good();
       }
       if (args[2] === "delete") {
-        if (String(100 + failDelete) === args[3]) throw new Error("delete failed");
+        if (String(100 + failDelete) === args[3]) return { status: 1, stdout: "", stderr: "delete failed" };
+        if (delayedDelete) stale = droplets;
         droplets = droplets.filter((d) => String(d.id) !== args[3]); deleted.push(args[3]); return good();
       }
     }
@@ -461,7 +466,7 @@ function fleet(t, { limit = 10, existing = [], failDelete = 0 } = {}) {
     if (binary === "tar") { const r = spawnSync(binary, args, { encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r; }
     throw new Error(`unexpected command ${binary} ${args.join(" ")}`);
   };
-  return { repo, local, run, calls, deleted, add(d) { droplets.push(d); },
+  return { repo, local, run, calls, deleted, waits, add(d) { droplets.push(d); },
     // Someone deleted droplet id by hand.
     drop(id) { droplets = droplets.filter((d) => d.id !== id); },
     // Droplet k's job finished: its unit is inactive and its archive holds its part's results.
@@ -474,7 +479,8 @@ function fleet(t, { limit = 10, existing = [], failDelete = 0 } = {}) {
       writeFileSync(join(dir, "exit-code"), `${exitCode}\n`); writeFileSync(join(dir, "run.log"), "all done\n");
       const r = spawnSync("tar", ["-czf", join(dir, "results.tgz"), "-C", dir, "run.log", "exit-code", results], { encoding: "utf8" }); assert.equal(r.status, 0, r.stderr);
     },
-    task(droplets) { return splitController({ round: "r17", stateDir: local, sshKey: "42", ...(droplets ? { droplets } : {}) }, { run, repo, sleep: async () => {} }); },
+    task(droplets) { return splitController({ round: "r17", stateDir: local, sshKey: "42", ...(droplets ? { droplets } : {}) },
+      { run, repo, now: () => clock, sleep: async (ms) => { clock += ms; waits.push(ms); } }); },
   };
 }
 const quiet = async (t, fn) => {
@@ -549,7 +555,7 @@ test("a signal during a split launch stops it between steps and says what each d
 });
 
 test("a split round finishes only when every droplet has, deleting each as it finishes, then merges", async (t) => {
-  const f = fleet(t);
+  const f = fleet(t, { delayedDelete: true });
   await quiet(t, () => f.task(2).launch());
   f.finish(1, 2);
   const first = await quiet(t, () => f.task().collect());
@@ -561,6 +567,7 @@ test("a split round finishes only when every droplet has, deleting each as it fi
   const done = await quiet(t, () => f.task().collect());
   assert.equal(done.value, 0, done.out);
   assert.deepEqual(f.deleted, ["101", "102"]);
+  assert.deepEqual(f.waits, [3000, 3000]);
   const folder = join(f.local, "round", "r17");
   const s = validateSummary(JSON.parse(readFileSync(join(folder, "summary.json"), "utf8")));
   assert.equal(s.split.droplets, 2);
@@ -576,8 +583,12 @@ test("a failed delete, a failed part or a leftover droplet keeps a split round f
   failing.finish(1, 2); failing.finish(2, 2);
   const deleteFailed = await quiet(t, () => failing.task().collect());
   assert.equal(deleteFailed.value, 2);
-  assert.match(deleteFailed.out, /r17-d2: collection error; its droplet and evidence are preserved: delete failed/);
+  assert.match(deleteFailed.out, /r17-d2: collection error; its droplet and evidence are preserved: droplet 102 deletion not confirmed \(DELETE acknowledgement unavailable\)/);
   assert.match(deleteFailed.out, /collection error on r17-d2: droplets that still exist are preserved and still billed\. Fix the error and run .* --collect again; never relaunch r17\./);
+  const calls = failing.calls.length;
+  failing.drop(102); // The fake account now proves absence on resume, without another DELETE.
+  assert.equal((await quiet(t, () => failing.task().collect())).value, 0);
+  assert.ok(failing.calls.slice(calls).every((c) => c[0] === "doctl" && (c[1] === "account" || c[3] === "list")));
 
   const partial = fleet(t);
   await quiet(t, () => partial.task(2).launch());
@@ -594,6 +605,20 @@ test("a failed delete, a failed part or a leftover droplet keeps a split round f
   const leftover = await quiet(t, () => extra.task().collect());
   assert.equal(leftover.value, 2);
   assert.match(leftover.out, /leftover droplet 103 \(corten-marketplace-r17-d3\) belongs to no live part of r17; check it is not another run's, then delete it: doctl compute droplet delete 103 --force/);
+});
+
+test("split leftover warnings do not suggest another DELETE for an intended ID", async (t) => {
+  const f = fleet(t, { failDelete: 2 });
+  await quiet(t, () => f.task(2).launch());
+  f.finish(1, 2); f.finish(2, 2);
+  assert.equal((await quiet(t, () => f.task().collect())).value, 2);
+  f.drop(102);
+  f.add({ id: 102, name: "corten-marketplace-r17-d3", tags: [] });
+  const listed = await quiet(t, () => f.task().collect());
+  assert.equal(listed.value, 2);
+  assert.match(listed.out, /droplet 102 is still listed despite a saved deletion record/);
+  assert.doesNotMatch(listed.out, /doctl compute droplet delete 102/);
+  assert.equal(f.calls.filter((c) => c[0] === "doctl" && c[3] === "delete" && c[4] === "102").length, 1);
 });
 
 test("a round whose start check fails stays starting, not never started, and is collected", async (t) => {

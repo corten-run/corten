@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { setImmediate as yieldToSignals } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { leftoverDroplets, nightly, ownedDroplet, parseDropletArgs, remoteFiles, safeArchive, splitExit, splitPlan, terminalUnit, validatePlan, validateState } from "./droplet-contract.mjs";
 import { validateSummary } from "./report.mjs";
@@ -28,17 +29,50 @@ function controlDir(stateDir, repo) {
   return local;
 }
 const benchTagged = (droplets) => droplets.some((d) => d.tags?.some((t) => ["corten-bench", "corten-marketplace"].includes(t)));
+const hasDeletionRecord = (state) => ["deletionTarget", "deletionIntentAt", "destroyedAt"].some((key) => Object.hasOwn(state, key));
+const accountScope = /^(?:team|user):[A-Za-z0-9_-]{1,128}$/;
+// Use the legacy doctl credentials, but never let doctl retry the one DELETE.
+const collectionArgs = ["--api-url", "https://api.digitalocean.com", "--http-retry-max", "0"];
+function collectionProvider(run, args, timeout = 10000) {
+  const result = run("doctl", [...args, ...collectionArgs], timeout, true);
+  assert.ok(!result.error && result.status === 0, `doctl ${args.slice(0, args[0] === "account" ? 2 : 3).join(" ")} did not succeed`);
+  return result.stdout;
+}
+function providerJson(run, args, timeout) {
+  const output = collectionProvider(run, [...args, "--output", "json"], timeout);
+  try { return JSON.parse(output); }
+  catch { throw new Error(`doctl ${args.join(" ")} returned invalid JSON`); }
+}
+function collectionAccount(run, timeout) {
+  const value = providerJson(run, ["account", "get"], timeout);
+  const account = Array.isArray(value) && value.length === 1 ? value[0] : value;
+  const team = account?.team !== undefined;
+  const uuid = team ? account?.team?.uuid : account?.uuid;
+  const scope = `${team ? "team" : "user"}:${uuid}`;
+  assert.ok(typeof uuid === "string" && accountScope.test(scope), "doctl account get gave no scoped account identity");
+  return scope;
+}
+function collectionList(run, timeout) {
+  // Unfiltered: doctl paginates the full account list, or exits unsuccessfully.
+  const list = providerJson(run, ["compute", "droplet", "list"], timeout);
+  assert.ok(Array.isArray(list) && list.every((d) => Number.isSafeInteger(d?.id) && d.id > 0)
+    && new Set(list.map((d) => d.id)).size === list.length, "doctl gave an invalid droplet inventory");
+  return list;
+}
 /**
  * One droplet's launcher: the whole round, or with options.part one droplet's part of a split
  * round (#816), whose checkout checks and measured commit (options.commit) the split launcher
  * made once for every droplet.
  */
-export function controller(options, { run = command, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), repo = checkout, interrupted = () => null } = {}) {
+export function controller(options, { run = command, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), repo = checkout, interrupted = () => null, now = () => performance.now() } = {}) {
   const local = controlDir(options.stateDir, repo);
   const part = options.part ?? null;
   const statePath = join(local, "state.json");
   let state = existsSync(statePath) ? validateState(JSON.parse(readFileSync(statePath, "utf8")), options.round) : null;
-  const save = () => { writeFileSync(`${statePath}.tmp`, JSON.stringify(state, null, 2) + "\n"); renameSync(`${statePath}.tmp`, statePath); };
+  const save = (flush = false) => {
+    writeFileSync(`${statePath}.tmp`, JSON.stringify(state, null, 2) + "\n", { flush });
+    renameSync(`${statePath}.tmp`, statePath);
+  };
   const list = () => JSON.parse(run("doctl", ["compute", "droplet", "list", "--output", "json"]).stdout);
   const own = () => ownedDroplet(list(), state);
   const sshOptions = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", `UserKnownHostsFile=${join(local, "known_hosts").replaceAll("\\", "/")}`,
@@ -104,24 +138,67 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
       const lock = join(local, "collect.lock");
       writeFileSync(lock, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
       try {
-        const verifyArchive = () => assert.equal(createHash("sha256").update(readFileSync(state.resultArchive)).digest("hex"), state.archiveSha256);
+        // A controller constructed before a prior collector saved intent must not use its old state.
+        state = validateState(JSON.parse(readFileSync(statePath, "utf8")), options.round);
+        const verifyArchive = () => assert.equal(createHash("sha256").update(readFileSync(state.resultArchive)).digest("hex"),
+          state.archiveSha256, "saved archive hash mismatch; refusing deletion or confirmation");
+        const checkInterrupted = () => {
+          const signal = interrupted();
+          assert.ok(!signal, `${signal} received; preserve state and evidence`);
+        };
+        const sameAccount = (account, timeout) =>
+          assert.ok(collectionAccount(run, timeout) === account, "provider account changed; refusing deletion or confirmation");
         const deleted = () => {
           verifyArchive();
-          state.destroyedAt ??= new Date().toISOString(); save();
+          if (!state.destroyedAt) { state.destroyedAt = new Date().toISOString(); save(); }
           console.log(`${state.complete ? "all done" : `partial results (the round did not finish): ${state.validationError}`}\nresults in ${state.resultFolder}\ndroplet ${state.id} deletion confirmed`);
           return state.complete ? 0 : 1;
         };
-        if (state.destroyedAt) {
-          assert.ok(!list().some((d) => String(d.id) === state.id), "previously deleted droplet still present");
-          return deleted();
+        const reconcile = async (disposition) => {
+          const target = state.deletionTarget;
+          assert.ok(state.collectedAt && state.deletionIntentAt && /^[1-9]\d*$/.test(state.id ?? "")
+            && target?.id === state.id && typeof target.account === "string" && accountScope.test(target.account),
+          "deletion intent has no bound ID/account or collected archive; preserve state for operator review, never repeat DELETE");
+          verifyArchive();
+          const pending = `droplet ${target.id} deletion not confirmed (${disposition}); preserve state and evidence, retry --collect for read-only confirmation`;
+          const deadline = now() + 120000;
+          const budget = (max = 10000) => {
+            checkInterrupted();
+            const ms = Math.floor(deadline - now());
+            assert.ok(ms > 0, "two-minute confirmation deadline elapsed");
+            return Math.min(ms, max);
+          };
+          for (;;) {
+            let present, wait;
+            try {
+              sameAccount(target.account, budget());
+              present = collectionList(run, budget()).some((d) => String(d.id) === target.id);
+              sameAccount(target.account, budget());
+              await yieldToSignals(); // doctl is synchronous; let queued signals run before accepting its result.
+              wait = budget(3000);
+            } catch (cause) { throw new Error(`${pending}: ${cause.message}`, { cause }); }
+            // Tags can disappear during removal. While the exact ID is listed we know only
+            // that its absence is unconfirmed, not that another delete is allowed.
+            if (!present) return deleted();
+            await sleep(wait);
+          }
+        };
+        if (hasDeletionRecord(state)) {
+          if (state.destroyedAt && !Object.hasOwn(state, "deletionTarget")) {
+            // A completed legacy receipt already recorded confirmation. Do not backfill its account.
+            assert.ok(state.collectedAt && /^[1-9]\d*$/.test(state.id ?? ""), "previous deletion receipt lacks an exact ID or archive");
+            assert.ok(!collectionList(run).some((d) => String(d.id) === state.id), "previously deleted droplet still present");
+            return deleted();
+          }
+          return await reconcile("saved intent, no DELETE attempted");
         }
-        if (state.deletionIntentAt && state.collectedAt && !list().some((d) => String(d.id) === state.id)) {
-          // A delete may succeed even when its acknowledgement or the next list is lost.
-          // The intent was saved only after owned-terminal checks and verified collection.
-          return deleted();
-        }
-        const d = own();
-        state.id = String(d.id); state.ip = d.networks.v4.find((n) => n.type === "public")?.ip_address; save(); validateState(state, options.round);
+        checkInterrupted();
+        const account = collectionAccount(run);
+        const d = ownedDroplet(collectionList(run), state);
+        sameAccount(account);
+        const ip = d.networks.v4.find((n) => n.type === "public")?.ip_address;
+        assert.ok(ip && (!state.ip || state.ip === ip), "owned droplet's public IP differs from reservation or is missing");
+        state.id = String(d.id); state.ip = ip; validateState(state, options.round); save();
         if (!terminalUnit(unit())) {
           console.log(`round ${state.round} is still running\n${ssh("tail -n 8 /bench/run.log").stdout}`);
           return 3;
@@ -159,13 +236,24 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
           Object.assign(state, { resultFolder: existsSync(source) ? source : extracted, evidenceFolder: extracted,
             collectedAt: new Date().toISOString(), status: state.complete ? "done" : "failed" }); save();
         }
-        // Repeat identity + terminal checks after the download, including cleanup retries.
+        // Only a fresh intent permits DELETE. Recheck identity and terminal state after custody.
         verifyArchive();
-        own(); assert.ok(terminalUnit(unit()), "unit became active; refusing deletion");
-        state.deletionIntentAt ??= new Date().toISOString(); save();
-        run("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000);
-        assert.ok(!list().some((item) => String(item.id) === state.id), "droplet deletion not confirmed");
-        return deleted();
+        sameAccount(account);
+        const current = ownedDroplet(collectionList(run), state);
+        assert.equal(current.networks.v4.find((n) => n.type === "public")?.ip_address, state.ip, "owned droplet's public IP changed; refusing deletion");
+        assert.ok(terminalUnit(unit()), "unit became active; refusing deletion");
+        sameAccount(account);
+        await yieldToSignals();
+        checkInterrupted();
+        Object.assign(state, { deletionIntentAt: new Date().toISOString(), deletionTarget: { id: state.id, account } });
+        save(true);
+        let disposition = "DELETE acknowledgement unavailable";
+        try {
+          collectionProvider(run, ["compute", "droplet", "delete", state.id, "--force"], 120000);
+          disposition = "DELETE acknowledged";
+        } catch { /* An unsuccessful response cannot establish whether the request took effect. */ }
+        await yieldToSignals();
+        return await reconcile(disposition);
       } finally { unlinkSync(lock); }
     },
   };
@@ -306,6 +394,7 @@ export function splitController(options, deps = {}) {
       const listed = (d) => s.id ? String(d.id) === s.id : d.name === s.name && d.tags?.includes(s.tag);
       const owned = (d) => listed(d) && d.name === s.name && ["corten-bench", "corten-marketplace", s.tag].every((tag) => d.tags?.includes(tag));
       try {
+        if (hasDeletionRecord(s)) { codes.push(await task(p).collect()); continue; }
         // creating or preparing: the launch stopped before systemctl start (starting is saved
         // just before it, and the unit has no [Install], so nothing else starts it).
         if (["creating", "preparing"].includes(s.status)) {
@@ -329,7 +418,11 @@ export function splitController(options, deps = {}) {
     let leftovers = [], unlisted = 0;
     try { leftovers = leftoverDroplets(list(), plan, states); }
     catch (e) { unlisted = 1; console.error(`the droplet list failed, so leftover droplets are unknown: ${e.message}`); }
-    for (const d of leftovers) console.error(`leftover droplet ${d.id} (${d.name}) belongs to no live part of ${options.round}; check it is not another run's, then delete it: doctl compute droplet delete ${d.id} --force`);
+    for (const d of leftovers) {
+      if (states.some((s) => s?.id === String(d.id) && hasDeletionRecord(s))) {
+        console.error(`droplet ${d.id} is still listed despite a saved deletion record; reconcile read-only, do not repeat DELETE`);
+      } else console.error(`leftover droplet ${d.id} (${d.name}) belongs to no live part of ${options.round}; check it is not another run's, then delete it: doctl compute droplet delete ${d.id} --force`);
+    }
     let code = splitExit(codes, leftovers.length + unlisted);
     const which = (...want) => plan.parts.filter((_, i) => want.includes(codes[i])).map(name).join(", ");
     // A part that never started, is partial or is missing means the round cannot merge, so the
@@ -395,7 +488,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const task = splitController(options, { interrupted: launcherSignals() });
       if (options.collect) process.exitCode = await task.collect(); else await task.launch();
     } else {
-      const task = controller(options);
+      const task = controller(options, options.collect ? { interrupted: launcherSignals() } : {});
       if (options.collect) process.exitCode = await task.collect(); else await task.launch();
     }
   } catch (e) { console.error(e.stack); process.exitCode = 2; }
