@@ -1566,6 +1566,19 @@ CDN in front does not purge the app, which gives the CDN the kept page again wit
 A request's own `Cache-Control: no-cache` (a hard reload) gets the kept page too: how long a
 page stands is the app's to say. Give a page whose changes must show at once a short lifetime.
 
+When a page's lifetime ends or a write drops it, the requests that ask for it before it is made
+again run its handler once: the first makes the page, and the others wait for its answer and
+are given the page when it is kept for them. So a page whose handler reads a slow source does
+not send that source a request for each visitor who arrives meanwhile. When the first request's
+page is not kept (its handler failed, or drew something for that request), or that request is
+dropped or panics, each of the others then runs its own handler. A request waits no longer than
+its own deadline (`App::deadline`), which answers it as it would a slow handler. Only
+requests for one copy wait for each other: another query, host or language the page is made in
+does not wait. Neither does a page with no copy kept (its first request after a start, a page
+that is never kept, one whose copy went to make room): each request runs its handler at once,
+since every request that met another for a page never kept would otherwise wait for that one's
+handler and then run its own.
+
 `App::kept_answers(bytes)` sets how much is kept: 32 MiB unless set, and `0` keeps none. What is
 counted is each page's key, headers and body and each compressed form made of it, with an
 allowance for what holds them. Past the bound, a page not read since room was last made goes

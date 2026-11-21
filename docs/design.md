@@ -7267,6 +7267,21 @@ rules something out.
     its `Age`), or a request's `Cache-Control: no-cache`. How long a page stands is the app's
     to say, and a reload is not a reason to render it.
 
+    Requests that miss a page together where the copy kept for them no longer stands (its
+    lifetime ended, or a write dropped it) run its handler once: the first makes the page again,
+    and the others that find the same copy wait for it and are given the page when it is kept for
+    them. The copy holds the wait, under a lock of its own taken for no wait, so no request waits
+    on the store's lock; a request given a kept page does what it did before, and the lookup that
+    misses hands out the copy, so a miss looks the URL up once. When the first request's page is
+    not kept (an error, a page drawn for that request), the others run their own handlers then
+    and the copy goes, so the next requests do not wait again; when that request is dropped (its
+    client left, its deadline passed) or panics, the wait ends with it and they run their own. A
+    request's own deadline drops its wait as it would its handler. Only a copy that no longer
+    stands is waited on: where none is kept (a page's first request after a start, a page never
+    kept, one whose copy went to make room) each request runs its handler at once, since for a
+    page never kept every request that met another would wait for that one's handler and then run
+    its own, and nothing known when the route is made tells the two apart.
+
     Not chosen: in front of the middleware, for the reasons above, though it would save the
     stages too; leaving out a write by its status (a `4xx`, a `501`) or by a mark the router
     set on the ones it refuses, each of which left a page stale in a case a review found; off unless asked for, which leaves the cost on every app that already said its
@@ -7275,11 +7290,15 @@ rules something out.
     honoring a request's `no-cache`; removing a written path's pages by a search of the store or
     a second index by path, which a write would pay for under the store's lock; a sweep that
     removes pages as their lifetimes end, since a page that no longer stands is replaced when it
-    is next asked for and goes when room is made; and, left for changes of their own, a call
+    is next asked for and goes when room is made; waiting on a page with no copy kept, which
+    would cover the first requests after a start at the cost above to a page never kept; giving
+    a waiting request the first one's page when it was not kept, which may be that request's
+    alone (a nonce, a cookie); a waiting request taking the first one's place when it is dropped,
+    so the others would wait in turn on each handler that fails; and, left for changes of their own, a call
     that drops a page for a change no write to its path made, a way for an extractor of the
     app's own to say it reads only the URL, `Public` text, JSON and files
     (their handlers take other inputs, which a key would have to cover), a page served stale
-    while it is made again, one render for requests that miss together, and one copy for each
+    while it is made again, and one copy for each
     locale rather than for each `Accept-Language` sent.
 
     Stands on: measured (the catalog benchmark's app with its page marked `Public` for a minute,
@@ -7312,8 +7331,18 @@ rules something out.
     it began with glibc's and 35.2 MiB above with jemalloc, so what an allocator holds beyond the
     bytes asked of it is beside the bound; `tests/kept_memory.rs` holds the bytes asked to the
     bound, 4,177,233 of 4,194,304 for its page in every coding and 4,050,606 with no compression.
+    Requests that miss together (`a66970c66` against `fc86d8eff`, `tests/kept_cost.rs` under
+    callgrind, its count for 1,200 requests less its count for 200, in 5 rounds that alternated
+    the two builds, each answer's status, `Age` and body checked): a kept page given again ran
+    19,216 instructions against 19,211 at the median, a page made and kept at a URL not asked for
+    before 34,973 against 34,811, a write and the page made again in the place of the copy it
+    dropped 45,925 against 45,403, and a page for one visitor, whose route keeps nothing, 18,339
+    against 18,339, each build's rounds within 7 instructions of each other; eight requests that
+    missed a copy that no longer stood together ran the handler once where they had run it eight
+    times (`tests/cache.rs`).
     Not measured: what a write pays for its count; a miss that is kept against the same page
-    made with nothing kept; a store read from more than one core; and the
+    made with nothing kept; a store read from more than one core; the cycles of requests that
+    miss together and the time those that wait spend or save, as no quiet host was free; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
@@ -7336,10 +7365,14 @@ rules something out.
     become most of a kept page's cost on a measured app, so a place further out is worth its
     rules; a multi-core measurement shows requests waiting on the store's lock; writes no
     handler takes (a scanner's `POST /`) make kept pages again often enough to show, so the
-    router's own refusals are worth leaving out where the request met no middleware; or the
-    connection speaks HTTP/2, where a request's target carries its authority.
+    router's own refusals are worth leaving out where the request met no middleware; a page's
+    first requests after a start are shown to load a slow source enough that waiting where no
+    copy is kept is worth its cost to a page never kept; or the connection speaks HTTP/2, where a
+    request's target carries its authority.
 
-    Last checked: 2026-11-21, the pass over the headers with rustc 1.100.0: the counts under
+    Last checked: 2026-11-21, requests that miss together with rustc 1.99.1, release builds
+    counted by valgrind 3.24.0's callgrind, with no cycles taken. 2026-11-21, the pass over the
+    headers with rustc 1.100.0: the counts under
     callgrind, and the cycles from the two builds started once on one CPU, its core's other thread
     left idle, and loaded in turn for three seconds each by `wrk` with 64 connections on the two
     CPUs of another core, 500 URLs asked for unevenly and uncompressed, the order of the two
