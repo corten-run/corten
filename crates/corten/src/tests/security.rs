@@ -56,6 +56,11 @@ pub(super) async fn inline_page(req: Req) -> Public<HtmlResult> {
     Public::new(std::time::Duration::from_secs(60), req.page(Inline { req: &req }))
 }
 
+/// The same page with the default caching.
+pub(super) async fn inline_default_page(req: Req) -> HtmlResult {
+    req.page(Inline { req: &req })
+}
+
 #[tokio::test]
 async fn the_csp_allows_the_import_map_by_hash_and_a_nonce_only_when_the_shell_asks() {
     let (_, headers, body) = call(app(routes(), None), "GET", None).await;

@@ -1,5 +1,5 @@
 use super::api::api_module;
-use super::security::{big_policy_page, inline_page, relayed_page};
+use super::security::{big_policy_page, inline_default_page, inline_page, relayed_page};
 use super::url::serves_url;
 use super::*;
 
@@ -91,10 +91,12 @@ async fn what_the_app_renders_is_private_unless_it_says_otherwise() {
     assert_eq!(cache_control(&router, "/missing", &[("accept", "application/json")]).await, "private, no-cache");
     assert_eq!(cache_control(&router, runtime_path(), &[]).await, "public, max-age=31536000, immutable");
     assert_eq!(cache_control(&router, "/health/ready", &[]).await, "no-store", "Corten's own routes keep theirs");
-    assert_eq!(cache_control(&router, "/statement", &[("cookie", "s=1")]).await, "no-store");
+    assert_eq!(cache_control(&router, "/statement", &[]).await, "no-store");
+    assert_eq!(cache_control(&router, "/statement", &[("cookie", "s=1")]).await, "private, no-store", "a request with credentials");
 }
 
-/// `NoStore` holds for a failure too: the error page that replaces it is not kept either.
+/// `NoStore` holds for a failure too: the error page that replaces it is not kept either. This one
+/// reads the caller, so it is personal and says `private` too.
 #[tokio::test]
 async fn a_failure_under_no_store_is_not_stored() {
     let router = app(cached_routes(), None);
@@ -106,32 +108,34 @@ async fn a_failure_under_no_store_is_not_stored() {
             }
             let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
             assert_eq!(res.status(), status, "{path} {extra:?}");
-            assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store", "{path} {extra:?}");
+            // A data client's failure is JSON, not the error page that reads the caller.
+            let cache = if extra == [("accept", "application/json")] { "no-store" } else { "private, no-store" };
+            assert_eq!(res.headers()[header::CACHE_CONTROL], cache, "{path} {extra:?}");
         }
     }
     // A form sent to the expired code: the runtime's action, answered with the error page.
     let req = Request::post("/code").header("sec-fetch-site", "same-origin").header("corten", "action");
     let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store", "an action");
-    // A header written by hand counts on any of its lines; the error page is `no-store` alone,
+    assert_eq!(res.headers()[header::CACHE_CONTROL], "private, no-store", "an action");
+    // A header written by hand counts on any of its lines; the error page is `private, no-store`,
     // since the failure's other directives described its own answer.
     let res =
         router.clone().oneshot(Request::get("/lines").header("accept", "text/html").body(Body::empty()).unwrap()).await.unwrap();
     let lines: Vec<_> = res.headers().get_all(header::CACHE_CONTROL).iter().map(|v| v.to_str().unwrap().to_string()).collect();
-    assert_eq!(lines, ["no-store"]);
+    assert_eq!(lines, ["private, no-store"]);
     // Also when the error page read a caller.
     let res = app(cached_routes(), Some("ann"))
         .oneshot(Request::get("/lines").header("accept", "text/html").header("cookie", "s=1").body(Body::empty()).unwrap())
         .await
         .unwrap();
     let lines: Vec<_> = res.headers().get_all(header::CACHE_CONTROL).iter().map(|v| v.to_str().unwrap().to_string()).collect();
-    assert_eq!(lines, ["no-store"], "with a caller");
+    assert_eq!(lines, ["private, no-store"], "with a caller");
     // A line that is not text still counts.
     let res =
         router.clone().oneshot(Request::get("/odd").header("accept", "text/html").body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(res.headers()[header::CACHE_CONTROL], "private, no-store");
 }
 
 async fn slips(crate::Params(at): crate::Params<no_store_url::Slips<'_>>) -> HtmlResult {
@@ -205,8 +209,8 @@ async fn rotate_key(Caller(viewer): Caller<Viewer>) -> HtmlResult {
     Ok(crate::answer::HtmlResponse::new(crate::response::IntoResponse::into_response(format!("new key of {}", viewer.0))))
 }
 
-/// `no_store(post)`: only the write's answer, and a write its extractors refuse, are `no-store`; the
-/// page is as any page that reads a caller (#844).
+/// `no_store(post)`: only the write's answer, and a write its extractors refuse, are `no-store`
+/// (`private` too, since they read a caller); the page is as any page that reads a caller (#844).
 #[tokio::test]
 async fn no_store_on_one_method_covers_only_that_handler() {
     let router = App::new(no_store_url::router()).router();
@@ -230,7 +234,7 @@ async fn no_store_on_one_method_covers_only_that_handler() {
         assert_eq!(res.status(), status, "{method} {viewer:?}");
         let cache = res.headers()[header::CACHE_CONTROL].to_str().unwrap().to_owned();
         if kept {
-            assert_eq!(cache, "no-store", "{method} {viewer:?}");
+            assert_eq!(cache, "private, no-store", "{method} {viewer:?}");
         } else {
             assert_eq!(cache, "private, no-cache", "{method} {viewer:?}");
         }
@@ -238,7 +242,7 @@ async fn no_store_on_one_method_covers_only_that_handler() {
 }
 
 /// `no_store` on a route: the handler keeps its `?`, and its page, its failure and a request its
-/// extractors refuse are `no-store`, in every mode.
+/// extractors refuse are `no-store`, in every mode, and `private, no-store` where a caller was read.
 #[tokio::test]
 async fn a_route_that_says_no_store_keeps_its_answers_and_failures_out_of_caches() {
     let router = App::new(no_store_url::router()).router();
@@ -290,15 +294,16 @@ async fn a_route_that_says_no_store_keeps_its_answers_and_failures_out_of_caches
                 _ => status == StatusCode::OK,
             };
             assert!(expected, "{method} {path} {viewer:?} {extra:?}: {status}");
-            assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store", "{method} {path} {viewer:?} {extra:?}");
+            let cache = if path == "/my/slips" { "private, no-store" } else { "no-store" };
+            assert_eq!(res.headers()[header::CACHE_CONTROL], cache, "{method} {path} {viewer:?} {extra:?}");
         }
     }
 }
 
 /// A `Cache-Control` whose `private` or `no-store` is not a plain directive (in a quoted value, a
 /// line that is not text, `no-store=1`, with `must-understand`) is not trusted: an answer that sets
-/// a cookie or read a caller goes out `private, no-cache`, or `no-store` when any reader could find
-/// one in its header. A plain `no-store` or `private` is trusted as written only on one line of
+/// a cookie or read a caller (here, the error page) goes out `private, no-cache`, or
+/// `private, no-store` when any reader could find a `no-store` in its header. A plain `no-store` or `private` is trusted as written only on one line of
 /// plain text with no quoted value: otherwise a `no-store` goes out on one line (`no-store` alone
 /// beside a quoted value or a byte that is not text), so a cache that reads only one line, or a
 /// value another way, is told the same. `must-understand, no-store` on an answer nothing makes
@@ -502,21 +507,21 @@ async fn a_cache_control_counts_only_for_what_it_plainly_says() {
     let router = app(router, Some("ann"));
     for (path, want) in [
         ("/odd-line", "private, no-cache"),
-        ("/quoted", "no-store"),
-        ("/quoted-failure", "no-store"),
-        ("/valued", "no-store"),
+        ("/quoted", "private, no-store"),
+        ("/quoted-failure", "private, no-store"),
+        ("/valued", "private, no-store"),
         ("/second-line", "public, max-age=600, no-store"),
-        ("/second-line-valued", "no-store"),
-        ("/escaped", "no-store"),
+        ("/second-line-valued", "private, no-store"),
+        ("/escaped", "private, no-store"),
         ("/must-understand-shared", "max-age=60, must-understand, no-store"),
-        ("/must-understand-valued", "no-store"),
-        ("/private-must-understand", "no-store"),
-        ("/private-valued-must-understand", "no-store"),
-        ("/upper-valued", "no-store"),
+        ("/must-understand-valued", "private, no-store"),
+        ("/private-must-understand", "private, no-store"),
+        ("/private-valued-must-understand", "private, no-store"),
+        ("/upper-valued", "private, no-store"),
         ("/private-then-no-store", "private, max-age=600, no-store"),
-        ("/must-understand", "no-store"),
-        ("/must-understand-failure", "no-store"),
-        ("/not-text-no-store", "no-store"),
+        ("/must-understand", "private, no-store"),
+        ("/must-understand-failure", "private, no-store"),
+        ("/not-text-no-store", "private, no-store"),
         ("/not-text-private", "private, no-cache"),
         ("/unquoted-limited", "private, no-cache"),
         ("/no-transform", "no-transform, no-store"),
@@ -710,6 +715,60 @@ async fn a_page_that_draws_a_submit_key_keeps_no_cdn_caching_header() {
     }
 }
 
+/// Staged middleware that marks every answer for a CDN: each caching header a CDN reads before
+/// `Cache-Control` says `public, max-age=60`, and the others a CDN reads say `x`. It reads the
+/// caller when the request names one (`viewer`).
+struct CdnWrites;
+
+impl crate::Middleware for CdnWrites {
+    async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        let (parts, body) = req.into_parts();
+        if parts.headers.contains_key("viewer") {
+            let _ = Caller::<Viewer>::find(&parts, &()).await;
+        }
+        let mut res = next.run(Request::from_parts(parts, body)).await;
+        let headers = res.headers_mut();
+        for name in CDN_OVERRIDES {
+            headers.insert(name, HeaderValue::from_static("public, max-age=60"));
+        }
+        for name in CDN_OTHERS {
+            headers.insert(name, HeaderValue::from_static("x"));
+        }
+        res
+    }
+}
+
+/// `uri`'s answer through `router`, asked with `asked`: its headers, after checking it is a `200`.
+async fn answered(router: &Router, uri: &str, asked: &[(&'static str, &'static str)]) -> http::HeaderMap {
+    let mut req = Request::get(uri);
+    for (name, value) in asked {
+        req = req.header(*name, *value);
+    }
+    let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{uri} {asked:?}");
+    res.headers().clone()
+}
+
+/// What is wrong with an answer Corten should have kept from every shared cache: a `Cache-Control`
+/// other than `cache`, any caching header a CDN reads first, or a missing header a CDN reads for
+/// something else.
+fn kept_from_cdns(headers: &http::HeaderMap, cache: &str) -> Vec<String> {
+    let mut wrong = Vec::new();
+    if headers[header::CACHE_CONTROL] != cache {
+        wrong.push(format!("Cache-Control {:?}, not {cache:?}", headers[header::CACHE_CONTROL]));
+    }
+    let kept: Vec<_> = CDN_OVERRIDES.into_iter().filter(|name| headers.contains_key(*name)).collect();
+    if !kept.is_empty() {
+        wrong.push(format!("still sends {kept:?}"));
+    }
+    for other in CDN_OTHERS {
+        if headers.get(other).is_none_or(|value| value != "x") {
+            wrong.push(format!("lost {other}"));
+        }
+    }
+    wrong
+}
+
 /// An answer Corten makes private because it is personal (it sets a cookie, carries the request's
 /// nonce, or answers a request whose middleware read a caller or that carried credentials) also
 /// loses the caching headers a CDN reads before `Cache-Control`, which staged middleware wrote:
@@ -717,26 +776,6 @@ async fn a_page_that_draws_a_submit_key_keeps_no_cdn_caching_header() {
 /// headers a CDN reads stay, and an answer that stays shared keeps what the middleware wrote.
 #[tokio::test]
 async fn a_personal_answer_made_private_keeps_no_cdn_caching_header() {
-    struct CdnHeaders;
-
-    impl crate::Middleware for CdnHeaders {
-        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
-            let (parts, body) = req.into_parts();
-            if parts.headers.contains_key("viewer") {
-                let _ = Caller::<Viewer>::find(&parts, &()).await;
-            }
-            let mut res = next.run(Request::from_parts(parts, body)).await;
-            let headers = res.headers_mut();
-            for name in CDN_OVERRIDES {
-                headers.insert(name, HeaderValue::from_static("public, max-age=60"));
-            }
-            for name in CDN_OTHERS {
-                headers.insert(name, HeaderValue::from_static("x"));
-            }
-            res
-        }
-    }
-
     let minute = std::time::Duration::from_secs(60);
     let home = || html! { <p>"home"</p> };
     let routes = Table::new()
@@ -748,7 +787,7 @@ async fn a_personal_answer_made_private_keeps_no_cdn_caching_header() {
             }),
         )
         .route("/nonce", get(inline_page));
-    let router = App::new(Routes::from(routes)).middleware(CdnHeaders).router();
+    let router = App::new(Routes::from(routes)).middleware(CdnWrites).router();
     let get = |uri: &'static str, asked: &'static [(&'static str, &'static str)]| {
         let router = router.clone();
         async move {
@@ -787,6 +826,127 @@ async fn a_personal_answer_made_private_keeps_no_cdn_caching_header() {
     }
 }
 
+/// An answer Corten knows is personal (it sets a cookie, carries the request's nonce, or answers a
+/// request whose middleware read a caller), and one `NoStore` keeps out of every cache, loses the
+/// caching headers a CDN reads before `Cache-Control` whatever its own `Cache-Control` says: none
+/// (the default), a plain `private`, or `no-store`. A CDN that obeys `CDN-Cache-Control` over
+/// `Cache-Control` (RFC 9213) would otherwise keep one visitor's answer for the next. The same
+/// answers to an anonymous request, with no such mark, keep what the middleware wrote.
+#[tokio::test]
+async fn a_personal_answer_keeps_no_cdn_caching_header_whatever_its_cache_control() {
+    const COOKIE: (header::HeaderName, &str) = (header::SET_COOKIE, "seen=1");
+    const PRIVATE: (header::HeaderName, &str) = (header::CACHE_CONTROL, "private, max-age=60");
+    let home = || html! { <p>"home"</p> };
+    let routes = Table::new()
+        .route("/default", get(move |req: Req| async move { req.test_page("Home", home()) }))
+        .route("/private", get(move |req: Req| async move { Ok::<_, Error>(([PRIVATE], req.test_page("Home", home())?)) }))
+        .route("/no-store", get(move |req: Req| async move { NoStore(req.test_page("Home", home())) }))
+        .route("/cookie", get(move |req: Req| async move { Ok::<_, Error>(([COOKIE], req.test_page("Home", home())?)) }))
+        .route(
+            "/cookie-private",
+            get(move |req: Req| async move { Ok::<_, Error>(([COOKIE, PRIVATE], req.test_page("Home", home())?)) }),
+        )
+        .route(
+            "/cookie-no-store",
+            get(move |req: Req| async move { NoStore(req.test_page("Home", home()).map(|page| ([COOKIE], page))) }),
+        )
+        .route("/nonce", get(inline_default_page))
+        .route("/nonce-private", get(|req: Req| async move { Ok::<_, Error>(([PRIVATE], inline_default_page(req).await?)) }))
+        .route("/nonce-no-store", get(|req: Req| async move { NoStore(inline_default_page(req).await) }));
+    let router = App::new(Routes::from(routes)).middleware(CdnWrites).router();
+    let viewer: &[(&str, &str)] = &[("viewer", "ann")];
+    let mut wrong = Vec::new();
+    for (uri, asked, cache, why) in [
+        ("/default", viewer, "private, no-cache", "the default, and a caller read"),
+        ("/private", viewer, "private, max-age=60", "a plain private, and a caller read"),
+        ("/no-store", &[][..], "no-store", "NoStore"),
+        ("/no-store", viewer, "private, no-store", "NoStore, and a caller read"),
+        ("/cookie", &[], "private, no-cache", "the default, and a cookie set"),
+        ("/cookie-private", &[], "private, max-age=60", "a plain private, and a cookie set"),
+        ("/cookie-no-store", &[], "private, no-store", "NoStore, and a cookie set"),
+        ("/nonce", &[], "private, no-cache", "the default, and the nonce"),
+        ("/nonce-private", &[], "private, max-age=60", "a plain private, and the nonce"),
+        ("/nonce-no-store", &[], "private, no-store", "NoStore, and the nonce"),
+    ] {
+        let headers = answered(&router, uri, asked).await;
+        for what in kept_from_cdns(&headers, cache) {
+            wrong.push(format!("{why} ({uri}): {what}"));
+        }
+    }
+    assert!(wrong.is_empty(), "a personal answer, still open to a CDN: {wrong:#?}");
+    for (uri, cache) in [("/default", "private, no-cache"), ("/private", "private, max-age=60")] {
+        let headers = answered(&router, uri, &[]).await;
+        assert_eq!(headers[header::CACHE_CONTROL], cache, "{uri}");
+        for name in CDN_OVERRIDES {
+            assert_eq!(headers[name], "public, max-age=60", "{uri}: nothing marks it personal, so it keeps {name}");
+        }
+    }
+}
+
+/// A personal answer that says `no-store` without setting a cookie (it carries the request's nonce
+/// or read a caller) goes out `private, no-store` with none of the caching headers a CDN reads
+/// first, as a page that draws a submit key does: some CDNs keep an answer that says only
+/// `no-store`, and none keeps a `private` one. A `must-understand` beside it is no exception. The
+/// same header on an anonymous answer is the app's own.
+#[tokio::test]
+async fn a_personal_no_store_answer_goes_out_private_no_store() {
+    const NO_STORE: (header::HeaderName, &str) = (header::CACHE_CONTROL, "no-store");
+    const MUST_UNDERSTAND: (header::HeaderName, &str) = (header::CACHE_CONTROL, "must-understand, no-store");
+    let home = || html! { <p>"home"</p> };
+    let routes = Table::new()
+        .route("/no-store", get(move |req: Req| async move { Ok::<_, Error>(([NO_STORE], req.test_page("Home", home())?)) }))
+        .route(
+            "/must-understand",
+            get(move |req: Req| async move { Ok::<_, Error>(([MUST_UNDERSTAND], req.test_page("Home", home())?)) }),
+        )
+        .route("/nonce-no-store", get(|req: Req| async move { Ok::<_, Error>(([NO_STORE], inline_default_page(req).await?)) }))
+        .route(
+            "/nonce-must-understand",
+            get(|req: Req| async move { Ok::<_, Error>(([MUST_UNDERSTAND], inline_default_page(req).await?)) }),
+        );
+    let router = App::new(Routes::from(routes)).middleware(CdnWrites).router();
+    let viewer: &[(&str, &str)] = &[("viewer", "ann")];
+    let mut wrong = Vec::new();
+    for (uri, asked) in [("/no-store", viewer), ("/must-understand", viewer), ("/nonce-no-store", &[]), ("/nonce-must-understand", &[])] {
+        let headers = answered(&router, uri, asked).await;
+        assert!(!headers.contains_key(header::SET_COOKIE), "{uri}");
+        for what in kept_from_cdns(&headers, "private, no-store") {
+            wrong.push(format!("{uri} {asked:?}: {what}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+    assert_eq!(answered(&router, "/no-store", &[]).await[header::CACHE_CONTROL], "no-store", "anonymous: as written");
+}
+
+/// A `Public` page asked for as anything but its full document (a client navigation, a form
+/// answer, a data client's JSON, the runtime's fetch of the page) is the browser's alone, and goes
+/// out with none of the caching headers a CDN reads first: a CDN that obeys them would keep the
+/// form it was asked for at the page's URL. The full document keeps what the middleware wrote.
+#[tokio::test]
+async fn a_public_page_in_a_partial_mode_keeps_no_cdn_caching_header() {
+    let minute = std::time::Duration::from_secs(60);
+    let routes = Table::new()
+        .route("/", get(move |req: Req| async move { Public::new(minute, req.test_page_for("Home", html! { <p>"home"</p> })) }));
+    let router = App::new(Routes::from(routes)).middleware(CdnWrites).router();
+    let mut wrong = Vec::new();
+    for asked in [
+        &[("corten", "nav")][..],
+        &[("corten", "action")],
+        &[("accept", "application/json")],
+        &[("corten", "page"), ("accept", "text/html")],
+    ] {
+        let headers = answered(&router, "/", asked).await;
+        for what in kept_from_cdns(&headers, "private, max-age=60") {
+            wrong.push(format!("{asked:?}: {what}"));
+        }
+    }
+    assert!(wrong.is_empty(), "the browser's alone, still open to a CDN: {wrong:#?}");
+    let headers = answered(&router, "/", &[]).await;
+    assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60");
+    for name in CDN_OVERRIDES {
+        assert_eq!(headers[name], "public, max-age=60", "the full document keeps the middleware's {name}");
+    }
+}
 /// A refused cross-site write gets the app's error page, which goes out before the cache rules
 /// run. One that draws a submit key goes out as any page that draws one does: a `no-store` it
 /// says as `private, no-store`, and none of the CDN caching headers it wrote. One that draws none
