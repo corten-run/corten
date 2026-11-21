@@ -131,6 +131,10 @@ for (const [name, change, expected] of [
 ]) test(`live external ${name} cannot clear cleanup`, async (t) => {
   const f = await fixture(t, "live-delivery", change), result = await f.inspect();
   assert.equal(result.cleanupComplete, false); assert.equal(result.status, expected);
+  if (expected === "blocked") {
+    assert.equal(result.resources, "blocked");
+    assert.ok(result.outcomes.every((row) => row.outcome === "failed"), "retain the recorded app dispositions as diagnostics");
+  }
 });
 
 test("a source-bound harness error without target observations is retained but cannot qualify", async (t) => {

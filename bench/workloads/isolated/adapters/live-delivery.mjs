@@ -348,7 +348,10 @@ export async function inspectLiveSaved(binding, folder, group) {
       if (proof) assert.equal(proof.code, passed ? 0 : 1, "observed exit contradicts native outcomes");
       if (proof?.complete) {
         result.cleanupComplete = true; result.resources = "verified"; result.blockers = [...missing];
-      } else if (proof && !failed) result.status = "blocked";
+      } else if (proof) {
+        // Keep the app dispositions as diagnostics, not a verified phase failure.
+        result.status = "blocked";
+      }
       if (proof && !failedEvidenceComplete) {
         result.status = "blocked"; result.attemptComplete = false; result.blockers.push("native-failed-attempt-raw-observation-missing");
       }
