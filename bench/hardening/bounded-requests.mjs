@@ -112,6 +112,13 @@ function validateTimeout(upstream, samples, statusRead) {
       earliest = Math.max(earliest, row.startMs - age - 1);
       latest = Math.min(latest, row.endMs - age + 1);
       assert.ok(i === 2 || age >= snapshots[i - 1].elapsedSinceStartMs, "non-monotonic recovery age");
+      // A slow 200 needs a read that started at least one delay earlier. Use
+      // the upstream's own sampled clock; normal snapshots precede its trigger.
+      for (const prior of snapshots.slice(0, i)) {
+        if (age - (prior.elapsedSinceStartMs ?? 0) < delayMs - timerSlackMs) {
+          assert.ok(state.responses200.slow <= prior.reads.slow, "slow response completed before the upstream delay");
+        }
+      }
     }
     if (i === 0) continue;
     for (const field of ["reads", "responses200"]) for (const key of phases) {

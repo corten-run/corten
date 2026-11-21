@@ -154,6 +154,25 @@ test("missing, invented and inconsistent bounded receipts fail offline replay", 
   assert.throws(() => assessBoundedRequests({ ...run.input, source: "fixture" }), /identity differs/);
 });
 
+test("a delayed upstream completion must have had time to finish since its read started", async () => {
+  const { raw, assess } = await fixture({ phase: "request-timeout" });
+  const states = raw[1].upstream;
+  // A cancelled slow read may still finish upstream by the restored window.
+  const completeOne = row => {
+    const state = JSON.parse(Buffer.from(row.receipt.bodyBase64, "base64"));
+    state.responses200.slow = 1;
+    row.receipt = reply(200, state);
+  };
+  assert.equal(assess().status, "client-deadline");
+  completeOne(states.restoredBefore);
+  completeOne(states.restoredAfter);
+  assert.equal(assess().status, "client-deadline");
+  // At slowBefore no slow read had started. At slowAfter one had started,
+  // but less than the private upstream delay had elapsed between snapshots.
+  completeOne(states.slowAfter);
+  assert.throws(assess, /before the upstream delay/);
+});
+
 test("unauthorized configuration fails before clocks, trigger or HTTP", async () => {
   const never = () => assert.fail("invalid config advanced to I/O");
   for (const config of [
