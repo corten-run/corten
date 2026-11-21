@@ -108,6 +108,41 @@ test("actual bounded qualification projection preserves capability cells and rem
   }
 }));
 
+test("Corten's emitted document policy preserves qualification for both sources", () => {
+  // Values from a normal marketplace page GET, with a stand-in for the import-map hash.
+  const hash = "A".repeat(44);
+  const csp = `default-src 'self'; script-src 'self' 'sha256-${hash}'; style-src 'self'; img-src 'self' data: https:; `
+    + "connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; "
+    + "frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; trusted-types corten";
+  const permissions = "accelerometer=(), bluetooth=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), "
+    + "hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), window-management=()";
+  for (const source of ["fixture", "api"]) {
+    const { probes } = actualQualification(source);
+    Object.assign(probes.page.headers, { "content-security-policy": csp, "permissions-policy": permissions });
+    const actual = produceBoundedQualification(probes, source);
+    assert.equal(actual.eligible, true);
+    const saved = qualificationEvidence(actual);
+    assert.deepEqual({ ...saved.qualification, probes: null }, { ...actual, probes: null });
+    const page = saved.qualification.probes.page;
+    assert.equal(page.headers["content-security-policy"], csp.replace(hash, "x".repeat(hash.length)));
+    assert.equal(page.headers["permissions-policy"], permissions);
+    assert.deepEqual(probeProjection(page).headers, page.headers, "saved headers must be stable on replay");
+    assert.ok(!JSON.stringify(saved).includes(hash), "raw CSP hash must not be retained");
+    assert.equal(probes.page.headers["content-security-policy"], csp, "projection must not change the response");
+  }
+});
+
+test("document policy projection rejects unreviewed names and values", () => {
+  const page = actualQualification().probes.page;
+  for (const value of ["trusted-types", "trusted-types example-policy", "trusted-types corten example-policy",
+    "script-src corten", "example-directive 'none'"]) {
+    assert.throws(() => probeProjection({ ...page, headers: { "content-security-policy": value } }), /unfilterable CSP/);
+  }
+  for (const value of ["example-feature=()", "bluetooth=(self)", "local-fonts=(self)", "window-management=(self)"]) {
+    assert.throws(() => probeProjection({ ...page, headers: { "permissions-policy": value } }), /unfilterable qualification header/);
+  }
+});
+
 test("failed features remain failed; unknown credential-bearing header/error shapes block projection", () => {
   const actual = actualQualification(); actual.probes.crossSite.status = 200;
   const failed = produceBoundedQualification(actual.probes, "api"), saved = qualificationEvidence(failed);
