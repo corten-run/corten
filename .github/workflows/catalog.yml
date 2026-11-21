@@ -110,11 +110,28 @@ jobs:
         run: node --test bench/catalog/gin-permissions.test.mjs
         env:
           CATALOG_GIN_DOCKER_TESTS: "1"
-      - name: Test native Gin lean logging and panic recovery
+      - name: Compile the native Gin lean logging and recovery test
         if: matrix.app == 'gin'
         run: |
           docker build --target build -t cb-catalog-gin-tests bench/fullstack/apps/gin
-          docker run --rm --cpus 1 --memory 1g cb-catalog-gin-tests go test -run '^TestCatalogLeanLoggingAndRecovery$' -count=1 .
+          mkdir "$RUNNER_TEMP/gin-tests"
+          docker run --rm --cpus 1 --memory 2g -v "$RUNNER_TEMP/gin-tests:/test-out" cb-catalog-gin-tests sh -c '
+            status=0
+            go test -c -o /test-out/itempage.test . || status=$?
+            echo "Go test compile exit: $status"
+            for file in memory.events memory.peak; do
+              if [ -r "/sys/fs/cgroup/$file" ]; then echo "$file:"; cat "/sys/fs/cgroup/$file"; fi
+            done
+            exit "$status"
+          '
+      - name: Test native Gin lean logging and panic recovery
+        if: matrix.app == 'gin'
+        run: |
+          docker run --rm --cpus 1 --memory 1g -v "$RUNNER_TEMP/gin-tests:/test-out:ro" cb-catalog-gin-tests sh -ec '
+            name=TestCatalogLeanLoggingAndRecovery
+            test "$(/test-out/itempage.test -test.list "^$name$")" = "$name"
+            exec /test-out/itempage.test -test.v -test.count=1 -test.timeout=10m -test.paniconexit0 -test.run "^$name$"
+          '
       - name: Test native FastAPI record boundaries
         if: matrix.app == 'fastapi'
         run: |

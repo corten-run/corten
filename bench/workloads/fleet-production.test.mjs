@@ -1,15 +1,17 @@
 // Offline composition acceptance: real snapshot Worker -> productionMain -> controller.
 // Only credential consumption and external Git/HTTPS/SSH/SCP responses are fake.
 import assert from "node:assert/strict";
+import { fork } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-import { accountId, archive, commit, context, harness, syntheticInspection, userId } from "./cloud-fixtures.mjs";
+import { accountId, archive, commit, context, harness, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
+import { providerTransport } from "./cloud-provider.mjs";
 import { bootstrapWorkspaceScript, captureSshOwner, installSshIngress, savedLoadLayout, verifySshIngress } from "./cloud-contract.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { groupNames } from "./registry.mjs";
@@ -89,15 +91,17 @@ const synthetic = (${syntheticDependencies.toString()})({
     return h.run(binary, argv, 60000);
   };
   const deps = { repo: h.repo, spawn, WorkerClass: SnapshotWorker, write: (value) => output.push(JSON.parse(value)) };
+  deps.catalogProvider = syntheticCatalogProvider(syntheticPlacement([mode === "overlap" ? "sfo2" : "sfo3"]));
   const args = ["r21", "--fleet-root", h.base];
   const saved = (group = groupNames[0]) => JSON.parse(fs.readFileSync(path.join(h.base, group, "groups-r21/state.json")));
   const events = () => fs.readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const prepareArgs = [...args, "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
   async function prepare() {
-    assert.equal(await fleetMain([...args, "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context], deps), 3);
+    assert.equal(await fleetMain(prepareArgs, deps), 3);
     assert.equal(await fleetMain([...args, "--detach", "--print-approval"], deps), 3);
     return [...args, "--detach", "--approve-reviewed-merged-ready", output.at(-1).approvalSha256];
   }
-  return { h, output, workers, saved, events, prepare, deps };
+  return { h, output, workers, saved, events, prepare, prepareArgs, deps, trace, hosts };
 }
 
 test("captured production composition ignores arbitrary hints, binds POST identity and propagates remote options", { timeout: 30000 }, async (t) => {
@@ -181,7 +185,7 @@ test("captured production composition ignores arbitrary hints, binds POST identi
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
 });
 
-test("second exact approval dispatches all remaining captured production workers once, with overlapping remote groups", { timeout: 60000 }, async (t) => {
+test("remaining approval still needs pinned c-8, not the deleted catalog host's size, and dispatches once", { timeout: 60000 }, async (t) => {
   const p = fixture(t, "overlap");
   assert.equal(await fleetMain(await p.prepare(), p.deps), 3);
   const state = p.saved(), group = groupNames[0], campaign = `r21-${state.token}`;
@@ -216,17 +220,32 @@ test("second exact approval dispatches all remaining captured production workers
   assert.equal(preview.subject.jobs[0].outcome, "verified");
   for (const job of preview.subject.jobs.slice(1)) assert.equal(job.subject.options.group, job.group);
   const approved = [...args, "--approve-reviewed-merged-ready", approval];
+  const pinnedCatalog = (region) => {
+    const catalog = syntheticPlacement([region]);
+    catalog.sizes.pop();
+    catalog.regions[0].sizes = catalog.regions[0].sizes.filter((size) => size !== "c-16");
+    return syntheticCatalogProvider(catalog);
+  };
+  p.deps.catalogProvider = pinnedCatalog("sfo3");
+  await assert.rejects(fleetMain(approved, p.deps), /reserved fleet placement not advertised: c-8\/sfo2/);
+  assert.equal(fs.existsSync(path.join(p.h.base, "remaining-intent.json")), false);
+  assert.equal(p.workers.length, 1);
+  assert.equal(p.events().filter((row) => row.method === "POST").length, 1);
+  p.deps.catalogProvider = pinnedCatalog("sfo2");
   assert.equal(await fleetMain(approved, p.deps), 3, JSON.stringify(p.output.at(-1)));
   assert.equal(p.workers.length, groupNames.length);
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "pending"));
   const events = p.events(), posts = events.filter((row) => row.method === "POST");
   assert.deepEqual(posts.map((row) => row.group), groupNames);
   assert.deepEqual(posts.map(({ body }) => [body.size, body.region]),
-    [["c-16", "sfo2"], ...groupNames.slice(1).map(() => ["c-8", "sfo3"])]);
+    [["c-16", "sfo2"], ...groupNames.slice(1).map(() => ["c-8", "sfo2"])]);
   const ids = new Set(), ips = new Set();
   for (const group of groupNames) {
     const saved = p.saved(group); ids.add(saved.id); ips.add(saved.ip);
     assert.equal(saved.group, group); assert.equal(saved.status, group === groupNames[0] ? "collected" : "running");
+    assert.equal(saved.host.region, "sfo2");
+    const job = events.find((row) => row.group === group && row.boundary === "upload" && row.to === "/bench/job.sh");
+    assert.equal(job.content.includes("--placement 'dedicated-sfo2'"), group !== groupNames[0]);
     const start = events.findIndex((row) => row.group === group && row.boundary === "provider-child-start");
     const exit = events.findIndex((row) => row.group === group && row.boundary === "provider-child-exit");
     assert.ok(start >= 0 && exit > start);
@@ -286,6 +305,84 @@ test("captured production rejects Git advertisement before reservation or provid
   assert.equal(p.output.at(-1).groups[0].controllerStage, "remote-main-advertisement");
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
+});
+
+function realCatalog(p, mode) {
+  let child;
+  p.deps.catalogProvider = (deps) => providerTransport({ ...deps, launch(_binary, _args, options) {
+    child = fork(new URL("./fleet-provider-test-worker.mjs", import.meta.url),
+      [mode, p.trace, p.hosts, p.h.base, "parent", userId],
+      { ...options, execArgv: [], env: { ...options.env, NODE_OPTIONS: "--max-old-space-size=64 --max-semi-space-size=4" } });
+    return child;
+  } });
+  return () => child.exitCode;
+}
+
+const refusedCatalog = { code: "catalog-response" };
+const deniedCatalog = { code: "catalog-http", httpStatus: 403 };
+const catalogFailure = (diagnostic) => (error) => {
+  assert.equal(!!error.controlTreeUncertain, diagnostic === null);
+  if (diagnostic) assert.deepEqual(error.providerDiagnostic, diagnostic);
+  return true;
+};
+
+test("prepare can retry a settled invalid listing, but retains the lock on disconnect", { timeout: 15000 }, async (t) => {
+  for (const [mode, diagnostic] of [["catalog-shape", refusedCatalog], ["catalog-disconnect", null]]) await t.test(mode, async (t) => {
+    const p = fixture(t), exitCode = realCatalog(p, mode);
+    await assert.rejects(fleetMain(p.prepareArgs, p.deps), catalogFailure(diagnostic));
+    assert.equal(exitCode(), diagnostic ? 0 : 2);
+    assert.deepEqual(fs.readdirSync(p.h.base), diagnostic ? [] : [".fleet-operation.lock"]);
+    assert.equal(p.workers.length, 0);
+    assert.ok(p.events().filter((row) => row.boundary === "provider").every((row) => row.method === "GET"));
+    if (diagnostic) {
+      const retryExitCode = realCatalog(p, "success");
+      assert.equal(await fleetMain(p.prepareArgs, p.deps), 3);
+      assert.equal(retryExitCode(), 0);
+      assert.equal(readFleet(p.h.base, "r21").manifest.host.region, "sfo3");
+      assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
+    }
+  });
+});
+
+test("settled catalog refusals retry before fleet intent; disconnect retains the lock", { timeout: 20000 }, async (t) => {
+  for (const [mode, diagnostic] of [["catalog-denial", deniedCatalog], ["catalog-count", refusedCatalog],
+    ["catalog-pagination", refusedCatalog], ["catalog-disconnect", null]]) await t.test(mode, async (t) => {
+    const p = fixture(t);
+    p.deps.catalogProvider = syntheticCatalogProvider(syntheticPlacement(["sfo2"]));
+    const approved = await p.prepare(), exitCode = realCatalog(p, mode);
+    await assert.rejects(fleetMain(approved, p.deps), catalogFailure(diagnostic));
+    assert.equal(exitCode(), diagnostic ? 0 : 2);
+    assert.equal(p.workers.length, 0);
+    assert.deepEqual(p.events().filter((row) => row.boundary === "provider").map((row) => [row.method, row.path]),
+      [["GET", "/v2/account"], ["GET", "/v2/sizes?page=1&per_page=200"],
+        ...(mode === "catalog-pagination" ? [["GET", "/v2/sizes?page=2&per_page=200"]] : [])]);
+    assert.equal(fs.existsSync(path.join(p.h.base, "launch-intent.json")), false);
+    assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), diagnostic === null);
+    if (diagnostic?.code === "catalog-response") {
+      const retryExitCode = realCatalog(p, "success");
+      assert.equal(await fleetMain(approved, p.deps), 3);
+      assert.equal(retryExitCode(), 0);
+      assert.equal(p.events().filter((row) => row.boundary === "provider" && row.method === "POST").length, 1);
+      assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
+    }
+  });
+});
+
+test("settled child catalog refusals release locks without a create; disconnect preserves custody", { timeout: 20000 }, async (t) => {
+  for (const [mode, diagnostic] of [["catalog-denial", deniedCatalog], ["catalog-shape", refusedCatalog], ["catalog-disconnect", null]]) await t.test(mode, async (t) => {
+    const p = fixture(t, mode), uncertain = diagnostic === null;
+    assert.equal(await fleetMain(await p.prepare(), p.deps), 2);
+    assert.equal(p.workers.length, 1);
+    const state = p.saved(), [row] = p.output.at(-1).groups;
+    assert.equal(state.status, "reserved"); assert.equal(state.createIntentAt, undefined);
+    assert.equal(row.uncertain, uncertain);
+    assert.equal(row.controllerStage, uncertain ? "provider-settlement" : "controller-launch");
+    if (diagnostic) assert.deepEqual(row.providerDiagnostic, diagnostic);
+    assert.ok(p.events().some((row) => row.path === "/v2/sizes?page=1&per_page=200"));
+    assert.ok(p.events().filter((row) => row.boundary === "provider").every((row) => row.method === "GET"));
+    for (const lock of [".fleet-operation.lock", "catalog-page/.groups-launch.lock", "catalog-page/groups-r21/operation.lock"])
+      assert.equal(fs.existsSync(path.join(p.h.base, lock)), uncertain, lock);
+  });
 });
 
 test("real provider refusal and withheld close retain locks and stop later admissions", { timeout: 30000 }, async (t) => {

@@ -58,6 +58,7 @@ test("clean worker uses one immutable private credential across account/create/a
 test("worker create mode accepts only its pinned size and region; recovery cannot create", async (t) => {
   for (const [createMode, region, allowed, size = "c-8"] of [["legacy", "sfo2", true], ["dedicated", "sfo3", true],
     ["legacy", "sfo3", false], ["dedicated", "sfo2", false], ["dedicated", "nyc1", false], [null, "sfo3", false], ["sfo3", "sfo3", false],
+    ["dedicated-sfo2", "sfo2", true], ["dedicated-sfo2", "sfo3", false], ["dedicated-sfo2", "sfo2", false, "c-16"],
     ["c16-generator-v1", "sfo2", true, "c-16"], ["c16-generator-v1", "sfo2", false],
     ["c16-generator-v1", "sfo3", false, "c-16"], ["dedicated", "sfo3", false, "c-16"]]) {
     const h = createMode === "sfo3"
