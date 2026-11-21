@@ -7507,7 +7507,12 @@ rules something out.
     visitor, whose route keeps nothing, 18,270 against 18,355, each build's rounds within 12
     instructions of each other. Of a miss's added cost, by callgrind's inclusive counts over the
     1,200 requests, the store's second look took about 300 instructions a request for a new URL
-    and 420 after a write, and the table's keyed hash 320 to 340. Timed (`tests/kept_wave.rs`, 64
+    and 420 after a write, and the table's keyed hash 320 to 340. With the rule for a full store
+    beside it (`cb9195a49` against main's `68ce3f1e6`, which has that rule, the same fixture and
+    rounds, its store never full): a kept page given again ran 19,226 instructions against
+    19,228, a page made and kept at a new URL 35,903 against 34,853 (3.0% more), a write and the
+    page made again 46,094 against 44,938 (2.6% more), and a page for one visitor 18,270 against
+    18,287, each build's rounds within 11 instructions of each other. Timed (`tests/kept_wave.rs`, 64
     requests sent at once for a page whose handler reads a source that answers 4 reads at a time
     in 50 ms each, under a 500 ms deadline, the same two builds in 2 passes of 5 rounds each, the
     order of the builds turned about between the passes, the medians of the 10 rounds): where a
@@ -7530,7 +7535,8 @@ rules something out.
     so how often one first asked for in a full store is asked for again (the simulation's
     spreads are a law, not a log); a miss that is kept with room against the same page made
     with nothing kept, in cycles; a store read from more than one core; the cycles of a miss,
-    and requests that miss together on a quiet host or with a real source; and the
+    and requests that miss together on a quiet host or with a real source; a miss in a full store
+    with the table, which the counts of the rule for a full store above were taken without; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
@@ -7564,7 +7570,9 @@ rules something out.
     than 1,024 pages at once, or to forget pages not kept within their minute; or the connection
     speaks HTTP/2, where a request's target carries its authority.
 
-    Last checked: 2026-11-21, the rule for a full store with rustc 1.100.0: each count the
+    Last checked: 2026-11-21, the two rules together with rustc 1.100.0, release builds of
+    `cb9195a49` and `68ce3f1e6` counted by valgrind 3.24.0's callgrind. 2026-11-21, the rule for
+    a full store with rustc 1.100.0: each count the
     difference of a run of 1,300 requests and one of 300 under callgrind, a new URL each, of
     which the first 28 or so fill a bound of 256 KiB, and for the second request the
     difference of such runs over 1,000 URLs less its 700 first requests, the simulation with
