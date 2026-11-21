@@ -1228,9 +1228,10 @@ answer whose own script must run is a page, not an unstaged route's. Its answer 
 `Cache-Control` unless the handler sets one, so a shared cache may keep it by its own rules
 ([Caching](#caching) describes the stages' rules, which it does not meet): an answer that changes
 says so (`NoStore`, `Public`), as the figure above does. One that sets a cookie is `private,
-no-cache` (`no-store` when it says one), whatever caching it says, and loses the caching headers
-a CDN reads first that [Caching](#caching) lists (`CDN-Cache-Control`, `Surrogate-Control`, ...),
-so no shared cache hands one visitor's cookie to another.
+no-cache` (`no-store` when it says one), whatever caching it says, and loses any
+`*-cache-control` header and the other caching headers a CDN reads first that [Caching](#caching)
+lists (`Surrogate-Control`, `Edge-Control`, ...), so no shared cache hands one visitor's cookie
+to another.
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
 or a plain 501 with none when no route in the app has a handler for the method ([error
 pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
