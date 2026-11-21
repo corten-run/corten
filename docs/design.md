@@ -7279,8 +7279,9 @@ rules something out.
     request on. What the rule spares is the copy for a URL's first request, and for URLs
     that outnumber what the marks remember. The marks are each host's own, so one host's
     answers do not show what was asked of another, and a URL's in any language. No list of
-    URLs is held, a request whose answer is not kept takes no lock but the read lock of the
-    lookup, and the hash needs no key of the process's: a client that chooses URLs sharing a
+    URLs is held, a request whose answer is not kept takes no lock of the store's but the read
+    lock of the lookup (it meets the others that miss its page in the table below, which has a
+    lock of its own), and the hash needs no key of the process's: a client that chooses URLs sharing a
     mark gains an answer kept the first time, and one that asks for enough new URLs to clear
     the marks gains one more run of each page's handler, with requests that each ran a
     handler.
@@ -7357,9 +7358,20 @@ rules something out.
     writes such requests may each read the source, which bounds every request to one wait. A
     request's own deadline drops its wait as it would its handler. The first requests after a
     start wait as the others do, so a deploy does not send a slow source a request for each
-    visitor who comes while each page is first made. In a full store a request for a URL not
-    asked for before is the handler's, as above, before it meets the table: it neither makes a
-    page others wait for nor waits, and nothing is remembered of it.
+    visitor who comes while each page is first made.
+
+    The two rules meet at a full store's first request for a URL. That request makes the page for
+    the others that miss it meanwhile, as any first request does, and a request that comes to
+    wait for it is the URL's second request: the page is kept then, and the others are given it,
+    so the requests that miss a new URL together run its handler once. With none waiting the
+    page is the handler's and not copied, as above, and it is not remembered as not kept: the
+    store refused it, not the page, and a minute of that memory would have the URL's next
+    requests, which the store keeps the page for, each run the handler. So the others waiting for
+    a first request never run their own handlers because the store refused it; they do, as for
+    any page, when its page was not kept for another reason (an error, a page drawn for that
+    request), and then each keeps its own only where the store would have kept it at that
+    request's own ask. A request the store refuses that finds the table full, or the page
+    remembered as not kept, is the handler's at once, as in a store with room.
 
     Not chosen: in front of the middleware, for the reasons above, though it would save the
     stages too; asking the marks whether or not the store has room, which spares the copy
@@ -7396,7 +7408,10 @@ rules something out.
     holds it to one each); no memory of pages not kept, which would cost each wave of requests for
     a page never kept one handler's time of waiting (31 of 64 requests past the deadline in every
     round of the wave below, against 28 with it) to save about 130 KB at most and no instruction
-    on a measured path; leaving a handler's `Date` out with nothing for its age, with which a cache
+    on a measured path; leaving a request a full store refuses out of the table, which ran a new
+    URL's handler twice for requests that miss it together, the first request's alone and then
+    one for the rest, and kept the page for those; remembering a page the store alone refused as
+    not kept, which had the requests that miss it together next each run the handler; leaving a handler's `Date` out with nothing for its age, with which a cache
     after the app counted the first answer older than each given in its place, and not keeping a
     page that sets a `Date` at all, which loses the page for an input HTTP gives a meaning to; and,
     left for changes of their own, a call

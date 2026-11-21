@@ -1599,7 +1599,9 @@ once an eighth of the bits are set (after 131,072 new URLs at 32 MiB), so a craw
 walk over the same URLs is kept as the first was before this rule. The price is one more run
 of a page's handler: in a full store the answer to the first request for a URL the app does
 not remember is not kept, whether the page is new, or was kept while there was room or before
-the bits were last cleared and has since passed its lifetime or been dropped. A store that has filled mostly stays full, since a page past its lifetime keeps
+the bits were last cleared and has since passed its lifetime or been dropped. Requests that ask
+for such a URL while its first request is made wait for it as above, and are its second
+requests: the page is kept then and given to them, so they run its handler once. A store that has filled mostly stays full, since a page past its lifetime keeps
 its room until another needs it. Nothing is kept under `corten dev`,
 so a change shows on the next load. An app's tests keep pages as a deploy does (`App::test`,
 `App::router`): a test that changes what a `Public` page shows other than by a write through the
