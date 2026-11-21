@@ -1009,7 +1009,7 @@ async fn a_handler_reads_the_visitors_time_zone_once_the_app_asks_for_it() {
     }
 }
 
-/// A `Public` page made for a visitor whose zone is known, and kept, is not given to the next one
+/// A `Public` page first asked for by a visitor whose zone is known is not given to the next one
 /// in that zone: it is written in UTC, which is what the app keeps (`crate::kept`).
 #[cfg(feature = "zones")]
 #[tokio::test]
@@ -1037,8 +1037,6 @@ async fn a_kept_public_page_is_not_in_its_first_visitor_s_zone() {
         }
     };
     let utc = "<p>Mar 22, 2026, 3:04 PM UTC</p>";
-    // Asked for once, so the next answer is the one kept.
-    get_with(None).await;
     let (kept, first) = get_with(Some("corten-zone=America/Chicago")).await;
     assert!(!kept && first.contains(utc), "the first visitor's own page is in UTC: {first}");
     for cookie in [None, Some("corten-zone=Asia/Tokyo"), None] {

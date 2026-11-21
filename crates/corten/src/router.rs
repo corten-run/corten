@@ -128,8 +128,7 @@ impl Endpoint for Keeping {
         if let Some(kept) = asked.find() {
             return Box::pin(std::future::ready(kept));
         }
-        // A URL not asked for before is the handler's as any other request: no one is known to
-        // ask for its answer again.
+        // In a full store a URL not asked for before is the handler's as any other request.
         let Some(missed) = asked.missed(&req) else { return self.inner.call(req) };
         let here = req.extensions().get::<crate::layout::StartHere>().cloned();
         let answer = self.inner.call(req);

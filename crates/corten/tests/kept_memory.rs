@@ -17,10 +17,12 @@ use tokio::{
 /// The bound the app is given, and more pages than it has room for.
 const BOUND: usize = 4 << 20;
 const PAGES: usize = 3000;
-/// The counts of writes and the marks of the URLs asked for: 65,536 and 32,768 of four bytes,
-/// each made once (the marks with the first page asked for, the counts with the first one
-/// asked for again) and held beside the bound.
-const COUNTS: usize = (4 << 16) + (4 << 15);
+/// The counts of writes: 65,536 of four bytes, made once with the first page asked for and held
+/// beside the bound.
+const COUNTS: usize = 4 << 16;
+/// The marks of the URLs asked for: a bit for every 32 bytes of the bound, made once when the
+/// store first fills and held beside the bound too.
+const MARKS: usize = BOUND / 256;
 
 #[cfg(feature = "compress")]
 const CODINGS: &[&str] = &["identity", "zstd", "br", "gzip"];
@@ -125,20 +127,27 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
         }
     }
     let before = LIVE.load(Ordering::Relaxed);
+    let mut twice = 0;
     for n in 0..PAGES {
-        // A page is kept from the second time its URL is asked for.
-        assert!(!get(&mut stream, &mut read, &format!("/kept?n={n}"), "identity").await, "page {n}, asked for once");
+        // With room a page is kept the first time it is made. In a full store it is kept from
+        // the second request for its URL, so one more comes first.
+        let made = !get(&mut stream, &mut read, &format!("/kept?n={n}"), "identity").await;
+        assert!(made, "page {n} was asked for the first time");
         for (asked, coding) in CODINGS.iter().enumerate() {
             let given = get(&mut stream, &mut read, &format!("/kept?n={n}"), coding).await;
-            assert_eq!(given, asked > 0, "page {n} in {coding}: made again and kept, then given in each coding");
+            // In a full store a new URL's bit is now and then another's, and its page was kept
+            // the first time after all.
+            twice += usize::from(asked == 0 && !given);
+            assert!(given || (asked == 0 && twice > 0), "page {n} in {coding}: kept by its second request at the latest");
             // The counts are made here, inside what is counted, or taking them off below is wrong.
             if (n, asked) == (0, 0) {
                 let first = LIVE.load(Ordering::Relaxed).saturating_sub(before);
-                assert!(first >= COUNTS, "the first page kept took {first} bytes: the counts and the marks were made before it");
+                assert!(first >= COUNTS, "the first page asked for took {first} bytes: the counts were made before it");
             }
         }
     }
-    let held = LIVE.load(Ordering::Relaxed).saturating_sub(before + COUNTS);
+    assert!(twice > PAGES / 2, "{twice} of {PAGES} pages were asked for in a full store");
+    let held = LIVE.load(Ordering::Relaxed).saturating_sub(before + COUNTS + MARKS);
     assert!(get(&mut stream, &mut read, &format!("/kept?n={}", PAGES - 1), "identity").await, "the newest is kept");
     assert!(!get(&mut stream, &mut read, "/kept?n=0", "identity").await, "and the oldest went to make room");
     server.abort();
