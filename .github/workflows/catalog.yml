@@ -130,7 +130,7 @@ jobs:
           docker run --rm --cpus 1 --memory 1g -v "$RUNNER_TEMP/gin-tests:/test-out:ro" cb-catalog-gin-tests sh -ec '
             name=TestCatalogLeanLoggingAndRecovery
             test "$(/test-out/itempage.test -test.list "^$name$")" = "$name"
-            exec /test-out/itempage.test -test.v -test.count=1 -test.run "^$name$"
+            exec /test-out/itempage.test -test.v -test.count=1 -test.timeout=10m -test.paniconexit0 -test.run "^$name$"
           '
       - name: Test native FastAPI record boundaries
         if: matrix.app == 'fastapi'
