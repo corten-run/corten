@@ -2132,8 +2132,9 @@ impl<A: Shareable> Public<A> {
     ///
     /// The name is checked when the app builds (`cargo build`, `cargo test`; `cargo check` does
     /// not evaluate it). A header that would make the answer one visitor's (`set-cookie`), one
-    /// Corten sets itself (`cache-control` and a CDN's `*-cache-control`, `vary`, the encoding
-    /// and length, the security headers, CORS, `corten-*`), one the answer has (`content-type`,
+    /// Corten sets itself (`cache-control`, any `*-cache-control` and the other caching headers a
+    /// CDN reads first, `surrogate-control`, `edge-control` and `x-accel-expires`, `vary`, the
+    /// encoding and length, the security headers, CORS, `corten-*`), one the answer has (`content-type`,
     /// `location`, `content-disposition`) or one of the connection's does not compile, and neither does a name that is
     /// not a lowercase header name:
     ///
@@ -2207,14 +2208,13 @@ headers! {
 /// those the answer itself has (its type, the place a redirect goes, a range, a download's file
 /// name, which [`Media::attachment`] writes escaped), and those that are
 /// the connection's, not the answer's. Names under `corten-` and `access-control-` (an API's
-/// CORS) are Corten's too, and so is any `*cache-control` and `surrogate-control`: a CDN
-/// obeys them over `Cache-Control`, which Corten makes `private` for an answer it must not
-/// share.
-const NOT_SHARED: [&str; 28] = [
+/// CORS) are Corten's too, and so are the caching headers a CDN obeys over `Cache-Control`, which
+/// Corten makes `private` for an answer it must not share: those it removes from such an answer
+/// (`crate::cache::CDN_CACHING`, the same list) and any other `*cache-control`.
+const NOT_SHARED: [&str; 27] = [
     "set-cookie",
     "clear-site-data",
     "cache-control",
-    "surrogate-control",
     "expires",
     "age",
     "date",
@@ -2257,21 +2257,27 @@ const fn has(name: &[u8], part: &[u8], at_end: bool) -> bool {
     true
 }
 
-/// Whether a [`Public`] answer may set the header `name` (lowercase), when the app compiles.
-const fn shared_header(name: &str) -> bool {
-    let name = name.as_bytes();
-    if has(name, b"corten-", false) || has(name, b"access-control-", false) || has(name, b"cache-control", true) {
-        return false;
-    }
+/// Whether `name` is one of `names`, when the app compiles.
+const fn listed(name: &[u8], names: &[&str]) -> bool {
     let mut n = 0;
-    while n < NOT_SHARED.len() {
-        let refused = NOT_SHARED[n].as_bytes();
-        if refused.len() == name.len() && has(name, refused, false) {
-            return false;
+    while n < names.len() {
+        let listed = names[n].as_bytes();
+        if listed.len() == name.len() && has(name, listed, false) {
+            return true;
         }
         n += 1;
     }
-    true
+    false
+}
+
+/// Whether a [`Public`] answer may set the header `name` (lowercase), when the app compiles.
+const fn shared_header(name: &str) -> bool {
+    let name = name.as_bytes();
+    !(has(name, b"corten-", false)
+        || has(name, b"access-control-", false)
+        || has(name, b"cache-control", true)
+        || listed(name, &NOT_SHARED)
+        || listed(name, &crate::cache::CDN_CACHING))
 }
 
 impl<A: Shareable> IntoResponse for Public<A> {
@@ -2870,15 +2876,25 @@ mod tests {
 
     #[test]
     fn a_public_answer_takes_the_app_s_headers_and_not_corten_s_or_the_connection_s() {
-        for name in ["x-robots-tag", "link", "content-language", "etag", "last-modified", "x-cache-tag"] {
+        for name in
+            ["x-robots-tag", "link", "content-language", "etag", "last-modified", "x-cache-tag", "surrogate-key", "cache-tag"]
+        {
             assert!(super::shared_header(name), "{name}");
+        }
+        // The caching headers a CDN reads first, which Corten removes from a page that draws a
+        // submit key: the same list.
+        for name in crate::cache::CDN_CACHING {
+            assert!(!super::shared_header(name), "{name}");
         }
         for name in [
             "set-cookie",
             "cache-control",
             "cdn-cache-control",
             "cloudflare-cdn-cache-control",
+            "vercel-cdn-cache-control",
             "surrogate-control",
+            "edge-control",
+            "x-accel-expires",
             "access-control-allow-origin",
             "corten-mode",
             "content-type",
