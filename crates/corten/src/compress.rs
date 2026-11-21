@@ -251,9 +251,16 @@ impl Accepts {
 
     /// The coding for a body compressed before ([`Precompressed`]: brotli or gzip), when the
     /// client ranks it as high as any it accepts: one that prefers zstd gets zstd made now.
-    pub(crate) fn stored(self) -> Option<Coding> {
+    fn stored(self) -> Option<Coding> {
         let top = self.0.iter().copied().max().unwrap_or(0);
         self.best(&[Coding::Brotli, Coding::Gzip]).filter(|c| self.0[*c as usize] == top)
+    }
+
+    /// Whether the client ranks brotli as high as any coding it accepts, as `stored` picks it:
+    /// two comparisons, where `stored` ranks every coding.
+    pub(crate) fn ranks_brotli_first(self) -> bool {
+        let [zstd, brotli, gzip] = [Coding::Zstd, Coding::Brotli, Coding::Gzip].map(|coding| self.0[coding as usize]);
+        brotli > 0 && brotli >= zstd && brotli >= gzip
     }
 
     fn best(self, offered: &[Coding]) -> Option<Coding> {
@@ -749,6 +756,20 @@ mod tests {
         assert_eq!(accepted(&accept("zstd, gzip"), &[Coding::Brotli, Coding::Gzip]), Some(Coding::Gzip));
     }
 
+    /// A kept page's answers ask `ranks_brotli_first`, which is `stored` choosing brotli, for
+    /// every weight each coding may have.
+    #[test]
+    fn ranking_brotli_first_is_storing_brotli() {
+        let weights = [0, 1, 500, 999, 1000];
+        for zstd in weights {
+            for brotli in weights {
+                for gzip in weights {
+                    let accepts = Accepts([zstd, brotli, gzip]);
+                    assert_eq!(accepts.ranks_brotli_first(), accepts.stored() == Some(Coding::Brotli), "{:?}", accepts.0);
+                }
+            }
+        }
+    }
     #[test]
     fn negotiation_ignores_invalid_weights() {
         let all = [Coding::Zstd, Coding::Brotli, Coding::Gzip];

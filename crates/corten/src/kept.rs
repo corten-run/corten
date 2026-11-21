@@ -366,7 +366,7 @@ impl Kept {
         encode: impl FnOnce() -> Bytes,
     ) -> (Bytes, Coding) {
         let Some(entry) = Kept::of(extensions, body) else { return (encode(), coding) };
-        if accepts.stored() == Some(Coding::Brotli) {
+        if accepts.ranks_brotli_first() {
             let coded = &entry.coded;
             if let Some(brotli) = coded.brotli.get() {
                 return (brotli.clone(), Coding::Brotli);
