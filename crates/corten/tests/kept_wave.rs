@@ -108,37 +108,39 @@ fn refresh_wave() {
             }
             let (path, waves) = if case == "never" { ("/never", 2) } else { ("/wave", 1) };
             for wave in 1..=waves {
-            let before = RUNS.load(Ordering::Relaxed);
-            let start = Instant::now();
-            let sent: Vec<_> = (0..requests)
-                .map(|_| {
-                    let router = router.clone();
-                    tokio::spawn(async move {
-                        let res = router.oneshot(request("GET", path)).await.unwrap();
-                        let (status, kept) = (res.status(), res.headers().contains_key("age"));
-                        res.into_body().collect().await.unwrap();
-                        (status, kept, start.elapsed().as_secs_f64() * 1000.0)
+                let before = RUNS.load(Ordering::Relaxed);
+                let start = Instant::now();
+                let sent: Vec<_> = (0..requests)
+                    .map(|_| {
+                        let router = router.clone();
+                        tokio::spawn(async move {
+                            let res = router.oneshot(request("GET", path)).await.unwrap();
+                            let (status, kept) = (res.status(), res.headers().contains_key("age"));
+                            res.into_body().collect().await.unwrap();
+                            (status, kept, start.elapsed().as_secs_f64() * 1000.0)
+                        })
                     })
-                })
-                .collect();
-            let mut answers = Vec::new();
-            for request in sent {
-                answers.push(request.await.unwrap());
-            }
-            let runs = RUNS.load(Ordering::Relaxed) - before;
-            let ok = answers.iter().filter(|(status, ..)| *status == StatusCode::OK).count();
-            let kept = answers.iter().filter(|(status, kept, _)| *status == StatusCode::OK && *kept).count();
-            let failed = answers.iter().filter(|(status, ..)| *status == StatusCode::SERVICE_UNAVAILABLE).count();
-            assert_eq!(ok + failed, requests, "only answers and deadlines");
-            let mut times: Vec<f64> = answers.iter().filter(|(status, ..)| *status == StatusCode::OK).map(|(.., ms)| *ms).collect();
-            times.sort_by(f64::total_cmp);
-            println!(
-                "round={round} case={case} wave={wave} requests={requests} runs={runs} ok={ok} kept={kept} failed={failed} p50={:.1} p90={:.1} p99={:.1} max={:.1}",
-                share(&times, 0.5),
-                share(&times, 0.9),
-                share(&times, 0.99),
-                times.last().copied().unwrap_or(f64::NAN),
-            );
+                    .collect();
+                let mut answers = Vec::new();
+                for request in sent {
+                    answers.push(request.await.unwrap());
+                }
+                let runs = RUNS.load(Ordering::Relaxed) - before;
+                let ok = answers.iter().filter(|(status, ..)| *status == StatusCode::OK).count();
+                let kept = answers.iter().filter(|(status, kept, _)| *status == StatusCode::OK && *kept).count();
+                let failed = answers.iter().filter(|(status, ..)| *status == StatusCode::SERVICE_UNAVAILABLE).count();
+                assert_eq!(ok + failed, requests, "only answers and deadlines");
+                let mut times: Vec<f64> =
+                    answers.iter().filter(|(status, ..)| *status == StatusCode::OK).map(|(.., ms)| *ms).collect();
+                times.sort_by(f64::total_cmp);
+                println!(
+                    "round={round} case={case} wave={wave} requests={requests} runs={runs} ok={ok} kept={kept} \
+                     failed={failed} p50={:.1} p90={:.1} p99={:.1} max={:.1}",
+                    share(&times, 0.5),
+                    share(&times, 0.9),
+                    share(&times, 0.99),
+                    times.last().copied().unwrap_or(f64::NAN),
+                );
             }
         }
     });
