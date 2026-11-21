@@ -18,9 +18,10 @@
 //! with zstd 1 (a Linux container on a busy desktop, five runs, medians). brotli 11 would take
 //! about 194 ms (one run on Windows), too long for a value that changes while the app runs.
 //! A page the app keeps ([`crate::kept`]) has each coding made once at the per-request level, by
-//! the first request that asks for it, and brotli 5 made on that same thread after its second
-//! answer to a client that takes brotli: from then on such a client gets brotli 5 in the place of
-//! zstd 1, 18% fewer bytes on a 4.4 KB page, and no request waits for it ([`Level::Kept`]).
+//! the first request that asks for it, and brotli 5 made on that same thread, queued on its second
+//! compressed answer to a client that ranks brotli first: from then on such a client gets brotli 5
+//! in the place of zstd 1, 18% fewer bytes on a 4.4 KB page, and no request waits for it
+//! ([`Level::Kept`]).
 //!
 //! Event streams ([`crate::live`], feeds) are compressed as one stream per connection, flushed
 //! after every event so it arrives at once, with the context kept between events: a redraw that

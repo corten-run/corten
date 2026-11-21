@@ -7271,11 +7271,14 @@ rules something out.
     A kept page's bytes in a coding are made once and sent many times, so a level that costs
     more and sends fewer pays for itself where a per-request answer's cannot
     ([#1793 A kept page is compressed at the level a per-request answer is](https://github.com/corten-run/corten/issues/1793)).
-    The request that makes the copy is still a visitor's, so nothing more is made on it: after
-    the page's second answer to a client that takes brotli (a page asked for once is compressed
-    once, as a held value is), the one thread that already compresses held JSON makes its brotli
-    at level 5, taking it in turn from that thread's bounded queue and holding the page weakly
-    while it waits. From then on a client that ranks brotli as high as any coding, as a browser
+    The request that makes the copy is still a visitor's, so nothing more is made on it: while
+    the page's second compressed answer to a client that ranks brotli first or ties it for first
+    is finished (a page asked for once is compressed once, as a held value is), its brotli at level
+    5 is queued for the one thread that already compresses held JSON, which takes it in turn from
+    its bounded queue, holding the page weakly while it waits, and makes and counts it only while
+    the page still stands, asked again under the store's lock when the bytes are put with it; a
+    full queue leaves it to the next such answer. From then on a client that ranks brotli as high
+    as any coding, as a browser
     that also takes zstd does, gets it in the place of zstd 1; one that prefers zstd, or takes
     only gzip, gets the per-request form as before, and until it is made so does everyone. It
     counts toward the bound, and each compressed form now counts the 24-byte record its bytes

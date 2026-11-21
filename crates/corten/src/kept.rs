@@ -12,8 +12,8 @@
 //! answered `304`. What a kept page saves is the handler, the render, the hash of its body for the
 //! tag and its compression: the hash and each coding's bytes are made once and stay with it
 //! ([`Kept`], which [`crate::cache::tag`] and `compress::finish` read), and its brotli is made
-//! once more at a higher level after its second answer to a client that takes it, by no request
-//! (`Coded`).
+//! once more at a higher level, queued on its second compressed answer to a client that ranks
+//! brotli first, by no request (`Coded`).
 //!
 //! What makes this safe is checked when the app compiles: a `Public` handler takes only inputs
 //! that cannot tell who is asking ([`crate::answer::Anonymous`]), and a page is kept only when
@@ -287,15 +287,16 @@ pub(crate) struct Entry {
 }
 
 /// A kept answer's body compressed: in each coding at the per-request level, made by the first
-/// request that asks for that coding, and in brotli at [`Level::Kept`], made once after the
-/// second answer to a client that takes brotli, on the thread that compresses held values, so no
-/// request waits for it. From then on a client that ranks brotli as high as any coding gets it.
+/// request that asks for that coding, and in brotli at [`Level::Kept`], queued on the second
+/// answer to a client that ranks brotli as high as any coding and made on the thread that
+/// compresses held values, so no request waits for it. From then on such a client gets it.
 #[cfg(feature = "compress")]
 #[derive(Default)]
 struct Coded {
     now: [OnceLock<Bytes>; 3],
     brotli: OnceLock<Bytes>,
-    /// The answers to a client that takes brotli before `brotli` was made: the second starts it.
+    /// The answers to a client that ranks brotli as high as any coding before `brotli` was made:
+    /// the second queues it, and a later one again when the queue was full.
     asked: AtomicU32,
     started: AtomicBool,
 }
