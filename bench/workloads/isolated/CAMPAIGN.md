@@ -31,6 +31,8 @@ node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page
 # The reviewed fleet reservation passes its named layout to the same entry:
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page --load-layout c16-generator-v1
+# For another group only when the fleet reserved c-8/sfo2:
+node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group json-api --placement dedicated-sfo2
 ```
 
 The argument order and root are fixed. No selection, recipe, command, validator, image,

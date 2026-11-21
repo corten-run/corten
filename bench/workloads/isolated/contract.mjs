@@ -20,7 +20,7 @@ import { createClientWorkload } from "../client.mjs";
 import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../live/native.mjs";
 import { fanoutProfile } from "../../live/fanout.mjs";
 import { budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
-import { catalogFleetPlacement, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
+import { alternateFleetMode, catalogFleetPlacement, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
 
 export const schema = "benchmark-isolated-contract/v1";
 const root = fileURLToPath(new URL("../../../", import.meta.url));
@@ -130,6 +130,7 @@ const selection = (group) => ({ registry: registrySchema, group, contractSha256:
 
 function subjectFor(r, sources, campaignMode) {
   assert.ok(campaignMode === "dedicated" || campaignMode === "legacy"
+    || campaignMode === alternateFleetMode && r.group !== "catalog-page"
     || campaignMode === catalogFleetPlacement.loadLayout && r.group === "catalog-page", "unknown campaign placement");
   const inputs = Object.fromEntries(Object.entries(latestStableSources).filter(([key]) => key === "policy" || r.group === "client-heavy").map(([key, path]) => {
     const bytes = git(["show", `${r.commit}:${path}`]);

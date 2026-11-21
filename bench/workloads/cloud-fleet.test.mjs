@@ -8,7 +8,7 @@ import { join } from "node:path";
 import * as contract from "./cloud-contract.mjs";
 import { host as catalogHost } from "../catalog/droplet-contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
-import { accountId, archive, commit, context, harness, metadata, syntheticInspection } from "./cloud-fixtures.mjs";
+import { accountId, archive, commit, context, harness, metadata, syntheticInspection, syntheticPlacement } from "./cloud-fixtures.mjs";
 import { campaignOutcome, controllerState, parseDropletArgs } from "./cloud-options.mjs";
 import { bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { digest } from "./cloud-local.mjs";
@@ -28,7 +28,7 @@ const droplet = (row, id = 123) => ({ id, name: row.name, tags: [...contract.tag
 test("fleet fixes the complete current registry to one unique host per group", () => {
   const fleet = plan();
   assert.equal(contract.validateFleet(fleet), fleet);
-  assert.equal(fleet.schema, "benchmark-group-fleet/v3");
+  assert.equal(fleet.schema, "benchmark-group-fleet/v4");
   assert.deepEqual(fleet.selection, contract.selection());
   assert.deepEqual(fleet.jobs.map((row) => row.group), groupNames);
   assert.equal(new Set(fleet.jobs.map((row) => row.token)).size, groupNames.length);
@@ -83,6 +83,44 @@ test("uniform v2 receipts stay bound to c-8/sfo3 and cannot authorize a new laun
   assert.match(remoteFiles(s)["job.sh"], /nproc\)" -ge 8/);
   assert.doesNotMatch(remoteFiles(s)["job.sh"], /--load-layout/);
   assert.throws(() => contract.validateLaunchFleet(fleet), /historical fleet cannot authorize launch/);
+});
+
+test("saved v3 uses the old placement and job bytes, not the current catalog", () => {
+  const current = plan(), { fleetSha256, ...body } = current;
+  body.schema = "benchmark-group-fleet/v3";
+  const fleet = { ...body, fleetSha256: digest(JSON.stringify(body)) };
+  for (const group of groupNames) {
+    const s = state(current, group), legacy = { ...s, fleet };
+    assert.equal(contract.validateState(legacy, s.round), legacy);
+    const job = remoteFiles(legacy)["job.sh"];
+    assert.equal(job, remoteFiles(s)["job.sh"]);
+    assert.doesNotMatch(job, /--placement/);
+    // The preflight base's v3 generator, evaluated with the same synthetic state.
+    if (group === "catalog-page") assert.equal(digest(job), "da0e490641bee439d4551a0fe1c1520eaf3995107ce980cb7c5673f32464a630");
+    if (group === "json-api") assert.equal(digest(job), "a58effb2bab110723920fe62374c21e0119e72bcc83c6501478e02b7521a9e8d");
+    assert.throws(() => contract.validateState({ ...legacy, host: { ...s.host, region: "sfo1" } }, s.round));
+  }
+  assert.throws(() => contract.validateLaunchFleet(fleet), /historical fleet cannot authorize launch/);
+  const altered = { ...body, host: { ...body.host, region: "sfo2" } };
+  assert.throws(() => contract.validateFleet({ ...altered, fleetSha256: digest(JSON.stringify(altered)) }));
+});
+
+test("alternate placement agrees across saved identity, census, remote entry and collection", () => {
+  const f = contract.fleetPlan(input(), at, "sfo2"), group = groupNames[1], s = state(f, group);
+  const row = droplet(f.jobs[1]), actual = { ...row, region: { slug: "sfo2" } };
+  assert.deepEqual(contract.providerCreateHost(contract.fleetCreateMode(group, f)), s.host);
+  assert.equal(contract.ownedDroplet([actual], s), actual);
+  assert.equal(contract.assertFleetCensus([actual], f), true);
+  assert.throws(() => contract.ownedDroplet([row], s));
+  assert.throws(() => contract.assertFleetCensus([row], f));
+  assert.match(remoteFiles(s)["job.sh"], /--placement 'dedicated-sfo2'/);
+  const report = { ...syntheticInspection("verified"), commit: s.commit,
+    schema: "benchmark-isolated-group-campaign-inspection/v1", selection: s.selection,
+    groups: syntheticInspection("verified").groups.filter((r) => r.group === group) };
+  assert.throws(() => campaignOutcome(report, s, 0), /replayed host placement differs/);
+  report.placement = "dedicated-sfo2";
+  assert.equal(campaignOutcome(report, s, 0).evidenceOutcome, "validated");
+  assert.throws(() => campaignOutcome(report, state(plan(), group), 0), /replayed host placement differs/);
 });
 
 // Captured by evaluating the committed 9f3d3588 generator and its committed
@@ -159,13 +197,32 @@ test("fleet census permits only exact reserved siblings, not a tag-prefix exempt
   }
 });
 
-function configured(t) {
-  const h = harness(t, { active: true }), values = input(); values.provider = { accountId, context };
+function configured(t, flags = {}) {
+  const h = harness(t, { active: true, ...flags }), values = input(); values.provider = { accountId, context };
   const fleet = contract.fleetPlan(values, at), path = join(h.temp, "fleet.json");
   writeFileSync(path, JSON.stringify(fleet));
   const options = { collect: undefined, detach: true, commit, sshKey: "42", accountId, context, group: groupNames[0], fleet: path };
   return { h, fleet, path, options };
 }
+
+test("direct grouped launch checks every pinned size before writing any create intent", async (t) => {
+  const { h, options } = configured(t, { placement: syntheticPlacement(["sfo2"]) });
+  // The catalog host itself is advertised, but all eight siblings are not.
+  await assert.rejects(h.task({}, options).launch(), /reserved fleet placement not advertised/);
+  assert.equal(h.creates, 0);
+  assert.equal(h.saved().status, "reserved");
+  assert.equal(h.saved().createIntentAt, undefined);
+});
+
+test("a direct sibling launch cannot stand in for verified remaining admission", async (t) => {
+  const placement = syntheticPlacement(["sfo3"]);
+  placement.sizes.pop();
+  placement.regions[0].sizes = [];
+  const { h, options } = configured(t, { placement });
+  await assert.rejects(h.task({}, { ...options, group: groupNames[1] }).launch(), /missing or invalid fleet catalog entry: c-16/);
+  assert.equal(h.creates, 0);
+  assert.equal(h.saved().createIntentAt, undefined);
+});
 
 test("group launch permits exact siblings but reserves only this group's complete work", async (t) => {
   const { h, fleet, options } = configured(t);

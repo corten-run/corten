@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
-import { roundName, savedLoadLayout, selection, terminalUnit, validateState } from "./cloud-contract.mjs";
+import { roundName, savedLoadLayout, savedPlacement, selection, terminalUnit, validateState } from "./cloud-contract.mjs";
 
 // A disposition of one fenced DELETE, not a diagnostic or permission to retry.
 export const unsentDelete = Object.freeze({ status: 1, stdout: "", stderr: "", deleteNotDispatched: true });
@@ -9,6 +9,7 @@ const providerCodes = ["provider-command", "provider-credential", "provider-outp
   "account-request", "account-http", "get-request", "get-http", "get-response", "list-request", "list-http", "list-response",
   "list-response-shape", "list-response-total", "list-response-id", "list-response-duplicate",
   "list-response-links", "list-response-pages", "list-response-next", "list-response-count", "list-response-bounds",
+  "catalog-request", "catalog-http", "catalog-response",
   "create-request", "create-http", "create-response", "create-link", "create-action-request", "create-action-http",
   "create-link-shape", "create-link-count", "create-link-id", "create-link-rel", "create-link-href",
   "create-action-response", "create-action-pending", "delete-request", "delete-http"];
@@ -39,6 +40,14 @@ export function providerDiagnostic(value) {
 }
 export function providerFailure(error) {
   return error && typeof error === "object" ? providerDiagnostic(Object.getOwnPropertyDescriptor(error, "providerDiagnostic")?.value) : undefined;
+}
+
+export function fleetCatalogResult(result) {
+  if (result.status !== 0 || result.error) {
+    const diagnostic = providerFailure(result);
+    throw Object.assign(new Error("fleet catalog read failed"), diagnostic ? { providerDiagnostic: diagnostic } : {});
+  }
+  return JSON.parse(result.stdout);
 }
 
 const controllerStages = ["source-plan", "exact-approval", "remote-main-advertisement", "remote-main-fetch", "remote-main-ancestry",
@@ -223,6 +232,8 @@ export function campaignOutcome(report, s, exitCode) {
   assert.deepEqual(report.selection, s.selection, "complete current native selection required");
   const loadLayout = savedLoadLayout(s);
   assert.equal(report.loadLayout, loadLayout, "replayed catalog load layout differs from reservation");
+  const placement = savedPlacement(s);
+  assert.equal(report.placement, placement, "replayed host placement differs from reservation");
   full(report.campaign, new RegExp(`${s.round}-[a-f0-9]{16}`), "native campaign identity");
   assert.deepEqual(report.uncollectedNativeRoots, [], "native evidence remains on host");
   assert.equal(report.collectionIntegrity, "manifest-verified", "unsealed native evidence");
@@ -240,6 +251,7 @@ export function campaignOutcome(report, s, exitCode) {
       "collectionIntegrity", "commandLifecycle", "uncollectedNativeRoots", "archiveTreeSha256", "reservationSha256"];
     if (s.control?.monitor?.phase === "closed") fields.push("supervisedTerminal");
     if (loadLayout) fields.push("loadLayout");
+    if (placement) fields.push("placement");
     assert.deepEqual(Object.keys(report).sort(), fields.sort(), "verified inspection schema differs");
     assert.deepEqual(report.blockers, []);
     assert.deepEqual(report.groups.map((r) => r.group), s.selection.groups.map((r) => r.group), "complete ordered native groups required");

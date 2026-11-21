@@ -5,10 +5,10 @@ import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertFleetCensus, bootstrapWorkspaceScript, ownedDroplet, reservation, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
+import { assertFleetCensus, bootstrapWorkspaceScript, fleetCatalogCommand, fleetRegion, ownedDroplet, reservation, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash, withVerifiedArchive } from "./cloud-local.mjs";
-import { campaignOutcome, controllerFailure, controllerState, full, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
+import { campaignOutcome, controllerFailure, controllerState, fleetCatalogResult, full, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-sealed-collection.mjs";
@@ -28,7 +28,7 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
 }
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-  inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit, unusedBootstrapApproval, approvedFleetSha256 } = {}) {
+  inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit, unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
   if (mergedHead !== "origin/main") full(mergedHead, /[a-f0-9]{40}/, "exact observed main commit required");
   const fleetBytes = options.group === undefined ? undefined : regular(options.fleet, 1024 * 1024);
@@ -38,6 +38,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assert.equal(fleet.round, options.round); assert.equal(fleet.commit, options.commit); assert.equal(fleet.sshKey, options.sshKey);
     assert.deepEqual(fleet.provider, { accountId: options.accountId, context: options.context });
   }
+  if (remainingAdmission) assert.ok(options.detach && fleet && options.group !== fleet.jobs[0].group, "remaining admission requires a sibling launch");
   const requested = resolve(options.stateDir), physicalRequest = resolveStateRoot(requested);
   assert.ok(outside(repo, physicalRequest) && outside(physicalRequest, repo), "state and checkout must be disjoint");
   mkdirSync(requested, { recursive: true, mode: 0o700 });
@@ -537,6 +538,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           if (fleet) {
             const present = existing.filter((d) => fleet.jobs.some((row) => row.name === d.name)).length;
             assert.ok(existing.length + fleet.jobs.length - present <= limit, "account capacity cannot cover the reserved fleet");
+            const catalog = fleetCatalogResult(await execute("doctl", fleetCatalogCommand, 60000, true));
+            fleetRegion(catalog, fleet.host.region, { remainingOnly: remainingAdmission });
           }
           state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
           const created = await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,

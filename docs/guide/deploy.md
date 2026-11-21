@@ -749,6 +749,10 @@ with the default inputs runs the whole evidence suite. Verify the run's commit
 and the successful jobs before counting them. Neither mode starts a droplet or
 produces framework timings.
 
+Before reserving a new grouped fleet, its [placement preflight](../../bench/workloads/CLOUD.md#dedicated-group-hosts)
+checks the provider's size and region listings for all required hosts. The
+reservation fixes those locations; create never tries a different region.
+
 The grouped benchmark's [disposable-host preparation](../../bench/workloads/CLOUD.md#evidence-and-cleanup)
 holds firmware-update services outside the measurement boundary before baseline.
 On a fresh dedicated group host it also limits incoming SSH to the controller's

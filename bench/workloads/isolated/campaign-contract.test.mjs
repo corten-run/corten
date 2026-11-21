@@ -14,6 +14,18 @@ import { isDeepStrictEqual } from "node:util";
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8",
   env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" } }).trim();
+test("alternate dedicated placement is replayable and changes neither resources nor native execution", () => {
+  const request = { round: "r17", commit, group: "json-api" };
+  const alternate = campaigns.bindGroupCampaign(request, "dedicated-sfo2");
+  validateCampaign(alternate);
+  const [a] = alternate.bindings, [b] = campaigns.bindGroupCampaign(request).bindings;
+  assert.deepEqual(a.host, { ...b.host, region: "sfo2" });
+  assert.equal(b.host.region, "sfo3");
+  for (const key of ["resources", "execution", "selection", "validation"]) assert.deepEqual(a[key], b[key]);
+  assert.notEqual(a.subjectSha256, b.subjectSha256);
+  assert.throws(() => validateCampaign({ ...alternate, bindings: [{ ...a, host: b.host }] }), /fixed native bindings/);
+  assert.throws(() => campaigns.bindGroupCampaign({ ...request, group: "catalog-page" }, "dedicated-sfo2"), /unknown group placement/);
+});
 test("official rounds are one fixed mapping with disjoint preparation and timing", () => {
   const rounds = campaignRounds("r17");
   assert.equal(rounds["catalog-page"], "c17"); assert.equal(rounds["json-api"], "j35");
