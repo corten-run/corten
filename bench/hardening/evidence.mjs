@@ -308,7 +308,16 @@ export const phaseInputs = (phase) => [...new Set([upstreamSourcePath(phase), pr
   ...(phase === recoveryPhase ? [] : ["bench/hardening/bounded-requests.mjs", "bench/hardening/request-capture.mjs"]),
   "bench/hardening/qualification.mjs", "bench/hardening/plan.mjs"])];
 
-function verifyWorker(r, cell, summary, receipts) {
+// parseArgs always writes options, but adds isolated only for --isolated.
+// Missing options are not valid standalone evidence.
+export function savedIsolation(options) {
+  assert.ok(options && Object.getPrototypeOf(options) === Object.prototype, "native hardening options required");
+  if (!Object.hasOwn(options, "isolated")) return false;
+  assert.equal(options.isolated, true, "invalid native hardening isolation option");
+  return true;
+}
+
+function verifyWorker(r, cell, summary, receipts, isolatedRun) {
   const step = r.intent.step, base = step.startsWith("edge-") ? "https://localhost:8080" : "http://127.0.0.1:8080";
   const upstream = `http://${summary.runId}-cell-upstream:8080`, edge = step.startsWith("edge-");
   const qualification = `/results/${edge ? "edge-" : ""}qualification.json`, node = "/repo/bench/hardening/";
@@ -325,7 +334,7 @@ function verifyWorker(r, cell, summary, receipts) {
     "edge-controls": ["node", node + "native.mjs", base, cell.source, upstream, qualification, "/results/edge-native-controls.json", "deployed-edge"],
     parity: ["node", node + "parity.mjs", base, cell.source, upstream, "/results/parity.json"],
     "edge-parity": ["node", node + "parity.mjs", base, cell.source, upstream, "/results/parity.json"],
-    probe: ["node", ...(summary.options.isolated ? ["--import", "/repo/" + hardeningCpuGate] : []),
+    probe: ["node", ...(isolatedRun ? ["--import", "/repo/" + hardeningCpuGate] : []),
       "/repo/" + probeSourcePath(cell.phase), "/results/probe.json", "/results/raw.jsonl"],
     "terminal-clock": ["node", node + "clock.mjs"], "cleanup-clock": ["node", node + "clock.mjs"],
     certificate: ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "/cert/key.pem", "-out", "/cert/cert.pem", "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
@@ -422,7 +431,7 @@ function verifyWorker(r, cell, summary, receipts) {
     ["--pids-limit", "512"], ["--ulimit", "nofile=65536:65536"],
   ]);
   if (role === "qualification") expectedOptions.set("--shm-size", "1g");
-  if (summary.options.isolated) {
+  if (isolatedRun) {
     const cpus = hardeningRoleCpu(role);
     assert.equal(info.HostConfig.CpusetCpus, cpus, "native hardening Docker cpuset differs");
     expectedOptions.set("--cpuset-cpus", cpus);
@@ -511,6 +520,7 @@ export function verifyHardeningCpuRoles(evidence, cell, launches, raw) {
 }
 
 export function verifyOwnedReceipts(receipts, summary, folder, preflight) {
+  const isolatedRun = savedIsolation(summary.options);
   assert.ok(Array.isArray(receipts)); if (!receipts.length) missingProof("missing owned container receipts");
   const ids = new Set(), launches = new Map(), resources = summary.budget.resources;
   const triggerByCell = new Map(), cellByTrigger = new Map();
@@ -524,7 +534,7 @@ export function verifyOwnedReceipts(receipts, summary, folder, preflight) {
     const before = r.created, end = r.terminal; if (!before || !end) missingProof("missing owned container lifetime");
     const cell = summary.cells.find((c) => c.key === r.intent.cell); assert.ok(cell);
     verifyContainerCommands(r, summary.runId);
-    const trigger = verifyWorker(r, cell, summary, receipts);
+    const trigger = verifyWorker(r, cell, summary, receipts, isolatedRun);
     if (folder && r.intent.step === "proxy")
       assert.ok(readFileSync(join(folder, cell.key, "nginx.conf")).equals(Buffer.from(proxyConfig())), "saved edge configuration differs");
     if (trigger !== undefined) {

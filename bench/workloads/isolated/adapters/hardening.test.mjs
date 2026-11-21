@@ -125,6 +125,10 @@ test("isolated hardening cannot reuse a historical verified resource proof witho
   assert.equal(result.resources, "blocked");
   assert.ok(result.blockers.includes("hardening-effective-cpu-role-proof-missing"));
   assert.ok(result.outcomes.every((r) => r.outcome === "passed"), "historical outcomes are not relabelled");
+  native.mock.resetCalls();
+  delete summary.options.isolated;
+  assert.equal((await inspect()).status, "invalid", "official isolation cannot be downgraded to standalone");
+  assert.equal(native.mock.callCount(), 0);
 });
 
 test("dependency recovery is verified from matching saved and replayed assessments, with no numeric comparison", async () => {

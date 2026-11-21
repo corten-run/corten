@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, linkSync }
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { budgets } from "./plan.mjs";
+import { budgets, parseArgs } from "./plan.mjs";
 import { nginxConf, edgeOffset } from "../fullstack/edge.mjs";
 import { qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { committedInputs, sourceGit, savedFiles, snapshotDependencies, verifyOwnedReceipts, verifyRunInputs, readyScript, buildNativeImage, digest, savedProofVersion, verifyNativeLimits, phaseInputs } from "./evidence.mjs";
@@ -16,6 +16,7 @@ import { livePaths } from "../fullstack/conformance.mjs";
 import { boundedQualification } from "./qualification.mjs";
 import { qualificationProbes } from "../marketplace/qualification-fixture.mjs";
 import { nativeBuildContext } from "../mixed-production/build-context.mjs";
+import { hardeningCpuGate, hardeningRoleCpu } from "../workloads/isolated/native-roles.mjs";
 
 // Docker-shaped replay vectors test the apparatus, not a native benchmark run.
 const root = mkdtempSync(join(tmpdir(), "hardening-proof-"));
@@ -28,9 +29,10 @@ const acknowledgeCreation = (r) => {
     "--label", `run.corten.hardening=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`, ...r.intent.args.slice(1)];
 };
 
-function fixture(mode = "direct") {
+function fixture(mode = "direct", isolated = false) {
   const cell = { key: `corten/fixture/${mode}/request-limit`, app: "corten", source: "fixture", phase: "request-limit", mode, status: "observed" };
-  const summary = { runId, startedAt: stamp, finishedAt: stamp, originalFolder: root, budget, cleanupFailures: [], cells: [cell],
+  const options = parseArgs(["w1", "--review", "proof-fixture", ...(isolated ? ["--isolated"] : [])]);
+  const summary = { runId, startedAt: stamp, finishedAt: stamp, originalFolder: root, options, budget, cleanupFailures: [], cells: [cell],
     tools: { node: image(1), checker: image(2), cert: image(3), edge: image(4) }, builds: { corten: { imageId: image(5).Id, image: image(5) } } };
   const node = "/repo/bench/hardening/", upstream = `http://${runId}-cell-upstream:8080`, base = "http://127.0.0.1:8080";
   const commands = [
@@ -39,7 +41,8 @@ function fixture(mode = "direct") {
     ["qualification", ["node", node + "qualification.mjs", "fixture", "direct", upstream, "/results/qualification.json"], "qualification"],
     ["native-controls", ["node", node + "native.mjs", base, "fixture", upstream, "/results/qualification.json", "/results/native-controls.json"], "qualification"],
     ["parity", ["node", node + "parity.mjs", base, "fixture", upstream, "/results/parity.json"], "qualification"],
-    ["probe", ["node", node + "bounded-requests-probe.mjs", "/results/probe.json", "/results/raw.jsonl"], "apparatus"],
+    ["probe", ["node", ...(isolated ? ["--import", "/repo/" + hardeningCpuGate] : []),
+      node + "bounded-requests-probe.mjs", "/results/probe.json", "/results/raw.jsonl"], "apparatus"],
     ...["terminal-clock", "terminal-clock", "cleanup-clock"].map((step) => [step, ["node", node + "clock.mjs"], "apparatus"]),
     ...(mode === "direct" ? [] : [
       ["proxy", ["/server"], "proxy"],
@@ -68,6 +71,7 @@ function fixture(mode = "direct") {
     const created = { Id: id(index + 20), Name: "/" + name, Image: step === "application" ? summary.builds.corten.imageId : summary.tools[tool].Id,
       RestartCount: 0, Config: { Cmd, Entrypoint: null, Env, User: "", WorkingDir: "", Labels: { "run.corten.hardening": runId, "agent.owner": "codex", "agent.task": runId } }, Mounts: mounts,
       HostConfig: { NanoCpus: limit.cpu * 1e9, Memory: limit.memory, MemorySwap: limit.memory, PidsLimit: 512, Ulimits: [{ Name: "nofile", Hard: 65536, Soft: 65536 }],
+        ...(isolated ? { CpusetCpus: hardeningRoleCpu(role) } : {}),
         ShmSize: role === "qualification" ? 1024 ** 3 : 64 * 1024 ** 2,
         RestartPolicy: { Name: "no" }, Privileged: false, PortBindings: {}, NetworkMode: ["upstream", "application", "proxy"].includes(step) ? runId + "-net"
           : ["terminal-clock", "cleanup-clock"].includes(step) ? "none" : `container:${id(20 + commands.findIndex(([s]) => s === (step.startsWith("edge-") ? "proxy" : "application")))}`,
@@ -78,6 +82,7 @@ function fixture(mode = "direct") {
     const args = [operation, ...(operation === "run" ? ["-d"] : []), "--network", created.HostConfig.NetworkMode,
       ...(step === "application" ? ["--network-alias", "fsw-target"] : []),
       "--cpus", String(limit.cpu), "--memory", String(limit.memory), "--memory-swap", String(limit.memory), "--pids-limit", "512", "--ulimit", "nofile=65536:65536",
+      ...(isolated ? ["--cpuset-cpus", hardeningRoleCpu(role)] : []),
       ...(role === "qualification" ? ["--shm-size", "1g"] : []),
       ...mounts.flatMap((m) => ["-v", `${m.Source}:${m.Destination}${m.RW ? "" : ":ro"}`]), ...Env.flatMap((e) => ["-e", e]), created.Image,
       ...(operation === "run" && step !== "upstream" ? [] : Cmd)];
@@ -95,6 +100,19 @@ test("complete actual-configuration vectors replay every charged native step", (
   // A target exit remains compatible with complete apparatus receipts.
   receipts[1].terminal.State.ExitCode = 137; receipts[1].terminal.State.OOMKilled = true;
   assert.doesNotThrow(() => verifyOwnedReceipts(receipts, summary));
+});
+
+test("owned receipts require declared options and enforce isolated launch CPU proof", () => {
+  const { summary, receipts } = fixture("direct", true);
+  assert.equal(verifyOwnedReceipts(receipts, summary).get(summary.cells[0].key).length, 10);
+  assert.throws(() => verifyOwnedReceipts(receipts, { ...summary, options: undefined }), /native hardening options required/);
+  assert.throws(() => verifyOwnedReceipts(receipts, { ...summary, options: { ...summary.options, isolated: false } }),
+    /invalid native hardening isolation option/);
+  assert.throws(() => verifyOwnedReceipts(fixture().receipts, summary), /Docker cpuset differs/);
+  const probe = receipts.find((r) => r.intent.step === "probe");
+  probe.created.Config.Cmd.splice(1, 2); probe.terminal.Config.Cmd.splice(1, 2);
+  probe.intent.args.splice(probe.intent.args.indexOf("--import"), 2); acknowledgeCreation(probe);
+  assert.throws(() => verifyOwnedReceipts(receipts, summary), /launched native worker command differs/);
 });
 
 for (const mode of ["direct", "deployed-edge"]) for (const discovery of [false, true])
