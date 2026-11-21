@@ -985,7 +985,7 @@ before it (a route that says `unstaged` goes through none;
    has answered. Either way the page is filled with their values before its answer goes back out
    through 5: a middleware sees the filled page, and the time it measures around `next`
    includes the reads' wait ([design Choice 20](../design.md#choice-layout-reads)).
-   A `Public` page the app has kept is given here in the handler's place
+   A `Public` page, JSON or text answer the app has kept is given here in the handler's place
    ([Caching](#the-pages-the-app-keeps)): stages 1 to 5 ran for the request as for any other,
    and 7 and 8 follow.
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
@@ -1522,7 +1522,7 @@ else a page could differ by, and the answer nothing made for one request:
 | the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound |
-| what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key, a `Vary` of the app's own |
+| what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key (drawn where the handler runs, not by a render it handed to another thread), a `Vary` of the app's own |
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
@@ -1578,7 +1578,8 @@ only in the instance that answered it, and a restart starts empty.
 
 A `Public` route that answers JSON (`Public<JsonResult<T>>`) or text is kept the same way: its
 whole body, under every rule above and by the same key (the language too, where the handler
-reads it with `req.t()` or `req.lang()`), with the tag's hash and each coding's bytes made once. What it saves is the handler with what it reads, the writing of the JSON, the
+reads it with `req.t()` or `req.lang()`), with each coding's bytes made once and, outside an API
+(whose answers are not tagged), the tag's hash. What it saves is the handler with what it reads, the writing of the JSON, the
 hash and the compression. Such a route has one answer at its URL, where a page route has the
 document, its swap and its data, so a data client's request (`Accept: application/json` first) is
 kept too, as a copy apart from a request that does not ask for JSON first: a handler that takes
@@ -1590,7 +1591,8 @@ lifetime ends.
 
 A file (`Media`), a relay, a live stream and a feed are not kept: each is its handler's for every
 request, and so is JSON the app holds as bytes (`json::Raw`) where the app compresses, which
-already keeps its compressed forms. Neither is anything that is not `Public`: a
+already keeps its compressed forms. One file is kept: a file of a known size that a page route
+answers in its page's place (`PageOr<Media>`), as that page would be. Neither is anything that is not `Public`: a
 page for one visitor runs its handler for every request, because a key that had to cover the
 caller is where a mistake shows one user's page to another. Cache the data such a page reads in
 the app, where it knows when the data changes.

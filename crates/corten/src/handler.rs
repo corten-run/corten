@@ -245,7 +245,7 @@ pub trait Handler<T, S>: Clone + Send + Sync + Sized + 'static {
     /// The typed route's answer is one that is the same for everyone (`Public`), a page or a
     /// whole body (JSON, text), which the app keeps and gives again in the handler's place
     /// ([`crate::kept`]).
-    fn keeps(&self) -> Option<crate::kept::Form> {
+    fn keeps(&self) -> Option<crate::kept::Shape> {
         None
     }
 

@@ -7242,18 +7242,29 @@ rules something out.
     A route whose answer is JSON or text is kept the same way
     ([#1794 `Public` text, JSON and files are not kept](https://github.com/corten-run/corten/issues/1794)):
     its whole body, by a page's key and under a page's rules. Which answers those are is known
-    when the route is made (`Answer::WHOLE`, of a type an app cannot name, as `KEYED` is), so a
-    file, a relay, a stream, a feed and an answer type of the app's own ask the store nothing.
+    when the route is made (`Answer::WHOLE`, of a type an app cannot name, as `KEYED` is), so the
+    route of a file, a relay, a stream, a feed or an answer type of the app's own asks the store
+    nothing. What a page route answers in a page's place is kept as the page would be, as it was
+    before this: a file of a known size from a route that says it answers a page or a file
+    (`PageOr`), and an answer type of the app's own that says it is a page.
     One thing differs from a page. A page route has three answers at its URL (the document, its
     swap and its data) and only the document is kept; a JSON or text route has one, so a request
     that asks for JSON first is kept too. A handler that takes `Req` can read which of the two
     asked (`req.mode`), and whether it does is not in its type, so the two are kept apart and a
     route asked both ways holds its body twice. It can read the request's language too
-    (`req.t()`, `req.lang()`), and a body says nothing of it in `Vary` as a page does, so
-    reading `Accept-Language` tells the request's signal and the body is kept for the header as
-    it was sent. A body may hold markup its handler rendered, and one with a form's new submit
-    key is not kept, as such a page is not: a body carries no mark of it, so the store watches
-    the handler run for one being drawn. An API's `Access-Control-Allow-Origin` is
+    (`req.t()`, `req.lang()`), so reading `Accept-Language` tells the request's signal and the
+    body is kept for the header as it was sent. That such a body leaves the app with no
+    `Vary: accept-language`, where a page has one, is a fault this does not mend: a cache in
+    front still keeps one language for all
+    ([#1800 Messages read without `App::messages` follow `Accept-Language`, and the answer does not say so](https://github.com/corten-run/corten/issues/1800)).
+    With both, a URL's eight copies are shared by the ways of asking times the languages asked
+    in. An answer may hold markup its handler rendered, and one with a form's new submit key is
+    not kept. A page's render marks the key it drew; markup rendered any other way (into JSON
+    or text, or into a file a page route answers) carries no mark, so the store watches the
+    handler run for one being drawn, on the thread that polls it. A key drawn on another
+    thread, by a render the handler handed to a blocking task, is not seen, and such an answer
+    is kept with it, as every cache in front already keeps it for the lifetime its route
+    wrote. An API's `Access-Control-Allow-Origin` is
     written from the request's `Origin` by the stage after the handler, so it is no part of a
     kept answer and no site is sent another's. Outside an API the stages send a request that
     asks for JSON first for the browser alone (`private`), as one form of a page's URL; the app
@@ -7333,10 +7344,12 @@ rules something out.
     request's target is its path and query and its host is the `Host` header,
     [Limit 14](#limit-http1)); reasoned (the inputs a kept page's handler may take read, of a whole
     document's `GET` without credentials, its URL, its `Host` and, for its language,
-    `Accept-Language`, which is the key; the stages after the handler read the request and the
+    `Accept-Language`, which is the key, and of a body's `GET` those and whether JSON was asked
+    for first, which is in its key too; the stages after the handler read the request and the
     answer and nothing the handler held, so they treat a kept answer as its own); bet (an app that
     marks a page `Public` means the lifetime it wrote also with no CDN in front, and does in its
-    handler nothing that must happen for every request); value (fast and proven fast; standards
+    handler nothing that must happen for every request; markup with a form's new submit key is
+    rendered where the handler runs, not on another thread); value (fast and proven fast; standards
     first, the app being a shared cache as RFC 9111 describes one; mistakes fail at compile time,
     what may be kept being known from the route's types; good defaults, easy overrides, with one
     setting for the bound, README Values).

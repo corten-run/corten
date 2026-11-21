@@ -118,7 +118,7 @@ impl Endpoint for Giving {
 /// here, as [`crate::middleware`] would after it, so what is kept is the page as it leaves the
 /// route.
 struct Keeping {
-    form: crate::kept::Form,
+    shape: crate::kept::Shape,
     inner: Route,
 }
 
@@ -126,32 +126,28 @@ impl Endpoint for Keeping {
     #[inline]
     fn call(&self, req: Request) -> Answering {
         // Any other request (a navigation, one with a cookie, a write) is the handler's as before.
-        let Some(asked) = crate::kept::Asked::of(&req, self.form) else { return self.inner.call(req) };
+        let Some(asked) = crate::kept::Asked::of(&req, self.shape) else { return self.inner.call(req) };
         if let Some(kept) = asked.find() {
             return Box::pin(std::future::ready(kept));
         }
         let missed = asked.missed(&req);
         // A whole body has no places: its route's reads are the middleware's to end, as before.
-        let page = self.form == crate::kept::Form::Page;
+        let page = self.shape == crate::kept::Shape::Page;
         let here = req.extensions().get::<crate::layout::StartHere>().filter(|_| page).cloned();
         let answer = self.inner.call(req);
         Box::pin(async move {
-            let res = if page {
-                // A page's render marks a submit key it drew itself (`cache::Unrepeatable`).
-                answer.await
-            } else {
-                // A body has no such mark and may hold markup its handler rendered: one with a
-                // form's new submit key is this request's alone.
-                let (res, drew_key) = crate::form::watched(answer).await;
-                if drew_key {
-                    return res;
-                }
-                res
-            };
+            // An answer with a form's new submit key is this request's alone. A page's render
+            // marks one it drew (`cache::Unrepeatable`); markup rendered any other way (into
+            // JSON or text, or into a file a page route answers) has no mark to carry, so the
+            // handler is watched for one being drawn.
+            let (res, drew_key) = crate::form::watched(answer).await;
             let res = match here {
                 Some(here) => here.fill(res).await,
                 None => res,
             };
+            if drew_key {
+                return res;
+            }
             missed.keep(res).await
         })
     }
@@ -292,7 +288,7 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
         Slot::Unbound(Arc::new(move |state| {
             let handled: Route = Arc::new(Handled { handler: handler.clone(), state, types: PhantomData });
             match keeps {
-                Some(form) => Arc::new(Keeping { form, inner: handled }),
+                Some(shape) => Arc::new(Keeping { shape, inner: handled }),
                 None => handled,
             }
         }))

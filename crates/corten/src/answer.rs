@@ -2706,14 +2706,14 @@ where
 {
     const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
 
-    fn keeps(&self) -> Option<crate::kept::Form> {
+    fn keeps(&self) -> Option<crate::kept::Shape> {
         if !(self.shared && self.keyed) {
             return None;
         }
         if O::PAGE {
-            Some(crate::kept::Form::Page)
+            Some(crate::kept::Shape::Page)
         } else {
-            O::WHOLE.0.then_some(crate::kept::Form::Body)
+            O::WHOLE.0.then_some(crate::kept::Shape::Body)
         }
     }
 

@@ -1771,6 +1771,9 @@ async fn a_public_json_or_text_answer_is_kept_and_given_again() {
     let (_, headers, _) = fetch(&router, "HEAD", "/items", &[]).await;
     assert!(runs.count() == ran + 1 && !headers.contains_key(header::AGE), "a HEAD is the handler's");
     assert!(fetch(&router, "GET", "/items", &[]).await.1.contains_key(header::AGE));
+    // The time zone's cookie says where the visitor is, not who, and a `Public` answer is in UTC.
+    let zone = [("cookie", "corten-zone=America/Chicago")];
+    assert!(fetch(&router, "GET", "/items", &zone).await.1.contains_key(header::AGE) && runs.count() == ran + 1);
     assert!(fetch(&router, "GET", "/items?page=2", &[]).await.1.get(header::AGE).is_none(), "another query is another answer");
 
     // A write to the path drops every copy kept there.
@@ -1857,6 +1860,87 @@ async fn a_kept_api_answer_is_sent_with_each_request_s_own_cors() {
     assert!(!fetch(&router, "GET", "/api/rates", &[]).await.1.contains_key(header::AGE));
     assert!(!fetch(&router, "GET", "/api/rates", &data).await.1.contains_key(header::AGE));
     assert_eq!(runs.count(), 4);
+}
+
+/// A page route may answer a file in its page's place (`PageOr`), and a file of a known size is
+/// kept as the page would be. Markup in one that holds a form's new submit key was rendered with
+/// no page to mark it, so the handler is watched for the key being drawn, and it is not kept.
+#[tokio::test]
+async fn a_file_in_a_page_s_place_is_kept_as_the_page_unless_it_drew_a_submit_key() {
+    const SUBMIT: crate::form::FieldName<crate::form::SubmitKey> = crate::form::FieldName::__new("submit");
+    type FileOrPage = crate::PageOr<Media, crate::answer::ForAll>;
+    let minute = Duration::from_secs(60);
+    let runs = Runs::default();
+    let (file, keyed) = (runs.clone(), runs.clone());
+    let file = move || {
+        file.ran();
+        async move { Public::new(minute, Ok::<FileOrPage, Error>(Media::new("text/csv", "sku,qty\n").into())) }
+    };
+    let keyed = move || {
+        keyed.ran();
+        let form = html! { <form method="post">{crate::form::SubmitKey::field(SUBMIT)}</form> }.to_html();
+        async move { Public::new(minute, Ok::<FileOrPage, Error>(Media::new("text/html", form).into())) }
+    };
+    let routes = Table::new().route("/file", crate::route::get(file).0).route("/keyed", crate::route::get(keyed).0);
+    let router = App::new(Routes::from(routes)).router();
+    for (path, kept) in [("/file", true), ("/keyed", false)] {
+        let before = runs.count();
+        let (status, _, body) = fetch(&router, "GET", path, &[]).await;
+        let (_, headers, again) = fetch(&router, "GET", path, &[]).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(headers.contains_key(header::AGE), kept, "{path}: {headers:?}");
+        assert_eq!(runs.count() - before, if kept { 1 } else { 2 }, "{path}");
+        assert_eq!(body == again, kept, "{path}: one key for each request");
+    }
+}
+
+/// A handler that waits moves between the runtime's threads, and a key it drew is seen on
+/// whichever thread ran that poll: no body with one is kept, and no two requests share a key.
+#[cfg(feature = "json")]
+#[test]
+fn a_submit_key_is_seen_wherever_the_handler_s_poll_ran() {
+    const SUBMIT: crate::form::FieldName<crate::form::SubmitKey> = crate::form::FieldName::__new("submit");
+    let runs = Runs::default();
+    let ran = runs.clone();
+    let keyed = move || {
+        ran.ran();
+        async move {
+            for _ in 0..8 {
+                tokio::task::yield_now().await;
+            }
+            let field = crate::form::SubmitKey::field(SUBMIT).to_html();
+            for _ in 0..8 {
+                tokio::task::yield_now().await;
+            }
+            Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json(field)))
+        }
+    };
+    let plain = || async { Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json("plain".repeat(20)))) };
+    let routes = Table::new().route("/keyed", crate::route::get(keyed).0).route("/plain", crate::route::get(plain).0);
+    let router = App::new(Routes::from(routes)).router();
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
+    runtime.block_on(async {
+        let mut bodies = std::collections::HashSet::new();
+        for _ in 0..40 {
+            let asked: Vec<_> = (0..8)
+                .map(|n| {
+                    let router = router.clone();
+                    tokio::spawn(async move { fetch(&router, "GET", if n % 2 == 0 { "/keyed" } else { "/plain" }, &[]).await })
+                })
+                .collect();
+            for (n, asked) in asked.into_iter().enumerate() {
+                let (_, headers, body) = asked.await.unwrap();
+                if n % 2 == 0 {
+                    assert!(!headers.contains_key(header::AGE), "a body with a key is not kept: {headers:?}");
+                    assert!(bodies.insert(body), "a key for each request");
+                }
+            }
+        }
+        assert_eq!(runs.count(), 160, "every request's own");
+        // A body with no key is kept on these threads all the same: a mark another request left
+        // on one of them is not this request's.
+        assert!(fetch(&router, "GET", "/plain", &[]).await.1.contains_key(header::AGE));
+    });
 }
 
 /// A kept body is for the language its handler read. No body says it varies on

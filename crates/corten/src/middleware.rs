@@ -25,7 +25,7 @@
 //!    page draws once it has answered. Either way the page is filled with their values before
 //!    its answer goes back out through 5: a middleware sees the filled page, and the time it
 //!    measures around `next` includes the reads' wait (`docs/design.md#choice-layout-reads`).
-//!    A [`crate::Public`] page the app has kept is given here in the handler's place
+//!    A [`crate::Public`] page, JSON or text answer the app has kept is given here in the handler's place
 //!    ([`crate::App::kept_answers`], `docs/design.md#choice-kept-pages`): 1 to 5 ran for its
 //!    request as for any other, and 7 and 8 follow, so a middleware meets every request and sees
 //!    the kept page as it would the handler's answer.

@@ -30,18 +30,22 @@
 //!
 //! A `Public` route whose answer is JSON (`Json<T>`, `JsonResult<T>`) or text is
 //! kept the same way, under the same rules and by the same key: its whole body, for a `GET` that
-//! shows nothing about who is asking ([`Form::Body`]). Which answers those are is known from the
+//! shows nothing about who is asking ([`Shape::Body`]). Which answers those are is known from the
 //! route's type when the app compiles ([`crate::answer::Answer::WHOLE`], which an answer type of
 //! the app's own cannot claim). Such a route has one answer at its URL, where a page route has
 //! the document, its swap and its data, so a request that asks for JSON first is kept too, as a
 //! copy apart from one that does not: a handler that takes `Req` can read which of the two
 //! asked (`req.mode`). What an API adds for the site that asks (`Access-Control-Allow-Origin`,
 //! `Vary: origin`) is written after the handler for each request, and is no part of what is
-//! kept. A body with markup its handler rendered that holds a form's new submit key is that
-//! request's alone, as such a page is (`form::watched`). JSON the app holds as bytes (`json::Raw`) carries its own compressed forms
+//! kept. An answer with markup its handler rendered that holds a form's new submit key is that
+//! request's alone: a page's render marks one, and the handler is watched for one drawn any
+//! other way, on the thread that runs it (`form::watched`). JSON the app holds as bytes (`json::Raw`) carries its own compressed forms
 //! where the app compresses, a mark this does not replay, so there it is its handler's for every
 //! request, which costs it no writing and no compression. Any other answer (a file, a relay, a
-//! stream, a feed, a status alone) is its handler's for every request.
+//! stream, a feed, a status alone) is its handler's for every request, but for what a page route
+//! answers in a page's place: a file of a known size from a route that says it answers a page
+//! or a file (`PageOr`), and an answer type of the app's own that says it is a page, are kept
+//! as the page would be.
 //!
 //! A write drops what is kept at its path, whatever the query (a named post is `?do=name` at its
 //! page's path) and however the path is escaped, whatever it is answered: a handler or a
@@ -110,7 +114,7 @@ const WRITES: usize = 1 << 16;
 /// document a browser loads, or a whole body (JSON, text), kept for whoever asks. Public in a
 /// private module, as the `Handler` whose `keeps` names it is: an app cannot name it.
 #[derive(Clone, Copy, PartialEq)]
-pub enum Form {
+pub enum Shape {
     Page,
     Body,
 }
@@ -251,7 +255,8 @@ pub(crate) struct Entry {
     place: Place,
     written: Written,
     host: Option<HeaderValue>,
-    /// The `Accept-Language` it was asked with, when its `Vary` names the header.
+    /// The `Accept-Language` it was asked with, when its `Vary` names the header or its handler
+    /// read the language the header asks for.
     language: Option<Option<HeaderValue>>,
     /// Asked for as data (`Accept: application/json` first): what [`Mode`] its handler saw.
     data: bool,
@@ -518,7 +523,7 @@ pub(crate) struct Asked<'a> {
 }
 
 impl<'a> Asked<'a> {
-    pub(crate) fn of(req: &'a Request, form: Form) -> Option<Self> {
+    pub(crate) fn of(req: &'a Request, shape: Shape) -> Option<Self> {
         if *req.method() != http::Method::GET {
             return None;
         }
@@ -541,9 +546,9 @@ impl<'a> Asked<'a> {
         if headers.contains_key(crate::page::MODE_HEADER) {
             return None;
         }
-        let data = match (Mode::asked(headers), form) {
+        let data = match (Mode::asked(headers), shape) {
             ((Mode::Document, false), _) => false,
-            ((Mode::Data, false), Form::Body) => true,
+            ((Mode::Data, false), Shape::Body) => true,
             _ => return None,
         };
         // Nothing the handler could read beside the URL: a notice the page sends back when it is

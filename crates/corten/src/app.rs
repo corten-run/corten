@@ -955,7 +955,8 @@ impl<M: Middleware> App<M> {
     /// JSON, the tag's hash and the compression. So a `Public` handler does not run for every
     /// request, and what it reads may be that old when it is seen, as it already may be behind a
     /// CDN. An answer whose handler takes an extractor of the app's own is not kept: it may read
-    /// a header the key does not cover. Neither is a file (`Media`), a relay, a stream or a feed.
+    /// a header the key does not cover. Neither is a file (`Media`), a relay, a stream or a feed,
+    /// but for a file of a known size that a page route answers in its page's place (`PageOr`).
     ///
     /// Past the bound, a page not read since the last time room was made goes first, and one
     /// larger than an eighth of the bound is not kept. A write to a page's path drops what is

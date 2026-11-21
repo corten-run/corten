@@ -2590,16 +2590,27 @@ thread_local! {
     pub(crate) static DREW_KEY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// `work` run to its end, and whether a submit key was drawn while it ran. A handler may move
-/// between threads where it waits, and one poll runs on one thread from start to end, so the
-/// mark is read after each poll and what the thread had before is put back.
+/// `work` run to its end, and whether a submit key was drawn while it ran, on the thread that
+/// ran it. A handler may move between threads where it waits, and one poll runs on one thread
+/// from start to end, so the mark is read after each poll and what the thread had before is put
+/// back, also when the poll panics. A key drawn on another thread (a render the handler handed
+/// to a blocking task) is not seen.
 pub(crate) async fn watched<F: std::future::Future + Unpin>(mut work: F) -> (F::Output, bool) {
+    struct Poll<'a> {
+        before: bool,
+        drew: &'a mut bool,
+    }
+
+    impl Drop for Poll<'_> {
+        fn drop(&mut self) {
+            *self.drew |= DREW_KEY.replace(self.before);
+        }
+    }
+
     let mut drew = false;
     let out = std::future::poll_fn(|cx| {
-        let before = DREW_KEY.replace(false);
-        let polled = std::pin::Pin::new(&mut work).poll(cx);
-        drew |= DREW_KEY.replace(before);
-        polled
+        let _poll = Poll { before: DREW_KEY.replace(false), drew: &mut drew };
+        std::pin::Pin::new(&mut work).poll(cx)
     })
     .await;
     (out, drew)
@@ -2957,6 +2968,30 @@ mod tests {
     #[derive(Debug, serde::Deserialize)]
     struct MaybeKeyed {
         submit: Option<SubmitKey>,
+    }
+
+    /// Watching work for a submit key sees one drawn in any of its polls and no other: what the
+    /// thread held before (another request's mark, left since) is neither counted nor lost.
+    #[tokio::test]
+    async fn watching_work_sees_the_keys_it_drew_and_leaves_the_thread_s_mark() {
+        const SUBMIT: FieldName<SubmitKey> = FieldName::__new("submit");
+        for before in [false, true] {
+            DREW_KEY.set(before);
+            let ((), drew) = watched(Box::pin(async {})).await;
+            assert!(!drew && DREW_KEY.get() == before, "nothing drawn, with {before} left on the thread");
+            let (html, drew) = watched(Box::pin(async {
+                tokio::task::yield_now().await;
+                let html = SubmitKey::field(SUBMIT).to_html();
+                tokio::task::yield_now().await;
+                html
+            }))
+            .await;
+            assert!(drew && html.contains("data-submit value="), "drawn in its second poll");
+            assert_eq!(DREW_KEY.get(), before, "the thread's own mark is as it was");
+            let (_, drew) = watched(Box::pin(async { SubmitKey::template_field(SUBMIT).to_html() })).await;
+            assert!(!drew, "a template's field holds no key");
+        }
+        DREW_KEY.set(false);
     }
 
     /// A template's key field holds no key and marks nothing drawn for the request; the runtime
