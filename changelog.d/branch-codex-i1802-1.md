@@ -1,2 +1,2 @@
-- A `Public` page that draws a form's new submit key (`SubmitKey::field`) now goes out `private, no-cache` without CDN caching headers, so no shared cache gives one visitor's key to the next. Keep a live stream that draws a key off `Public`: its fragments carry no mark.
+- A `Public` page that draws a form's new submit key (`SubmitKey::field`) now goes out `private` (with `no-store` if it says one), without the CDN caching headers the caching guide names, so no shared cache gives one visitor's key to another. A live stream that may draw a key needs its own `private` header.
   ([#1802 A Public page that draws a submit key is sent to shared caches as one any visitor may be given](https://github.com/corten-run/corten/issues/1802))
