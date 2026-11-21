@@ -86,6 +86,11 @@ const HEADER: usize = 112;
 /// An entry's size once it is no longer kept: nothing made for it counts from then on.
 const GONE: usize = usize::MAX;
 
+/// Room for the headers the stages after the handler add to a kept answer (`Age`, the tag, the
+/// security headers, `Strict-Transport-Security`), so its head is not grown as they are written.
+/// A middleware of the app that adds more grows it as it would any other.
+const ADDED: usize = 12;
+
 /// The counts of writes, one for the paths whose hash names it: enough of them (256 KiB, made
 /// when the first page is asked for) that an app's writes seldom share a count with a kept page.
 const WRITES: usize = 1 << 16;
@@ -479,6 +484,51 @@ pub(crate) struct Asked<'a> {
     language: Option<&'a HeaderValue>,
 }
 
+/// What a request's headers say of whether a kept answer can stand for it, and the two its key
+/// is made of. Read in one pass over them: by name, each is a lookup of its own, and a request
+/// answered from the store had eleven.
+struct Sent<'a> {
+    host: Option<&'a HeaderValue>,
+    language: Option<&'a HeaderValue>,
+}
+
+impl<'a> Sent<'a> {
+    /// `None` where the headers show something the page could differ by beside its key: a
+    /// cookie but the time zone's ([`crate::cache::Credentials::personal`]), an
+    /// `Authorization`, what the runtime asks for (`corten`, whatever it says), a data client's
+    /// JSON asked for first, a notice the page sends back when it is read again, where a stream
+    /// stopped, a body.
+    fn read(headers: &'a HeaderMap) -> Option<Self> {
+        let (mut host, mut language, mut accept) = (None, None, None);
+        // The first `Cookie` line, and whether another follows it.
+        let (mut cookie, mut more) = (None, false);
+        for (name, value) in headers {
+            match name.as_str() {
+                "cookie" => match cookie {
+                    None => cookie = Some(value),
+                    Some(_) => more = true,
+                },
+                "authorization"
+                | crate::page::MODE_NAME
+                | crate::page::NOTICE_NAME
+                | "last-event-id"
+                | "content-length"
+                | "transfer-encoding" => return None,
+                // The first line of each, which is what a lookup by name gives.
+                "host" => host = host.or(Some(value)),
+                "accept-language" => language = language.or(Some(value)),
+                "accept" => accept = accept.or(Some(value)),
+                _ => {}
+            }
+        }
+        if cookie.is_some_and(|cookie| more || !crate::cache::zone_only(cookie)) {
+            return None;
+        }
+        let accept = accept.and_then(|accept| accept.to_str().ok()).unwrap_or("");
+        (Mode::accepting(accept) == Mode::Document).then_some(Sent { host, language })
+    }
+}
+
 impl<'a> Asked<'a> {
     pub(crate) fn of(req: &'a Request) -> Option<Self> {
         if *req.method() != http::Method::GET {
@@ -491,27 +541,7 @@ impl<'a> Asked<'a> {
         if signal.is_personal() || signal.is_error_page() {
             return None;
         }
-        let headers = req.headers();
-        // First, since it is what most requests a page is not kept for carry.
-        if crate::cache::Credentials::read(headers).personal(|| headers.contains_key(header::AUTHORIZATION)) {
-            return None;
-        }
-        // The document a browser loads: not what the runtime asks for (`corten`, whatever it
-        // says), not a data client's JSON.
-        if headers.contains_key(crate::page::MODE_HEADER) || Mode::asked(headers) != (Mode::Document, false) {
-            return None;
-        }
-        // Nothing the handler could read beside the URL: a notice the page sends back when it is
-        // read again, where a stream stopped, a body.
-        const READ: [header::HeaderName; 4] = [
-            crate::page::NOTICE_HEADER,
-            header::HeaderName::from_static("last-event-id"),
-            header::CONTENT_LENGTH,
-            header::TRANSFER_ENCODING,
-        ];
-        if READ.iter().any(|name| headers.contains_key(name)) {
-            return None;
-        }
+        let Sent { host, language } = Sent::read(req.headers())?;
         // In origin form: a URL that names its own host is a proxy's.
         if req.uri().authority().is_some() {
             return None;
@@ -524,14 +554,17 @@ impl<'a> Asked<'a> {
             return None;
         }
         let at = at.as_str();
-        Some(Asked { answers, at, host: headers.get(header::HOST), language: headers.get(header::ACCEPT_LANGUAGE) })
+        Some(Asked { answers, at, host, language })
     }
 
     /// The kept answer for this request, as its handler gave it, with its age.
     pub(crate) fn find(&self) -> Option<Response> {
         let (entry, age) = self.answers.find(self.at, self.host, self.language)?;
         let mut res = Response::new(Body::from(entry.body.clone()));
-        let mut head = entry.head.clone();
+        // With room for what the stages after the handler add: a copy made by `clone` is as
+        // large as what it holds, and grows on the first header added.
+        let mut head = HeaderMap::with_capacity(entry.head.len() + ADDED);
+        head.extend(entry.head.iter().map(|(name, value)| (name.clone(), value.clone())));
         // So a cache after this one, the browser's too, does not start the lifetime over.
         head.insert(header::AGE, HeaderValue::from(age));
         *res.headers_mut() = head;
@@ -667,6 +700,95 @@ fn varies(headers: &HeaderMap) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What [`Sent::read`] reads in one pass, by a lookup of each header's name: the rule as
+    /// the functions that own each part of it say it.
+    fn by_name(headers: &HeaderMap) -> Option<(Option<&HeaderValue>, Option<&HeaderValue>)> {
+        if crate::cache::Credentials::read(headers).personal(|| headers.contains_key(header::AUTHORIZATION)) {
+            return None;
+        }
+        if headers.contains_key(crate::page::MODE_HEADER) || Mode::asked(headers) != (Mode::Document, false) {
+            return None;
+        }
+        let read = [
+            crate::page::NOTICE_HEADER,
+            header::HeaderName::from_static("last-event-id"),
+            header::CONTENT_LENGTH,
+            header::TRANSFER_ENCODING,
+        ];
+        if read.iter().any(|name| headers.contains_key(name)) {
+            return None;
+        }
+        Some((headers.get(header::HOST), headers.get(header::ACCEPT_LANGUAGE)))
+    }
+
+    #[test]
+    fn one_pass_over_the_headers_reads_what_a_lookup_of_each_name_does() {
+        // Each header not sent, sent, and sent on two lines, with each value that changes what is
+        // read of it.
+        let sent: [(header::HeaderName, &[&[&[u8]]]); 11] = [
+            (
+                header::COOKIE,
+                &[
+                    &[],
+                    &[b"corten-zone=UTC"],
+                    &[b"sid=1"],
+                    &[b"corten-zone=UTC", b"corten-zone=UTC"],
+                    &[b"corten-zone=UTC; sid=1"],
+                ],
+            ),
+            (header::AUTHORIZATION, &[&[], &[b"Bearer x"]]),
+            (crate::page::MODE_HEADER, &[&[], &[b"nav"], &[b"another"]]),
+            (
+                header::ACCEPT,
+                &[
+                    &[],
+                    &[b"application/json"],
+                    &[b"text/html,application/json"],
+                    &[b"text/html", b"application/json"],
+                    &[b"application/json", b"text/html"],
+                    &[b" application/json ; q=1, text/html"],
+                    &[b"\xff"],
+                ],
+            ),
+            (crate::page::NOTICE_HEADER, &[&[], &[b"saved"]]),
+            (header::HeaderName::from_static("last-event-id"), &[&[], &[b"7"]]),
+            (header::CONTENT_LENGTH, &[&[], &[b"0"]]),
+            (header::TRANSFER_ENCODING, &[&[], &[b"chunked"]]),
+            (header::HOST, &[&[], &[b"a.example"], &[b"a.example", b"b.example"]]),
+            (header::ACCEPT_LANGUAGE, &[&[], &[b"fr"], &[b"fr", b"en"]]),
+            // One the rule does not read, as most of a browser's are.
+            (header::USER_AGENT, &[&[], &[b"a browser"]]),
+        ];
+        let (mut kept, mut left) = (0, 0);
+        let mut choice = [0; 11];
+        loop {
+            for backwards in [false, true] {
+                let mut headers = HeaderMap::new();
+                let mut order: Vec<usize> = (0..sent.len()).collect();
+                if backwards {
+                    order.reverse();
+                }
+                for at in order {
+                    for line in sent[at].1[choice[at]] {
+                        headers.append(sent[at].0.clone(), HeaderValue::from_bytes(line).unwrap());
+                    }
+                }
+                let read = Sent::read(&headers).map(|sent| (sent.host, sent.language));
+                assert_eq!(read, by_name(&headers), "{headers:?}");
+                match read {
+                    Some(_) => kept += 1,
+                    None => left += 1,
+                }
+            }
+            // The next choice of lines, as a number with a digit for each header.
+            let Some(at) = (0..sent.len()).find(|&at| choice[at] + 1 < sent[at].1.len()) else { break };
+            choice[at] += 1;
+            choice[..at].fill(0);
+        }
+        // Both answers were met, for more than the request with no header at all.
+        assert!(kept > 100 && left > 100, "{kept} {left}");
+    }
 
     /// An answer for `at` whose request found the path's writes as they are now.
     fn entry(answers: &Answers, at: &str, host: Option<&'static str>, lifetime: u64, body: usize) -> impl FnOnce(Place) -> Entry {
