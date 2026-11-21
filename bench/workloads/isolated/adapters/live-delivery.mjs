@@ -265,12 +265,14 @@ export async function inspectLiveSaved(binding, folder, group) {
         assert.ok(typeof p.processInventory === "string" && /^PID\s+PPID\s+COMMAND\r?\n/.test(p.processInventory));
         if (provenance.has(app)) assert.ok(isDeepStrictEqual(p, provenance.get(app)), "native build provenance differs"); else provenance.set(app, p);
         if (actors && need(a.actorWindow !== undefined, `native-live-actor-window-missing:${app}`)) {
-          const { startedAt, endedAt } = a.actorWindow;
+          let { startedAt, endedAt } = a.actorWindow;
           assert.ok(Number.isSafeInteger(startedAt) && Number.isSafeInteger(endedAt) && endedAt >= startedAt);
           if (a.schema === "native-live-fanout/v3") {
             // The retained measurement interval is monotonic relative to the Node origin.
             assert.ok(startedAt <= Math.ceil(a.host.timeOrigin + a.interval.startedAt)
               && endedAt >= Math.floor(a.host.timeOrigin + a.interval.finishedAt), "measurement outside native actor window");
+            startedAt = Math.ceil(a.host.timeOrigin + a.interval.startedAt);
+            endedAt = Math.floor(a.host.timeOrigin + a.interval.finishedAt);
           }
           actors.windows.push({ app, startedAt, endedAt,
             requireRenderer: a.schema === "native-live-evidence/v1" || a.schema === "native-live-fanout/v3" });

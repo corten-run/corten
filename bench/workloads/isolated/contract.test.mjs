@@ -156,7 +156,7 @@ test("live preserves historical-mode guard, unchanged defaults, registered ports
     assert.ok(ordinary.status.blockers.includes("native port incompatible with selected profile: corten"));
     assert.equal(measured.execution.nativeDefaults.profile, "bounded");
     assert.deepEqual(measured.execution.nativeDefaults, { apps: selectedApps(group), build: false, profile: "bounded", measure: false });
-    assert.deepEqual(measured.execution.effectiveOptions, { apps: selectedApps(group), build: true, profile: "native-feed", measure: true });
+    assert.deepEqual(measured.execution.effectiveOptions, { apps: selectedApps(group), build: true, profile: "native-feed", measure: true, isolated: true });
     assert.deepEqual(measured.execution.invocation.argv, [group === "live-delivery" ? "bench/live/run.mjs" : "bench/recoverable-live/run.mjs", "w1",
       ...(group === "live-delivery" ? ["--group", group] : []), "--build", "--isolated", "--profile", "native-feed", "--measure"]);
     assert.equal(measured.execution.settings.workload.seed, 17);
@@ -175,15 +175,16 @@ test("live preserves historical-mode guard, unchanged defaults, registered ports
   }
 });
 
-test("reviewed live CLI parser bytes and explicit rejection semantics remain unchanged", async () => {
+test("reviewed live CLI parser adds only the isolated mode and retains explicit rejections", async () => {
   const source = readFileSync(join(root, "bench/live/parity.mjs"), "utf8").replaceAll("\r\n", "\n");
   const parser = source.slice(source.indexOf("export async function main("));
-  assert.equal(createHash("sha256").update(parser).digest("hex"), "634281d26c75390cade87f7046ee04db5999b1b360bfeeaca8c36f9424ee02de");
-  assert.ok(source.includes('export async function run({ group, out, apps: requested, build = false, round, profile = "bounded", measure = false })'));
+  assert.equal(createHash("sha256").update(parser).digest("hex"), "e861be48ad779e70cb399475a286e76e69d36a4d5926a5f030aef51290c9f303");
+  assert.ok(source.includes('export async function run({ group, out, apps: requested, build = false, round, profile = "bounded", measure = false, isolated = false })'));
   const { runRound } = await import("../../live/parity.mjs");
   for (const group of ["live-delivery", "recoverable-live"]) {
     await assert.rejects(runRound(group, ["w1", "--duration", "1"]), /unknown argument/);
     await assert.rejects(runRound(group, ["w1", "--profile"]), /needs a value/);
+    await assert.rejects(runRound(group, ["w1", "--isolated", "--isolated"]), /duplicate isolation flag/);
     await assert.rejects(runRound(group, ["../escape"]), /safe round/);
   }
 });

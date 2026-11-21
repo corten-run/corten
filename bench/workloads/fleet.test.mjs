@@ -968,7 +968,7 @@ test("productionMain awaits its final close before releasing the fleet lock on a
   const { options } = p.output.at(-1).subject.jobs[0].subject;
   const reached = Promise.withResolvers(), settlement = Promise.withResolvers();
   let workers = 0, requests = 0, closes = 0;
-  p.deps.main = productionMain;
+  p.deps.main = (args, deps) => productionMain(args, { ...deps, roleCheck: () => [] });
   p.deps.providerFactory = () => {
     workers++;
     // Change the approved bytes after transport construction. The controller

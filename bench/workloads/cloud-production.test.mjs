@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { accountId, commit, context, harness, syntheticDelivery, syntheticProviderRequest } from "./cloud-fixtures.mjs";
-import { controllerPaths, nativePaths, parseProductionArgs, productionMain } from "./cloud-production.mjs";
+import { controllerPaths, nativePaths, parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
 import { benchPackagePaths } from "./droplet.mjs";
 import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { createProviderEngine } from "./cloud-engine-test-fixture.mjs";
@@ -963,6 +963,7 @@ function groupProduction(t, flags = {}) {
   return { p, path, fleet, values, async approval() {
     assert.equal(await productionMain([...values, "--print-approval"], p.deps), 3);
     const { subject, approvalSha256 } = await fleetOperationPlan({ root, round: "r21", detach: true }, { repo: p.h.repo,
+      plan: (options, deps) => productionPlan(options, { ...deps, roleCheck: p.deps.roleCheck }),
       run: (binary, argv, timeout = 60000) => p.deps.spawn(binary, argv, { timeout }) });
     const childApproval = p.stdout.at(-1).approvalSha256;
     assert.equal(subject.jobs[0].approvalSha256, childApproval);

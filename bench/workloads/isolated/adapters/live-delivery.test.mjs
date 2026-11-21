@@ -134,6 +134,17 @@ if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
     assert.ok(r.blockers.includes("native-effective-invocation-build-proof-not-produced"));
     assert.ok(r.blockers.includes("native-positive-os-terminal-cleanup-proof-not-produced"));
   });
+  test("isolated replay cannot clear actor proof using historical live evidence", async (t) => {
+    const f = await syntheticFixture(t);
+    f.binding.execution.effectiveOptions.isolated = true;
+    f.binding.resources.actorCpus = { application: "1", browser: "4-7" };
+    f.plan.isolated = true; await f.json("plan.json", f.plan);
+    const r = await inspectSaved(f.binding, f.folder);
+    assert.equal(r.resources, "blocked"); assert.equal(r.attemptComplete, false);
+    assert.ok(r.blockers.includes("native-live-actor-tools-missing"));
+    assert.ok(r.blockers.includes("native-live-actor-window-missing:corten"));
+    assert.ok(r.outcomes.some((o) => o.outcome === "unsupported"));
+  });
   for (const [name, change] of [
     ["group", (f) => { f.plan.group = "recoverable-live"; }], ["round", (f) => { f.plan.round = "another"; }],
     ["commit", (f) => { f.plan.commit = "b".repeat(40); }], ["subset", (f) => { f.plan.requested.pop(); }],

@@ -320,9 +320,10 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   assert.ok(["cpu", "cpuset", "memory"].every((key) => controllers.includes(key)), "required accounting controllers must be delegated and enabled");
   const browser = binding.request.group === "fullstack-browser";
   const commandCpus = boundCommandCpuSet(binding);
-  const captureDocker = browser || (commandCpus && liveGroup(binding.request.group));
+  const liveCpus = commandCpus && liveGroup(binding.request.group) ? nativeControlPartition(binding).cpus : null;
+  const captureDocker = browser || liveCpus !== null;
   const excluded = new Set(captureDocker ? docker(["container", "ls", "-aq", "--no-trunc"]).split("\n").filter(Boolean) : []);
-  if (liveGroup(binding.request.group) && captureDocker) assert.equal(excluded.size, 0, "live worker requires a clean Docker inventory");
+  if (liveCpus) assert.equal(excluded.size, 0, "live worker requires a clean Docker inventory");
   for (const id of excluded) assert.match(id, containerId);
   const path = `${parent}/native-${command}-${randomBytes(8).toString("hex")}`;
   mkdirSync(join(root, path)); // Exclusive creation. Never adopt a saved or existing cgroup.
@@ -407,6 +408,11 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     });
     sampleOperation = "docker-inventory";
     if (captureDocker) observed.docker = browserDocker(excluded, executables, pending);
+    if (liveCpus) for (const { kernel } of observed.docker.participants) if (kernel) {
+      const path = groupPath(kernel.cgroup);
+      assert.ok(scopeCpuSetMatches(kernel.groups, path, liveCpus.application)
+        && participantCpuSetsWithin(kernel, path, liveCpus.application), "native live application effective cpuset differs");
+    }
     sampleOperation = "sample-write";
     writer.enqueue(initial, serial(observed));
     if (binding.request.group === "catalog-page") previousCatalogProcesses = processes;
