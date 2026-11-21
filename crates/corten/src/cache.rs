@@ -35,8 +35,10 @@
 //! Some things are never shared, whoever set the header (`Public`, or a `Cache-Control` written by
 //! hand, by a middleware or on an [`crate::HtmlResponse`]): a response that sets a cookie, HTML
 //! with this request's CSP nonce (`req.nonce()` in the layout, or a handler that takes
-//! [`crate::security::Nonce`]), and an answer to a request whose handler or middleware read a
-//! [`crate::Caller`]. They get `private, no-cache`, and `corten dev` logs the first two.
+//! [`crate::security::Nonce`]), a page that draws a form's new submit key
+//! ([`crate::SubmitKey::field`]: each visitor needs a key of their own), and an answer to a request
+//! whose handler or middleware read a [`crate::Caller`]. They get `private, no-cache`, and
+//! `corten dev` logs the first three.
 //!
 //! The app is the first shared cache of its own `Public` pages: the whole document one made for a
 //! request without credentials is kept for its shared lifetime and given again in the handler's
@@ -347,18 +349,23 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
         }
     };
     let typed = res.extensions().get::<Typed>().copied();
-    let headers = res.headers_mut();
     let bug = if seen.nonce {
         Some("its HTML has this request's CSP nonce (req.nonce() in the layout, or a handler that takes Nonce)")
-    } else if headers
+    } else if res
+        .headers()
         .get_all(header::SET_COOKIE)
         .iter()
         .any(|cookie| !NOTICE_GONE.iter().any(|gone| cookie.as_bytes().starts_with(gone)))
     {
         Some("it sets a cookie")
+    } else if res.extensions().get::<Unrepeatable>().is_some() {
+        // The mark that keeps its tag off and the app from keeping it: each visitor needs a key
+        // of their own, and the browser one it has not sent.
+        Some("it draws a form's new submit key (SubmitKey::field), and each visitor needs a key of their own")
     } else {
         None
     };
+    let headers = res.headers_mut();
     if let Some(bug) = bug {
         if seen.dev {
             tracing::warn!("corten: {path} is marked for shared caches, but {bug}, so it was sent private, no-cache (or no-store, if its header names it)");
@@ -406,7 +413,8 @@ pub(crate) fn accepts_a_coding(headers: &HeaderMap) -> bool {
 static TAG_KEY: std::sync::LazyLock<std::hash::RandomState> = std::sync::LazyLock::new(std::hash::RandomState::new);
 
 /// Marks a page whose body holds a value drawn for this request alone (a [`crate::SubmitKey`]'s
-/// new key): its tag would never match, so it is not made.
+/// new key): its tag would never match, so it is not made; no cache may give it to another
+/// visitor or reuse it unasked ([`settle`]), and the app does not keep it ([`crate::kept`]).
 #[derive(Clone, Copy)]
 pub(crate) struct Unrepeatable;
 
@@ -781,6 +789,34 @@ mod tests {
         }
         assert_eq!(settled(Some("Private, max-age=60"), true, Seen { nonce: true, ..seen() }, true), "Private, max-age=60");
         assert_eq!(settled(Some("no-store"), true, Seen { caller: true, ..seen() }, true), "no-store");
+    }
+
+    /// A page that drew a submit key for this request ([`Unrepeatable`]) is the browser's alone
+    /// and asked about again, whoever set its header; a plain `private` or `no-store` stands.
+    #[test]
+    fn an_answer_that_drew_a_submit_key_is_not_shared() {
+        let drawn = |cache: Option<Cache>, line: Option<&'static str>, seen: Seen| {
+            let mut res = "x".into_response();
+            res.extensions_mut().insert(Unrepeatable);
+            if let Some(cache) = cache {
+                cache.apply(&mut res);
+            }
+            if let Some(line) = line {
+                res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(line));
+            }
+            settle(&mut res, seen, "/x");
+            res.headers()[header::CACHE_CONTROL].to_str().unwrap().to_string()
+        };
+        let minute = Duration::from_secs(60);
+        for (partial, dev) in [(false, false), (true, false), (false, true)] {
+            let asked = || Seen { partial, dev, ..seen() };
+            assert_eq!(drawn(Some(Cache::public(minute).shared(minute * 60)), None, asked()), "private, no-cache");
+            assert_eq!(drawn(Some(Cache::immutable()), None, asked()), "private, no-cache", "its URL does not name a new key");
+            assert_eq!(drawn(None, Some("public, max-age=60"), asked()), "private, no-cache", "a header written by hand");
+        }
+        assert_eq!(drawn(None, None, seen()), "private, no-cache", "the default");
+        assert_eq!(drawn(None, Some("private, max-age=60"), seen()), "private, max-age=60", "the app's own choice");
+        assert_eq!(drawn(None, Some("no-store"), seen()), "no-store");
     }
 
     #[test]

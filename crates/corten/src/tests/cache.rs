@@ -583,6 +583,49 @@ async fn a_public_page_is_shared_only_when_nothing_makes_it_personal() {
     assert_eq!(cache_control(&api, "/api/rates", &[("cookie", "session=abc")]).await, "private, no-cache");
 }
 
+/// A form's submit key is drawn for each render, so a `Public` page that draws one
+/// (`SubmitKey::field`) differs between visitors: a cache that gave the first visitor's page to
+/// the next would have the second visitor's submit taken for a repeat of the first. It goes out
+/// `private, no-cache` whoever set the header, as a page with the request's nonce does, and the
+/// browser asks again before reusing it, so a reload is not sent a key it already used. A page
+/// whose only key field is a template's draws nothing and stays shared.
+#[tokio::test]
+async fn a_public_page_that_draws_a_submit_key_is_not_shared() {
+    let minute = std::time::Duration::from_secs(60);
+    let form = || html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> };
+    let routes = Table::new()
+        .route("/keyed", get(move |req: Req| async move { Public::new(minute, req.test_page_for("Keyed", form())) }))
+        .route(
+            "/keyed-rendered",
+            get(move |req: Req| async move {
+                let form = req.rendered(form());
+                let placed = &form;
+                Public::new(minute, req.test_page_for("Keyed", html! { {placed} }))
+            }),
+        )
+        .route(
+            "/keyed-by-hand",
+            get(move |req: Req| async move {
+                Ok::<_, Error>((Cache::public(minute).shared(minute * 60), req.test_page("Keyed", form())?))
+            }),
+        )
+        .route(
+            "/template-keyed",
+            get(move |req: Req| async move {
+                let template = html! {
+                    <template><form method="post">{crate::SubmitKey::template_field(KeyedWrite::FIELDS.submit)}</form></template>
+                };
+                Public::new(minute, req.test_page_for("Keyed", template))
+            }),
+        );
+    let router = App::new(Routes::from(routes)).router();
+    for uri in ["/keyed", "/keyed-rendered", "/keyed-by-hand"] {
+        for asked in [&[][..], &[("corten", "nav")], &[("accept", "application/json")]] {
+            assert_eq!(cache_control(&router, uri, asked).await, "private, no-cache", "{uri} {asked:?}");
+        }
+    }
+    assert_eq!(cache_control(&router, "/template-keyed", &[]).await, "public, max-age=60", "a template's key draws nothing");
+}
 #[tokio::test]
 async fn cache_stages_keep_incoming_headers_while_the_handler_sees_middleware_edits() {
     struct Rewrite;
