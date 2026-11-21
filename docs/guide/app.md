@@ -1397,23 +1397,24 @@ but an unstaged one):
 | a client navigation, a form answer or a data client's JSON from a page route | `private`, same lifetime: only the document is shared |
 | a response that sets a cookie, HTML with the request's nonce, or a page that draws a form's new submit key (`SubmitKey::field`) | `private, no-cache`, logged under `corten dev` |
 
-An answer the second or last row sends private in place of the shared caching it was marked
-with also goes out without the caching headers a CDN or proxy reads before `Cache-Control` that
-a middleware wrote, so a CDN that obeys them does not keep one visitor's
-answer for the next: `CDN-Cache-Control` (RFC 9213), `Cloudflare-CDN-Cache-Control`,
+An answer Corten knows is personal goes out without the caching headers a CDN or proxy reads
+before `Cache-Control` that a middleware wrote, whatever its own `Cache-Control` says (none, a
+plain `private`, or `no-store`), so a CDN that obeys them does not keep one visitor's answer for
+the next: `CDN-Cache-Control` (RFC 9213), `Cloudflare-CDN-Cache-Control`,
 `Vercel-CDN-Cache-Control`, `Surrogate-Control`, Akamai's `Edge-Control` and nginx's
-`X-Accel-Expires`. Those names, matched exactly, are the whole list (a `Public` answer cannot
-set one either). An answer that was not marked for shared caches (the default, or a `private` or
-`no-store` of its own) keeps the ones a middleware wrote, so a middleware writes one only on
-answers meant to be shared.
+`X-Accel-Expires`. Such an answer read a caller, sets a cookie, has the request's nonce or draws a
+submit key, or is a `Public` or `NoStore` answer to a request with credentials. A `no-store` on it
+goes out `private, no-store`: some CDNs ignore a bare `no-store`, and none keeps a `private`
+answer. A `NoStore` answer, a `Public` one the third row sends as the browser's alone, and a
+refused write's error page lose those headers too. Those names, matched exactly, are the whole
+list (a `Public` answer cannot set one either); any other answer keeps the ones a middleware
+wrote.
 
-A page that draws a submit key loses them even when its `Cache-Control` already says
-`private` or `no-store`, and a `no-store` on it goes out `private, no-store`: some CDNs ignore
-a bare `no-store`, and none keeps a `private` answer. Keeping a page with a form out of a
-shared cache by any other means is the deployment's: a name its CDN is configured to read (RFC
-9213 allows any), a layer around the app (`App::layer`, which runs after Corten settles the answer), and an edge
-rule that caches whatever the origin says. The key's render marks the answer: a page, a patch,
-the layout's reads, and a `Rendered` placed in one. A live stream's fragments are text rendered
+Keeping a personal answer out of a shared cache by any other means is the deployment's: a name
+its CDN is configured to read (RFC 9213 allows any), a layer around the app (`App::layer`, which
+runs after Corten settles the answer), and an edge rule that caches whatever the origin says. A
+submit key marks the answer it is rendered for: a page, a patch, the layout's reads, and a
+`Rendered` placed in one. A live stream's fragments are text rendered
 after its headers went out and carry no mark, so a stream that may draw a key is not `Public`,
 says `Cache-Control: private` itself and carries none of those headers
 ([live data](live-data.md)).
@@ -1437,8 +1438,9 @@ stay public for clients without credentials. A cache in front of the app must ke
 `accept-language` with `App::messages`, unless the handler took the page's locale from its URL); the [deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
 A `Public` page in an app with several locales is one copy per `Accept-Language` string in a cache that keys on it, and one language for everyone in one that ignores `Vary`: put its locale in its URL ([Views](views.md#a-locale-in-the-url)), so the cache keys on the URL alone.
 `NoStore<..>` keeps an answer out of every cache, the browser's back/forward cache included:
-`async fn statement(req: Req) -> NoStore<HtmlResult>`. A failure it returns is not kept either:
-the error page for an expired code or someone else's statement goes out `no-store` too. In a
+`async fn statement(req: Req) -> NoStore<HtmlResult>`. It goes out `no-store`, or `private,
+no-store` when it is personal (above). A failure it returns is not kept either: the error page
+for an expired code or someone else's statement goes out the same way. In a
 routes module the route can say it instead, `#[route("/statement", get = statement, no_store)]`,
 and the handler keeps its own result: a handler that uses `?` (`async fn statement(req: Req) ->
 HtmlResult`) is wrapped as it is, where `NoStore<HtmlResult>` would need its body moved into an
