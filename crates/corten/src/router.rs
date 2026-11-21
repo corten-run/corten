@@ -116,7 +116,7 @@ impl Endpoint for Giving {
 /// A handler whose answer is a page that is the same for everyone (`Public`): a kept answer is
 /// given in its place, and the one it makes is kept ([`crate::kept`]). Its page is filled here,
 /// as [`crate::middleware`] would after it, so what is kept is the page as it leaves the route.
-/// Requests that miss a copy that no longer stands together wait for the first to make it again.
+/// Requests that miss the same copy together wait for the first to make it.
 struct Keeping {
     inner: Route,
 }
@@ -126,20 +126,19 @@ impl Endpoint for Keeping {
     fn call(&self, req: Request) -> Answering {
         // Any other request (a navigation, one with a cookie, a write) is the handler's as before.
         let Some(asked) = crate::kept::Asked::of(&req) else { return self.inner.call(req) };
-        let mut stale = crate::kept::Stale::default();
-        if let Some(kept) = asked.find(&mut stale) {
+        if let Some(kept) = asked.find() {
             return Box::pin(std::future::ready(kept));
         }
-        let making = match asked.missed(&req, stale) {
+        let making = match asked.missed(&req) {
             Ok(missed) => return made(&self.inner, req, missed),
             Err(making) => making,
         };
-        // Another request is making the page again: the page it keeps is this one's too.
+        // Another request is making the page: the page it keeps is this one's too.
         let inner = self.inner.clone();
         Box::pin(async move {
             making.ended().await;
             let Some(asked) = crate::kept::Asked::of(&req) else { return inner.call(req).await };
-            if let Some(kept) = asked.find(&mut crate::kept::Stale::default()) {
+            if let Some(kept) = asked.find() {
                 return kept;
             }
             let missed = asked.missed_again(&req);

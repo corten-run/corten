@@ -50,23 +50,23 @@
 //! started and did not wait for, a store whose readers lag its writers) can leave the page as
 //! it was until its lifetime ends.
 //!
-//! Requests that miss a page together where the copy kept for them no longer stands (its
-//! lifetime ended, or a write dropped it) run its handler once: the first makes the page again,
-//! and the others that find the same copy wait for it ([`Making`]) and are given the page when
-//! it is kept for them. When it is not (an error, a page drawn for that request), or that request
-//! is dropped (its client left, its deadline passed) or panics, each runs its own handler then,
-//! and none waits again. A request waits no longer than its own deadline, which drops its wait as
-//! it would its handler. Where no copy is kept (the first request for a page, one never kept)
-//! each request runs its handler at once: a page never kept would otherwise have every request
-//! wait for another's handler before running its own.
+//! Requests that miss a page together run its handler once: the first makes the page, and the
+//! others asking for the same copy (the same URL, `Host` and `Accept-Language` as sent, with no
+//! write to its path between them) wait for it ([`Making`]) and are given the page when it is
+//! kept for them. When it is not (an error, a page drawn for that request), or that request is
+//! dropped (its client left, its deadline passed) or panics, each runs its own handler then, and
+//! none waits again. A page answered and not kept is remembered as not kept for [`FORGOT`], or
+//! until a write to its path, so the requests that meet in that time each run the handler at once,
+//! as they would with nothing kept. A request waits no longer than its own deadline, which drops
+//! its wait as it would its handler.
 
-use std::collections::HashMap;
-use std::hash::{BuildHasher, DefaultHasher, Hasher};
+use std::collections::{hash_map, HashMap};
+use std::hash::{BuildHasher, DefaultHasher, Hasher, RandomState};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -86,6 +86,14 @@ const SHARE: usize = 8;
 /// The copies kept for one URL, one for each `Host` and `Accept-Language` it was asked with: a
 /// new one past this takes the place of the oldest.
 const COPIES: usize = 8;
+
+/// How long a page made and not kept is remembered as such: the requests for it that meet in that
+/// time each run its handler at once, as they would with nothing kept.
+const FORGOT: Duration = Duration::from_secs(60);
+
+/// The most pages remembered as not kept, with those being made: past it, the ones whose time is
+/// up go, then the others.
+const NOT_KEPT: usize = 1024;
 
 /// What an entry counts for beside its key, its headers and its bytes: itself, its header map
 /// and its places in the maps.
@@ -146,6 +154,7 @@ struct Store {
     /// kept, without a lock or a search.
     written: OnceLock<Box<[AtomicU32]>>,
     inner: RwLock<Inner>,
+    flights: Flights,
     /// The requests that have waited for another's page, so a test sees one wait.
     #[cfg(test)]
     joined: AtomicUsize,
@@ -246,6 +255,37 @@ fn on_site<'a>(to: &'a [u8], host: Option<&HeaderValue>) -> Option<&'a [u8]> {
     }
 }
 
+/// The pages being made for requests no kept copy stood for, and those made and not kept, by a
+/// hash of the copy asked for (its URL, `Host` and `Accept-Language` as sent) and the count of
+/// writes to its path its requests found ([`Asked::missed`]). Two copies whose hashes are the same
+/// are made one after the other: each request still looks its own copy up once it has waited.
+struct Flights {
+    keys: RandomState,
+    at: Mutex<HashMap<u64, Flight>>,
+}
+
+enum Flight {
+    /// A request is making the page: the others for its copy wait on the semaphore, which the
+    /// first of them makes and the request making the page closes when it is answered or dropped.
+    Making(Option<Arc<Semaphore>>),
+    /// Made and not kept, until then: the requests for it each run the handler at once.
+    NotKept(Instant),
+}
+
+impl Flights {
+    /// Makes room for a page remembered as not kept: the ones whose time is up go, then the others
+    /// if that was not enough. Pages being made stay.
+    fn prune(at: &mut HashMap<u64, Flight>, now: Instant) {
+        at.retain(|_, flight| match flight {
+            Flight::Making(_) => true,
+            Flight::NotKept(until) => *until > now,
+        });
+        if at.len() >= NOT_KEPT {
+            at.retain(|_, flight| matches!(flight, Flight::Making(_)));
+        }
+    }
+}
+
 /// Where an entry is kept.
 struct Place {
     /// In the clock's slots.
@@ -289,9 +329,6 @@ pub(crate) struct Entry {
     used: AtomicBool,
     /// What it counts for in the store's bytes, or [`GONE`].
     size: AtomicUsize,
-    /// The request making its page again once it no longer stands, which the others that find
-    /// it wait for ([`Answers::lead`]).
-    making: Mutex<Option<Arc<Semaphore>>>,
 }
 
 /// On a response whose body is a kept answer's: the stages after the handler find the body's
@@ -444,6 +481,7 @@ impl Answers {
                 bytes: AtomicUsize::new(0),
                 written: OnceLock::new(),
                 inner: RwLock::default(),
+                flights: Flights { keys: RandomState::new(), at: Mutex::default() },
                 #[cfg(test)]
                 joined: AtomicUsize::new(0),
             }))
@@ -462,51 +500,18 @@ impl Answers {
         self.0.joined.load(Ordering::Acquire)
     }
 
-    /// The answer kept for a request, while it stands, with its age in seconds. Where none does,
-    /// the copy kept for it that no longer stands is put in `stale`, so a request that misses
-    /// looks the URL up once.
-    fn look(
-        &self,
-        at: &str,
-        host: Option<&HeaderValue>,
-        language: Option<&HeaderValue>,
-        stale: &mut Option<Arc<Entry>>,
-    ) -> Option<(Arc<Entry>, u64)> {
+    /// The answer kept for a request, while it stands, with its age in seconds.
+    fn find(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Option<(Arc<Entry>, u64)> {
         let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
-        let copies = inner.at.get(at)?;
         // The copy that stands: one that no longer does is in no other's way until it goes.
-        let Some(entry) = copies.iter().find(|entry| entry.is_for(host, language) && entry.stands(&self.0, now)) else {
-            *stale = copies.iter().find(|entry| entry.is_for(host, language)).cloned();
-            return None;
-        };
+        let entry = inner.at.get(at)?.iter().find(|entry| entry.is_for(host, language) && entry.stands(&self.0, now))?;
         let age = entry.age(now);
         // Stored only when it changes: a page read often is marked once for each pass of the hand.
         if !entry.used.load(Ordering::Relaxed) {
             entry.used.store(true, Ordering::Relaxed);
         }
         Some((entry.clone(), age))
-    }
-
-    /// The answer kept for a request, while it stands, with its age in seconds.
-    #[cfg(test)]
-    fn find(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Option<(Arc<Entry>, u64)> {
-        self.look(at, host, language, &mut None)
-    }
-
-    /// Makes a request the one that makes `stale`'s page again, or gives it the request that
-    /// already is. Under the copy's own lock, held for no wait.
-    fn lead(&self, stale: Arc<Entry>) -> Result<Box<Leading>, Making> {
-        let mut making = stale.making.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(now) = making.as_ref() {
-            #[cfg(test)]
-            self.0.joined.fetch_add(1, Ordering::AcqRel);
-            return Err(Making(now.clone()));
-        }
-        let now = Arc::new(Semaphore::new(0));
-        *making = Some(now.clone());
-        drop(making);
-        Ok(Box::new(Leading { store: self.0.clone(), stale, making: now, forget: false }))
     }
 
     /// Keeps `entry`, in the place of the copy it stands for, and makes room for it.
@@ -651,10 +656,9 @@ impl<'a> Asked<'a> {
         Some(Asked { answers, at, host, language })
     }
 
-    /// The kept answer for this request, as its handler gave it, with its age. Where none stands,
-    /// the copy kept for it that no longer does is put in `stale`, for [`Asked::missed`].
-    pub(crate) fn find(&self, stale: &mut Stale) -> Option<Response> {
-        let (entry, age) = self.answers.look(self.at, self.host, self.language, &mut stale.0)?;
+    /// The kept answer for this request, as its handler gave it, with its age.
+    pub(crate) fn find(&self) -> Option<Response> {
+        let (entry, age) = self.answers.find(self.at, self.host, self.language)?;
         let mut res = Response::new(Body::from(entry.body.clone()));
         let mut head = with_room(&entry.head);
         // So a cache after this one, the browser's too, does not start the lifetime over.
@@ -669,31 +673,50 @@ impl<'a> Asked<'a> {
         Some(res)
     }
 
-    /// Once no kept answer stood for this request: what keeping its handler's answer needs of it;
-    /// or, where the copy kept for it no longer stands and another request is making its page
-    /// again, that request, to wait for ([`Making::ended`]). The others that find the same copy
-    /// wait for this one's.
-    pub(crate) fn missed(&self, req: &Request, stale: Stale) -> Result<Missed, Making> {
-        let leading = match stale.0 {
-            Some(stale) => Some(self.answers.lead(stale)?),
-            None => None,
+    /// Once no kept answer stood for this request: what keeping its handler's answer needs of it,
+    /// the others asking for the same copy waiting for its page; or, where another request is
+    /// making that page, that request, to wait for ([`Making::ended`]). Taken before the handler
+    /// runs, so the answer's age counts its making and a write made meanwhile is seen; and a
+    /// request after a write makes the page again rather than wait for one read before it.
+    pub(crate) fn missed(&self, req: &Request) -> Result<Missed, Making> {
+        let (store, asked) = (&self.answers.0, Instant::now());
+        let written = Written::of(store, self.at);
+        let key = store.flights.keys.hash_one((self.at, self.host, self.language, written.was));
+        let mut flights = store.flights.at.lock().unwrap_or_else(PoisonError::into_inner);
+        let leads = match flights.entry(key) {
+            hash_map::Entry::Vacant(flight) => {
+                flight.insert(Flight::Making(None));
+                true
+            }
+            hash_map::Entry::Occupied(mut flight) => match flight.get_mut() {
+                Flight::Making(waiting) => {
+                    #[cfg(test)]
+                    store.joined.fetch_add(1, Ordering::AcqRel);
+                    return Err(Making(waiting.get_or_insert_with(|| Arc::new(Semaphore::new(0))).clone()));
+                }
+                // Made and not kept: this request makes its own, and none waits for it.
+                Flight::NotKept(until) if *until > asked => false,
+                flight => {
+                    *flight = Flight::Making(None);
+                    true
+                }
+            },
         };
-        Ok(self.missing(req, leading))
+        drop(flights);
+        let leading = leads.then(|| Leading { store: store.clone(), key, written, answered: false });
+        Ok(self.missing(req, asked, written, leading))
     }
 
     /// After waiting for another request whose page was not kept for this one: what keeping its
     /// own handler's answer needs of it, which no other request waits for.
     pub(crate) fn missed_again(&self, req: &Request) -> Missed {
-        self.missing(req, None)
+        self.missing(req, Instant::now(), Written::of(&self.answers.0, self.at), None)
     }
 
-    /// What keeping the handler's answer needs of the request, once no kept one stood for it:
-    /// taken before the handler runs, so the answer's age counts its making and a write made
-    /// meanwhile is seen.
-    fn missing(&self, req: &Request, leading: Option<Box<Leading>>) -> Missed {
+    fn missing(&self, req: &Request, asked: Instant, written: Written, leading: Option<Leading>) -> Missed {
         Missed {
-            asked: Instant::now(),
-            written: Written::of(&self.answers.0, self.at),
+            asked,
+            written,
             signal: req.extensions().get::<crate::Signal>().cloned(),
             nonce: req.extensions().get::<crate::security::NonceSlot>().cloned(),
             at: self.at.into(),
@@ -706,13 +729,9 @@ impl<'a> Asked<'a> {
     }
 }
 
-/// The copy kept for a request that no longer stands, which [`Asked::find`] found in its place.
-#[derive(Default)]
-pub(crate) struct Stale(Option<Arc<Entry>>);
-
-/// The page another request is making again in the place of a copy that no longer stands: a
-/// request that found the same copy waits for it, then is given the page if it was kept for it
-/// ([`Asked::find`]), else runs its own handler ([`Asked::missed_again`]).
+/// The page another request is making for the same copy: a request waits for it, then is given
+/// the page if it was kept for it ([`Asked::find`]), else runs its own handler
+/// ([`Asked::missed_again`]).
 pub(crate) struct Making(Arc<Semaphore>);
 
 impl Making {
@@ -724,31 +743,39 @@ impl Making {
     }
 }
 
-/// The request making a page again in the place of `stale`, which the others that find that
-/// copy wait for until it is answered or dropped. Held in a box of its own, so a request that
-/// makes no page again carries a pointer for it.
+/// The request making a page that the others asking for the same copy wait for, until it is
+/// answered or dropped. It holds no page: what it made is the store's once kept.
 struct Leading {
     store: Arc<Store>,
-    stale: Arc<Entry>,
-    making: Arc<Semaphore>,
-    /// Answered with a page that is not kept (one that failed, or was drawn for this request):
-    /// the copy goes too, so the next requests that miss the page do not wait for each other.
-    forget: bool,
+    key: u64,
+    written: Written,
+    /// Answered with a page that is not kept (one that failed, or was drawn for this request).
+    answered: bool,
 }
 
 impl Drop for Leading {
-    /// Answered or dropped: the requests waiting for it look again.
+    /// Answered or dropped: the requests waiting for it look again. A page answered and not kept,
+    /// with no write to its path since its handler read, is remembered as not kept.
     fn drop(&mut self) {
-        if self.forget {
-            let mut inner = self.store.inner.write().unwrap_or_else(PoisonError::into_inner);
-            self.store.drop_entry(&mut inner, &self.stale);
+        let flights = &self.store.flights;
+        let mut at = flights.at.lock().unwrap_or_else(PoisonError::into_inner);
+        let ended = match self.answered && self.written.stands(&self.store) {
+            true => {
+                let now = Instant::now();
+                if at.len() >= NOT_KEPT {
+                    Flights::prune(&mut at, now);
+                }
+                match at.len() < NOT_KEPT {
+                    true => at.insert(self.key, Flight::NotKept(now + FORGOT)),
+                    false => at.remove(&self.key),
+                }
+            }
+            false => at.remove(&self.key),
+        };
+        drop(at);
+        if let Some(Flight::Making(Some(waiting))) = ended {
+            waiting.close();
         }
-        let mut making = self.stale.making.lock().unwrap_or_else(PoisonError::into_inner);
-        if making.as_ref().is_some_and(|now| Arc::ptr_eq(now, &self.making)) {
-            *making = None;
-        }
-        drop(making);
-        self.making.close();
     }
 }
 
@@ -761,8 +788,8 @@ pub(crate) struct Missed {
     at: Box<str>,
     host: Option<HeaderValue>,
     language: Option<HeaderValue>,
-    /// Where it makes a page again in the place of a copy that no longer stands.
-    leading: Option<Box<Leading>>,
+    /// Where the others asking for the same copy wait for its page.
+    leading: Option<Leading>,
 }
 
 impl Missed {
@@ -771,7 +798,7 @@ impl Missed {
     pub(crate) async fn keep(mut self, res: Response) -> Response {
         // Until it is kept below.
         if let Some(leading) = &mut self.leading {
-            leading.forget = true;
+            leading.answered = true;
         }
         let shared = self.signal.as_ref().and_then(crate::Signal::shared);
         let Some(answers) = shared.and_then(|shared| shared.kept.as_ref()) else { return res };
@@ -837,12 +864,12 @@ impl Missed {
             coded: Default::default(),
             used: AtomicBool::new(false),
             size: AtomicUsize::new(size),
-            making: Mutex::default(),
         });
-        // Kept in the place of the copy it made again.
+        // Kept: the requests waiting for it are given it.
         if let Some(leading) = &mut leading {
-            leading.forget = false;
+            leading.answered = false;
         }
+        drop(leading);
         // This answer's tag and compression are the kept one's first.
         parts.extensions.insert(Kept(entry));
         Response::from_parts(parts, Body::from(body))
@@ -1041,7 +1068,6 @@ mod tests {
             coded: Default::default(),
             used: AtomicBool::new(false),
             size: AtomicUsize::new(body + OVERHEAD),
-            making: Mutex::default(),
         }
     }
 
