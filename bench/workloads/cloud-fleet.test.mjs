@@ -214,6 +214,16 @@ test("direct grouped launch checks every pinned size before writing any create i
   assert.equal(h.saved().createIntentAt, undefined);
 });
 
+test("a direct sibling launch cannot stand in for verified remaining admission", async (t) => {
+  const placement = syntheticPlacement(["sfo3"]);
+  placement.sizes.pop();
+  placement.regions[0].sizes = [];
+  const { h, options } = configured(t, { placement });
+  await assert.rejects(h.task({}, { ...options, group: groupNames[1] }).launch(), /missing or invalid fleet catalog entry: c-16/);
+  assert.equal(h.creates, 0);
+  assert.equal(h.saved().createIntentAt, undefined);
+});
+
 test("group launch permits exact siblings but reserves only this group's complete work", async (t) => {
   const { h, fleet, options } = configured(t);
   h.hosts([droplet(fleet.jobs[1], 456)]);

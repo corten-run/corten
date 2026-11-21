@@ -1,6 +1,7 @@
 // Offline composition acceptance: real snapshot Worker -> productionMain -> controller.
 // Only credential consumption and external Git/HTTPS/SSH/SCP responses are fake.
 import assert from "node:assert/strict";
+import { fork } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
@@ -10,6 +11,7 @@ import { accountId, archive, commit, context, harness, syntheticCatalogProvider,
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
+import { providerTransport } from "./cloud-provider.mjs";
 import { bootstrapWorkspaceScript, captureSshOwner, installSshIngress, savedLoadLayout, verifySshIngress } from "./cloud-contract.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { groupNames } from "./registry.mjs";
@@ -98,7 +100,7 @@ const synthetic = (${syntheticDependencies.toString()})({
     assert.equal(await fleetMain([...args, "--detach", "--print-approval"], deps), 3);
     return [...args, "--detach", "--approve-reviewed-merged-ready", output.at(-1).approvalSha256];
   }
-  return { h, output, workers, saved, events, prepare, deps };
+  return { h, output, workers, saved, events, prepare, deps, trace, hosts };
 }
 
 test("captured production composition ignores arbitrary hints, binds POST identity and propagates remote options", { timeout: 30000 }, async (t) => {
@@ -182,7 +184,7 @@ test("captured production composition ignores arbitrary hints, binds POST identi
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
 });
 
-test("second exact approval dispatches all remaining captured production workers once, with overlapping remote groups", { timeout: 60000 }, async (t) => {
+test("remaining approval still needs pinned c-8, not the deleted catalog host's size, and dispatches once", { timeout: 60000 }, async (t) => {
   const p = fixture(t, "overlap");
   assert.equal(await fleetMain(await p.prepare(), p.deps), 3);
   const state = p.saved(), group = groupNames[0], campaign = `r21-${state.token}`;
@@ -217,6 +219,18 @@ test("second exact approval dispatches all remaining captured production workers
   assert.equal(preview.subject.jobs[0].outcome, "verified");
   for (const job of preview.subject.jobs.slice(1)) assert.equal(job.subject.options.group, job.group);
   const approved = [...args, "--approve-reviewed-merged-ready", approval];
+  const pinnedCatalog = (region) => {
+    const catalog = syntheticPlacement([region]);
+    catalog.sizes.pop();
+    catalog.regions[0].sizes = catalog.regions[0].sizes.filter((size) => size !== "c-16");
+    return syntheticCatalogProvider(catalog);
+  };
+  p.deps.catalogProvider = pinnedCatalog("sfo3");
+  await assert.rejects(fleetMain(approved, p.deps), /reserved fleet placement not advertised: c-8\/sfo2/);
+  assert.equal(fs.existsSync(path.join(p.h.base, "remaining-intent.json")), false);
+  assert.equal(p.workers.length, 1);
+  assert.equal(p.events().filter((row) => row.method === "POST").length, 1);
+  p.deps.catalogProvider = pinnedCatalog("sfo2");
   assert.equal(await fleetMain(approved, p.deps), 3, JSON.stringify(p.output.at(-1)));
   assert.equal(p.workers.length, groupNames.length);
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "pending"));
@@ -290,6 +304,47 @@ test("captured production rejects Git advertisement before reservation or provid
   assert.equal(p.output.at(-1).groups[0].controllerStage, "remote-main-advertisement");
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
+});
+
+test("catalog HTTP denial settles before intent; a disconnected read retains the fleet lock", { timeout: 15000 }, async (t) => {
+  for (const mode of ["catalog-denial", "catalog-disconnect"]) await t.test(mode, async (t) => {
+    const p = fixture(t), approved = await p.prepare(), uncertain = mode === "catalog-disconnect";
+    let child;
+    p.deps.catalogProvider = (deps) => providerTransport({ ...deps, launch(_binary, _args, options) {
+      child = fork(new URL("./fleet-provider-test-worker.mjs", import.meta.url),
+        [mode, p.trace, p.hosts, p.h.base, "parent", userId],
+        { ...options, execArgv: [], env: { ...options.env, NODE_OPTIONS: "--max-old-space-size=64 --max-semi-space-size=4" } });
+      return child;
+    } });
+    await assert.rejects(fleetMain(approved, p.deps), (error) => {
+      assert.equal(!!error.controlTreeUncertain, uncertain);
+      if (!uncertain) assert.deepEqual(error.providerDiagnostic, { code: "catalog-http", httpStatus: 403 });
+      return true;
+    });
+    assert.equal(child.exitCode, uncertain ? 2 : 0);
+    assert.equal(p.workers.length, 0);
+    assert.deepEqual(p.events().filter((row) => row.boundary === "provider").map((row) => [row.method, row.path]),
+      [["GET", "/v2/account"], ["GET", "/v2/sizes?page=1&per_page=200"]]);
+    assert.equal(fs.existsSync(path.join(p.h.base, "launch-intent.json")), false);
+    assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), uncertain);
+  });
+});
+
+test("child catalog denial settles its locks without a create; disconnect preserves custody", { timeout: 20000 }, async (t) => {
+  for (const mode of ["catalog-denial", "catalog-disconnect"]) await t.test(mode, async (t) => {
+    const p = fixture(t, mode), uncertain = mode === "catalog-disconnect";
+    assert.equal(await fleetMain(await p.prepare(), p.deps), 2);
+    assert.equal(p.workers.length, 1);
+    const state = p.saved(), [row] = p.output.at(-1).groups;
+    assert.equal(state.status, "reserved"); assert.equal(state.createIntentAt, undefined);
+    assert.equal(row.uncertain, uncertain);
+    assert.equal(row.controllerStage, uncertain ? "provider-settlement" : "controller-launch");
+    if (!uncertain) assert.deepEqual(row.providerDiagnostic, { code: "catalog-http", httpStatus: 403 });
+    assert.ok(p.events().some((row) => row.path === "/v2/sizes?page=1&per_page=200"));
+    assert.ok(p.events().filter((row) => row.boundary === "provider").every((row) => row.method === "GET"));
+    for (const lock of [".fleet-operation.lock", "catalog-page/.groups-launch.lock", "catalog-page/groups-r21/operation.lock"])
+      assert.equal(fs.existsSync(path.join(p.h.base, lock)), uncertain, lock);
+  });
 });
 
 test("real provider refusal and withheld close retain locks and stop later admissions", { timeout: 30000 }, async (t) => {

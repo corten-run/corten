@@ -8,7 +8,7 @@ import { Worker } from "node:worker_threads";
 import { isIPv4 } from "node:net";
 import { fleetCatalogCommand, fleetPlan, fleetRegion, roundName, selection, validateLaunchFleet } from "./cloud-contract.mjs";
 import { digest, durable, physical, regular, syncDirectory } from "./cloud-local.mjs";
-import { controllerFailure, full, providerAccount, providerFailure, providerIdentity } from "./cloud-options.mjs";
+import { controllerFailure, fleetCatalogResult, full, providerAccount, providerFailure, providerIdentity } from "./cloud-options.mjs";
 import { controllerPaths, productionPlan, productionSignals } from "./cloud-production.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { streamRecoveryReady } from "./cloud-control-stream.mjs";
@@ -63,23 +63,24 @@ async function exactSource(repo, run) {
 }
 
 const placementFailures = new WeakSet();
-async function readPlacement(provider, { repo, interrupted, catalogProvider }, reservedRegion) {
+async function readPlacement(provider, { repo, interrupted, catalogProvider }, reservedRegion, scope) {
   const run = catalogProvider({ repo, interrupted }); // No create mode.
-  const read = async (args) => {
+  const read = async (args, allowFail = false) => {
     await controlCheckpoint(interrupted);
-    const result = await run([...args, "--context", provider.context]);
-    assert.equal(result.status, 0, "fleet catalog read failed");
-    return JSON.parse(result.stdout);
+    return run([...args, "--context", provider.context], 60000, allowFail);
   };
-  const account = async () => assert.equal(providerAccount(await read(["account", "get", "--output", "json"])),
-    provider.accountId, "fleet catalog account differs");
+  const account = async () => {
+    const result = await read(["account", "get", "--output", "json"]);
+    assert.equal(result.status, 0, "fleet catalog account read failed");
+    assert.equal(providerAccount(JSON.parse(result.stdout)), provider.accountId, "fleet catalog account differs");
+  };
   try {
     try {
       await account();
-      const catalog = await read(fleetCatalogCommand);
+      const catalog = fleetCatalogResult(await read(fleetCatalogCommand, true));
       await account();
       await controlCheckpoint(interrupted);
-      return fleetRegion(catalog, reservedRegion);
+      return fleetRegion(catalog, reservedRegion, scope);
     } finally { await run.close(); }
   } catch (error) {
     if (error && typeof error === "object") placementFailures.add(error);
@@ -375,12 +376,13 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
       const provider = { accountId: options.accountId, context: options.context };
       const region = await readPlacement(provider, placement);
-      physical(root); assert.equal(regular(lock, 1024).toString(), owner, "fleet-lock-changed");
-      assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
       const used = new Set(), token = () => { let v; do { v = randomBytes(8).toString("hex"); } while (used.has(v)); used.add(v); return v; };
       const manifest = fleetPlan({ round: options.round, commit: options.commit, token: token(),
         tokens: Object.fromEntries(selection().groups.map(({ group }) => [group, token()])),
         provider, sshKey: options.sshKey }, undefined, region);
+      await controlCheckpoint(interrupted); // Provider close is asynchronous.
+      physical(root); assert.equal(regular(lock, 1024).toString(), owner, "fleet-lock-changed");
+      assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
       durable(join(root, `fleet-${options.round}.json`), json(manifest));
       assert.deepEqual(readFleet(root, options.round).manifest, manifest);
       write(JSON.stringify({ schema: "benchmark-group-fleet-preparation/v1", round: options.round, outcome: "prepared", groups: manifest.jobs.map(({ group }) => group), fullGroupQualified: false }));
@@ -406,7 +408,7 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
     assert.equal(repeated.approvalSha256, options.approval, "fleet-action-changed");
     if (options.detach || options["admit-remaining"]) {
       const { manifest } = repeated.fleet;
-      await readPlacement(manifest.provider, placement, manifest.host.region);
+      await readPlacement(manifest.provider, placement, manifest.host.region, { remainingOnly: repeated.subject.action === "admit-remaining" });
       assert.equal(readFleet(root, options.round).manifestSha256, repeated.fleet.manifestSha256, "fleet-manifest-changed");
       assert.deepEqual(rootRecords(repeated.fleet), repeated.subject.records, "fleet-records-changed");
       assert.equal(regular(lock, 1024 * 1024).toString(), owner, "fleet-lock-changed");
@@ -558,7 +560,10 @@ export async function fleetCli(args) {
   const signals = productionSignals();
   try { return await fleetMain(args, { interrupted: signals.interrupted }); }
   catch (error) {
-    console.error(placementFailures.has(error) ? "fleet-placement-preflight-failed" : "fleet-operation-failed");
+    if (placementFailures.has(error)) {
+      const refusal = providerFailure(error);
+      console.error("fleet-placement-preflight-failed" + (refusal ? `: ${refusal.code}${refusal.httpStatus ? ` (HTTP ${refusal.httpStatus})` : ""}` : ""));
+    } else console.error("fleet-operation-failed");
     return 2;
   }
   finally { signals.close(); }

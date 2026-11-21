@@ -113,7 +113,7 @@ export const savedPlacement = (s) => s.fleet?.schema === launchFleetSchema
 
 // Keep the wider catalog job fixed, and use one common region for all other jobs.
 // Both directional listings must agree for each candidate pair.
-export function fleetRegion(catalog, reservedRegion) {
+export function fleetRegion(catalog, reservedRegion, { remainingOnly = false } = {}) {
   const listed = (kind, slug, membership) => {
     assert.ok(Array.isArray(catalog?.[kind]), "invalid fleet catalog listing");
     const rows = catalog[kind].filter((row) => row?.slug === slug);
@@ -127,9 +127,9 @@ export function fleetRegion(catalog, reservedRegion) {
     assert.ok(inSize === inRegion, `fleet catalog listings disagree: ${size}/${region}`);
     return inSize && s.available && r.available;
   };
-  const catalogReady = available(catalogFleetPlacement.host);
+  if (remainingOnly) assert.ok(reservedRegion !== undefined, "remaining placement must already be reserved");
+  else assert.ok(available(catalogFleetPlacement.host), "fleet placement not advertised: c-16/sfo2");
   const options = (reservedRegion === undefined ? fleetRegions : [reservedRegion]).filter((region) => available(fleetHost(region)));
-  assert.ok(catalogReady, "fleet placement not advertised: c-16/sfo2");
   assert.ok(options.length > 0, reservedRegion === undefined ? "no supported c-8 fleet placement advertised"
     : `reserved fleet placement not advertised: c-8/${reservedRegion}`);
   return options[0];

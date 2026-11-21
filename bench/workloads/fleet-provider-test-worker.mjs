@@ -7,13 +7,15 @@ import { serveProviderWorker } from "./cloud-provider-worker.mjs";
 
 const [mode, trace, hostsPath, stateDir, group, userId] = process.argv.slice(2);
 assert.equal(process.argv.length, 8);
-assert.ok(["success", "advertisement", "marker", "provider-failure", "withhold-close", "host-id-mismatch", "late-create"].includes(mode));
+assert.ok(["success", "overlap", "advertisement", "marker", "provider-failure", "withhold-close", "host-id-mismatch", "late-create",
+  "catalog-denial", "catalog-disconnect"].includes(mode));
 assert.ok(getHeapStatistics().heap_size_limit <= 128 * 1024 ** 2);
 delete process.env.NODE_OPTIONS;
 process.stdin.resume(); // Drain the transport's actual captured bootstrap bytes.
 const record = (event) => appendFileSync(trace, `${JSON.stringify({ group, ...event })}\n`);
 const state = () => JSON.parse(readFileSync(join(stateDir, "groups-r21/state.json")));
 const hosts = () => existsSync(hostsPath) ? JSON.parse(readFileSync(hostsPath)) : [];
+const later = mode === "overlap" && group !== "catalog-page";
 let clock = 0;
 serveProviderWorker({
   now: () => clock,
@@ -29,11 +31,15 @@ serveProviderWorker({
     if (path === "/v2/account") return mode === "provider-failure" ? { status: 403, value: null }
       : { status: 200, value: { account: { uuid: userId, droplet_limit: 20 } } };
     if (method === "GET" && path === "/v2/sizes?page=1&per_page=200") {
-      const sizes = [{ slug: "c-8", available: true, regions: ["sfo2", "sfo3"] }, { slug: "c-16", available: true, regions: ["sfo2"] }];
+      if (mode === "catalog-disconnect") process.exit(2);
+      if (mode === "catalog-denial") return { status: 403, value: { private: credential } };
+      const sizes = [{ slug: "c-8", available: true, regions: later ? ["sfo2"] : ["sfo2", "sfo3"] }];
+      if (!later) sizes.push({ slug: "c-16", available: true, regions: ["sfo2"] });
       return { status: 200, value: { sizes, meta: { total: sizes.length } } };
     }
     if (method === "GET" && path === "/v2/regions?page=1&per_page=200") {
-      const regions = [{ slug: "sfo2", available: true, sizes: ["c-8", "c-16"] }, { slug: "sfo3", available: true, sizes: ["c-8"] }];
+      const regions = [{ slug: "sfo2", available: true, sizes: later ? ["c-8"] : ["c-8", "c-16"] },
+        { slug: "sfo3", available: true, sizes: later ? [] : ["c-8"] }];
       return { status: 200, value: { regions, meta: { total: regions.length } } };
     }
     if (method === "GET" && path.startsWith("/v2/droplets?")) {

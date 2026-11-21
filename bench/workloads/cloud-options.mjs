@@ -42,6 +42,14 @@ export function providerFailure(error) {
   return error && typeof error === "object" ? providerDiagnostic(Object.getOwnPropertyDescriptor(error, "providerDiagnostic")?.value) : undefined;
 }
 
+export function fleetCatalogResult(result) {
+  if (result.status !== 0 || result.error) {
+    const diagnostic = providerFailure(result);
+    throw Object.assign(new Error("fleet catalog read failed"), diagnostic ? { providerDiagnostic: diagnostic } : {});
+  }
+  return JSON.parse(result.stdout);
+}
+
 const controllerStages = ["source-plan", "exact-approval", "remote-main-advertisement", "remote-main-fetch", "remote-main-ancestry",
   "source-recheck", "controller-construction", "controller-launch", "controller-collect", "controller-audit", "controller-cancellation", "controller-retirement", "controller-checkpoint", "provider-settlement"];
 export function controllerFailure(error) {

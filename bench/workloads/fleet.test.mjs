@@ -180,6 +180,17 @@ test("placement observation cannot reserve against a different account", async (
   assert.deepEqual(readdirSync(p.h.base), []);
 });
 
+test("cancellation during the placement worker's close never writes a manifest", async (t) => {
+  const flags = {}, p = fixture(t, flags), factory = p.deps.catalogProvider;
+  p.deps.catalogProvider = (options) => {
+    const run = factory(options), close = run.close;
+    run.close = async () => { await close(); await turn(); flags.cancelled = true; };
+    return run;
+  };
+  await assert.rejects(fleetMain(p.prepare(), p.deps), /controller cancelled/);
+  assert.deepEqual(readdirSync(p.h.base), []);
+});
+
 test("historical roster is inspectable but never opens either fleet launch stage", async (t) => {
   const p = fixture(t);
   const { fleet } = JSON.parse(readFileSync(new URL("./test-fixtures/grouped-sfo2-reservation.json", import.meta.url)));

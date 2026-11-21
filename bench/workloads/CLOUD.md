@@ -141,12 +141,15 @@ review its exact source, physical root, complete roster and every contained chil
 subject before supplying the batch approval. Source review and merged native
 readiness remain prerequisites; never automatically feed a preview into execution.
 The launch intent is durable before any child starts and prevents a second launch,
-including after partial failure. Before either fleet launch intent is consumed,
-the controller rechecks the reserved placement for both sizes and never selects
-another region. Each child rechecks before its own create intent as well, including
-direct child launches. `fleet-placement-preflight-failed` means the saved account
+including after partial failure. Initial detach rechecks both reserved sizes
+before consuming its intent and before the first create. After the first group
+is collected, verified and deleted, remaining admission and its children
+recheck only the reserved `c-8` placement. Direct child launches outside that
+admission still check both sizes. No check selects another region.
+`fleet-placement-preflight-failed` means the saved account
 or placement could not be verified; inspect both listings rather than editing the
-manifest. Each child has an independent state directory,
+manifest. An acknowledged catalog HTTP denial stops without a create and releases
+settled locks; a disconnected worker cannot establish settlement. Each child has an independent state directory,
 operation lock, private credential worker and remote systemd unit.
 Every group in the roster uses the same commit. Merge the repairs needed by
 the entire round before preparing it: the first group's results cannot be
