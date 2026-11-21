@@ -4488,7 +4488,9 @@ mod carried_tests {
 
     #[test]
     fn a_request_s_mode_is_its_corten_header_s_or_its_first_accept_line_s() {
-        let read = |corten: &[&[u8]], accept: &[&[u8]], check_html| {
+        /// A header's lines.
+        type Lines = &'static [&'static [u8]];
+        let read = |corten: Lines, accept: Lines, check_html| {
             let mut headers = HeaderMap::new();
             for (name, lines) in [(MODE_HEADER, corten), (header::ACCEPT, accept)] {
                 for line in lines {
@@ -4502,7 +4504,7 @@ mod carried_tests {
         };
         // The mode, whether the runtime sent the request, and whether a document was asked for by
         // an `Accept` that names HTML.
-        let cases: [(&[&[u8]], &[&[u8]], Mode, bool, bool); 21] = [
+        let cases: [(Lines, Lines, Mode, bool, bool); 21] = [
             // No `corten`: the first item of the first `Accept` line, JSON or anything else.
             (&[], &[], Mode::Document, false, false),
             (&[], &[b"text/html,application/xhtml+xml,*/*;q=0.8"], Mode::Document, false, true),
