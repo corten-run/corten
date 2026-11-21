@@ -439,8 +439,12 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
 /// Removes the caching headers a CDN reads before `Cache-Control` ([`CDN_CACHING`]) from an
 /// answer no shared cache may keep.
 pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
-    for name in &CDN_HEADERS {
-        headers.remove(name);
+    // One pass comparing names first: the usual answer has none of them, and a lookup of each
+    // costs more than that pass.
+    if headers.keys().any(|name| CDN_CACHING.contains(&name.as_str())) {
+        for name in &CDN_HEADERS {
+            headers.remove(name);
+        }
     }
 }
 
