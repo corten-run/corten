@@ -171,7 +171,7 @@ pub enum Shape {
 
 /// How many whole bodies too small to be kept a route makes in a row before it stops asking the
 /// store ([`Small`]).
-const SMALL_RUN: u8 = 16;
+const SMALL_RUN: u8 = 64;
 
 thread_local! {
     /// The requests on this thread that a route of small bodies left to its handler unasked, as
@@ -183,11 +183,13 @@ thread_local! {
 /// ([`compresses`]), which its size decides and no type shows, so a route whose bodies are all
 /// under that size would ask the store, find nothing, and have every answer refused: about as
 /// much again as a handler that answers a constant costs. After [`SMALL_RUN`] such bodies in a
-/// row, with none between that was large enough, the route's requests are its handler's, as
-/// they were before the app kept bodies, but one in 256 on each thread, which asks as before
-/// and so finds out a route whose bodies grew. A route that answers both sizes keeps asking:
-/// one body large enough ends the run. While a route leaves the store out, a body it kept
-/// earlier is not given; it is made again, as it would be had it not been kept.
+/// row, with none between that was large enough or was found kept, the route's requests are
+/// its handler's, as they were before the app kept bodies, but one in 256 on each thread,
+/// which asks as before and so finds out a route whose bodies grew. A route that answers both
+/// sizes keeps asking: a body large enough ends the run, and so does one given from the store,
+/// since once a route's large bodies are kept the only ones still made are the small. While a
+/// route leaves the store out, a body it kept earlier is not given, but to the one request
+/// that asks; it is made again, as it would be had it not been kept.
 #[derive(Default)]
 pub(crate) struct Small(AtomicU8);
 
@@ -203,6 +205,14 @@ impl Small {
             left.set(count);
             count != 0
         })
+    }
+
+    /// The route's request was given a kept body: the route has bodies worth asking for.
+    #[inline]
+    pub(crate) fn found(&self) {
+        if self.0.load(Ordering::Relaxed) != 0 {
+            self.0.store(0, Ordering::Relaxed);
+        }
     }
 
     /// The route made a body the store refused for its size, or one it did not.

@@ -2662,10 +2662,11 @@ async fn a_whole_body_is_kept_from_the_size_the_app_compresses() {
     }
 }
 
-/// A route whose bodies are all too small to keep stops asking the store after sixteen in a
-/// row, and is its handler's as it was before the app kept bodies, but for one request in 256
-/// on a thread, which asks as before: so a route whose bodies grew is found out, and kept
-/// again. One body large enough ends a run, so a route that answers both sizes keeps asking.
+/// A route whose bodies are all too small to keep stops asking the store after 64 in a row, and
+/// is its handler's as it was before the app kept bodies, but for one request in 256 on a
+/// thread, which asks as before: so a route whose bodies grew is found out, and kept again. A
+/// body large enough ends a run and so does one given from the store, so a route that answers
+/// both sizes keeps asking, also once its large bodies are all kept and only the small are made.
 #[cfg(feature = "compress")]
 #[tokio::test]
 async fn a_route_of_small_bodies_leaves_the_store_out_until_one_is_large_enough() {
@@ -2682,30 +2683,35 @@ async fn a_route_of_small_bodies_leaves_the_store_out_until_one_is_large_enough(
     let routes = Table::new().route("/body", crate::route::get(body).0);
     let router = App::new(Routes::from(routes)).router();
     let asked = |router: Router| async move { fetch(&router, "GET", "/body", &[]).await.1.contains_key(header::AGE) };
-    // This thread's count of requests left to their handlers starts here, whatever ran before.
-    crate::kept::Small::none_left();
-
-    // Fifteen small bodies and a large one: the run ended, and the large one is kept and given.
-    for _ in 0..15 {
-        assert!(!asked(router.clone()).await);
-    }
-    size.store(2048, Ordering::Relaxed);
-    assert!(!asked(router.clone()).await && asked(router.clone()).await, "kept, after fifteen small bodies");
-    assert_eq!(runs.count(), 16);
-    // The large one ended the run: fifteen more small bodies, at other URLs of the route so the
-    // kept body stands, and a large one is kept again.
     let other = |router: Router, n: usize| async move {
         fetch(&router, "GET", &format!("/body?n={n}"), &[]).await.1.contains_key(header::AGE)
     };
+    // This thread's count of requests left to their handlers starts here, whatever ran before.
+    crate::kept::Small::none_left();
+
+    // 63 small bodies and a large one: the run ended, and the large one is kept and given.
+    for _ in 0..63 {
+        assert!(!asked(router.clone()).await);
+    }
+    size.store(2048, Ordering::Relaxed);
+    assert!(!asked(router.clone()).await && asked(router.clone()).await, "kept, after 63 small bodies");
+    assert_eq!(runs.count(), 64);
+    // The large one ended the run: 63 more small bodies, at other URLs of the route so the kept
+    // body stands. The kept body given ends that run too, so after 63 more the route still
+    // asks, and a large body is kept.
     size.store(8, Ordering::Relaxed);
-    for n in 0..15 {
+    for n in 0..63 {
+        assert!(!other(router.clone(), n).await);
+    }
+    assert!(asked(router.clone()).await, "the kept body, between two runs of small ones");
+    for n in 100..163 {
         assert!(!other(router.clone(), n).await);
     }
     size.store(2048, Ordering::Relaxed);
-    assert!(!other(router.clone(), 50).await && other(router.clone(), 50).await, "the run began again at the large one");
-    // Sixteen small bodies in a row follow.
+    assert!(!other(router.clone(), 50).await && other(router.clone(), 50).await, "the route still asks");
+    // 64 small bodies in a row follow.
     size.store(8, Ordering::Relaxed);
-    for n in 100..116 {
+    for n in 200..264 {
         assert!(!other(router.clone(), n).await);
     }
     // From here the store is left out: a large body is made for each request and not kept, and
@@ -2723,6 +2729,18 @@ async fn a_route_of_small_bodies_leaves_the_store_out_until_one_is_large_enough(
     assert!(!other(router.clone(), 99).await, "the one that asks: made by its handler, and kept");
     assert!(other(router.clone(), 99).await, "given from here on");
     assert!(asked(router.clone()).await, "as is the body kept before");
+
+    // The one that asks may find a body kept: that ends the run as well. 64 small bodies, 255
+    // requests left to the handler, and the next is given the kept body, as are those after it.
+    size.store(8, Ordering::Relaxed);
+    for n in 300..364 {
+        assert!(!other(router.clone(), n).await);
+    }
+    for left in 0..255 {
+        assert!(!asked(router.clone()).await, "left to the handler: request {left}");
+    }
+    assert!(asked(router.clone()).await, "the one that asks is given the kept body");
+    assert!(other(router.clone(), 50).await && asked(router.clone()).await, "and the route asks again");
 }
 
 /// A kept answer in an API is the handler's part alone: what the API adds for the site that asks
