@@ -729,11 +729,11 @@ impl Missed {
             language = true;
         }
         let style = res.extensions().get::<crate::security::StyleBlock>().cloned();
-        // Only what is put back on a kept answer: a mark this does not know is not replayed.
-        let known = 2 + usize::from(style.is_some());
+        // Only what is put back on a kept answer: a mark this does not know is not replayed. The
+        // cache mark says it is a `Public` answer (`Typed::shared`).
+        let known = 1 + usize::from(style.is_some());
         if res.status() != StatusCode::OK
             || res.extensions().len() != known
-            || res.extensions().get::<crate::layout::SameForAll>().is_none()
             || res.headers().contains_key(header::SET_COOKIE)
             || res.headers().contains_key(header::CONTENT_ENCODING)
             || res.headers().contains_key(header::CONTENT_RANGE)

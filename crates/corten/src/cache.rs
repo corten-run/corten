@@ -171,17 +171,27 @@ impl Cache {
 impl Cache {
     /// Sets the response's `Cache-Control` to this, as [`settle`] reads it.
     pub(crate) fn apply(self, res: &mut Response) {
-        let (value, typed) = self.typed(self.kind == Kind::Immutable);
+        self.apply_marked(res, false);
+    }
+
+    /// [`Cache::apply`] on a [`crate::Public`] answer: its one mark says too that the answer is
+    /// the same for everyone, as [`crate::layout::SameForAll`] does on one without it.
+    pub(crate) fn apply_for_all(self, res: &mut Response) {
+        self.apply_marked(res, true);
+    }
+
+    fn apply_marked(self, res: &mut Response, for_all: bool) {
+        let (value, typed) = self.typed(self.kind == Kind::Immutable, for_all);
         res.headers_mut().insert(header::CACHE_CONTROL, value);
         res.extensions_mut().insert(typed);
     }
 
     /// The header and the mark [`settle`] reads it by. A `public` one says none of what [`settle`]
     /// reads a line for, so the mark holds it to know it while it stands as written.
-    fn typed(self, named: bool) -> (HeaderValue, Typed) {
+    fn typed(self, named: bool, for_all: bool) -> (HeaderValue, Typed) {
         let value = self.header();
         let wrote = matches!(self.kind, Kind::Public { .. } | Kind::Immutable).then(|| value.clone());
-        (value, Typed { named, lifetime: self.lifetime(), wrote })
+        (value, Typed { named, for_all, lifetime: self.lifetime(), wrote })
     }
 }
 
@@ -189,7 +199,7 @@ impl IntoResponseParts for Cache {
     type Error = std::convert::Infallible;
 
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
-        let (value, typed) = self.typed(false);
+        let (value, typed) = self.typed(false, false);
         res.headers_mut().insert(header::CACHE_CONTROL, value);
         res.extensions_mut().insert(typed);
         Ok(res)
@@ -202,6 +212,8 @@ impl IntoResponseParts for Cache {
 pub(crate) struct Typed {
     /// A [`Cache::immutable`] answer: its URL names it, so the request's cookies do not change it.
     named: bool,
+    /// A [`crate::Public`] answer, the same for everyone ([`crate::layout::same_for_all`]).
+    for_all: bool,
     /// [`Cache::lifetime`], for the app's own keeping of the answer ([`crate::kept`]).
     lifetime: u64,
     /// The `public` header [`Cache`] wrote, held so no other value has its bytes.
@@ -209,11 +221,16 @@ pub(crate) struct Typed {
 }
 
 impl Typed {
-    /// `res`'s mark and its lifetime in seconds, when it is an answer a shared cache may keep for
-    /// one: what the app itself keeps ([`crate::kept`]).
+    /// `res`'s mark and its lifetime in seconds, when it is a [`crate::Public`] answer a shared
+    /// cache may keep for one: what the app itself keeps ([`crate::kept`]).
     pub(crate) fn shared(res: &Response) -> Option<(Typed, u64)> {
         let typed = res.extensions().get::<Typed>()?;
-        (!typed.named && typed.lifetime > 0).then(|| (typed.clone(), typed.lifetime))
+        (typed.for_all && !typed.named && typed.lifetime > 0).then(|| (typed.clone(), typed.lifetime))
+    }
+
+    /// Whether `res` has the mark of a [`crate::Public`] answer.
+    pub(crate) fn for_all(res: &Response) -> bool {
+        res.extensions().get::<Typed>().is_some_and(|typed| typed.for_all)
     }
 
     /// Whether `lines` are the header [`Cache`] wrote and nothing else: one line with its very
@@ -226,7 +243,7 @@ impl Typed {
 
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
-        Typed { named: false, lifetime: 60, wrote: None }
+        Typed { named: false, for_all: true, lifetime: 60, wrote: None }
     }
 }
 
