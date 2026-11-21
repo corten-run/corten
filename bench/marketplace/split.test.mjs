@@ -16,7 +16,7 @@ import { leftoverDroplets, nightly, parseDropletArgs, remoteFiles, safeArchive, 
 import { report, validateSummary } from "./report.mjs";
 import { compare } from "./compare.mjs";
 import { betweenDroplets, cleanOutcome, mergeParts, outcomeFields } from "./split.mjs";
-import { launcherSignals, processRuns, splitController, splitDryRun } from "./droplet.mjs";
+import { controller, launcherSignals, processRuns, splitController, splitDryRun } from "./droplet.mjs";
 
 const commit = "a".repeat(40), group = "production";
 const qualified = () => Object.fromEntries(sources.map((source) => [source, qualification(qualificationProbes(), source)]));
@@ -420,28 +420,37 @@ test("plan mode prints the split and every command without git, doctl or ssh", (
 
 // A fake DigitalOcean account and droplets for the split launcher: each droplet k answers SSH at
 // 192.0.2.k, runs its unit until finish(k), and serves the archive a part's job would pack.
-function fleet(t, { limit = 10, existing = [], failDelete = 0 } = {}) {
+function fleet(t, { limit = 10, existing = [], failDelete = 0, delayedDelete = false } = {}) {
   const temp = mkdtempSync(join(tmpdir(), "marketplace-split-test-"));
   t.after(() => rmSync(temp, { recursive: true, force: true }));
   const repo = join(temp, "repo"), local = join(temp, "control"), remote = join(temp, "remote");
   mkdirSync(repo); mkdirSync(remote);
   let droplets = [...existing];
-  const active = new Set(), installed = new Set(), calls = [], deleted = [];
+  const active = new Set(), installed = new Set(), calls = [], deleted = [], waits = [];
+  let clock = 0, stale;
   const good = (stdout = "") => ({ status: 0, stdout, stderr: "" });
   const host = (args) => Number(args.find((a) => /^root@/.test(a)).split(/[@:]/)[1].split(".").at(-1));
   const run = (binary, args) => {
     calls.push([binary, ...args]);
     if (binary === "git") return good(args[0] === "rev-parse" ? commit : "");
     if (binary === "doctl") {
-      if (args[0] === "account") return good(JSON.stringify({ droplet_limit: limit, email: "test" }));
-      if (args[2] === "list") return good(JSON.stringify(droplets));
+      if (args[0] === "account") return good(JSON.stringify({ droplet_limit: limit, uuid: "bench-account" }));
+      if (args[2] === "list") {
+        return good(JSON.stringify(droplets));
+      }
+      if (args[2] === "get") {
+        const listing = stale ?? droplets; stale = undefined;
+        const found = listing.filter((d) => String(d.id) === args[3]);
+        return found.length ? good(JSON.stringify(found)) : { status: 1, stdout: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } };
+      }
       if (args[2] === "create") {
-        const k = Number(args[3].split("-d").at(-1));
+        const k = Number(args[3].match(/-d(\d+)$/)?.[1] ?? 1);
         droplets.push({ id: 100 + k, name: args[3], tags: args[args.indexOf("--tag-names") + 1].split(","), networks: { v4: [{ type: "public", ip_address: `192.0.2.${k}` }] }, size: { price_hourly: 0.25 } });
         return good();
       }
       if (args[2] === "delete") {
-        if (String(100 + failDelete) === args[3]) throw new Error("delete failed");
+        if (String(100 + failDelete) === args[3]) return { status: 1, stdout: "", stderr: "delete failed" };
+        if (delayedDelete) stale = droplets;
         droplets = droplets.filter((d) => String(d.id) !== args[3]); deleted.push(args[3]); return good();
       }
     }
@@ -461,20 +470,31 @@ function fleet(t, { limit = 10, existing = [], failDelete = 0 } = {}) {
     if (binary === "tar") { const r = spawnSync(binary, args, { encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r; }
     throw new Error(`unexpected command ${binary} ${args.join(" ")}`);
   };
-  return { repo, local, run, calls, deleted, add(d) { droplets.push(d); },
+  const dependencies = (effects) => ({
+    run: effects, repo, now: () => clock, sleep: async (ms) => { clock += ms; waits.push(ms); },
+    providerFactory: () => Object.assign(async (args) => {
+      assert.deepEqual(args.slice(-2), ["--context", "bench"]);
+      return effects("doctl", args);
+    }, { close: async () => {} }),
+  });
+  const options = { round: "r17", stateDir: local, sshKey: "42", context: "bench", group };
+  return { repo, local, run, calls, deleted, waits, add(d) { droplets.push(d); },
     // Someone deleted droplet id by hand.
     drop(id) { droplets = droplets.filter((d) => d.id !== id); },
     // Droplet k's job finished: its unit is inactive and its archive holds its part's results.
     finish(k, n, { exitCode = 0, change = () => {} } = {}) {
       active.delete(k);
-      const dir = join(remote, String(k)), results = `repo/bench/marketplace/results/r17/d${k}`;
+      const dir = join(remote, String(k)), results = `repo/bench/marketplace/results/r17${n ? `/d${k}` : ""}`;
       mkdirSync(join(dir, results), { recursive: true });
-      const summary = part(k, n); change(summary);
+      const summary = n ? part(k, n) : full(); change(summary);
       writeFileSync(join(dir, results, "summary.json"), JSON.stringify(summary));
       writeFileSync(join(dir, "exit-code"), `${exitCode}\n`); writeFileSync(join(dir, "run.log"), "all done\n");
       const r = spawnSync("tar", ["-czf", join(dir, "results.tgz"), "-C", dir, "run.log", "exit-code", results], { encoding: "utf8" }); assert.equal(r.status, 0, r.stderr);
     },
-    task(droplets) { return splitController({ round: "r17", stateDir: local, sshKey: "42", ...(droplets ? { droplets } : {}) }, { run, repo, sleep: async () => {} }); },
+    task(droplets, effects = run, deps = {}) {
+      return splitController({ ...options, ...(droplets ? { droplets } : {}) }, { ...dependencies(effects), ...deps });
+    },
+    ordinary() { return controller(options, dependencies(run)); },
   };
 }
 const quiet = async (t, fn) => {
@@ -482,6 +502,78 @@ const quiet = async (t, fn) => {
   console.log = (...a) => out.push(a.join(" ")); console.error = (...a) => out.push(a.join(" "));
   try { return { value: await fn(), out: out.join("\n") }; } finally { console.log = log; console.error = error; }
 };
+
+test("ordinary launch and terminal collection confirm one exact-ID deletion", async (t) => {
+  const f = fleet(t, { delayedDelete: true });
+  await quiet(t, () => f.ordinary().launch());
+  f.finish(1);
+  const result = await quiet(t, () => f.ordinary().collect());
+  assert.equal(result.value, 0, result.out);
+  assert.match(result.out, /all done[\s\S]*droplet 101 deletion confirmed/);
+  assert.deepEqual(f.deleted, ["101"]);
+  assert.deepEqual(f.waits, [3000]);
+  const state = JSON.parse(readFileSync(join(f.local, "state.json"), "utf8"));
+  assert.deepEqual(state.deletionTarget, { id: "101", account: "user:bench-account", context: "bench" });
+  assert.ok(state.destroyedAt);
+});
+
+test("an unsupported durable publisher refuses a fresh split launch before any cloud command", async (t) => {
+  const f = fleet(t);
+  const publishIntent = () => { throw new Error("scripts are disabled on this system"); };
+  await assert.rejects(quiet(t, () => f.task(2, f.run, { publishIntent }).launch()), /publisher preflight failed.*no droplet created.*scripts are disabled/);
+  assert.ok(!f.calls.some((c) => c[0] === "doctl" || c[0] === "ssh"));
+  assert.equal(existsSync(join(f.local, "split.json")), false);
+  assert.equal(existsSync(join(f.local, "launch.lock")), false);
+});
+
+test("a different account's empty inventory cannot retire two still-live starting parts", async (t) => {
+  const f = fleet(t);
+  await quiet(t, () => f.task(2).launch());
+  assert.equal((await quiet(t, () => f.task().collect())).value, 3);
+  for (const k of [1, 2]) {
+    const path = join(f.local, `d${k}`, "state.json");
+    const saved = JSON.parse(readFileSync(path, "utf8"));
+    if (k === 1) delete saved.collectionTarget; // Historical unbound reservation.
+    writeFileSync(path, JSON.stringify({ ...saved, status: "starting" }));
+  }
+  const before = f.calls.length;
+  const wrongAccount = (binary, args) => {
+    if (binary === "doctl") {
+      if (args[0] === "account") return { status: 0, stdout: '{"uuid":"another-account"}' };
+      if (args[2] === "list") return { status: 0, stdout: "[]" };
+      if (args[2] === "get") return { status: 1, stdout: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } };
+    }
+    return f.run(binary, args);
+  };
+  const result = await quiet(t, () => f.task(undefined, wrongAccount).collect());
+  assert.equal(result.value, 2, result.out);
+  assert.match(result.out, /r17-d1: collection error;.*absence unconfirmed: no saved account binding/);
+  assert.match(result.out, /r17-d2: collection error;.*provider account changed; absence unconfirmed/);
+  assert.doesNotMatch(result.out, /deletion is confirmed|droplet is gone/);
+  assert.ok(!f.calls.slice(before).some((c) => c[0] === "ssh" || c[3] === "delete"));
+  assert.deepEqual(f.deleted, []);
+});
+
+test("the final stale inventory cannot override exact 404s for the two retired parts", async (t) => {
+  const f = fleet(t);
+  await quiet(t, () => f.task(2).launch());
+  const stale = f.run("doctl", ["compute", "droplet", "list", "--output", "json"]);
+  f.finish(1, 2); f.finish(2, 2);
+  const effects = (binary, args) => binary === "doctl" && args[2] === "list" && f.deleted.length === 2 ? stale : f.run(binary, args);
+  const result = await quiet(t, () => f.task(undefined, effects).collect());
+  assert.equal(result.value, 0, result.out);
+  assert.match(result.out, /every droplet's deletion is confirmed/);
+  assert.doesNotMatch(result.out, /leftover droplet|doctl compute droplet delete/);
+  assert.deepEqual(f.deleted, ["101", "102"]);
+  for (const id of ["101", "102"]) assert.ok(f.calls.some((c) => c[3] === "get" && c[4] === id));
+  const withExtra = { ...stale, stdout: JSON.stringify([...JSON.parse(stale.stdout), { id: 103, name: "corten-marketplace-r17-d1" }]) };
+  const extra = await quiet(t, () => f.task(undefined, (binary, args) =>
+    binary === "doctl" && args[2] === "list" ? withExtra : f.run(binary, args)).collect());
+  assert.equal(extra.value, 2, extra.out);
+  assert.match(extra.out, /leftover droplet 103 /);
+  assert.doesNotMatch(extra.out, /leftover droplet 10[12] |doctl compute droplet delete/);
+  assert.deepEqual(f.deleted, ["101", "102"]);
+});
 
 test("a split launch plans once, creates every droplet before starting any, and refuses a second launch", async (t) => {
   const f = fleet(t);
@@ -498,7 +590,7 @@ test("a split launch plans once, creates every droplet before starting any, and 
   }
   assert.ok(f.calls.filter((c) => c[0] === "ssh").every((c) => c.some((a) => a.includes(`control/d${c.find((x) => x.startsWith("root@")).at(-1)}/known_hosts`))), "each droplet has its own known_hosts");
   const calls = f.calls.length;
-  await assert.rejects(f.task(2).launch(), new RegExp(`r17 is already planned in .*split\\.json at commit ${commit}; never launch a split round twice: collect it \\(node bench/marketplace/droplet\\.mjs r17 --state-dir ".*control" --collect\\)`));
+  await assert.rejects(f.task(2).launch(), new RegExp(`r17 is already planned in .*split\\.json at commit ${commit}; never launch a split round twice: collect it \\(node bench/marketplace/droplet\\.mjs r17 --state-dir ".*control" --collect --context bench\\)`));
   assert.equal(f.calls.length, calls, "a second launch calls nothing");
 });
 
@@ -549,18 +641,19 @@ test("a signal during a split launch stops it between steps and says what each d
 });
 
 test("a split round finishes only when every droplet has, deleting each as it finishes, then merges", async (t) => {
-  const f = fleet(t);
+  const f = fleet(t, { delayedDelete: true });
   await quiet(t, () => f.task(2).launch());
   f.finish(1, 2);
   const first = await quiet(t, () => f.task().collect());
   assert.equal(first.value, 3);
   assert.deepEqual(f.deleted, ["101"]);
-  assert.match(first.out, /r17 is not finished: r17-d2 still running\. Finished droplets are collected and deleted; run .* --collect again later\./);
+  assert.match(first.out, /r17 is not finished: r17-d2 still running\. Finished droplets are collected and deleted; run .* --collect --context bench again later\./);
   assert.equal(existsSync(join(f.local, "round")), false);
   f.finish(2, 2);
   const done = await quiet(t, () => f.task().collect());
   assert.equal(done.value, 0, done.out);
   assert.deepEqual(f.deleted, ["101", "102"]);
+  assert.deepEqual(f.waits, [3000, 3000]);
   const folder = join(f.local, "round", "r17");
   const s = validateSummary(JSON.parse(readFileSync(join(folder, "summary.json"), "utf8")));
   assert.equal(s.split.droplets, 2);
@@ -576,15 +669,19 @@ test("a failed delete, a failed part or a leftover droplet keeps a split round f
   failing.finish(1, 2); failing.finish(2, 2);
   const deleteFailed = await quiet(t, () => failing.task().collect());
   assert.equal(deleteFailed.value, 2);
-  assert.match(deleteFailed.out, /r17-d2: collection error; its droplet and evidence are preserved: delete failed/);
-  assert.match(deleteFailed.out, /collection error on r17-d2: droplets that still exist are preserved and still billed\. Fix the error and run .* --collect again; never relaunch r17\./);
+  assert.match(deleteFailed.out, /r17-d2: collection error; its droplet and evidence are preserved: droplet 102 deletion not confirmed \(DELETE acknowledgement unavailable\)/);
+  assert.match(deleteFailed.out, /collection error on r17-d2: droplets that still exist are preserved and still billed\. Fix the error and run .* --collect --context bench again; never relaunch r17\./);
+  const calls = failing.calls.length;
+  failing.drop(102); // The fake account now proves absence on resume, without another DELETE.
+  assert.equal((await quiet(t, () => failing.task().collect())).value, 0);
+  assert.ok(failing.calls.slice(calls).every((c) => c[0] === "doctl" && (c[1] === "account" || ["get", "list"].includes(c[3]))));
 
   const partial = fleet(t);
   await quiet(t, () => partial.task(2).launch());
   partial.finish(1, 2); partial.finish(2, 2, { exitCode: 1 });
   const failed = await quiet(t, () => partial.task().collect());
   assert.equal(failed.value, 1);
-  assert.match(failed.out, /r17 is partial: r17-d2 did not finish its part\. Every droplet's deletion is confirmed; there is no merged round\./);
+  assert.match(failed.out, /r17 is partial: r17-d2 did not finish its part\. Exact IDs confirmed absent: 101, 102\. There is no merged round\./);
   assert.equal(existsSync(join(partial.local, "round")), false);
 
   const extra = fleet(t);
@@ -593,7 +690,21 @@ test("a failed delete, a failed part or a leftover droplet keeps a split round f
   extra.add({ id: 103, name: "corten-marketplace-r17-d3", tags: ["corten-bench"] });
   const leftover = await quiet(t, () => extra.task().collect());
   assert.equal(leftover.value, 2);
-  assert.match(leftover.out, /leftover droplet 103 \(corten-marketplace-r17-d3\) belongs to no live part of r17; check it is not another run's, then delete it: doctl compute droplet delete 103 --force/);
+  assert.match(leftover.out, /leftover droplet 103 \(corten-marketplace-r17-d3\) belongs to no live part of r17; check exact identity and ownership before any action/);
+});
+
+test("split leftover warnings do not suggest another DELETE for an intended ID", async (t) => {
+  const f = fleet(t, { failDelete: 2 });
+  await quiet(t, () => f.task(2).launch());
+  f.finish(1, 2); f.finish(2, 2);
+  assert.equal((await quiet(t, () => f.task().collect())).value, 2);
+  f.drop(102);
+  f.add({ id: 102, name: "corten-marketplace-r17-d3", tags: [] });
+  const listed = await quiet(t, () => f.task().collect());
+  assert.equal(listed.value, 2);
+  assert.match(listed.out, /droplet 102 is still listed despite a saved deletion record/);
+  assert.doesNotMatch(listed.out, /doctl compute droplet delete 102/);
+  assert.equal(f.calls.filter((c) => c[0] === "doctl" && c[3] === "delete" && c[4] === "102").length, 1);
 });
 
 test("a round whose start check fails stays starting, not never started, and is collected", async (t) => {
@@ -616,7 +727,7 @@ test("a round whose start check fails stays starting, not never started, and is 
 
   // d1's round runs; d2 never reached systemctl start, so only d2 gets a delete command. The
   // round cannot merge, so exit 2 also says how to stop d1.
-  const stopD1 = /r17 cannot merge: r17-d2 will not complete it\. Stop each running droplet so it stops billing:\nssh -o "UserKnownHostsFile=.*\/d1\/known_hosts" root@192\.0\.2\.1 systemctl stop corten-marketplace-r17-d1\.service\nThen run node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect again/;
+  const stopD1 = /r17 cannot merge: r17-d2 will not complete it\. Stop each running droplet so it stops billing:\nssh -o "UserKnownHostsFile=.*\/d1\/known_hosts" root@192\.0\.2\.1 systemctl stop corten-marketplace-r17-d1\.service\nThen run node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect --context bench again/;
   const first = await quiet(t, () => f.task().collect());
   assert.equal(first.value, 2, first.out);
   assert.match(first.out, /r17-d2: droplet 102 was created but never started its round \(its launch stopped before systemctl start\); nothing to collect\. Delete it: doctl compute droplet delete 102 --force/);
@@ -629,7 +740,7 @@ test("a round whose start check fails stays starting, not never started, and is 
   f.drop(102);
   const running = await quiet(t, () => f.task().collect());
   assert.equal(running.value, 3, running.out);
-  assert.match(running.out, /r17-d2 never started its round and has no droplet/);
+  assert.match(running.out, /r17-d2 never started its round, but its exact droplet 102 is absent in the saved account/);
   assert.match(running.out, stopD1);
   assert.doesNotMatch(running.out, /is not finished/);
 
@@ -665,11 +776,11 @@ test("a failed create on d2 leaves it creating with no id, and collect looks for
   assert.match(error.message, new RegExp(`r17-d2: its create may have succeeded; look for a droplet named corten-marketplace-r17-d2 tagged ${d2.tag} before deleting anything\\.`));
   assert.ok(!f.calls.some((c) => c[0] === "ssh"), "no round starts when a create fails");
 
-  // No d2 droplet: d2 is missing, and d1 never reached systemctl start, so d1 gets a delete command.
+  // No exact ID found for d2: its create remains unconfirmed while the owned d1 gets a delete command.
   const first = await quiet(t, () => f.task().collect());
   assert.equal(first.value, 2, first.out);
   assert.match(first.out, /r17-d1: droplet 101 was created but never started its round \(its launch stopped before systemctl start\); nothing to collect\. Delete it: doctl compute droplet delete 101 --force/);
-  assert.match(first.out, /r17-d2 never started its round and has no droplet/);
+  assert.match(first.out, /r17-d2: collection error;.*no exact droplet ID found for this reservation; absence unconfirmed/);
   assert.doesNotMatch(first.out, /cannot merge/, "no droplet runs, so there is nothing to stop");
   assert.ok(!f.calls.some((c) => c[0] === "ssh"), "collect needs no SSH to droplets that never started");
 
@@ -697,22 +808,23 @@ test("a starting droplet that never answers SSH is not deleted on a guess", asyn
     if (!allowFail) throw new Error("ssh: timed out");
     return { status: 255, stdout: "", stderr: "timed out" };
   };
-  const result = await quiet(t, () => splitController({ round: "r17", stateDir: f.local, sshKey: "42" }, { run, repo: f.repo, sleep: async () => {} }).collect());
+  const result = await quiet(t, () => f.task(undefined, run).collect());
   assert.equal(result.value, 2, result.out);
   assert.match(result.out, /r17-d2: collection error; its droplet and evidence are preserved: ssh: timed out/);
   assert.doesNotMatch(result.out, /delete 102/);
   assert.equal(JSON.parse(readFileSync(file, "utf8")).status, "starting");
 });
 
-test("a starting part whose droplet is gone may have started: it is missing, not never started", async (t) => {
+test("a bound starting part with an exact 404 may have started: it is missing, not never started", async (t) => {
   const f = fleet(t);
   await quiet(t, () => f.task(2).launch());
+  assert.equal((await quiet(t, () => f.task().collect())).value, 3);
   const file = join(f.local, "d2", "state.json"), s = JSON.parse(readFileSync(file, "utf8"));
   writeFileSync(file, JSON.stringify({ ...s, status: "starting" }));
   f.drop(102);
   const result = await quiet(t, () => f.task().collect());
   assert.equal(result.value, 3, result.out);
-  assert.match(result.out, /r17-d2 may have started its round, but its droplet is gone; nothing to collect/);
+  assert.match(result.out, /r17-d2 may have started its round, but its exact droplet 102 is absent in the saved account; nothing to collect/);
   assert.doesNotMatch(result.out, /r17-d2 never started/);
   assert.match(result.out, /r17 cannot merge: r17-d2 will not complete it\. Stop each running droplet so it stops billing:\nssh .*\/d1\/known_hosts" root@192\.0\.2\.1 /);
 });
@@ -724,7 +836,7 @@ test("code 3 with a partial part says to stop the running droplets, since the ro
   const running = await quiet(t, () => f.task().collect());
   assert.equal(running.value, 3, running.out);
   assert.deepEqual(f.deleted, ["101"]);
-  assert.match(running.out, /r17 cannot merge: r17-d1 will not complete it\. Stop each running droplet so it stops billing:\nssh -o "UserKnownHostsFile=.*\/d2\/known_hosts" root@192\.0\.2\.2 systemctl stop corten-marketplace-r17-d2\.service\nThen run node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect again/);
+  assert.match(running.out, /r17 cannot merge: r17-d1 will not complete it\. Stop each running droplet so it stops billing:\nssh -o "UserKnownHostsFile=.*\/d2\/known_hosts" root@192\.0\.2\.2 systemctl stop corten-marketplace-r17-d2\.service\nThen run node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect --context bench again/);
   assert.doesNotMatch(running.out, /is not finished/);
   // Once stopped, d2 is collected and deleted, and the round is partial.
   f.finish(2, 2);
@@ -787,7 +899,7 @@ test("a stopped launch keeps its own error when saying what each droplet is left
   };
   const launch = splitController({ round: "r17", stateDir: f.local, sshKey: "42", droplets: 2 }, { run, repo: f.repo, sleep: async () => {}, interrupted: () => signal });
   const { value: error } = await quiet(t, () => launch.launch().catch((e) => e));
-  assert.match(error.message, /^SIGINT received\nWhat each droplet is left doing is unknown: .*JSON.*\. Collect the round: node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect\nThis is also saved in .*launch-stopped\.txt\.$/s);
+  assert.match(error.message, /^SIGINT received\nWhat each droplet is left doing is unknown: .*JSON.*\. Collect the round: node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect --context <saved-context>\nThis is also saved in .*launch-stopped\.txt\.$/s);
   assert.equal(error.cause.message, "SIGINT received");
 });
 
@@ -831,24 +943,22 @@ test("collect refuses while a live launch holds launch.lock, and takes over a st
   assert.equal(existsSync(lock), false);
 });
 
-test("a droplet list that fails is that part's collection error, and the stop commands still print", async (t) => {
+test("exact read and final census failures remain distinguishable, and stop commands still print", async (t) => {
   // d1 runs its round; d2 never reached systemctl start.
   const f = fleet(t);
   let starts = 0;
   const run = (binary, args) => { const r = f.run(binary, args); if (binary === "ssh" && args.at(-1).includes("systemctl start")) starts++; return r; };
   const launch = splitController({ round: "r17", stateDir: f.local, sshKey: "42", droplets: 2 }, { run, repo: f.repo, sleep: async () => {}, interrupted: () => starts ? "SIGINT" : null });
   await quiet(t, () => launch.launch().catch((e) => e));
-  const flaky = (fail) => {
-    let lists = 0;
-    return (binary, args) => { if (binary === "doctl" && args[2] === "list" && fail.includes(++lists)) throw new Error("doctl: connection reset"); return f.run(binary, args); };
-  };
-  const collect = (fail) => quiet(t, () => splitController({ round: "r17", stateDir: f.local, sshKey: "42" }, { run: flaky(fail), repo: f.repo, sleep: async () => {} }).collect());
-  // d1's collect lists once; the second list is d2's, the third the leftover check.
-  const part = await collect([2]);
+  const collect = (fail) => quiet(t, () => f.task(undefined, (binary, args) => {
+    if (binary === "doctl" && fail(args)) throw new Error("doctl: connection reset");
+    return f.run(binary, args);
+  }).collect());
+  const part = await collect((args) => args[2] === "get" && args[3] === "102");
   assert.equal(part.value, 2, part.out);
   assert.match(part.out, /r17-d2: collection error; its droplet and evidence are preserved: doctl: connection reset/);
   assert.match(part.out, /r17 cannot merge: r17-d2 will not complete it\. Stop each running droplet so it stops billing:\nssh .*\/d1\/known_hosts" root@192\.0\.2\.1 /);
-  const leftovers = await collect([3]);
+  const leftovers = await collect((args) => args[2] === "list");
   assert.equal(leftovers.value, 2, leftovers.out);
   assert.match(leftovers.out, /the droplet list failed, so leftover droplets are unknown: doctl: connection reset/);
   assert.match(leftovers.out, /r17-d2: droplet 102 was created but never started its round/);
@@ -856,9 +966,10 @@ test("a droplet list that fails is that part's collection error, and the stop co
 
   // A droplet listed under d2's id but with another name and no tags is not deleted.
   f.drop(102); f.add({ id: 102, name: "someone-else", tags: [] });
-  const other = await collect([]);
+  const other = await collect(() => false);
   assert.equal(other.value, 2, other.out);
-  assert.match(other.out, /r17-d2: droplet 102 is listed for this part but lacks its name or ownership tags; not ours to delete: check it/);
+  assert.match(other.out, /r17-d2: collection error;/);
+  assert.match(other.out, /someone-else/);
   assert.doesNotMatch(other.out, /delete 102/);
 });
 
