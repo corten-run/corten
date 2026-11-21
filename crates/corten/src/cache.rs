@@ -260,7 +260,7 @@ impl<'a> Credentials<'a> {
 }
 
 /// A `Cookie` header with only [`crate::App::client_zone`]'s cookie in it.
-pub(crate) fn zone_only(cookie: &HeaderValue) -> bool {
+fn zone_only(cookie: &HeaderValue) -> bool {
     let cookie = cookie.as_bytes();
     cookie.starts_with(b"corten-zone=") && !cookie.contains(&b';')
 }

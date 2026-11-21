@@ -38,9 +38,7 @@ use crate::{
 
 /// Request header the runtime sets: `nav` for navigations, `action` for form submits, `page` for
 /// the whole page it fetches after a write.
-pub const MODE_HEADER: HeaderName = HeaderName::from_static(MODE_NAME);
-/// [`MODE_HEADER`]'s name, for code that reads a request's headers in one pass.
-pub(crate) const MODE_NAME: &str = "corten";
+pub const MODE_HEADER: HeaderName = HeaderName::from_static("corten");
 /// `Prefer` (RFC 7240), the request header in which a runtime that draws a write's own page whole
 /// says so with each form submit: `Prefer: corten-draws=whole` ([`DRAWS_WHOLE`]). A write the
 /// runtime sent without it (a tab whose runtime predates this, open across a deploy) gets its own
@@ -55,9 +53,7 @@ pub(crate) const PATCH_HEADER: HeaderName = HeaderName::from_static("corten-patc
 pub(crate) const LOCATION_HEADER: HeaderName = HeaderName::from_static("corten-location");
 pub(crate) const SHELL_HEADER: HeaderName = HeaderName::from_static("corten-shell");
 /// A navigation's page with a notice: `m=<text>`, form-encoded, and `&d` when the page drew it.
-pub(crate) const NOTICE_HEADER: HeaderName = HeaderName::from_static(NOTICE_NAME);
-/// [`NOTICE_HEADER`]'s name, for code that reads a request's headers in one pass.
-pub(crate) const NOTICE_NAME: &str = "corten-notice";
+pub(crate) const NOTICE_HEADER: HeaderName = HeaderName::from_static("corten-notice");
 /// The cookie a redirect's notice rides in: `__Host-`, so no other site on the domain can set it.
 pub(crate) const NOTICE_COOKIE: &str = "__Host-corten-notice";
 /// The notice's cookie for a write from a plain `http://` origin that is not loopback (a LAN
@@ -134,8 +130,8 @@ impl Mode {
         Self::read(headers, false).0
     }
 
-    /// The mode of a request the runtime did not send (one with no `corten` header), from its
-    /// `Accept`. Browsers never put JSON first for a navigation.
+    /// The mode a request's `Accept` asks for, where its `corten` header names none. Browsers
+    /// never put JSON first for a navigation.
     pub(crate) fn accepting(accept: &str) -> Mode {
         if crate::api::media_type(accept.split(',').next().unwrap_or("")) == crate::api::JSON {
             Mode::Data
