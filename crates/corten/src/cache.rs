@@ -339,9 +339,15 @@ pub(crate) fn request_tags(method: &http::Method, headers: &HeaderMap, accepts_c
 /// page is private, by the request's cookie, but not the app's mistake.
 const NOTICE_GONE: [&[u8]; 2] = [b"__Host-corten-notice=;", b"corten-notice=;"];
 
-/// Whether `headers` set a cookie other than Corten's removal of a redirect's notice.
+/// Whether `headers` set a cookie other than Corten's removal of a redirect's notice. The first
+/// line settles it unless it is that removal: only then are the others read.
 fn sets_cookie(headers: &HeaderMap) -> bool {
-    headers.get_all(header::SET_COOKIE).iter().any(|cookie| !NOTICE_GONE.iter().any(|gone| cookie.as_bytes().starts_with(gone)))
+    let set = |cookie: &HeaderValue| !NOTICE_GONE.iter().any(|gone| cookie.as_bytes().starts_with(gone));
+    match headers.get(header::SET_COOKIE) {
+        None => false,
+        Some(first) if set(first) => true,
+        Some(_) => headers.get_all(header::SET_COOKIE).iter().skip(1).any(set),
+    }
 }
 
 /// Sets the response's `Cache-Control`: the default when it has none, and a private one instead
