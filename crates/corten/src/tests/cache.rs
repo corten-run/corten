@@ -2002,7 +2002,7 @@ async fn requests_for_another_copy_do_not_wait() {
 /// through; the others pass at once.
 #[derive(Clone)]
 struct Hold {
-    next: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    next: std::sync::Arc<std::sync::Mutex<usize>>,
     gate: std::sync::Arc<tokio::sync::Semaphore>,
 }
 
@@ -2015,7 +2015,7 @@ impl Default for Hold {
 impl Hold {
     /// Holds the handlers of the next `count` requests that reach theirs.
     fn next(&self, count: usize) {
-        self.next.store(count, std::sync::atomic::Ordering::SeqCst);
+        *self.next.lock().unwrap() = count;
     }
 
     /// Lets `count` held handlers through, the one held longest first.
@@ -2024,8 +2024,12 @@ impl Hold {
     }
 
     fn pass(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
-        use std::sync::atomic::Ordering::SeqCst;
-        let held = self.next.fetch_update(SeqCst, SeqCst, |next| next.checked_sub(1)).is_ok();
+        let held = {
+            let mut next = self.next.lock().unwrap();
+            let held = *next > 0;
+            *next = next.saturating_sub(1);
+            held
+        };
         let gate = self.gate.clone();
         async move {
             if held {
