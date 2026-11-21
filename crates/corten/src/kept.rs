@@ -420,7 +420,10 @@ impl Entry {
         let made = Bytes::copy_from_slice(&crate::compress::encode(Coding::Brotli, &self.body, Level::Kept));
         let size = made.len() + FORM;
         let mut inner = store.inner.write().unwrap_or_else(PoisonError::into_inner);
-        if !kept() || self.coded.brotli.set(made).is_err() {
+        // Put with it as a clone, which makes the record that shares the bytes (`FORM`) here: the
+        // first answer to give them would make it otherwise, and every answer would clone them by
+        // the path for bytes not yet shared.
+        if !kept() || self.coded.brotli.set(made.clone()).is_err() {
             return;
         }
         // Counted in the store first, as `grew` counts; under the lock it cannot go meanwhile.
