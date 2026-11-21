@@ -247,50 +247,118 @@ async fn a_live_fragment_the_browser_would_drop_panics_in_debug_builds() {
 #[derive(crate::view::Id)]
 struct LiveFormId;
 
+/// A form for a live fragment, with a new submit key when `keyed`.
+#[cfg(all(debug_assertions, feature = "log"))]
+fn live_form(keyed: bool) -> String {
+    html! { <form id={LiveFormId} method="post">if keyed { {crate::SubmitKey::field(KeyedWrite::FIELDS.submit)} }</form> }
+        .to_html()
+}
+
+/// An item a stream gives that is drawn only when it becomes a fragment.
+#[cfg(all(debug_assertions, feature = "log"))]
+struct LateForm;
+
+#[cfg(all(debug_assertions, feature = "log"))]
+impl From<LateForm> for crate::Fragment {
+    fn from(_: LateForm) -> Self {
+        live_form(true).into()
+    }
+}
+
 /// A live fragment is text, rendered after the stream's headers went out, so a form's new submit
-/// key in one cannot make the stream private as it makes a page: under `corten dev` a stream marked
-/// for shared caches whose fragment draws one is logged, and one left with its own caching, or
-/// whose fragments draw no key, is not.
+/// key in one cannot make the stream private as it makes a page. Under `corten dev` a stream whose
+/// headers, as sent, let a shared cache keep it (no plain `private`, which its default `no-cache`
+/// lacks, or a CDN's own header beside one) is logged when a fragment it gives draws one, in the
+/// stream or when the item becomes a fragment. A stream sent private (one whose middleware says so,
+/// a `Public` one asked with a cookie), one whose fragments draw no key, and a key drawn by a
+/// stream that then ends without a fragment are not logged.
 #[cfg(all(debug_assertions, feature = "log"))]
 #[tokio::test]
 async fn a_shared_live_stream_that_draws_a_submit_key_is_logged_under_corten_dev() {
     use std::sync::Arc;
+    use std::task::Poll;
+
+    /// `private` on one stream, as the guide says, and a CDN's own lifetime beside it on another.
+    struct Caching;
+
+    impl crate::Middleware for Caching {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let path = req.uri().path().to_string();
+            let mut res = next.run(req).await;
+            if path.starts_with("/private") {
+                res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-cache"));
+            }
+            if path == "/private-cdn" {
+                res.headers_mut().insert("cdn-cache-control", HeaderValue::from_static("max-age=60"));
+            }
+            res
+        }
+    }
+
     let minute = std::time::Duration::from_secs(60);
-    let form = |keyed: bool| {
-        futures_util::stream::once(async move {
-            html! { <form id={LiveFormId} method="post">if keyed { {crate::SubmitKey::field(KeyedWrite::FIELDS.submit)} }</form> }
-                .to_html()
-        })
-    };
+    let form = |keyed: bool| futures_util::stream::once(async move { live_form(keyed) });
     let routes = Table::new()
         .route("/shared", get(move || async move { Public::new(minute, crate::live(form(true))) }))
         .route("/own", get(move || async move { crate::live(form(true)) }))
-        .route("/plain", get(move || async move { Public::new(minute, crate::live(form(false))) }));
+        .route("/private", get(move || async move { crate::live(form(true)) }))
+        .route("/private-cdn", get(move || async move { crate::live(form(true)) }))
+        .route("/plain", get(move || async move { Public::new(minute, crate::live(form(false))) }))
+        .route(
+            "/late",
+            get(move || async move { Public::new(minute, crate::live(futures_util::stream::once(async { LateForm }))) }),
+        )
+        .route(
+            "/ended",
+            get(move || async move {
+                let ended = futures_util::stream::poll_fn(|_| {
+                    let _ = live_form(true);
+                    Poll::Ready(None::<String>)
+                });
+                Public::new(minute, crate::live(ended))
+            }),
+        );
     let lines = Lines(Arc::default());
     let writer = lines.clone();
     let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
     let _logging = tracing::subscriber::set_default(subscriber);
-    let router = App::new(Routes::from(routes)).dev(true).router();
-    let logged = |uri: &'static str| {
+    let router = App::new(Routes::from(routes)).middleware(Caching).dev(true).router();
+    let warned = |text: &str, uri: &str| text.contains(&format!("corten: {uri} ")) && text.contains("submit key");
+    let logged = |uri: &'static str, cookie: bool| {
         let (router, lines) = (router.clone(), lines.clone());
         async move {
             lines.0.lock().unwrap().clear();
-            let res = router.oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
+            let mut req = Request::get(uri);
+            if cookie {
+                req = req.header(header::COOKIE, "session=abc");
+            }
+            let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
             let cache = res.headers()[header::CACHE_CONTROL].to_str().unwrap().to_string();
             let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
-            assert!(body.starts_with("event: patch\ndata: <form id="), "{body}");
-            (cache, String::from_utf8(lines.0.lock().unwrap().clone()).unwrap())
+            (cache, body, String::from_utf8(lines.0.lock().unwrap().clone()).unwrap())
         }
     };
-    let (cache, text) = logged("/shared").await;
+    let (cache, body, text) = logged("/shared", false).await;
     assert_eq!(cache, "public, max-age=60", "its headers went out before the fragment was drawn");
-    assert!(
-        text.contains("corten: /shared is marked for shared caches, but a live fragment draws a form's new submit key"),
-        "{text}"
-    );
-    let (cache, text) = logged("/own").await;
+    assert!(body.starts_with("event: patch\ndata: <form id="), "{body}");
+    assert!(warned(&text, "/shared"), "{text}");
+    let (cache, _, text) = logged("/shared", true).await;
+    assert_eq!(cache, "private, no-cache", "a request with a cookie");
+    assert!(!text.contains("submit key"), "it went out private: {text}");
+    let (cache, _, text) = logged("/own", false).await;
     assert_eq!(cache, "no-cache");
+    assert!(warned(&text, "/own"), "some CDNs keep an answer that says only no-cache: {text}");
+    let (cache, _, text) = logged("/private", false).await;
+    assert_eq!(cache, "private, no-cache");
     assert!(!text.contains("submit key"), "{text}");
-    let (_, text) = logged("/plain").await;
+    let (cache, _, text) = logged("/private-cdn", false).await;
+    assert_eq!(cache, "private, no-cache");
+    assert!(warned(&text, "/private-cdn"), "a CDN reads its own header first: {text}");
+    let (_, _, text) = logged("/plain", false).await;
     assert!(!text.contains("submit key"), "{text}");
+    let (_, body, text) = logged("/late", false).await;
+    assert!(body.starts_with("event: patch\ndata: <form id="), "{body}");
+    assert!(warned(&text, "/late"), "drawn as the item became a fragment: {text}");
+    let (_, body, text) = logged("/ended", false).await;
+    assert_eq!(body, "event: end\ndata: end\n\n");
+    assert!(!text.contains("submit key"), "no fragment was given: {text}");
 }

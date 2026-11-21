@@ -2667,15 +2667,15 @@ impl<S: Steps> Layer<S> {
             nonce: nonced,
             dev: self.shared.dev,
         };
+        // Corten's own routes (assets, the runtime) are settled the same way: they say what they
+        // are, and anything that does not gets the default.
+        cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
         // A live stream's fragments carry no mark, so under `corten dev` it logs a key one draws
-        // while marked for shared caches.
+        // when its headers as sent let a shared cache keep it.
         #[cfg(debug_assertions)]
         if let Some(path) = &path {
             crate::LiveShared::note(&res, path);
         }
-        // Corten's own routes (assets, the runtime) are settled the same way: they say what they
-        // are, and anything that does not gets the default.
-        cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
         // A body with this request's nonce differs every time, so its tag would never match.
         if !nonced {
             if let Some(has) = has {

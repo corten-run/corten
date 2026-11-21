@@ -894,19 +894,19 @@ pub(crate) fn import_map(events: Option<&str>, views: Option<&str>, own: &[(&str
 /// ends without that, and the browser reconnects (to another instance, or this one restarted).
 ///
 /// A fragment is text, so it carries no note of a form's new submit key (`SubmitKey::field`) it
-/// holds, and its headers go out before it is rendered: a stream that may draw one keeps its
-/// default caching, not [`crate::Public`], or every visitor a shared cache gives it to sends the
-/// same key. Under `corten dev`, a stream marked for shared caches whose fragment draws a key
-/// while the stream gives it is logged.
+/// holds, and the stream's headers go out before it is rendered: Corten cannot make the stream
+/// private as it makes a page that draws one. A stream that may draw a key is never
+/// [`crate::Public`], says `Cache-Control: private` itself (written by a middleware of its area,
+/// [`crate::Area::middleware`]; its default `no-cache` is not enough for a CDN that ignores it),
+/// and has no CDN caching header, or every visitor a shared cache gives it to sends the same key.
+/// Under `corten dev`, a stream whose headers as sent have no plain `private` or carry a CDN's
+/// own caching header (`CDN-Cache-Control`, `Surrogate-Control`, ...) is logged when a fragment it
+/// gives draws a key, in its stream or as the item becomes a [`Fragment`].
 pub fn live<S>(fragments: S) -> LiveResponse
 where
     S: Stream + Send + 'static,
     S::Item: Into<Fragment>,
 {
-    #[cfg(debug_assertions)]
-    let shared = LiveShared::default();
-    #[cfg(debug_assertions)]
-    let fragments = shared.clone().watch(fragments);
     let patches = fragments.map(|fragment| {
         let Fragment { html, cursor } = fragment.into();
         // A top-level element without an id would be dropped in the browser: a bug in the view.
@@ -928,6 +928,10 @@ where
         }
         .data(&html)
     });
+    #[cfg(debug_assertions)]
+    let shared = LiveShared::default();
+    #[cfg(debug_assertions)]
+    let patches = shared.clone().watch(patches);
     // An event with no data is never dispatched, so `end` carries some.
     let end = futures_util::stream::once(async { Event::new().event("end").data("end") });
     let res = unbuffered(sse::response(patches.chain(end).take_until(draining())));
@@ -940,39 +944,42 @@ where
     LiveResponse(res)
 }
 
-/// In a debug build under `corten dev`: the path of a [`live`] stream whose answer was marked for
-/// shared caches, which the stream logs when a fragment draws a form's new submit key. A fragment
-/// is text, rendered after the headers went out, so [`cache::settle`] cannot keep it private as it
-/// does a page that draws one.
+/// In a debug build under `corten dev`: the path of a [`live`] stream whose headers as sent let a
+/// shared cache keep it ([`cache::sent_shared`]), which the stream logs when a fragment it gives
+/// draws a form's new submit key. A fragment is text, rendered after the headers went out, so
+/// [`cache::settle`] cannot keep it private as it does a page that draws one.
 #[cfg(debug_assertions)]
 #[derive(Clone, Default)]
 pub(crate) struct LiveShared(std::sync::Arc<std::sync::OnceLock<String>>);
 
 #[cfg(debug_assertions)]
 impl LiveShared {
-    /// Notes `path` on a live stream's answer whose `Cache-Control` marks it for shared caches,
-    /// before [`cache::settle`].
+    /// Notes `path` on a live stream's answer whose headers, after [`cache::settle`], let a shared
+    /// cache keep it.
     pub(crate) fn note(res: &Response, path: &str) {
         if let Some(shared) = res.extensions().get::<LiveShared>() {
-            if cache::marked_shared(res.headers()) {
+            if cache::sent_shared(res.headers()) {
                 let _ = shared.0.set(path.to_string());
             }
         }
     }
 
-    /// `fragments`, logging once a submit key drawn while the stream gives a fragment (in the
-    /// polls that make it, which is where `live_watch`'s view and a stream's `map` render).
-    fn watch<S: Stream + Send + 'static>(self, fragments: S) -> impl Stream<Item = S::Item> + Send + 'static {
-        let mut fragments = Box::pin(fragments);
+    /// `patches`, logging once a submit key drawn in the polls that give a patch: where
+    /// `live_watch`'s view, a stream's `map` and an item's conversion to a [`Fragment`] render. A
+    /// key drawn by a stream that then ends gave no fragment, and is not logged.
+    fn watch<S: Stream + Send + 'static>(self, patches: S) -> impl Stream<Item = S::Item> + Send + 'static {
+        let mut patches = Box::pin(patches);
         let (mut drew, mut logged) = (false, false);
         futures_util::stream::poll_fn(move |cx| {
             let outer = crate::form::DREW_KEY.replace(false);
-            let polled = fragments.as_mut().poll_next(cx);
+            let polled = patches.as_mut().poll_next(cx);
             drew |= crate::form::DREW_KEY.replace(outer);
-            if polled.is_ready() && std::mem::take(&mut drew) && !logged {
-                if let Some(path) = self.0.get() {
-                    logged = true;
-                    tracing::warn!("corten: {path} is marked for shared caches, but a live fragment draws a form's new submit key (SubmitKey::field), and each visitor needs a key of their own: a fragment carries no mark, so the stream went out as marked; keep a stream that draws a key off shared caches (no Public)");
+            if let std::task::Poll::Ready(patch) = &polled {
+                if std::mem::take(&mut drew) && patch.is_some() && !logged {
+                    if let Some(path) = self.0.get() {
+                        logged = true;
+                        tracing::warn!("corten: {path} went out where a shared cache may keep it (no plain `private` in its Cache-Control, or a CDN's own caching header), but a live fragment it gave draws a form's new submit key (SubmitKey::field), and each visitor needs a key of their own: a fragment carries no mark, so the stream went out as it was; give a stream that draws a key Cache-Control: private and no CDN caching header, and never Public");
+                    }
                 }
             }
             polled

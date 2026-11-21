@@ -127,6 +127,9 @@ async fn unstaged_shared_cookie() -> crate::response::Response {
         .header("cdn-cache-control", "max-age=600")
         .header("vercel-cdn-cache-control", "max-age=600")
         .header("surrogate-control", "max-age=600")
+        .header("edge-control", "max-age=600")
+        .header("x-accel-expires", "600")
+        .header("surrogate-key", "ids")
         .body(Body::from("id"))
         .unwrap()
 }
@@ -204,9 +207,10 @@ async fn an_unstaged_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     // Whatever caching it says, a CDN's own header too, and `no-store` where it says one.
     let (_, headers, _) = call_with(router.clone(), "GET", "/shared-cookie", None, None).await;
     assert_eq!(headers["cache-control"], "private, no-cache");
-    for cdn in ["cdn-cache-control", "vercel-cdn-cache-control", "surrogate-control"] {
+    for cdn in ["cdn-cache-control", "vercel-cdn-cache-control", "surrogate-control", "edge-control", "x-accel-expires"] {
         assert!(!headers.contains_key(cdn), "{headers:?}");
     }
+    assert_eq!(headers["surrogate-key"], "ids", "a CDN's header that keeps nothing stays");
     let (_, headers, _) = call_with(router.clone(), "GET", "/private-cookie", None, None).await;
     assert_eq!(headers["cache-control"], "no-store");
     assert!(!headers.contains_key("cdn-cache-control"), "{headers:?}");

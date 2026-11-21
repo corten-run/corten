@@ -627,21 +627,39 @@ async fn a_public_page_that_draws_a_submit_key_is_not_shared() {
     assert_eq!(cache_control(&router, "/template-keyed", &[]).await, "public, max-age=60", "a template's key draws nothing");
 }
 
+/// The caching headers a CDN or proxy reads before `Cache-Control`, as Corten names them. A name a
+/// deployment configures for itself (RFC 9213 allows one) is the deployment's to keep off.
+const CDN_OVERRIDES: [&str; 6] = [
+    "cdn-cache-control",
+    "cloudflare-cdn-cache-control",
+    "vercel-cdn-cache-control",
+    "surrogate-control",
+    "edge-control",
+    "x-accel-expires",
+];
+
+/// Headers a CDN reads that do not say how long to keep the answer.
+const CDN_OTHERS: [&str; 3] = ["cache-status", "surrogate-key", "cache-tag"];
+
 /// A CDN reads its own caching header before `Cache-Control`, so a page that draws a submit key
-/// goes out with none of them, whoever wrote one (here staged middleware), and also when its
-/// `Cache-Control` already keeps it private or out of every cache. A page with no key keeps what
-/// the middleware wrote.
+/// goes out with none of those Corten names, whoever wrote one (here staged middleware), and also
+/// when its `Cache-Control` already keeps it private or out of every cache. Other headers a CDN
+/// reads stay, and a page with no key keeps what the middleware wrote.
 #[tokio::test]
 async fn a_page_that_draws_a_submit_key_keeps_no_cdn_caching_header() {
+    assert_eq!(crate::cache::CDN_CACHING, CDN_OVERRIDES, "the list the guide names");
     struct CdnHeaders;
 
     impl crate::Middleware for CdnHeaders {
         async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
             let mut res = next.run(req).await;
             let headers = res.headers_mut();
-            headers.insert("cdn-cache-control", HeaderValue::from_static("public, max-age=60"));
-            headers.insert("vercel-cdn-cache-control", HeaderValue::from_static("max-age=60"));
-            headers.insert("surrogate-control", HeaderValue::from_static("max-age=60"));
+            for name in CDN_OVERRIDES {
+                headers.insert(name, HeaderValue::from_static("max-age=60"));
+            }
+            for name in CDN_OTHERS {
+                headers.insert(name, HeaderValue::from_static("x"));
+            }
             res
         }
     }
@@ -671,17 +689,25 @@ async fn a_page_that_draws_a_submit_key_keeps_no_cdn_caching_header() {
         ("/keyed", "private, no-cache"),
         ("/keyed-default", "private, no-cache"),
         ("/keyed-private", "private, max-age=60"),
-        ("/keyed-no-store", "no-store"),
+        ("/keyed-no-store", "private, no-store"),
     ] {
         let headers = get(uri).await;
         assert_eq!(headers[header::CACHE_CONTROL], cache, "{uri}");
-        for cdn in ["cdn-cache-control", "vercel-cdn-cache-control", "surrogate-control"] {
+        for cdn in CDN_OVERRIDES {
             assert!(!headers.contains_key(cdn), "{uri}: {headers:?}");
+        }
+        for other in CDN_OTHERS {
+            assert_eq!(headers[other], "x", "{uri}: {other}");
         }
     }
     let headers = get("/plain").await;
     assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60");
-    assert_eq!(headers["cdn-cache-control"], "public, max-age=60", "a page with no key keeps the middleware's");
+    for name in CDN_OVERRIDES {
+        assert_eq!(headers[name], "max-age=60", "a page with no key keeps the middleware's {name}");
+    }
+    for other in CDN_OTHERS {
+        assert_eq!(headers[other], "x", "{other}");
+    }
 }
 
 #[tokio::test]
