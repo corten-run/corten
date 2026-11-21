@@ -52,7 +52,9 @@ async fn show(req: Req, State(source): State<Source>, Params(at): Params<routes:
         req.page(views::document(&req, &record.title, views::record(&record, at.query.field.as_deref().unwrap_or(""))))
     }
     .await;
-    corten::Public::new(std::time::Duration::from_secs(60), page)
+    static LIFE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let life = *LIFE.get_or_init(|| std::env::var("CORTEN_LIFE").ok().and_then(|life| life.parse().ok()).unwrap_or(60));
+    corten::Public::new(std::time::Duration::from_secs(life), page)
 }
 
 async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>) -> JsonResult<Arc<Record>> {
