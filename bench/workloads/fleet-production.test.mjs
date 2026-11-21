@@ -24,12 +24,21 @@ const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(
 const checkout = fs.realpathSync(".");
 const checkoutCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim();
 function roleCheckFor(fixtureCommit, sourceCommit) {
-  return ({ round, commit: measured, group, mode }, interrupted) => {
+  // Reuse the real result for identical inputs within this fixture/worker so
+  // role replay does not consume the offline monitor's peer-overlap window.
+  const checked = new Map();
+  return async ({ round, commit: measured, group, mode }, interrupted) => {
     assert.equal(measured, fixtureCommit);
-    return inspectCampaign({ action: "actor-role-preflight", round, commit: sourceCommit, group: group ?? null, mode: mode ?? null }, { interrupted });
+    assert.ok(!interrupted?.());
+    const key = JSON.stringify([round, group, mode]);
+    if (!checked.has(key)) {
+      const report = await inspectCampaign({ action: "actor-role-preflight", round, commit: sourceCommit,
+        group: group ?? null, mode: mode ?? null }, { interrupted });
+      checked.set(key, report);
+    }
+    return checked.get(key);
   };
 }
-const roleCheck = roleCheckFor(commit, checkoutCommit);
 
 function fixture(t, mode = "success") {
   t.after(() => {
@@ -105,7 +114,7 @@ const synthetic = (${syntheticDependencies.toString()})({
     if (argv[0] === "show") return { status: 0, stdout: committed.get(argv[1].slice(41)) };
     return h.run(binary, argv, 60000);
   };
-  const deps = { repo: h.repo, spawn, WorkerClass: SnapshotWorker, write: (value) => output.push(JSON.parse(value)),
+  const roleCheck = roleCheckFor(commit, checkoutCommit), deps = { repo: h.repo, spawn, WorkerClass: SnapshotWorker, write: (value) => output.push(JSON.parse(value)),
     plan: (options, deps) => productionPlan(options, { ...deps, roleCheck }) };
   deps.catalogProvider = syntheticCatalogProvider(syntheticPlacement([mode === "overlap" ? "sfo2" : "sfo3"]));
   const args = ["r21", "--fleet-root", h.base];
