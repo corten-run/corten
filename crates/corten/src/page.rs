@@ -1189,7 +1189,7 @@ impl Action<'_> {
     ) -> crate::Result<HtmlResponse<For, Kind>> {
         view.__check_whole_patch();
         let mut body = String::new();
-        let drew_before = crate::form::drawing();
+        let drawing = crate::form::Drawing::start();
         // A debug build notes the places a patch draws: a patch is not a page, so none is filled.
         #[cfg(debug_assertions)]
         {
@@ -1214,7 +1214,7 @@ impl Action<'_> {
         self.0.parses_whole(&body)?;
         let mut res = html_response(status, body, Some(PATCH_HEADER));
         // A form's submit key is new on every render, so this body's tag would never match.
-        if crate::form::drew(drew_before) {
+        if drawing.drew() {
             res.extensions_mut().insert(crate::cache::Unrepeatable);
         }
         Ok(HtmlResponse::new(res))
@@ -1722,7 +1722,7 @@ impl Req {
         let mut out = String::with_capacity(size.load(Ordering::Relaxed));
         HEAD_AT.set(None);
         crate::view::SHELL.set(0);
-        let drew_before = crate::form::drawing();
+        let drawing = crate::form::Drawing::start();
         // A full page's custom properties (`style={..}`) go in one style block its CSP allows by
         // hash; a swap's are set by the runtime, under the CSP the document loaded with.
         // The places the layout draws its reads (`later`): noted only in an app that starts some,
@@ -1811,7 +1811,7 @@ impl Req {
             res.extensions_mut().insert(crate::security::StyleBlock(crate::security::hash_source(&vars)));
         }
         // A form's submit key is new on every render, so this body's tag would never match.
-        if crate::form::drew(drew_before) {
+        if drawing.drew() {
             res.extensions_mut().insert(crate::cache::Unrepeatable);
         }
         Ok(HtmlResponse::new(res))

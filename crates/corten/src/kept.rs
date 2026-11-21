@@ -40,7 +40,7 @@
 //! kept. An answer with markup its handler rendered that holds a form's new submit key is that
 //! request's alone: a page's render marks one, and the handler is watched for one drawn any
 //! other way, on the thread that runs it (`form::watched`). JSON the app holds as bytes (`json::Raw`) carries its own compressed forms
-//! where the app compresses, a mark this does not replay, so there it is its handler's for every
+//! in a build that compresses (the `compress` feature), a mark this does not replay, so there it is its handler's for every
 //! request, which costs it no writing and no compression. Any other answer (a file, a relay, a
 //! stream, a feed, a status alone) is its handler's for every request, but for what a page route
 //! answers in a page's place: a file of a known size from a route that says it answers a page

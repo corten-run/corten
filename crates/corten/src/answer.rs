@@ -1052,18 +1052,12 @@ impl<A: Shareable> Shareable for std::result::Result<A, JsonError> {
 }
 
 #[cfg(feature = "json")]
-impl<T> Shareable for crate::Json<T>
-where
-    crate::Json<T>: IntoResponse,
-{
+impl<T: crate::json::ToJson> Shareable for crate::Json<T> {
     type ForAll = Self;
 }
 
 #[cfg(feature = "json")]
-impl<T> ForEveryone for crate::Json<T>
-where
-    crate::Json<T>: IntoResponse,
-{
+impl<T: crate::json::ToJson> ForEveryone for crate::Json<T> {
     type Named = Self;
 
     fn for_all(self) -> Self {
@@ -1399,7 +1393,7 @@ impl<A: Answer> Answer for std::result::Result<A, JsonError> {
 #[cfg(feature = "json")]
 impl<T: crate::json::ToJson> Answer for crate::Json<T> {
     const FORMAT: Format = Format::Json;
-    const WHOLE: sealed::Whole = sealed::Whole(T::__KEPT);
+    const WHOLE: sealed::Whole = T::__KEPT;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
     type Kind = AnyAnswer;

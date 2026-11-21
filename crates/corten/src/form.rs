@@ -2590,19 +2590,31 @@ thread_local! {
     pub(crate) static DREW_KEY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// The thread's mark as it stood, cleared for a render that reads whether it drew a key itself
-/// ([`drew`]).
-pub(crate) fn drawing() -> bool {
-    DREW_KEY.replace(false)
+/// A render that reads for itself whether it drew a submit key: the thread's mark is cleared as
+/// it starts and, as it ends, left set where it was before or a key was drawn since. So a watch
+/// around the handler ([`watched`]) still sees a key the handler drew before this render (one
+/// rendered to a string and placed in a page as markup), also when the render fails or panics.
+pub(crate) struct Drawing {
+    before: bool,
 }
 
-/// Whether a key was drawn since [`drawing`], which gave `before`. The mark is left set where
-/// either was, so a watch around the handler ([`watched`]) still sees a key the handler drew
-/// before this render: one rendered to a string and placed in the page as markup.
-pub(crate) fn drew(before: bool) -> bool {
-    let drew = DREW_KEY.get();
-    DREW_KEY.set(before || drew);
-    drew
+impl Drawing {
+    pub(crate) fn start() -> Self {
+        Drawing { before: DREW_KEY.replace(false) }
+    }
+
+    /// Whether a key was drawn since this started.
+    pub(crate) fn drew(&self) -> bool {
+        DREW_KEY.get()
+    }
+}
+
+impl Drop for Drawing {
+    fn drop(&mut self) {
+        if self.before {
+            DREW_KEY.set(true);
+        }
+    }
 }
 
 /// `work` run to its end, and whether a submit key was drawn in any of its polls. A handler may
@@ -2610,25 +2622,23 @@ pub(crate) fn drew(before: bool) -> bool {
 /// the mark is cleared before each poll and read after it, also when the poll panics, and then
 /// left set where it was before or a key was drawn: a watch around this one sees that key too,
 /// and a mark another request left on the thread counts for no one, since every reader clears
-/// it first. A key drawn outside the polls of `work` (by a task the handler spawned, or a render
-/// it handed to a blocking task) is not seen.
+/// it first. A key drawn outside the polls of `work`, or on another thread during one (by a task
+/// the handler spawned, a render it handed to a blocking task, a thread of its own), is not seen.
 pub(crate) async fn watched<F: std::future::Future + Unpin>(mut work: F) -> (F::Output, bool) {
     struct Poll<'a> {
-        before: bool,
+        drawing: Drawing,
         drew: &'a mut bool,
     }
 
     impl Drop for Poll<'_> {
         fn drop(&mut self) {
-            let drew = DREW_KEY.get();
-            *self.drew |= drew;
-            DREW_KEY.set(self.before || drew);
+            *self.drew |= self.drawing.drew();
         }
     }
 
     let mut drew = false;
     let out = std::future::poll_fn(|cx| {
-        let _poll = Poll { before: DREW_KEY.replace(false), drew: &mut drew };
+        let _poll = Poll { drawing: Drawing::start(), drew: &mut drew };
         std::pin::Pin::new(&mut work).poll(cx)
     })
     .await;
@@ -3017,17 +3027,29 @@ mod tests {
             }))
             .await;
             assert!(inner && outer, "a key drawn under two watches");
-            // A render that reads the mark for itself leaves a key drawn before it for the watch.
-            let ((first, second), watch) = watched(Box::pin(async {
-                let field = SubmitKey::field(SUBMIT).to_html();
-                let before = drawing();
-                let first = super::drew(before);
-                let before = drawing();
-                let _ = (field, SubmitKey::field(SUBMIT).to_html());
-                (first, super::drew(before))
-            }))
-            .await;
-            assert!(!first && second && watch, "{first} {second} {watch}");
+            // A render that reads the mark for itself draws nothing here, and leaves the key
+            // drawn before it for the watch: also one that ends early, as a render that fails.
+            for fails in [false, true] {
+                let (own, watch) = watched(Box::pin(async move {
+                    let _field = SubmitKey::field(SUBMIT).to_html();
+                    let render = || {
+                        let drawing = Drawing::start();
+                        if fails {
+                            return Err(());
+                        }
+                        Ok(drawing.drew())
+                    };
+                    render()
+                }))
+                .await;
+                assert!(own != Ok(true) && watch, "{own:?} {watch}, failing {fails}");
+            }
+            // And it reads its own key, whatever was drawn before it.
+            let drawing = Drawing::start();
+            let _ = SubmitKey::field(SUBMIT).to_html();
+            assert!(drawing.drew());
+            drop(drawing);
+            DREW_KEY.set(false);
         }
         DREW_KEY.set(false);
     }

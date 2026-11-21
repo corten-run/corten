@@ -395,9 +395,21 @@ pub trait ToJson {
     /// Whether [`Json`] of the type is a whole body the app keeps for a `Public` route
     /// (`Answer::WHOLE`): every type's but [`Raw`]'s in a build that compresses, where it holds
     /// its compressed forms itself and its route is its handler's for every request. Not a
-    /// public API.
+    /// public API: its type is one an app cannot name, as [`crate::Answer`]'s is.
+    ///
+    /// ```compile_fail,E0326
+    /// struct Mine;
+    ///
+    /// impl corten::ToJson for Mine {
+    ///     const __KEPT: bool = false;
+    ///
+    ///     fn write_json(&self, out: &mut Vec<u8>) {
+    ///         out.extend_from_slice(b"1");
+    ///     }
+    /// }
+    /// ```
     #[doc(hidden)]
-    const __KEPT: bool = true;
+    const __KEPT: crate::answer::sealed::Whole = crate::answer::sealed::Whole(true);
 
     /// The response [`Json`] sends, before its headers: the value written into a new vector, or
     /// for [`Raw`] the bytes it holds. Not a public API.
@@ -528,7 +540,7 @@ impl ToJson for Raw {
         out.extend_from_slice(self.as_bytes());
     }
 
-    const __KEPT: bool = !cfg!(feature = "compress");
+    const __KEPT: crate::answer::sealed::Whole = crate::answer::sealed::Whole(!cfg!(feature = "compress"));
 
     /// `Raw::new` parsed it.
     fn __well_formed() -> bool {
