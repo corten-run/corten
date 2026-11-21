@@ -227,7 +227,8 @@ test("continuation replays catalog, creates only the next whole group, and does 
     fs.mkdirSync(path.join(folder, campaign), { recursive: true });
     const report = syntheticInspection("verified");
     Object.assign(report, { schema: "benchmark-isolated-group-campaign-inspection/v1", round: fleet.round, commit: fleet.commit, campaign,
-      selection: state.selection, groups: report.groups.filter((entry) => entry.group === group), loadLayout: savedLoadLayout(state) });
+      selection: state.selection, groups: report.groups.filter((entry) => entry.group === group) });
+    if (savedLoadLayout(state)) report.loadLayout = savedLoadLayout(state);
     if (group === catalog) Object.assign(report.groups[0].appOutcomes.find((app) => app.app === "express"), { outcome: "failed", comparisonEligible: false });
     if (state.control?.monitor) {
       const terminal = JSON.parse(fs.readFileSync(path.join(local, "monitor-terminal.json")));
@@ -274,6 +275,11 @@ test("continuation replays catalog, creates only the next whole group, and does 
   await assert.rejects(detached(json, approvalSha256), /retained catalog-page/);
   assert.equal(p.events().filter((row) => row.method === "POST").length, 0);
   fs.writeFileSync(oldArchive, oldBytes);
+  const statePath = path.join(retained, catalog, "groups-r20/state.json");
+  const originalState = fs.readFileSync(statePath);
+  fs.writeFileSync(statePath, JSON.stringify({ ...saved, destroyedAt: undefined }));
+  await assert.rejects(detached(json, approvalSha256), /retained catalog-page/);
+  fs.writeFileSync(statePath, originalState);
   assert.equal(await detached(json, approvalSha256), 3, JSON.stringify(p.output.at(-1)));
   await assert.rejects(detached(json, approvalSha256), /unresolved custody|already attempted/);
   const job = path.join(p.h.base, json), fleet = readFleet(job, "r21").manifest;
@@ -284,6 +290,7 @@ test("continuation replays catalog, creates only the next whole group, and does 
   assert.equal(report.status, "incomplete"); assert.equal(report.publishableBaseline, false);
   assert.deepEqual(report.groups.map(({ group }) => group), groupNames);
   for (const [i, [round, measuredCommit, date, group]] of [["r20", history.commit, at, catalog], ["r21", commit, at2, json]].entries()) {
+    assert.equal(report.groups[i].outcome, "verified", JSON.stringify(report.groups[i]));
     const result = report.groups[i].result;
     assert.deepEqual([result.round, result.commit, result.campaignCreatedAt, result.configuration], [round, measuredCommit, date, { fixture: group }]);
   }
