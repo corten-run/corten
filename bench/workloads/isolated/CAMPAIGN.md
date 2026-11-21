@@ -349,12 +349,13 @@ or campaign readiness. The v2 native adapter/producer integration remains a sepa
 In supervised localized-marketplace timing only, a first-after inventory containing
 new sleeping children of the same baseline `systemd-udevd` can trigger one five-second wait
 and one more host observation after the marketplace command and its kernel observation are
-terminal. The recorded Linux clock must place every new non-kernel identity strictly after
-that terminal point. Exact cgroup, parent PID/start identity and matching executable path,
-device and inode are required, not just the worker name. The original before and first-after
-inventories, terminal clock and settled inventory stay sealed; saved replay applies the same
-checks. A worker or replacement still present, uncertain timing or ownership, a new login,
-benchmark process, or changed Docker baseline still stops sequencing. This does not rerun or
+terminal. The Linux start ticks must place every new non-kernel identity strictly after the
+cutoff in the sealed command-lifetime record. Both the uptime and the monotonic apparatus
+samples must support the wait. Cancellation keeps the first-after inventory and skips the
+second census. Exact cgroup, parent PID/start identity and matching executable path,
+device and inode are required, not just the worker name. Saved replay checks all the sealed
+observations by the same rules. A worker or replacement still present, uncertain timing or
+ownership, a new login, benchmark process, or changed Docker baseline still stops sequencing. This does not rerun or
 alter a measured window, prove the host was quiet, or repair historical evidence.
 
 ## Awaitable intrinsic API

@@ -29,17 +29,20 @@ const t = (value) => {
   const match = /^(\d{1,12})\.(\d{2}) \d{1,15}\.\d{2}\n$/.exec(value);
   return match && BigInt(match[1] + match[2]);
 };
+const monotonic = (value) => typeof value === "string" && /^(0|[1-9]\d{0,19})$/.test(value) ? BigInt(value) : null;
+const apparatusTime = (observation) => monotonic(observation.controlApparatus?.sample?.monoNs);
 const identityOf = (p) => `${p.pid}:${p.startTicks}`;
 const sameProcess = (a, b) => a && b && a.pid === b.pid && a.startTicks === b.startTicks;
 
-// Bound to a command-exited journal event, after the command's kernel observation
-// has finished. Unsupported or unreadable clocks disable settling, not strict cleanup.
+// Captured in the sealed lifetime terminal record, after the final kernel sample.
+// Unsupported or unreadable clocks disable settling, not strict cleanup.
 export function hostTerminalClock() {
   try {
-    const raw = uptime(), boot = bootId();
     const hz = execFileSync("/usr/bin/getconf", ["CLK_TCK"], { encoding: "utf8", timeout: 1000, maxBuffer: 256,
       env: { LANG: "C" }, stdio: ["ignore", "pipe", "pipe"] }).trim();
-    return t(raw) !== null && hz === "100" ? { bootId: boot, uptime: raw, ticksPerSecond: 100 } : undefined;
+    if (hz !== "100") return undefined;
+    const boot = bootId(), raw = uptime(), monoNs = String(process.hrtime.bigint());
+    return t(raw) !== null ? { bootId: boot, uptime: raw, ticksPerSecond: 100, monoNs } : undefined;
   } catch { return undefined; }
 }
 
@@ -161,6 +164,8 @@ export function udevSettleCandidates(before, after, terminal) {
   if (!remaining.length || !terminal || terminal.bootId !== before.bootId || terminal.ticksPerSecond !== 100) return null;
   const start = t(before.uptime), end = t(terminal.uptime), first = t(after.uptime);
   if (start === null || end === null || first === null || !(start < end && end < first)) return null;
+  const startMono = apparatusTime(before), endMono = monotonic(terminal.monoNs), firstMono = apparatusTime(after);
+  if (startMono === null || endMono === null || firstMono === null || !(startMono < endMono && endMono < firstMono)) return null;
   const baseline = processInventory(before), observed = processInventory(after), workers = remaining.map((p) => observed.get(p.pid));
   const daemon = observed.get(workers[0].parentPid), original = baseline.get(daemon?.pid);
   const exe = executableOf(daemon);
@@ -178,12 +183,14 @@ export function verifySettledHostBoundary(before, after, settled, terminal) {
   // Allow the procfs clock's 10 ms rounding at the lower edge, but no second retry.
   assert.ok(last !== null && last - first >= BigInt(udevSettleMs / 10 - 1) && last - first <= 1000n,
     "settled host observation outside the bounded interval");
+  const settledMono = apparatusTime(settled), firstMono = apparatusTime(after);
+  const wait = BigInt(udevSettleMs) * 1000000n;
+  assert.ok(settledMono !== null && settledMono - firstMono >= wait && settledMono - firstMono <= 10000000000n,
+    "settled host observation outside the bounded monotonic interval");
   const clean = verifyHostBoundary(before, settled);
   const final = processInventory(settled), daemon = final.get(candidates.daemon.pid);
   assert.ok(isUdevDaemon(daemon) && sameProcess(candidates.daemon, daemon) && executableOf(candidates.daemon) === executableOf(daemon),
     "udev daemon changed across host settle");
   assert.ok(candidates.workers.every((p) => !sameProcess(p, final.get(p.pid))), "udev worker identity still present");
-  if (after.controlApparatus) assert.ok(BigInt(settled.controlApparatus.sample.monoNs) > BigInt(after.controlApparatus.sample.monoNs),
-    "settled apparatus sample is not later than the first boundary");
   return { ...clean, settledUdevWorkers: candidates.workers.map(({ pid, startTicks }) => ({ pid, startTicks })) };
 }

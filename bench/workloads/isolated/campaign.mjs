@@ -6,11 +6,12 @@ import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, writeSync } from 
 import { dirname, join } from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 import { validateCampaign, freeze, jsonPhase, mixedPhase } from "./campaign-contract.mjs";
 import { verifyWorkingSources } from "./worker.mjs";
 import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, readRegular, syncDirectory, tree } from "./evidence.mjs";
 import { supervise } from "./process.mjs";
-import { hostTerminalClock, observeHost, udevSettleCandidates, udevSettleMs, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
+import { observeHost, udevSettleCandidates, udevSettleMs, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { inspectNative } from "./native-replay.mjs";
 import { beginLifetime, composeHostProof, inspectLifetime } from "./host-lifetime.mjs";
@@ -88,7 +89,7 @@ export function createCampaign({ authorize }) {
       throw error;
     } finally { c.busy = false; }
   }
-  async function command(c, binding, invocation, directory, signal) {
+  async function command(c, binding, invocation, directory, signal, retainTerminalClock) {
     c.stream?.check();
     own(c.handle); verifyWorkingSources(c.plan.bindings[0]);
     const observerStop = new AbortController();
@@ -118,14 +119,11 @@ export function createCampaign({ authorize }) {
     } finally { try { fsyncSync(fd); } finally { closeSync(fd); } }
     c.files.push({ path, sha256: digest(readRegular(join(c.directory, path))) });
     if (observer) {
-      const manifest = await observer.finish(result); hostManifestSha256 = manifest.sha256;
+      const manifest = await observer.finish(result, retainTerminalClock); hostManifestSha256 = manifest.sha256;
       for (const file of manifest.entries.filter((e) => e.type === "file")) c.files.push({
         path: `${directory}/command-${number}-host/${file.path}`, sha256: file.sha256 });
     }
-    const terminalClock = c.stream && binding.request.group === "localized-marketplace" && invocation === binding.execution.invocation
-      && result.terminal && !result.cancelled && !result.forced ? hostTerminalClock() : undefined;
-    const terminalEvidence = terminalClock ? { hostTerminalClock: terminalClock } : {};
-    event(c, "command-exited", { ...result, ...(hostManifestSha256 ? { hostManifestSha256 } : {}), ...terminalEvidence });
+    event(c, "command-exited", { ...result, ...(hostManifestSha256 ? { hostManifestSha256 } : {}) });
     assert.equal(result.terminal, true, "native process is not observed terminal");
     const lifetime = hostManifestSha256 ? inspectLifetime(binding, invocation,
       join(c.directory, directory, `command-${number}-host`), { campaign: c.handle.id, command: number, pid, result }) : null;
@@ -136,7 +134,7 @@ export function createCampaign({ authorize }) {
       && ["accounting", "terminal", "empty", "observer", "leader"].every((key) => lifetime.checks?.[key] === true);
     assert.ok((lifetime?.status === "verified" && lifetime.cleanupComplete === true) || drainedCancellation,
       "command lifetime or cleanup unproven; retain pending native root");
-    return { ...result, number, pid, hostManifestSha256, ...terminalEvidence };
+    return { ...result, number, pid, hostManifestSha256, terminalClock: lifetime?.terminalClock };
   }
   async function phase(c, binding, phaseName, signal) {
     verifyWorkingSources(c.plan.bindings[0]);
@@ -155,18 +153,20 @@ export function createCampaign({ authorize }) {
     for (const invocation of [...binding.preparation.fixtures, binding.execution.invocation]) {
       if (signal?.aborted) throw new Error("campaign cancelled");
       if (invocation === binding.execution.invocation) fresh(original);
-      const result = await command(c, binding, invocation, relative, signal); commands.push(result);
+      const result = await command(c, binding, invocation, relative, signal, retainUdev && invocation === binding.execution.invocation);
+      commands.push(result);
       if (!result.success) break;
     }
     let after, settled, boundaryError;
-    const terminalClock = commands.at(-1)?.hostTerminalClock;
+    const terminalClock = commands.at(-1)?.terminalClock;
     try {
       verifyWorkingSources(c.plan.bindings[0]); after = observeHost(c.stream?.registration, retainUdev);
       if (terminalClock) after.terminalClock = terminalClock;
       save(c, `${relative}/host-after.json`, after);
       if (retainUdev && terminalClock && !signal?.aborted && udevSettleCandidates(before, after, terminalClock)) {
-        await new Promise((resolve) => setTimeout(resolve, udevSettleMs));
+        await delay(udevSettleMs, undefined, { signal });
         c.stream.check();
+        signal?.throwIfAborted();
         settled = observeHost(c.stream.registration, true);
         save(c, `${relative}/host-after-settled.json`, settled);
       }
@@ -304,7 +304,7 @@ export function createCampaign({ authorize }) {
             catch { throw new Error("timing-audit-does-not-match-accepted-subject"); }
           }
           const native = await inspectNative(effective, p.native);
-          const last = p.commands.at(-1), { number, pid, hostManifestSha256, hostTerminalClock: _clock, ...result } = last;
+          const last = p.commands.at(-1), { number, pid, hostManifestSha256, terminalClock: _clock, ...result } = last;
           let host = { resources: "blocked", cleanupComplete: false };
           if (hostManifestSha256) {
             const invocation = [...effective.preparation.fixtures, effective.execution.invocation][p.commands.length - 1];

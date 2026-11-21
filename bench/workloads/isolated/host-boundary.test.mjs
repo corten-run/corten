@@ -87,10 +87,15 @@ function udevBoundaries() {
   const udevExecutable = { path: "/usr/lib/systemd/systemd-udevd", device: "2049", inode: "10" };
   const daemon = { pid: 846, startTicks: "812", stat: stat(846, "812", "4194560", "systemd-udevd", "1", "S"), cgroup, udevExecutable };
   const worker = { pid: 62274, startTicks: "209603", stat: stat(62274, "209603", "4194624", "(udev-worker)", "846", "S"), cgroup, udevExecutable };
-  const terminal = { bootId: before.bootId, uptime: "2096.02 10244.13\n", ticksPerSecond: 100 };
-  return structuredClone({ baseline: { ...after(daemon), uptime: "236.30 1500.23\n" },
-    first: { ...after(daemon, worker), uptime: "2100.71 10444.32\n", terminalClock: terminal },
-    settled: { ...after(daemon), uptime: "2105.72 10494.00\n" }, terminal });
+  const apparatusPids = [...registration.members, registration.listener].map((p) => ({
+    pid: p.pid, startTicks: p.startTicks, cgroup: p.cgroup, stat: stat(p.pid, p.startTicks, "4194304", "ordinary", String(p.parentPid)),
+  }));
+  const boundary = (uptime, monoNs, ...processes) => ({ ...after(...processes, ...apparatusPids), ...registration.host, uptime,
+    controlApparatus: { registration, sample: { host: registration.host, monoNs, members: registration.members, listener: registration.listener } } });
+  const terminal = { bootId: registration.host.bootId, uptime: "2096.02 10244.13\n", ticksPerSecond: 100, monoNs: "4000000" };
+  return structuredClone({ baseline: boundary("236.30 1500.23\n", "2000000", daemon),
+    first: { ...boundary("2100.71 10444.32\n", "5000000", daemon, worker), terminalClock: terminal },
+    settled: boundary("2105.72 10494.00\n", "5015000000", daemon), terminal });
 }
 
 test("a proved sleeping post-terminal udev worker can settle; the first after stays strict and intact", () => {
@@ -113,16 +118,21 @@ test("a name, cgroup or executable alone never permits settling an unknown or po
     ({ first }) => { first.processes[1].stat = stat(62274, "209603", "4194624", "(udev-worker)", "1", "S"); },
     ({ first }) => { first.processes[1].stat = stat(62274, "209603", "4194624", "(udev-worker)", "846", "R"); },
     ({ first }) => { first.processes.push({ pid: 777, startTicks: "209999", stat: stat(777, "209999", "4194304", "node", "1", "S"), cgroup: "0::/benchmark\n" }); },
-    ({ first }) => { first.processes.push({ pid: 778, startTicks: "209999", stat: stat(778, "209999", "4194304", "sshd", "1", "S"), cgroup: "0::/user.slice/session-77.scope\n" }); },
     ({ terminal }) => { terminal.uptime = "2096.03 10244.13\n"; }, // Equal ticks do not establish ordering.
     ({ terminal }) => { terminal.uptime = "2096.04 10244.13\n"; },
     ({ terminal }) => { terminal.ticksPerSecond = 1000; },
+    ({ terminal }) => { terminal.monoNs = "5000000"; },
     ({ baseline }) => { delete baseline.uptime; },
   ]) {
     const b = udevBoundaries(); change(b);
     assert.equal(udevSettleCandidates(b.baseline, b.first, b.terminal), null);
     assert.throws(() => verifySettledHostBoundary(b.baseline, b.first, b.settled, b.terminal), /not eligible/);
   }
+  const { baseline, first, settled, terminal } = udevBoundaries();
+  first.processes.push({ pid: 778, startTicks: "209999", stat: stat(778, "209999", "4194304", "sshd", "1", "S"),
+    cgroup: "0::/user.slice/session-77.scope\n" });
+  assert.throws(() => udevSettleCandidates(baseline, first, terminal), /undeclared SSH\/login/);
+  assert.throws(() => verifySettledHostBoundary(baseline, first, settled, terminal), /undeclared SSH\/login/);
 });
 
 test("workers or replacements still present, other new work and boundary drift still fail after waiting", () => {
@@ -137,6 +147,8 @@ test("workers or replacements still present, other new work and boundary drift s
     ({ settled }) => { settled.bootId = "rebooted"; },
     ({ settled }) => { settled.uptime = "2105.69 10494.00\n"; },
     ({ settled }) => { settled.uptime = "2110.72 10494.00\n"; },
+    ({ settled }) => { settled.controlApparatus.sample.monoNs = "5000001"; },
+    ({ settled }) => { settled.controlApparatus.sample.monoNs = "10005000001"; },
   ]) {
     const b = udevBoundaries(); change(b);
     assert.throws(() => verifySettledHostBoundary(b.baseline, b.first, b.settled, b.terminal));
@@ -196,7 +208,10 @@ test("udev collector retains executable evidence only bound to the same PID and 
       [`/proc/${p.pid}/exe`, { executable: p.udevExecutable.path, metadata: { dev: 2049n, ino: 10n } }]]),
   ]);
   try {
-    assert.deepEqual(hostTerminalClock(), terminal);
+    const { monoNs, ...captured } = hostTerminalClock();
+    const { monoNs: _fixtureTime, ...expected } = terminal;
+    assert.match(monoNs, /^\d+$/);
+    assert.deepEqual(captured, expected);
     assert.equal(observeHost().processes[1].udevExecutable, undefined);
     assert.deepEqual(observeHost(undefined, true).processes, [daemon, worker]);
     let reads = 0;
