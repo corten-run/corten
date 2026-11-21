@@ -7218,7 +7218,9 @@ rules something out.
     `Cache-Control`, the tag and the compression treat a kept page as the handler's answer, so no
     rule about what may be shared is written twice. Only a route typed `Public` whose answer is
     a page asks the store at all, which is known when the route is made, so no other route's
-    `GET` pays for it; a write pays a hash of its path and a count.
+    `GET` pays for it. A write pays a hash of its path and a count, and only in an app with such
+    a route: whether one has any is known when the router is made, and an app with none makes no
+    store and counts no writes.
 
     "Cannot tell who asks" is less than a key needs: an extractor of the app's own may be
     `Anonymous` and read the browser's `User-Agent` or a country header a proxy set. So a page
@@ -7301,7 +7303,16 @@ rules something out.
     it began with glibc's and 35.2 MiB above with jemalloc, so what an allocator holds beyond the
     bytes asked of it is beside the bound; `tests/kept_memory.rs` holds the bytes asked to the
     bound, 4,177,233 of 4,194,304 for its page in every coding and 4,050,606 with no compression.
-    Not measured: what a write pays for its count; a miss that is kept against the same page
+    What a write pays for its count, under callgrind (valgrind 3.24.0, rustc 1.99.1, release with
+    debuginfo) on an app with one route whose `GET` and `POST` each answer text, sent
+    `POST /items/7/edit` in process with `oneshot`, as (instructions at 1,200 writes less those at
+    200) over 1,000, the same totals in every round (6 at `30b39d455`, 4 of them alternated with
+    4 at `45489ced9`): at `30b39d455` 16,292.0 a write against 15,212.7 with
+    `kept_answers(0)`, so 1,079.3 (6.6%) went to a count no page could use; at `45489ced9`,
+    where an app with no `Public` page makes no store, 15,210.8 against 15,210.7. With a
+    `Public` page at another path a write still pays for its count, 16,310.7 at `45489ced9`
+    against 16,308.7 at `30b39d455`, and 15,230.7 against 15,216.4 with `kept_answers(0)`.
+    Not measured: a miss that is kept against the same page
     made with nothing kept; a store read from more than one core; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
@@ -7328,7 +7339,8 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; or the
     connection speaks HTTP/2, where a request's target carries its authority.
 
-    Last checked: 2026-11-20, the rounds above with rustc 1.99.1, the app on one CPU under `wrk`
+    Last checked: 2026-11-21 for a write's count, the callgrind rounds above; 2026-11-20 for the
+    rest, the rounds above with rustc 1.99.1, the app on one CPU under `wrk`
     with 64 connections on three others, 500 URLs asked for unevenly, the app's cycles and
     instructions counted by `perf stat` and divided by the requests answered. The bodies of the two
     builds' answers were identical in each coding, and the headers differed by the kept page's `Age`

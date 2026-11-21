@@ -1570,8 +1570,9 @@ page stands is the app's to say. Give a page whose changes must show at once a s
 counted is each page's key, headers and body and each compressed form made of it, with an
 allowance for what holds them. Past the bound, a page not read since room was last made goes
 first. Nothing is kept under `corten dev`,
-so a change shows on the next load. An app's tests keep pages as a deploy does (`App::test`,
-`App::router`): a test that changes what a `Public` page shows other than by a write through the
+so a change shows on the next load. An app with no `Public` page keeps nothing whatever the
+bound, and its writes are not counted, so it pays nothing for pages it cannot keep. An app's
+tests keep pages as a deploy does (`App::test`, `App::router`): a test that changes what a `Public` page shows other than by a write through the
 app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page
 only in the instance that answered it, and a restart starts empty.
