@@ -27,9 +27,30 @@ mod url {
 }
 
 const NAMES: [&str; 24] = [
-    "Access", "Area", "Archive", "Boundary", "Condition", "Direction", "Environment", "Feature", "Ground", "Habitat",
-    "Information", "Journey", "Key", "Location", "Material", "Notes", "Origin", "Path", "Quality", "Route", "Surface",
-    "Terrain", "Use", "View",
+    "Access",
+    "Area",
+    "Archive",
+    "Boundary",
+    "Condition",
+    "Direction",
+    "Environment",
+    "Feature",
+    "Ground",
+    "Habitat",
+    "Information",
+    "Journey",
+    "Key",
+    "Location",
+    "Material",
+    "Notes",
+    "Origin",
+    "Path",
+    "Quality",
+    "Route",
+    "Surface",
+    "Terrain",
+    "Use",
+    "View",
 ];
 
 /// A record page about the size of the catalog benchmark's (4.4 KB).
