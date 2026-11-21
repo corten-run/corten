@@ -1821,8 +1821,9 @@ async fn a_localized_head_and_its_304_name_accept_language() {
 }
 
 /// `accept-language` is added once, on a line of its own, beside the `Vary` lines the answer
-/// already has, and not at all when one of them names it in another case. A patch and a streamed
-/// answer that negotiated their messages before answering name it too.
+/// already has, and not at all when one of them names it in another case or padded with spaces
+/// and tabs among other names. A `Vary: *` is left as it is. A patch and a streamed answer that
+/// negotiated their messages before answering name it too.
 #[tokio::test]
 async fn the_language_is_named_once_beside_the_answer_s_own_vary() {
     let with = |extra: &'static str| {
@@ -1845,15 +1846,25 @@ async fn the_language_is_named_once_beside_the_answer_s_own_vary() {
         let chunk = Ok::<_, std::convert::Infallible>(bytes::Bytes::from(format!("<p>{}</p>", t.item_listings())));
         ([(header::CONTENT_TYPE, "text/html")], Body::from_stream(futures_util::stream::iter([chunk])))
     };
+    let star = |req: Req| async move {
+        let page: HtmlResult = late_words(&req).map(|mut page| {
+            page.headers_mut().insert(header::VARY, HeaderValue::from_static("*"));
+            page
+        });
+        page
+    };
     let routes = Table::new()
         .route("/tenant", crate::route::get(with("X-Tenant")).0)
         .route("/mixed", crate::route::get(with("Accept-Language")).0)
+        .route("/padded", crate::route::get(with("X-Tenant , \tAccept-LANGUAGE\t ")).0)
+        .route("/star", get(star))
         .route("/patch", get(patch))
         .route("/stream", get(stream));
     let router = App::new(Routes::from(routes)).router();
     for (uri, mode, lines) in [
         ("/tenant", None, &["corten, accept", "X-Tenant", "accept-language"][..]),
         ("/mixed", None, &["corten, accept", "Accept-Language"][..]),
+        ("/padded", None, &["corten, accept", "X-Tenant , \tAccept-LANGUAGE\t "][..]),
         ("/patch", Some("action"), &[][..]),
         ("/stream", None, &[][..]),
     ] {
@@ -1864,6 +1875,41 @@ async fn the_language_is_named_once_beside_the_answer_s_own_vary() {
         let had: Vec<_> = headers.get_all(header::VARY).iter().map(|line| line.to_str().unwrap()).collect();
         assert_eq!(&had[..lines.len()], lines, "{uri}");
         names_once(&headers, &["accept-language"], uri);
+    }
+    // A negotiated answer that varies on everything says nothing more.
+    let (status, headers, body) = fetch(&router, "GET", "/star", &[("accept-language", "fr")]).await;
+    assert!(status == StatusCode::OK && String::from_utf8_lossy(&body).contains("Annonces"), "{headers:?}");
+    let had: Vec<_> = headers.get_all(header::VARY).iter().map(|line| line.to_str().unwrap()).collect();
+    assert_eq!(had, ["*"]);
+}
+
+/// A `Public` page that read its messages before it was built names the language on its own first
+/// line, which is left as it is; a line the page added after it (`X-Tenant`) still reaches the
+/// wire, and keeps the page from being kept, since its key does not cover the app's header.
+#[tokio::test]
+async fn a_later_vary_line_after_the_page_s_own_survives_and_is_not_kept() {
+    let runs = Runs::default();
+    let counted = runs.clone();
+    let page = move |req: Req| {
+        counted.ran();
+        async move {
+            let t: WordsMsg = req.t();
+            let listings = t.item_listings().to_string();
+            let page = req.test_page_for("Words", html! { <p>{listings}</p> }).map(|mut page| {
+                page.headers_mut().append(header::VARY, HeaderValue::from_static("X-Tenant"));
+                page
+            });
+            Public::new(Duration::from_secs(60), page)
+        }
+    };
+    let router = App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).router();
+    for ran in [1, 2] {
+        let (status, headers, body) = fetch(&router, "GET", "/", &[("accept-language", "fr")]).await;
+        assert!(status == StatusCode::OK && String::from_utf8_lossy(&body).contains("Annonces"), "{headers:?}");
+        assert_eq!((runs.count(), headers.contains_key(header::AGE)), (ran, false), "{headers:?}");
+        let had: Vec<_> = headers.get_all(header::VARY).iter().map(|line| line.to_str().unwrap()).collect();
+        assert_eq!(&had[..2], ["corten, accept, accept-language", "X-Tenant"], "run {ran}");
+        names_once(&headers, &["corten", "accept", "accept-language", "x-tenant"], &format!("run {ran}"));
     }
 }
 
