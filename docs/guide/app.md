@@ -1397,15 +1397,21 @@ but an unstaged one):
 | a client navigation, a form answer or a data client's JSON from a page route | `private`, same lifetime: only the document is shared |
 | a response that sets a cookie, HTML with the request's nonce, or a page that draws a form's new submit key (`SubmitKey::field`) | `private, no-cache`, logged under `corten dev` |
 
-A page that draws a submit key also goes out without the caching headers a CDN or proxy reads
-before `Cache-Control` that a middleware wrote, even when its `Cache-Control` already says
-`private` or `no-store`: `CDN-Cache-Control` (RFC 9213), `Cloudflare-CDN-Cache-Control`,
+An answer the second or last row sends private in place of the shared caching it was marked
+with also goes out without the caching headers a CDN or proxy reads before `Cache-Control` that
+a middleware wrote, so a CDN that obeys them does not keep one visitor's
+answer for the next: `CDN-Cache-Control` (RFC 9213), `Cloudflare-CDN-Cache-Control`,
 `Vercel-CDN-Cache-Control`, `Surrogate-Control`, Akamai's `Edge-Control` and nginx's
-`X-Accel-Expires`. A `no-store` on it goes out `private, no-store`: some CDNs ignore a bare
-`no-store`, and none keeps a `private` answer. Those names, matched exactly, are the whole list
-(a `Public` answer cannot set one either). Keeping a page with a form out of a shared cache by
-any other means is the deployment's: a name its CDN is configured to read (RFC 9213 allows any),
-a layer around the app (`App::layer`, which runs after Corten settles the answer), and an edge
+`X-Accel-Expires`. Those names, matched exactly, are the whole list (a `Public` answer cannot
+set one either). An answer that was not marked for shared caches (the default, or a `private` or
+`no-store` of its own) keeps the ones a middleware wrote, so a middleware writes one only on
+answers meant to be shared.
+
+A page that draws a submit key loses them even when its `Cache-Control` already says
+`private` or `no-store`, and a `no-store` on it goes out `private, no-store`: some CDNs ignore
+a bare `no-store`, and none keeps a `private` answer. Keeping a page with a form out of a
+shared cache by any other means is the deployment's: a name its CDN is configured to read (RFC
+9213 allows any), a layer around the app (`App::layer`, which runs after Corten settles the answer), and an edge
 rule that caches whatever the origin says. The key's render marks the answer: a page, a patch,
 the layout's reads, and a `Rendered` placed in one. A live stream's fragments are text rendered
 after its headers went out and carry no mark, so a stream that may draw a key is not `Public`,
