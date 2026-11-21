@@ -1312,6 +1312,36 @@ async fn an_error_page_for_a_failure_no_handler_answered_is_not_shared() {
     assert!(wrong.is_empty(), "an error page no handler answered, open to a CDN: {wrong:#?}");
 }
 
+/// A redirect's notice is removed by a `Set-Cookie` Corten writes on the page it was for, which
+/// alone does not make the page personal; a real cookie after it still does, and the page loses the
+/// caching headers a CDN reads first.
+#[tokio::test]
+async fn a_cookie_after_a_notice_s_removal_still_makes_the_page_personal() {
+    const GONE: &str = "__Host-corten-notice=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax";
+    let page = |cookies: &'static [&'static str]| {
+        move |req: Req| async move {
+            req.test_page("Home", html! { <p>"home"</p> }).map(|mut page| {
+                for cookie in cookies {
+                    page.headers_mut().append(header::SET_COOKIE, HeaderValue::from_static(cookie));
+                }
+                page
+            })
+        }
+    };
+    let routes = Table::new()
+        .route("/gone", get(page(&[GONE])))
+        .route("/gone-then-set", get(page(&[GONE, "session=abc; Path=/"])))
+        .route("/set", get(page(&["session=abc; Path=/"])));
+    let router = App::new(Routes::from(routes)).middleware(CdnWrites).router();
+    for uri in ["/gone-then-set", "/set"] {
+        assert_eq!(kept_from_cdns(&answered(&router, uri, &[]).await, "private, no-cache"), Vec::<String>::new(), "{uri}");
+    }
+    let headers = answered(&router, "/gone", &[]).await;
+    for name in CDN_OVERRIDES {
+        assert_eq!(headers[name], "public, max-age=60", "the notice's removal alone keeps {name}");
+    }
+}
+
 #[tokio::test]
 async fn cache_stages_keep_incoming_headers_while_the_handler_sees_middleware_edits() {
     struct Rewrite;
