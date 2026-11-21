@@ -1192,6 +1192,61 @@ async fn a_kept_page_still_passes_every_middleware() {
     assert!(none.is_empty() && headers["x-request"] == "3", "{headers:?}");
 }
 
+/// What a page's caching costs a request: `PAGE_REQUESTS` (200) `GET`s in process, one at a time,
+/// each with a browser's headers and no cookie. `PAGE_CASE` is the page: `visitor` (the default),
+/// the page for one visitor (`private, no-cache`); `public`, the same page marked `Public` in an
+/// app that keeps none (`App::kept_answers(0)`); `kept`, that page in an app that keeps it, so
+/// every request after the first is given the kept one. Counting it under callgrind at two numbers
+/// of requests gives the instructions per request. Run in release:
+/// `cargo test --release -p corten-run --all-features --lib --no-run`, then
+/// `PAGE_REQUESTS=1200 valgrind --tool=callgrind <that binary> --ignored --exact tests::cache::what_a_page_s_caching_costs`
+/// and again at 200.
+#[test]
+#[ignore]
+fn what_a_page_s_caching_costs() {
+    let requests: usize = std::env::var("PAGE_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let case = std::env::var("PAGE_CASE").unwrap_or_else(|_| "visitor".to_string());
+    let minute = Duration::from_secs(60);
+    let main = || html! { <ul><li>"one"</li><li>"two"</li><li>"three"</li></ul> };
+    let routes = match case.as_str() {
+        "visitor" => Table::new().route("/", crate::route::get(move |req: Req| async move { req.test_page("Page", main()) }).0),
+        "public" | "kept" => Table::new().route(
+            "/",
+            crate::route::get(move |req: Req| async move { Public::new(minute, req.test_page_for("Page", main())) }).0,
+        ),
+        other => panic!("PAGE_CASE is visitor, public or kept, not {other:?}"),
+    };
+    let app = App::new(Routes::from(routes));
+    let router = if case == "public" { app.kept_answers(0).router() } else { app.router() };
+    let expected = if case == "visitor" { "private, no-cache" } else { "public, max-age=60" };
+    let browser = [
+        ("host", "localhost"),
+        ("user-agent", "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"),
+        ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+        ("accept-language", "en-US,en;q=0.5"),
+        ("upgrade-insecure-requests", "1"),
+        ("sec-fetch-dest", "document"),
+        ("sec-fetch-mode", "navigate"),
+        ("sec-fetch-site", "none"),
+        ("sec-fetch-user", "?1"),
+        ("priority", "u=0, i"),
+    ];
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for n in 0..requests {
+            let mut req = Request::get("/");
+            for (name, value) in browser {
+                req = req.header(name, value);
+            }
+            let (parts, body) = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap().into_parts();
+            let body = body.collect().await.unwrap().to_bytes();
+            assert!(parts.status == StatusCode::OK && body.windows(14).any(|w| w == b"<li>three</li>"), "{}", parts.status);
+            assert_eq!(parts.headers[header::CACHE_CONTROL], expected);
+            assert_eq!(parts.headers.contains_key(header::AGE), case == "kept" && n > 0, "{n}");
+        }
+    });
+}
+
 /// A kept page's tag and its bytes in every coding are those the handler's own answer has in an
 /// app that keeps none: only who makes them, and how often, differs.
 #[tokio::test]
