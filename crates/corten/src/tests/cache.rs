@@ -754,8 +754,14 @@ async fn a_refusal_page_that_draws_a_submit_key_is_not_shared() {
         (false, "public, max-age=60", "private, no-cache"),
     ] {
         let headers = refused(keyed, cache).await;
-        let cdn: Vec<_> = CDN_OVERRIDES.into_iter().filter(|name| keyed && headers.contains_key(*name)).collect();
-        assert_eq!((headers[header::CACHE_CONTROL].to_str().unwrap(), cdn), (sent, vec![]), "keyed {keyed}, {cache}");
+        assert_eq!(headers[header::CACHE_CONTROL], sent, "keyed {keyed}, {cache}");
+        for name in CDN_OVERRIDES {
+            if keyed {
+                assert!(!headers.contains_key(name), "a keyed refusal sends no {name} ({cache})");
+            } else {
+                assert_eq!(headers[name], "max-age=60", "a refusal with no key keeps its {name} ({cache})");
+            }
+        }
     }
 }
 
