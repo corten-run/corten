@@ -24,6 +24,9 @@ If ordinary reads succeed but the deployment has no discoverable health endpoint
 its terminal liveness check is unsupported. A discovered endpoint returning an
 error, a process observed to have stopped, or an incorrect follow-up read stays a
 failure; a missing endpoint does not erase it.
+If no candidate health path succeeds, a completed HTTP 5xx during discovery
+is reported with its path and status rather than as an absent feature. A
+confirmed failure before timing counts against the app, not as a timed result.
 
 Qualification applies only to the checked features. The runner does not test
 incomplete requests, connection caps, large bodies or server-enforced deadlines.

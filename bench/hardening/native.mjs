@@ -59,9 +59,12 @@ export function assessNative(report, qualification, deployment = "direct") {
   const hostState = !healthy(host.allowed) ? "inconclusive" : host.denied.complete && !host.denied.error && !host.denied.timedOut && host.denied.status >= 400 && host.denied.status < 500 ? "observed"
     : healthy(host.denied) ? "missing" : "inconclusive";
   const expectedLive = qualification.probes.live?.path ?? null;
+  const discoveryErrors = !expectedLive && qualification.schema === "native-bounded-qualification/v1"
+    ? qualification.probes.liveness.filter(row => row.status >= 500) : [];
+  for (const { path, status } of discoveryErrors) targetFunctionalFailures.push({ control: "liveness-discovery", path, status });
   assert.equal(liveness.path, expectedLive);
   if (expectedLive) { receipt(liveness.baseline); baseline(liveness.baseline, "liveness-baseline"); }
-  const livenessState = !expectedLive ? "missing" : !healthy(liveness.baseline) ? "inconclusive" : liveness.negative.complete && !liveness.negative.error && !liveness.negative.timedOut
+  const livenessState = !expectedLive ? (discoveryErrors.length ? "inconclusive" : "missing") : !healthy(liveness.baseline) ? "inconclusive" : liveness.negative.complete && !liveness.negative.error && !liveness.negative.timedOut
     && liveness.negative.status >= 400 && liveness.negative.status < 500 ? "observed" : "inconclusive";
   let sourceControl = "not-applicable";
   if (report.source === "api") {

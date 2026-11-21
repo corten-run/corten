@@ -14,6 +14,26 @@ import { qualificationSettings, featureProfile } from "../marketplace/feature-co
 import { records } from "../marketplace/fixtures.mjs";
 const read = (file) => JSON.parse(readFileSync(file, "utf8"));
 
+// Preflight may finish with a real HTTP error before parity or timing starts.
+// Replay only the named control, never count this cell as observed or complete.
+function failedControl(folder, cell, paths) {
+  if (cell.status !== "invalid" || cell.failureKind !== "target-functional-failure") return false;
+  const edge = cell.failedStage === "edge-native-controls";
+  if (!edge && cell.failedStage !== "native-controls") return false;
+  if (edge) assert.equal(cell.mode, "deployed-edge");
+  const prefix = edge ? "edge-" : "";
+  const files = [prefix + "qualification.json", prefix + "native-controls.json", "failure.json"];
+  if (!files.every(f => paths.has(cell.key + "/" + f))) return false;
+  const [qualification, raw, failure] = files.map(f => read(join(folder, cell.key, f)));
+  assert.equal(failure.stage, cell.failedStage); assert.equal(failure.kind, cell.failureKind);
+  validateBoundedQualification(qualification); assert.equal(qualification.source, cell.source);
+  const assessment = assessNative(raw, qualification, edge ? "deployed-edge" : "direct");
+  assert.deepEqual(assessment, edge ? cell.edgeAssessment : cell.nativeAssessment);
+  assert.ok(assessment.targetFunctionalFailures?.length || assessment.sourceControl === "target-functional-failure",
+    "failed control not corroborated by native responses");
+  return true;
+}
+
 export function verifySavedProof(folder, summary, tree = savedFiles(folder)) {
   const proof = { schema: "native-hardening-saved-proof/v1", resources: "blocked", sources: "blocked", cleanupComplete: false, blockers: [] };
   if (summary.savedProofVersion === undefined || summary.savedProofVersion === 1) { proof.blockers.push("historical-capture-missing-execution-proof"); return proof; }
@@ -97,14 +117,18 @@ export function verify(folder) {
   }
   assert.deepEqual(summary.nativeGroup, nativeGroup(summary.cells));
   let observed = 0;
-  const dependencyRecovery = [], boundedRequests = [], qualifications = [];
+  const dependencyRecovery = [], boundedRequests = [], qualifications = [], failedControls = [];
+  const paths = new Set(tree.map(f => f.path));
   for (const cell of summary.cells) {
     const recovery = cell.phase === "dependency-recovery";
     for (const field of ["targetOutcome", "defense", "recovery", "sourceObservation",
       ...(recovery ? ["boundedRequests", "boundedTerminalHealthy"] : ["dependencyRecovery", "dependencyTerminalHealthy"])])
       assert.ok(!Object.hasOwn(cell, field), "legacy or mismatched phase outcome in native v3 cell");
     assert.ok(["observed", "invalid", "not-run"].includes(cell.status));
-    if (cell.status !== "observed") continue;
+    if (cell.status !== "observed") {
+      if (failedControl(folder, cell, paths)) failedControls.push({ key: cell.key, stage: cell.failedStage });
+      continue;
+    }
     const out = join(folder, cell.key), manifest = read(join(out, "manifest.json")); verifyArtifacts(out, manifest);
     const settings = read(join(out, "settings.json")), deployment = read(join(out, "deployment.json"));
     const qualification = validateBoundedQualification(read(join(out, "qualification.json"))); assert.deepEqual(qualification.missing, cell.nativeMissingFeatures);
@@ -183,6 +207,6 @@ export function verify(folder) {
   const proof = verifySavedProof(folder, summary, tree);
   assert.deepEqual(savedFiles(folder), tree, "saved native bytes changed during replay");
   return { schema, observed, groupReady: ready, notRun: summary.cells.filter((c) => c.status === "not-run").length, proof,
-    dependencyRecovery, boundedRequests, qualifications };
+    dependencyRecovery, boundedRequests, qualifications, failedControls };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) console.log(JSON.stringify(verify(resolve(process.argv[2]))));

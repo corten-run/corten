@@ -224,6 +224,15 @@ function apiControls(missingLive) {
     api: { nonce, expected: changed, original: expected, controllers, responses } };
 }
 
+test("a server error during health discovery is not an absent endpoint", () => {
+  const q = apiQualification(true), raw = apiControls(true);
+  assert.equal(assessNative(raw, q).liveness, "missing");
+  q.probes.liveness[0].status = 503;
+  const assessment = assessNative(raw, boundedQualification(q.probes, "api"));
+  assert.deepEqual(assessment.targetFunctionalFailures, [{ control: "liveness-discovery", path: livePaths[0], status: 503 }]);
+  assert.notEqual(assessment.liveness, "missing");
+});
+
 test("real offline replay distinguishes an undiscovered endpoint from a terminal HTTP failure", async (t) => {
   const prefix = join(tmpdir(), "dependency-recovery-replay-"), folder = mkdtempSync(prefix);
   t.after(() => { assert.ok(folder.startsWith(prefix)); rmSync(folder, { recursive: true }); });
@@ -298,4 +307,27 @@ test("real offline replay distinguishes an undiscovered endpoint from a terminal
       assert.equal((await inspectSaved(binding, folder)).status, "invalid");
     }
   }
+
+  // No timing took place. Only the saved preflight responses establish a
+  // target failure; retaining or inventing a failure label is insufficient.
+  const partial = matrix(), stopped = partial.find(c => c.app === cell.app && c.phase === "request-limit" && c.source === "api" && c.mode === "direct");
+  const dir = join(folder, stopped.key); mkdirSync(dir, { recursive: true });
+  const persist = (path, value) => writeFileSync(join(dir, path), JSON.stringify(value));
+  const q = apiQualification(false), controls = apiControls(false);
+  controls.host.allowed = response(503);
+  Object.assign(stopped, { status: "invalid", failedStage: "native-controls", failureKind: "target-functional-failure",
+    apparatusValid: false, nativeAssessment: assessNative(controls, q) });
+  persist("qualification.json", q); persist("native-controls.json", controls);
+  const failure = { kind: stopped.failureKind, stage: stopped.failedStage };
+  persist("failure.json", failure);
+  const summary = JSON.parse(readFileSync(join(folder, "summary.json")));
+  Object.assign(summary, { cells: partial, nativeGroup: nativeGroup(partial), failures: [{ key: stopped.key, ...failure }] });
+  writeFileSync(join(folder, "summary.json"), JSON.stringify(summary));
+  const seal = () => writeFileSync(join(folder, "run-manifest.json"), JSON.stringify(savedFiles(folder).filter(f => f.path !== "run-manifest.json")));
+  seal();
+  const result = await inspectSaved(binding, folder);
+  assert.equal(result.status, "blocked"); assert.equal(result.attemptComplete, false);
+  assert.equal(result.outcomes.find(o => o.app === stopped.app).outcome, "failed");
+  controls.host.allowed = response(200); persist("native-controls.json", controls); seal();
+  assert.equal((await inspectSaved(binding, folder)).status, "invalid");
 });
