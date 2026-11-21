@@ -1,2 +1,2 @@
-- An answer Corten keeps from shared caches (a cookie set, the nonce, a caller read, `NoStore`, `Public` with credentials, a partial mode, a refused write) loses a middleware's CDN caching headers whatever its `Cache-Control`; a personal `no-store` says `private` too.
+- An answer kept from shared caches (a cookie, the nonce, a caller read, `NoStore`, `Public` with credentials, a partial mode, a refused write) drops a middleware's CDN caching headers whatever its `Cache-Control`; `NoStore` and personal `no-store` send `private, no-store`.
   ([#1814 A staged answer made private for a cookie, the nonce or a caller read keeps a middleware's CDN-Cache-Control and Surrogate-Control](https://github.com/corten-run/corten/issues/1814))

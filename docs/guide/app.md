@@ -1227,8 +1227,9 @@ header reads the answer's type or policy, so no type or policy a handler writes 
 answer whose own script must run is a page, not an unstaged route's. Its answer has no
 `Cache-Control` unless the handler sets one, so a shared cache may keep it by its own rules
 ([Caching](#caching) describes the stages' rules, which it does not meet): an answer that changes
-says so (`NoStore`, `Public`), as the figure above does. One that sets a cookie is `private,
-no-cache` (`no-store` when it says one), whatever caching it says, and loses any
+says so (`NoStore`, which sends `private, no-store`, or `Public`), as the figure above does. One
+that sets a cookie is `private, no-cache` (`private, no-store` when it says `no-store`), whatever
+caching it says, and loses any
 `*-cache-control` header and the other caching headers a CDN reads first that [Caching](#caching)
 lists (`Surrogate-Control`, `Edge-Control`, ...), so no shared cache hands one visitor's cookie
 to another.
@@ -1403,12 +1404,13 @@ plain `private`, or `no-store`), so a CDN that obeys them does not keep one visi
 the next: `CDN-Cache-Control` (RFC 9213), `Cloudflare-CDN-Cache-Control`,
 `Vercel-CDN-Cache-Control`, `Surrogate-Control`, Akamai's `Edge-Control` and nginx's
 `X-Accel-Expires`. Such an answer read a caller, sets a cookie, has the request's nonce or draws a
-submit key, or is a `Public` or `NoStore` answer to a request with credentials. A `no-store` on it
-goes out `private, no-store`: some CDNs ignore a bare `no-store`, and none keeps a `private`
-answer. A `NoStore` answer, a `Public` one the third row sends as the browser's alone, and a
-refused write's error page lose those headers too. Those names, matched exactly, are the whole
-list (a `Public` answer cannot set one either); any other answer keeps the ones a middleware
-wrote.
+submit key, or is a `Public` answer to a request with credentials. A `no-store` on it goes out
+`private, no-store`: some CDNs ignore a bare `no-store`, and none keeps a `private` answer. A
+`NoStore` answer, a `Public` one the third row sends as the browser's alone, and a refused
+write's error page lose those headers too, whatever a middleware made of their `Cache-Control`
+(a `NoStore` one still goes out `private, no-store`, below). Those names, matched exactly, are the
+whole list (a `Public` answer cannot set one either); any other answer keeps the ones a
+middleware wrote.
 
 Keeping a personal answer out of a shared cache by any other means is the deployment's: a name
 its CDN is configured to read (RFC 9213 allows any), a layer around the app (`App::layer`, which
@@ -1438,9 +1440,11 @@ stay public for clients without credentials. A cache in front of the app must ke
 `accept-language` with `App::messages`, unless the handler took the page's locale from its URL); the [deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
 A `Public` page in an app with several locales is one copy per `Accept-Language` string in a cache that keys on it, and one language for everyone in one that ignores `Vary`: put its locale in its URL ([Views](views.md#a-locale-in-the-url)), so the cache keys on the URL alone.
 `NoStore<..>` keeps an answer out of every cache, the browser's back/forward cache included:
-`async fn statement(req: Req) -> NoStore<HtmlResult>`. It goes out `no-store`, or `private,
-no-store` when it is personal (above). A failure it returns is not kept either: the error page
-for an expired code or someone else's statement goes out the same way. In a
+`async fn statement(req: Req) -> NoStore<HtmlResult>`. It goes out `private, no-store` (`private`
+for a CDN that ignores a bare `no-store`) with none of the CDN caching headers above, whatever a
+staged middleware made of its `Cache-Control`: `NoStore` may be all that says an answer is someone's
+(a code in a link, before sign-in). A failure it returns is not kept either: the error page for
+an expired code or someone else's statement goes out the same way. In a
 routes module the route can say it instead, `#[route("/statement", get = statement, no_store)]`,
 and the handler keeps its own result: a handler that uses `?` (`async fn statement(req: Req) ->
 HtmlResult`) is wrapped as it is, where `NoStore<HtmlResult>` would need its body moved into an
@@ -1449,11 +1453,15 @@ and so is a request its extractors refuse before the handler runs (a path that d
 `Caller` that is not signed in). A route whose page is ordinary and whose write's answer
 carries the secret (a new key shown once) names the methods instead,
 `#[route("/account/key", get = page, post = rotate, no_store(post))]`: only `rotate`'s answers
-and refusals are `no-store`, and the page keeps its usual caching (and the back/forward cache).
+and refusals are `private, no-store`, and the page keeps its usual caching (and the back/forward cache).
 Use `no_store` in a routes module and `NoStore<..>` for a handler added by hand (`Api::route`,
-`Area::route`). Two failures never reach either and get the default:
-a handler that panics and one past its deadline; `NoStore<..>` also misses a request refused before
-the handler runs. A handler
+`Area::route`). Some failures never reach either and get the default, `private, no-cache`: a handler
+that panics and one past its deadline, whose error page no middleware sees, and, for
+`NoStore<..>`, a request refused before the handler runs, whose error page keeps a CDN caching
+header a middleware wrote on the refusal unless the page is personal (above). Each sends the
+app's error page, not the handler's answer: it shows who is asking only if the error page reads a
+caller, which makes it personal. An unstaged route's `NoStore` answer meets none of these rules
+and goes out as `NoStore` writes it, `private, no-store`. A handler
 cannot mark an answer public any other way: a response it builds by hand is not an answer a route
 can name, and if anything read a caller the answer is private whatever its header says.
 
@@ -1470,8 +1478,7 @@ or a byte that is not text it goes out alone (its other directives dropped, so n
 anything else). A personal answer (it sets a cookie, read a caller, has the CSP nonce, draws a
 form's new submit key, or is a `Cache` answer to a request with credentials) whose header does
 not count goes out
-`private, no-cache`, or `no-store` if any reader could find one in its header (`private,
-no-store` for a page that draws a submit key).
+`private, no-cache`, or `private, no-store` if any reader could find a `no-store` in its header.
 
 An answer at a URL that names its content (a hash of its bytes, as an uploaded picture's can be)
 never changes there. `Public::immutable(answer)` sends it as Corten's versioned files are sent,
@@ -3010,7 +3017,8 @@ failure still reaches the client. The ones that described the old body (`Content
 `Last-Modified`) and `Cache-Control` are the error page's own, and a header the error page sets
 wins, except a `Cache-Control` that names `no-store` (`NoStore`, `no_store` on its route, or one written by hand, on any
 of its lines and however a cache could find it): the failure said nothing may keep it, so the
-error page goes out `no-store`.
+error page goes out `no-store` (`private, no-store` for `NoStore` and `no_store`, whatever a
+middleware made of the failure's header).
 
 The error page is an async function of the `Failure` and then extractors, as a handler's
 arguments are, with the state they read given beside it (`()` for none). A layout that shows

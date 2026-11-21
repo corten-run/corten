@@ -2187,7 +2187,7 @@ rules something out.
     the app's), and a file it sends (an uploaded picture) runs no script on the app's origin; a
     client that reads it as data sees nothing else change, and a PDF the browser opens still shows
     in Chrome's, Edge's and Firefox's viewers; an answer that sets a cookie is
-    `private, no-cache` (`no-store` when it says one) with no CDN caching header, so no shared cache hands one
+    `private, no-cache` (`private, no-store` when it says `no-store`) with no CDN caching header, so no shared cache hands one
     visitor's cookie to another; a panic is logged and answered `500` by the lane. It
     answers `get` alone and its handler reads no body: no same-origin check covers it, a form
     posted to it needs no preflight, so any site could make its visitors send one, and no deadline
