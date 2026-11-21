@@ -307,6 +307,11 @@ by ID. For functional setup failures, `summary.json` distinguishes create-comman
 an unusable create ID, unconfirmed name or inspection evidence, and start-command failure
 without retaining raw Docker errors. An acknowledged create is not a readiness result.
 
+Cleanup skips roles that never attempted creation. After a failed start it removes only
+the acknowledged container ID with matching ownership and checks that the container and
+its recorded volumes are absent. A matching name alone is not authority; missing or
+ambiguous ownership leaves a cleanup failure alongside the original setup failure.
+
 `validateResults` runs on the real merged capture. Isolated cell checks use only that cell and
 real preceding state transitions, with other cells explicitly unsupported, to expose independent
 read results even when a different write lacks state evidence. `afterFunctionalGate` blocks

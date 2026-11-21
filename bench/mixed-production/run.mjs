@@ -68,7 +68,7 @@ export async function run(args) {
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder);
   const runId = `mixed-${options.round}-${randomBytes(4).toString("hex")}`, network = `${runId}-net`;
   const io = withImmutableGit(commands(repo), repo), docker = (args, opts) => io.command("docker", args, opts);
-  const active = new Set(), builtImages = new Set(); let networkCreated = false;
+  const builtImages = new Set(); let networkCreated = false;
   const label = "run.corten.mixed-production", token = randomBytes(32).toString("hex");
   const records = fixtureRecords(), plan = createPlan({ seed: options.seed, clients: options.clients, repetitions: options.repetitions, records });
   const summary = { schema: "mixed-native-run/v1", group: "mixed-production", inventory, definition: registry.definition("mixed-production"),
@@ -89,10 +89,7 @@ export async function run(args) {
   summary.provenance.fixtureSha256 = sha256(readFileSync(join(folder, "marketplace.json")));
   summary.provenance.harnessFiles = Object.fromEntries(["build-context.mjs", "capture.mjs", "native.mjs", "snapshot.mjs", "source-audit.mjs", "upstream.mjs", "worker.mjs", "run.mjs"].map((file) => [file, sha256(readFileSync(join(here, file)))]));
   const inspect = async (name) => JSON.parse(await docker(["inspect", name], { cleanup: true }))[0];
-  const own = async (args, name) => {
-    active.add(name);
-    await execution.own(name, args);
-  };
+  const own = (args, name) => execution.own(name, args);
   const remove = async (name) => {
     const observed = await execution.remove(name), context = executionContext(name, summary);
     if (observed && context.stage === "functional" && context.role === "app") {
@@ -100,7 +97,6 @@ export async function run(args) {
       entry.container = { imageId: observed.imageId, startedAt: observed.state.StartedAt, running: observed.state.Running,
         exitCode: observed.state.ExitCode, oomKilled: observed.state.OOMKilled, restartCount: observed.restartCount };
     }
-    active.delete(name);
   };
   const fail = (app, source, stage, cause) => { summary.failures.push({ app, source, stage, ...(cause ? { cause } : {}) }); save(); };
   const ready = async (name, path, probes, role, wire) => {
@@ -298,7 +294,7 @@ export async function run(args) {
     summary.complete = inventory.every((app) => summary.apps[app].sources.fixture?.complete && summary.apps[app].sources.api?.complete);
   } catch { fail(null, null, "suite-setup-or-execution-failed"); }
   finally {
-    for (const name of [...active]) try { await remove(name); } catch { summary.cleanupFailures.push({ name }); }
+    for (const name of execution.pendingNames()) try { await remove(name); } catch { summary.cleanupFailures.push({ name }); }
     if (networkCreated) try {
       await execution.removeNetwork(network);
     } catch { summary.cleanupFailures.push({ network }); }

@@ -169,6 +169,7 @@ test("matched functional source and target bind create IDs before start, preserv
     const own = (n) => collector.own(n, ["run", "-d", ...runtime.get(n)]);
     if (mode === "ready") {
       await own(up); await own(name);
+      assert.deepEqual(collector.pendingNames(), [name, up]);
       assert.deepEqual(started, [upstreamId, id]); await collector.remove(name); await collector.remove(up);
     } else {
       const cause = mode === "start-failed" ? "docker-start-command-failed" : "docker-create-id-unavailable";
@@ -219,12 +220,73 @@ test("cleanup never substitutes a same-name ID for a missing create acknowledgem
     calls.push(args); if (args[0] === "ps") return id;
     assert.fail("no name-based inspection or removal without original acknowledgement");
   } });
-  await assert.rejects(collector.create(name, async () => { throw Error("synthetic-private-canary"); }));
+  await assert.rejects(collector.create(name, async () => { throw Error("synthetic-private-canary"); }),
+    (error) => participantSetupCause(error) === "docker-create-command-failed");
   await assert.rejects(collector.remove(name), /without original create ID/);
   assert.ok(calls.every((args) => args[0] === "ps"));
   for (const ref of read(folder, "execution/manifest.json").events)
     assert.equal(readFileSync(join(folder, ref.path), "utf8").includes("synthetic-private-canary"), false);
 }));
+
+test("partial cleanup skips unattempted roles, binds ownership and proves absence without touching peers", async (t) => {
+  for (const mode of ["clean", "foreign-owner", "unconfirmed-name", "still-present", "volume-present", "absence-query-fails"]) await t.test(mode,
+    () => temporary(async (folder) => {
+      const s = summary(), p = participant(s), name = p.Name.slice(1), worker = name + "-capture";
+      const peer = "e".repeat(64), before = [peer], current = new Set(before), calls = [];
+      let terminal = false;
+      if (mode === "volume-present") p.Mounts.push({ Type: "volume", Name: "owned-volume", Destination: "/tmp", Source: "/local/owned-volume", RW: true });
+      const docker = async (args) => {
+        calls.push(args);
+        if (args[0] === "ps") {
+          const filter = args[args.indexOf("--filter") + 1];
+          if (filter === `name=^/${name}$`) return mode === "unconfirmed-name" ? peer : id;
+          if (filter === `id=${id}`) {
+            if (mode === "absence-query-fails") throw Error("private-canary");
+            return current.has(id) ? id : "";
+          }
+          assert.fail("no unbound inventory query");
+        }
+        if (args[0] === "inspect") {
+          assert.deepEqual(args, ["inspect", "--type", "container", id]);
+          const info = structuredClone(p);
+          if (terminal && mode === "foreign-owner") info.Config.Labels["agent.owner"] = "peer";
+          if (mode === "unconfirmed-name") info.Name = "/" + name + "-different";
+          return JSON.stringify([info]);
+        }
+        if (args[0] === "image") return JSON.stringify([imageInfo]);
+        if (args[0] === "rm") {
+          assert.deepEqual(args, ["rm", "-f", "-v", id]);
+          if (mode !== "still-present") current.delete(id);
+          return id;
+        }
+        if (args[0] === "volume") { assert.ok(args.includes("name=^owned-volume$")); return "owned-volume"; }
+        assert.fail("unexpected cleanup command");
+      };
+      const collector = createExecutionEvidence({ folder, summary: s, docker });
+      assert.equal(await collector.remove(worker), null);
+      assert.deepEqual(calls, []);
+      const creation = collector.create(name, async () => { current.add(id); return id; });
+      if (mode === "unconfirmed-name") await assert.rejects(creation, /docker-create-name-unconfirmed/); else await creation;
+      terminal = true;
+      assert.deepEqual(collector.pendingNames(), [name]);
+      const remove = () => collector.remove(name);
+      if (mode === "clean") assert.equal((await remove()).id, id);
+      else {
+        const cause = ["foreign-owner", "unconfirmed-name"].includes(mode) ? /ownership or terminal inspection unavailable/ : /absence unconfirmed/;
+        await assert.rejects(remove(), cause);
+        const count = calls.length;
+        await assert.rejects(remove(), cause);
+        assert.equal(calls.length, count, "do not retry a settled failed terminal attempt");
+      }
+      assert.deepEqual(collector.pendingNames(), []);
+      assert.equal(await collector.remove(worker), null);
+      const refused = ["foreign-owner", "unconfirmed-name"].includes(mode);
+      assert.deepEqual(calls.filter(([cmd]) => cmd === "rm"), refused ? [] : [["rm", "-f", "-v", id]]);
+      assert.deepEqual([...current], refused || mode === "still-present" ? [...before, id] : before);
+      for (const ref of read(folder, "execution/manifest.json").events)
+        assert.ok(!readFileSync(join(folder, ref.path), "utf8").includes("private-canary"));
+    }));
+});
 
 test("network cleanup never re-resolves a reused name or substitutes another ID", () => temporary(async (folder) => {
   const s = summary(), name = `${s.runId}-net`, replacement = "e".repeat(64), removed = [];
