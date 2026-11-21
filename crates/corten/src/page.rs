@@ -670,6 +670,19 @@ pub(crate) enum Cause {
     UnknownMethod,
 }
 
+/// Marks a failure no handler answered: an extractor refused the request before the handler ran,
+/// or the deadline passed while it waited for the request's body. The error page in its place is
+/// never shared ([`page_or_error`]), as for a panic or a timeout ([`Cause`]).
+#[derive(Clone, Copy)]
+pub(crate) struct Unanswered;
+
+/// `res`, an extractor's refusal, marked [`Unanswered`].
+#[cold]
+pub(crate) fn unanswered(mut res: Response) -> Response {
+    res.extensions_mut().insert(Unanswered);
+    res
+}
+
 /// The error page of an app that gives none ([`crate::App::error_page`]): a plain document. An app
 /// made by `corten new` has its own, in its layout. Every error page is sent with
 /// `X-Robots-Tag: noindex`.
@@ -3637,6 +3650,12 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     if failed.is_none() && cause.is_none() && !empty_error && !rejection {
         return res;
     }
+    // No handler answered it: a refusal before the handler ran, a panic, the deadline. The error
+    // page can read the request's `Cookie` and `Authorization` without reading a caller, and a
+    // `NoStore` handler never said it, so it is never shared, as a refused write's page is not.
+    let unanswered = rejection
+        || matches!(cause, Some(Cause::Panicked | Cause::TimedOut | Cause::Refused | Cause::Unidentified))
+        || res.extensions().get::<Unanswered>().is_some();
     // What the handler and the app's middleware said besides the body (a request id,
     // `Retry-After`, `WWW-Authenticate`, `Allow`) goes out with the error page.
     let kept = std::mem::take(res.headers_mut());
@@ -3672,7 +3691,11 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     #[cfg(not(debug_assertions))]
     let shows = shared.dev;
     let failure = if shows { failure } else { failure.without_detail() };
-    carried(kept, no_store, error_page(shared, asked, failure).await)
+    let mut res = carried(kept, no_store, error_page(shared, asked, failure).await);
+    if unanswered {
+        crate::cache::settle_refused(&mut res);
+    }
+    res
 }
 
 /// [`Req::asset`] with no static directory: a bug, which panics in debug builds.
@@ -3835,16 +3858,20 @@ fn deadline_failure(
             let limit = deadline.expect("timed out");
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline waiting for the request's body", uri.path());
-            Error::new("the request's body did not arrive in time").with_status(StatusCode::REQUEST_TIMEOUT).into_response()
+            unanswered(
+                Error::new("the request's body did not arrive in time").with_status(StatusCode::REQUEST_TIMEOUT).into_response(),
+            )
         }
         // A body over its limit, read past so the client reads the 413: still the 413.
         Waited::PastLimit(over) => {
             signal.abort(crate::Abort::Deadline);
-            match over {
-                Over::Body(limit) => Error::from(crate::extract::BodyError::TooLarge { limit }),
-                Over::Upload(limit) => Error::from(crate::form::UploadError::TooLarge { limit }),
-            }
-            .into_response()
+            unanswered(
+                match over {
+                    Over::Body(limit) => Error::from(crate::extract::BodyError::TooLarge { limit }),
+                    Over::Upload(limit) => Error::from(crate::form::UploadError::TooLarge { limit }),
+                }
+                .into_response(),
+            )
         }
         Waited::Nothing => {
             let limit = deadline.expect("timed out");

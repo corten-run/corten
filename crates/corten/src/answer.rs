@@ -2311,8 +2311,9 @@ impl<A: Answer + Shareable> Answer for Public<A> {
 /// `async fn statement(req: Req) -> NoStore<HtmlResult>`. The browser's back/forward cache may not
 /// restore the page either. It applies to a failure the handler returns too: the error page that
 /// replaces it is `private, no-store`. A request refused before the handler runs
-/// (a path that does not parse), a handler that panics and one past its deadline never reach it,
-/// and get the default. In a routes module the route can say it instead,
+/// (a path that does not parse), a handler that panics and one past its deadline never reach it:
+/// their error page is never shared either, but is `private, no-cache` unless a middleware's
+/// header named `no-store`. In a routes module the route can say it instead,
 /// `#[route("/statement", get = statement, no_store)]`: the handler keeps its own result and its
 /// `?`, and a request its extractors refuse is `no-store` too; `no_store(post)` covers only the
 /// methods it names (see [`crate::routes`]).

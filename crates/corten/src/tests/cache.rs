@@ -1221,6 +1221,97 @@ async fn a_refused_write_s_page_is_not_shared() {
     }
 }
 
+#[crate::routes]
+mod unanswered_url {
+    #[route("/codes/{id}", get = code)]
+    pub struct Code {
+        pub id: u32,
+    }
+}
+
+/// A one-time code's page, which nothing may keep.
+async fn code(crate::Params(at): crate::Params<unanswered_url::Code>) -> NoStore<HtmlResult> {
+    NoStore(Ok(crate::answer::HtmlResponse::new(crate::response::IntoResponse::into_response(format!("code {}", at.id)))))
+}
+
+async fn broken() -> &'static str {
+    if true {
+        panic!("broken")
+    } else {
+        "never"
+    }
+}
+
+async fn late() -> &'static str {
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    "late"
+}
+
+/// The app's error page in place of a failure no handler answered (a request an extractor refused
+/// before the handler ran, a handler that panicked or passed its deadline) can read the request's
+/// `Cookie` and `Authorization` without reading a caller, and the handler's `NoStore` never
+/// reached it. It is never shared, as a refused write's page is not: `private` whatever a staged
+/// middleware or the error page itself made of its `Cache-Control` (`private, no-store` where
+/// either names `no-store`), and with none of the caching headers a CDN reads first, whoever wrote
+/// them.
+#[tokio::test]
+async fn an_error_page_for_a_failure_no_handler_answered_is_not_shared() {
+    let mut wrong = Vec::new();
+    let asks: [&[(&str, &str)]; 3] =
+        [&[("accept", "text/html")], &[("accept", "text/html"), ("cookie", "session=abc")], &[("corten", "nav")]];
+    // A path that does not parse, under a middleware's shared lifetime.
+    for (cache, sent) in
+        [(None, "private, no-cache"), (Some("public, max-age=60"), "private, no-cache"), (Some("no-store"), "private, no-store")]
+    {
+        let router = App::new(unanswered_url::router()).middleware(CdnRecaches(cache)).router();
+        for asked in asks {
+            let (status, headers) = asked_for(&router, "/codes/x", asked).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{cache:?} {asked:?}");
+            for what in kept_from_cdns(&headers, sent) {
+                wrong.push(format!("refused, {cache:?} {asked:?}: {what}"));
+            }
+        }
+        let (status, headers) = asked_for(&router, "/codes/7", &[("accept", "text/html")]).await;
+        assert_eq!(status, StatusCode::OK, "{cache:?}");
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-store", "{cache:?}");
+    }
+    // A handler that panics and one past its deadline, whose error page writes its own.
+    let error_page = |cache: Option<&'static str>| {
+        move |_: Failure, req: Req| async move {
+            req.test_page("Failed", html! { <p>"failed"</p> }).map(|mut page| {
+                let headers = page.headers_mut();
+                if let Some(cache) = cache {
+                    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+                }
+                for name in CDN_OVERRIDES {
+                    headers.insert(name, HeaderValue::from_static("max-age=60"));
+                }
+                for name in CDN_OTHERS {
+                    headers.insert(name, HeaderValue::from_static("x"));
+                }
+                page
+            })
+        }
+    };
+    for (cache, sent) in
+        [(None, "private, no-cache"), (Some("public, max-age=60"), "private, no-cache"), (Some("no-store"), "private, no-store")]
+    {
+        let routes = Table::new().route("/broken", get(broken)).route("/late", get(late));
+        let router =
+            App::new(Routes::from(routes)).deadline(Duration::from_millis(50)).error_page(error_page(cache), ()).router();
+        for (uri, status) in [("/broken", StatusCode::INTERNAL_SERVER_ERROR), ("/late", StatusCode::SERVICE_UNAVAILABLE)] {
+            for asked in asks {
+                let (got, headers) = asked_for(&router, uri, asked).await;
+                assert_eq!(got, status, "{uri} {cache:?} {asked:?}");
+                for what in kept_from_cdns(&headers, sent) {
+                    wrong.push(format!("{uri}, {cache:?} {asked:?}: {what}"));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "an error page no handler answered, open to a CDN: {wrong:#?}");
+}
+
 #[tokio::test]
 async fn cache_stages_keep_incoming_headers_while_the_handler_sees_middleware_edits() {
     struct Rewrite;

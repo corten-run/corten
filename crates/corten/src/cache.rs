@@ -45,7 +45,9 @@
 //! `private, no-store`, for a CDN that ignores a bare one. A `NoStore` answer says
 //! `private, no-store` itself, and goes out so whatever a middleware made of its header since (the
 //! error page that replaces a failure it returns too); it and a `Public` one sent as the browser's
-//! alone (below) lose those headers as well. A [`crate::live`] stream's fragments are text rendered
+//! alone (below, `private, no-store` where its header names `no-store`) lose those headers as
+//! well, and so does the error page for a failure no handler answered (a request refused before
+//! the handler ran, a panic, the deadline), which is private whatever it said. A [`crate::live`] stream's fragments are text rendered
 //! after its headers went out, so they carry no such mark.
 //!
 //! The app is the first shared cache of its own `Public` pages: the whole document one made for a
@@ -243,8 +245,9 @@ pub(crate) const PRIVATE_NO_STORE: HeaderValue = HeaderValue::from_static("priva
 /// The caching headers a CDN or proxy reads before `Cache-Control`, by exact name: RFC 9213's
 /// `CDN-Cache-Control`, Cloudflare's and Vercel's own, `Surrogate-Control`, Akamai's `Edge-Control`
 /// and nginx's `X-Accel-Expires`. [`settle`] removes them from a personal answer, a `NoStore` one
-/// and a `Public` one it sends as the browser's alone, a refused write's page loses them, an
-/// unstaged route's answer that sets a cookie loses them and any other `*cache-control`, and a
+/// and a `Public` one it sends as the browser's alone, a refused write's page and the error page
+/// for a failure no handler answered lose them, an unstaged route's answer that sets a cookie or is
+/// `NoStore` loses them and any other `*cache-control`, and a
 /// [`crate::Public`] answer may not set one. A name a deployment configures for itself (RFC 9213
 /// allows one) is the deployment's.
 pub(crate) const CDN_CACHING: [&str; 6] = [
@@ -494,9 +497,10 @@ pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
     }
 }
 
-/// Settles a refused write's answer, which goes out without [`settle`]: the default, whatever it
-/// said, and none of the CDN caching headers its page wrote (the page may show who is asking). One
-/// that names `no-store` goes out `private, no-store`, as [`settle`] gives a personal one.
+/// Settles a refused write's answer, which goes out without [`settle`], and the error page for a
+/// failure no handler answered: the default, whatever it said, and none of the CDN caching headers
+/// written on it (the page may show who is asking). One that names `no-store` goes out
+/// `private, no-store`, as [`settle`] gives a personal one.
 pub(crate) fn settle_refused(res: &mut Response) {
     let headers = res.headers_mut();
     drop_cdn_caching(headers);
