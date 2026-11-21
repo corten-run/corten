@@ -7363,8 +7363,8 @@ rules something out.
     its core's other thread given none of the run's work, loaded in turn for three seconds each
     by `wrk` with 64 connections on the two CPUs of another core, the order of the two turned
     about from each pair to the next, the app's cycles counted by `perf stat` over each turn and
-    divided by the requests answered, while other builds ran on the machine; the historical pair
-    `30b39d455` and `45489ced9` the same day, by callgrind alone. 2026-11-21, the pass over the
+    divided by the requests answered, while other builds ran on the machine; 2026-11-21, the
+    historical pair `30b39d455` and `45489ced9`, by callgrind alone; 2026-11-21, the pass over the
     headers with rustc 1.100.0: the counts under
     callgrind, and the cycles from the two builds started once on one CPU, its core's other thread
     left idle, and loaded in turn for three seconds each by `wrk` with 64 connections on the two
