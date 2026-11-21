@@ -7435,12 +7435,12 @@ rules something out.
     keeps a page makes no store, 15,787.4 with or without `kept_answers(0)`, 1,083.3 (6.4%)
     fewer. With a `Public` page at another path a write still pays for its count, 16,872.0 at
     `6984b2ac4` against 16,875.0 at `fc86d8eff`, and 15,790.7 against 15,797.0 with
-    `kept_answers(0)`. Under load, the same write to the app with no `Public` page in 140 pairs of
-    turns ran 24,248 user instructions a request against 25,380 (-4.5% at the median of the
-    pairs), and its user and kernel cycles a request changed by +1.5% at the median with a
-    one-sided 95% bound of +2.8% (user cycles +1.0%, bound +2.0%; kernel +2.0%, bound +3.3%):
-    the margin set before the run, a bound under +1%, was not met, so the change is not shown to
-    cost no more cycles and no fall in cycles is claimed. Historical, a parent and child from
+    `kept_answers(0)`. Under load on a quiet host, the same write to the app with no `Public` page in 140 pairs of
+    turns ran 21,265.5 user instructions a request against 22,424.4 (-5.0% at the median of the
+    pairs, one-sided 95% bound -4.7%), and its user and kernel cycles a request fell by 2.8% at
+    the median with a bound of -2.6% (user cycles -6.5%, bound -5.8%; kernel -0.6%, bound
+    +0.2%): the margin set before the run, a bound under +1%, was met. A first run on a shared
+    workstation, with other builds running, gave +1.5% (bound +2.8%) and is set aside as noise. Historical, a parent and child from
     before main changed the reading of a request's mode that a write runs: 16,292.0 a write at
     `30b39d455` against 15,210.8 at `45489ced9`, and with a `Public` page 16,308.7 against 16,310.7.
     Not measured: how the URLs of an app in use are spread,
@@ -7479,11 +7479,11 @@ rules something out.
     connection speaks HTTP/2, where a request's target carries its authority.
 
     Last checked: 2026-11-21 for a write's count, the callgrind rounds above at `fc86d8eff` and
-    `6984b2ac4`, and the cycles of the same write from the two builds started once on one CPU,
-    its core's other thread given none of the run's work, loaded in turn for three seconds each
-    by `wrk` with 64 connections on the two CPUs of another core, the order of the two turned
-    about from each pair to the next, the app's cycles counted by `perf stat` over each turn and
-    divided by the requests answered, while other builds ran on the machine; 2026-11-21, the
+    `6984b2ac4`, and the cycles of the same write from the two builds, built with rustc 1.100.0
+    on a dedicated 8-CPU cloud host (Xeon Platinum 8358, one thread a core) with nothing else
+    running, started once on one CPU, loaded in turn for three seconds each by `wrk` with 64
+    connections on two other CPUs, the order of the two turned about from each pair to the next,
+    the app's cycles counted by `perf stat` over each turn and divided by the requests answered; 2026-11-21, the
     historical pair `30b39d455` and `45489ced9`, by callgrind alone; 2026-11-21, the rule for a full store with rustc 1.100.0: each count the
     difference of a run of 1,300 requests and one of 300 under callgrind, a new URL each, of
     which the first 28 or so fill a bound of 256 KiB, and for the second request the
