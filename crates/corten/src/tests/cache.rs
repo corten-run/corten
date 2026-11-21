@@ -1135,20 +1135,21 @@ async fn a_page_is_kept_from_the_second_time_its_url_is_asked_for() {
     assert!(!kept(router.clone(), &[]).await, "the first ask: none of those was one");
     assert!(!kept(router.clone(), &[]).await, "the second, whose answer is kept");
     assert!(kept(router.clone(), &[]).await && runs.count() == 8, "the third is given it");
-    // The same URL from another host was asked for before: its answer is kept the first time.
-    assert!(!kept(router.clone(), &[("host", "127.0.0.1")]).await);
-    assert!(kept(router.clone(), &[("host", "127.0.0.1")]).await && runs.count() == 9);
-    // After a write the page is made once more, not twice.
+    // The same URL for another host is asked for twice too: what one host's visitors asked for
+    // says nothing to another's.
+    assert!(!kept(router.clone(), &[("host", "127.0.0.1")]).await && !kept(router.clone(), &[("host", "127.0.0.1")]).await);
+    assert!(kept(router.clone(), &[("host", "127.0.0.1")]).await && runs.count() == 10);
+    // After a write the page is made once more, not twice: the one it drops was given.
     let (status, _, _) = fetch(&router, "POST", "/", &[("sec-fetch-site", "same-origin")]).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert!(!kept(router.clone(), &[]).await);
-    assert!(kept(router.clone(), &[]).await && runs.count() == 10);
+    assert!(kept(router.clone(), &[]).await && runs.count() == 11);
     // An app that keeps none makes every one.
     let none = App::new(Routes::from(kept_routes(&runs))).kept_answers(0).router();
     for _ in 0..3 {
         assert!(!kept(none.clone(), &[]).await);
     }
-    assert_eq!(runs.count(), 13);
+    assert_eq!(runs.count(), 14);
 }
 
 /// A kept page stands where the handler does: every middleware runs for the request it answers,
@@ -1620,7 +1621,7 @@ async fn a_kept_page_lasts_its_lifetime() {
         counted.ran();
         async move {
             let page = req.test_page_for("Brief", html! { <p>"brief"</p> });
-            Public::new(Duration::from_secs(600), page).shared(Duration::from_secs(1))
+            Public::new(Duration::from_secs(600), page).shared(Duration::from_secs(2))
         }
     };
     let long = |req: Req| async move { Public::new(Duration::from_secs(60), req.test_page_for("Long", html! { <p>"long"</p> })) };
@@ -1636,7 +1637,7 @@ async fn a_kept_page_lasts_its_lifetime() {
     // Each asked for once, so the next answer is the one kept.
     fetch(&router, "GET", "/", &[]).await;
     let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
-    assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=600, s-maxage=1");
+    assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=600, s-maxage=2");
     assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE) && runs.count() == 2, "kept for now");
     fetch(&router, "GET", "/long", &[]).await;
     fetch(&router, "GET", "/long", &[]).await;
@@ -1650,10 +1651,12 @@ async fn a_kept_page_lasts_its_lifetime() {
             fetch(&router, "GET", "/slow", &[]).await
         }
     });
-    tokio::time::sleep(Duration::from_millis(1100)).await;
+    // Past the brief page's two seconds, and well after the slow page was asked for again
+    // (at 1.1 seconds), so nothing below is asked for between that page's two requests.
+    tokio::time::sleep(Duration::from_millis(2300)).await;
     let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
     assert!(runs.count() == 4 && !headers.contains_key(header::AGE), "past the shared lifetime: {headers:?}");
-    // The copy that ended was given to a request, so the one made now is kept without a second ask.
+    // The page that ended was given to a request, so the one made now is kept without a second ask.
     assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE) && runs.count() == 4, "kept again at once");
     // Asked for last longer ago than it lasts: a copy kept then would have been given to no one,
     // so this answer is not kept either. Asked for again within its lifetime, it is.
@@ -1677,14 +1680,18 @@ async fn a_kept_page_is_for_the_host_and_the_language_it_was_asked_in() {
     crate::i18n::messages! { struct KeptMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
     let runs = Runs::default();
     let one = App::new(Routes::from(kept_routes(&runs))).router();
-    // The URL asked for once, so each answer below is kept the first time it is made.
-    fetch(&one, "GET", "/", &[("host", "localhost")]).await;
+    // Each host's page is asked for twice before it is kept, and so is the page asked for with
+    // no host.
     for (asked, ran) in [
+        (("host", "localhost"), 1),
         (("host", "localhost"), 2),
         (("host", "127.0.0.1"), 3),
-        (("host", "localhost"), 3),
-        (("accept-language", "fr"), 4),
-        (("accept-language", "de"), 4),
+        (("host", "127.0.0.1"), 4),
+        (("host", "localhost"), 4),
+        (("host", "127.0.0.1"), 4),
+        (("accept-language", "fr"), 5),
+        (("accept-language", "de"), 6),
+        (("accept-language", "fr"), 6),
     ] {
         fetch(&one, "GET", "/", &[asked]).await;
         assert_eq!(runs.count(), ran, "{asked:?}: one language, so the header is not read");
