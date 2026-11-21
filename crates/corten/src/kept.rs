@@ -6,6 +6,13 @@
 //! that lifetime (`s-maxage` where the answer has one, else `max-age`, RFC 9111 section 4.2.1)
 //! gives it to the next such request in the handler's place, with an `Age`.
 //!
+//! An answer is kept from the second time its URL is asked for by such a request. Keeping one
+//! costs a copy of it, and room that is taken from a page asked for again once the bound is
+//! reached, so a URL asked for once (a crawler's, a search no one repeats) is its handler's as
+//! if the app kept nothing, and leaves a mark by which the next request for it is known
+//! ([`Asked::asked_before`]). The handler of a page asked for often so runs twice where once
+//! would do, once in the life of its mark.
+//!
 //! It stands where the handler does, after the app's middleware, so every stage still runs for
 //! every request: a middleware sees the `200` with the whole body, the security headers and
 //! `Cache-Control` are written as for any answer, and a request that names the page's tag is
@@ -51,8 +58,10 @@
 //! it was until its lifetime ends.
 
 use std::collections::HashMap;
+#[cfg(not(test))]
+use std::hash::RandomState;
 use std::hash::{BuildHasher, DefaultHasher, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
@@ -122,6 +131,20 @@ fn with_room(head: &HeaderMap) -> HeaderMap {
 /// when the first page is asked for) that an app's writes seldom share a count with a kept page.
 const WRITES: usize = 1 << 16;
 
+/// The marks of the URLs asked for ([`Asked::asked_before`]): 128 KiB of them, made when the
+/// first page is asked for. A URL's mark is still its own after about as many other URLs were
+/// asked for the first time as there are marks.
+const MARKS: usize = 1 << 16;
+
+/// The hash a URL's mark is found by: keyed for each process.
+#[cfg(not(test))]
+type Marked = RandomState;
+
+/// In this crate's own tests the key is the same in every run, so which of a test's URLs share
+/// a mark does not change from one run to the next.
+#[cfg(test)]
+type Marked = std::hash::BuildHasherDefault<DefaultHasher>;
+
 /// The app's kept answers, at most `bound` bytes of them.
 pub(crate) struct Answers(Arc<Store>);
 
@@ -134,6 +157,11 @@ struct Store {
     /// whatever its query, and a page whose handler was reading while the write was made is not
     /// kept, without a lock or a search.
     written: OnceLock<Box<[AtomicU32]>>,
+    /// The URL each mark was last left by, as sixteen bits of a hash of it, or 0 for none.
+    marks: OnceLock<Box<[AtomicU16]>>,
+    /// The key of that hash, which is this process's own: a client cannot choose the URLs that
+    /// take a page's mark.
+    marked: Marked,
     inner: RwLock<Inner>,
 }
 
@@ -422,7 +450,14 @@ impl Answers {
     /// Room for `bound` bytes of answers; none for a bound of 0.
     pub(crate) fn new(bound: usize) -> Option<Self> {
         (bound > 0).then(|| {
-            Answers(Arc::new(Store { bound, bytes: AtomicUsize::new(0), written: OnceLock::new(), inner: RwLock::default() }))
+            Answers(Arc::new(Store {
+                bound,
+                bytes: AtomicUsize::new(0),
+                written: OnceLock::new(),
+                marks: OnceLock::new(),
+                marked: Marked::default(),
+                inner: RwLock::default(),
+            }))
         })
     }
 
@@ -605,6 +640,36 @@ impl<'a> Asked<'a> {
         Some(res)
     }
 
+    /// Whether this URL (its path and query, for any host and language) was asked for before
+    /// with no kept answer standing for the request, which is when its answer is kept: asked for
+    /// only by a request a kept page can stand for, and only after [`Asked::find`] found none.
+    /// The mark stays while the page is kept and after, so a page that went from the store (its
+    /// lifetime, a write, the bound) is kept again the next time it is asked for, and so is the
+    /// same URL's page for another host or language.
+    ///
+    /// One mark for the URLs whose hash names it, each leaving its own in the other's place. So
+    /// a URL is not known again once another took its mark, which about as many first asks as
+    /// there are marks make likely; and of two that share a mark, asked for in turn, neither is
+    /// kept until one is asked for twice running. Each of those is a page made by its handler
+    /// that could have been kept, never a wrong answer. A URL that finds another's sixteen bits
+    /// in its mark (one pair in two thousand million) is kept the first time, as every page was
+    /// before.
+    pub(crate) fn asked_before(&self) -> bool {
+        let store = &*self.answers.0;
+        let hash = store.marked.hash_one(self.at);
+        let marks = store.marks.get_or_init(|| (0..MARKS).map(|_| AtomicU16::new(0)).collect());
+        // The hash's low bits choose the mark and its high ones are what the URL leaves there:
+        // never 0, which no URL left.
+        let (mark, left) = (&marks[hash as usize % MARKS], (hash >> 48) as u16 | 1);
+        // Two first requests for a URL at once may each find the other's mark or neither: the
+        // answer is kept from one of them or from the next.
+        if mark.load(Ordering::Relaxed) == left {
+            return true;
+        }
+        mark.store(left, Ordering::Relaxed);
+        false
+    }
+
     /// What keeping the handler's answer needs of the request, once no kept one stood for it:
     /// taken before the handler runs, so the answer's age counts its making and a write made
     /// meanwhile is seen.
@@ -728,6 +793,25 @@ fn varies(headers: &HeaderMap) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A URL is known the second time it is asked for and each time after, and one asked for
+    /// once is not. Of 4,000 URLs asked for in turn, the few that share a mark with a later one
+    /// are not known again; with as many marks as there are, that is about 240 of them.
+    #[test]
+    fn a_url_is_known_from_the_second_time_it_is_asked_for() {
+        let answers = Answers::new(1 << 20).unwrap();
+        let asked = |at: &str| Asked { answers: &answers, at, host: None, language: None }.asked_before();
+        assert!(!asked("/items") && asked("/items") && asked("/items"));
+        assert!(!asked("/items?page=2") && asked("/items?page=2"), "another query is another URL");
+        assert!(asked("/items"), "and the first still has its mark");
+        let urls: Vec<String> = (0..4000).map(|n| format!("/catalog/{n}")).collect();
+        assert_eq!(urls.iter().filter(|at| asked(at)).count(), 0, "none was asked for before");
+        let known = urls.iter().filter(|at| asked(at)).count();
+        assert!((3500..=3950).contains(&known), "{known} of 4,000 known again");
+        // The ones not known left their mark again, and are known now unless they share it.
+        let known = urls.iter().filter(|at| asked(at)).count();
+        assert!(known >= 3500, "{known} of 4,000 known the third time");
+    }
 
     /// What [`Sent::read`] reads, by a lookup of each header's name: the rule as the functions
     /// that own each part of it say it.

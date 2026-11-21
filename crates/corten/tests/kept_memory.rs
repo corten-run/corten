@@ -17,9 +17,10 @@ use tokio::{
 /// The bound the app is given, and more pages than it has room for.
 const BOUND: usize = 4 << 20;
 const PAGES: usize = 3000;
-/// The counts of writes: 65,536 of four bytes, made once with the first page asked for and held
-/// beside the bound.
-const COUNTS: usize = 4 << 16;
+/// The counts of writes and the marks of the URLs asked for: 65,536 of four bytes and as many of
+/// two, each made once (the marks with the first page asked for, the counts with the first one
+/// asked for again) and held beside the bound.
+const COUNTS: usize = (4 << 16) + (2 << 16);
 
 #[cfg(feature = "compress")]
 const CODINGS: &[&str] = &["identity", "zstd", "br", "gzip"];
@@ -125,13 +126,15 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
     }
     let before = LIVE.load(Ordering::Relaxed);
     for n in 0..PAGES {
+        // A page is kept from the second time its URL is asked for.
+        assert!(!get(&mut stream, &mut read, &format!("/kept?n={n}"), "identity").await, "page {n}, asked for once");
         for (asked, coding) in CODINGS.iter().enumerate() {
             let given = get(&mut stream, &mut read, &format!("/kept?n={n}"), coding).await;
-            assert_eq!(given, asked > 0, "page {n} in {coding}: made once, then given in each coding");
+            assert_eq!(given, asked > 0, "page {n} in {coding}: made again and kept, then given in each coding");
             // The counts are made here, inside what is counted, or taking them off below is wrong.
             if (n, asked) == (0, 0) {
                 let first = LIVE.load(Ordering::Relaxed).saturating_sub(before);
-                assert!(first >= COUNTS, "the first page asked for took {first} bytes: the counts were made before it");
+                assert!(first >= COUNTS, "the first page kept took {first} bytes: the counts and the marks were made before it");
             }
         }
     }

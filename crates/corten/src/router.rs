@@ -128,6 +128,11 @@ impl Endpoint for Keeping {
         if let Some(kept) = asked.find() {
             return Box::pin(std::future::ready(kept));
         }
+        // A URL asked for the first time is the handler's as any other request: its answer is
+        // kept from the second.
+        if !asked.asked_before() {
+            return self.inner.call(req);
+        }
         let missed = asked.missed(&req);
         let here = req.extensions().get::<crate::layout::StartHere>().cloned();
         let answer = self.inner.call(req);
