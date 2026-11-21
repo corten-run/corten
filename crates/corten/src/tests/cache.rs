@@ -2827,6 +2827,41 @@ async fn requests_that_miss_a_new_url_in_a_full_store_together_run_its_handler_o
     assert_eq!(held.runs.count(), runs + 1);
 }
 
+/// In a full store, the requests for a new URL that come once its first request's page was
+/// refused, none having waited for it, do not wait for that page: the first of them makes the
+/// page, as the URL's second request, which is kept, and the others wait for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn requests_that_come_once_a_full_store_refused_a_new_url_s_page_wait_for_the_next() {
+    let (held, watch) = (Held::default(), Watch::default());
+    let router = filled(&held, &watch).await;
+    let (runs, joined) = (held.runs.count(), watch.joined());
+    let mut stopped = watch.answers().stop_at(crate::kept::Stop::Refused);
+    let first = sent(&router, "GET", "/?n=late", &[]);
+    stopped.reached().await;
+    held.hold.next(1);
+    let others: Vec<_> = (0..2).map(|_| sent(&router, "GET", "/?n=late", &[])).collect();
+    // Each has run its handler or waits for another's.
+    let settled = async {
+        while watch.joined() - joined + held.runs.count() - runs < 3 {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), settled).await.expect("the requests came to their handlers");
+    stopped.go();
+    let (status, headers, body) = first.await.unwrap();
+    assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{headers:?}");
+    held.hold.release(1);
+    let mut given = 0;
+    for other in others {
+        let (status, headers, same) = other.await.unwrap();
+        assert!(status == StatusCode::OK && same == body, "{headers:?}");
+        given += usize::from(headers.contains_key(header::AGE));
+    }
+    assert_eq!((held.runs.count() - runs, given), (2, 1), "one made the page again, and the other was given it");
+    let (_, headers, again) = fetch(&router, "GET", "/?n=late", &[]).await;
+    assert!(headers.contains_key(header::AGE) && again == body, "and kept: {headers:?}");
+}
+
 /// Requests that miss a page whose lifetime ended together run its handler once.
 #[tokio::test]
 async fn requests_that_miss_a_page_past_its_lifetime_together_run_its_handler_once() {

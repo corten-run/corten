@@ -213,6 +213,9 @@ pub(crate) enum Stop {
     Missed,
     /// Its handler answered with a page that may be kept, which is not kept yet.
     Keep,
+    /// In a full store, the first request for a URL not asked for before had its page refused by
+    /// the store, none having waited for it.
+    Refused,
 }
 
 /// A request held at a [`Stop`]: the test waits for it to come there, then lets it go on.
@@ -402,7 +405,9 @@ impl Hasher for Same {
 enum Flight {
     /// A request is making the page: the others for its copy wait on the semaphore, which the
     /// first of them makes and the request making the page closes when it is answered or dropped.
-    Making(Option<Arc<Semaphore>>),
+    /// `kept` once another request, which made the page with none waiting, kept it meanwhile:
+    /// then the page is not remembered as not kept when this one's is not.
+    Making { waiting: Option<Arc<Semaphore>>, kept: bool },
     /// Made and not kept, until then: the requests for it each run the handler at once.
     NotKept(Instant),
 }
@@ -424,15 +429,15 @@ impl Table {
         let room = self.making < MAKING;
         match self.at.entry(key) {
             hash_map::Entry::Occupied(flight) => match flight.into_mut() {
-                Flight::Making(waiting) => {
+                Flight::Making { waiting, .. } => {
                     return Admitted::Joins(waiting.get_or_insert_with(|| Arc::new(Semaphore::new(0))).clone());
                 }
                 Flight::NotKept(until) if *until > now => return Admitted::Alone,
-                flight if room => *flight = Flight::Making(None),
+                flight if room => *flight = Flight::Making { waiting: None, kept: false },
                 _ => return Admitted::Alone,
             },
             hash_map::Entry::Vacant(flight) if room => {
-                flight.insert(Flight::Making(None));
+                flight.insert(Flight::Making { waiting: None, kept: false });
             }
             hash_map::Entry::Vacant(_) => return Admitted::Alone,
         }
@@ -442,11 +447,15 @@ impl Table {
 
     /// The page `key` names, which a request was admitted to make, was answered or dropped: what
     /// waits for it, to be woken. A page answered and not kept is remembered as such until
-    /// [`FORGOT`] after `not_kept`, the one remembered first forgotten to make room.
+    /// [`FORGOT`] after `not_kept`, the one remembered first forgotten to make room; unless another
+    /// request kept it meanwhile ([`Table::kept`]).
     fn ended(&mut self, key: u64, not_kept: Option<Instant>) -> Option<Arc<Semaphore>> {
-        let ended = self.at.remove(&key);
+        let (waiting, kept) = match self.at.remove(&key) {
+            Some(Flight::Making { waiting, kept }) => (waiting, kept),
+            _ => (None, false),
+        };
         self.making -= 1;
-        if let Some(now) = not_kept {
+        if let Some(now) = not_kept.filter(|_| !kept) {
             while let Some(&(first, until)) = self.remembered.front() {
                 if until > now && self.remembered.len() < NOT_KEPT {
                     break;
@@ -465,17 +474,19 @@ impl Table {
             self.at.insert(key, Flight::NotKept(until));
             self.remembered.push_back((key, until));
         }
-        match ended {
-            Some(Flight::Making(waiting)) => waiting,
-            _ => None,
-        }
+        waiting
     }
 
     /// The page `key` names was kept, by a request that made it alone: it is not remembered as not
-    /// kept. A page being made is left as it is.
+    /// kept, and a request making it now does not have it remembered so when that one's page is
+    /// not kept. Those waiting for that one still wait for it.
     fn kept(&mut self, key: u64) {
-        if matches!(self.at.get(&key), Some(Flight::NotKept(_))) {
-            self.at.remove(&key);
+        match self.at.get_mut(&key) {
+            Some(Flight::NotKept(_)) => {
+                self.at.remove(&key);
+            }
+            Some(Flight::Making { kept, .. }) => *kept = true,
+            None => {}
         }
     }
 }
@@ -980,8 +991,11 @@ impl<'a> Asked<'a> {
     /// In a full store, a URL not asked for before is kept only when another request asks for it
     /// while it is made: keeping its answer would drop a page for one no one is known to ask for
     /// again. Such a request still makes the page the others wait for, so the requests that miss
-    /// a new URL together run its handler once; with none to make it for, it is the handler's
-    /// ([`Miss::Pass`]), and nothing here is paid for it but the mark it leaves.
+    /// a new URL together run its handler once. It pays for that as any miss does (the table and
+    /// the second look) and for the checks of its answer that come before its headers are read
+    /// ([`Missed::keep`]), not for the copy. With no page made that others may wait for (the
+    /// table is full, or the page was not kept a moment ago), it is the handler's ([`Miss::Pass`]),
+    /// and nothing here is paid for it but the mark it leaves.
     pub(crate) fn missed(&self, req: &Request) -> Miss {
         #[cfg(test)]
         self.answers.0.stop(Stop::Missed);
@@ -1005,7 +1019,7 @@ impl<'a> Asked<'a> {
                 store.joined.fetch_add(1, Ordering::AcqRel);
                 return Miss::Wait(Making { waiting, stored });
             }
-            Admitted::Leads => Leading { store: store.clone(), key, written, answered: false },
+            Admitted::Leads => Leading { store: store.clone(), key, written, answered: false, ended: false },
         };
         if let Some(kept) = self.find() {
             // The requests that came to wait for this one look again, and are given it too.
@@ -1089,12 +1103,23 @@ struct Leading {
     written: Written,
     /// Answered with a page that is not kept (one that failed, or was drawn for this request).
     answered: bool,
+    /// No longer being made for any other ([`Leading::waited`]).
+    ended: bool,
 }
 
 impl Leading {
-    /// Whether another request has come to wait for the page.
-    fn waited(&self) -> bool {
-        matches!(self.store.flights.table().at.get(&self.key), Some(Flight::Making(Some(_))))
+    /// Whether another request has come to wait for the page. Where none has, the page is no longer
+    /// made for any, in the same step under the table's lock: a request that comes after finds none
+    /// being made, and makes the page itself, and nothing is remembered of this one.
+    fn waited(&mut self) -> bool {
+        let mut table = self.store.flights.table();
+        if matches!(table.at.get(&self.key), Some(Flight::Making { waiting: Some(_), .. })) {
+            return true;
+        }
+        // None waits, so none is woken.
+        table.ended(self.key, None);
+        self.ended = true;
+        false
     }
 }
 
@@ -1102,6 +1127,9 @@ impl Drop for Leading {
     /// Answered or dropped: the requests waiting for it look again. A page answered and not kept,
     /// with no write to its path since its handler read, is remembered as not kept.
     fn drop(&mut self) {
+        if self.ended {
+            return;
+        }
         let not_kept = (self.answered && self.written.stands(&self.store)).then(Instant::now);
         let waiting = self.store.flights.table().ended(self.key, not_kept);
         if let Some(waiting) = waiting {
@@ -1167,6 +1195,16 @@ impl Missed {
         {
             return res;
         }
+        // A URL not asked for before, in a full store, that no other request asked for while it
+        // was made: refused by the store alone, decided once the answer is ready and before its
+        // headers are read. Not remembered as not kept, so the requests that miss it next, which
+        // the store keeps it for, wait for one another as for any page; and one that comes from
+        // here on makes it itself rather than wait for this one.
+        if !self.stored && !self.leading.as_mut().is_some_and(Leading::waited) {
+            #[cfg(test)]
+            answers.0.stop(Stop::Refused);
+            return res;
+        }
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
         // A `Date` the handler set is its own answer's, and is not kept (below): it says how old the
         // page is, which the age of each answer given in its place counts.
@@ -1196,15 +1234,6 @@ impl Missed {
             + self.language.as_ref().filter(|_| language).map_or(0, HeaderValue::len);
         let size = key + head + OVERHEAD + length as usize;
         if length == 0 || size > answers.0.bound / SHARE {
-            return res;
-        }
-        // A URL not asked for before, in a full store, that no other request asked for meanwhile.
-        if !self.stored && !self.leading.as_ref().is_some_and(Leading::waited) {
-            // Refused by the store alone: not remembered as not kept, so the requests that miss it
-            // next, which the store keeps it for, wait for one another as for any page.
-            if let Some(leading) = &mut self.leading {
-                leading.answered = false;
-            }
             return res;
         }
         let (mut parts, body) = res.into_parts();
@@ -1289,9 +1318,10 @@ fn made_at(date: &HeaderValue, asked: Instant) -> Option<Instant> {
 }
 
 /// The seconds since 1970 an HTTP date in the form HTTP sends (IMF-fixdate, RFC 9110, 5.6.7)
-/// names: `Sun, 06 Nov 1994 08:49:37 GMT`.
+/// names: `Sun, 06 Nov 1994 08:49:37 GMT`, its day of the week the date's and its date one that
+/// exists.
 fn http_date(date: &[u8]) -> Option<u64> {
-    let &[_, _, _, b',', b' ', d0, d1, b' ', m0, m1, m2, b' ', y0, y1, y2, y3, b' ', h0, h1, b':', n0, n1, b':', s0, s1, b' ', b'G', b'M', b'T'] =
+    let &[w0, w1, w2, b',', b' ', d0, d1, b' ', m0, m1, m2, b' ', y0, y1, y2, y3, b' ', h0, h1, b':', n0, n1, b':', s0, s1, b' ', b'G', b'M', b'T'] =
         date
     else {
         return None;
@@ -1301,6 +1331,8 @@ fn http_date(date: &[u8]) -> Option<u64> {
     };
     const MONTHS: [&[u8; 3]; 12] =
         [b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep", b"Oct", b"Nov", b"Dec"];
+    // From 1970-01-01, a Thursday.
+    const DAYS: [&[u8; 3]; 7] = [b"Thu", b"Fri", b"Sat", b"Sun", b"Mon", b"Tue", b"Wed"];
     let month = MONTHS.iter().position(|month| **month == [m0, m1, m2])? as u32 + 1;
     let (day, year) = (number(&[d0, d1])?, number(&[y0, y1, y2, y3])?);
     let (hour, minute, second) = (number(&[h0, h1])?, number(&[n0, n1])?, number(&[s0, s1])?);
@@ -1308,6 +1340,10 @@ fn http_date(date: &[u8]) -> Option<u64> {
         return None;
     }
     let days = crate::i18n::days_from_civil(i64::from(year), month, day);
+    // A day past its month's end would be read as one of the next month's.
+    if crate::i18n::civil_from_days(days) != (i64::from(year), month, day) || *DAYS[days.rem_euclid(7) as usize] != [w0, w1, w2] {
+        return None;
+    }
     u64::try_from(days * 86_400 + i64::from(hour * 3600 + minute * 60 + second)).ok()
 }
 
@@ -1761,7 +1797,7 @@ mod tests {
                 assert!(table.at.len() <= 1 + NOT_KEPT && table.remembered.len() <= NOT_KEPT, "{round} {key}");
             }
         }
-        assert!(matches!(table.at.get(&0), Some(Flight::Making(Some(_)))), "the page being made stays");
+        assert!(matches!(table.at.get(&0), Some(Flight::Making { waiting: Some(_), .. })), "the page being made stays");
         assert!(table.ended(0, None).is_some(), "and wakes those waiting for it when it ends");
         assert_eq!((table.making, table.at.len()), (0, NOT_KEPT));
     }
@@ -1782,12 +1818,17 @@ mod tests {
         // Kept by a request that made it alone, while another makes it: that one stays.
         table.kept(1);
         assert!(matches!(table.admit(1, now + FORGOT), Admitted::Joins(_)));
+        // And when that one ends not kept (its handler failed), the page is not remembered as not
+        // kept: it was kept meanwhile.
+        assert!(table.ended(1, Some(now + FORGOT)).is_some(), "the request waiting is woken");
+        assert!(matches!(table.admit(1, now + FORGOT), Admitted::Leads), "kept since it was made");
     }
 
     #[test]
     fn an_http_date_is_read_in_the_form_http_sends() {
         assert_eq!(http_date(b"Sun, 06 Nov 1994 08:49:37 GMT"), Some(784_111_777));
         assert_eq!(http_date(b"Thu, 01 Jan 1970 00:00:00 GMT"), Some(0));
+        assert_eq!(http_date(b"Thu, 29 Feb 1996 23:59:60 GMT"), Some(825_638_400), "a leap day, and a leap second");
         for other in [
             &b"Sunday, 06-Nov-94 08:49:37 GMT"[..],
             b"Sun Nov  6 08:49:37 1994",
@@ -1796,6 +1837,19 @@ mod tests {
             b"Sun, 32 Nov 1994 08:49:37 GMT",
             b"Sun, 06 Nov 1994 24:49:37 GMT",
             b"Sun, 06 Nov 1994 08:49:3x GMT",
+            // A day that is not one, or not the date's.
+            b"Bad, 06 Nov 1994 08:49:37 GMT",
+            b"sun, 06 Nov 1994 08:49:37 GMT",
+            b"Mon, 06 Nov 1994 08:49:37 GMT",
+            // A date that does not exist.
+            b"Sun, 00 Nov 1994 08:49:37 GMT",
+            b"Thu, 31 Nov 1994 08:49:37 GMT",
+            b"Wed, 29 Feb 1995 08:49:37 GMT",
+            b"Mon, 29 Feb 1900 08:49:37 GMT",
+            b"Sun, 06 Nov 1994 08:60:37 GMT",
+            b"Sun, 06 Nov 1994 08:49:61 GMT",
+            b"Sun, 06 Nov 1994 08:49:37 GMT ",
+            b"Sun,  6 Nov 1994 08:49:37 GMT",
         ] {
             assert_eq!(http_date(other), None, "{}", String::from_utf8_lossy(other));
         }
