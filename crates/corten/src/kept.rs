@@ -62,6 +62,8 @@ use bytes::Bytes;
 use http::{header, HeaderMap, HeaderValue, StatusCode};
 
 use crate::body::Body;
+#[cfg(feature = "compress")]
+use crate::compress::{Accepts, Coding, Level};
 use crate::handler::Request;
 use crate::page::Mode;
 use crate::response::Response;
@@ -82,6 +84,11 @@ const OVERHEAD: usize = 1024;
 
 /// What a header counts for beside its name and value: its place in the header map.
 const HEADER: usize = 112;
+
+/// What a compressed form counts for beside its bytes: the record its `Bytes` makes to share
+/// them once they are cloned (three words).
+#[cfg(feature = "compress")]
+const FORM: usize = 24;
 
 /// An entry's size once it is no longer kept: nothing made for it counts from then on.
 const GONE: usize = usize::MAX;
@@ -269,12 +276,26 @@ pub(crate) struct Entry {
     body: Bytes,
     /// The tag's hasher once it has read the body ([`crate::cache::tag`]).
     hashed: OnceLock<DefaultHasher>,
-    /// The body in each coding, once a request asked for it.
+    /// The body compressed, as requests asked for it.
     #[cfg(feature = "compress")]
-    coded: [OnceLock<Bytes>; 3],
+    coded: Coded,
     used: AtomicBool,
     /// What it counts for in the store's bytes, or [`GONE`].
     size: AtomicUsize,
+}
+
+/// A kept answer's body compressed: in each coding at the per-request level, made by the first
+/// request that asks for that coding, and in brotli at [`Level::Kept`], made once after the
+/// second answer to a client that takes brotli, on the thread that compresses held values, so no
+/// request waits for it. From then on a client that ranks brotli as high as any coding gets it.
+#[cfg(feature = "compress")]
+#[derive(Default)]
+struct Coded {
+    now: [OnceLock<Bytes>; 3],
+    brotli: OnceLock<Bytes>,
+    /// The answers to a client that takes brotli before `brotli` was made: the second starts it.
+    asked: AtomicU32,
+    started: AtomicBool,
 }
 
 /// On a response whose body is a kept answer's: the stages after the handler find the body's
@@ -285,9 +306,9 @@ pub(crate) struct Entry {
 pub(crate) struct Kept(Arc<Entry>);
 
 impl Kept {
-    fn of<'a>(extensions: &'a http::Extensions, body: &Bytes) -> Option<&'a Entry> {
+    fn of<'a>(extensions: &'a http::Extensions, body: &Bytes) -> Option<&'a Arc<Entry>> {
         let Kept(entry) = extensions.get::<Kept>()?;
-        (entry.body.as_ptr() == body.as_ptr() && entry.body.len() == body.len()).then_some(&**entry)
+        (entry.body.as_ptr() == body.as_ptr() && entry.body.len() == body.len()).then_some(entry)
     }
 
     /// The tag's hasher with `body` read, which `start` makes: kept with the answer `body` is
@@ -310,32 +331,70 @@ impl Kept {
         }
     }
 
-    /// `body` in `coding`, which `encode` makes: kept with the answer `body` is from, so only the
-    /// first request for a coding compresses it.
+    /// `body` compressed for a request that `accepts` it and prefers `coding` now, which
+    /// `encode` makes, and the coding it is in. Kept with the answer `body` is from ([`Coded`]):
+    /// only the first request for a coding compresses it, and a client that ranks brotli as high
+    /// as any coding gets its [`Level::Kept`] form once that is made.
     #[cfg(feature = "compress")]
     pub(crate) fn coded(
         extensions: &http::Extensions,
         body: &Bytes,
-        coding: crate::compress::Coding,
+        accepts: Accepts,
+        coding: Coding,
         encode: impl FnOnce() -> Bytes,
-    ) -> Bytes {
-        let Some(entry) = Kept::of(extensions, body) else { return encode() };
-        let slot = &entry.coded[coding as usize];
+    ) -> (Bytes, Coding) {
+        let Some(entry) = Kept::of(extensions, body) else { return (encode(), coding) };
+        if accepts.stored() == Some(Coding::Brotli) {
+            let coded = &entry.coded;
+            if let Some(brotli) = coded.brotli.get() {
+                return (brotli.clone(), Coding::Brotli);
+            }
+            // Not on the first such answer (usually the one that made the page): a page asked
+            // for once is compressed once. The job holds the page weakly while it waits its
+            // turn, so one dropped by then is skipped, and its bytes are not held for it.
+            if coded.asked.fetch_add(1, Ordering::Relaxed) >= 1 && !coded.started.swap(true, Ordering::AcqRel) {
+                let page = Arc::downgrade(entry);
+                let made = crate::compress::later(Box::new(move || {
+                    if let Some(entry) = page.upgrade() {
+                        entry.make_brotli();
+                    }
+                }));
+                if !made {
+                    // Full, or no thread to be had: a later answer asks again.
+                    coded.started.store(false, Ordering::Release);
+                }
+            }
+        }
+        let slot = &entry.coded.now[coding as usize];
         if let Some(coded) = slot.get() {
-            return coded.clone();
+            return (coded.clone(), coding);
         }
         // Made outside the cell: two first requests each compress it, and neither waits.
         // A copy of its own length: an encoder's buffer is sized for the worst case, and the
         // bytes made from it hold all of that for as long as they are kept.
         let coded = Bytes::copy_from_slice(&encode());
         if slot.set(coded.clone()).is_ok() {
-            entry.grew(coded.len());
+            entry.grew(coded.len() + FORM);
         }
-        coded
+        (coded, coding)
     }
 }
 
 impl Entry {
+    /// Makes its body's brotli at [`Level::Kept`] and counts it, unless it is no longer kept.
+    #[cfg(feature = "compress")]
+    fn make_brotli(&self) {
+        if self.size.load(Ordering::Acquire) == GONE {
+            return;
+        }
+        // A copy of its own length, as each coding's bytes are (`Kept::coded`).
+        let made = Bytes::copy_from_slice(&crate::compress::encode(Coding::Brotli, &self.body, Level::Kept));
+        let size = made.len() + FORM;
+        if self.coded.brotli.set(made).is_ok() {
+            self.grew(size);
+        }
+    }
+
     /// Counts `more` bytes made for it, unless it is no longer kept, and makes room for them when
     /// they take the store past its bound, as keeping a page does.
     #[cfg(feature = "compress")]
@@ -1150,26 +1209,95 @@ mod tests {
 
         #[cfg(feature = "compress")]
         {
-            use crate::compress::Coding;
             let made = std::cell::Cell::new(0);
             let encode = || {
                 made.set(made.get() + 1);
                 Bytes::from_static(b"coded")
             };
             let before = answers.bytes();
+            let gzip = accepts("gzip");
             for _ in 0..3 {
-                assert_eq!(Kept::coded(&extensions, &kept.body, Coding::Gzip, encode), "coded");
+                assert_eq!(Kept::coded(&extensions, &kept.body, gzip, Coding::Gzip, encode), ("coded".into(), Coding::Gzip));
             }
-            assert_eq!((made.get(), answers.bytes()), (1, before + 5), "made once, and counted");
-            Kept::coded(&extensions, &other, Coding::Gzip, encode);
-            Kept::coded(&http::Extensions::new(), &kept.body, Coding::Gzip, encode);
-            assert_eq!((made.get(), answers.bytes()), (3, before + 5), "not the kept answer's");
+            assert_eq!((made.get(), answers.bytes()), (1, before + 5 + FORM), "made once, and counted");
+            Kept::coded(&extensions, &other, gzip, Coding::Gzip, encode);
+            Kept::coded(&http::Extensions::new(), &kept.body, gzip, Coding::Gzip, encode);
+            assert_eq!((made.get(), answers.bytes()), (3, before + 5 + FORM), "not the kept answer's");
             // Another answer takes its place.
             answers.keep(entry(&answers, "/p", None, 60, 10));
             assert_eq!(answers.bytes(), 10 + OVERHEAD);
-            Kept::coded(&extensions, &kept.body, Coding::Brotli, encode);
+            Kept::coded(&extensions, &kept.body, accepts("br"), Coding::Brotli, encode);
             assert_eq!((made.get(), answers.bytes()), (4, 10 + OVERHEAD), "no longer kept: nothing is counted for it");
         }
+    }
+
+    /// What a request with this `Accept-Encoding` takes.
+    #[cfg(feature = "compress")]
+    fn accepts(value: &'static str) -> Accepts {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static(value));
+        crate::compress::negotiate(&headers)
+    }
+
+    /// A kept answer's brotli at `Level::Kept` is made once after its second answer to a client
+    /// that takes brotli, on another thread, and counted: from then on a client that ranks brotli
+    /// as high as any coding gets it with no request compressing anything, and one that prefers
+    /// another coding, or does not take brotli, gets the form made for its coding. Answers to
+    /// clients that do not take brotli do not start it.
+    #[cfg(feature = "compress")]
+    #[test]
+    fn a_kept_answer_s_brotli_is_made_after_its_second_answer_and_given_from_then_on() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let page: String =
+            (0..120u32).map(|n| format!(r#"<li><a href="/items/{n}">Item {n}</a> {}</li>"#, n * 7919 % 1000)).collect();
+        let page = Bytes::from(page);
+        let kept = answers.keep(|place| Entry { body: page.clone(), ..entry(&answers, "/p", None, 60, page.len())(place) });
+        let mut extensions = http::Extensions::new();
+        extensions.insert(Kept(kept.clone()));
+        let fast = |coding| Bytes::from(crate::compress::encode(coding, &kept.body, Level::Fast));
+        let browser = accepts("gzip, deflate, br, zstd");
+        // Answers to clients that take no brotli: what they asked for, and nothing more.
+        for _ in 0..3 {
+            assert_eq!(
+                Kept::coded(&extensions, &kept.body, accepts("zstd, gzip"), Coding::Zstd, || fast(Coding::Zstd)).1,
+                Coding::Zstd
+            );
+        }
+        let zstd = kept.coded.now[Coding::Zstd as usize].get().expect("made once").clone();
+        let before = answers.bytes();
+        assert!(!kept.coded.started.load(Ordering::Acquire), "no client that takes brotli has asked");
+        // The first answer to a browser is zstd 1, as it was made, and starts nothing.
+        let first = Kept::coded(&extensions, &kept.body, browser, Coding::Zstd, || unreachable!("made already"));
+        assert_eq!(first, (zstd.clone(), Coding::Zstd));
+        assert!(!kept.coded.started.load(Ordering::Acquire), "made for one request, never compressed twice");
+        // The second is too, and brotli is made after it.
+        let second = Kept::coded(&extensions, &kept.body, browser, Coding::Zstd, || unreachable!("made already"));
+        assert_eq!(second, (zstd.clone(), Coding::Zstd), "the request does not wait for brotli");
+        let started = Instant::now();
+        while answers.bytes() == before {
+            assert!(started.elapsed() < std::time::Duration::from_secs(10), "brotli was not made");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let brotli = kept.coded.brotli.get().expect("made").clone();
+        assert_eq!(brotli, crate::compress::encode(Coding::Brotli, &kept.body, Level::Kept));
+        assert_eq!(answers.bytes(), before + brotli.len() + FORM, "and counted");
+        assert!(brotli.len() < zstd.len() && brotli.len() < fast(Coding::Brotli).len(), "{} {}", brotli.len(), zstd.len());
+        // From then on: brotli to a client that ranks it as high as any, made by no request.
+        for (asked, now) in [
+            ("gzip, deflate, br, zstd", Coding::Zstd),
+            ("br", Coding::Brotli),
+            ("gzip;q=0.8, br;q=0.8, zstd;q=0.5", Coding::Brotli),
+        ] {
+            let given = Kept::coded(&extensions, &kept.body, accepts(asked), now, || unreachable!("{asked}: made already"));
+            assert_eq!(given, (brotli.clone(), Coding::Brotli), "{asked}");
+            assert_eq!(given.0.as_ptr(), brotli.as_ptr(), "{asked}: the bytes made once");
+        }
+        // A client that prefers zstd gets zstd; one that takes no brotli, its own coding.
+        let given = Kept::coded(&extensions, &kept.body, accepts("zstd, br;q=0.5"), Coding::Zstd, || unreachable!());
+        assert_eq!(given, (zstd, Coding::Zstd));
+        let given = Kept::coded(&extensions, &kept.body, accepts("gzip"), Coding::Gzip, || fast(Coding::Gzip));
+        assert_eq!(given.1, Coding::Gzip);
+        assert_eq!(answers.bytes(), before + brotli.len() + given.0.len() + FORM * 2);
     }
 
     /// The bound holds for what is made after a page is kept too: a coded form that takes the
@@ -1177,7 +1305,6 @@ mod tests {
     #[cfg(feature = "compress")]
     #[test]
     fn a_coded_form_that_passes_the_bound_makes_room() {
-        use crate::compress::Coding;
         let size = 1000 + OVERHEAD;
         let answers = Answers::new(size * 2 + 100).expect("a bound");
         let first = answers.keep(entry(&answers, "/a", None, 60, 1000));
@@ -1185,9 +1312,9 @@ mod tests {
         assert_eq!(answers.bytes(), size * 2);
         let mut extensions = http::Extensions::new();
         extensions.insert(Kept(second.clone()));
-        let coded = Kept::coded(&extensions, &second.body, Coding::Zstd, || Bytes::from(vec![b'z'; 400]));
+        let (coded, _) = Kept::coded(&extensions, &second.body, accepts("zstd"), Coding::Zstd, || Bytes::from(vec![b'z'; 400]));
         assert_eq!(coded.len(), 400);
-        assert_eq!(answers.bytes(), size + 400, "the other page went, and the bound holds");
+        assert_eq!(answers.bytes(), size + 400 + FORM, "the other page went, and the bound holds");
         assert!(answers.find("/a", None, None).is_none() && answers.find("/b", None, None).is_some());
         assert_eq!(first.size.load(Ordering::Acquire), GONE);
     }

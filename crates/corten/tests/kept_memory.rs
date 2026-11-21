@@ -21,8 +21,10 @@ const PAGES: usize = 3000;
 /// beside the bound.
 const COUNTS: usize = 4 << 16;
 
+/// Each coding alone, then a browser's: its answer is the second to a client that takes brotli,
+/// so the page's brotli at the kept level is made after it, on the compression thread.
 #[cfg(feature = "compress")]
-const CODINGS: &[&str] = &["identity", "zstd", "br", "gzip"];
+const CODINGS: &[&str] = &["identity", "zstd", "br", "gzip", "gzip, deflate, br, zstd"];
 #[cfg(not(feature = "compress"))]
 const CODINGS: &[&str] = &["identity"];
 
@@ -134,6 +136,13 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
                 assert!(first >= COUNTS, "the first page asked for took {first} bytes: the counts were made before it");
             }
         }
+    }
+    // What the compression thread makes for the last pages, and the encoder's own tables while
+    // it does, are counted once it is done with them.
+    let mut last = usize::MAX;
+    while LIVE.load(Ordering::Relaxed) != last {
+        last = LIVE.load(Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
     let held = LIVE.load(Ordering::Relaxed).saturating_sub(before + COUNTS);
     assert!(get(&mut stream, &mut read, &format!("/kept?n={}", PAGES - 1), "identity").await, "the newest is kept");

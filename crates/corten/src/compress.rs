@@ -17,6 +17,10 @@
 //! every read takes 162 µs (zstd 1) to 634 µs (brotli 1), and gives 5,655 bytes against 6,577
 //! with zstd 1 (a Linux container on a busy desktop, five runs, medians). brotli 11 would take
 //! about 194 ms (one run on Windows), too long for a value that changes while the app runs.
+//! A page the app keeps ([`crate::kept`]) has each coding made once at the per-request level, by
+//! the first request that asks for it, and brotli 5 made on that same thread after its second
+//! answer to a client that takes brotli: from then on such a client gets brotli 5 in the place of
+//! zstd 1, 18% fewer bytes on a 4.4 KB page, and no request waits for it ([`Level::Kept`]).
 //!
 //! Event streams ([`crate::live`], feeds) are compressed as one stream per connection, flushed
 //! after every event so it arrives at once, with the context kept between events: a redraw that
@@ -178,6 +182,16 @@ pub(crate) enum Level {
     /// and brotli 1 634 µs (444 to 746; 3.14 million) for 7,284, where brotli 2 takes 1,754 µs
     /// (1,516 to 2,153; 12.7 million) for 6,939.
     Held,
+    /// Once per page the app keeps ([`crate::kept`]), after its second answer that could use it,
+    /// on the thread that compresses held values: brotli 5, which a client that ranks brotli as
+    /// high as any coding gets in the place of zstd 1. On the catalog benchmark's record page
+    /// (4,424 bytes) it gives 882 bytes where zstd 1 gives 1,078, and on card-market's item pages
+    /// (4,013 bytes on average) 1,293 where zstd 1 gives 1,564; it takes 1.01 and 1.25 million
+    /// instructions once (callgrind), where zstd 1 takes 0.12 and 0.16 million. brotli 9 gives
+    /// the same bytes for 1.47 and 1.89 million instructions but 14 to 18 times the time (it
+    /// clears larger tables), and brotli 11 gives 761 and 1,170 bytes for 84 and 56 million: too
+    /// much for a page made again each time its lifetime ends, on a thread held values share.
+    Kept,
     /// Once per file that never changes: the highest levels.
     Best,
 }
@@ -193,6 +207,7 @@ pub(crate) fn encode(coding: Coding, data: &[u8], level: Level) -> Vec<u8> {
             let quality = match level {
                 Level::Fast => BROTLI_LEVEL,
                 Level::Held => 9,
+                Level::Kept => 5,
                 Level::Best => 11,
             };
             let mut out = Vec::with_capacity(data.len() / 3);
@@ -235,7 +250,7 @@ impl Accepts {
 
     /// The coding for a body compressed before ([`Precompressed`]: brotli or gzip), when the
     /// client ranks it as high as any it accepts: one that prefers zstd gets zstd made now.
-    fn stored(self) -> Option<Coding> {
+    pub(crate) fn stored(self) -> Option<Coding> {
         let top = self.0.iter().copied().max().unwrap_or(0);
         self.best(&[Coding::Brotli, Coding::Gzip]).filter(|c| self.0[*c as usize] == top)
     }
@@ -318,11 +333,10 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     });
     let (encoded, coding) = match stored {
         Some(made) => made,
-        // A kept answer's bytes in this coding are made once ([`crate::kept`]).
-        None => {
-            let encode = || Bytes::from(encode(coding, &bytes, Level::Fast));
-            (crate::kept::Kept::coded(&parts.extensions, &bytes, coding, encode), coding)
-        }
+        // A kept answer's bytes in a coding are made once ([`crate::kept`]).
+        None => crate::kept::Kept::coded(&parts.extensions, &bytes, accepts, coding, || {
+            Bytes::from(encode(coding, &bytes, Level::Fast))
+        }),
     };
     parts.headers.insert(header::CONTENT_ENCODING, coding.header());
     parts.headers.remove(header::CONTENT_LENGTH);
@@ -615,7 +629,7 @@ impl Precompressed {
                 // Files: as many as the app has, each once.
                 Level::Best => std::thread::Builder::new().spawn(job()).is_ok(),
                 // Held values: as many as the app's data, so one worker, a bounded queue.
-                _ => held_worker().is_some_and(|tx| tx.try_send(job()).is_ok()),
+                _ => later(job()),
             };
             if !queued {
                 // Full, or no thread to be had: a later read asks again.
@@ -670,6 +684,12 @@ fn held_worker() -> Option<&'static std::sync::mpsc::SyncSender<Job>> {
             worker.ok().map(|_| tx)
         })
         .as_ref()
+}
+
+/// Gives `job` to the thread that compresses held values, after those asked for before it.
+/// False when it is not taken: the queue is full, or there is no thread to be had.
+pub(crate) fn later(job: Job) -> bool {
+    held_worker().is_some_and(|tx| tx.try_send(job).is_ok())
 }
 
 /// Sets the headers for a body [`Precompressed::pick`] chose.

@@ -1148,14 +1148,15 @@ async fn a_kept_page_still_passes_every_middleware() {
     assert!(none.is_empty() && headers["x-request"] == "3", "{headers:?}");
 }
 
-/// A kept page's tag and its bytes in every coding are those the handler's own answer has in an
-/// app that keeps none: only who makes them, and how often, differs.
+/// A kept page's tag and its bytes in every coding but brotli are those the handler's own answer
+/// has in an app that keeps none: only who makes them, and how often, differs. (Its brotli is
+/// those bytes for two answers, then made again: below.)
 #[tokio::test]
 async fn a_kept_page_has_the_tag_and_the_coded_bytes_of_the_handler_s_answer() {
     let (runs, each) = (Runs::default(), Runs::default());
     let kept = App::new(Routes::from(kept_routes(&runs))).router();
     let none = App::new(Routes::from(kept_routes(&each))).kept_answers(0).router();
-    for coding in ["zstd", "br", "gzip", "identity", "br", "zstd", "gzip"] {
+    for coding in ["zstd", "gzip", "identity", "zstd", "gzip"] {
         let asked = [("accept-encoding", coding)];
         let (_, made, body) = fetch(&none, "GET", "/", &asked).await;
         let (_, mut given, same) = fetch(&kept, "GET", "/", &asked).await;
@@ -1177,7 +1178,55 @@ async fn a_kept_page_has_the_tag_and_the_coded_bytes_of_the_handler_s_answer() {
             assert_eq!(fetch(&kept, "GET", "/", &asked).await.0, StatusCode::NOT_MODIFIED, "{coding}");
         }
     }
-    assert_eq!((runs.count(), each.count()), (1, 14), "one render for all of them");
+    assert_eq!((runs.count(), each.count()), (1, 10), "one render for all of them");
+}
+
+/// A kept page's brotli is the handler's answer's for its first two answers to a client that
+/// takes brotli, and is made once more at `Level::Kept` after the second, by no request: from
+/// then on a client that ranks brotli as high as any coding (a browser, which takes zstd too)
+/// gets those fewer bytes with the same tag, and one that prefers zstd, or takes only gzip, gets
+/// what was made for its coding.
+#[cfg(feature = "compress")]
+#[tokio::test]
+async fn a_kept_page_is_given_in_brotli_made_after_its_second_answer() {
+    use crate::compress::{encode, Coding, Level};
+    let (runs, each) = (Runs::default(), Runs::default());
+    let kept = App::new(Routes::from(kept_routes(&runs))).router();
+    let none = App::new(Routes::from(kept_routes(&each))).kept_answers(0).router();
+    let br = [("accept-encoding", "br")];
+    let (_, made, fast) = fetch(&none, "GET", "/", &br).await;
+    let (_, mut first, body) = fetch(&kept, "GET", "/", &br).await;
+    let (_, _, again) = fetch(&kept, "GET", "/", &br).await;
+    assert!(body == fast && again.as_ptr() == body.as_ptr(), "the handler's bytes, made once, for two answers");
+    first.remove(header::AGE);
+    assert_eq!(first, made);
+    let (_, _, identity) = fetch(&kept, "GET", "/", &[("accept-encoding", "identity")]).await;
+    let better = encode(Coding::Brotli, &identity, Level::Kept);
+    assert!(better.len() < fast.len(), "{} of {}", better.len(), fast.len());
+    // Made after those answers: a browser gets zstd until it is there.
+    let browser = [("accept-encoding", "gzip, deflate, br, zstd")];
+    let started = std::time::Instant::now();
+    let (headers, given) = loop {
+        let (_, headers, given) = fetch(&kept, "GET", "/", &browser).await;
+        if headers[header::CONTENT_ENCODING] == "br" {
+            break (headers, given);
+        }
+        assert_eq!(headers[header::CONTENT_ENCODING], "zstd");
+        assert!(started.elapsed() < Duration::from_secs(10), "brotli was not made");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert_eq!(given, better);
+    assert!(headers.contains_key(header::AGE), "{headers:?}");
+    assert!(headers.get_all(header::VARY).iter().any(|v| v == "accept-encoding"), "{headers:?}");
+    assert_eq!(headers[header::ETAG], made[header::ETAG], "the tag is the page's, whatever its coding");
+    let (_, _, same) = fetch(&kept, "GET", "/", &br).await;
+    assert_eq!(same.as_ptr(), given.as_ptr(), "made once, for every client that takes it");
+    let (_, headers, _) = fetch(&kept, "GET", "/", &[("accept-encoding", "zstd, br;q=0.5")]).await;
+    assert_eq!(headers[header::CONTENT_ENCODING], "zstd");
+    let (_, headers, gzip) = fetch(&kept, "GET", "/", &[("accept-encoding", "gzip")]).await;
+    assert_eq!(headers[header::CONTENT_ENCODING], "gzip");
+    assert_eq!(gzip, fetch(&none, "GET", "/", &[("accept-encoding", "gzip")]).await.2);
+    assert_eq!(runs.count(), 1, "one render for all of them");
 }
 
 /// A write drops what is kept at its path, whatever the query and whatever it is answered (the
