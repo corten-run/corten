@@ -117,6 +117,12 @@ The Corten app is standalone under `corten/`; other adapters add v2 routes witho
 their legacy marketplace or catalog routes. Formatter/catalog reuse is allowed; formatted
 record, HTML and serialized-response caches are not. Dependency versions are recorded in
 manifests/lockfiles and resolved image IDs, and should accompany published measurements.
+
+Dependency input: builds from this point resolve the Corten app's shared crates at the
+workspace lock's versions (brotli 9.1.1 to 9.1.3 and zstd 0.14.3 to 0.14.4 among them, [#1767 The catalog and marketplace Corten apps lock brotli 9.1.1 and zstd 0.14.3 behind the workspace lock, so those benchmarks time a compression stack CI no longer tests](https://github.com/corten-run/corten/issues/1767)).
+Compare a new run with an earlier one as a changed dependency input: no speedup from the move was
+measured, and r21 stays pinned to its recorded source, `4225a2837`.
+
 Next.js uses Pages Router SSR here; Phoenix uses controller/HEEx and Laravel uses Blade,
 not their legacy LiveView/Livewire examples. V2 result labels name these workload choices.
 
