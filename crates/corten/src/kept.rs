@@ -104,7 +104,9 @@ static NOTICE: header::HeaderName = crate::page::NOTICE_HEADER;
 
 /// A copy of a kept answer's `head`, each line where it was, with room for [`ADDED`] more
 /// names: a copy made by `clone` holds its lines in a vector as long as they are, which grows on
-/// the first name a stage adds.
+/// the first name a stage adds. (A head with more than four lines beyond the first of their
+/// names pays for this copy once more than for a `clone`, as the map's room for those is not
+/// asked for.)
 fn with_room(head: &HeaderMap) -> HeaderMap {
     if head.keys_len() > ROOMY {
         return head.clone();
@@ -755,7 +757,9 @@ mod tests {
 
     #[test]
     fn a_kept_head_is_copied_line_for_line_with_room_for_what_the_stages_add() {
+        // Made as a page's head is, with room in its table that a `clone` has as well.
         let mut head = HeaderMap::new();
+        head.reserve(13);
         for (name, value) in [
             ("content-type", "text/html; charset=utf-8"),
             ("link", "</a.css>; rel=preload; as=style"),
@@ -772,8 +776,11 @@ mod tests {
         head.append("link", HeaderValue::from_static("</b.js>; rel=modulepreload"));
         let mut copy = with_room(&head);
         assert_eq!(lines(&copy), lines(&head));
-        // As many more names as the stages add, and the map is the size it was made.
-        let room = copy.capacity();
+        // As many more names as the stages add, and the map is the size it was made, with each
+        // line where it was put: the vector a `clone` holds them in grows on the first of these
+        // and moves them, which the size of the map's table does not show.
+        let first = |copy: &HeaderMap| std::ptr::from_ref(&copy[header::CONTENT_TYPE]);
+        let (room, at) = (copy.capacity(), first(&copy));
         assert!(room >= head.keys_len() + ADDED, "{room}");
         for added in 0..ADDED {
             copy.insert(
@@ -782,6 +789,7 @@ mod tests {
             );
         }
         assert_eq!(copy.capacity(), room);
+        assert_eq!(first(&copy), at);
         assert_eq!(lines(&copy)[..head.len()], lines(&head)[..]);
 
         // A head of more names than is given room, with two lines of one, is copied as it is: the
