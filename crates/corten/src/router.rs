@@ -113,10 +113,12 @@ impl Endpoint for Giving {
     }
 }
 
-/// A handler whose answer is a page that is the same for everyone (`Public`): a kept answer is
-/// given in its place, and the one it makes is kept ([`crate::kept`]). Its page is filled here,
-/// as [`crate::middleware`] would after it, so what is kept is the page as it leaves the route.
+/// A handler whose answer is the same for everyone (`Public`), a page or a whole body: a kept
+/// answer is given in its place, and the one it makes is kept ([`crate::kept`]). A page is filled
+/// here, as [`crate::middleware`] would after it, so what is kept is the page as it leaves the
+/// route.
 struct Keeping {
+    form: crate::kept::Form,
     inner: Route,
 }
 
@@ -124,12 +126,14 @@ impl Endpoint for Keeping {
     #[inline]
     fn call(&self, req: Request) -> Answering {
         // Any other request (a navigation, one with a cookie, a write) is the handler's as before.
-        let Some(asked) = crate::kept::Asked::of(&req) else { return self.inner.call(req) };
+        let Some(asked) = crate::kept::Asked::of(&req, self.form) else { return self.inner.call(req) };
         if let Some(kept) = asked.find() {
             return Box::pin(std::future::ready(kept));
         }
         let missed = asked.missed(&req);
-        let here = req.extensions().get::<crate::layout::StartHere>().cloned();
+        // A whole body has no places: its route's reads are the middleware's to end, as before.
+        let page = self.form == crate::kept::Form::Page;
+        let here = req.extensions().get::<crate::layout::StartHere>().filter(|_| page).cloned();
         let answer = self.inner.call(req);
         Box::pin(async move {
             let res = answer.await;
@@ -276,10 +280,9 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
         let keeps = handler.keeps();
         Slot::Unbound(Arc::new(move |state| {
             let handled: Route = Arc::new(Handled { handler: handler.clone(), state, types: PhantomData });
-            if keeps {
-                Arc::new(Keeping { inner: handled })
-            } else {
-                handled
+            match keeps {
+                Some(form) => Arc::new(Keeping { form, inner: handled }),
+                None => handled,
             }
         }))
     }

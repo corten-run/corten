@@ -512,7 +512,7 @@ pub struct App<M = ()> {
     access_log: bool,
     /// The values only the layout shows ([`App::layout_read`]).
     layout_reads: Vec<Arc<dyn crate::layout::Erased>>,
-    /// How many bytes of `Public` pages the app keeps ([`App::kept_answers`]).
+    /// How many bytes of `Public` answers the app keeps ([`App::kept_answers`]).
     kept: usize,
     middleware: M,
 }
@@ -944,17 +944,18 @@ impl<M: Middleware> App<M> {
         self
     }
 
-    /// How many bytes of [`crate::Public`] pages the app keeps to give again (32 MiB unless set;
-    /// `0` keeps none). A page whose route says its answer is the same for everyone is one any
-    /// shared cache may keep for the lifetime it names, and the app is the first of them: the
-    /// whole document made for a `GET` with no cookie or `Authorization` is given to the next
-    /// such request in the handler's place until that lifetime ends (`s-maxage` where the answer
-    /// has `.shared(..)`, else `max_age`), with an `Age`. Every stage still runs for it, the
-    /// app's middleware too; what it saves is the handler, the render, the tag's hash and the
-    /// compression. So a `Public` page's handler does not run for every request, and what it
-    /// reads may be that old when a visitor sees it, as it already may be behind a CDN. A page
-    /// whose handler takes an extractor of the app's own is not kept: it may read a header the
-    /// kept page's key does not cover.
+    /// How many bytes of [`crate::Public`] answers the app keeps to give again (32 MiB unless
+    /// set; `0` keeps none): pages, and whole bodies of JSON or text. A route that says its
+    /// answer is the same for everyone names one any shared cache may keep for the lifetime it
+    /// gives, and the app is the first of them: the whole document, or the body of a route that
+    /// answers JSON or text, made for a `GET` with no cookie or `Authorization` is given to the
+    /// next such request in the handler's place until that lifetime ends (`s-maxage` where the
+    /// answer has `.shared(..)`, else `max_age`), with an `Age`. Every stage still runs for it,
+    /// the app's middleware too; what it saves is the handler, the render or the writing of the
+    /// JSON, the tag's hash and the compression. So a `Public` handler does not run for every
+    /// request, and what it reads may be that old when it is seen, as it already may be behind a
+    /// CDN. An answer whose handler takes an extractor of the app's own is not kept: it may read
+    /// a header the key does not cover. Neither is a file (`Media`), a relay, a stream or a feed.
     ///
     /// Past the bound, a page not read since the last time room was made goes first, and one
     /// larger than an eighth of the bound is not kept. A write to a page's path drops what is

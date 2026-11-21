@@ -254,7 +254,8 @@ and sent `Vary: Accept`, nginx fetched JSON for the JSON request by default and 
 HTML with `Vary` ignored. The runtime loads a navigation answered with a document as a whole
 page, so it still works, more slowly; a data client gets HTML where it asked for JSON.
 
-The app keeps its own `Public` pages too ([the pages the app keeps](app.md#the-pages-the-app-keeps)),
+The app keeps its own `Public` pages too, and its `Public` JSON and text
+([the pages the app keeps](app.md#the-pages-the-app-keeps)),
 so a cache in front may be sent one the app made earlier. Such an answer carries `Age`, and a cache
 that follows RFC 9111 counts its own lifetime from when the page was made rather than from when it
 fetched it: a page is never shown past its lifetime because two caches each kept it for the whole

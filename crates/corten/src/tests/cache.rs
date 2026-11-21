@@ -1413,8 +1413,9 @@ impl<S: Send + Sync> crate::extract::FromRequestParts<S> for Device {
 impl crate::answer::Anonymous for Device {}
 
 /// What is not kept: an answer that is not for everyone, sets a cookie, drew this request's
-/// nonce, failed, is not a page, has no lifetime or is too large for the bound; one whose handler
-/// takes an input of the app's own; and nothing in an app that keeps none, or under `corten dev`.
+/// nonce, failed, is not a page or a whole body (a file, a status alone), has no lifetime or is
+/// too large for the bound; one whose handler takes an input of the app's own; and nothing in an
+/// app that keeps none, or under `corten dev`.
 #[tokio::test]
 async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
     use crate::route::get as typed;
@@ -1470,6 +1471,8 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
             .route("/now", typed(move |req: Req| async move { Public::new(Duration::ZERO, req.test_page_for("Now", home())) }).0)
             .route("/moved", typed(move |req: Req| async move { Public::new(minute, req.redirect(&Root)) }).0)
             .route("/text", typed(move || async move { Public::new(minute, "text") }).0)
+            .route("/file", typed(move || async move { Public::new(minute, Ok::<_, Error>(Media::new("image/png", &b"\x89PNG"[..]))) }).0)
+            .route("/status", typed(move || async move { Public::new(minute, StatusCode::OK) }).0)
             .route(
                 "/device",
                 typed(move |device: Device, req: Req| async move {
@@ -1501,14 +1504,15 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
         ("/gone", "an error page"),
         ("/now", "no lifetime"),
         ("/moved", "a redirect"),
-        ("/text", "not a page"),
+        ("/file", "a file, which is neither a page nor a whole body its type names"),
+        ("/status", "a status alone has no body to keep"),
         ("/keyed", "a submit key drawn for this request"),
         ("/device", "an input of the app's own, which may read a header no key covers"),
         ("/missing", "no route"),
     ] {
         assert!(!kept(router.clone(), uri).await, "{uri}: {why}");
     }
-    for uri in ["/", "/catalog", "/inputs"] {
+    for uri in ["/", "/catalog", "/inputs", "/text"] {
         assert!(kept(router.clone(), uri).await, "{uri}");
     }
     assert!(!kept(App::new(Routes::from(routes())).kept_answers(0).router(), "/").await, "an app that keeps none");
@@ -1669,4 +1673,149 @@ async fn a_kept_page_keeps_the_hash_its_policy_allows_its_style_block_by() {
     assert!(styles.contains("'sha256-"), "the block's hash: {policy}");
     assert!(again.contains_key(header::AGE) && same == body, "the kept page");
     assert_eq!(again[header::CONTENT_SECURITY_POLICY], policy);
+}
+
+// ---- The whole bodies the app keeps: JSON and text ----
+
+/// Which answers are kept as a whole body is known when the app compiles: JSON and text, in a
+/// `Result` or not. A page is kept as a page, and a file, a relay or a status is its handler's
+/// for every request.
+#[test]
+fn an_answer_s_type_says_whether_its_body_is_kept() {
+    use crate::answer::Answer;
+    fn whole<A: Answer>() -> bool {
+        A::WHOLE.0
+    }
+    assert!(whole::<String>() && whole::<&'static str>() && whole::<crate::Result<String>>());
+    assert!(whole::<Public<String>>() && whole::<Public<crate::Result<&'static str>>>());
+    #[cfg(feature = "json")]
+    assert!(whole::<Json<u32>>() && whole::<JsonResult<u32>>() && whole::<Public<JsonResult<u32>>>());
+    assert!(!whole::<StatusCode>() && !whole::<Media>() && !whole::<Public<crate::Result<Media>>>());
+    assert!(!whole::<crate::Relay>() && !whole::<HtmlResult>() && !whole::<Public<HtmlResult>>());
+    assert!(!whole::<NoStore<String>>(), "an answer no cache may store");
+}
+
+/// A `Public` JSON answer and a `Public` text answer are made once for their lifetime, as a
+/// page is: the next request that shows nothing about who asks gets the same bytes with their
+/// age, with the tag and the coded bytes made once, and a write to the path drops them. A
+/// request that asks for JSON first is kept too, apart: its handler can read which client asked.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_public_json_or_text_answer_is_kept_and_given_again() {
+    let minute = Duration::from_secs(60);
+    let (runs, texts, modes) = (Runs::default(), Runs::default(), Runs::default());
+    let (ran, text_ran, mode_ran) = (runs.clone(), texts.clone(), modes.clone());
+    let items = move || {
+        ran.ran();
+        async move { Public::new(minute, Ok::<_, JsonError>(Json(vec!["kept".repeat(300)]))) }
+    };
+    let text = move || {
+        text_ran.ran();
+        async move { Public::new(minute, "kept ".repeat(400)) }
+    };
+    // Says which client asked, as a handler that takes `Req` can.
+    let mode = move |req: Req| {
+        mode_ran.ran();
+        async move { Public::new(minute, Ok::<_, JsonError>(Json(req.mode == crate::Mode::Data))) }
+    };
+    let routes = Table::new()
+        .route("/items", crate::route::get(items).0.post(|| async { StatusCode::NO_CONTENT }))
+        .route("/text", crate::route::get(text).0)
+        .route("/mode", crate::route::get(mode).0);
+    let router = App::new(Routes::from(routes)).router();
+
+    let (status, first, body) = fetch(&router, "GET", "/items", &[]).await;
+    assert_eq!((status, runs.count()), (StatusCode::OK, 1));
+    assert_eq!(first[header::CONTENT_TYPE], "application/json");
+    assert_eq!(first[header::CACHE_CONTROL], "public, max-age=60");
+    assert!(!first.contains_key(header::AGE), "the handler's own answer: {first:?}");
+    let (status, mut again, same) = fetch(&router, "GET", "/items", &[]).await;
+    assert_eq!((status, runs.count()), (StatusCode::OK, 1), "the kept answer, not the handler");
+    assert_eq!(again.remove(header::AGE).expect("a kept answer says how old it is"), "0");
+    assert_eq!(again, first, "every other header as the handler's answer had it");
+    assert_eq!(same, body);
+
+    // A data client's request is another way of asking: kept, and apart.
+    let data = [("accept", "application/json")];
+    let (_, asked, same) = fetch(&router, "GET", "/items", &data).await;
+    assert!(runs.count() == 2 && !asked.contains_key(header::AGE) && same == body, "{asked:?}");
+    let (_, asked, same) = fetch(&router, "GET", "/items", &data).await;
+    assert!(runs.count() == 2 && asked.contains_key(header::AGE) && same == body, "{asked:?}");
+    for _ in 0..2 {
+        let (_, _, plain) = fetch(&router, "GET", "/mode", &[]).await;
+        let (_, _, asked) = fetch(&router, "GET", "/mode", &data).await;
+        assert_eq!((&plain[..], &asked[..]), (&b"false"[..], &b"true"[..]), "each as its handler answered that client");
+    }
+    assert_eq!(modes.count(), 2, "one run for each way of asking");
+
+    // What the answer could differ for is the handler's, and takes no kept answer's place.
+    let mut ran = runs.count();
+    for asked in [
+        ("cookie", "session=abc"),
+        ("authorization", "Bearer t"),
+        ("corten", "page"),
+        ("corten-notice", "saved"),
+        ("last-event-id", "4"),
+        ("content-length", "0"),
+    ] {
+        let (_, headers, _) = fetch(&router, "GET", "/items", &[asked]).await;
+        ran += 1;
+        assert!(runs.count() == ran && !headers.contains_key(header::AGE), "{asked:?}");
+    }
+    let (_, headers, _) = fetch(&router, "HEAD", "/items", &[]).await;
+    assert!(runs.count() == ran + 1 && !headers.contains_key(header::AGE), "a HEAD is the handler's");
+    assert!(fetch(&router, "GET", "/items", &[]).await.1.contains_key(header::AGE));
+    assert!(fetch(&router, "GET", "/items?page=2", &[]).await.1.get(header::AGE).is_none(), "another query is another answer");
+
+    // A write to the path drops every copy kept there.
+    let (status, _, _) = fetch(&router, "POST", "/items", &[("sec-fetch-site", "same-origin")]).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    for asked in [&[][..], &data[..]] {
+        assert!(!fetch(&router, "GET", "/items", asked).await.1.contains_key(header::AGE), "{asked:?}");
+        assert!(fetch(&router, "GET", "/items", asked).await.1.contains_key(header::AGE), "{asked:?}");
+    }
+
+    // Text, with the tag and the coded bytes made once (a coding asked for, so it is tagged).
+    let coded = [("accept-encoding", "gzip")];
+    let (_, first, body) = fetch(&router, "GET", "/text", &coded).await;
+    assert!(first[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/plain"), "{first:?}");
+    let (_, mut again, same) = fetch(&router, "GET", "/text", &coded).await;
+    assert_eq!(texts.count(), 1);
+    assert_eq!(again.remove(header::AGE).expect("kept"), "0");
+    assert!(again == first && same == body, "{again:?}");
+    let (_, _, third) = fetch(&router, "GET", "/text", &coded).await;
+    assert_eq!(third.as_ptr(), same.as_ptr(), "the coded bytes made once");
+    #[cfg(feature = "compress")]
+    assert_eq!(first[header::CONTENT_ENCODING], "gzip");
+    let tag = first[header::ETAG].to_str().unwrap();
+    let (status, _, none) = fetch(&router, "GET", "/text", &[("accept-encoding", "gzip"), ("if-none-match", tag)]).await;
+    assert!(status == StatusCode::NOT_MODIFIED && none.is_empty() && texts.count() == 1);
+}
+
+/// A kept answer in an API is the handler's part alone: what the API adds for the site that asks
+/// (`Access-Control-Allow-Origin`) is written for each request, so no site is sent another's.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_kept_api_answer_is_sent_with_each_request_s_own_cors() {
+    let runs = Runs::default();
+    let ran = runs.clone();
+    let rates = move || {
+        ran.ran();
+        async move { Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json(vec![1.5_f64, 2.5]))) }
+    };
+    let router = App::new(Routes::new())
+        .api::<ApiRoot>(|api| api.route::<ApiRates>(crate::route::get(rates)).allow_origin("https://partner.example"))
+        .router();
+    let partner = [("origin", "https://partner.example")];
+    let allowed = |headers: &HeaderMap| headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).map(|v| v.to_str().unwrap().to_string());
+    let (status, first, body) = fetch(&router, "GET", "/api/rates", &partner).await;
+    assert_eq!((status, &body[..], allowed(&first).as_deref()), (StatusCode::OK, &b"[1.5,2.5]"[..], Some("https://partner.example")));
+    let (_, plain, same) = fetch(&router, "GET", "/api/rates", &[]).await;
+    assert!(plain.contains_key(header::AGE) && same == body, "{plain:?}");
+    assert_eq!(allowed(&plain), None, "not the first asker's");
+    let (_, other, _) = fetch(&router, "GET", "/api/rates", &[("origin", "https://other.example")]).await;
+    assert!(other.contains_key(header::AGE) && allowed(&other).is_none(), "{other:?}");
+    let (_, again, _) = fetch(&router, "GET", "/api/rates", &partner).await;
+    assert!(again.contains_key(header::AGE) && allowed(&again).as_deref() == Some("https://partner.example"), "{again:?}");
+    assert_eq!(runs.count(), 1, "one run for all four");
 }

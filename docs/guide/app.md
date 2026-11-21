@@ -1519,7 +1519,7 @@ else a page could differ by, and the answer nothing made for one request:
 | | Kept and given again | The handler answers |
 |---|---|---|
 | the handler | takes only Corten's own inputs for a page | takes an extractor of the app's own |
-| the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
+| the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound |
 | what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key, a `Vary` of the app's own |
@@ -1576,7 +1576,21 @@ app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a 
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page
 only in the instance that answered it, and a restart starts empty.
 
-`Public` text, JSON and `Media` are not kept, and neither is anything that is not `Public`: a
+A `Public` route that answers JSON (`Public<JsonResult<T>>`) or text is kept the same way: its
+whole body, under every rule above and by the same key, with the tag's hash and each coding's
+bytes made once. What it saves is the handler with what it reads, the writing of the JSON, the
+hash and the compression. Such a route has one answer at its URL, where a page route has the
+document, its swap and its data, so a data client's request (`Accept: application/json` first) is
+kept too, as a copy apart from a request that does not ask for JSON first: a handler that takes
+`Req` can read which of the two asked. What an API adds for the site that asks
+(`Access-Control-Allow-Origin`) is written for each request and is no part of what is kept, so no
+site is sent another's. A write drops it as it drops a page: `PUT /api/items/7` drops what is
+kept for `GET /api/items/7`, and not the list at `/api/items`, which shows the change when its
+lifetime ends.
+
+A file (`Media`), a relay, a live stream and a feed are not kept: each is its handler's for every
+request, and so is JSON the app holds as bytes (`json::Raw`) where the app compresses, which
+already keeps its compressed forms. Neither is anything that is not `Public`: a
 page for one visitor runs its handler for every request, because a key that had to cover the
 caller is where a mistake shows one user's page to another. Cache the data such a page reads in
 the app, where it knows when the data changes.
