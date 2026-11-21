@@ -1273,6 +1273,49 @@ async fn a_kept_page_is_given_in_brotli_made_after_its_second_answer() {
     assert_eq!(runs.count(), 1, "one render for all of them");
 }
 
+/// Only answers a store kept count toward a page's brotli at `Level::Kept`: in a full store the
+/// first request for a new URL is answered by the handler and not kept, and queues nothing, so
+/// the page kept from the second request is given zstd on its first answer after that too, and
+/// its brotli is queued on its second. The compression thread is waited for after each request.
+#[cfg(feature = "compress")]
+#[tokio::test]
+async fn an_answer_a_full_store_did_not_keep_does_not_count_toward_its_brotli() {
+    let runs = Runs::default();
+    let router = App::new(Routes::from(kept_routes(&runs))).kept_answers(64 << 10).router();
+    // Filled uncompressed, so no page of the fill queues a brotli of its own.
+    let kept = |uri: String| {
+        let router = router.clone();
+        async move { fetch(&router, "GET", &uri, &[]).await.1.contains_key(header::AGE) }
+    };
+    let mut room = 0;
+    while kept(format!("/?n={room}")).await || kept(format!("/?n={room}")).await {
+        room += 1;
+        assert!(room < 100, "the store never filled");
+    }
+    // Everything queued on the compression thread before is done.
+    let drained = || {
+        let (done, heard) = std::sync::mpsc::channel();
+        let job = Box::new(move || {
+            done.send(()).ok();
+        });
+        assert!(crate::compress::later(job), "the thread took the job");
+        heard.recv_timeout(Duration::from_secs(10)).expect("the thread is done");
+    };
+    let browser = [("accept-encoding", "gzip, deflate, br, zstd")];
+    let mut given = Vec::new();
+    for _ in 0..4 {
+        let (status, headers, _) = fetch(&router, "GET", "/?new", &browser).await;
+        assert_eq!(status, StatusCode::OK);
+        given.push((headers.contains_key(header::AGE), headers[header::CONTENT_ENCODING].to_str().unwrap().to_owned()));
+        drained();
+    }
+    let given: Vec<(bool, &str)> = given.iter().map(|(age, coding)| (*age, coding.as_str())).collect();
+    assert_eq!(
+        given,
+        [(false, "zstd"), (false, "zstd"), (true, "zstd"), (true, "br")],
+        "not kept, then made and kept, then given twice: brotli after the kept page's second answer"
+    );
+}
 /// A write drops what is kept at its path, whatever the query and whatever it is answered (the
 /// router's own answer for a method the path has no handler for included), and one that goes
 /// through drops the place it redirects to. No other path's page is dropped.
