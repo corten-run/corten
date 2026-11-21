@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { alternateCampaignPlacements, bindExecution } from "./contract.mjs";
-import { groupNames } from "../registry.mjs";
+import { campaignRounds, groupNames, jsonPreparationRound, nativeArtifactRoot } from "../registry.mjs";
 import { catalogFleetPlacement } from "../cloud-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { parseArgs } from "../../json-api/contract.mjs";
@@ -21,14 +21,7 @@ export function exact(value, fields) {
   assert.ok(value && Object.getPrototypeOf(value) === Object.prototype, "plain object required");
   assert.deepEqual(Object.keys(value).sort(), [...fields].sort(), "unexpected or missing fields");
 }
-export function campaignRounds(round) {
-  assert.equal(typeof round, "string"); assert.match(round, /^r[1-9]\d*$/);
-  const n = Number(round.slice(1));
-  assert.ok(Number.isSafeInteger(n) && n >= 17 && n <= 1000000000, "official campaign round must be r17..r1000000000");
-  return Object.fromEntries(groupNames.map((group) => [group, group === "catalog-page" ? `c${n}`
-    : group === "json-api" ? `j${2 * n + 1}` : group === "localized-marketplace" ? round
-      : ["live-delivery", "recoverable-live"].includes(group) ? round : `w${n}`]));
-}
+export { campaignRounds };
 export function bindCampaign(input) {
   exact(input, ["round", "commit"]);
   return bindNativeCampaign(input, groupNames, campaignSchema, "legacy");
@@ -69,13 +62,13 @@ export function validateCampaign(plan) {
 export function jsonPhase(plan, phase, receiptPath) {
   const binding = plan.bindings.find((b) => b.request.group === "json-api");
   assert.ok(binding); assert.ok(["prepare", "timing"].includes(phase));
-  const round = phase === "prepare" ? `j${2 * Number(plan.round.slice(1))}` : binding.request.round;
+  const round = phase === "prepare" ? jsonPreparationRound(plan.round) : binding.request.round;
   const argv = ["bench/json-api/run.mjs", round, "--group", "json-api"];
   if (phase === "prepare") argv.push("--build", "--check-only");
   else { assert.equal(typeof receiptPath, "string"); argv.push("--receipts", receiptPath); }
   return freeze({ ...binding, request: { ...binding.request, round },
     execution: { ...binding.execution, invocation: { executable: "node", argv }, effectiveOptions: parseArgs(argv.slice(1)) },
-    validation: { ...binding.validation, artifactRoot: `bench/json-api/results/${round}` } });
+    validation: { ...binding.validation, artifactRoot: nativeArtifactRoot("json-api", round) } });
 }
 
 export function mixedPhase(plan, id) {

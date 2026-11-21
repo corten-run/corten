@@ -67,8 +67,58 @@ const NOTICE_MAX: usize = 500;
 
 /// Responses depend on the mode header and, for [`Mode::Data`], on `Accept`.
 const VARY: &str = "corten, accept";
-/// The same, for an app with [`crate::App::messages`]: the locale follows `Accept-Language`.
+/// The same, for an answer whose locale follows `Accept-Language`.
 const VARY_LANGUAGE: &str = "corten, accept, accept-language";
+
+/// Settles the answer's dependency on `Accept-Language` as it leaves the app, whatever made it: a
+/// page, JSON, a redirect, the error page, or a middleware that read messages after `next` or put
+/// its own `Vary` on a kept page (which says the language it was kept for, [`crate::kept`]). When
+/// something negotiated the request's locale from the header (`asked`, read from
+/// [`crate::Signal::asked_language`] before the answer's body is wrapped) and no line of the
+/// answer's `Vary` names it (or `*`), it is added ([`add_language`]). A page that read messages
+/// before it was made names it on its own line ([`Req::vary`]), which is taken as it is, unscanned.
+/// Returns whether the answer has a `Vary`, so the security headers do not look it up again.
+///
+/// Inlined, so the common answer (a page's own line, or nothing negotiated) costs the lookup the
+/// security headers would make anyway and a comparison.
+#[inline(always)]
+pub(crate) fn vary_on_language(asked: bool, headers: &mut HeaderMap) -> bool {
+    match headers.get(header::VARY) {
+        None if !asked => false,
+        Some(first) if !asked || first.as_bytes() == VARY_LANGUAGE.as_bytes() => true,
+        _ => {
+            name_language(headers);
+            true
+        }
+    }
+}
+
+/// The rest of [`vary_on_language`]: `accept-language` added unless a line names it or `*`.
+#[inline(never)]
+fn name_language(headers: &mut HeaderMap) {
+    let named = headers.get_all(header::VARY).iter().any(|line| {
+        line.as_bytes()
+            .split(|&b| b == b',')
+            .map(<[u8]>::trim_ascii)
+            .any(|name| name == b"*" || name.eq_ignore_ascii_case(b"accept-language"))
+    });
+    if !named {
+        add_language(headers);
+    }
+}
+
+/// Names `accept-language` in a `Vary` none of whose lines does: in the place of a page's own
+/// line when it is the only one, as a page that read messages before it was made says it
+/// ([`Req::vary`]), else on a line of its own beside the others.
+pub(crate) fn add_language(headers: &mut HeaderMap) {
+    let mut lines = headers.get_all(header::VARY).iter();
+    let own = lines.next().is_some_and(|line| line.as_bytes() == VARY.as_bytes()) && lines.next().is_none();
+    if own {
+        headers.insert(header::VARY, HeaderValue::from_static(VARY_LANGUAGE));
+    } else {
+        headers.append(header::VARY, HeaderValue::from_static("accept-language"));
+    }
+}
 
 /// How the client asked for this response.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1582,15 +1632,11 @@ impl Req {
             // Another messages type: the app's locale by its tag, as the URL chose it.
             Some(locales) => match self.signal.locale() {
                 Some(index) => M::for_locale(locales.get(index).copied().unwrap_or(locales[0])),
-                None => M::negotiate(self.accept_language()),
+                None => self.negotiate::<M>(),
             },
             None => match self.signal.locale() {
                 Some(index) => M::from_index(index),
-                None => {
-                    // No answer of this app says it varies on the header: a kept page is told.
-                    self.signal.ask_language();
-                    M::negotiate(self.accept_language())
-                }
+                None => self.negotiate::<M>(),
             },
         }
     }
@@ -1601,9 +1647,17 @@ impl Req {
         if let Some(index) = self.signal.known_locale() {
             return index;
         }
+        // Noted for the answer's `Vary` (`vary_on_language`), however late it is read.
+        self.signal.ask_language();
         let index = crate::i18n::negotiate(locales, self.accept_language());
         self.signal.negotiated_locale(index);
         index
+    }
+
+    /// `M` in the locale `Accept-Language` asks for, noted for the answer's `Vary`.
+    fn negotiate<M: crate::i18n::Messages>(&self) -> M {
+        self.signal.ask_language();
+        M::negotiate(self.accept_language())
     }
 
     /// Answers in `locale`, the one the page's URL names (a [`crate::i18n::Locale`] route field,
@@ -2314,13 +2368,15 @@ impl Req {
         res
     }
 
-    /// A page whose locale the handler chose from its URL does not vary on `Accept-Language`.
+    /// What the answer varies on. With [`crate::App::messages`] every answer is in the locale
+    /// `Accept-Language` asks for (its `Content-Language` says which) unless the handler chose it
+    /// from the URL; without, only one that read messages in the language the header asks for is.
     fn vary(&self) -> HeaderValue {
-        HeaderValue::from_static(if self.shared.locales.is_some() && self.signal.locale().is_none() {
-            VARY_LANGUAGE
-        } else {
-            VARY
-        })
+        let language = match self.shared.locales {
+            Some(_) => self.signal.locale().is_none(),
+            None => self.signal.asked_language(),
+        };
+        HeaderValue::from_static(if language { VARY_LANGUAGE } else { VARY })
     }
 
     /// `Content-Language`: the locale the answer is in, in an app with messages.
