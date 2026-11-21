@@ -512,6 +512,8 @@ pub struct App<M = ()> {
     access_log: bool,
     /// The values only the layout shows ([`App::layout_read`]).
     layout_reads: Vec<Arc<dyn crate::layout::Erased>>,
+    /// How many bytes of `Public` pages the app keeps ([`App::kept_answers`]).
+    kept: usize,
     middleware: M,
 }
 
@@ -644,6 +646,7 @@ impl App {
             layers: Vec::new(),
             access_log: false,
             layout_reads: Vec::new(),
+            kept: crate::kept::BOUND,
             middleware: (),
         }
     }
@@ -685,6 +688,7 @@ impl App {
             layers: self.layers,
             access_log: self.access_log,
             layout_reads: self.layout_reads,
+            kept: self.kept,
             middleware,
         }
     }
@@ -937,6 +941,29 @@ impl<M: Middleware> App<M> {
     /// and open pages reload when the server restarts. Never on in production.
     pub fn dev(mut self, dev: bool) -> Self {
         self.dev = Some(dev);
+        self
+    }
+
+    /// How many bytes of [`crate::Public`] pages the app keeps to give again (32 MiB unless set;
+    /// `0` keeps none). A page whose route says its answer is the same for everyone is one any
+    /// shared cache may keep for the lifetime it names, and the app is the first of them: the
+    /// whole document made for a `GET` with no cookie or `Authorization` is given to the next
+    /// such request in the handler's place until that lifetime ends (`s-maxage` where the answer
+    /// has `.shared(..)`, else `max_age`), with an `Age`. Every stage still runs for it, the
+    /// app's middleware too; what it saves is the handler, the render, the tag's hash and the
+    /// compression. So a `Public` page's handler does not run for every request, and what it
+    /// reads may be that old when a visitor sees it, as it already may be behind a CDN. A page
+    /// whose handler takes an extractor of the app's own is not kept: it may read a header the
+    /// kept page's key does not cover.
+    ///
+    /// Past the bound, a page not read since the last time room was made goes first, and one
+    /// larger than an eighth of the bound is not kept. A write to a page's path drops what is
+    /// kept there, whatever it is answered, and so does one that redirects to it; a
+    /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
+    /// under `corten dev`. The bytes counted are each page's key, its headers, its body and each
+    /// compressed form made of it.
+    pub fn kept_answers(mut self, bytes: usize) -> Self {
+        self.kept = bytes;
         self
     }
 
@@ -1512,6 +1539,8 @@ impl<M: Middleware> App<M> {
             shared.zoned_dates = self.zoned_dates;
         }
         shared.dev = dev;
+        // Under `corten dev` every load is the handler's, so a change shows on the next one.
+        shared.kept = if dev { None } else { crate::kept::Answers::new(self.kept) };
         shared.layout_reads = self.layout_reads.into();
         // The same path routed in two places (the app's routes and an area's) is one route to the router,
         // with the methods of both.
@@ -2606,6 +2635,10 @@ impl<S: Steps> Layer<S> {
             req.extensions_mut().remove::<crate::router::MatchedPath>();
         }
         let path = self.shared.dev.then(|| req.uri().path().to_string());
+        // A write may change what a kept page shows: it is counted for its path when it is
+        // answered, and when it is dropped before that. Only for a method that is not safe, in
+        // an app that keeps answers.
+        let wrote = self.shared.kept.as_ref().filter(|_| !req.method().is_safe()).map(|kept| kept.writing(req, &watch.0));
         // A debug build times the runtime's hover prefetch, so a page that grew slow is named
         // before someone has to measure every screen. It is timed until it is dropped, so a
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
@@ -2616,6 +2649,9 @@ impl<S: Steps> Layer<S> {
         let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
         let caller = watch.0.is_personal();
         let mut res = signal::follow(res, watch, self.zoned());
+        if let Some(wrote) = wrote {
+            wrote.answered(&res);
+        }
         #[cfg(debug_assertions)]
         if let Some(prefetched) = &mut prefetched {
             prefetched.answered = true;

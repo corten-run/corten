@@ -5,8 +5,8 @@ import { pathToFileURL } from "node:url";
 import { posix } from "node:path";
 import { memoryMiB, summarizeSamples } from "../catalog/stats.mjs";
 import { records } from "./fixtures.mjs";
-import { admitted, featureProfile, qualificationSettings, validateQualification } from "./feature-contract.mjs";
-import { validateSummary } from "./report.mjs";
+import { admitted } from "./feature-contract.mjs";
+import { qualificationValidator, validateSummary } from "./report.mjs";
 import { imageProvenance, inventory, loadPhases, parseArgs, passPlan, phaseEnd, readLoadSummary, readOutcome, resultSchema, roundIdentity, sources, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 import { validateLoadExecution } from "./load-evidence.mjs";
 import { evidenceVersion, k6Image, loadEnvironment, nodeImage, sourceTree, upstreamInterpretation } from "./raw-contract.mjs";
@@ -59,6 +59,8 @@ function replay({ folder, round, commit }) {
   assert.equal(s.evidenceVersion, evidenceVersion, "raw receipts absent or unsupported; summary-only evidence is not validated");
   assert.equal(s.split, undefined, "validate each native split part, not its merged summary");
   validateSummary(s);
+  const validateQualificationRecord = s.options.group ? qualificationValidator(s.measurement) : null;
+  const { featureProfile, qualificationSettings } = s.measurement;
   const args = [round, ...(s.options.build === true ? ["--build"] : []), ...(s.options.group ? ["--group", s.options.group] : []),
     ...(s.options.part ? ["--part", `${s.options.part.index}/${s.options.part.of}`] : [])];
   for (const [key, flag] of [["passes", "--passes"], ["duration", "--duration"], ["warmup", "--warmup"], ["rate", "--rate"], ["startupTimeout", "--startup-timeout"]]) args.push(flag, String(s.options[key]));
@@ -207,7 +209,7 @@ function replay({ folder, round, commit }) {
       const base = `${source}/${app}`;
       const checkedApp = appRuntime(files.json(`${base}/app-container.json`), app, source);
       if (s.options.group) {
-        const q = validateQualification(files.json(`${base}/qualification.json`));
+        const q = validateQualificationRecord(files.json(`${base}/qualification.json`));
         assert.deepEqual(q, a.qualification[source], "saved qualification differs from raw probes");
         checker(files.json(`${base}/qualification-container.json`), checkedApp, source, "qualify", "qualification", 512 * 2 ** 20);
         if (!q.eligible) continue;

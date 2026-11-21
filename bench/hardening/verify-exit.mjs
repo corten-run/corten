@@ -4,7 +4,6 @@ import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
 import { terminalRecovery, collectTerminalHealth } from "./lifecycle.mjs";
-import { targetOutcome } from "./evidence.mjs";
 
 const exec = promisify(execFile), task = `hardening-exit-${randomBytes(6).toString("hex")}`, name = `${task}-target`, observer = `${task}-observer`;
 const docker = async (args) => (await exec("docker", args, { timeout: 15000, windowsHide: true, maxBuffer: 2 ** 20 })).stdout.trim();
@@ -41,10 +40,8 @@ try {
   assert.ok(!events.some((e) => ["kill", "stop", "start", "restart", "destroy"].includes(e.Action)));
   const recovery = terminalRecovery(true, [{ id: "application", role: "application" }], [{ id: "application", running: true }],
     { application: { before, ...result, events } }, "api", { application: "/health" });
-  const capture = { recovery, measurement: "complete", legitimate: Object.fromEntries(["before", "during", "after"].map((window) => [window, { counts: { sent: 1, ok: 1, errors: 0 } }])) };
-  const outcome = targetOutcome(capture, { productionQualified: true }, { state: "observed" });
-  assert.equal(outcome.classification, "target-capacity-failure"); assert.equal(outcome.numericComparisonQualified, false);
-  console.log("PASS real Docker natural exit between Running check and observer start: retained target-capacity-failure, not apparatus-invalid");
+  assert.equal(recovery.disposition, "not-recovered"); assert.equal(recovery.terminalServices[0].healthy, false);
+  console.log("PASS real Docker natural exit between Running check and observer start: retained target exit, not apparatus-invalid");
 } finally {
   for (const owned of [observer, name]) {
     const ids = await docker(["ps", "-aq", "--filter", `name=^/${owned}$`]);

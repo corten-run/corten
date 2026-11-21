@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterPhase, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, phases, readLoadSummary, readOutcome, resultSchema, sources, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 import { workload } from "./contract.mjs";
-import { admitted, featureProfile, qualificationSettings, validateQualification } from "./feature-contract.mjs";
+import { admitted, boundedFeatureProfile, boundedQualificationSettings, validateActiveQualification } from "./feature-contract.mjs";
 import { validateMarketplace } from "./records.mjs";
 import { sampleStats } from "../catalog/stats.mjs";
 import { containerReceipt, evidenceVersion, imageReceipt, nodeImage, sourceTree } from "./raw-contract.mjs";
@@ -36,7 +36,7 @@ const summary = { schema: resultSchema, evidenceVersion, workload, round: option
     cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU", coldClock: "Docker-host container StartedAt to first complete 200, not process exec" } };
 const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
 const log = (message) => { const line = `${new Date().toISOString()} ${message}`; console.log(line); appendFileSync(join(folder, "run.log"), `${line}\n`); };
-if (options.group) Object.assign(summary.measurement, { featureProfile, qualificationSettings });
+if (options.group) Object.assign(summary.measurement, { featureProfile: boundedFeatureProfile, qualificationSettings: boundedQualificationSettings });
 const active = new Set();
 const created = [], removed = [], images = {}, toolImages = {};
 const retain = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2));
@@ -150,7 +150,7 @@ function appArgs(name, source, image) {
   return ["--network", network, ...cpus.app.args, "--memory", "1g", "-p", "127.0.0.1::8080",
     "-v", `${fixtureDir}:/fixtures:ro`, "-e", `MARKETPLACE_SOURCE=${source}`, "-e", "MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json",
     "-e", `API_BASE=${apiBase}`, "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`,
-    ...(options.group ? ["--ulimit", "nofile=65536:65536", "-e", `PROFILE=${qualificationSettings.nativeProfile}`, "-e", `MAX_CONNECTIONS=${qualificationSettings.maxConnections}`] : []), image];
+    ...(options.group ? ["--ulimit", "nofile=65536:65536", "-e", `PROFILE=${boundedQualificationSettings.nativeProfile}`, "-e", `MAX_CONNECTIONS=${boundedQualificationSettings.maxConnections}`] : []), image];
 }
 async function ready(base) {
   const deadline = Date.now() + options.startupTimeout * 1000;
@@ -313,7 +313,7 @@ try {
         const buildCommit = await command("git", ["rev-parse", "HEAD"]);
         const buildDirty = (await command("git", ["status", "--porcelain"])).length > 0;
         await docker(["build", "--label", `run.corten.marketplace.commit=${buildCommit}`, "--label", `run.corten.marketplace.dirty=${buildDirty}`,
-          ...(options.group ? ["--label", `run.corten.marketplace.profile=${featureProfile}`, "--build-arg", `PROFILE=${qualificationSettings.nativeProfile}`] : []),
+          ...(options.group ? ["--label", `run.corten.marketplace.profile=${boundedFeatureProfile}`, "--build-arg", `PROFILE=${boundedQualificationSettings.nativeProfile}`] : []),
           "-t", entry.image, "-f", dockerfile, context], { timeout: 60 * 60 * 1000, file: join(folder, `build-${app}.log`) });
         assert.equal(await command("git", ["rev-parse", "HEAD"]), buildCommit, "HEAD changed during image build");
         assert.ok(buildDirty || !(await command("git", ["status", "--porcelain"])).length, "checkout became dirty during image build");
@@ -322,8 +322,8 @@ try {
       images[app] = imageReceipt(image);
       retain(join(folder, "images.json"), images);
       Object.assign(entry, imageProvenance(image.Config.Labels, summary.commit, options.checkOnly));
+      if (options.group) assert.equal(image.Config.Labels["run.corten.marketplace.profile"], boundedFeatureProfile, "image lacks the required feature profile; rebuild with --build");
       entry.imageId = image.Id;
-      if (options.group) assert.equal(image.Config.Labels["run.corten.marketplace.profile"], featureProfile, "image lacks the required feature profile");
       entry.imageBytes = image.Size;
     } catch (e) { fail(app, null, "build/image", e); }
     save();
@@ -380,11 +380,12 @@ try {
         if (options.group) {
           const qualificationContainer = `${name}-qualification`;
           try {
-            await owned(["create", "--network", `container:${name}`, ...cpus.load.args, "--memory", "512m", "--ulimit", "nofile=65536:65536", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
+            await owned(["create", "--network", `container:${name}`, ...cpus.load.args, "--memory", "512m", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
               checker.Id, "node", "/repo/bench/marketplace/qualify.mjs", "http://127.0.0.1:8080", source, apiBase, "/results/qualification.json"], qualificationContainer);
             await docker(["start", "-a", qualificationContainer], { timeout: 8 * 60000, file: join(out, "qualification.log") });
             retain(join(out, "qualification-container.json"), await receipt(qualificationContainer));
-            const q = validateQualification(JSON.parse(readFileSync(join(out, "qualification.json"), "utf8")));
+            const q = validateActiveQualification(JSON.parse(readFileSync(join(out, "qualification.json"), "utf8")));
+            assert.equal(q.source, source, "qualification came from a different source");
             (entry.qualification ??= {})[source] = q;
             if (!q.eligible) { log(`excluding ${app} ${source}: missing ${q.missing.join(", ")}`); save(); continue; }
           } finally { await remove(qualificationContainer); }

@@ -2116,7 +2116,8 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    one CPU and 1 GiB. Nothing is tuned to get an app through a test: one that cannot start or cannot
    serve the fixed rate (more than 5% of it never sent, or more than 1% errors) is marked failed.
    Each could be tuned further (caching, streaming, more workers). None of the apps cache rendered
-   pages. Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at their
+   pages: Corten keeps a `Public` page by default, and its app turns that off
+   (`App::kept_answers(0)`). Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at their
    default level and FastAPI does (`fastapi run` keeps uvicorn's access log). Drogon runs one IO
    thread per core, as its docs advise, and counts its cores from its CPU affinity capped by the
    container's CPU quota, since its own count (`0`) sees every core of the host. FastAPI runs

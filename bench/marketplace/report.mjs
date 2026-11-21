@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupApps } from "./groups.mjs";
-import { admitted, featureProfile, qualificationSettings, validateQualification } from "./feature-contract.mjs";
+import { admitted, boundedFeatureProfile, boundedQualificationSettings, featureProfile, qualificationSettings, validateActiveQualification, validateQualification } from "./feature-contract.mjs";
 import { aggregateCold, cpuSettings, loadPhases, parsePart, phases, readableSchemas, roundIdentity, sources, splitApps, splitSubject, stageAggregate, timedProfiles, v3Schema } from "./run-contract.mjs";
 import { betweenDroplets, cleanOutcome, differText, outcomeFields, subjectMetrics } from "./split.mjs";
 const finite = (n, min = 0) => assert.ok(Number.isFinite(n) && n >= min, "missing/invalid measurement");
@@ -55,11 +55,24 @@ function hostEvidence(host, tools) {
   assert.match(host.onlineCpus, /^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/);
   for (const tool of ["upstream", "checker", "k6"]) assert.match(tools[tool].imageId, /^sha256:[a-f0-9]{64}$/);
 }
+// The round's profile selects one contract for every source, candidate and split part.
+export function qualificationValidator(measurement) {
+  switch (measurement.featureProfile) {
+    case featureProfile:
+      assert.deepEqual(measurement.qualificationSettings, qualificationSettings, "wrong historical qualification settings");
+      return validateQualification;
+    case boundedFeatureProfile:
+      assert.deepEqual(measurement.qualificationSettings, boundedQualificationSettings, "wrong bounded qualification settings");
+      return validateActiveQualification;
+    default:
+      assert.fail(`unknown marketplace feature profile ${measurement.featureProfile}`);
+  }
+}
 // A round split across droplets (#816): its parts must be the split of its named group, each with
 // its own Corten, host and window, and each a comparison by itself: a feature-qualified Corten and
 // at least one admitted peer on that droplet, each finished and clean, with its own run, and all
 // run at once. Returns the window each candidate was measured in.
-function splitEvidence(s, v3, start, end) {
+function splitEvidence(s, v3, start, end, validateQualificationRecord) {
   const { split } = s;
   assert.deepEqual(Object.keys(split ?? {}).sort(), ["droplets", "parts"], "a split round records its droplets and parts");
   const shares = splitApps(s.options.group, split.droplets);
@@ -76,7 +89,7 @@ function splitEvidence(s, v3, start, end) {
     const partStart = time(p.startedAt), partEnd = time(p.finishedAt);
     assert.ok(partStart >= start && partEnd > partStart && partEnd <= end, `d${p.index}'s window is outside the round's`);
     hostEvidence(p.host, p.tools);
-    validateApp(s, p.corten, partStart, partEnd, v3);
+    validateApp(s, p.corten, partStart, partEnd, v3, validateQualificationRecord);
     assert.ok(admitted(p.corten) && p.apps.some((app) => app !== splitSubject && admitted(s.apps[app])), `d${p.index} needs a feature-qualified Corten and peer: a part whose peers are all excluded is no comparison`);
     for (const app of p.apps) windows[app] ??= [partStart, partEnd];
   });
@@ -87,14 +100,14 @@ function splitEvidence(s, v3, start, end) {
   assert.deepEqual(split.parts[0].corten, s.apps[splitSubject], "the round's corten is d1's");
   return windows;
 }
-function validateApp(s, a, start, end, v3) {
+function validateApp(s, a, start, end, v3, validateQualificationRecord) {
   assert.match(a.imageId, /^sha256:[a-f0-9]{64}$/);
   assert.equal(a.builtCommit, s.commit);
   assert.equal(a.builtDirty, false);
   assert.ok(!a.failures?.length, "per-app failures contradict complete status");
-  if (s.options.group) {
+  if (validateQualificationRecord) {
     assert.deepEqual(Object.keys(a.qualification).sort(), [...sources].sort());
-    for (const source of sources) { const q = validateQualification(a.qualification[source]); assert.equal(q.source, source); }
+    for (const source of sources) { const q = validateQualificationRecord(a.qualification[source]); assert.equal(q.source, source); }
     if (!admitted(a)) {
       assert.deepEqual(a.runs, {}, "an excluded candidate cannot have load runs");
       assert.deepEqual(a.phases, {}, "an excluded candidate cannot have aggregates");
@@ -181,15 +194,15 @@ export function validateSummary(s) {
   assert.deepEqual([...s.options.apps].sort(), [...selected].sort());
   assert.deepEqual(Object.keys(s.apps).sort(), [...selected].sort());
   assert.equal(s.fixtureSha256, createHash("sha256").update(JSON.stringify(records())).digest("hex"));
+  let validateQualificationRecord;
   if (s.options.group) {
     assert.equal(s.schema, "marketplace-results/v5", "named feature groups require the v5 schema");
-    assert.equal(s.measurement.featureProfile, featureProfile);
-    assert.deepEqual(s.measurement.qualificationSettings, qualificationSettings);
+    validateQualificationRecord = qualificationValidator(s.measurement);
     // A merged split round checks this on each droplet (splitEvidence).
     if (s.split === undefined) assert.ok(admitted(s.apps.corten) && Object.values(s.apps).filter(admitted).length > 1, "a group needs a feature-qualified Corten and peer");
   }
-  const windows = s.split === undefined ? {} : splitEvidence(s, v3, start, end);
-  for (const app of selected) validateApp(s, s.apps[app], ...(windows[app] ?? [start, end]), v3);
+  const windows = s.split === undefined ? {} : splitEvidence(s, v3, start, end, validateQualificationRecord);
+  for (const app of selected) validateApp(s, s.apps[app], ...(windows[app] ?? [start, end]), v3, validateQualificationRecord);
   return s;
 }
 export function report(s) {
@@ -218,8 +231,10 @@ export function report(s) {
   const cell = (r, digits = 2) => `${r.median.toFixed(digits)} [${r.min.toFixed(digits)}-${r.max.toFixed(digits)}]`;
   const label = (v) => v.replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
   if (s.options.group) {
-    lines.push("", `Feature contract: ${featureProfile}. Popular and performance-oriented candidate cohorts are deduplicated; candidates are not a current speed ranking. ETag/conditional GET and downstream readiness are not required by this workload, and are not claimed equivalent. Logging remains native, not normalized.`,
-      "", "## Feature Qualification", "", `| Candidate |${split ? " Droplet |" : ""} Result | Missing required work |`, `|---|${split ? "---|" : ""}---|---|`);
+    lines.push("", `Feature contract: ${s.measurement.featureProfile}. Popular and performance-oriented candidate cohorts are deduplicated; candidates are not a current speed ranking. ETag/conditional GET and downstream readiness are not required by this workload, and are not claimed equivalent. Logging remains native, not normalized.`);
+    if (s.measurement.featureProfile === boundedFeatureProfile) lines.push("", "Connection-flood resistance: not measured.",
+      "The bounded gate also does not assess incomplete request headers, oversized requests or downstream deadlines.");
+    lines.push("", "## Feature Qualification", "", `| Candidate |${split ? " Droplet |" : ""} Result | Missing required work |`, `|---|${split ? "---|" : ""}---|---|`);
     // A split round's Corten qualified on every droplet; each other candidate on its own.
     const qualified = split ? split.parts.flatMap((p) => p.apps.map((app) => ({ app, a: app === splitSubject ? p.corten : s.apps[app], droplet: ` ${s.round}-d${p.index} |` })))
       : candidates.map((app) => ({ app, a: s.apps[app], droplet: "" }));

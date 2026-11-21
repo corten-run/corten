@@ -18,7 +18,7 @@ const nativeScope = {
   "client-heavy": "Native production bundles and browser observations; bounded local verification is not an isolated performance ranking.",
   "live-delivery": "Native live captures; complete native inventory and reviewed fanout measurement are still required.",
   "recoverable-live": "Native replay/resnapshot captures; complete native inventory and reviewed recovery load measurement are still required.",
-  hardening: "Native attack apparatus; full parity, controls and complete direct/edge evidence are still required.",
+  hardening: "Bounded request deadlines, request limits and dependency recovery; requires matching parity, controls and direct/edge evidence.",
 };
 
 export function plan(name, evidence = []) {

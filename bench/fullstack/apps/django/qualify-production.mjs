@@ -1,4 +1,4 @@
-// Local qualification and the complete browser gate on a built image, never load evidence.
+// Local bounded qualification and the complete browser gate on a built image, never load evidence.
 // node bench/fullstack/apps/django/qualify-production.mjs <output-directory> [image]
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -116,8 +116,9 @@ try {
         effectiveConfig: docker("exec", app, "cat", "/proc/1/cmdline").split("\0").filter(Boolean),
         upstream: { cpuQuota: 1000000000, memory: 1073741824 }, sourceOverlays: [] }, null, 2));
       const result = await qualify({ base: port(app), source, upstream: port(upstream) });
-      writeFileSync(resolve(output, `${source}-qualification.json`), JSON.stringify(result, null, 2));
-      console.log(`${source}: ${result.eligible ? "qualified" : `missing ${result.missing.join(", ")}`}`);
+      writeFileSync(resolve(output, `${source}-bounded-qualification.json`), JSON.stringify(result, null, 2));
+      console.log(`${source}: bounded qualification ${result.eligible ? "passed" : `missing ${result.missing.join(", ")}`}`);
+      console.log("Connection-flood resistance: not measured.");
       if (!result.eligible) failures.push(`${source}: ${result.missing.join(", ")}`);
       const check = `${app}-browser`;
       containers.add(check);

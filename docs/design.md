@@ -7230,6 +7230,147 @@ rules something out.
     and only the build ran. The build argument's two values in these runs each ran the
     first `RUN` anew.
 
+70. <a id="choice-kept-pages"></a>**The app keeps its own `Public` pages, where the handler
+    stands.** A page whose route says its answer is the same for everyone told every shared
+    cache to keep it, and the app kept none: each request without credentials ran the handler,
+    the render, the tag's hash and the compression again. The whole document a `Public` page's
+    handler made for a `GET` that shows nothing about who asks is now kept for its shared
+    lifetime (`s-maxage`, else `max-age`, RFC 9111 section 4.2.1) and given to the next such
+    request with an `Age` ([caching](guide/app.md#the-pages-the-app-keeps),
+    `crates/corten/src/kept.rs`). The hash of its body and its bytes in each coding are made
+    once and stay with it, so the tag and the compression after the handler cost a kept page a
+    lookup. It is on unless the app says otherwise, holds at most 32 MiB
+    (`App::kept_answers`), and is off under `corten dev`.
+
+    It stands at the handler's place, not in front of the app. What makes a kept answer safe to
+    give to anyone is the rule checked when the app compiles, that a `Public` handler takes only
+    inputs that cannot tell who asks, and that rule covers the handler alone. A middleware may
+    refuse a request (a rate limit, an allow-list, a maintenance switch), send it elsewhere or
+    stamp its answer, and a store in front of it would pass each of those by for a kept page and
+    replay one request's headers to the next. Here every stage runs for every request: the
+    middleware meets it and sees the `200` with the whole body, as
+    [the request path](guide/app.md#your-own-middleware) says it does, and the security headers,
+    `Cache-Control`, the tag and the compression treat a kept page as the handler's answer, so no
+    rule about what may be shared is written twice. Only a route typed `Public` whose answer is
+    a page asks the store at all, which is known when the route is made, so no other route's
+    `GET` pays for it; a write pays a hash of its path and a count.
+
+    "Cannot tell who asks" is less than a key needs: an extractor of the app's own may be
+    `Anonymous` and read the browser's `User-Agent` or a country header a proxy set. So a page
+    is kept only when each input of its handler is one of Corten's own whose reading of a page's
+    request is known (`Params`, `Form`, `State`, `Req`, `Signal`, `Method`, `Uri`), which is
+    also known when the route is made (`Anonymous::KEYED`, whose type an app cannot name, so
+    an extractor of the app's own cannot claim it); a page whose handler takes another is made
+    for every request. What those inputs read of the whole document's `GET` is the key:
+    the `Host`, the path and the query, and the `Accept-Language` when the page's `Vary` names
+    it or a message was read in the language it asks for. The header is compared as it was
+    sent, as a CDN compares it ([Choice 22](#choice-locale-in-url)), with at most eight copies
+    for a URL, a new one in the place of one not read since it was kept or since room was last
+    made. The request must be at the URL the router matched (a route's parameters are read
+    from the path as it was matched), with no cookie but the time zone's, no `Authorization`, no
+    caller read by a middleware and no body. The answer must be a `200` of a known size with a
+    lifetime that sets no cookie, drew neither the request's nonce nor a value made for this
+    request, varies on nothing else, and carries exactly the marks a page is known to carry: one
+    added later that this code does not know is not replayed by mistake, the page is simply not
+    kept.
+
+    A write drops what is kept at its path, whatever the query, since a named post is
+    `?do=name` at its page's path, whatever it is answered. That is wider than RFC 9111
+    section 4.4 asks (a write that did not fail): a handler that answered `4xx` or `5xx`,
+    passed its deadline (a `503`, or a `408` while it waited for the body) or lost its client
+    may have written first, and its status does not say; work that outlives its request
+    (`Signal::finish`) counts again when it ends. The router's own `405` and `501` count as
+    well: a middleware met the request first and may have taken the write itself, and leaving
+    them out by a mark the router set was tried and left a page stale in that case. The price is
+    that any client can have a kept page made again: one write to a path drops every copy kept
+    there (each query, host and language), and each is made again by the next request for it.
+    Each costs what the page cost before the app kept pages and the copy into the store. Only
+    a write that does not reach the app's middleware is not counted: one another site sent, one
+    for a host the app does not answer, or one a layer in front (`App::layer`) answered
+    itself. A write that went through also drops the place on
+    the site its `Location` or `Content-Location` names. A write is counted when it is answered or dropped, so one whose
+    effect lands later (a task the handler did not wait for, a store whose readers lag) can
+    leave a page as it was for its lifetime, which the lifetime allows and the guide says.
+    Writes are counted by a hash of the path with its escapes decoded, and a kept page stands
+    only while the count is the one its request found before its handler ran: a write takes no
+    lock and searches nothing, and a page whose handler was reading while the write went
+    through is not kept. There are 65,536 counts (256 KiB, made when the first page is asked
+    for, so an app with no `Public` page holds none), and a write to another path drops a
+    given kept page early once in 65,536 times, which costs that page a render. Nothing else
+    drops a page before its lifetime ends: not a change made by a task
+    or another instance, a purge at a CDN in front (which is given the kept page again with
+    its `Age`), or a request's `Cache-Control: no-cache`. How long a page stands is the app's
+    to say, and a reload is not a reason to render it.
+
+    Not chosen: in front of the middleware, for the reasons above, though it would save the
+    stages too; leaving out a write by its status (a `4xx`, a `501`) or by a mark the router
+    set on the ones it refuses, each of which left a page stale in a case a review found; off unless asked for, which leaves the cost on every app that already said its
+    pages are public; a page for one visitor kept by caller, where a mistake in the key shows
+    one user's page to another ([architecture](architecture.md#what-belongs-in-the-framework));
+    honoring a request's `no-cache`; removing a written path's pages by a search of the store or
+    a second index by path, which a write would pay for under the store's lock; a sweep that
+    removes pages as their lifetimes end, since a page that no longer stands is replaced when it
+    is next asked for and goes when room is made; and, left for changes of their own, a call
+    that drops a page for a change no write to its path made, a way for an extractor of the
+    app's own to say it reads only the URL, `Public` text, JSON and files
+    (their handlers take other inputs, which a key would have to cover), a page served stale
+    while it is made again, one render for requests that miss together, and one copy for each
+    locale rather than for each `Accept-Language` sent.
+
+    Stands on: measured (the catalog benchmark's app with its page marked `Public` for a minute,
+    `44323327e` on this change's `f7e53a594` against `60a77b231` on main's `6045710b0`, each
+    answer's bytes compared first: a kept page took 104,129 cycles a request against 123,879 where
+    nothing is compressed and 110,889 against 202,439 where each answer is, at the medians of 12
+    alternated rounds; within a round that is 14.5% fewer at the median uncompressed, from 3.3% to
+    21.0%, and 46.3% fewer compressed, from 30.9% to 61.3%, lower in all 12 rounds of each, with
+    12.7% and 43.2% the one-sided 95% bounds on the median; user-mode instructions fell 35.5% and
+    81.0%. The same rounds at `88e9d012b`, before a kept page's bytes were copied to their own size,
+    had 4.0% fewer cycles uncompressed, bound 2.0%, and 41.7% fewer compressed, bound 38.8%. A page
+    for one visitor, which asks the store nothing, was not told from main's: its cycles changed by
+    0.0% and -0.6% at the median with bounds of +4.4% and +2.1%, its instructions by +0.4% and +0.1%
+    with bounds of +1.5% and +0.3%. A `Public` page asked for with a session cookie, which is never
+    kept, took 2.1% more instructions at the median of 8 rounds, bound 3.4%, and its cycles were not
+    told from main's, -2.6% with a bound of +7.2%. 3,000 kept pages of 4,488 bytes with their zstd
+    form took 7,260 bytes each of resident memory with glibc's allocator and 8,107 with jemalloc;
+    under a 32 MiB bound and three passes over 40,000 URLs the process settled 57.8 MiB above where
+    it began with glibc's and 35.2 MiB above with jemalloc, so what an allocator holds beyond the
+    bytes asked of it is beside the bound; `tests/kept_memory.rs` holds the bytes asked to the
+    bound, 4,177,233 of 4,194,304 for its page in every coding and 4,050,606 with no compression.
+    Not measured: what a write pays for its count; a miss that is kept against the same page
+    made with nothing kept; a store read from more than one core; and the
+    tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
+    URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
+    an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
+    `Location` of a write that did not fail: RFC 9111 sections 4.2.1, 5.1 and 4.4; a recipient
+    counts an answer's lifetime less its `Age`, section 4.2.3; the connection is HTTP/1.1, so a
+    request's target is its path and query and its host is the `Host` header,
+    [Limit 14](#limit-http1)); reasoned (the inputs a kept page's handler may take read, of a whole
+    document's `GET` without credentials, its URL, its `Host` and, for its language,
+    `Accept-Language`, which is the key; the stages after the handler read the request and the
+    answer and nothing the handler held, so they treat a kept answer as its own); bet (an app that
+    marks a page `Public` means the lifetime it wrote also with no CDN in front, and does in its
+    handler nothing that must happen for every request); value (fast and proven fast; standards
+    first, the app being a shared cache as RFC 9111 describes one; mistakes fail at compile time,
+    what may be kept being known from the route's types; good defaults, easy overrides, with one
+    setting for the bound, README Values).
+
+    Revisit when: apps report pages shown past what they meant, so the default should be off
+    or the lifetime the app's to set apart from `s-maxage`; an app must drop a page for a
+    change made by a task, another instance or a purge; the stages around the handler
+    become most of a kept page's cost on a measured app, so a place further out is worth its
+    rules; a multi-core measurement shows requests waiting on the store's lock; writes no
+    handler takes (a scanner's `POST /`) make kept pages again often enough to show, so the
+    router's own refusals are worth leaving out where the request met no middleware; or the
+    connection speaks HTTP/2, where a request's target carries its authority.
+
+    Last checked: 2026-11-20, the rounds above with rustc 1.99.1, the app on one CPU under `wrk`
+    with 64 connections on three others, 500 URLs asked for unevenly, the app's cycles and
+    instructions counted by `perf stat` and divided by the requests answered. The bodies of the two
+    builds' answers were identical in each coding, and the headers differed by the kept page's `Age`
+    and, where compressed, the tag. The commits after `f7e53a594` change which writes count and
+    nothing a page's `GET` runs. `tests/kept_memory.rs` at this change, with all features and with
+    none.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

@@ -48,7 +48,7 @@ uploaded file; it is not a blanket transport-level body limit. Neither a native
 read timeout nor a worker timeout is a universal absolute request deadline.
 Conditional GET and dependency readiness are not claimed by this qualification.
 
-Build and run the unchanged marketplace qualifier and complete browser gate on
+Build and run the bounded marketplace qualifier and complete browser gate on
 the fresh matched image:
 
 ```sh
@@ -58,7 +58,7 @@ node bench/fullstack/apps/django/qualify-production.mjs bench/fullstack/apps/dja
 ```
 
 The helper mounts fixtures only, not application source. It runs fixture and API
-modes, records raw qualification, the actual PID 1 command, image identity,
+modes, records raw qualification in `*-bounded-qualification.json`, the actual PID 1 command, image identity,
 deployment/process/thread inventory, complete browser results and server logs,
 then removes its containers and network. Run the commands from the repository
 root: before creating results or starting Docker, the helper checks the checker's
@@ -67,4 +67,5 @@ root lockfile and loads the checker's Playwright entry without launching a brows
 It then uses the matching Noble image. This is capability and
 functional-parity evidence, not load/performance evidence. A missing feature
 leaves `eligible: false`; failures are retained and the helper exits nonzero.
+Connection-flood resistance: not measured.
 The baseline image must never be relabeled as the production image, or vice versa.

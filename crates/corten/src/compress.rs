@@ -318,7 +318,11 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     });
     let (encoded, coding) = match stored {
         Some(made) => made,
-        None => (Bytes::from(encode(coding, &bytes, Level::Fast)), coding),
+        // A kept answer's bytes in this coding are made once ([`crate::kept`]).
+        None => {
+            let encode = || Bytes::from(encode(coding, &bytes, Level::Fast));
+            (crate::kept::Kept::coded(&parts.extensions, &bytes, coding, encode), coding)
+        }
     };
     parts.headers.insert(header::CONTENT_ENCODING, coding.header());
     parts.headers.remove(header::CONTENT_LENGTH);
