@@ -1646,20 +1646,28 @@ rules something out.
        a request hyper says has no body (no body framing or a zero decoded length, that is no
        `Content-Length` or `Transfer-Encoding`, or `Content-Length: 0`) is handed on as the empty
        body rather than boxed in the type that marks a read that waits, against 20 allocations and
-       20,527 bytes on `e8f8e47dc`. Keeping the room the head tags are written in in the thread
+       20,527 bytes on `e8f8e47dc`, which has no such test: that count is the test as it stands at
+       `2899e131e`, copied onto `e8f8e47dc`'s tree and run there in a release build with default
+       features. Keeping the room the head tags are written in in the thread
        (`e7f40d8a5`: 18 and 19,479) took one more, for up to 16 KiB each thread keeps, a cap and a
        test of the cap; it was taken back out, since one allocation does not pay for state each
        thread holds. Under `wrk` (64 connections from three CPUs, the server on one CPU with the lean
        catalog profile's timeouts off, `perf stat` on the server for 10 seconds after 2 of
        warm-up, release builds, 24 rounds in which the builds took turns, answers checked against
        `e8f8e47dc`'s to the byte but for the date, no request failed, every counter running 100%),
-       on a busy WSL2 workstation rather than a quiet bench host: user instructions a request
+       in an exploratory run on a busy WSL2 workstation (the quiet-host comparison that
+       [CONTRIBUTING](../CONTRIBUTING.md#pull-requests), item 2, asks for is still to be run), user
+       instructions a request
        were 34,906 on `2899e131e` against 35,050 on `e8f8e47dc` at the median, 138 fewer within a
        round, fewer in 16 of 24. The smallest worthwhile reduction, declared before the run, was
        1,000 user and kernel cycles a request. Those cycles were 120,902 against 120,418 at the
        median (ranges 103,314 to 142,628 and 98,648 to 146,706), and within a round a median of
        1,460 fewer (user 637, kernel 609), from 20,275 fewer to 14,265 more, fewer in 14 of 24; the
        interval for that median (97.7%, the 7th and 18th of 24) runs from 4,788 fewer to 1,981 more.
+       The 24 pairs' changes in those cycles (a minus is fewer on `2899e131e`) were -8,517, 836,
+       -10,752, 8,940, -4,585, 4,048, -6,002, -15,925, -4,788, -3,297, -4,351, 5,385, -394, 8,999,
+       666, -2,077, 1,410, -20,275, -843, -14,193, -2,086, 2,613, 1,981 and 14,265; user L1
+       instruction-cache misses were not collected.
        `e8f8e47dc` against a copy of itself in the same rounds moved a median of 2,944 (7,614 fewer
        to 2,702 more), more than the change did. The run does not resolve cycles at the declared
        margin, and no CPU-cost win is claimed; `e7f40d8a5` was no different (306 fewer user

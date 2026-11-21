@@ -28,6 +28,13 @@ const MOST: usize = if cfg!(feature = "compress") { 20 } else { 19 };
 /// How long the client waits for one read or write, and the test for the server to stop.
 const WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// The fewest bytes the record page's body may have, well under the 4.4 KB it renders, so a
+/// smaller answer fails rather than being counted as a cheaper page.
+const LEAST: usize = 4_000;
+
+/// What only the record page has, near its start, middle and end, so another page's `200` fails.
+const MARKERS: [&[u8]; 3] = [b"<h1>first</h1>", b"<caption>Record fields</caption>", b">West ridge</a>"];
+
 static ON: AtomicBool = AtomicBool::new(false);
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 static BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -189,7 +196,8 @@ async fn record(req: Req, Params(at): Params<url::Record<'_>>) -> HtmlResult {
     })
 }
 
-/// One request on the connection; the answer's body length. Allocates nothing.
+/// One request on the connection; the answer's body length, once it is checked to be the record
+/// page. Allocates nothing unless a check fails.
 fn one(stream: &mut std::net::TcpStream, request: &[u8], buf: &mut [u8]) -> usize {
     stream.write_all(request).unwrap();
     let mut len = 0;
@@ -213,6 +221,15 @@ fn one(stream: &mut std::net::TcpStream, request: &[u8], buf: &mut [u8]) -> usiz
         len += n;
     }
     assert_eq!(len, head + length, "one answer to one request");
+    let body = &buf[head..len];
+    assert!(length >= LEAST, "an answer of {length} bytes is not the record page");
+    for marker in MARKERS {
+        assert!(
+            body.windows(marker.len()).any(|w| w == marker),
+            "the answer is not the record page: it has no {}",
+            String::from_utf8_lossy(marker)
+        );
+    }
     length
 }
 
