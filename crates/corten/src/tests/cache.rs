@@ -2088,25 +2088,51 @@ async fn a_kept_page_keeps_the_hash_its_policy_allows_its_style_block_by() {
     assert_eq!(again[header::CONTENT_SECURITY_POLICY], policy);
 }
 
-/// What settling a page's caching costs a request: `SETTLE_REQUESTS` (200) full-document `GET`s
-/// in process, one at a time. `SETTLE_CASE` is the page: `keyed`, a `Public` page that draws a
-/// submit key (sent `private, no-cache`); `public` (the default), the same page without the key,
-/// which the app keeps; `private`, the page with the key and no `Public`; `plain`, the page with
-/// neither (the default caching, the usual page); `cookie`, the page with neither, marked
-/// `public, max-age=60` and setting a cookie (sent `private, no-cache`). Counting it under
-/// callgrind at two numbers of requests gives the instructions per request. Run in release:
+/// What settling a page's caching costs a request: `SETTLE_REQUESTS` (200) `GET`s in process, one
+/// at a time. `SETTLE_CASE` is the page: `keyed`, a `Public` page that draws a submit key (sent
+/// `private, no-cache`); `public` (the default), the same page without the key, which the app
+/// keeps; `partial`, that page asked for as a client navigation (sent `private, max-age=60`);
+/// `private`, the page with the key and no `Public`; `plain`, the page with neither (the default
+/// caching, the usual page); `caller`, the plain page to a request whose staged middleware read a
+/// caller; `cookie`, the page with neither, marked `public, max-age=60` and setting a cookie (sent
+/// `private, no-cache`). With `SETTLE_CDN` set, a staged middleware writes the six caching headers
+/// a CDN reads first on every answer, and each answer is checked to keep them (`kept`) or not
+/// (`dropped`), so the count includes their removal. Counting it under callgrind at two numbers of
+/// requests gives the instructions per request. Run in release:
 /// `cargo test --release -p corten-run --all-features --lib --no-run`, then
 /// `SETTLE_REQUESTS=1200 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 valgrind --tool=callgrind <that binary> --ignored --exact tests::cache::what_settling_a_page_costs`
 /// (Debian's `libjemalloc2`) and again at 200.
 #[test]
 #[ignore]
 fn what_settling_a_page_costs() {
+    struct Staged {
+        caller: bool,
+        cdn: bool,
+    }
+
+    impl crate::Middleware for Staged {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let (parts, body) = req.into_parts();
+            if self.caller {
+                let _ = Caller::<Viewer>::find(&parts, &()).await;
+            }
+            let mut res = next.run(Request::from_parts(parts, body)).await;
+            if self.cdn {
+                for name in CDN_OVERRIDES {
+                    res.headers_mut().insert(name, HeaderValue::from_static("public, max-age=60"));
+                }
+            }
+            res
+        }
+    }
+
     let requests: usize = std::env::var("SETTLE_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
     let case = std::env::var("SETTLE_CASE").unwrap_or_else(|_| "public".to_string());
+    let cdn = std::env::var("SETTLE_CDN").ok();
     let minute = Duration::from_secs(60);
     let keyed = case == "keyed" || case == "private";
     let form = move || html! { <form method="post">if keyed { {crate::SubmitKey::field(KeyedWrite::FIELDS.submit)} }</form> };
-    let routes = if case == "private" || case == "plain" {
+    let routes = if case == "private" || case == "plain" || case == "caller" {
         Table::new().route("/", get(move |req: Req| async move { req.test_page("Form", form()) }))
     } else if case == "cookie" {
         Table::new().route(
@@ -2118,15 +2144,41 @@ fn what_settling_a_page_costs() {
     } else {
         Table::new().route("/", get(move |req: Req| async move { Public::new(minute, req.test_page_for("Form", form())) }))
     };
-    let router = App::new(Routes::from(routes)).router();
-    let expected = if case == "public" { "public, max-age=60" } else { "private, no-cache" };
+    let app = App::new(Routes::from(routes));
+    let router = if case == "caller" || cdn.is_some() {
+        app.middleware(Staged { caller: case == "caller", cdn: cdn.is_some() }).router()
+    } else {
+        app.router()
+    };
+    let expected = match case.as_str() {
+        "public" => "public, max-age=60",
+        "partial" => "private, max-age=60",
+        _ => "private, no-cache",
+    };
+    let kept = cdn.as_deref().map(|cdn| match cdn {
+        "kept" => true,
+        "dropped" => false,
+        other => panic!("SETTLE_CDN is kept or dropped, not {other:?}"),
+    });
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(async {
         for _ in 0..requests {
-            let (status, headers, body) = call_with(router.clone(), "GET", "/", None, None).await;
-            assert!(status == StatusCode::OK && body.contains("<form method=\"post\">"), "{status}: {body}");
-            assert_eq!(headers[header::CACHE_CONTROL], expected);
-            assert_eq!(headers.contains_key(header::SET_COOKIE), case == "cookie");
+            let mut req = Request::get("/");
+            if case == "caller" {
+                req = req.header("viewer", "ann");
+            } else if case == "partial" {
+                req = req.header("corten", "nav");
+            }
+            let (parts, body) = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap().into_parts();
+            let body = String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap();
+            assert!(parts.status == StatusCode::OK && body.contains("<form method=\"post\">"), "{}: {body}", parts.status);
+            assert_eq!(parts.headers[header::CACHE_CONTROL], expected);
+            assert_eq!(parts.headers.contains_key(header::SET_COOKIE), case == "cookie");
+            if let Some(kept) = kept {
+                for name in CDN_OVERRIDES {
+                    assert_eq!(parts.headers.contains_key(name), kept, "{name}");
+                }
+            }
         }
     });
 }
