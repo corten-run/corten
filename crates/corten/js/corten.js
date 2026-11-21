@@ -890,9 +890,16 @@ export function subscribe(url, handlers, { signal } = {}) {
     timer = setTimeout(next, Math.min(30_000, 500 * 2 ** times));
   }
 
-  /** Runs `next` after a backoff that grows with each failure in a row. @param {() => void} next */
+  /**
+   * Runs `next` after a backoff that doubles every second failure in a row: 1, 1, 1, 2, 2, 4, 4 s
+   * and on to 30 s, for a failed snapshot and a stream answered with an HTTP error alike. After
+   * the browser's own retry at 1 s, the tries come about 1, 2, 3, 4, 6, 8, 12, 16, 24, 32 s after a
+   * cut (modeled): sooner after a short outage than doubling from 1 s, 2 s later after some long
+   * ones.
+   * @param {() => void} next
+   */
   function retry(next) {
-    wait(next, (failures += 1));
+    wait(next, Math.max(1, (failures += 1) >> 1));
   }
 
   /** @param {boolean} [shown] the status already says `syncing` */

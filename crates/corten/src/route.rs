@@ -4723,6 +4723,7 @@ pub mod __private {
                         answer: std::marker::PhantomData,
                         // Never `Public`: the bound above refuses it.
                         shared: false,
+                        keyed: false,
                     };
                     Methods(crate::router::$method(endpoint), matches!(stringify!($method), "get" | "any"), None, std::marker::PhantomData)
                 }
@@ -5397,8 +5398,14 @@ pub mod __private {
     ) -> crate::answer::Endpoint<H::Handler, <H as crate::answer::Signature<T>>::Out>
     where
         H: RouteHandler<T, S> + crate::answer::Signature<T>,
+        <H as crate::answer::Signature<T>>::Out: crate::answer::Answer,
+        <<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs:
+            crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>,
     {
-        crate::answer::Endpoint { handler: handler.into_handler(), answer: std::marker::PhantomData, shared }
+        let keyed = <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<
+            <H as crate::answer::Signature<T>>::Args,
+        >>::KEYED;
+        crate::answer::Endpoint { handler: handler.into_handler(), answer: std::marker::PhantomData, shared, keyed }
     }
 
     /// A handler a route names: an async function whose arguments a request fills (extractors,

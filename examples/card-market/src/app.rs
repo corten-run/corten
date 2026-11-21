@@ -130,6 +130,9 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
         .components(views::COMPONENTS)
         .pwa(pwa)
         .policy(policy)
+        // The benchmark this app is measured in allows no page cache on the server
+        // (bench/fullstack/REVIEW.md), so its `Public` pages are rendered for every request.
+        .kept_answers(0)
         // An item page waits on the item API: past 10 seconds the visitor gets the 503 page.
         .deadline(Duration::from_secs(10))
         // Not ready while the item API is unreachable, so a load balancer sends no traffic here.

@@ -50,10 +50,10 @@ pub(crate) const PREFER: HeaderName = HeaderName::from_static("prefer");
 pub(crate) const DRAWS_WHOLE: &str = "corten-draws=whole";
 pub(crate) const PAGE_HEADER: HeaderName = HeaderName::from_static("corten-page");
 pub(crate) const PATCH_HEADER: HeaderName = HeaderName::from_static("corten-patch");
-const LOCATION_HEADER: HeaderName = HeaderName::from_static("corten-location");
+pub(crate) const LOCATION_HEADER: HeaderName = HeaderName::from_static("corten-location");
 pub(crate) const SHELL_HEADER: HeaderName = HeaderName::from_static("corten-shell");
 /// A navigation's page with a notice: `m=<text>`, form-encoded, and `&d` when the page drew it.
-const NOTICE_HEADER: HeaderName = HeaderName::from_static("corten-notice");
+pub(crate) const NOTICE_HEADER: HeaderName = HeaderName::from_static("corten-notice");
 /// The cookie a redirect's notice rides in: `__Host-`, so no other site on the domain can set it.
 pub(crate) const NOTICE_COOKIE: &str = "__Host-corten-notice";
 /// The notice's cookie for a write from a plain `http://` origin that is not loopback (a LAN
@@ -1005,6 +1005,9 @@ pub(crate) struct Shared {
     /// The values only the layout shows ([`crate::App::layout_read`]), started for each request
     /// for a whole document.
     pub layout_reads: Box<[Arc<dyn crate::layout::Erased>]>,
+    /// The `Public` pages the app keeps to give again ([`crate::App::kept_answers`]); none under
+    /// `corten dev`, or with a bound of 0.
+    pub kept: Option<crate::kept::Answers>,
 }
 
 impl Shared {
@@ -1044,6 +1047,7 @@ impl Shared {
             pages: Box::default(),
             not_pages: Default::default(),
             layout_reads: Box::default(),
+            kept: None,
         }
     }
 }
@@ -1404,9 +1408,14 @@ pub(crate) fn plain_origin(headers: &HeaderMap) -> bool {
 /// The page a notice is for, as its cookie names it: a hash of the path with its escapes decoded,
 /// so the link the app wrote (`/items/a b` as `a%20b`, a [`crate::Local`] with a `{`) and the path
 /// the browser asks for (which escapes the `{`) name one page, in 16 characters however long it is.
-/// An escaped `/` is kept as written, since it is part of one segment.
+/// An escaped `/` stays escaped, since it is part of one segment (`%2f` and `%2F` are the same).
 pub(crate) fn path_key(path: &str) -> String {
-    let (bytes, mut hash, mut i) = (path.as_bytes(), crate::fnv::OFFSET, 0);
+    crate::ascii::hex(path_hash(path.as_bytes()), &mut [0; 16]).to_string()
+}
+
+/// The hash [`path_key`] writes: of the path with its escapes decoded, an escaped `/` kept.
+pub(crate) fn path_hash(bytes: &[u8]) -> u64 {
+    let (mut hash, mut i) = (crate::fnv::OFFSET, 0);
     while i < bytes.len() {
         let hex = |b: u8| (b as char).to_digit(16);
         let byte = match (bytes[i], bytes.get(i + 1).copied().and_then(hex), bytes.get(i + 2).copied().and_then(hex)) {
@@ -1415,12 +1424,14 @@ pub(crate) fn path_key(path: &str) -> String {
                 i += 2;
                 (hi * 16 + lo) as u8
             }
+            // In one case of its digits, so `%2f` and `%2F` are one segment's.
+            (b'f', ..) if i >= 2 && bytes[i - 2] == b'%' && bytes[i - 1] == b'2' => b'F',
             (byte, ..) => byte,
         };
         hash = crate::fnv::extend(hash, &[byte]);
         i += 1;
     }
-    crate::ascii::hex(hash, &mut [0; 16]).to_string()
+    hash
 }
 
 impl Render for Notice {
@@ -1557,7 +1568,11 @@ impl Req {
             },
             None => match self.signal.locale() {
                 Some(index) => M::from_index(index),
-                None => M::negotiate(self.accept_language()),
+                None => {
+                    // No answer of this app says it varies on the header: a kept page is told.
+                    self.signal.ask_language();
+                    M::negotiate(self.accept_language())
+                }
             },
         }
     }
