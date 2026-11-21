@@ -6,7 +6,9 @@
 //! `made` a page made and kept, at a query not asked for before; `again` a write to the page's
 //! path and then the page made again in the place of the copy the write dropped, counted
 //! together; `plain` a page for one visitor, whose route keeps nothing. Every answer's status,
-//! whether it was a kept one, and its body are checked.
+//! whether it was a kept one, and its body are checked, and after the counted requests one more
+//! asks for the last URL they asked for, which must be given kept where its page was made (and
+//! not where nothing is kept): the same one request at both counts.
 
 use std::time::Duration;
 
@@ -100,5 +102,11 @@ fn request_cost() {
             };
             assert_eq!(answer, (StatusCode::OK, expected, body.clone()), "{case} {n}");
         }
+        let last = match case.as_str() {
+            "made" => format!("/kept?n={}", requests.saturating_sub(1)),
+            _ => path.to_owned(),
+        };
+        let answer = send(get(&last)).await;
+        assert_eq!(answer, (StatusCode::OK, case != "plain", body.clone()), "{case}: the last page made was kept");
     });
 }
