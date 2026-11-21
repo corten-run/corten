@@ -1389,7 +1389,13 @@ fn what_a_page_s_caching_costs() {
     let requests: usize = std::env::var("PAGE_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
     let case = std::env::var("PAGE_CASE").unwrap_or_else(|_| "visitor".to_string());
     let minute = Duration::from_secs(60);
-    let main = || html! { <ul><li>"one"</li><li>"two"</li><li>"three"</li></ul> };
+    let main = || html! {
+        <ul>
+            <li>"one"</li>
+            <li>"two"</li>
+            <li>"three"</li>
+        </ul>
+    };
     let routes = match case.as_str() {
         "visitor" => Table::new().route("/", crate::route::get(move |req: Req| async move { req.test_page("Page", main()) }).0),
         "public" | "kept" => Table::new().route(
