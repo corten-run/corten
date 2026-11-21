@@ -347,6 +347,24 @@ then, as a restart of one binary normally is. If that request arrives while the 
 as they were until it is loaded again. The same holds for a stream the limit refused (429). Any
 other request that arrives while the service is down gets nginx's 502.
 
+In ten local deploys of the same binary, on Debian 13 with systemd, nginx over loopback TLS,
+one CPU and 512 MiB, page probes started every 50 ms. The successful probes bracketing a
+run of 502s started 152 to 337 ms apart in the first rehearsal. Across rehearsals, 36 to 78
+of 600 to 1,000 dense probes got a 502 per ten deploys; probes a second apart usually missed
+the gap. The bracket is a sampling interval, not a measurement of the exact outage boundaries.
+
+The Site workflow samples public page availability throughout the ship step. It targets 100 ms
+between public page probe starts, one request at a time, with a 250 ms timeout. A slow probe
+delays the next start. The log separates completed misses (including 502s, connection errors,
+timeouts or a missing page marker) from probes interrupted when the step ends. It reports the
+ship-wide longest run of misses and the time between the successful starts on either side, when
+both were seen. It also logs the start and end of each release or rollback command on the runner's
+clock and counts missed probes by whether they started inside or outside those windows. Each
+window includes SSH and the symlink move as well as the restart; it is not the outage duration.
+The observation does not decide the ship result. Keep the ordinary restart unless a reader
+reports disruption or a gap well beyond the local measurements is corroborated around a restart.
+Then revisit the smallest handoff the evidence justifies.
+
 ## What it holds
 
 Measured at `ff2fca828` with `hold.mjs` as it is at that commit, against the site's image in a

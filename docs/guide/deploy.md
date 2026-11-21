@@ -239,6 +239,17 @@ compressed at all, the app as a systemd service on one small machine, a workflow
 ships each change and puts the release before back when the new one does not answer, and a
 machine that is replaced by one that serves before the address moves to it.
 
+An ordinary restart still briefly returns 502. In a local systemd and nginx rehearsal of ten
+same-binary deploys over loopback TLS (one CPU, 512 MiB), successful page probes bracketing
+502s started 152 to 337 ms apart at a 50 ms sampling cadence; one-second probes usually missed
+the gap. The Site workflow reports the ship-wide longest run of missed public page probes
+and the time between the successful starts bracketing it, when available. It separately counts
+misses by probe start inside and outside release and rollback restart command windows, which
+include SSH and the symlink move. It targets 100 ms between starts, with one request at a time
+and a 250 ms timeout, and does not gate the ship. Revisit a handoff if a reader reports disruption
+or a gap well beyond the local one is corroborated around a restart. See
+[Every change](../../examples/corten-site/deploy/README.md#every-change) for the measurement and its limits.
+
 ## Caching
 
 A page route can answer several clients at one URL: the whole document, a client navigation
