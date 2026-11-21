@@ -1228,9 +1228,10 @@ answer whose own script must run is a page, not an unstaged route's. Its answer 
 `Cache-Control` unless the handler sets one, so a shared cache may keep it by its own rules
 ([Caching](#caching) describes the stages' rules, which it does not meet): an answer that changes
 says so (`NoStore`, `Public`), as the figure above does. One that sets a cookie is `private,
-no-cache` (`no-store` when it says one), whatever caching it says, and loses a CDN's own
-`CDN-Cache-Control`, `Cloudflare-CDN-Cache-Control` and `Surrogate-Control`, so no shared cache
-hands one visitor's cookie to another.
+no-cache` (`no-store` when it says one), whatever caching it says, and loses any
+`*-cache-control` header and the other caching headers a CDN reads first that [Caching](#caching)
+lists (`Surrogate-Control`, `Edge-Control`, ...), so no shared cache hands one visitor's cookie
+to another.
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
 or a plain 501 with none when no route in the app has a handler for the method ([error
 pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
@@ -1394,7 +1395,22 @@ but an unstaged one):
 | a full document, no `Cookie` or `Authorization`, nothing read a caller | as asked, plus `Vary: cookie` |
 | a request with a `Cookie` or `Authorization`, or one whose handler or middleware read a caller | `private, no-cache` |
 | a client navigation, a form answer or a data client's JSON from a page route | `private`, same lifetime: only the document is shared |
-| a response that sets a cookie, or HTML with the request's nonce | `private, no-cache`, logged under `corten dev` |
+| a response that sets a cookie, HTML with the request's nonce, or a page that draws a form's new submit key (`SubmitKey::field`) | `private, no-cache`, logged under `corten dev` |
+
+A page that draws a submit key also goes out without the caching headers a CDN or proxy reads
+before `Cache-Control` that a middleware wrote, even when its `Cache-Control` already says
+`private` or `no-store`: `CDN-Cache-Control` (RFC 9213), `Cloudflare-CDN-Cache-Control`,
+`Vercel-CDN-Cache-Control`, `Surrogate-Control`, Akamai's `Edge-Control` and nginx's
+`X-Accel-Expires`. A `no-store` on it goes out `private, no-store`: some CDNs ignore a bare
+`no-store`, and none keeps a `private` answer. Those names, matched exactly, are the whole list
+(a `Public` answer cannot set one either). Keeping a page with a form out of a shared cache by
+any other means is the deployment's: a name its CDN is configured to read (RFC 9213 allows any),
+a layer around the app (`App::layer`, which runs after Corten settles the answer), and an edge
+rule that caches whatever the origin says. The key's render marks the answer: a page, a patch,
+the layout's reads, and a `Rendered` placed in one. A live stream's fragments are text rendered
+after its headers went out and carry no mark, so a stream that may draw a key is not `Public`,
+says `Cache-Control: private` itself and carries none of those headers
+([live data](live-data.md)).
 
 A `Public` answer cannot set a cookie the way a private one does: the page inside
 `Public<HtmlResult>` is made for everyone (`HtmlResponse<ForAll>`), and `with_cookie` on it does
@@ -1443,9 +1459,11 @@ shared cache keep the rest, or `no-store=1`) or inside a quoted value does not c
 ignore the `no-store`), which is left as written unless the answer is personal. A `no-store`
 goes out where every reader sees it: several lines are joined into one, and beside a quoted value
 or a byte that is not text it goes out alone (its other directives dropped, so no reader can find
-anything else). A personal answer (it sets a cookie, read a caller, has the CSP nonce, or is a
-`Cache` answer to a request with credentials) whose header does not count goes out
-`private, no-cache`, or `no-store` if any reader could find one in its header.
+anything else). A personal answer (it sets a cookie, read a caller, has the CSP nonce, draws a
+form's new submit key, or is a `Cache` answer to a request with credentials) whose header does
+not count goes out
+`private, no-cache`, or `no-store` if any reader could find one in its header (`private,
+no-store` for a page that draws a submit key).
 
 An answer at a URL that names its content (a hash of its bytes, as an uploaded picture's can be)
 never changes there. `Public::immutable(answer)` sends it as Corten's versioned files are sent,
@@ -1477,8 +1495,8 @@ server's answer, sent as it came) is not. Corten names `XRobotsTag`, `Link` and
 corten::answer::Header for ContentLocation { const NAME: &'static str = "content-location"; }`.
 Which names a public answer may set is checked when the app builds (`cargo build` and `cargo
 test`; `cargo check` does not evaluate it): `set-cookie` (the answer would be one visitor's), the
-headers Corten sets itself (`cache-control`, a CDN's `cdn-cache-control` and
-`surrogate-control`, which it would obey over Corten's, `vary`, the encoding and length, the
+headers Corten sets itself (`cache-control`, any `*-cache-control` and the other caching headers
+a CDN would obey over Corten's that [Caching](#caching) lists, `vary`, the encoding and length, the
 security headers, CORS's `access-control-*`, `corten-*`), those the answer has (`content-type`,
 `location`, `content-disposition`) and the connection's (`transfer-encoding`) do not compile. Headers are added to a
 success or a redirect; an error is the error page, without them.
@@ -1581,7 +1599,8 @@ of a page's handler: in a full store the answer to the first request for a URL t
 not remember is not kept, whether the page is new, or was kept while there was room or before
 the bits were last cleared and has since passed its lifetime or been dropped. A store that has filled mostly stays full, since a page past its lifetime keeps
 its room until another needs it. Nothing is kept under `corten dev`,
-so a change shows on the next load. An app's tests keep pages as a deploy does (`App::test`,
+so a change shows on the next load. An app with no `Public` page keeps nothing whatever the
+bound, and its writes are not counted, so it pays nothing for pages it cannot keep. An app's tests keep pages as a deploy does (`App::test`,
 `App::router`): a test that changes what a `Public` page shows other than by a write through the
 app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page
