@@ -14,6 +14,7 @@ try {
   // Grow the source budget only for the exact new replay dependencies.
   const additionalSources = new Set([
     "bench/catalog/cgroup.mjs",
+    "bench/fullstack/edge.mjs",
     "bench/hardening/bounded-requests.mjs",
     "bench/hardening/dependency-recovery-capture.mjs",
     "bench/hardening/dependency-recovery-contract.mjs",

@@ -268,10 +268,11 @@ test("semver snapshot pins same-read library bytes before actual worker executio
 });
 
 test("only named catalog, bounded resilience and compiler replay dependencies extend the worker source budget", { timeout: 15000 }, async (t) => {
-  const paths = validationPaths.filter((path) => path === "bench/catalog/cgroup.mjs" || path === "bench/typescript.mjs"
+  const paths = validationPaths.filter((path) => path === "bench/catalog/cgroup.mjs" || path === "bench/typescript.mjs" || path === "bench/fullstack/edge.mjs"
     || /^bench\/hardening\/(?:bounded-requests\.mjs$|dependency-recovery-)/.test(path));
   assert.deepEqual(paths, [
     "bench/catalog/cgroup.mjs",
+    "bench/fullstack/edge.mjs",
     "bench/hardening/bounded-requests.mjs",
     "bench/hardening/dependency-recovery-capture.mjs",
     "bench/hardening/dependency-recovery-contract.mjs",
@@ -441,6 +442,18 @@ test("nested native worker stays captured when outer snapshot hooks cannot be in
   await new Promise((resolve, reject) => { outer.once("error", reject); outer.once("exit", (code) => code === 0 ? resolve() : reject(new Error("synthetic outer worker failed"))); });
   assert.deepEqual(message, { report: { syntheticNested: true } });
   assert.equal(existsSync(marker), false);
+});
+
+test("isolated hardening adapter replays the captured edge configuration without loading the checkout", { timeout: 15000 }, async (t) => {
+  const h = await fakeNative(t, `import { inspectSaved } from "./adapters/hardening.mjs";
+    import { proxyConfig } from "../../hardening/evidence.mjs";
+    export function validateCampaign() { return { adapter: typeof inspectSaved, config: proxyConfig() }; }`, { realGraph: true });
+  const snapshot = captureValidation(h.input.commit, { root: h.repo });
+  const edge = "bench/fullstack/edge.mjs";
+  writeFileSync(join(h.repo, edge), 'throw new Error("must not load replaced checkout");');
+  const { nginxConf, edgeOffset } = await import("../fullstack/edge.mjs");
+  assert.deepEqual(await validationTask(h.input, { snapshot }).result,
+    { adapter: "function", config: nginxConf([["target", { port: 8080 - edgeOffset }]], 1) });
 });
 
 test("complete fixed native graph and pinned TypeScript evaluate captured bytes without package loaders", { timeout: 15000 }, async (t) => {
