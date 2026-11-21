@@ -92,7 +92,11 @@ async fn what_the_app_renders_is_private_unless_it_says_otherwise() {
     assert_eq!(cache_control(&router, runtime_path(), &[]).await, "public, max-age=31536000, immutable");
     assert_eq!(cache_control(&router, "/health/ready", &[]).await, "no-store", "Corten's own routes keep theirs");
     assert_eq!(cache_control(&router, "/statement", &[]).await, "no-store");
-    assert_eq!(cache_control(&router, "/statement", &[("cookie", "s=1")]).await, "private, no-store", "a request with credentials");
+    assert_eq!(
+        cache_control(&router, "/statement", &[("cookie", "s=1")]).await,
+        "private, no-store",
+        "a request with credentials"
+    );
 }
 
 /// `NoStore` holds for a failure too: the error page that replaces it is not kept either. This one
@@ -907,7 +911,9 @@ async fn a_personal_no_store_answer_goes_out_private_no_store() {
     let router = App::new(Routes::from(routes)).middleware(CdnWrites).router();
     let viewer: &[(&str, &str)] = &[("viewer", "ann")];
     let mut wrong = Vec::new();
-    for (uri, asked) in [("/no-store", viewer), ("/must-understand", viewer), ("/nonce-no-store", &[]), ("/nonce-must-understand", &[])] {
+    for (uri, asked) in
+        [("/no-store", viewer), ("/must-understand", viewer), ("/nonce-no-store", &[]), ("/nonce-must-understand", &[])]
+    {
         let headers = answered(&router, uri, asked).await;
         assert!(!headers.contains_key(header::SET_COOKIE), "{uri}");
         for what in kept_from_cdns(&headers, "private, no-store") {
