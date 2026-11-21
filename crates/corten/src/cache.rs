@@ -144,28 +144,55 @@ impl Cache {
     }
 
     fn header(self) -> HeaderValue {
-        let (max_age, shared, stale, if_error) = match self.kind {
-            Kind::Public { max_age, shared, stale, if_error } => (max_age, shared, stale, if_error),
-            Kind::NoStore => return NO_STORE,
-            Kind::Immutable => return crate::assets::IMMUTABLE,
+        let Kind::Public { max_age, shared, stale, if_error } = self.kind else {
+            return if self.kind == Kind::NoStore { NO_STORE } else { crate::assets::IMMUTABLE };
         };
-        let mut text = Vec::with_capacity(96);
-        let mut push = |name: &str, n: u64| {
-            text.extend_from_slice(name.as_bytes());
-            text.extend_from_slice(crate::ascii::digits(n, &mut [0; 20]));
-        };
-        push("public, max-age=", max_age);
-        if let Some(shared) = shared {
-            push(", s-maxage=", shared);
-        }
-        if stale > 0 {
-            push(", stale-while-revalidate=", stale);
-        }
-        if if_error > 0 {
-            push(", stale-if-error=", if_error);
-        }
-        HeaderValue::from_maybe_shared(bytes::Bytes::from(text)).expect("digits are a valid header")
+        // A route answers with the same numbers each time: its header is made once on a thread and
+        // each answer after shares its bytes (a clone counts a reference).
+        MADE.try_with(|made| {
+            let mut made = made.borrow_mut();
+            if let Some((_, value)) = made.headers.iter().flatten().find(|(kind, _)| *kind == self.kind) {
+                return value.clone();
+            }
+            let value = public(max_age, shared, stale, if_error);
+            let at = made.next;
+            made.headers[at] = Some((self.kind, value.clone()));
+            made.next = (at + 1) % made.headers.len();
+            value
+        })
+        .unwrap_or_else(|_| public(max_age, shared, stale, if_error))
     }
+}
+
+thread_local! {
+    /// The `public` headers this thread made last, by their numbers ([`Cache::header`]).
+    static MADE: std::cell::RefCell<Made> = const { std::cell::RefCell::new(Made { headers: [const { None }; 4], next: 0 }) };
+}
+
+struct Made {
+    headers: [Option<(Kind, HeaderValue)>; 4],
+    /// Where the next one goes, in place of the oldest.
+    next: usize,
+}
+
+/// A `public` header with these numbers, made anew.
+fn public(max_age: u64, shared: Option<u64>, stale: u64, if_error: u64) -> HeaderValue {
+    let mut text = Vec::with_capacity(96);
+    let mut push = |name: &str, n: u64| {
+        text.extend_from_slice(name.as_bytes());
+        text.extend_from_slice(crate::ascii::digits(n, &mut [0; 20]));
+    };
+    push("public, max-age=", max_age);
+    if let Some(shared) = shared {
+        push(", s-maxage=", shared);
+    }
+    if stale > 0 {
+        push(", stale-while-revalidate=", stale);
+    }
+    if if_error > 0 {
+        push(", stale-if-error=", if_error);
+    }
+    HeaderValue::from_maybe_shared(bytes::Bytes::from(text)).expect("digits are a valid header")
 }
 
 impl Cache {
@@ -753,6 +780,25 @@ mod tests {
         assert_eq!(named(seen(), true).0, "private, no-cache", "it sets a cookie");
         assert_eq!(named(Seen { nonce: true, ..seen() }, false).0, "private, no-cache");
         assert_eq!(named(Seen { partial: true, ..seen() }, false).0, "private, max-age=31536000, immutable");
+    }
+
+    /// A route's numbers make its header once on a thread: each answer after shares its bytes, and
+    /// other numbers still get their own, more of them than are held at once too.
+    #[test]
+    fn a_header_with_the_same_numbers_is_made_once() {
+        let minute = Cache::public(Duration::from_secs(60));
+        let (first, again) = (minute.header(), minute.header());
+        assert!(std::ptr::eq(first.as_bytes(), again.as_bytes()), "made once");
+        let other = minute.shared(Duration::from_secs(3600)).header();
+        assert_eq!(first, "public, max-age=60");
+        assert_eq!(other, "public, max-age=60, s-maxage=3600");
+        for round in 0..3 {
+            for n in 1..=9 {
+                let cache = Cache::public(Duration::from_secs(n)).stale_if_error(Duration::from_secs(n * 10));
+                assert_eq!(cache.header(), format!("public, max-age={n}, stale-if-error={}", n * 10), "round {round}");
+            }
+        }
+        assert!(std::ptr::eq(minute.header().as_bytes(), minute.header().as_bytes()), "made once again");
     }
 
     #[test]
