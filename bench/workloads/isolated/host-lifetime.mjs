@@ -6,6 +6,7 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSy
 import { join, posix } from "node:path";
 import { durable, readRegular, syncDirectory, tree } from "./evidence.mjs";
 import { hostDurableWriter } from "./host-durable-writer.mjs";
+import { hostTerminalClock } from "./host-observation.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { executableReference, participantExecutables } from "./participant-executables.mjs";
 import { browserContainers } from "../../fullstack-browser/contract.mjs";
@@ -456,7 +457,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     // Explicitly await appends in controls; enqueue/capture is not storage proof.
     drain() { return writer.drain(); },
     get pendingStorage() { return writer.settled; },
-    async finish(result) {
+    async finish(result, retainTerminalClock = false) {
       assert.equal(closed, false); closed = true; clearInterval(timer); releaseStartup();
       let empty = false;
       try { sample(); sampleOperation = "terminal-empty"; empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0"); }
@@ -474,11 +475,14 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       // an earlier, contradictorily clean command result.
       assert.ok(!signal?.aborted || result.cancelled || result.forced, "host observation cancelled during storage drain");
       const terminal = result.terminal && empty;
+      const terminalClock = retainTerminalClock && terminal && !result.cancelled && !result.forced && observerError === null
+        ? hostTerminalClock() : undefined;
       const staged = join(directory, "terminal.pending.json"), published = join(directory, "terminal.json");
       let identity;
       try {
         durable(staged, `${JSON.stringify({ terminal, attached, empty, samples, observerError, observerFailures,
-          command: result, bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), ancestors: parents(parent) }, null, 2)}\n`);
+          command: result, bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), ancestors: parents(parent),
+          ...(terminalClock ? { terminalClock } : {}) }, null, 2)}\n`);
         identity = lstatSync(staged);
         assert.equal(lstatSync(published, { throwIfNoEntry: false }), undefined);
         renameSync(staged, published); syncDirectory(directory);
@@ -607,8 +611,13 @@ export function inspectLifetime(binding, invocation, directory, expected) {
     unforced: !terminal.command.cancelled && !terminal.command.forced,
     leader: [...identities.values()].some((p) => p.pid === context.leaderPid) };
   const complete = Object.values(checks).every(Boolean);
+  if (terminal.terminalClock !== undefined) {
+    assert.equal(context.group, "localized-marketplace");
+    assert.equal(terminal.terminalClock.bootId, context.bootId);
+  }
   return { status: complete ? "verified" : "blocked", cleanupComplete: complete, context,
-    samples, identities: [...identities.values()], manifestSha256: before.sha256, checks };
+    samples, identities: [...identities.values()], manifestSha256: before.sha256, checks,
+    ...(complete && terminal.terminalClock ? { terminalClock: terminal.terminalClock } : {}) };
 }
 
 export function inspectBrowserParticipants(subject, observation, cpus) {

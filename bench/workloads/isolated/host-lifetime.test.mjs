@@ -419,6 +419,21 @@ test("actual inherited controls need no invented cap; terminal observations comp
   native.hostSubject.processWindows[0].endedAt = 40;
   assert.equal(composeHostProof(binding, native, observed).resources, "blocked");
 });
+test("only a verified marketplace lifetime exposes its sealed, same-boot terminal clock", (t) => {
+  const marketplace = { ...binding, request: { ...binding.request, group: "localized-marketplace" } };
+  const clock = { bootId: "boot", uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" };
+  const withClock = ({ terminal }) => { terminal.terminalClock = clock; };
+  const clean = fixture(t, withClock, marketplace).observation();
+  assert.equal(clean.status, "verified");
+  assert.deepEqual(clean.terminalClock, clock);
+  assert.equal(fixture(t, ({ terminal }) => {
+    withClock({ terminal }); terminal.empty = false;
+  }, marketplace).observation().terminalClock, undefined);
+  assert.throws(() => fixture(t, ({ terminal }) => {
+    terminal.terminalClock = { ...clock, bootId: "other" };
+  }, marketplace).observation());
+  assert.throws(() => fixture(t, withClock).observation());
+});
 test("missing effective command controls cannot verify a client lifetime", (t) => {
   const f = fixture(t, ({ samples }) => {
     for (const sample of samples) for (const group of sample.groups)

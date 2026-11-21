@@ -761,9 +761,12 @@ On a fresh dedicated group host it also limits incoming SSH to the controller's
 authenticated provisioning IPv4 source. Keep that egress for collection and
 cleanup; do not make a separate login during measurement.
 Its cleanup check retains all process observations and exempts only kernel threads
-proved by saved Linux stat flags and matching PID/start identity. A new user-space
-daemon or application process still fails cleanup; later observations cannot repair
-an old failed run. This is benchmark-host preparation, not app deployment advice.
+proved by saved Linux stat flags and matching PID/start identity. The supervised marketplace
+run can [take one additional cleanup observation](../../bench/workloads/isolated/CAMPAIGN.md#post-command-udev-settle)
+if every new user-space identity is a proven systemd-udevd worker born after the sealed
+command-lifetime cutoff. Cleanup still fails unless the monotonic wait is proved, the
+workers are gone, and the ordinary boundary checks pass. This cannot repair an old failed run
+or discount activity during measurement. This is benchmark-host preparation, not app deployment advice.
 
 A new benchmark allocation launched from a commit that includes
 [pinned unused-host recovery](../../bench/workloads/CLOUD.md#failed-allocation-retirement)

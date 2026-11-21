@@ -12,7 +12,7 @@ import { inspectLifetime, composeHostProof } from "./host-lifetime.mjs";
 import { commandResult, composePhase } from "./composition.mjs";
 import { registrySchema } from "../registry.mjs";
 import { alternateCampaignPlacements } from "./contract.mjs";
-import { verifyHostBoundary } from "./host-observation.mjs";
+import { verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -127,9 +127,6 @@ export async function validateCampaign(input) {
           }
         }
         if (controlHost) for (const field of ["hostname", "bootId"]) assert.equal(hostBefore[field], controlHost[field]);
-        try { boundary = verifyHostBoundary(hostBefore, read(`${id}/${entry.path}/host-after.json`)); }
-        catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
-        if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.ok(isDeepStrictEqual(status.outcomes[index].cleanup, boundary), "cleanup boundary differs"); }
       }
       if (currentExecution) for (const [commandIndex, result] of recorded.results.entries()) {
         // An intent is already forbidden advancement, even if its exit is absent.
@@ -151,6 +148,23 @@ export async function validateCampaign(input) {
         }
         hostObservations[commandIndex] = observation;
         if (observation.status !== "verified") blockers.push(`${group}/${phase}: host observations incomplete`);
+      }
+      if (hostBefore) {
+        try {
+          const after = read(`${id}/${entry.path}/host-after.json`);
+          const settlePath = `${entry.path}/host-after-settled.json`;
+          if (subtree.entries.some((e) => e.path === settlePath)) {
+            const lifetime = hostObservations.at(recorded.results.length - 1);
+            assert.ok(status.executionVersion === 5 && group === "localized-marketplace" && phase === "timing"
+              && recorded.results.length === recorded.invocations.length && lifetime?.status === "verified"
+              && lifetime.cleanupComplete && lifetime.terminalClock, "udev settle lacks sealed terminal marketplace lifetime");
+            const settled = read(`${id}/${settlePath}`);
+            if (streamSeal) assert.ok(BigInt(settled.controlApparatus.sample.monoNs) <= BigInt(streamSeal.sealedMonoNs));
+            boundary = verifySettledHostBoundary(hostBefore, after, settled, lifetime.terminalClock);
+          } else boundary = verifyHostBoundary(hostBefore, after);
+        }
+        catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
+        if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.ok(isDeepStrictEqual(status.outcomes[index].cleanup, boundary), "cleanup boundary differs"); }
       }
       const manifestEntry = subtree.entries.find((e) => e.path === `${entry.path}/native-manifest.json`);
       if (!manifestEntry) {
