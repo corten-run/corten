@@ -7462,10 +7462,10 @@ rules something out.
     Last checked: 2026-11-21, the rule for a full store with rustc 1.100.0: each count the
     difference of a run of 1,300 requests and one of 300 under callgrind, a new URL each, of
     which the first 28 or so fill a bound of 256 KiB, and for the second request the
-    difference of such runs over 1,000 URLs less its 700 first requests; the simulation with
-    Node.js 24; the cycles as in the pass over the headers below, but that other work ran on
-    the machine's other CPUs and at times on the app's core's other thread, a new URL for
-    every request or for every second one, and the store off by `kept_answers(0)`.
+    difference of such runs over 1,000 URLs less its 700 first requests, the simulation with
+    Node.js 24, and the cycles as in the pass over the headers below, but that other work ran
+    on the machine's other CPUs and at times on the app's core's other thread, with a new URL
+    for every request or for every second one, and the store off by `kept_answers(0)`.
     2026-11-21, the pass over the headers with rustc 1.100.0: the counts under
     callgrind, and the cycles from the two builds started once on one CPU, its core's other thread
     left idle, and loaded in turn for three seconds each by `wrk` with 64 connections on the two
