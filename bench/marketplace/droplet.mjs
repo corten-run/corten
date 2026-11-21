@@ -58,16 +58,27 @@ function openCollection(context, { providerFactory = providerTransport, repo, in
     close: run.close,
   };
 }
-function requireIntentDirectory(path) {
-  assert.notEqual(process.platform, "win32", "DELETE needs directory persistence; native Windows cannot fsync the control directory");
-  syncDirectory(path);
+function publishWindowsIntent(directory) {
+  const root = process.env.SystemRoot;
+  assert.ok(root && isAbsolute(root), "Windows system PowerShell is unavailable");
+  const result = spawnSync(join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+    ["-NoProfile", "-NonInteractive", "-File", fileURLToPath(new URL("publish-delete-intent.ps1", import.meta.url)), directory],
+    { windowsHide: true, shell: false, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000, maxBuffer: 16384 });
+  assert.ok(!result.error && result.status === 0 && result.stdout.trim() === "intent committed",
+    `Windows intent publication not confirmed: ${result.error?.code ?? (result.stderr?.trim() || "missing write-through receipt")}`);
 }
-function saveDeletionIntent(path, state, sync = requireIntentDirectory) {
+function saveDeletionIntent(path, state, sync = syncDirectory) {
   const directory = dirname(path), temp = `${path}.delete-intent.tmp`;
-  sync(directory); // Prove the directory supports fsync before creating an intent.
-  durable(temp, `${JSON.stringify(state, null, 2)}\n`);
-  renameSync(temp, path);
-  sync(directory); // Required after the rename, not merely after flushing the temporary file.
+  const bytes = `${JSON.stringify(state, null, 2)}\n`;
+  try {
+    if (process.platform !== "win32") sync(directory); // Prove directory fsync is supported.
+    durable(temp, bytes);
+    if (process.platform === "win32") publishWindowsIntent(directory);
+    else { renameSync(temp, path); sync(directory); }
+    assert.ok(!existsSync(temp) && readFileSync(path, "utf8") === bytes, "published intent does not match the staged bytes");
+  } catch (cause) {
+    throw new Error(`durable intent not confirmed for droplet ${state.id}; no DELETE sent by this invocation. Preserve state and evidence for operator review: ${cause.message}`, { cause });
+  }
 }
 /**
  * One droplet's launcher: the whole round, or with options.part one droplet's part of a split

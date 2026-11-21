@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fork, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,14 +64,14 @@ test("generated remote shell and systemd unit pass native syntax validation", { 
 
 function harness(t, { active = false, activates = false, corrupt = false, missing = false, dirty = false,
   failCreate = false, failDelete = false, lostDelete = false, failExtract = false, delayedDelete = false,
-  interruptDelete = false } = {}) {
-  const temp = mkdtempSync(join(tmpdir(), "marketplace-droplet-test-"));
+  interruptDelete = false, prefix = "marketplace-droplet-test-" } = {}) {
+  const temp = mkdtempSync(join(tmpdir(), prefix));
   t.after(() => rmSync(temp, { recursive: true, force: true }));
   const repo = join(temp, "repo"), local = join(temp, "control"), remote = join(temp, "remote");
   mkdirSync(repo); mkdirSync(local); mkdirSync(remote);
   const statePath = join(local, "state.json");
   let s = state(), droplets = [droplet(s)], deleted = 0, creates = 0, extractions = 0, unitChecks = 0;
-  let clock = 0, signal = null, team = "bench-team", getResponse, afterGet = () => {};
+  let clock = 0, signal = null, team = "bench-team", getResponse, afterGet = () => {}, beforeUnit = () => {};
   const calls = [], waits = [], observedAfterDelete = [];
   const saved = () => JSON.parse(readFileSync(statePath, "utf8"));
   const run = (binary, args, bound = false) => {
@@ -101,6 +101,7 @@ function harness(t, { active = false, activates = false, corrupt = false, missin
         assert.equal(args[3], "123");
         assert.ok(bound);
         assert.ok(existsSync(join(local, "collect.lock")));
+        assert.equal(existsSync(join(local, "state.json.delete-intent.tmp")), false, "the staged file has been published before dispatch");
         assert.deepEqual(saved().deletionTarget, { id: "123", account: "team:bench-team", context: "bench" });
         assert.ok(saved().deletionIntentAt && saved().collectedAt && !saved().destroyedAt);
         if (failDelete) return { status: 1, stdout: "", stderr: "delete temporarily unavailable" };
@@ -115,6 +116,7 @@ function harness(t, { active = false, activates = false, corrupt = false, missin
       const script = args.at(-1);
       if (script.startsWith("systemctl show")) {
         unitChecks++;
+        beforeUnit(unitChecks);
         return good(missing ? loaded.replace("loaded", "not-found") : active || (activates && unitChecks > 1) ? loaded.replace("inactive", "active") : loaded);
       }
       if (script === "sha256sum /bench/results.tgz") return good(`${createHash("sha256").update(readFileSync(join(remote, "results.tgz"))).digest("hex")}  /bench/results.tgz`);
@@ -144,6 +146,7 @@ function harness(t, { active = false, activates = false, corrupt = false, missin
     selectTeam(value) { team = value; },
     getResponse(value) { getResponse = value; },
     onGet(callback) { afterGet = callback; },
+    onUnit(callback) { beforeUnit = callback; },
     tick(ms) { clock += ms; },
     resume() { signal = null; },
     empty() { droplets = []; },
@@ -157,7 +160,7 @@ function harness(t, { active = false, activates = false, corrupt = false, missin
     },
     task(extra = {}, deps = {}) { return controller({ round: "r17", stateDir: local, sshKey: "42", context: "bench", ...extra },
       { run, repo, interrupted: () => signal, now: () => clock, sleep: async (ms) => { waits.push(ms); clock += ms; },
-        providerFactory, ...(process.platform === "win32" ? { syncIntentDirectory: () => {} } : {}), ...deps }); },
+        providerFactory, ...deps }); },
   };
 }
 test("live unit: no pack, download, deletion or restart", async (t) => {
@@ -358,14 +361,32 @@ test("the worker that checks ownership sends the sole DELETE and confirms the ex
     assert.ok(!h.calls.some((c) => c[0] === "doctl"), "legacy command runner has no collection authority");
   });
 });
-test("native Windows cannot authorize DELETE without directory persistence", { skip: process.platform !== "win32" }, async (t) => {
-  const h = harness(t); h.reserve(); h.archive();
-  await assert.rejects(h.task({}, { syncIntentDirectory: undefined }).collect(), /directory persistence/);
-  assert.equal(h.deleted, 0);
-  assert.ok(h.saved().collectedAt);
-  assert.equal(h.saved().deletionIntentAt, undefined);
+test("native Windows publishes an intent on NTFS and resumes without a second DELETE", { skip: process.platform !== "win32" }, async (t) => {
+  const h = harness(t, { prefix: "marketplace [Windows intent] 'test'-", interruptDelete: true }); h.reserve(); h.archive();
+  await assert.rejects(h.task().collect(), /deletion not confirmed.*SIGINT received/);
+  assert.equal(h.deleted, 1);
+  assert.equal(h.saved().destroyedAt, undefined);
+  assert.ok(h.saved().deletionIntentAt);
+  h.resume();
+  assert.equal(await h.task().collect(), 1);
+  assert.equal(h.deleted, 1); assert.ok(h.saved().destroyedAt);
 });
-test("last directory fsync must finish before DELETE, and a failed sync leaves read-only intent", async (t) => {
+test("native Windows rename refusal never reaches DELETE", { skip: process.platform !== "win32" }, async (t) => {
+  const h = harness(t); h.reserve(); h.archive();
+  const target = join(h.local, "state.json"), backup = `${target}.test-backup`;
+  h.onUnit((checks) => {
+    if (checks !== 2) return;
+    renameSync(target, backup);
+    mkdirSync(target); // The Win32 file rename cannot replace a directory.
+  });
+  await assert.rejects(h.task().collect(), /no DELETE sent.*NTFS write-through intent rename failed/);
+  assert.equal(h.deleted, 0);
+  const prior = JSON.parse(readFileSync(backup, "utf8"));
+  assert.ok(prior.collectedAt); assert.equal(prior.deletionIntentAt, undefined);
+  assert.ok(existsSync(prior.resultArchive));
+  assert.ok(existsSync(`${target}.delete-intent.tmp`), "preserve staged bytes for operator review");
+});
+test("last directory fsync must finish before DELETE, and a failed sync leaves read-only intent", { skip: process.platform === "win32" }, async (t) => {
   const h = harness(t, { failDelete: true }); h.reserve(); h.archive();
   let syncs = 0;
   const syncIntentDirectory = (directory) => {

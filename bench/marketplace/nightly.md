@@ -146,9 +146,12 @@ complete or partial evidence first. Missing units/SSH failures/identity mismatch
 Do not manually delete, restart or power-cycle running rounds, or touch another run's droplet.
 Pass the saved doctl context for the account that launched the round. One credential-bound
 worker checks ownership, dispatches at most one DELETE, and checks for absence. Before
-dispatch the collector flushes and renames the intent containing the exact ID, account and
-context, then syncs the control directory. If the directory cannot be synced (including on
-native Windows), the collector can save evidence but refuses DELETE.
+dispatch the collector flushes the intent containing the exact ID, account and context.
+On POSIX it renames the intent and syncs the control directory. On Windows it uses the
+system Windows PowerShell to publish the intent through a write-through rename on fixed
+local NTFS, with no administrator access required. If durable publication fails, collection
+reports exit 2 without sending DELETE. Keep the archive, state and any staged intent for
+operator review; the host may still be billed.
 
 For up to two minutes the collector looks for an authenticated HTTP 404 on the exact ID,
 checking the saved account before and after the GET. An ID that is still present, even

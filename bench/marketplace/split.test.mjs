@@ -489,8 +489,7 @@ function fleet(t, { limit = 10, existing = [], failDelete = 0, delayedDelete = f
         return effects("doctl", args);
       }, { close: async () => {} });
       return splitController({ round: "r17", stateDir: local, sshKey: "42", context: "bench", ...(droplets ? { droplets } : {}) },
-        { run: effects, repo, now: () => clock, sleep: async (ms) => { clock += ms; waits.push(ms); }, providerFactory,
-          ...(process.platform === "win32" ? { syncIntentDirectory: () => {} } : {}) });
+        { run: effects, repo, now: () => clock, sleep: async (ms) => { clock += ms; waits.push(ms); }, providerFactory });
     },
   };
 }
