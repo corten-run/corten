@@ -871,27 +871,33 @@ test("unconfirmed or wrong-code unused retirement cannot masquerade as collectio
   }
 });
 
-test("actual productionMain close uncertainty retains the fleet lock after all child worker settlements", { timeout: 15000 }, async (t) => {
-  const flags = {}, p = fixture(t, flags);
+test("productionMain awaits its final close before releasing the fleet lock on a construction failure", { timeout: 15000 }, async (t) => {
+  const p = fixture(t);
   await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
+  const { options } = p.output.at(-1).subject.jobs[0].subject;
   const reached = Promise.withResolvers(), settlement = Promise.withResolvers();
-  let workers = 0, requests = 0;
+  let workers = 0, requests = 0, closes = 0;
   p.deps.main = productionMain;
   p.deps.providerFactory = () => {
     workers++;
-    flags.dirty = true; // Fail the source recheck after a worker is actually in custody.
+    // Change the approved bytes after transport construction. The controller
+    // must refuse them before creating its state root or entering locked cleanup.
+    writeFileSync(options.fleet, "\n", { flag: "a" });
     return Object.assign(async () => { requests++; assert.fail("no synthetic provider call expected"); }, {
-      close() { reached.resolve(); return settlement.promise; },
+      close() { closes++; reached.resolve(); return settlement.promise; },
     });
   };
   let finished = false;
   const result = fleetMain(approved, p.deps).then((v) => { finished = true; return v; });
   await Promise.race([reached.promise, result.then(() => assert.fail("fleet finished before worker close"))]);
-  assert.equal(workers, 1); assert.equal(finished, false);
-  assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
+  assert.equal(workers, 1); assert.equal(closes, 1);
+  assert.equal(existsSync(options.stateDir), false);
+  const lock = join(p.h.base, ".fleet-operation.lock");
+  assert.equal(await Promise.race([result.then(() => false), turn().then(() => !finished && existsSync(lock))]), true);
   settlement.reject(Object.assign(new Error("PRIVATE_WORKER_CLOSE"), { controlUncertain: true, controlTreeUncertain: true }));
-  assert.equal(await result, 2); assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
-  assert.equal(workers, 1); assert.equal(requests, 0);
+  assert.equal(await result, 2); assert.ok(existsSync(lock));
+  assert.equal(workers, 1); assert.equal(requests, 0); assert.equal(closes, 1);
+  assert.equal(p.output.at(-1).groups[0].controllerStage, "provider-settlement");
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
   assert.ok(!JSON.stringify(p.output).includes("PRIVATE"));
   assert.equal(p.calls.filter(([binary]) => binary !== "git").length, 0);
