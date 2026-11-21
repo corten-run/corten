@@ -1,4 +1,4 @@
-//! Byte-level pieces the HTML and JSON writers share: testing text for a byte to escape eight
+//! Byte-level pieces the HTML and JSON writers share: testing text for a byte to escape sixteen
 //! bytes at a time, integer digits two at a time, and a hash's hex digits. Safe Rust, no
 //! dependencies.
 
@@ -17,20 +17,68 @@ fn has(x: u64, b: u8) -> u64 {
     below(x ^ (ONES * b as u64), 1)
 }
 
-/// Some byte of `x` may be one HTML escapes: `&`, `'`, `<`, `>` or `"`. `| 5` turns `"` (0x22)
-/// and `&` (0x26) into `'` (0x27), and `| 2` turns `<` (0x3c) into `>` (0x3e), so two tests find
-/// all five. The first finds `#` (0x23) too, which is written as it is: a `#` only costs the
-/// byte-exact path.
-#[inline(always)]
-pub(crate) fn html(x: u64) -> bool {
-    (has(x | (ONES * 5), b'\'') | has(x | (ONES * 2), b'>')) != 0
+/// The bytes a writer escapes, with the two tests for them: of eight bytes held in a word, for
+/// text shorter than sixteen, and of sixteen bytes.
+pub(crate) trait Set {
+    /// Some byte of `x` may be in the set: each of its bytes is found, and another may be, which
+    /// then only costs the caller its byte-exact path.
+    fn word(x: u64) -> bool;
+
+    /// Some byte of `block` is in the set, and no other byte counts. Each is written with every
+    /// compare in a variable of its own and every byte tested, with no early exit: the form the
+    /// compiler makes one vector compare of all sixteen bytes from, for each (read in the
+    /// machine code of x86-64, whose every target has SSE2, and of aarch64; on a target where it
+    /// does not, the test is the same sixteen bytes one by one, and as right).
+    fn block(block: &[u8; 16]) -> bool;
 }
 
-/// Some byte of `x` is one JSON escapes: a control character, `"` or `\`.
+/// What HTML escapes in text and in a quoted attribute value: `&`, `'`, `<`, `>` and `"`.
+pub(crate) struct Html;
+
+impl Set for Html {
+    /// `| 5` turns `"` (0x22) and `&` (0x26) into `'` (0x27), and `| 2` turns `<` (0x3c) into `>`
+    /// (0x3e), so two tests find all five. The first finds `#` (0x23) too, which is written as
+    /// it is.
+    #[inline(always)]
+    fn word(x: u64) -> bool {
+        (has(x | (ONES * 5), b'\'') | has(x | (ONES * 2), b'>')) != 0
+    }
+
+    /// `| 1` turns `&` into `'` and no other byte, so with `"` apart the five are found and
+    /// `#` is not.
+    #[inline(always)]
+    fn block(block: &[u8; 16]) -> bool {
+        let (mut amp, mut angle, mut quote) = (false, false, false);
+        for &b in block {
+            amp |= b | 1 == b'\'';
+            angle |= b | 2 == b'>';
+            quote |= b == b'"';
+        }
+        amp | angle | quote
+    }
+}
+
+/// What JSON escapes in a string: a control character, `"` and `\`.
 #[cfg(feature = "json")]
-#[inline(always)]
-pub(crate) fn json(x: u64) -> bool {
-    (below(x, 0x20) | has(x, b'"') | has(x, b'\\')) != 0
+pub(crate) struct Json;
+
+#[cfg(feature = "json")]
+impl Set for Json {
+    #[inline(always)]
+    fn word(x: u64) -> bool {
+        (below(x, 0x20) | has(x, b'"') | has(x, b'\\')) != 0
+    }
+
+    #[inline(always)]
+    fn block(block: &[u8; 16]) -> bool {
+        let (mut control, mut quote, mut slash) = (false, false, false);
+        for &b in block {
+            control |= b < 0x20;
+            quote |= b == b'"';
+            slash |= b == b'\\';
+        }
+        control | quote | slash
+    }
 }
 
 #[inline(always)]
@@ -43,25 +91,28 @@ fn half(bytes: &[u8]) -> u64 {
     u32::from_le_bytes(bytes.try_into().expect("four bytes")) as u64
 }
 
-/// Whether `hit` finds a byte in `bytes`. Eight bytes per test; the last (or only) bytes are read
-/// overlapping, so a short string is one test, not a loop over its bytes. A string shorter than
-/// four is padded with spaces, which neither set has.
+/// Whether `bytes` has a byte of the set `S`. Text of sixteen bytes or more is tested sixteen at a
+/// time ([`Set::block`], so only the set's own bytes are found), and shorter text in one or two
+/// words ([`Set::word`]). The last (or only) bytes are read overlapping, so no length loops over
+/// single bytes. A string shorter than four is padded with spaces, which neither set has.
 #[inline(always)]
-pub(crate) fn any(bytes: &[u8], hit: impl Fn(u64) -> bool) -> bool {
+pub(crate) fn any<S: Set>(bytes: &[u8]) -> bool {
     let n = bytes.len();
-    if n >= 8 {
-        let mut i = 0;
-        while i + 8 < n {
-            if hit(word(&bytes[i..i + 8])) {
+    if n >= 16 {
+        let mut rest = bytes;
+        while let Some((block, after)) = rest.split_first_chunk::<16>() {
+            if S::block(block) {
                 return true;
             }
-            i += 8;
+            rest = after;
         }
-        hit(word(&bytes[n - 8..]))
+        !rest.is_empty() && bytes.last_chunk::<16>().is_some_and(S::block)
+    } else if n >= 8 {
+        S::word(word(&bytes[..8])) | S::word(word(&bytes[n - 8..]))
     } else if n >= 4 {
-        hit(half(&bytes[..4]) | half(&bytes[n - 4..]) << 32)
+        S::word(half(&bytes[..4]) | half(&bytes[n - 4..]) << 32)
     } else if n > 0 {
-        hit(bytes[0] as u64 | (bytes[n / 2] as u64) << 8 | (bytes[n - 1] as u64) << 16 | (ONES * b' ' as u64) << 24)
+        S::word(bytes[0] as u64 | (bytes[n / 2] as u64) << 8 | (bytes[n - 1] as u64) << 16 | (ONES * b' ' as u64) << 24)
     } else {
         false
     }
@@ -121,42 +172,67 @@ pub(crate) fn hex(n: u64, buf: &mut [u8; 16]) -> &str {
 mod tests {
     use super::*;
 
-    #[test]
-    fn finds_every_escaped_byte_at_every_position_and_length() {
-        for len in 0..40 {
-            for at in 0..len {
-                for (special, hit) in [(b'&', html as fn(u64) -> bool), (b'\'', html), (b'<', html), (b'>', html), (b'"', html)] {
-                    let mut text = vec![b'a'; len];
-                    text[at] = special;
-                    assert!(any(&text, hit), "{len} {at} {}", special as char);
-                }
-            }
-            assert!(!any(&vec![b'a'; len], html));
-            // Bytes next to the special ones, and UTF-8, are not hits.
-            assert!(!any(&"%(;=?é日".repeat(len).into_bytes()[..len.min(7 * len)], html));
-        }
-    }
-
-    #[test]
-    fn the_html_test_finds_the_five_and_only_hash_besides() {
-        for b in 0..=255u8 {
-            let alone = u64::from_le_bytes([b, b'a', b'a', b'a', b'a', b'a', b'a', b'a']);
-            assert_eq!(html(alone), b"&'<>\"#".contains(&b), "{b:#x}");
-        }
+    /// A set's bytes, one by one: what both of its tests are held to.
+    fn html(b: u8) -> bool {
+        b"&'<>\"".contains(&b)
     }
 
     #[cfg(feature = "json")]
+    fn json(b: u8) -> bool {
+        b < 0x20 || b == b'"' || b == b'\\'
+    }
+
+    /// Every byte value at every place in sixteen bytes, and in a word: the sixteen-byte test
+    /// finds the set and nothing else, and the word test the set and no more than it says.
     #[test]
-    fn finds_json_escapes() {
-        for len in 1..40 {
-            for at in 0..len {
-                for special in (0u8..0x20).chain(*b"\"\\") {
-                    let mut text = vec![b' '; len];
-                    text[at] = special;
-                    assert!(any(&text, json), "{len} {at} {special}");
-                }
+    fn each_test_finds_its_set_at_every_place() {
+        for b in 0..=255u8 {
+            for at in 0..16 {
+                let mut block = [b'a'; 16];
+                block[at] = b;
+                assert_eq!(Html::block(&block), html(b), "{b:#x} at {at}");
+                #[cfg(feature = "json")]
+                assert_eq!(Json::block(&block), json(b), "{b:#x} at {at}");
             }
-            assert!(!any("!#[]^~\u{7f}é".repeat(len).as_bytes(), json));
+            for at in 0..8 {
+                let mut word = [b'a'; 8];
+                word[at] = b;
+                let word = u64::from_le_bytes(word);
+                assert_eq!(Html::word(word), html(b) || b == b'#', "{b:#x} at {at}");
+                #[cfg(feature = "json")]
+                assert_eq!(Json::word(word), json(b), "{b:#x} at {at}");
+            }
+        }
+        // Each byte of a block is tested, not only one: two of the set, and bytes above ASCII.
+        assert!(Html::block(b"<aaaaaaaaaaaaaa>") && !Html::block(&[0xe9; 16]) && !Html::block(b"#%(;=?!$)*:@[]^~"));
+        #[cfg(feature = "json")]
+        assert!(Json::block(b"\"aaaaaaaaaaaaaa\\") && !Json::block(&[0xe9; 16]) && !Json::block(b"!#[]^~ '&<>/{}:,"));
+    }
+
+    /// `any` against the set's bytes one by one: every byte value at every place of every length
+    /// to past four blocks, so each branch by length, the loop and the overlapping end are met.
+    /// Text of sixteen bytes or more is exact; shorter HTML text may also stop at a `#`.
+    #[test]
+    fn any_finds_a_byte_of_the_set_at_every_position_and_length() {
+        for len in 0..70 {
+            let mut text = vec![b'a'; len];
+            assert!(!any::<Html>(&text), "{len}");
+            #[cfg(feature = "json")]
+            assert!(!any::<Json>(&text), "{len}");
+            for at in 0..len {
+                for b in 0..=255u8 {
+                    text[at] = b;
+                    assert_eq!(any::<Html>(&text), html(b) || (len < 16 && b == b'#'), "{len} {at} {b:#x}");
+                    #[cfg(feature = "json")]
+                    assert_eq!(any::<Json>(&text), json(b), "{len} {at} {b:#x}");
+                }
+                text[at] = b'a';
+            }
+            // Bytes next to the escaped ones, and UTF-8, are not hits.
+            let near = "%(;=?é日".repeat(len);
+            assert!(!any::<Html>(&near.as_bytes()[..len.min(near.len())]), "{len}");
+            #[cfg(feature = "json")]
+            assert!(!any::<Json>("!#[]^~\u{7f}é".repeat(len).as_bytes()), "{len}");
         }
     }
 

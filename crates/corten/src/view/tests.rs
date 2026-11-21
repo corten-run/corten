@@ -400,26 +400,35 @@ fn escaping_matches_the_one_byte_at_a_time_rule() {
         }
         out
     }
-    // Each escaped character, and its neighbours in ASCII (which the eight-byte test must not
-    // mistake for it), at every offset of strings longer than one chunk, among multibyte text.
+    // Each escaped character, and its neighbours in ASCII (which neither the eight-byte test nor
+    // the sixteen-byte one may mistake for it), at every offset of strings up to six blocks long,
+    // among multibyte text.
     let pieces = ["a", "&", "<", ">", "\"", "'", "%", "=", "?", ";", ":", "!", "#", "é", "★", "\u{7f}", "\u{80}", "\0"];
     let mut seed = 0x2545_f491_4f6c_dd1du64;
     for _ in 0..4000 {
         seed ^= seed << 13;
         seed ^= seed >> 7;
         seed ^= seed << 17;
-        let len = (seed % 40) as usize;
+        let len = (seed % 100) as usize;
         let text: String = (0..len).map(|i| pieces[((seed >> (i % 60)) as usize + i * 7) % pieces.len()]).collect();
         let mut out = String::new();
         crate::view::escape_into(&text, &mut out);
         assert_eq!(out, reference(&text), "{text:?}");
     }
-    for at in 0..24 {
-        for special in ["&", "<", ">", "\"", "'"] {
-            let text = format!("{}{special}{}", "x".repeat(at), "y".repeat(24 - at));
-            let mut out = String::new();
-            crate::view::escape_into(&text, &mut out);
-            assert_eq!(out, reference(&text));
+    // One, and then two with clean text between, at every offset of every length to past four
+    // blocks: the skip finds each from wherever the last one left it.
+    for len in 1..70 {
+        for at in 0..len {
+            for special in ["&", "<", ">", "\"", "'", "#"] {
+                let text = format!("{}{special}{}", "x".repeat(at), "y".repeat(len - at - 1));
+                let mut out = String::new();
+                crate::view::escape_into(&text, &mut out);
+                assert_eq!(out, reference(&text), "{text:?}");
+                let twice = format!("{text}{}{special}z", "é".repeat(at % 19));
+                out.clear();
+                crate::view::escape_into(&twice, &mut out);
+                assert_eq!(out, reference(&twice), "{twice:?}");
+            }
         }
     }
 }

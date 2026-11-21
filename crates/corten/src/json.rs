@@ -679,7 +679,7 @@ pub trait JsonKey {
 /// control characters, `\n`-style where JSON has a short form), nothing else.
 #[inline]
 fn str_body(out: &mut Vec<u8>, s: &str) {
-    if crate::ascii::any(s.as_bytes(), crate::ascii::json) {
+    if crate::ascii::any::<crate::ascii::Json>(s.as_bytes()) {
         escaped(out, s.as_bytes());
     } else {
         out.extend_from_slice(s.as_bytes());
@@ -689,26 +689,40 @@ fn str_body(out: &mut Vec<u8>, s: &str) {
 #[cold]
 fn escaped(out: &mut Vec<u8>, bytes: &[u8]) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut start = 0;
-    for (i, &b) in bytes.iter().enumerate() {
-        let short: &[u8] = match b {
-            b'"' => b"\\\"",
-            b'\\' => b"\\\\",
-            b'\n' => b"\\n",
-            b'\r' => b"\\r",
-            b'\t' => b"\\t",
-            0x08 => b"\\b",
-            0x0c => b"\\f",
-            0..0x20 => b"",
-            _ => continue,
+    use crate::ascii::{Json, Set};
+    let (mut start, mut i) = (0, 0);
+    while i < bytes.len() {
+        // Sixteen bytes with none to escape are passed in one test; any others are read one by one.
+        let end = match bytes[i..].first_chunk::<16>() {
+            Some(block) if !Json::block(block) => {
+                i += 16;
+                continue;
+            }
+            Some(_) => i + 16,
+            None => bytes.len(),
         };
-        out.extend_from_slice(&bytes[start..i]);
-        if short.is_empty() {
-            out.extend_from_slice(&[b'\\', b'u', b'0', b'0', HEX[(b >> 4) as usize], HEX[(b & 15) as usize]]);
-        } else {
-            out.extend_from_slice(short);
+        while i < end {
+            let b = bytes[i];
+            i += 1;
+            let short: &[u8] = match b {
+                b'"' => b"\\\"",
+                b'\\' => b"\\\\",
+                b'\n' => b"\\n",
+                b'\r' => b"\\r",
+                b'\t' => b"\\t",
+                0x08 => b"\\b",
+                0x0c => b"\\f",
+                0..0x20 => b"",
+                _ => continue,
+            };
+            out.extend_from_slice(&bytes[start..i - 1]);
+            if short.is_empty() {
+                out.extend_from_slice(&[b'\\', b'u', b'0', b'0', HEX[(b >> 4) as usize], HEX[(b & 15) as usize]]);
+            } else {
+                out.extend_from_slice(short);
+            }
+            start = i;
         }
-        start = i + 1;
     }
     out.extend_from_slice(&bytes[start..]);
 }
@@ -1874,6 +1888,34 @@ mod tests {
         names.insert("a\"b".into(), vec![-1, 2]);
         same(&names);
         same(&serde_json::json!({ "id": "item_1", "price": 0.5, "tags": ["a", "<b>"], "none": null }));
+    }
+
+    /// A string is escaped as serde_json escapes it wherever its escaped bytes fall: each one,
+    /// and its neighbours in ASCII, at every offset of every length to past four blocks, alone and
+    /// with a second after clean text, so the skip over sixteen clean bytes starts and ends at
+    /// every place.
+    #[test]
+    fn strings_escape_as_serde_json_writes_them_at_every_position_and_length() {
+        let pieces = ["\"", "\\", "\n", "\r", "\t", "\u{8}", "\u{c}", "\0", "\u{1f}", " ", "!", "#", "[", "]", "\u{7f}", "é"];
+        for len in 1..70 {
+            for at in 0..len {
+                for special in pieces {
+                    let text = format!("{}{special}{}", "x".repeat(at), "y".repeat(len - at - 1));
+                    same(&text);
+                    same(&format!("{text}{}{special}z", "日".repeat(at % 19)));
+                }
+            }
+        }
+        // Many in one string, as prose has them.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        for _ in 0..4000 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let len = (seed % 100) as usize;
+            let text: String = (0..len).map(|i| if (seed >> (i % 60)) & 7 == 0 { pieces[i * 7 % pieces.len()] } else { "a" }).collect();
+            same(&text);
+        }
     }
 
     /// The std types a schema is given for are written as serde writes them, alone and in a map.
