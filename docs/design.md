@@ -7238,7 +7238,13 @@ rules something out.
     request, varies on nothing else, and carries exactly the marks a page is known to carry: one
     added later that this code does not know is not replayed by mistake, the page is simply not
     kept. A `Date` the handler set is left out of what is kept, so each answer given in its place
-    is dated when it is sent.
+    is dated when it is sent, and its `Age` counts from the handler's date as a cache counts one
+    (RFC 9111, 4.2.3, the apparent age less the time the answer took): a cache after the app then
+    finds the page as old whichever answer it is given. A page that date makes older than its
+    lifetime, or whose date is not in IMF-fixdate form, the form HTTP sends, is not kept. A page is
+    put in the store only while no write to its path has been counted since its handler read,
+    seen under the store's lock, so one read before a write and kept late never takes the place of
+    one read after it.
 
     A write drops what is kept at its path, whatever the query, since a named post is
     `?do=name` at its page's path, whatever it is answered. That is wider than RFC 9111
@@ -7276,19 +7282,30 @@ rules something out.
     keeping one copy of a URL does not end the wait for another, and a request after a write
     makes the page again rather than wait for one read before it. Two copies whose hashes meet are
     made one after the other, since each request looks its own copy up once it has waited. A
-    request given a kept page does what it did before; one that misses takes the table's lock
-    when it starts and when it ends. The language is keyed as sent whatever the page varies on,
+    request looks for a kept copy again once it holds or has joined the page being made, so one
+    kept between its first look and then (the first request's, or one made for every language by
+    another) is given at once rather than made again or waited for. A request given a kept page
+    does what it did before; one that misses takes the table's lock when it starts and when it
+    ends, and looks in the store twice. The language is keyed as sent whatever the page varies on,
     since that is known only from its answer: a request waits for no page in another language,
     and a page the same in every language is made once for each `Accept-Language` sent while it
     is made. When the first request's page is not kept (an error, a page drawn for that request),
-    the others run their own handlers then, and the page is remembered as not kept for a minute
-    or until a write to its path, so requests for a page never kept wait for each other at most
-    once a minute; the table remembers at most 1,024 such pages, tens of kilobytes beside the
-    bound. When that request is dropped (its client left, its deadline passed) or panics, the
-    wait ends with it and they run their own, with nothing remembered. A request's own deadline
-    drops its wait as it would its handler. The first requests after a start wait as the others
-    do, so a deploy does not send a slow source a request for each visitor who comes while each
-    page is first made.
+    the others run their own handlers then, and the page is remembered as not kept for a minute,
+    until a write to its path, or until a request that made it alone keeps it, so requests for a
+    page never kept wait for each other about once a minute. That is best effort: the table
+    remembers the latest 1,024 such pages and forgets the one remembered first, so with more than
+    that in a minute a page may be waited for again sooner. At most 1,024 pages are made at once
+    that others wait for; past that, a request makes its page as it would with nothing kept. So
+    the table holds at most 2,048 entries and 1,024 remembered times, about 130 KB at most beside
+    the bound by their sizes, and a request that ends does a lookup and forgets at most one page
+    beside those whose time is up. When that request is dropped (its client left, its deadline
+    passed) or panics, the wait ends with it and they run their own, with nothing remembered. A
+    request that waited and was not given a page runs its own handler and does not wait again,
+    even where a write has meanwhile started another request making the page: in a burst of
+    writes such requests may each read the source, which bounds every request to one wait. A
+    request's own deadline drops its wait as it would its handler. The first requests after a
+    start wait as the others do, so a deploy does not send a slow source a request for each
+    visitor who comes while each page is first made.
 
     Not chosen: in front of the middleware, for the reasons above, though it would save the
     stages too; leaving out a write by its status (a `4xx`, a `501`) or by a mark the router
@@ -7306,7 +7323,16 @@ rules something out.
     a page begins to vary; giving
     a waiting request the first one's page when it was not kept, which may be that request's
     alone (a nonce, a cookie); a waiting request taking the first one's place when it is dropped,
-    so the others would wait in turn on each handler that fails; and, left for changes of their own, a call
+    so the others would wait in turn on each handler that fails; forgetting pages not kept by a
+    pass over the table, which a review found made each end look at every page being made once
+    more than 1,024 were (81,774 places looked at as 1,100 such pages ended, by the test that now
+    holds it to one each); no memory of pages not kept, which would cost each wave of requests for
+    a page never kept one handler's time of waiting (31 of 64 requests past the deadline in every
+    round of the wave below, against 28 with it) to save about 130 KB at most and no instruction
+    on a measured path; leaving a handler's `Date` out with nothing for its age, with which a cache
+    after the app counted the first answer older than each given in its place, and not keeping a
+    page that sets a `Date` at all, which loses the page for an input HTTP gives a meaning to; and,
+    left for changes of their own, a call
     that drops a page for a change no write to its path made, a way for an extractor of the
     app's own to say it reads only the URL, `Public` text, JSON and files
     (their handlers take other inputs, which a key would have to cover), a page served stale
@@ -7343,24 +7369,28 @@ rules something out.
     it began with glibc's and 35.2 MiB above with jemalloc, so what an allocator holds beyond the
     bytes asked of it is beside the bound; `tests/kept_memory.rs` holds the bytes asked to the
     bound, 4,177,233 of 4,194,304 for its page in every coding and 4,050,606 with no compression.
-    Requests that miss together (`c9c11bfda` against `fc86d8eff`, `tests/kept_cost.rs` under
+    Requests that miss together (`200f08426` against `fc86d8eff`, `tests/kept_cost.rs` under
     callgrind, its count for 1,200 requests less its count for 200, in 5 rounds that alternated
     the two builds, each answer's status, `Age` and body checked and the last page made asked
-    for again and given kept): a kept page given again ran 19,208 instructions against 19,213 at
-    the median, a page made and kept at a URL not asked for before 35,730 against 34,812 (2.6%
-    more: the table's lock taken twice and a keyed hash of the URL, `Host` and
-    `Accept-Language`), a write and the page made again 45,711 against 45,407 (0.7% more), and a
-    page for one visitor, whose route keeps nothing, 18,256 against 18,341, each build's rounds
-    within 8 instructions of each other. Timed (`tests/kept_wave.rs`, 64 requests sent at once
-    for a page whose handler reads a source that answers 4 reads at a time in 50 ms each, under a
-    500 ms deadline, 10 rounds of each, the medians of the rounds): where a write had dropped the
-    copy, the handler ran once where it had run 64 times, and all 64 requests were answered, the
-    slowest in 51.8 ms (from 50.9 to 52.1 over the rounds), where 28 had passed their deadline and
-    the 36 answered took 257 ms at the median and 463 ms at the slowest; the first requests after
-    a start the same, the slowest in 51.9 ms (51.0 to 56.4), where 28 had failed; for a page
-    never kept, the first wave lost 31 to the deadline where 28 had been lost, as its requests
-    waited 50 ms for the first one's page before running their own, and the second, the page
-    remembered as not kept, 28 as before. Under load (below, one URL asked for), a kept page's
+    for again and given kept): a kept page given again ran 19,226 instructions against 19,234 at
+    the median, a page made and kept at a URL not asked for before 35,810 against 34,821 (2.8%
+    more), a write and the page made again 46,053 against 45,361 (1.5% more), and a page for one
+    visitor, whose route keeps nothing, 18,270 against 18,355, each build's rounds within 12
+    instructions of each other. Of a miss's added cost, by callgrind's inclusive counts over the
+    1,200 requests, the store's second look took about 300 instructions a request for a new URL
+    and 420 after a write, and the table's keyed hash 320 to 340. Timed (`tests/kept_wave.rs`, 64
+    requests sent at once for a page whose handler reads a source that answers 4 reads at a time
+    in 50 ms each, under a 500 ms deadline, the same two builds in 2 passes of 5 rounds each, the
+    order of the builds turned about between the passes, the medians of the 10 rounds): where a
+    write had dropped the copy, the handler ran once where it had run 64 times, and all 64
+    requests were answered, the slowest in 52.0 ms (from 51.0 to 52.1 over the rounds), where 28
+    had passed their deadline in every round and the 36 answered took 256.5 ms at the median and
+    461.9 ms at the slowest; the first requests after a start the same, the slowest in 51.9 ms
+    (50.9 to 58.8), where 28 had failed; for a page never kept, the first wave lost 31 to the
+    deadline in every round where 28 had been lost, as its requests waited 50 ms for the first
+    one's page before running their own, and the second, the page remembered as not kept, 28 as
+    before. Under load (below, one URL asked for, `c9c11bfda` against `fc86d8eff`, not taken
+    again for the second look, which a kept page does not reach), a kept page's
     cycles changed by +0.1% at the median of 140 pairs of turns, with a one-sided 95% bound of
     +0.6%, its user cycles by -0.4% with a bound of +0.2%, and its user instructions by -0.1% with
     a bound of +0.5%, which meets the margin set before the rounds, cycles not worse with the bound
@@ -7394,10 +7424,14 @@ rules something out.
     handler takes (a scanner's `POST /`) make kept pages again often enough to show, so the
     router's own refusals are worth leaving out where the request met no middleware; requests for
     pages not kept are shown to wait for each other often enough to matter, or requests in many
-    languages for a page the same in all of them to load its source; or the connection speaks
-    HTTP/2, where a request's target carries its authority.
+    languages for a page the same in all of them to load its source; an app is shown to make more
+    than 1,024 pages at once, or to forget pages not kept within their minute; or the connection
+    speaks HTTP/2, where a request's target carries its authority.
 
-    Last checked: 2026-11-21, requests that miss together with rustc 1.99.1, release builds
+    Last checked: 2026-11-21, the second look and the table's bounds with rustc 1.100.0, release
+    builds of `200f08426` and `fc86d8eff` counted by valgrind 3.24.0's callgrind and the waves
+    timed on a workstation's Docker VM with 4 worker threads and 4 CPUs. 2026-11-21, requests
+    that miss together with rustc 1.99.1, release builds
     counted by valgrind 3.24.0's callgrind, the waves timed on a workstation's Docker VM with 4
     worker threads, and the cycles of a kept page from the two builds started once on one of the
     VM's CPUs, its sibling left idle, and loaded in turn for three seconds each by `wrk` with 64
