@@ -1076,8 +1076,10 @@ async fn a_no_store_answer_goes_out_private_no_store_whatever_a_middleware_made_
 /// A `Public` page asked for as anything but its full document is the browser's alone, and goes out
 /// with none of the caching headers a CDN reads first also when a staged middleware already made
 /// its `Cache-Control` `private` or `no-store`, or took it out. A `no-store` any reader could find
-/// (beside `must-understand`, on a second line, `no-store=1`) goes out `private, no-store`: some
-/// CDNs keep an answer that says only `no-store`. The full document keeps what the middleware wrote.
+/// (beside `must-understand`, on a second line, `no-store=1`, also beside a plain `private`) goes
+/// out `private, no-store`: some CDNs keep an answer that says only `no-store`, and a browser that
+/// ignores `no-store=1` would keep a `private` one. The full document keeps what the middleware
+/// wrote.
 #[tokio::test]
 async fn a_public_page_in_a_partial_mode_keeps_no_cdn_caching_header_whatever_a_middleware_says() {
     /// Staged middleware that writes these lines in place of the answer's `Cache-Control` (none

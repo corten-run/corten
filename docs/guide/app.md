@@ -1410,7 +1410,8 @@ submit key, or is a `Public` answer to a request with credentials. A `no-store` 
 error page and the error page for a failure no handler answered (below) lose those headers too,
 whatever a middleware made of their `Cache-Control` (a `NoStore` one still goes out
 `private, no-store`, below, and so does a `Public` one sent as the browser's alone whose header
-names `no-store` anywhere, `must-understand` or a second line included). Those names, matched
+names `no-store` anywhere: `must-understand`, a second line, or `no-store=1` beside a plain
+`private` included). Those names, matched
 exactly, are the whole list (a `Public` answer cannot set one either); any other answer keeps the
 ones a middleware wrote.
 
@@ -1462,8 +1463,14 @@ and, for `NoStore<..>`, a request refused before the handler runs. Each sends th
 which can read the request's `Cookie` and `Authorization` without reading a caller, so Corten never
 lets it be shared, as for a refused write: it goes out `private, no-cache` (`private, no-store`
 when a middleware's header or its own names `no-store`), with none of the CDN caching headers
-above, whoever wrote them. An unstaged route's `NoStore` answer goes out `private, no-store` with
-none of them either ([a route outside the stages](#a-route-outside-the-stages)). A handler
+above, whoever wrote them. The same holds for the error page in place of the router's own answer
+to a request no handler takes (the 404 of an unknown URL, the 405 of a method the route lacks,
+the 501 of one no route has), the PWA's offline page included, which its service worker keeps
+whatever its `Cache-Control` says; a handler's own 404 is its answer, under the rules above. A
+request refused before the handler runs is not shared in the other forms it goes out in either:
+as it is, to a client that does not ask for HTML, or as JSON. An unstaged route's `NoStore`
+answer goes out `private, no-store` with none of them either
+([a route outside the stages](#a-route-outside-the-stages)). A handler
 cannot mark an answer public any other way: a response it builds by hand is not an answer a route
 can name, and if anything read a caller the answer is private whatever its header says.
 

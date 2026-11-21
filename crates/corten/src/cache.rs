@@ -47,8 +47,9 @@
 //! error page that replaces a failure it returns too); it and a `Public` one sent as the browser's
 //! alone (below, `private, no-store` where its header names `no-store`) lose those headers as
 //! well, and so does the error page for a failure no handler answered (a request refused before
-//! the handler ran, a panic, the deadline), which is private whatever it said. A [`crate::live`] stream's fragments are text rendered
-//! after its headers went out, so they carry no such mark.
+//! the handler ran, a panic, the deadline, the router's own `404`, `405` or `501`), which is
+//! private whatever it said, as is such a refusal sent as it is or as JSON. A [`crate::live`]
+//! stream's fragments are text rendered after its headers went out, so they carry no such mark.
 //!
 //! The app is the first shared cache of its own `Public` pages: the whole document one made for a
 //! request without credentials is kept for its shared lifetime and given again in the handler's
