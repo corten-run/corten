@@ -44,6 +44,9 @@ pub(super) mod unstaged_url {
     #[route("/private-cookie", get = unstaged_private_cookie, unstaged)]
     pub struct PrivateCookie;
 
+    #[route("/no-store", get = unstaged_no_store, unstaged)]
+    pub struct NoStored;
+
     #[route("/feeds/{name}.xml", get = unstaged_feed, unstaged)]
     pub struct Feed<'a> {
         pub name: &'a str,
@@ -117,6 +120,11 @@ async fn unstaged_private_cookie() -> crate::response::Response {
         .header("cdn-cache-control", "max-age=600")
         .body(Body::from("id"))
         .unwrap()
+}
+
+/// An answer nothing may keep, with no cookie: a code in the link it answers.
+async fn unstaged_no_store() -> NoStore<&'static str> {
+    NoStore("code")
 }
 
 /// A cookie set on an answer that says a shared cache may keep it.
@@ -221,8 +229,11 @@ async fn an_unstaged_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     }
     assert_eq!(headers["surrogate-key"], "ids", "a CDN's header that keeps nothing stays");
     let (_, headers, _) = call_with(router.clone(), "GET", "/private-cookie", None, None).await;
-    assert_eq!(headers["cache-control"], "no-store");
+    assert_eq!(headers["cache-control"], "private, no-store", "personal, so `private` too");
     assert!(!headers.contains_key("cdn-cache-control"), "{headers:?}");
+    // `NoStore` says `private` too, with no stage to add it, for a CDN that ignores a bare `no-store`.
+    let (_, headers, _) = call_with(router.clone(), "GET", "/no-store", None, None).await;
+    assert_eq!(headers["cache-control"], "private, no-store");
     // Whatever type it says: a list a browser takes the last of too.
     let (_, headers, _) = call_with(router.clone(), "GET", "/listed", None, None).await;
     assert_eq!(headers["content-security-policy"], "sandbox");

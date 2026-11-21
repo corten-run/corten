@@ -38,13 +38,15 @@
 //! [`crate::security::Nonce`]), a page that draws a form's new submit key
 //! ([`crate::SubmitKey::field`]: each visitor needs a key of their own), and an answer to a request
 //! whose handler or middleware read a [`crate::Caller`]. They get `private, no-cache`, and
-//! `corten dev` logs the first three. Such an answer, and a `Public` or `NoStore` answer to a
-//! request with credentials, is personal: whatever its `Cache-Control` says (none, `private`,
-//! `no-store`), it also loses the caching headers a CDN reads first, by name ([`CDN_CACHING`]:
+//! `corten dev` logs the first three. Such an answer, and a `Public` answer to a request with
+//! credentials, is personal: whatever its `Cache-Control` says (none, `private`, `no-store`), it
+//! also loses the caching headers a CDN reads first, by name ([`CDN_CACHING`]:
 //! `CDN-Cache-Control`, `Surrogate-Control`, ...), and a `no-store` on it goes out
-//! `private, no-store`, for a CDN that ignores a bare one. A `NoStore` answer and a `Public` one
-//! sent as the browser's alone (below) lose those headers too. A [`crate::live`] stream's
-//! fragments are text rendered after its headers went out, so they carry no such mark.
+//! `private, no-store`, for a CDN that ignores a bare one. A `NoStore` answer says
+//! `private, no-store` itself, and goes out so whatever a middleware made of its header since (the
+//! error page that replaces a failure it returns too); it and a `Public` one sent as the browser's
+//! alone (below) lose those headers as well. A [`crate::live`] stream's fragments are text rendered
+//! after its headers went out, so they carry no such mark.
 //!
 //! The app is the first shared cache of its own `Public` pages: the whole document one made for a
 //! request without credentials is kept for its shared lifetime and given again in the handler's
@@ -154,7 +156,8 @@ impl Cache {
     fn header(self) -> HeaderValue {
         let (max_age, shared, stale, if_error) = match self.kind {
             Kind::Public { max_age, shared, stale, if_error } => (max_age, shared, stale, if_error),
-            Kind::NoStore => return NO_STORE,
+            // `private` too: some CDNs keep an answer that says only `no-store`.
+            Kind::NoStore => return PRIVATE_NO_STORE,
             Kind::Immutable => return crate::assets::IMMUTABLE,
         };
         let mut text = Vec::with_capacity(96);
@@ -216,6 +219,12 @@ impl Typed {
     pub(crate) fn shared(res: &Response) -> Option<(Typed, u64)> {
         let typed = *res.extensions().get::<Typed>()?;
         (!typed.named && typed.lifetime > 0).then_some((typed, typed.lifetime))
+    }
+
+    /// Whether `res` is a [`crate::NoStore`] answer: the error page that replaces it is marked
+    /// again ([`Cache::apply`]), so [`settle`] still holds it to that.
+    pub(crate) fn is_no_store(res: &Response) -> bool {
+        res.extensions().get::<Typed>().is_some_and(|typed| typed.no_store)
     }
 
     #[cfg(test)]
@@ -336,8 +345,9 @@ fn sets_cookie(headers: &HeaderMap) -> bool {
 /// of a shared one when the response may differ between users. An answer Corten knows is personal
 /// (it sets a cookie, has the nonce, drew a submit key, read a caller, or is a [`Cache`] answer to
 /// a request with credentials), one [`crate::NoStore`] keeps out of every cache, and a page route's
-/// answer made the browser's alone also lose the caching headers a CDN reads first
-/// ([`CDN_CACHING`]), whatever its `Cache-Control` says.
+/// [`Cache`] answer asked for as anything but its full document also lose the caching headers a
+/// CDN reads first ([`CDN_CACHING`]), whatever its `Cache-Control` says, and a `NoStore` one goes
+/// out `private, no-store` whatever a middleware made of its header.
 pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     // A page that drew a submit key ([`Unrepeatable`]) is the browser's alone, whatever its
     // `Cache-Control` says: a CDN reads its own header first, so none of those Corten names stays.
@@ -357,16 +367,21 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     // answer is personal, and a `private` beside them is not trusted.
     let (mut no_store, mut is_private, mut must_understand) = (false, false, false);
     let (mut lines, mut quoted, mut text) = (0, false, true);
-    // One lookup for the usual response, which says nothing.
+    let typed = res.extensions().get::<Typed>().copied();
     match res.headers_mut().entry(header::CACHE_CONTROL) {
         header::Entry::Vacant(entry) => {
             entry.insert(PRIVATE);
-            // Private already; one Corten knows is personal loses the CDN's own headers too. The
-            // usual answer pays for two flags and one lookup.
-            if !drew_key && (seen.nonce || seen.caller || sets_cookie(res.headers())) {
-                drop_cdn_caching(res.headers_mut());
+            // The usual response says nothing and has no [`Cache`] mark: private already, and one
+            // Corten knows is personal loses the CDN's own headers too, for two flags and one
+            // lookup. A marked one whose header a middleware took out is settled below as one that
+            // says `private, no-cache`.
+            if typed.is_none() {
+                if !drew_key && (seen.nonce || seen.caller || sets_cookie(res.headers())) {
+                    drop_cdn_caching(res.headers_mut());
+                }
+                return;
             }
-            return;
+            (is_private, lines) = (true, 1);
         }
         header::Entry::Occupied(entry) => {
             for line in entry.iter() {
@@ -381,7 +396,6 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
         }
     }
     let plain = lines == 1 && !quoted && text;
-    let typed = res.extensions().get::<Typed>().copied();
     let bug = if seen.nonce {
         Some("its HTML has this request's CSP nonce (req.nonce() in the layout, or a handler that takes Nonce)")
     } else if sets_cookie(res.headers()) {
@@ -395,12 +409,21 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     };
     // The answer is this visitor's, whoever set its header.
     let personal = bug.is_some() || seen.caller || typed.is_some_and(|typed| seen.credentials && !typed.named);
+    // `NoStore`, whatever a middleware made of its header since.
+    let kept_out = typed.is_some_and(|typed| typed.no_store);
+    // A page route's answer asked for as anything but its full document is the browser's alone:
+    // a CDN that read its own header would keep this form at the page's URL.
+    let partial = seen.partial && typed.is_some();
     let headers = res.headers_mut();
-    // A CDN reads its own caching header before `Cache-Control`, so a personal answer, and one
-    // `NoStore` keeps out of every cache, keeps none of those Corten names (a page that drew a key
-    // lost them above).
-    if !drew_key && (personal || typed.is_some_and(|typed| typed.no_store)) {
+    // A CDN reads its own caching header before `Cache-Control`, so none of those Corten names stays
+    // on any of these, whatever `Cache-Control` says (a page that drew a key lost them above).
+    if !drew_key && (personal || kept_out || partial) {
         drop_cdn_caching(headers);
+    }
+    if kept_out {
+        // As `NoStore` writes it: `private` too, for a CDN that ignores a bare `no-store`.
+        headers.insert(header::CACHE_CONTROL, PRIVATE_NO_STORE);
+        return;
     }
     if no_store && !must_understand {
         // A personal answer says `private` too, for a CDN that ignores `no-store`.
@@ -443,9 +466,6 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     }
     let Some(typed) = typed else { return };
     if seen.partial {
-        // Not the full document, so the browser's alone: a CDN that read its own header would keep
-        // this form at the page's URL.
-        drop_cdn_caching(headers);
         let browser = private(headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).unwrap_or(""));
         headers.insert(header::CACHE_CONTROL, browser);
     }
@@ -453,6 +473,7 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
         headers.append(header::VARY, HeaderValue::from_static("cookie"));
     }
 }
+
 /// Removes the caching headers a CDN reads before `Cache-Control` ([`CDN_CACHING`]) from an
 /// answer no shared cache may keep.
 pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
@@ -466,14 +487,12 @@ pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
 }
 
 /// Settles a refused write's answer, which goes out without [`settle`]: the default, whatever it
-/// said, and none of the CDN caching headers its page wrote (the page may show who is asking). A
-/// page that drew a submit key and names `no-store` goes out `private, no-store`, as [`settle`]
-/// gives one.
+/// said, and none of the CDN caching headers its page wrote (the page may show who is asking). One
+/// that names `no-store` goes out `private, no-store`, as [`settle`] gives a personal one.
 pub(crate) fn settle_refused(res: &mut Response) {
-    let drew_key = res.extensions().get::<Unrepeatable>().is_some();
     let headers = res.headers_mut();
     drop_cdn_caching(headers);
-    let no_store = drew_key && headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes()));
+    let no_store = headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes()));
     headers.insert(header::CACHE_CONTROL, if no_store { PRIVATE_NO_STORE } else { PRIVATE });
 }
 
@@ -832,7 +851,7 @@ mod tests {
             "public, max-age=60, stale-while-revalidate=600"
         );
         assert_eq!(Cache::public(Duration::from_millis(1500)).header(), "public, max-age=1", "whole seconds");
-        assert_eq!(Cache::no_store().stale_while_revalidate(minute).header(), "no-store");
+        assert_eq!(Cache::no_store().stale_while_revalidate(minute).header(), "private, no-store");
         let day = Duration::from_secs(86_400);
         assert_eq!(Cache::public(minute).shared(day).header(), "public, max-age=60, s-maxage=86400");
         assert_eq!(
@@ -840,7 +859,7 @@ mod tests {
             "public, max-age=60, s-maxage=86400, stale-while-revalidate=3600",
             "in either order"
         );
-        assert_eq!(Cache::no_store().shared(day).header(), "no-store");
+        assert_eq!(Cache::no_store().shared(day).header(), "private, no-store");
         assert_eq!(
             Cache::public(minute).stale_if_error(day).stale_while_revalidate(minute).header(),
             "public, max-age=60, stale-while-revalidate=60, stale-if-error=86400",
@@ -861,7 +880,7 @@ mod tests {
             "neither stale window drops a shared age set before it"
         );
         assert_eq!(Cache::public(minute).stale_if_error(Duration::ZERO).header(), "public, max-age=60", "0 is left out");
-        assert_eq!(Cache::no_store().stale_if_error(day).header(), "no-store");
+        assert_eq!(Cache::no_store().stale_if_error(day).header(), "private, no-store");
         assert_eq!(Cache::immutable().stale_if_error(day).header(), "public, max-age=31536000, immutable");
     }
 

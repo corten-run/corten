@@ -2306,10 +2306,11 @@ impl<A: Answer + Shareable> Answer for Public<A> {
     type Kind = <A::Kind as KindOf<A>>::InPublic;
 }
 
-/// An answer nothing may keep, not even the browser's own cache (`Cache-Control: no-store`): a
-/// statement, a one-time code. `async fn statement(req: Req) -> NoStore<HtmlResult>`. The browser's
-/// back/forward cache may not restore the page either. It applies to a failure the handler returns
-/// too: the error page that replaces it is `no-store`. A request refused before the handler runs
+/// An answer nothing may keep, not even the browser's own cache (`Cache-Control: private, no-store`,
+/// `private` for a CDN that ignores a bare `no-store`): a statement, a one-time code.
+/// `async fn statement(req: Req) -> NoStore<HtmlResult>`. The browser's back/forward cache may not
+/// restore the page either. It applies to a failure the handler returns too: the error page that
+/// replaces it is `private, no-store`. A request refused before the handler runs
 /// (a path that does not parse), a handler that panics and one past its deadline never reach it,
 /// and get the default. In a routes module the route can say it instead,
 /// `#[route("/statement", get = statement, no_store)]`: the handler keeps its own result and its

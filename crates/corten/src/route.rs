@@ -4562,7 +4562,7 @@ fn written_checked<R: Route + ?Sized>() {
 /// handler set, since a browser enforces each: whatever its type, a document it sends (an uploaded
 /// SVG) runs no script on the app's origin. Neither reads the answer's type or policy, so none fools
 /// them; an unstaged route is for data, and an answer whose script must run is not one. An answer
-/// that sets a cookie is `private, no-cache` (`no-store` when it says one), with no CDN's own
+/// that sets a cookie is `private, no-cache` (`private, no-store` when it says `no-store`), with no CDN's own
 /// caching header, so no shared cache hands one visitor's cookie to another. A handler that panics
 /// is logged with the route's path and answered `500`, as a staged one is, rather than dropping
 /// the connection. Under an API's prefix a failure after the host check is the API's JSON, as
@@ -4629,7 +4629,7 @@ fn unstaged_headers(mut res: crate::response::Response) -> crate::response::Resp
     headers.append(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
     if headers.contains_key(header::SET_COOKIE) {
         let no_store = headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
-        headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::NO_STORE } else { crate::cache::PRIVATE });
+        headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::PRIVATE_NO_STORE } else { crate::cache::PRIVATE });
         // A CDN reads its own before `Cache-Control`: any `*cache-control`, as a
         // [`crate::Public`] answer may not set, and the others Corten names
         // ([`crate::cache::CDN_CACHING`]).

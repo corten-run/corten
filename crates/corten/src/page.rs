@@ -3595,6 +3595,8 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
         drop(asked);
         return crate::api::json_failure(res, shared.dev, None).await;
     }
+    // A `NoStore` answer: the page that replaces it is one too.
+    let no_store = crate::cache::Typed::is_no_store(&res);
     if let Some(crate::caller::SignIn(to)) = res.extensions().get::<crate::caller::SignIn>().cloned() {
         let kept = std::mem::take(res.headers_mut());
         let Some(message) = sign_in_loops(asked.path(), &to) else {
@@ -3604,14 +3606,14 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
                 tracing::error!("corten: {message}");
                 print_unserved(shared.dev, &message);
                 let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
-                return carried(kept, error_page(shared, asked, failure).await);
+                return carried(kept, no_store, error_page(shared, asked, failure).await);
             }
-            return carried(kept, redirect(asked.mode, asked.fetched, to));
+            return carried(kept, no_store, redirect(asked.mode, asked.fetched, to));
         };
         tracing::error!("corten: {message}");
         let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
         let failure = if shared.dev { failure } else { failure.without_detail() };
-        return carried(kept, error_page(shared, asked, failure).await);
+        return carried(kept, no_store, error_page(shared, asked, failure).await);
     }
     let mut failed = res.extensions().get::<crate::Failed>().cloned();
     // Read here, before the answer's body is taken; not in a release build, where it would be one
@@ -3646,7 +3648,7 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     }
     if offline && status == StatusCode::NOT_FOUND {
         // The PWA's offline page, which the service worker keeps: a 200.
-        return carried(kept, error_page(shared, asked, Failure::Offline).await);
+        return carried(kept, no_store, error_page(shared, asked, Failure::Offline).await);
     }
     let detail = failed.map(|crate::Failed(message)| message);
     let failure = match cause {
@@ -3670,7 +3672,7 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     #[cfg(not(debug_assertions))]
     let shows = shared.dev;
     let failure = if shows { failure } else { failure.without_detail() };
-    carried(kept, error_page(shared, asked, failure).await)
+    carried(kept, no_store, error_page(shared, asked, failure).await)
 }
 
 /// [`Req::asset`] with no static directory: a bug, which panics in debug builds.
@@ -3691,14 +3693,19 @@ fn no_assets(path: &'static str) -> crate::assets::AssetUrl<'static> {
 /// on still decides this one. A `Cache-Control` that names `no-store` (`NoStore`, or one written
 /// by hand, on any of its lines, however a reader could find it) makes `res` `no-store` too:
 /// whoever set it said nothing may keep the answer, a failure included. Its other directives
-/// described the failed answer, so they are not carried.
-fn carried(kept: HeaderMap, mut res: Response) -> Response {
+/// described the failed answer, so they are not carried. The page that replaces a `NoStore`
+/// answer (`no_store`) is `NoStore` too, whatever a middleware made of the answer's header, so
+/// the cache rules hold it to that.
+fn carried(kept: HeaderMap, no_store: bool, mut res: Response) -> Response {
+    if no_store {
+        crate::cache::Cache::no_store().apply(&mut res);
+    }
     if kept.is_empty() {
         return res;
     }
     use http::header::Entry;
     let headers = res.headers_mut();
-    if kept.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes())) {
+    if !no_store && kept.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes())) {
         headers.insert(header::CACHE_CONTROL, crate::cache::NO_STORE);
     }
     // Allocates only for a failure that varied on something.
@@ -4432,7 +4439,7 @@ mod carried_tests {
         kept.append(header::VARY, HeaderValue::from_bytes(b"caf\xe9").unwrap());
         let mut res = Response::new(Body::empty());
         res.headers_mut().append(header::VARY, HeaderValue::from_static("corten, accept"));
-        let res = carried(kept, res);
+        let res = carried(kept, false, res);
         let vary: Vec<_> = res.headers().get_all(header::VARY).iter().map(HeaderValue::as_bytes).collect();
         assert_eq!(vary, [&b"corten, accept"[..], b"Origin", b"cookie", b"caf\xe9"]);
     }

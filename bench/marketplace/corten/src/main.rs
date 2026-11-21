@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(fresh.status(), StatusCode::OK, "{}", fresh.text());
         assert_eq!(fresh.text(), "[]");
         assert!(fresh.headers().get("set-cookie").is_none());
-        assert_eq!(fresh.headers()["cache-control"], "no-store");
+        assert_eq!(fresh.headers()["cache-control"], "private, no-store");
         let chosen = "11111111111111111111111111111111";
         assert_eq!(app.get(&readback).cookie("marketplace-alerts", chosen).await.text(), "[]");
         let fields = AlertForm::FIELDS;
