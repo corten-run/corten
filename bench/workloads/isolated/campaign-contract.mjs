@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
-import { bindExecution } from "./contract.mjs";
+import { alternateCampaignPlacements, bindExecution } from "./contract.mjs";
 import { groupNames } from "../registry.mjs";
-import { alternateFleetMode, catalogFleetPlacement } from "../cloud-contract.mjs";
+import { catalogFleetPlacement } from "../cloud-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { parseArgs } from "../../json-api/contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
@@ -37,7 +37,7 @@ export function bindGroupCampaign(input, mode = "dedicated") {
   exact(input, ["round", "commit", "group"]);
   const { group, ...request } = input;
   assert.ok(groupNames.includes(group), "unknown registry group");
-  assert.ok(mode === "dedicated" || mode === alternateFleetMode && group !== "catalog-page"
+  assert.ok(mode === "dedicated" || alternateCampaignPlacements.includes(mode) && group !== "catalog-page"
     || mode === catalogFleetPlacement.loadLayout && group === "catalog-page", "unknown group placement");
   return bindNativeCampaign(request, [group], groupCampaignSchema, mode);
 }

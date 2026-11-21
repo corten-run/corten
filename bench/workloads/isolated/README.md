@@ -121,10 +121,13 @@ Requested overrides are always separate from recorded native defaults.
 
 ## Resources and validation
 
-The binding uses the provider placement for its campaign mode: c-8 in sfo3 for
-the default dedicated group and c-8 in sfo2 for either the legacy nonfleet
-campaign or the dedicated fleet's reserved `dedicated-sfo2` mode. Native
-replay reports the latter explicitly so the collector can match the saved fleet.
+The binding uses the provider placement for its campaign mode. The default
+dedicated group uses c-8 in sfo3 and the legacy nonfleet campaign uses c-8 in
+sfo2. A non-catalog group can use c-8 in sfo2 (`dedicated-sfo2`), lon1
+(`dedicated-lon1`) or blr1 (`dedicated-blr1`) when its fleet authorizes that
+placement. Native replay reports the alternate mode so the collector can check
+it against the child's reservation. These c-8 placements use the same workload
+and resource budgets.
 The fleet binds only catalog-page to c-16 in sfo2 with
 [`c16-generator-v1`](CAMPAIGN.md#parent-interface), which widens the load generator
 without changing the app, upstream or probes. Allocation and isolation remain

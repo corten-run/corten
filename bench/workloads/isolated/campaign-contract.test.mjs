@@ -15,16 +15,23 @@ const root = fileURLToPath(new URL("../../../", import.meta.url));
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8",
   env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" } }).trim();
 test("alternate dedicated placement is replayable and changes neither resources nor native execution", () => {
-  const request = { round: "r17", commit, group: "json-api" };
-  const alternate = campaigns.bindGroupCampaign(request, "dedicated-sfo2");
-  validateCampaign(alternate);
-  const [a] = alternate.bindings, [b] = campaigns.bindGroupCampaign(request).bindings;
-  assert.deepEqual(a.host, { ...b.host, region: "sfo2" });
+  const request = { round: "r25", commit, group: "json-api" };
+  const [b] = campaigns.bindGroupCampaign(request).bindings;
   assert.equal(b.host.region, "sfo3");
-  for (const key of ["resources", "execution", "selection", "validation"]) assert.deepEqual(a[key], b[key]);
-  assert.notEqual(a.subjectSha256, b.subjectSha256);
-  assert.throws(() => validateCampaign({ ...alternate, bindings: [{ ...a, host: b.host }] }), /fixed native bindings/);
-  assert.throws(() => campaigns.bindGroupCampaign({ ...request, group: "catalog-page" }, "dedicated-sfo2"), /unknown group placement/);
+  const subjects = new Set([b.subjectSha256]);
+  for (const region of ["sfo2", "lon1", "blr1"]) {
+    const mode = `dedicated-${region}`, alternate = campaigns.bindGroupCampaign(request, mode);
+    validateCampaign(alternate);
+    const [a] = alternate.bindings;
+    assert.equal(a.campaignMode, mode);
+    assert.deepEqual(a.host, { ...b.host, region });
+    for (const key of ["resources", "execution", "selection", "validation"]) assert.deepEqual(a[key], b[key]);
+    assert.ok(!subjects.has(a.subjectSha256)); subjects.add(a.subjectSha256);
+    assert.throws(() => validateCampaign({ ...alternate, bindings: [{ ...a, host: b.host }] }), /fixed native bindings/);
+    assert.throws(() => campaigns.bindGroupCampaign({ ...request, group: "catalog-page" }, mode), /unknown group placement/);
+  }
+  for (const mode of ["lon1", "dedicated-nyc1", "dedicated-sfo3"])
+    assert.throws(() => campaigns.bindGroupCampaign(request, mode), /unknown group placement/);
 });
 test("official rounds are one fixed mapping with disjoint preparation and timing", () => {
   const rounds = campaignRounds("r17");

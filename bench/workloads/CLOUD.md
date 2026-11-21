@@ -71,17 +71,27 @@ readiness; this repair still requires independent source review before merge.
 
 ## Dedicated Group Hosts
 
-A new dedicated fleet uses `benchmark-group-fleet/v4`. The `catalog-page`
+A new dedicated fleet uses `benchmark-group-fleet/v5`. The `catalog-page`
 job still reserves `c-16/sfo2` with `c16-generator-v1`. That layout gives the
 catalog load generator CPUs 4-15; app, upstream and probe placement and budgets
-do not change. All other groups use the same `c-8` placement: sfo3 when
-advertised, otherwise sfo2 when advertised. These are the only two supported
-fleet placements. Nonfleet all-group hosts still use `c-8/sfo2`.
+do not change. Before spending, the fleet checks that the catalog placement and
+at least one supported `c-8` placement are advertised in both the size and
+region listings. That first check does not set aside provider capacity.
 
-Saved v1 (sfo2), v2 (sfo3), and v3 (catalog `c-16/sfo2`, siblings
-`c-8/sfo3`) fleets keep their original placements, rosters and receipts. The
+After catalog is verified and its host is deleted, the remaining preview
+checks again. It selects one common `c-8` region for all remaining groups,
+in preference order: `sfo3`, `sfo2`, `lon1`, then `blr1`. Review the actual
+region in that preview. If none is available, wait without starting a host or
+consuming the remaining attempt. If the proposed region changes before
+admission, obtain a fresh preview and approval. Once the remaining intent
+is recorded, do not substitute another region or retry a subset. Nonfleet
+all-group hosts still use `c-8/sfo2`.
+
+Saved v1 (sfo2), v2 (sfo3), v3 (catalog `c-16/sfo2`, siblings
+`c-8/sfo3`), and v4 (siblings pinned to one San Francisco region at
+preparation) fleets keep their original placements, rosters and receipts. The
 new controller can read them for inspection and independently authorized
-recovery, never for new detach or remaining admission. A v3 fleet such as r23
+recovery, never for new detach or remaining admission. A fleet such as r23 or r24
 stays on its original measured controller and existing checks; it can only
 admit the remaining children at their recorded placement, if it returns and
 the existing approval gates pass. Ordinary
