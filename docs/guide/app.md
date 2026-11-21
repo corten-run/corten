@@ -1539,16 +1539,19 @@ is escaped, whatever it is answered: a handler or a middleware that refused it (
 `422`), failed, passed its deadline or lost its client may have saved first, and a status does
 not say, so a `405` for a method the path has no handler for counts too. Work that outlives its
 request (`signal.finish`) drops the page again when it ends. So any client can have a kept page
-made again by sending a write to its path, and one such request drops every copy kept there; the
-most that costs is what the app paid before it kept pages. Only a write refused before the app's
-middleware (another site's, or one for a host the app does not answer) is not counted. A write
+made again by sending a write to its path, and one such request drops every copy kept there, for
+every query, host and language. Each is made again when it is next asked for, which costs what
+the page cost before the app kept pages and the copy into the store. Only a write that does not
+reach the app's middleware is not counted: one another site sent, one for a host the app does
+not answer, or one a layer in front (`App::layer`) answered itself. A write
 that went through also drops the page at the place on the site its answer
 names (`Location` or `Content-Location`, as a path from the root or a whole URL with the
 request's `Host`;
 [RFC 9111 section 4.4](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.4)), and a page
 whose handler was reading while a write went through is sent and not kept. So the process that
 answered a form posted to its own page, or one that redirects to the list, shows what was saved
-on the next load.
+on the next load. A write that fails before it names the list (it passes its deadline, or its
+client leaves) drops its own path alone.
 
 A write is counted when it is answered, so what it saves must be there for a reader by then, or
 be saved under `signal.finish`. One that lands later (a task the handler started and did not

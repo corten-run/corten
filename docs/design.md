@@ -7249,9 +7249,10 @@ rules something out.
     them out by a mark the router set was tried and left a page stale in that case. The price is
     that any client can have a kept page made again: one write to a path drops every copy kept
     there (each query, host and language), and each is made again by the next request for it.
-    The most that costs is what the app paid before it kept pages, with the copy into the
-    store. Only a write refused before the app's middleware (another site's, or for a host the
-    app does not answer) is not counted. A write that went through also drops the place on
+    Each costs what the page cost before the app kept pages and the copy into the store. Only
+    a write that does not reach the app's middleware is not counted: one another site sent, one
+    for a host the app does not answer, or one a layer in front (`App::layer`) answered
+    itself. A write that went through also drops the place on
     the site its `Location` or `Content-Location` names. A write is counted when it is answered or dropped, so one whose
     effect lands later (a task the handler did not wait for, a store whose readers lag) can
     leave a page as it was for its lifetime, which the lifetime allows and the guide says.
@@ -7267,7 +7268,8 @@ rules something out.
     to say, and a reload is not a reason to render it.
 
     Not chosen: in front of the middleware, for the reasons above, though it would save the
-    stages too; off unless asked for, which leaves the cost on every app that already said its
+    stages too; leaving out a write by its status (a `4xx`, a `501`) or by a mark the router
+    set on the ones it refuses, each of which left a page stale in a case a review found; off unless asked for, which leaves the cost on every app that already said its
     pages are public; a page for one visitor kept by caller, where a mistake in the key shows
     one user's page to another ([architecture](architecture.md#what-belongs-in-the-framework));
     honoring a request's `no-cache`; removing a written path's pages by a search of the store or
@@ -7299,7 +7301,8 @@ rules something out.
     it began with glibc's and 35.2 MiB above with jemalloc, so what an allocator holds beyond the
     bytes asked of it is beside the bound; `tests/kept_memory.rs` holds the bytes asked to the
     bound, 4,177,233 of 4,194,304 for its page in every coding and 4,050,606 with no compression.
-    Not measured: what a write pays for its count; a store read from more than one core; and the
+    Not measured: what a write pays for its count; a miss that is kept against the same page
+    made with nothing kept; a store read from more than one core; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
@@ -7320,13 +7323,15 @@ rules something out.
     or the lifetime the app's to set apart from `s-maxage`; an app must drop a page for a
     change made by a task, another instance or a purge; the stages around the handler
     become most of a kept page's cost on a measured app, so a place further out is worth its
-    rules; a multi-core measurement shows requests waiting on the store's lock; or the
+    rules; a multi-core measurement shows requests waiting on the store's lock; writes no
+    handler takes (a scanner's `POST /`) make kept pages again often enough to show, so the
+    router's own refusals are worth leaving out where the request met no middleware; or the
     connection speaks HTTP/2, where a request's target carries its authority.
 
     Last checked: 2026-11-20, the rounds above with rustc 1.99.1, the app on one CPU under `wrk`
     with 64 connections on three others, 500 URLs asked for unevenly, the app's cycles and
     instructions counted by `perf stat` and divided by the requests answered. The bodies of the two
-    builds' answers were identical in each coding; the headers differed by the kept page's `Age`
+    builds' answers were identical in each coding, and the headers differed by the kept page's `Age`
     and, where compressed, the tag. The commits after `f7e53a594` change which writes count and
     nothing a page's `GET` runs. `tests/kept_memory.rs` at this change, with all features and with
     none.

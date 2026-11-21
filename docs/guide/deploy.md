@@ -264,8 +264,12 @@ costs the app neither the render nor the compression. A purge at the cache in fr
 reach the app: the cache is sent the kept page again until its lifetime ends or a write through
 the app drops it, so a page that must change at once on a purge takes a short lifetime in the app
 and a long one nowhere. The pages are held in the process's memory, 32 MiB of them unless
-`App::kept_answers` says otherwise (and 256 KiB beside them once a page is kept), which belongs
-in the memory the container is given.
+`App::kept_answers` says otherwise, with 256 KiB beside them once a `Public` page is asked for.
+The bound counts the bytes asked of the allocator, and an allocator holds more than it is asked
+for when pages come and go: the benchmark app's resident memory settled 35 MiB above where it
+began with jemalloc and 58 MiB above with glibc's allocator
+([design Choice 70](../design.md#choice-kept-pages)). Allow about twice the bound in the memory
+the container is given.
 
 | Cache | Pages are cached | To key on `Vary` |
 |---|---|---|

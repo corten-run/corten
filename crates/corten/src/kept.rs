@@ -33,8 +33,10 @@
 //! middleware that refused it, failed, passed its deadline or lost its client may have written
 //! first, and a status does not say. Work that outlives its request
 //! ([`crate::Signal::finish`]) counts again when it ends. So a client can have a kept page made
-//! again by sending a write to its path, and the most that costs is what the app paid before it
-//! kept pages. A write that went through also drops what is kept at the place on this site its
+//! again by sending a write to its path: each copy is made when it is next asked for, at what the
+//! page cost before the app kept pages and the copy into the store. A write that does not reach
+//! the app's middleware (another site's, one for another host) is not counted.
+//! A write that went through also drops what is kept at the place on this site its
 //! answer names (`Location`, `Content-Location`; RFC 9111 section 4.4). A page whose handler
 //! was reading while a write went through is not kept. Nothing else drops a page before its
 //! lifetime ends: the lifetime is how stale the app said the page may be. Off under `corten dev`. The

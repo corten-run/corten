@@ -1192,6 +1192,13 @@ async fn a_write_drops_the_pages_kept_at_its_path() {
     };
     reads(router.clone()).await;
     assert_eq!(runs.count(), 1);
+    // A write another site sent is refused before the app's middleware and is not counted, or
+    // any site could have the app's pages made again through its visitors' browsers.
+    let cross = [("origin", "https://other.example"), ("sec-fetch-site", "cross-site")];
+    let (status, _, _) = fetch(&router, "POST", "/", &cross).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    reads(router.clone()).await;
+    assert_eq!(runs.count(), 1, "a write another site sent");
     // The router's own answers: the route has no `POST` (405), and no route has a `DELETE` (501).
     // A middleware may have met either, so each counts as any write does.
     assert!(!fetch(&router, "GET", "/read", &[]).await.1.contains_key(header::AGE));
@@ -1199,7 +1206,8 @@ async fn a_write_drops_the_pages_kept_at_its_path() {
     let (status, _, _) = fetch(&router, "POST", "/read", &same_origin).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     assert!(!fetch(&router, "GET", "/read", &[]).await.1.contains_key(header::AGE));
-    assert_eq!((runs.count(), read.count()), (1, 2), "a write to a path with no handler for it, and that path alone");
+    assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE), "and that path alone");
+    assert_eq!((runs.count(), read.count()), (1, 2), "a write to a path with no handler for it");
     let (status, _, _) = fetch(&router, "DELETE", "/", &same_origin).await;
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
     reads(router.clone()).await;
