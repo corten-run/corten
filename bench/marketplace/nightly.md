@@ -128,7 +128,7 @@ launch while it is unmerged. For a legacy open PR, finish its legacy validation 
 For running, append output to its log and invoke from the benchmark checkout:
 
 ```sh
-node bench/marketplace/droplet.mjs r17 --state-dir <round-control-directory> --collect
+node bench/marketplace/droplet.mjs r17 --state-dir <round-control-directory> --collect --context <saved-context>
 ```
 
 Poll command completion at most 60 seconds apart, up to 30 minutes. Exit 3 means running:
@@ -144,17 +144,21 @@ The launcher verifies ID, exact name, both shared tags and unique ownership tag,
 terminal unit with Restart=no, before download and again before deletion. It saves and hashes
 complete or partial evidence first. Missing units/SSH failures/identity mismatches fail closed.
 Do not manually delete, restart or power-cycle running rounds, or touch another run's droplet.
-The collector saves the exact droplet ID and DigitalOcean account with its deletion intent
-before one DELETE. It then checks that account's full droplet list for the exact ID for up to
-two minutes, including when the DELETE acknowledgement is lost. A listed ID is still
-unconfirmed even if its tags disappear. Confirmation requires a successful inventory that
-omits the ID, with the saved account verified before and after the read.
+Pass the saved doctl context for the account that launched the round. One credential-bound
+worker checks ownership, dispatches at most one DELETE, and checks for absence. Before
+dispatch the collector flushes and renames the intent containing the exact ID, account and
+context, then syncs the control directory. If the directory cannot be synced (including on
+native Windows), the collector can save evidence but refuses DELETE.
 
-Retry an unconfirmed cleanup using `--collect`, the same durable state and the same doctl
-account, not another launch. Once an intent exists, the collector only rechecks the local
-archive and reads the provider; it never sends another DELETE. If the ID remains listed or
-an older pending intent lacks an account binding, preserve the state and evidence for
-operator review. Do not clear the intent to force a retry.
+For up to two minutes the collector looks for an authenticated HTTP 404 on the exact ID,
+checking the saved account before and after the GET. An ID that is still present, even
+without its tags, does not prove deletion. If acknowledgement is lost and the worker cannot
+continue, confirmation stops without marking the host destroyed.
+
+Retry unconfirmed cleanup with `--collect`, the same state and the same context, not another
+launch. Once an intent exists, the collector only verifies the local archive and reads the
+provider. If the ID stays present or an older record lacks the account/context binding,
+preserve the state and evidence for operator review. Do not clear an intent to retry DELETE.
 
 ## Evening Launch
 
@@ -211,7 +215,7 @@ state directory rules as above:
 
 ```sh
 node bench/marketplace/droplet.mjs r17 --droplets 3 --ssh-key <saved-key-id> --state-dir <round-control-directory> --detach
-node bench/marketplace/droplet.mjs r17 --state-dir <round-control-directory> --collect
+node bench/marketplace/droplet.mjs r17 --state-dir <round-control-directory> --collect --context <saved-context>
 ```
 
 Each droplet is a dedicated c-8 with the same pinning, passes, windows and rate. The launch

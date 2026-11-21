@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { spawnSync } from "node:child_process";
+import { fork, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { providerTransport } from "../workloads/cloud-provider.mjs";
 import { controller } from "./droplet.mjs";
 import { nightly, officialRound, ownedDroplet, parseDropletArgs, remoteFiles, safeArchive, terminalUnit, validateState } from "./droplet-contract.mjs";
 
@@ -17,7 +19,8 @@ test("official identity and explicit launch arguments", () => {
   for (const r of ["r17", "r19", "r20", "r99", "r100", "r1234"]) assert.equal(officialRound(r), r);
   for (const r of ["r16", "r1", "c1", "w1", "r017", "r17;true", "r17\n"]) assert.throws(() => officialRound(r));
   assert.equal(parseDropletArgs(["r17", "--detach", "--ssh-key", "42", "--state-dir", "../state"]).detach, true);
-  assert.equal(parseDropletArgs(["r17", "--collect", "--state-dir", "../state"]).collect, true);
+  assert.equal(parseDropletArgs(["r17", "--collect", "--state-dir", "../state", "--context", "bench"]).context, "bench");
+  assert.throws(() => parseDropletArgs(["r17", "--collect", "--state-dir", "../state"]), /explicit saved doctl --context/);
   for (const args of [["r17"], ["r17", "--detach", "--ssh-key", "no", "--state-dir", "x"], ["r17", "--collect", "--detach", "--state-dir", "x"], ["r17", "--collect", "--state-dir", "x", "--keep"], ["r17", "--collect", "--collect", "--state-dir", "x"]]) assert.throws(() => parseDropletArgs(args));
 });
 test("identity never falls back to a similarly named or tagged host", () => {
@@ -68,22 +71,24 @@ function harness(t, { active = false, activates = false, corrupt = false, missin
   mkdirSync(repo); mkdirSync(local); mkdirSync(remote);
   const statePath = join(local, "state.json");
   let s = state(), droplets = [droplet(s)], deleted = 0, creates = 0, extractions = 0, unitChecks = 0;
-  let clock = 0, signal = null, team = "bench-team", inventory, afterList = () => {};
+  let clock = 0, signal = null, team = "bench-team", getResponse, afterGet = () => {};
   const calls = [], waits = [], observedAfterDelete = [];
   const saved = () => JSON.parse(readFileSync(statePath, "utf8"));
-  const run = (binary, args) => {
+  const run = (binary, args, bound = false) => {
     calls.push([binary, ...args]);
     const good = (stdout = "") => ({ status: 0, stdout, stderr: "" });
     if (binary === "git") return good(args[0] === "rev-parse" ? commit : dirty ? " M README.md\n" : "");
     if (binary === "doctl") {
       if (args[0] === "account") return good(JSON.stringify([{ uuid: "operator", team: { uuid: team } }]));
-      if (args[2] === "list") {
-        const found = inventory ?? good(JSON.stringify(droplets));
-        if (deleted) {
-          observedAfterDelete.push(droplets.map((d) => d.id));
-          if (delayedDelete && !failDelete) droplets = [];
-        }
-        afterList();
+      if (args[2] === "list") return good(JSON.stringify(droplets));
+      if (args[2] === "get") {
+        assert.ok(bound);
+        const matches = droplets.filter((d) => String(d.id) === args[3]);
+        const found = getResponse ?? (matches.length ? good(JSON.stringify(matches))
+          : { status: 1, stdout: "", providerDiagnostic: { code: "get-http", httpStatus: 404 } });
+        observedAfterDelete.push(matches.map((d) => d.id));
+        if (delayedDelete && !failDelete) droplets = [];
+        afterGet();
         return found;
       }
       if (args[2] === "create") {
@@ -94,9 +99,9 @@ function harness(t, { active = false, activates = false, corrupt = false, missin
       if (args[2] === "delete") {
         deleted++;
         assert.equal(args[3], "123");
-        assert.equal(args[args.indexOf("--http-retry-max") + 1], "0");
+        assert.ok(bound);
         assert.ok(existsSync(join(local, "collect.lock")));
-        assert.deepEqual(saved().deletionTarget, { id: "123", account: "team:bench-team" });
+        assert.deepEqual(saved().deletionTarget, { id: "123", account: "team:bench-team", context: "bench" });
         assert.ok(saved().deletionIntentAt && saved().collectedAt && !saved().destroyedAt);
         if (failDelete) return { status: 1, stdout: "", stderr: "delete temporarily unavailable" };
         if (!delayedDelete) droplets = [];
@@ -129,12 +134,16 @@ function harness(t, { active = false, activates = false, corrupt = false, missin
     }
     throw new Error(`unexpected command ${binary} ${args.join(" ")}`);
   };
+  const providerFactory = () => Object.assign(async (args) => {
+    assert.deepEqual(args.slice(-2), ["--context", "bench"]);
+    return run("doctl", args, true);
+  }, { close: async () => {} });
   return { repo, local, remote, run, calls, waits, observedAfterDelete, saved, get deleted() { return deleted; }, get creates() { return creates; },
     reserve(change = {}) { writeFileSync(statePath, JSON.stringify({ ...s, ...change })); },
     changeHost(change) { droplets = droplets.map((d) => ({ ...d, ...change })); },
     selectTeam(value) { team = value; },
-    listResponse(value, status = 0) { inventory = value === undefined ? undefined : { stdout: value, status }; },
-    onList(callback) { afterList = callback; },
+    getResponse(value) { getResponse = value; },
+    onGet(callback) { afterGet = callback; },
     tick(ms) { clock += ms; },
     resume() { signal = null; },
     empty() { droplets = []; },
@@ -146,8 +155,9 @@ function harness(t, { active = false, activates = false, corrupt = false, missin
       writeFileSync(join(remote, "exit-code"), "1\n"); writeFileSync(join(remote, "run.log"), "checks failed\n");
       const r = spawnSync("tar", ["-czf", join(remote, "results.tgz"), "-C", remote, "run.log", "exit-code", ...(beforeRun ? [] : ["repo/bench/marketplace/results/r17"])], { encoding: "utf8" }); assert.equal(r.status, 0, r.stderr);
     },
-    task(extra = {}) { return controller({ round: "r17", stateDir: local, sshKey: "42", ...extra },
-      { run, repo, interrupted: () => signal, now: () => clock, sleep: async (ms) => { waits.push(ms); clock += ms; } }); },
+    task(extra = {}, deps = {}) { return controller({ round: "r17", stateDir: local, sshKey: "42", context: "bench", ...extra },
+      { run, repo, interrupted: () => signal, now: () => clock, sleep: async (ms) => { waits.push(ms); clock += ms; },
+        providerFactory, ...(process.platform === "win32" ? { syncIntentDirectory: () => {} } : {}), ...deps }); },
   };
 }
 test("live unit: no pack, download, deletion or restart", async (t) => {
@@ -216,7 +226,7 @@ test("failed DELETE and a still-listed ID time out; even a stale controller only
   assert.ok(h.saved().destroyedAt);
   assert.deepEqual(readFileSync(pending.resultArchive), archive);
   assert.equal(h.deleted, 1);
-  assert.ok(h.calls.slice(calls).every((c) => c[0] === "doctl" && (c[1] === "account" || c[3] === "list")));
+  assert.ok(h.calls.slice(calls).every((c) => c[0] === "doctl" && (c[1] === "account" || c[3] === "get")));
 });
 
 test("interrupted extraction retries independently and preserves the failed attempt", async (t) => {
@@ -234,7 +244,7 @@ test("interrupted extraction retries independently and preserves the failed atte
   assert.equal(existsSync(join(h.repo, "bench/marketplace/results/r17")), false);
 });
 
-test("one stale post-delete list does not fail terminal collection", async (t) => {
+test("one still-present exact ID after DELETE does not fail terminal collection", async (t) => {
   const h = harness(t, { delayedDelete: true }); h.reserve(); h.archive();
   assert.equal(await h.task().collect(), 1);
   assert.equal(h.deleted, 1);
@@ -260,36 +270,118 @@ test("interrupted after DELETE: recheck saved evidence and account, then confirm
   await assert.rejects(h.task().collect(), /provider account changed/);
   assert.deepEqual(h.saved(), before);
   h.selectTeam("bench-team");
-  h.onList(() => h.selectTeam("another-team"));
+  await assert.rejects(h.task({ context: "wrong-context" }).collect(), /context differs/);
+  h.onGet(() => h.selectTeam("another-team"));
   await assert.rejects(h.task().collect(), /provider account changed/);
   assert.deepEqual(h.saved(), before);
-  h.selectTeam("bench-team"); h.onList(() => {});
-  h.listResponse("[]", 1);
-  await assert.rejects(h.task().collect(), /droplet list did not succeed/);
+  h.selectTeam("bench-team"); h.onGet(() => {});
+  h.getResponse({ status: 1, stdout: "", providerDiagnostic: { code: "get-http", httpStatus: 500 } });
+  await assert.rejects(h.task().collect(), /provider read did not succeed/);
   assert.deepEqual(h.saved(), before);
-  for (const bad of ["[", "null", "[{}]", '[{"id":99},{"id":99}]']) {
-    h.listResponse(bad);
-    await assert.rejects(h.task().collect(), /invalid JSON|invalid droplet inventory/);
+  for (const bad of ["[", "null", "[]", '[{"id":99}]']) {
+    h.getResponse({ status: 0, stdout: bad });
+    await assert.rejects(h.task().collect(), /invalid JSON|did not return the exact ID/);
     assert.deepEqual(h.saved(), before);
   }
-  h.listResponse(undefined);
-  h.onList(() => h.tick(120000));
+  h.getResponse(undefined);
+  h.onGet(() => h.tick(120000));
   await assert.rejects(h.task().collect(), /confirmation deadline elapsed/);
   assert.deepEqual(h.saved(), before);
-  h.onList(() => {});
+  h.onGet(() => {});
   writeFileSync(before.resultArchive, "tampered archive");
   await assert.rejects(h.task().collect(), /saved archive hash mismatch/);
   assert.deepEqual(h.saved(), before);
   writeFileSync(before.resultArchive, archive);
   assert.equal(await h.task().collect(), 1); assert.equal(h.deleted, 1);
   assert.ok(h.saved().destroyedAt);
-  assert.ok(h.calls.slice(calls).every((c) => c[0] === "doctl" && (c[1] === "account" || c[3] === "list")));
+  assert.ok(h.calls.slice(calls).every((c) => c[0] === "doctl" && (c[1] === "account" || c[3] === "get")));
 });
 test("unbound historical pending intent is not promoted, even on an empty inventory", async (t) => {
   const h = harness(t); h.reserve({ deletionIntentAt: "2026-01-01T00:00:00.000Z", collectedAt: "2026-01-01T00:00:00.000Z" });
   h.empty();
-  await assert.rejects(h.task().collect(), /no bound ID\/account.*never repeat DELETE/);
+  await assert.rejects(h.task().collect(), /no bound ID\/account\/context.*never repeat DELETE/);
   assert.deepEqual(h.calls, []); assert.equal(h.saved().destroyedAt, undefined);
+});
+function credentialWorker(mode, onAction = () => {}) {
+  const actions = [], children = [];
+  const providerFactory = (options) => providerTransport({ ...options, launch(_binary, _args, opts) {
+    const child = fork(fileURLToPath(new URL("./test-fixtures/credential-reload.mjs", import.meta.url)), [mode], opts);
+    children.push(child);
+    const send = child.send.bind(child);
+    child.send = (message, done) => {
+      if (message.args) { actions.push(message.args); onAction(message.args); }
+      return send(message, done);
+    };
+    return child;
+  } });
+  return { actions, children, providerFactory };
+}
+test("a context remapped A to B to A cannot confirm absence of the live A host", async (t) => {
+  const h = harness(t, { failDelete: true }); h.reserve(); h.archive();
+  await assert.rejects(h.task().collect(), /deletion not confirmed/);
+  const { actions, children, providerFactory } = credentialWorker("resume");
+  const calls = h.calls.length;
+  await assert.rejects(h.task({}, { providerFactory }).collect(), /deletion not confirmed.*deadline elapsed/);
+  assert.deepEqual(children.map((child) => child.exitCode), [0]);
+  assert.ok(actions.filter((a) => a[2] === "get").length > 1);
+  assert.ok(actions.every((a) => a[0] === "account" || a[2] === "get"));
+  assert.equal(h.calls.length, calls, "confirmation never reloads doctl via the legacy command runner");
+  assert.equal(h.saved().destroyedAt, undefined);
+  assert.equal(h.deleted, 1);
+});
+test("the worker that checks ownership sends the sole DELETE and confirms the exact ID", async (t) => {
+  for (const mode of ["fresh", "lost"]) await t.test(mode, async (t) => {
+    const h = harness(t); h.reserve(); h.archive();
+    let durableAtDispatch = false;
+    const { actions, children, providerFactory } = credentialWorker(mode, (args) => {
+      if (args[2] === "delete") {
+        durableAtDispatch = Boolean(h.saved().deletionIntentAt && h.saved().collectedAt && !h.saved().destroyedAt);
+      }
+    });
+    const task = h.task({}, { providerFactory });
+    if (mode === "fresh") {
+      assert.equal(await task.collect(), 1);
+      assert.ok(h.saved().destroyedAt);
+      assert.ok(actions.some((a) => a[2] === "get" && a[3] === "123"));
+      assert.deepEqual(children.map((child) => child.exitCode), [0]);
+    } else {
+      await assert.rejects(task.collect(), /deletion not confirmed.*acknowledgement unavailable/);
+      assert.equal(h.saved().destroyedAt, undefined);
+      assert.equal(children.length, 1, "an uncertain worker never triggers a new session in this invocation");
+      const gone = credentialWorker("gone");
+      assert.equal(await h.task({}, gone).collect(), 1);
+      assert.ok(h.saved().destroyedAt);
+      assert.ok(gone.actions.every((a) => a[0] === "account" || a[2] === "get"));
+    }
+    assert.ok(durableAtDispatch);
+    assert.equal(actions.filter((a) => a[2] === "delete" && a[3] === "123").length, 1);
+    assert.ok(!h.calls.some((c) => c[0] === "doctl"), "legacy command runner has no collection authority");
+  });
+});
+test("native Windows cannot authorize DELETE without directory persistence", { skip: process.platform !== "win32" }, async (t) => {
+  const h = harness(t); h.reserve(); h.archive();
+  await assert.rejects(h.task({}, { syncIntentDirectory: undefined }).collect(), /directory persistence/);
+  assert.equal(h.deleted, 0);
+  assert.ok(h.saved().collectedAt);
+  assert.equal(h.saved().deletionIntentAt, undefined);
+});
+test("last directory fsync must finish before DELETE, and a failed sync leaves read-only intent", async (t) => {
+  const h = harness(t, { failDelete: true }); h.reserve(); h.archive();
+  let syncs = 0;
+  const syncIntentDirectory = (directory) => {
+    assert.equal(directory, h.local);
+    assert.equal(h.deleted, 0);
+    if (++syncs === 1) assert.equal(h.saved().deletionIntentAt, undefined);
+    else {
+      assert.ok(h.saved().deletionIntentAt, "final sync happens after rename");
+      assert.equal(existsSync(join(h.local, "state.json.delete-intent.tmp")), false);
+      throw new Error("injected directory fsync failure");
+    }
+  };
+  await assert.rejects(h.task({}, { syncIntentDirectory }).collect(), /injected directory fsync failure/);
+  assert.equal(syncs, 2); assert.equal(h.deleted, 0);
+  await assert.rejects(h.task().collect(), /saved intent, no DELETE attempted.*deadline elapsed/);
+  assert.equal(h.deleted, 0); assert.equal(h.saved().destroyedAt, undefined);
 });
 test("launch reserves once even when create response is ambiguous", async (t) => {
   const h = harness(t, { active: true, failCreate: true }); h.empty();

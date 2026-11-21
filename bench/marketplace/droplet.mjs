@@ -7,6 +7,9 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, u
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { setImmediate as yieldToSignals } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { durable, syncDirectory } from "../workloads/cloud-local.mjs";
+import { providerAccount, providerIdentity } from "../workloads/cloud-options.mjs";
+import { providerTransport } from "../workloads/cloud-provider.mjs";
 import { leftoverDroplets, nightly, ownedDroplet, parseDropletArgs, remoteFiles, safeArchive, splitExit, splitPlan, terminalUnit, validatePlan, validateState } from "./droplet-contract.mjs";
 import { validateSummary } from "./report.mjs";
 import { groupApps, scheduledGroup } from "./groups.mjs";
@@ -30,47 +33,55 @@ function controlDir(stateDir, repo) {
 }
 const benchTagged = (droplets) => droplets.some((d) => d.tags?.some((t) => ["corten-bench", "corten-marketplace"].includes(t)));
 const hasDeletionRecord = (state) => ["deletionTarget", "deletionIntentAt", "destroyedAt"].some((key) => Object.hasOwn(state, key));
-const accountScope = /^(?:team|user):[A-Za-z0-9_-]{1,128}$/;
-// Use the legacy doctl credentials, but never let doctl retry the one DELETE.
-const collectionArgs = ["--api-url", "https://api.digitalocean.com", "--http-retry-max", "0"];
-function collectionProvider(run, args, timeout = 10000) {
-  const result = run("doctl", [...args, ...collectionArgs], timeout, true);
-  assert.ok(!result.error && result.status === 0, `doctl ${args.slice(0, args[0] === "account" ? 2 : 3).join(" ")} did not succeed`);
-  return result.stdout;
+function openCollection(context, { providerFactory = providerTransport, repo, interrupted }) {
+  assert.match(context ?? "", /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/, "collection requires an explicit saved doctl --context");
+  const run = providerFactory({ repo, interrupted });
+  const call = (args, timeout = 10000, allowFail = false) => run([...args, "--context", context], timeout, allowFail);
+  const json = (result) => {
+    assert.equal(result?.status, 0, "provider read did not succeed");
+    try { return JSON.parse(result.stdout); } catch { throw new Error("provider returned invalid JSON"); }
+  };
+  return {
+    async account(timeout) { return providerAccount(json(await call(["account", "get", "--output", "json"], timeout))); },
+    async list() { return json(await call(["compute", "droplet", "list", "--output", "json"])); },
+    async present(id, timeout) {
+      const result = await call(["compute", "droplet", "get", id, "--output", "json"], timeout, true);
+      if (result?.status === 1 && result.providerDiagnostic?.code === "get-http" && result.providerDiagnostic.httpStatus === 404) return false;
+      const rows = json(result);
+      assert.ok(Array.isArray(rows) && rows.length === 1 && rows[0]?.id === Number(id), "provider GET did not return the exact ID");
+      return true;
+    },
+    async delete(id) {
+      const result = await call(["compute", "droplet", "delete", id, "--force"], 30000, true);
+      assert.equal(result?.status, 0, "provider did not acknowledge DELETE");
+    },
+    close: run.close,
+  };
 }
-function providerJson(run, args, timeout) {
-  const output = collectionProvider(run, [...args, "--output", "json"], timeout);
-  try { return JSON.parse(output); }
-  catch { throw new Error(`doctl ${args.join(" ")} returned invalid JSON`); }
+function requireIntentDirectory(path) {
+  assert.notEqual(process.platform, "win32", "DELETE needs directory persistence; native Windows cannot fsync the control directory");
+  syncDirectory(path);
 }
-function collectionAccount(run, timeout) {
-  const value = providerJson(run, ["account", "get"], timeout);
-  const account = Array.isArray(value) && value.length === 1 ? value[0] : value;
-  const team = account?.team !== undefined;
-  const uuid = team ? account?.team?.uuid : account?.uuid;
-  const scope = `${team ? "team" : "user"}:${uuid}`;
-  assert.ok(typeof uuid === "string" && accountScope.test(scope), "doctl account get gave no scoped account identity");
-  return scope;
-}
-function collectionList(run, timeout) {
-  // Unfiltered: doctl paginates the full account list, or exits unsuccessfully.
-  const list = providerJson(run, ["compute", "droplet", "list"], timeout);
-  assert.ok(Array.isArray(list) && list.every((d) => Number.isSafeInteger(d?.id) && d.id > 0)
-    && new Set(list.map((d) => d.id)).size === list.length, "doctl gave an invalid droplet inventory");
-  return list;
+function saveDeletionIntent(path, state, sync = requireIntentDirectory) {
+  const directory = dirname(path), temp = `${path}.delete-intent.tmp`;
+  sync(directory); // Prove the directory supports fsync before creating an intent.
+  durable(temp, `${JSON.stringify(state, null, 2)}\n`);
+  renameSync(temp, path);
+  sync(directory); // Required after the rename, not merely after flushing the temporary file.
 }
 /**
  * One droplet's launcher: the whole round, or with options.part one droplet's part of a split
  * round (#816), whose checkout checks and measured commit (options.commit) the split launcher
  * made once for every droplet.
  */
-export function controller(options, { run = command, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), repo = checkout, interrupted = () => null, now = () => performance.now() } = {}) {
+export function controller(options, { run = command, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), repo = checkout,
+  interrupted = () => null, now = () => performance.now(), providerFactory, syncIntentDirectory } = {}) {
   const local = controlDir(options.stateDir, repo);
   const part = options.part ?? null;
   const statePath = join(local, "state.json");
   let state = existsSync(statePath) ? validateState(JSON.parse(readFileSync(statePath, "utf8")), options.round) : null;
-  const save = (flush = false) => {
-    writeFileSync(`${statePath}.tmp`, JSON.stringify(state, null, 2) + "\n", { flush });
+  const save = () => {
+    writeFileSync(`${statePath}.tmp`, JSON.stringify(state, null, 2) + "\n");
     renameSync(`${statePath}.tmp`, statePath);
   };
   const list = () => JSON.parse(run("doctl", ["compute", "droplet", "list", "--output", "json"]).stdout);
@@ -133,10 +144,11 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
     get state() { return state; },
     sshOptions,
     async launch() { await create(); return start(); },
-    async collect() {
+    async collect(sharedCollection) {
       assert.ok(state, "missing launch reservation");
       const lock = join(local, "collect.lock");
       writeFileSync(lock, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
+      let collection = sharedCollection, failed = false;
       try {
         // A controller constructed before a prior collector saved intent must not use its old state.
         state = validateState(JSON.parse(readFileSync(statePath, "utf8")), options.round);
@@ -146,8 +158,9 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
           const signal = interrupted();
           assert.ok(!signal, `${signal} received; preserve state and evidence`);
         };
-        const sameAccount = (account, timeout) =>
-          assert.ok(collectionAccount(run, timeout) === account, "provider account changed; refusing deletion or confirmation");
+        const session = () => collection ??= openCollection(options.context, { repo, interrupted, providerFactory });
+        const sameAccount = async (account, timeout) =>
+          assert.ok(await session().account(timeout) === account, "provider account changed; refusing deletion or confirmation");
         const deleted = () => {
           verifyArchive();
           if (!state.destroyedAt) { state.destroyedAt = new Date().toISOString(); save(); }
@@ -157,8 +170,10 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
         const reconcile = async (disposition) => {
           const target = state.deletionTarget;
           assert.ok(state.collectedAt && state.deletionIntentAt && /^[1-9]\d*$/.test(state.id ?? "")
-            && target?.id === state.id && typeof target.account === "string" && accountScope.test(target.account),
-          "deletion intent has no bound ID/account or collected archive; preserve state for operator review, never repeat DELETE");
+            && Number.isSafeInteger(Number(state.id)) && target?.id === state.id && target.account && target.context,
+          "deletion record has no bound ID/account/context or collected archive; preserve state for operator review, never repeat DELETE");
+          providerIdentity({ accountId: target.account, context: target.context });
+          assert.ok(options.context === target.context, "collection context differs from saved deletion intent");
           verifyArchive();
           const pending = `droplet ${target.id} deletion not confirmed (${disposition}); preserve state and evidence, retry --collect for read-only confirmation`;
           const deadline = now() + 120000;
@@ -171,10 +186,9 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
           for (;;) {
             let present, wait;
             try {
-              sameAccount(target.account, budget());
-              present = collectionList(run, budget()).some((d) => String(d.id) === target.id);
-              sameAccount(target.account, budget());
-              await yieldToSignals(); // doctl is synchronous; let queued signals run before accepting its result.
+              await sameAccount(target.account, budget());
+              present = await session().present(target.id, budget());
+              await sameAccount(target.account, budget());
               wait = budget(3000);
             } catch (cause) { throw new Error(`${pending}: ${cause.message}`, { cause }); }
             // Tags can disappear during removal. While the exact ID is listed we know only
@@ -183,19 +197,10 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
             await sleep(wait);
           }
         };
-        if (hasDeletionRecord(state)) {
-          if (state.destroyedAt && !Object.hasOwn(state, "deletionTarget")) {
-            // A completed legacy receipt already recorded confirmation. Do not backfill its account.
-            assert.ok(state.collectedAt && /^[1-9]\d*$/.test(state.id ?? ""), "previous deletion receipt lacks an exact ID or archive");
-            assert.ok(!collectionList(run).some((d) => String(d.id) === state.id), "previously deleted droplet still present");
-            return deleted();
-          }
-          return await reconcile("saved intent, no DELETE attempted");
-        }
+        if (hasDeletionRecord(state)) return await reconcile("saved intent, no DELETE attempted");
         checkInterrupted();
-        const account = collectionAccount(run);
-        const d = ownedDroplet(collectionList(run), state);
-        sameAccount(account);
+        const account = await session().account();
+        const d = ownedDroplet(await session().list(), state);
         const ip = d.networks.v4.find((n) => n.type === "public")?.ip_address;
         assert.ok(ip && (!state.ip || state.ip === ip), "owned droplet's public IP differs from reservation or is missing");
         state.id = String(d.id); state.ip = ip; validateState(state, options.round); save();
@@ -238,23 +243,26 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
         }
         // Only a fresh intent permits DELETE. Recheck identity and terminal state after custody.
         verifyArchive();
-        sameAccount(account);
-        const current = ownedDroplet(collectionList(run), state);
+        const current = ownedDroplet(await session().list(), state);
         assert.equal(current.networks.v4.find((n) => n.type === "public")?.ip_address, state.ip, "owned droplet's public IP changed; refusing deletion");
+        await sameAccount(account);
         assert.ok(terminalUnit(unit()), "unit became active; refusing deletion");
-        sameAccount(account);
         await yieldToSignals();
         checkInterrupted();
-        Object.assign(state, { deletionIntentAt: new Date().toISOString(), deletionTarget: { id: state.id, account } });
-        save(true);
+        Object.assign(state, { deletionIntentAt: new Date().toISOString(), deletionTarget: { id: state.id, account, context: options.context } });
+        saveDeletionIntent(statePath, state, syncIntentDirectory);
         let disposition = "DELETE acknowledgement unavailable";
         try {
-          collectionProvider(run, ["compute", "droplet", "delete", state.id, "--force"], 120000);
+          await session().delete(state.id);
           disposition = "DELETE acknowledged";
         } catch { /* An unsuccessful response cannot establish whether the request took effect. */ }
-        await yieldToSignals();
         return await reconcile(disposition);
-      } finally { unlinkSync(lock); }
+      } catch (error) { failed = true; throw error; }
+      finally {
+        try { if (!sharedCollection) await collection?.close(); }
+        catch (error) { if (!failed) throw error; }
+        finally { unlinkSync(lock); }
+      }
     },
   };
 }
@@ -297,13 +305,14 @@ export function splitController(options, deps = {}) {
   let plan = existsSync(planPath) ? validatePlan(JSON.parse(readFileSync(planPath, "utf8")), options.round) : null;
   const partDir = (k) => join(local, `d${k}`);
   const list = () => JSON.parse(run("doctl", ["compute", "droplet", "list", "--output", "json"]).stdout);
-  const task = (p) => controller({ round: options.round, stateDir: partDir(p.index), sshKey: options.sshKey, part: { index: p.index, of: plan.droplets }, group: plan.group, commit: plan.commit }, deps);
+  const task = (p) => controller({ round: options.round, stateDir: partDir(p.index), sshKey: options.sshKey, context: options.context,
+    part: { index: p.index, of: plan.droplets }, group: plan.group, commit: plan.commit }, deps);
   const stateOf = (p) => {
     const file = join(partDir(p.index), "state.json");
     return existsSync(file) ? validateState(JSON.parse(readFileSync(file, "utf8")), options.round) : null;
   };
   const name = (p) => `${options.round}-d${p.index}`;
-  const collectCommand = `node bench/marketplace/droplet.mjs ${options.round} --state-dir "${local}" --collect`;
+  const collectCommand = `node bench/marketplace/droplet.mjs ${options.round} --state-dir "${local}" --collect --context ${options.context ?? "<saved-context>"}`;
   // A launch holds launch.lock with its pid until it ends, by any path, so collect can tell a
   // stopped launch from a live one.
   const lockPath = join(local, "launch.lock");
@@ -382,7 +391,7 @@ export function splitController(options, deps = {}) {
     console.log(`running ${options.round} on ${plan.droplets} droplets, each by itself; collect with: ${collectCommand}`);
     return plan;
   }
-  async function collectUnlocked() {
+  async function collectUnlocked(collection) {
     const codes = [], neverStarted = new Set();
     for (const p of plan.parts) {
       const s = stateOf(p), signal = interrupted();
@@ -394,12 +403,12 @@ export function splitController(options, deps = {}) {
       const listed = (d) => s.id ? String(d.id) === s.id : d.name === s.name && d.tags?.includes(s.tag);
       const owned = (d) => listed(d) && d.name === s.name && ["corten-bench", "corten-marketplace", s.tag].every((tag) => d.tags?.includes(tag));
       try {
-        if (hasDeletionRecord(s)) { codes.push(await task(p).collect()); continue; }
+        if (hasDeletionRecord(s)) { codes.push(await task(p).collect(collection)); continue; }
         // creating or preparing: the launch stopped before systemctl start (starting is saved
         // just before it, and the unit has no [Install], so nothing else starts it).
         if (["creating", "preparing"].includes(s.status)) {
           neverStarted.add(p.index);
-          const found = list().filter(listed);
+          const found = (await collection.list()).filter(listed);
           for (const d of found) {
             if (owned(d)) console.error(`${name(p)}: droplet ${d.id} was created but never started its round (its launch stopped before systemctl start); nothing to collect. Delete it: doctl compute droplet delete ${d.id} --force`);
             else console.error(`${name(p)}: droplet ${d.id} is listed for this part but lacks its name or ownership tags; not ours to delete: check it`);
@@ -407,16 +416,16 @@ export function splitController(options, deps = {}) {
           if (!found.length) console.log(`${name(p)} never started its round and has no droplet`);
           codes.push(found.length ? 2 : "missing"); continue;
         }
-        if (s.status === "starting" && !list().some(listed)) {
+        if (s.status === "starting" && !(await collection.list()).some(listed)) {
           console.log(`${name(p)} may have started its round, but its droplet is gone; nothing to collect`); codes.push("missing"); continue;
         }
         // Its controller collects it, and refuses a missing or unloaded unit.
-        codes.push(await task(p).collect());
+        codes.push(await task(p).collect(collection));
       } catch (e) { console.error(`${name(p)}: collection error; its droplet and evidence are preserved: ${e.message}`); codes.push(2); }
     }
     const states = plan.parts.map(stateOf);
     let leftovers = [], unlisted = 0;
-    try { leftovers = leftoverDroplets(list(), plan, states); }
+    try { leftovers = leftoverDroplets(await collection.list(), plan, states); }
     catch (e) { unlisted = 1; console.error(`the droplet list failed, so leftover droplets are unknown: ${e.message}`); }
     for (const d of leftovers) {
       if (states.some((s) => s?.id === String(d.id) && hasDeletionRecord(s))) {
@@ -456,7 +465,11 @@ export function splitController(options, deps = {}) {
         console.log(`${lockPath} is stale: pid ${lock.pid} is not running, so its launch was killed; removing the lock and collecting the stopped launch`);
         unlinkSync(lockPath);
       }
-      return collectUnlocked();
+      const collection = openCollection(options.context, { ...deps, repo, interrupted });
+      let failed = false;
+      try { return await collectUnlocked(collection); }
+      catch (error) { failed = true; throw error; }
+      finally { try { await collection.close(); } catch (error) { if (!failed) throw error; } }
     },
   };
 }

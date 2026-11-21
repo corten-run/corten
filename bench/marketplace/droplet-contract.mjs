@@ -14,9 +14,9 @@ export function parseDropletArgs(args) {
     const flag = args[i];
     assert.ok(!seen.has(flag), `duplicate ${flag}`); seen.add(flag);
     if (["--collect", "--detach", "--plan"].includes(flag)) options[flag.slice(2)] = true;
-    else if (["--ssh-key", "--state-dir", "--group"].includes(flag)) {
+    else if (["--ssh-key", "--state-dir", "--group", "--context"].includes(flag)) {
       const value = args[++i]; assert.ok(value && !value.startsWith("--"), `${flag} needs a value`);
-      options[flag === "--ssh-key" ? "sshKey" : flag === "--group" ? "group" : "stateDir"] = value;
+      options[flag === "--ssh-key" ? "sshKey" : flag === "--state-dir" ? "stateDir" : flag.slice(2)] = value;
     } else if (flag === "--droplets") {
       // A round split across n droplets started together (#816); 1 is the whole round on one.
       const value = args[++i]; assert.match(value ?? "", /^[1-9]\d*$/, "--droplets needs a count");
@@ -26,6 +26,8 @@ export function parseDropletArgs(args) {
   assert.ok(options.stateDir, "--state-dir is required (durable launcher state, outside the checkout)");
   assert.ok(options.collect ? !options.detach && !options.plan : options.detach || options.plan, "use --detach to launch, or --collect");
   assert.ok(!(options.collect && seen.has("--droplets")), "--collect reads the split from the state directory's split.json; omit --droplets");
+  if (options.collect) assert.match(options.context ?? "", /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/, "--collect needs an explicit saved doctl --context");
+  else assert.equal(options.context, undefined, "--context is for --collect only");
   assert.ok(options.collect || /^\d+$/.test(options.sshKey ?? ""), "--ssh-key needs a DigitalOcean key id");
   assert.ok(!options.collect || options.group === undefined, "collection uses the reserved group, never a new selection");
   if (!options.collect) { options.group ??= scheduledGroup(options.round); groupApps(options.group); }

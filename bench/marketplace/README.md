@@ -133,8 +133,11 @@ committed checkout, with durable state outside that checkout:
 
 ```sh
 node bench/marketplace/droplet.mjs r17 --ssh-key <id> --state-dir <outside-checkout>/marketplace-r17 --detach
-node bench/marketplace/droplet.mjs r17 --state-dir <outside-checkout>/marketplace-r17 --collect
+node bench/marketplace/droplet.mjs r17 --state-dir <outside-checkout>/marketplace-r17 --collect --context <saved-context>
 ```
+
+Use the saved doctl context for the account that launched the round. Deletion requires a
+collector filesystem that supports directory sync; see [State and Collection](nightly.md#state-and-collection).
 
 Use a fresh official `rN` with N >= 17 for each nightly round. The dedicated c-8 runs three
 passes with `--duration 15 --warmup 10 --rate 150`, pinned to app CPU 1, upstream CPUs 2-3
@@ -150,7 +153,7 @@ droplets started together
 ```sh
 node bench/marketplace/droplet.mjs r17 --droplets 3 --ssh-key <id> --state-dir <outside-checkout>/marketplace-r17 --plan
 node bench/marketplace/droplet.mjs r17 --droplets 3 --ssh-key <id> --state-dir <outside-checkout>/marketplace-r17 --detach
-node bench/marketplace/droplet.mjs r17 --state-dir <outside-checkout>/marketplace-r17 --collect
+node bench/marketplace/droplet.mjs r17 --state-dir <outside-checkout>/marketplace-r17 --collect --context <saved-context>
 ```
 
 `--plan` prints the split, each droplet's remote files and every command, calling neither
