@@ -7204,7 +7204,8 @@ rules something out.
     request with an `Age` ([caching](guide/app.md#the-pages-the-app-keeps),
     `crates/corten/src/kept.rs`). The hash of its body and its bytes in each coding are made
     once and stay with it, so the tag and the compression after the handler cost a kept page a
-    lookup. It is on unless the app says otherwise, holds at most 32 MiB
+    lookup, and its brotli is made once more at a higher level after its second answer, by no
+    request (below). It is on unless the app says otherwise, holds at most 32 MiB
     (`App::kept_answers`), and is off under `corten dev`.
 
     It stands at the handler's place, not in front of the app. What makes a kept answer safe to
@@ -7267,9 +7268,38 @@ rules something out.
     its `Age`), or a request's `Cache-Control: no-cache`. How long a page stands is the app's
     to say, and a reload is not a reason to render it.
 
+    A kept page's bytes in a coding are made once and sent many times, so a level that costs
+    more and sends fewer pays for itself where a per-request answer's cannot
+    ([#1793 A kept page is compressed at the level a per-request answer is](https://github.com/corten-run/corten/issues/1793)).
+    The request that makes the copy is still a visitor's, so nothing more is made on it: after
+    the page's second answer to a client that takes brotli (a page asked for once is compressed
+    once, as a held value is), the one thread that already compresses held JSON makes its brotli
+    at level 5, taking it in turn from that thread's bounded queue and holding the page weakly
+    while it waits. From then on a client that ranks brotli as high as any coding, as a browser
+    that also takes zstd does, gets it in the place of zstd 1; one that prefers zstd, or takes
+    only gzip, gets the per-request form as before, and until it is made so does everyone. It
+    counts toward the bound, and each compressed form now counts the 24-byte record its bytes
+    are shared by as well. Level 5 is where the bytes stop falling until brotli's slowest levels:
+    on the catalog benchmark's record page (4,424 bytes) zstd 1 sends 1,078 bytes, brotli 5 882
+    (18.2% fewer), brotli 9 884, brotli 10 778 and brotli 11 761; on card-market's item pages
+    (4,013 bytes on average) 1,564, 1,293 (17.3% fewer), 1,291, 1,188 and 1,170, and on the same
+    items given 12 to 30 listings and 4 to 10 offers, all shown (7,200 bytes), 2,111, 1,764 (16.4%
+    fewer) and, at 11, 1,571. Made once, brotli 5 takes 1.01 and 1.25 million instructions on the
+    record and item pages, brotli 9 1.47 and 1.89 million but 14 to 18 times brotli 5's time,
+    which its instructions do not account for, brotli 10 26.1 and 24.6 million and brotli 11 84.5
+    and 56.0 million,
+    which would hold the thread held values share for milliseconds a page each time a lifetime
+    ends. zstd's higher levels gain little on a page (zstd 19: 1,040 and 1,472 bytes for 18.1 and
+    8.4 million), since brotli's built-in dictionary is what finds the words HTML repeats, and gzip
+    stays at 1 for the few clients that take nothing else. Made on the request that makes the
+    copy, brotli 5 would add 1.01 million instructions to it where zstd 1 adds 0.12 million.
+
     Not chosen: in front of the middleware, for the reasons above, though it would save the
     stages too; leaving out a write by its status (a `4xx`, a `501`) or by a mark the router
-    set on the ones it refuses, each of which left a page stale in a case a review found; off unless asked for, which leaves the cost on every app that already said its
+    set on the ones it refuses, each of which left a page stale in a case a review found; a
+    kept page's higher level made on the request that makes the copy, which a visitor would wait
+    for, or at brotli 9 to 11, or with brotli's window sized to the page, which took longer for the
+    same bytes; off unless asked for, which leaves the cost on every app that already said its
     pages are public; a page for one visitor kept by caller, where a mistake in the key shows
     one user's page to another ([architecture](architecture.md#what-belongs-in-the-framework));
     honoring a request's `no-cache`; removing a written path's pages by a search of the store or
@@ -7311,8 +7341,22 @@ rules something out.
     under a 32 MiB bound and three passes over 40,000 URLs the process settled 57.8 MiB above where
     it began with glibc's and 35.2 MiB above with jemalloc, so what an allocator holds beyond the
     bytes asked of it is beside the bound; `tests/kept_memory.rs` holds the bytes asked to the
-    bound, 4,177,233 of 4,194,304 for its page in every coding and 4,050,606 with no compression.
-    Not measured: what a write pays for its count; a miss that is kept against the same page
+    bound, 4,145,524 of 4,194,304 for its page in every coding and its brotli 5, and 4,050,606 with
+    no compression. A kept page's brotli 5 (`a14e58b22` against `512ebc1ef`, the request counts
+    of `tests/kept_coding_cost.rs` for a page of 3,052 bytes, callgrind's count for 1,200 requests
+    less its count for 200, two runs of each that agreed within 7 instructions): a kept page given
+    again to a browser's codings ran 29,403 instructions for 543 bytes of brotli 5 against 29,071
+    for 637 of zstd 1 (of the 332 more, 3 in `compress::finish` and the rest in glibc's `malloc`,
+    by callgrind's functions), a page made and kept 145,926 against 145,813, a kept page given again
+    uncompressed 23,750 against 23,753 and one made uncompressed 45,030 against 45,233, and in
+    gzip alone 29,227 against 29,199 given again and 625,901 against 625,804 made. The levels'
+    bytes and instructions above are a probe's that compresses as `compress::encode` does, whose
+    level-1 bytes matched the app's answers, on the catalog benchmark's ten record pages and
+    card-market's twelve demo item pages as served at `b5324cbae`, its instructions by callgrind
+    over one and three rounds of the pages, and its times the medians of seven rounds in a Linux
+    container on a busy desktop, too noisy for more than their ratios.
+    Not measured: what a write pays for its count; the time a held value waits behind a kept
+    page's brotli on the thread they share; a miss that is kept against the same page
     made with nothing kept; a store read from more than one core; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
@@ -7325,7 +7369,9 @@ rules something out.
     `Accept-Language`, which is the key; the stages after the handler read the request and the
     answer and nothing the handler held, so they treat a kept answer as its own); bet (an app that
     marks a page `Public` means the lifetime it wrote also with no CDN in front, and does in its
-    handler nothing that must happen for every request); value (fast and proven fast; standards
+    handler nothing that must happen for every request; the clients that ask for a kept page
+    take brotli at the weight they take zstd, as a browser's `Accept-Encoding` does, and most
+    kept pages are read more than twice in a lifetime); value (fast and proven fast; standards
     first, the app being a shared cache as RFC 9111 describes one; mistakes fail at compile time,
     what may be kept being known from the route's types; good defaults, easy overrides, with one
     setting for the bound, README Values).
@@ -7336,8 +7382,10 @@ rules something out.
     become most of a kept page's cost on a measured app, so a place further out is worth its
     rules; a multi-core measurement shows requests waiting on the store's lock; writes no
     handler takes (a scanner's `POST /`) make kept pages again often enough to show, so the
-    router's own refusals are worth leaving out where the request met no middleware; or the
-    connection speaks HTTP/2, where a request's target carries its authority.
+    router's own refusals are worth leaving out where the request met no middleware; a kept
+    page's brotli is seen delaying held values on the thread they share, or most clients of a
+    measured app prefer zstd to brotli, so a level made after the answer is worth having for zstd;
+    or the connection speaks HTTP/2, where a request's target carries its authority.
 
     Last checked: 2026-11-21, the pass over the headers with rustc 1.100.0: the counts under
     callgrind, and the cycles from the two builds started once on one CPU, its core's other thread
@@ -7350,8 +7398,10 @@ rules something out.
     `perf stat` and divided by the requests answered. The bodies of the two builds' answers were
     identical in each coding, and the headers differed by the kept page's `Age` and, where
     compressed, the tag. The commits after `f7e53a594` up to `24e61b4b0` change which writes count
-    and nothing a page's `GET` runs. `tests/kept_memory.rs` at this change, with all features and
-    with none.
+    and nothing a page's `GET` runs. 2026-11-21, a kept page's brotli 5 with rustc 1.100.0, brotli
+    9.1.3, zstd 0.14.4 (libzstd 1.5.7) and flate2 1.1.11 (miniz_oxide 0.9.1): the probe on
+    `b5324cbae`, and `tests/kept_coding_cost.rs` under callgrind on `a14e58b22` and `512ebc1ef`.
+    `tests/kept_memory.rs` at `512ebc1ef` with rustc 1.99.1, with all features and with none.
 
 ## Rules
 

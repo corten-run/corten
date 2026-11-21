@@ -11,7 +11,9 @@
 //! `Cache-Control` are written as for any answer, and a request that names the page's tag is
 //! answered `304`. What a kept page saves is the handler, the render, the hash of its body for the
 //! tag and its compression: the hash and each coding's bytes are made once and stay with it
-//! ([`Kept`], which [`crate::cache::tag`] and `compress::finish` read).
+//! ([`Kept`], which [`crate::cache::tag`] and `compress::finish` read), and its brotli is made
+//! once more at a higher level after its second answer to a client that takes it, by no request
+//! (`Coded`).
 //!
 //! What makes this safe is checked when the app compiles: a `Public` handler takes only inputs
 //! that cannot tell who is asking ([`crate::answer::Anonymous`]), and a page is kept only when

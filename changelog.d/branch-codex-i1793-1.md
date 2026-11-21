@@ -1,0 +1,3 @@
+- A kept `Public` page now goes to browsers in brotli made once at level 5, after its second
+  answer, on the thread that compresses held JSON, in the place of zstd 1: about 18% fewer
+  bytes, and no request waits for it ([A kept page is compressed at the level a per-request answer is](https://github.com/corten-run/corten/issues/1793)).
