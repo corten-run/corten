@@ -103,7 +103,8 @@ pub trait Answer: IntoResponse + Sized {
     /// and its layout's places draw nothing.
     const PAGE: bool = false;
     /// The answer is one whole body that only the handler's inputs decide (JSON, text): what the
-    /// app keeps for a [`Public`] route, as it keeps a page ([`crate::kept`]). Not a public API:
+    /// app keeps for a [`Public`] route where it compresses the body, as it keeps a page
+    /// ([`crate::kept`]). Not a public API:
     /// its type is one an app cannot name, so an answer type of the app's own is never kept this way
     /// (`Json` of a type of the app's is `Json`'s answer, kept under the checks every kept answer
     /// passes).

@@ -37,9 +37,15 @@
 //! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
 //! and no value made for this request alone, and varies on nothing but what the key covers.
 //!
-//! A `Public` route whose answer is JSON (`Json<T>`, `JsonResult<T>`) or text is
-//! kept the same way, under the same rules and by the same key: its whole body, for a `GET` that
-//! shows nothing about who is asking ([`Shape::Body`]). Which answers those are is known from the
+//! A `Public` route whose answer is JSON (`Json<T>`, `JsonResult<T>`) or text is kept the same
+//! way, under the same rules and by the same key, where the app compresses the answer: its
+//! whole body, of 1,024 bytes or more, in a build with the `compress` feature, for a `GET` that
+//! shows nothing about who is asking ([`Shape::Body`]). A kept body saves its handler, its
+//! writing and its compression, and one the app does not compress saves too little of the first
+//! two, where the handler reads only memory, to pay for asking the store ([`compresses`]); so a
+//! build that does not compress keeps no body, and a route whose bodies are all too small stops
+//! asking ([`Small`]). Once kept, a body is given to a request that accepts no coding as well.
+//! Which answers are whole bodies is known from the
 //! route's type when the app compiles ([`crate::answer::Answer::WHOLE`], which an answer type of
 //! the app's own cannot claim). Such a route has one answer at its URL, where a page route has
 //! the document, its swap and its data, so a request that asks for JSON first is kept too, as a
@@ -48,9 +54,10 @@
 //! `Vary: origin`) is written after the handler for each request, and is no part of what is
 //! kept. An answer with markup its handler rendered that holds a form's new submit key is that
 //! request's alone: a page's render marks one, and the handler is watched for one drawn any
-//! other way, on the thread that runs it (`form::watched`). JSON the app holds as bytes (`json::Raw`) carries its own compressed forms
-//! in a build that compresses (the `compress` feature), a mark this does not replay, so there it is its handler's for every
-//! request, which costs it no writing and no compression. Any other answer (a file, a relay, a
+//! other way, on the thread that runs it (`form::watched`). JSON the app holds as bytes
+//! (`json::Raw`) carries its own compressed forms in a build that compresses, a mark this does
+//! not replay, so it is its handler's for every request, which costs it no writing and no
+//! compression. Any other answer (a file, a relay, a
 //! stream, a feed, a status alone) is its handler's for every request, but for what a page route
 //! answers in a page's place: a file of a known size from a route that says it answers a page
 //! or a file (`PageOr`), and an answer type of the app's own that says it is a page, are kept
