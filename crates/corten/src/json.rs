@@ -1913,7 +1913,8 @@ mod tests {
             seed ^= seed >> 7;
             seed ^= seed << 17;
             let len = (seed % 100) as usize;
-            let text: String = (0..len).map(|i| if (seed >> (i % 60)) & 7 == 0 { pieces[i * 7 % pieces.len()] } else { "a" }).collect();
+            let text: String =
+                (0..len).map(|i| if (seed >> (i % 60)) & 7 == 0 { pieces[i * 7 % pieces.len()] } else { "a" }).collect();
             same(&text);
         }
     }
