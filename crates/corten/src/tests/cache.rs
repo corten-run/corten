@@ -1139,17 +1139,24 @@ async fn a_page_is_kept_from_the_second_time_its_url_is_asked_for() {
     // says nothing to another's.
     assert!(!kept(router.clone(), &[("host", "127.0.0.1")]).await && !kept(router.clone(), &[("host", "127.0.0.1")]).await);
     assert!(kept(router.clone(), &[("host", "127.0.0.1")]).await && runs.count() == 10);
-    // After a write the page is made once more, not twice: the one it drops was given.
+    // After a write the page is made once more, not twice: its URL was asked for before.
     let (status, _, _) = fetch(&router, "POST", "/", &[("sec-fetch-site", "same-origin")]).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert!(!kept(router.clone(), &[]).await);
     assert!(kept(router.clone(), &[]).await && runs.count() == 11);
+    // A write between a URL's first two asks: the second answer is made after it, and is kept.
+    let written = App::new(Routes::from(kept_routes(&runs))).router();
+    assert!(!kept(written.clone(), &[]).await);
+    let (status, _, _) = fetch(&written, "POST", "/", &[("sec-fetch-site", "same-origin")]).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!kept(written.clone(), &[]).await);
+    assert!(kept(written.clone(), &[]).await && runs.count() == 13);
     // An app that keeps none makes every one.
     let none = App::new(Routes::from(kept_routes(&runs))).kept_answers(0).router();
     for _ in 0..3 {
         assert!(!kept(none.clone(), &[]).await);
     }
-    assert_eq!(runs.count(), 14);
+    assert_eq!(runs.count(), 16);
 }
 
 /// A kept page stands where the handler does: every middleware runs for the request it answers,
@@ -1641,9 +1648,6 @@ async fn a_kept_page_lasts_its_lifetime() {
     assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE) && runs.count() == 2, "kept for now");
     fetch(&router, "GET", "/long", &[]).await;
     fetch(&router, "GET", "/long", &[]).await;
-    // Another URL of the brief page, asked for once now and again after longer than it lasts.
-    let rare = |router: Router| async move { fetch(&router, "GET", "/?rare=1", &[]).await.1.contains_key(header::AGE) };
-    assert!(!rare(router.clone()).await);
     let making = tokio::spawn({
         let router = router.clone();
         async move {
@@ -1655,13 +1659,9 @@ async fn a_kept_page_lasts_its_lifetime() {
     // (at 1.1 seconds), so nothing below is asked for between that page's two requests.
     tokio::time::sleep(Duration::from_millis(2300)).await;
     let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
-    assert!(runs.count() == 4 && !headers.contains_key(header::AGE), "past the shared lifetime: {headers:?}");
-    // The page that ended was given to a request, so the one made now is kept without a second ask.
-    assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE) && runs.count() == 4, "kept again at once");
-    // Asked for last longer ago than it lasts: a copy kept then would have been given to no one,
-    // so this answer is not kept either. Asked for again within its lifetime, it is.
-    assert!(!rare(router.clone()).await && !rare(router.clone()).await, "not kept by an ask that came too late");
-    assert!(rare(router.clone()).await && runs.count() == 6, "kept by the one that came in time");
+    assert!(runs.count() == 3 && !headers.contains_key(header::AGE), "past the shared lifetime: {headers:?}");
+    // Its URL was asked for before, however long ago, so the page made now is kept without a second ask.
+    assert!(fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE) && runs.count() == 3, "kept again at once");
     // One still within its lifetime says how long ago its handler was asked.
     let (_, headers, _) = fetch(&router, "GET", "/long", &[]).await;
     let age: u64 = headers[header::AGE].to_str().unwrap().parse().unwrap();

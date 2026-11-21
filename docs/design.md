@@ -7201,7 +7201,7 @@ rules something out.
     the render, the tag's hash and the compression again. The whole document a `Public` page's
     handler made for a `GET` that shows nothing about who asks is now kept for its shared
     lifetime (`s-maxage`, else `max-age`, RFC 9111 section 4.2.1), once its URL was asked for
-    before within that lifetime, and given to the next such request with an `Age` ([caching](guide/app.md#the-pages-the-app-keeps),
+    before, and given to the next such request with an `Age` ([caching](guide/app.md#the-pages-the-app-keeps),
     `crates/corten/src/kept.rs`). The hash of its body and its bytes in each coding are made
     once and stay with it, so the tag and the compression after the handler cost a kept page a
     lookup. It is on unless the app says otherwise, holds at most 32 MiB
@@ -7239,48 +7239,36 @@ rules something out.
     added later that this code does not know is not replayed by mistake, the page is simply not
     kept.
 
-    An answer is kept only when there is a sign that its copy will be given to someone.
-    Keeping one costs a copy of its body into an allocation of its own size, its head, its key
-    and a turn under the store's lock, and once the bound is reached it also drops a page that
-    may be asked for again. A URL asked for once pays that for nothing, and so does one asked
-    for less often than its page lasts, which is every URL of an app behind a CDN that asks
-    once a lifetime; a crawler walking a catalog fills the store with pages no one asks for
-    twice. So a request no kept answer stands for leaves a mark that says when its URL (host,
-    path and query) was asked for, and its answer is kept in two cases: the mark was the URL's
-    already and younger than the answer's lifetime, so a copy kept at that request would have
-    been given to this one; or the mark says an answer kept for the URL since then was given
-    to a request, which the lookup tells the mark the first time it gives a copy. A page that
-    was given is so kept again at once when its lifetime ends or a write drops it, however
-    long after, and whether or not its old copy is still held: one that no longer stands is
-    the first to go when room is made. Otherwise the answer is the handler's and is not
-    copied into the store. A request for a URL not asked for before then costs what it does in
-    an app that keeps nothing, and the mark. One for a URL asked for too long ago costs more
-    than that: the lifetime is the answer's to say, so the request is prepared for keeping
-    before its handler runs and refused after (the counts are below). The rule stands on a
-    premise no round here shows: that URLs asked for once in a page's lifetime are common
-    enough in an app's requests to be worth one more run of the handler for each page that is
-    asked for again.
+    An answer is kept once its URL (host, path and query) was asked for before. Keeping one
+    costs a copy of its body into an allocation of its own size, its head, its key and a turn
+    under the store's lock, and once the bound is reached it also drops a page that may be
+    asked for again. A URL asked for once pays that for nothing: a crawler walking a catalog,
+    or a search no one repeats, fills the store with pages no one is given. So a request no
+    kept answer stands for leaves a mark that says its URL was asked for, and its answer is
+    kept when the mark was there already. Otherwise the answer is the handler's and is not
+    copied into the store: the request costs what it does in an app that keeps nothing, with
+    the pass over its headers, the lookup and the mark. The mark does not age, so a page
+    asked for again a day later is kept then. A kept answer that is given to no one costs a
+    copy, and an answer that was not kept costs its next visitor the handler, which an app's
+    reads may make far dearer than this benchmark's: the rule gives up one kept answer for
+    each URL, the first, and no other.
 
-    A mark is half of a hash of the URL, the millisecond it was asked for (to two) and that
-    one bit, in a table the other half of the hash indexes: a mark of eight bytes for each KiB
-    of the bound, to a power of two (32,768 marks, 256 KiB, for the 32 MiB an app keeps unless
-    it says otherwise), made when the first page is asked for. The hash is keyed for the
+    A mark is half of a hash of the URL in a table of 32,768 (128 KiB, made when the first
+    page is asked for) that the other half of the hash indexes, and the hash is keyed for the
     process. No list of URLs is held, and a request whose answer is not kept takes no lock but
     the read lock of the lookup. A mark is each host's own, so what one host's visitors asked
     for does not show in another host's answers, and is the URL's in any language, so a page
-    asked for in a second language soon after the first is kept the first time. The price is
-    one more run of the handler for every page that is asked for again, the first time; a
-    copy given to no one for a URL asked for twice within a lifetime and then not until it
-    ended, which pays for the store every second request and is never given a page; and now
-    and then an answer that is made where it could have been kept, when another URL took the
-    mark between two asks or while the page stood, or when two URLs that share a mark are
-    asked for in turn. Each request that leaves a mark takes one mark, so it costs at most one
-    other URL one more run of its handler, and a given URL's mark with one chance in as many
-    as there are marks: as likely as not once seven tenths as many others as there are marks
-    were asked for with no kept answer since (about 23,000 for the default bound). None of
-    those gives a wrong answer. A client can find two URLs that share a page's mark by asking
-    and watching for `Age`. Asking for them in turn then costs that page's handler at most one
-    more run for each request the client sends, as a write to the page's path does.
+    asked for in a second language is kept the first time. The price is one more run of the
+    handler for every page that is asked for again, the first time, and now and then an
+    answer that is made where it could have been kept: when another URL took the mark since
+    the URL's last request that no kept answer stood for, or when two URLs that share a mark
+    are asked for in turn. Each request that leaves a mark takes one mark, so it costs at most
+    one other URL one more run of its handler, and a given URL's with one chance in 32,768: a
+    mark is as likely as not still its URL's after 23,000 other URLs were asked for with no
+    kept answer. None of those gives a wrong answer. A client can find two URLs that share a
+    page's mark by asking and watching for `Age`. Asking for them in turn then costs that
+    page's handler at most one more run for each request the client sends, as a write to the
+    page's path does.
 
     A write drops what is kept at its path, whatever the query, since a named post is
     `?do=name` at its page's path, whatever it is answered. That is wider than RFC 9111
@@ -7313,14 +7301,16 @@ rules something out.
     Not chosen: in front of the middleware, for the reasons above, though it would save the
     stages too; keeping an answer the first time it is made, which this Choice did until a
     request for a new URL was measured against the same page not kept (below); keeping it
-    from the second ask however long after the first, which goes on paying for a URL asked
-    for less often than its page lasts; a count of asks with a threshold above two, which
-    makes a page asked for a few times in its lifetime wait longer for a gain no round has
-    shown; a mark for each language, which costs a second run for each of a page's copies; a
-    mark for a URL whatever its host, which shows one host's visitors, by an `Age`, what was
-    asked of another; the sign that a copy was given held with the copy, which is lost when
-    the copy goes to make room, as an ended one is the first to; a table of one size whatever
-    the bound; a list of the URLs asked for, which grows with what clients send; leaving out a write by its status (a `4xx`, a `501`) or by a mark the router
+    only when its URL was last asked for within the answer's lifetime, or a kept answer was
+    given since, which spares the copy for a URL asked for less often than its page lasts
+    and gives up kept answers to do it (below); a count of asks with a threshold above two,
+    which makes a page asked for a few times wait longer for a gain no round has shown; a
+    mark for each language, which costs a second run for each of a page's copies; a mark for
+    a URL whatever its host, which shows one host's visitors, by an `Age`, what was asked of
+    another; a table sized by the bound, since the marks an app needs follow the URLs it is
+    asked for and not the bytes it keeps; a hash keyed alike in every process, which lets a
+    client name two URLs that share a mark without asking;
+    a list of the URLs asked for, which grows with what clients send; leaving out a write by its status (a `4xx`, a `501`) or by a mark the router
     set on the ones it refuses, each of which left a page stale in a case a review found; off unless asked for, which leaves the cost on every app that already said its
     pages are public; a page for one visitor kept by caller, where a mistake in the key shows
     one user's page to another ([architecture](architecture.md#what-belongs-in-the-framework));
@@ -7365,9 +7355,11 @@ rules something out.
     bytes asked of it is beside the bound; `tests/kept_memory.rs` holds the bytes asked to the
     bound, @@MEMALL@@ of 4,194,304 for its page in every coding and @@MEMNONE@@ with no compression.
 @@SECOND@@
-    Not measured: what a write pays for its count; the share of an app's `Public` URLs that are
-    asked for once in their lifetime, which decides what the second run of a handler buys; an
-    app behind a CDN, where the requests that reach it are not the visitors'; a store read
+    Not measured: what a write pays for its count; the share of an app's requests to
+    `Public` pages that are for a URL not asked for before, which decides what the second
+    run of each handler buys; an app behind a CDN, where the requests that reach it are not
+    the visitors' and each URL comes about once a lifetime, so every answer is copied and
+    few are given; a store read
     from more than one core; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
@@ -7386,9 +7378,10 @@ rules something out.
     setting for the bound, README Values).
 
     Revisit when: apps report pages shown past what they meant, so the default should be off
-    or the lifetime the app's to set apart from `s-maxage`; an app's pages are each asked for
-    a few times in a lifetime and their second render costs more than the copies it saves, so
-    which ask keeps a page should be the app's to say; an app must drop a page for a
+    or the lifetime the app's to set apart from `s-maxage`; an app's second render of
+    each page costs more than the copies the rule saves, or the copies for URLs asked for
+    once a lifetime show in an app's profile, so which ask keeps a page should be the app's
+    to say; an app must drop a page for a
     change made by a task, another instance or a purge; the stages around the handler
     become most of a kept page's cost on a measured app, so a place further out is worth its
     rules; a multi-core measurement shows requests waiting on the store's lock; writes no

@@ -950,8 +950,8 @@ impl<M: Middleware> App<M> {
     /// whole document made for a `GET` with no cookie or `Authorization` is given to the next
     /// such request in the handler's place until that lifetime ends (`s-maxage` where the answer
     /// has `.shared(..)`, else `max_age`), with an `Age`. An answer is kept once its URL
-    /// was asked for before within its lifetime, so a URL asked for once, or less often than its
-    /// page lasts, costs no copy. Every stage still runs for it, the
+    /// was asked for before, so a URL asked for once costs no copy and a page's handler runs
+    /// for its first two requests. Every stage still runs for it, the
     /// app's middleware too; what it saves is the handler, the render, the tag's hash and the
     /// compression. So a `Public` page's handler does not run for every request, and what it
     /// reads may be that old when a visitor sees it, as it already may be behind a CDN. A page
