@@ -1964,7 +1964,8 @@ async fn requests_for_another_copy_or_a_page_never_kept_do_not_wait() {
     let others = [sent(&router, "GET", "/", EN), sent(&router, "GET", "/?page=2", FR)];
     ran(&runs, 6).await;
     // The first requests for a page, and those for one never kept, are each made at once.
-    let never: Vec<_> = (0..3).map(|_| sent(&router, "GET", "/cookie", &[])).chain([sent(&router, "GET", "/?new", &[])]).collect();
+    let never: Vec<_> =
+        (0..3).map(|_| sent(&router, "GET", "/cookie", &[])).chain([sent(&router, "GET", "/?new", &[])]).collect();
     ran(&runs, 10).await;
     settle().await;
     assert_eq!(runs.count(), 10, "the second request for the French page waits");
