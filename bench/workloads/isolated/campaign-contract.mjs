@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
-import { bindExecution } from "./contract.mjs";
+import { alternateCampaignPlacements, bindExecution } from "./contract.mjs";
 import { groupNames } from "../registry.mjs";
 import { catalogFleetPlacement } from "../cloud-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
@@ -37,7 +37,8 @@ export function bindGroupCampaign(input, mode = "dedicated") {
   exact(input, ["round", "commit", "group"]);
   const { group, ...request } = input;
   assert.ok(groupNames.includes(group), "unknown registry group");
-  assert.ok(mode === "dedicated" || mode === catalogFleetPlacement.loadLayout && group === "catalog-page", "unknown group placement");
+  assert.ok(mode === "dedicated" || alternateCampaignPlacements.includes(mode) && group !== "catalog-page"
+    || mode === catalogFleetPlacement.loadLayout && group === "catalog-page", "unknown group placement");
   return bindNativeCampaign(request, [group], groupCampaignSchema, mode);
 }
 function bindNativeCampaign(input, order, schema, mode) {

@@ -9,12 +9,12 @@ import { isDeepStrictEqual } from "node:util";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
-import { accountId, archive, commit, context, harness, syntheticInspection } from "./cloud-fixtures.mjs";
+import { accountId, archive, commit, context, harness, syntheticCatalogProvider, syntheticInspection, syntheticPlacement } from "./cloud-fixtures.mjs";
 import { fleetMain, fleetWorkerPaths, parseFleetArgs, productionChild, stagedChildIntent, watchSupervisedHost } from "./fleet.mjs";
-import { fleetPlan, reservation, savedLoadLayout, tags } from "./cloud-contract.mjs";
+import { fleetPlan, reservation, savedLoadLayout, savedPlacement, stagedFleet, tags } from "./cloud-contract.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
-import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { readFleet, readGroup, readRemainingIntent, verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
 import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { groupNames } from "./registry.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
@@ -25,18 +25,19 @@ import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 const committedSources = new Map(fleetWorkerPaths.map((path) => [path, readFileSync(resolve(path), "utf8").replaceAll("\r\n", "\n")]));
 
 function fixture(t, flags = {}) {
-  const h = harness(t), output = [], calls = [], children = [], completions = [];
-  let firstReport, firstJob;
+  const h = harness(t), output = [], calls = [], children = [], completions = [], catalogCalls = [];
+  const reports = new Map();
+  let firstJob;
   const args = (mode) => ["r21", "--fleet-root", flags.root ?? h.base, mode];
   const prepare = () => [...args("--prepare"), "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
   const spawn = (binary, argv) => {
     calls.push([binary, argv]); assert.equal(binary, "git", "synthetic local boundary only");
     if (argv[0] === "show") return { status: 0, stdout: flags.wrongSource ? "wrong" : committedSources.get(argv[1].slice(41)) };
     if (argv[0] === "status" && flags.dirty) return { status: 0, stdout: " M synthetic" };
-    if (argv[0] === "fetch" && flags.fetchError) return { status: 1, stdout: "", stderr: "PRIVATE_FETCH_ARGV" };
     return h.run(binary, argv, 60000);
   };
   const deps = { repo: h.repo, spawn, interrupted: () => !!flags.cancelled, write: (value) => output.push(JSON.parse(value)),
+    catalogProvider: syntheticCatalogProvider(() => (typeof flags.placement === "function" ? flags.placement() : flags.placement) ?? syntheticPlacement(), catalogCalls),
     main: async (argv, { onReady }) => {
       const { options, approval } = parseProductionArgs(argv), group = options.group ?? groupNames.find((g) => options.stateDir === join(h.base, g));
       children.push(group); assert.ok(approval);
@@ -45,14 +46,23 @@ function fixture(t, flags = {}) {
       completions.push(group); return 3;
     } };
   function manifest() { return readFleet(h.base, "r21").manifest; }
+  function seedLegacy(...groups) {
+    const fleet = fleetPlan({ round: "r21", commit, token: "f".repeat(16), provider: { accountId, context }, sshKey: "42",
+      tokens: Object.fromEntries(groupNames.map((group, i) => [group, (i + 1).toString(16).padStart(16, "0")])) });
+    writeFileSync(join(h.base, "fleet-r21.json"), JSON.stringify(fleet));
+    for (const group of groups) seed(group);
+  }
   function seed(group, change = () => {}) {
     const fleet = manifest(), local = join(h.base, group, "groups-r21"), i = groupNames.indexOf(group);
+    const admitted = i > 0 && existsSync(join(h.base, "remaining-intent.json"));
+    const intent = admitted && stagedFleet(fleet) && readRemainingIntent(readFleet(h.base, "r21"));
     mkdirSync(local, { recursive: true });
-    const state = { ...reservation({ round: "r21", commit, token: fleet.jobs[i].token, group, fleet }),
+    const state = { ...reservation({ round: "r21", commit, token: fleet.jobs[i].token, group, fleet,
+      ...(intent ? { remainingPlacement: { region: intent.placement.region, intentSha256: intent.sha256 } } : {}) }),
       status: "running", createIntentAt: "2026-11-14T01:00:00.000Z", id: String(i + 1), ip: `192.0.2.${i + 1}`,
       provider: fleet.provider, fullGroupQualified: false };
     if (group === fleet.jobs[0].group) state.bootstrapReady = { sha256: "a".repeat(64), observedAt: "2026-11-14T01:01:00.000Z" };
-    if (i > 0 && existsSync(join(h.base, "remaining-intent.json"))) {
+    if (admitted) {
       const binding = { round: state.round, commit, token: state.token, helperSha256: guardianSha256 };
       const reg = { ...registration, binding, id: state.token.repeat(2) };
       state.control = { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: ["bootstrap"],
@@ -75,15 +85,18 @@ function fixture(t, flags = {}) {
   // Code-only stand-in for the native replay worker, using the real shared
   // snapshot/provenance checks. These synthetic tests confer no native authority.
   deps.verify = async (fleet, group, { interrupted }) => {
-    const proof = await verifyCollectedGroup(fleet, group, { inspect: async () => firstReport, interrupted });
+    const proof = await verifyCollectedGroup(fleet, group, { inspect: async () => reports.get(group), interrupted });
     return { ...proof, evidenceMode: "native-replay" };
   };
-  function finishFirst() {
-    const group = groupNames[0], state = seed(group), local = join(h.base, group, "groups-r21");
+  function finishGroup(group) {
+    const state = seed(group), local = join(h.base, group, "groups-r21");
     const evidence = join(local, "evidence-Synthetic"), folder = join(evidence, "campaign"), campaign = `r21-${state.token}`;
     const report = syntheticInspection("verified");
     Object.assign(report, { schema: "benchmark-isolated-group-campaign-inspection/v1", campaign,
-      selection: state.selection, groups: report.groups.filter((g) => g.group === group), loadLayout: savedLoadLayout(state) });
+      selection: state.selection, groups: report.groups.filter((g) => g.group === group),
+      ...(savedLoadLayout(state) ? { loadLayout: savedLoadLayout(state) } : {}),
+      ...(savedPlacement(state) ? { placement: savedPlacement(state) } : {}),
+      ...(state.control ? { supervisedTerminal: { registrationSha256: state.control.monitor.registrationSha256, sealSha256: "b".repeat(64) } } : {}) });
     mkdirSync(join(folder, campaign), { recursive: true });
     writeFileSync(join(folder, ".host-attempt.json"), JSON.stringify({ id: campaign, commit, campaignSha256: report.campaignSha256 }));
     report.reservationSha256 = fileHash(join(folder, ".host-attempt.json"));
@@ -94,29 +107,169 @@ function fixture(t, flags = {}) {
       destroyedAt: "2026-11-14T02:02:00.000Z", archiveSha256: fileHash(join(local, "results.tgz")), evidence: "evidence-Synthetic",
       extractionAttempts: ["evidence-Synthetic"], evidenceSha256: treeHash(evidence), evidenceOutcome: "validated", exitCode: 0,
       validation: { status: "verified", campaign, collectionIntegrity: "manifest-verified" } });
-    const path = join(local, "state.json"), save = () => writeFileSync(path, JSON.stringify(state)); save(); firstReport = report;
-    firstJob = { state, local, evidence, folder, path, report, save, rehash() { state.evidenceSha256 = treeHash(evidence); save(); } };
-    return firstJob;
+    const path = join(local, "state.json"), save = () => writeFileSync(path, JSON.stringify(state)); save(); reports.set(group, report);
+    return { state, local, evidence, folder, path, report, save, rehash() { state.evidenceSha256 = treeHash(evidence); save(); } };
   }
+  function finishFirst() { return firstJob = finishGroup(groupNames[0]); }
   async function remaining() {
     await fleetMain(prepare(), deps); await fleetMain(await approve("--detach"), deps); finishFirst();
     children.length = 0; completions.length = 0;
     return approve("--admit-remaining");
   }
-  return { h, flags, args, prepare, deps, output, calls, children, completions, manifest, seed, approve, finishFirst, remaining,
+  return { h, flags, args, prepare, deps, output, calls, children, completions, catalogCalls, manifest, seed, seedLegacy, approve, finishFirst, finishGroup, remaining,
     get first() { return firstJob; } };
 }
 
-test("prepare reserves cryptorandom complete fleet once, using only local Git", async (t) => {
+test("prepare reserves cryptorandom complete fleet once, using local Git and read-only scoped catalogs", async (t) => {
   const p = fixture(t);
   assert.equal(await fleetMain(p.prepare(), p.deps), 3);
   const f = p.manifest(); assert.deepEqual(f.jobs.map((j) => j.group), groupNames);
   assert.equal(new Set([f.token, ...f.jobs.map((j) => j.token)]).size, groupNames.length + 1);
   assert.ok(p.calls.every(([binary, argv]) => binary === "git" && argv[0] !== "fetch"));
+  assert.deepEqual(p.catalogCalls.map((args) => args.slice(0, 3)),
+    [["account", "get", "--output"], ["compute", "placement", "catalog"], ["account", "get", "--output"]]);
   assert.deepEqual(p.children, []); assert.ok(!existsSync(join(p.h.base, ".fleet-operation.lock")));
   const bytes = readFileSync(join(p.h.base, "fleet-r21.json"));
   await assert.rejects(fleetMain(p.prepare(), p.deps));
   assert.deepEqual(readFileSync(join(p.h.base, "fleet-r21.json")), bytes);
+});
+
+test("both reversed catalogs bind the whole roster; a later reversal cannot consume the fleet intent", async (t) => {
+  for (const [region, other] of [["sfo2", "sfo3"], ["sfo3", "sfo2"]]) await t.test(region, async (t) => {
+    const flags = { placement: syntheticPlacement([region]) }, p = fixture(t, flags);
+    await fleetMain(p.prepare(), p.deps);
+    assert.equal(p.manifest().host.region, region);
+    const path = join(p.h.base, "fleet-r21.json"), bytes = readFileSync(path);
+    const approved = await p.approve("--detach");
+    flags.placement = syntheticPlacement([other]);
+    await assert.rejects(fleetMain(approved, p.deps), /reserved fleet placement not advertised/);
+    assert.deepEqual(p.children, []);
+    assert.deepEqual(readdirSync(p.h.base), ["fleet-r21.json"]);
+    assert.deepEqual(readFileSync(path), bytes);
+    flags.placement = syntheticPlacement([region]);
+    assert.equal(await fleetMain(approved, p.deps), 3);
+    assert.deepEqual(p.children, ["catalog-page"]);
+    assert.deepEqual(readFileSync(path), bytes);
+    p.finishFirst();
+    const remaining = await p.approve("--admit-remaining");
+    flags.placement = syntheticPlacement([other]);
+    await assert.rejects(fleetMain(remaining, p.deps), /fleet-exact-approval-required/);
+    assert.deepEqual(p.children, ["catalog-page"]);
+    assert.equal(existsSync(join(p.h.base, "remaining-intent.json")), false);
+    assert.deepEqual(readFileSync(path), bytes);
+  });
+});
+
+test("remaining admission selects lon1 after catalog retirement and consumes exactly one batch", async (t) => {
+  const flags = { placement: syntheticPlacement(["sfo2"]) }, p = fixture(t, flags);
+  await fleetMain(p.prepare(), p.deps);
+  await fleetMain(await p.approve("--detach"), p.deps);
+  p.finishFirst();
+  const manifest = join(p.h.base, "fleet-r21.json"), catalog = p.first.path;
+  const manifestBefore = readFileSync(manifest), catalogBefore = readFileSync(catalog);
+  flags.placement = syntheticPlacement(["blr1", "lon1"]);
+  const argv = await p.approve("--admit-remaining"), { subject } = p.output.at(-1);
+  assert.equal(subject.remainingRegion, "lon1");
+  for (const job of subject.jobs.slice(1)) {
+    assert.deepEqual(job.subject.remainingPlacement, { region: "lon1", firstGroup: subject.firstGroup.snapshot });
+    assert.equal(job.subject.controllerCommit, commit);
+    assert.equal(job.approvalSha256, digest(JSON.stringify(job.subject)));
+  }
+  await assert.rejects(fleetMain([...argv.slice(0, -1), "f".repeat(64)], p.deps), /fleet-exact-approval-required/);
+  const intent = join(p.h.base, "remaining-intent.json");
+  assert.equal(existsSync(intent), false);
+  // A preferred region returning under the lock must not change this approval.
+  let placementReads = 0;
+  flags.placement = () => syntheticPlacement(++placementReads === 1 ? ["blr1", "lon1"] : ["sfo3", "lon1"]);
+  assert.equal(await fleetMain(argv, p.deps), 3);
+  assert.equal(placementReads, 3);
+  const consumed = readFileSync(intent);
+  for (const group of groupNames.slice(1)) {
+    const state = JSON.parse(readFileSync(join(p.h.base, group, "groups-r21/state.json")));
+    assert.equal(state.host.region, "lon1");
+    assert.deepEqual(state.remainingPlacement, { region: "lon1", intentSha256: digest(consumed) });
+  }
+  await assert.rejects(fleetMain(argv, p.deps), /fleet-remaining-already-attempted/);
+  assert.deepEqual(p.children, groupNames);
+  assert.deepEqual(readFileSync(intent), consumed);
+  assert.deepEqual(readFileSync(manifest), manifestBefore);
+  assert.deepEqual(readFileSync(catalog), catalogBefore);
+
+  const finished = groupNames.map((group, index) => index === 0 ? p.first : p.finishGroup(group));
+  const verify = () => verifyFleet({ root: p.h.base, round: "r21", commit }, { inspect: async ({ folder }) => finished.find((s) => s.folder === folder).report });
+  const result = await verify();
+  assert.equal(result.status, "verified", JSON.stringify(result.groups));
+  assert.deepEqual(result.groups.map((g) => g.host.region), ["sfo2", ...groupNames.slice(1).map(() => "lon1")]);
+  finished[1].report.placement = "dedicated-blr1";
+  assert.equal((await verify()).groups[1].outcome, "error");
+  finished[1].report.placement = "dedicated-lon1";
+  const stale = finished[1]; stale.state.remainingPlacement.intentSha256 = "0".repeat(64); stale.save();
+  assert.throws(() => readGroup(readFleet(p.h.base, "r21"), groupNames[1]), /remaining-placement-differs/);
+  assert.equal((await verify()).status, "incomplete");
+});
+
+test("remaining admission waits without an intent when no four-region c-8 pair is advertised", async (t) => {
+  const flags = { placement: syntheticPlacement(["sfo2"]) }, p = fixture(t, flags);
+  const argv = await p.remaining();
+  flags.placement = syntheticPlacement([]);
+  await assert.rejects(p.approve("--admit-remaining"), /no supported c-8 fleet placement advertised/);
+  await assert.rejects(fleetMain(argv, p.deps), /no supported c-8 fleet placement advertised/);
+  assert.deepEqual(p.children, []);
+  assert.equal(existsSync(join(p.h.base, "remaining-intent.json")), false);
+  assert.equal(existsSync(join(p.h.base, ".fleet-operation.lock")), false);
+});
+
+test("locked remaining admission rechecks the exact reviewed pair without falling back", async (t) => {
+  const p = fixture(t), argv = await p.remaining();
+  let reads = 0;
+  p.flags.placement = () => syntheticPlacement(++reads === 1 ? ["sfo3"] : ["lon1"]);
+  await assert.rejects(fleetMain(argv, p.deps), /reserved fleet placement not advertised: c-8\/sfo3/);
+  assert.equal(reads, 2);
+  assert.deepEqual(p.children, []);
+  assert.equal(existsSync(join(p.h.base, "remaining-intent.json")), false);
+});
+
+test("unusable wider placement, disagreement and missing facts stop before reservation", async (t) => {
+  for (const alter of [
+    ({ sizes, regions }) => { sizes[1].regions = []; regions[0].sizes = ["c-8"]; },
+    ({ regions }) => { regions[1].sizes = []; },
+    ({ sizes }) => { sizes.pop(); },
+    ({ regions }) => { regions.splice(1, 1); }, // c-8 still advertises the missing sfo3 row.
+    ({ sizes }) => { sizes[0].available = false; },
+    ({ regions }) => { regions[0].available = false; },
+  ]) {
+    const placement = syntheticPlacement();
+    alter(placement);
+    const p = fixture(t, { placement });
+    await assert.rejects(fleetMain(p.prepare(), p.deps), /fleet (catalog|placement)|no supported c-8/);
+    assert.deepEqual(readdirSync(p.h.base), []);
+    assert.deepEqual(p.children, []);
+  }
+});
+
+test("placement observation cannot reserve against a different account", async (t) => {
+  const p = fixture(t), factory = p.deps.catalogProvider;
+  let reads = 0, closed = false;
+  p.deps.catalogProvider = (options) => {
+    const run = factory(options);
+    return Object.assign(async (args) => args[0] === "account" && ++reads === 2
+      ? { status: 0, stdout: '{"uuid":"different-user"}' } : run(args),
+    { close: async () => { await run.close(); closed = true; } });
+  };
+  await assert.rejects(fleetMain(p.prepare(), p.deps), /fleet catalog account differs/);
+  assert.equal(closed, true);
+  assert.deepEqual(readdirSync(p.h.base), []);
+});
+
+test("cancellation during the placement worker's close never writes a manifest", async (t) => {
+  const flags = {}, p = fixture(t, flags), factory = p.deps.catalogProvider;
+  p.deps.catalogProvider = (options) => {
+    const run = factory(options), close = run.close;
+    run.close = async () => { await close(); await turn(); flags.cancelled = true; };
+    return run;
+  };
+  await assert.rejects(fleetMain(p.prepare(), p.deps), /controller cancelled/);
+  assert.deepEqual(readdirSync(p.h.base), []);
 });
 
 test("historical roster is inspectable but never opens either fleet launch stage", async (t) => {
@@ -134,6 +287,16 @@ test("historical roster is inspectable but never opens either fleet launch stage
   assert.deepEqual(p.children, []);
   assert.deepEqual(readdirSync(p.h.base), ["fleet-r21.json"]);
   assert.equal(readFileSync(path, "utf8"), bytes);
+});
+
+test("v4 manifests are readable but this controller cannot launch or re-admit them", async (t) => {
+  const p = fixture(t); p.seedLegacy();
+  const path = join(p.h.base, "fleet-r21.json"), before = readFileSync(path);
+  for (const mode of ["--detach", "--admit-remaining"])
+    await assert.rejects(p.approve(mode), /historical fleet cannot authorize launch/);
+  assert.deepEqual(p.children, []);
+  assert.deepEqual(readdirSync(p.h.base), ["fleet-r21.json"]);
+  assert.deepEqual(readFileSync(path), before);
 });
 
 test("detach launches only the first whole group, even after its bootstrap settles", async (t) => {
@@ -407,7 +570,7 @@ test("detach refuses a return code without valid running unique host state", asy
 
 test("collection children remain concurrent; one rejection never abandons siblings", async (t) => {
   const flags = {}, p = fixture(t, flags), pending = [];
-  await fleetMain(p.prepare(), p.deps); for (const group of groupNames) p.seed(group);
+  p.seedLegacy(...groupNames);
   const approved = await p.approve("--collect");
   flags.child = ({ group, options, approval }) => new Promise((resolve, reject) => {
     assert.equal(approval, p.output.at(-1).subject.jobs.find((j) => j.group === group).approvalSha256);
@@ -539,7 +702,7 @@ test("remaining admission binds exact approval and immutable first evidence, nev
     }
     if (kind === "state") { j.state.destroyedAt = "2026-11-14T02:03:00.000Z"; j.save(); }
     if (kind === "dirty") p.flags.dirty = true;
-    if (kind === "future-child") p.seed(groupNames[1]);
+    if (kind === "future-child") mkdirSync(join(p.h.base, groupNames[1]));
     const args = kind === "wrong-approval" ? [...approved.slice(0, -1), "f".repeat(64)] : approved;
     await assert.rejects(fleetMain(args, p.deps), undefined, kind);
     assert.equal(p.children.length, 0, kind); assert.ok(!existsSync(join(p.h.base, "remaining-intent.json")), kind);
@@ -614,7 +777,7 @@ test("single-child recovery requires its original staged root, roster and consum
   assert.throws(() => intent(first, { ...p.first.state, fleet: {} }));
   await fleetMain(approved, p.deps);
   const path = join(p.h.base, "remaining-intent.json"), bytes = readFileSync(path);
-  assert.deepEqual(intent(second, saved), { launch, remaining: digest(bytes) });
+  assert.deepEqual(intent(second, p.seed(second)), { launch, remaining: digest(bytes) });
   const bad = JSON.parse(bytes); bad.subject.jobs[1].options = bad.subject.jobs[2].options;
   bad.approvalSha256 = digest(JSON.stringify(bad.subject)); writeFileSync(path, JSON.stringify(bad));
   assert.throws(() => intent(second, saved));
@@ -719,8 +882,7 @@ test("a failed admission receipt stops dispatch even after a child saved valid r
 });
 
 test("partial collection launches no missing/ambiguous/busy job, and does not wait for a live sibling", async (t) => {
-  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
-  p.seed(groupNames[0]); p.seed(groupNames[1]);
+  const flags = {}, p = fixture(t, flags); p.seedLegacy(...groupNames.slice(0, 2));
   p.seed(groupNames[2], (s) => { s.status = "reserved"; delete s.createIntentAt; delete s.id; delete s.ip; });
   p.seed(groupNames[3]); writeFileSync(join(p.h.base, groupNames[3], "groups-r21", "operation.lock"), "synthetic-live");
   flags.child = async ({ group, options }) => { assert.equal(options.collect, true); assert.equal(options.detach, undefined); return group === groupNames[0] ? 3 : 1; };
@@ -735,8 +897,7 @@ test("partial collection launches no missing/ambiguous/busy job, and does not wa
 
 test("collection reports both retirement kinds as incomplete, never as native qualification", async (t) => {
   for (const kind of ["unused", "setup-failed"]) {
-  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
-  for (const group of groupNames) p.seed(group);
+  const flags = {}, p = fixture(t, flags); p.seedLegacy(...groupNames);
   const approved = await p.approve("--collect"), unusedBytes = JSON.stringify({ syntheticUnused: true });
   flags.child = ({ group }) => {
     p.seed(group, (state) => {
@@ -757,8 +918,7 @@ test("collection reports both retirement kinds as incomplete, never as native qu
 });
 
 test("a pending collection sibling never delays another host's confirmed unused retirement", async (t) => {
-  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
-  for (const group of groupNames) p.seed(group);
+  const flags = {}, p = fixture(t, flags); p.seedLegacy(...groupNames);
   const approved = await p.approve("--collect"); let release, finished = false;
   flags.child = ({ group }) => {
     if (group === groupNames[0]) return new Promise((resolve) => { release = resolve; });
@@ -800,21 +960,33 @@ test("unconfirmed or wrong-code unused retirement cannot masquerade as collectio
   }
 });
 
-test("actual productionMain close uncertainty retains the fleet lock after all child worker settlements", async (t) => {
-  const flags = {}, p = fixture(t, flags), pending = [];
+test("productionMain awaits its final close before releasing the fleet lock on a construction failure", { timeout: 15000 }, async (t) => {
+  const p = fixture(t);
   await fleetMain(p.prepare(), p.deps); const approved = await p.approve("--detach");
-  flags.fetchError = true; p.deps.main = productionMain;
-  p.deps.providerFactory = () => Object.assign(async () => { assert.fail("no synthetic provider call expected"); }, {
-    close: () => new Promise((resolve, reject) => { pending.push({ resolve, reject }); }),
-  });
+  const { options } = p.output.at(-1).subject.jobs[0].subject;
+  const reached = Promise.withResolvers(), settlement = Promise.withResolvers();
+  let workers = 0, requests = 0, closes = 0;
+  p.deps.main = productionMain;
+  p.deps.providerFactory = () => {
+    workers++;
+    // Change the approved bytes after transport construction. The controller
+    // must refuse them before creating its state root or entering locked cleanup.
+    writeFileSync(options.fleet, "\n", { flag: "a" });
+    return Object.assign(async () => { requests++; assert.fail("no synthetic provider call expected"); }, {
+      close() { closes++; reached.resolve(); return settlement.promise; },
+    });
+  };
   let finished = false;
   const result = fleetMain(approved, p.deps).then((v) => { finished = true; return v; });
-  while (pending.length < 1) await turn();
-  assert.equal(pending.length, 1); assert.equal(finished, false);
-  assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
-  pending[0].reject(Object.assign(new Error("PRIVATE_WORKER_CLOSE"), { controlUncertain: true, controlTreeUncertain: true }));
-  assert.equal(await result, 2); assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
-  assert.equal(pending.length, 1);
+  await Promise.race([reached.promise, result.then(() => assert.fail("fleet finished before worker close"))]);
+  assert.equal(workers, 1); assert.equal(closes, 1);
+  assert.equal(existsSync(options.stateDir), false);
+  const lock = join(p.h.base, ".fleet-operation.lock");
+  assert.equal(await Promise.race([result.then(() => false), turn().then(() => !finished && existsSync(lock))]), true);
+  settlement.reject(Object.assign(new Error("PRIVATE_WORKER_CLOSE"), { controlUncertain: true, controlTreeUncertain: true }));
+  assert.equal(await result, 2); assert.ok(existsSync(lock));
+  assert.equal(workers, 1); assert.equal(requests, 0); assert.equal(closes, 1);
+  assert.equal(p.output.at(-1).groups[0].controllerStage, "provider-settlement");
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "not-admitted"));
   assert.ok(!JSON.stringify(p.output).includes("PRIVATE"));
   assert.equal(p.calls.filter(([binary]) => binary !== "git").length, 0);
@@ -856,7 +1028,7 @@ test("real detach workers exit before the next admission without terminating a r
 test("real collection worker event loops overlap synchronous blocking tasks and drain before unlocking", async (t) => {
   for (const cancel of [false, true]) {
     const flags = {}, p = fixture(t, flags);
-    await fleetMain(p.prepare(), p.deps); for (const group of groupNames) p.seed(group);
+    p.seedLegacy(...groupNames);
     const approved = await p.approve("--collect");
     const controls = new SharedArrayBuffer((3 + groupNames.length) * 4), shared = new Int32Array(controls);
     let spawned = 0;
@@ -1087,8 +1259,8 @@ test("a ready notification is optional, one-shot, exact and never worker settlem
 });
 
 test("fleet receipts retain sanitized provider failure and uncertainty without replay", async (t) => {
-  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
-  for (const group of groupNames) p.seed(group); const approved = await p.approve("--collect");
+  const flags = {}, p = fixture(t, flags); p.seedLegacy(...groupNames);
+  const approved = await p.approve("--collect");
   const codes = ["create-request", ...["shape", "count", "id", "rel", "href"].map((predicate) => `create-link-${predicate}`)];
   flags.child = ({ group }) => { throw Object.assign(new Error("PRIVATE_PROVIDER_TOKEN"), {
     controlTreeUncertain: true, controllerStage: "controller-launch", providerDiagnostic: { code: codes[groupNames.indexOf(group) % codes.length] } }); };
@@ -1110,8 +1282,8 @@ test("fleet receipts retain sanitized provider failure and uncertainty without r
 });
 
 test("fleet receipts retain all closed census predicates without replay", async (t) => {
-  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
-  for (const group of groupNames) p.seed(group); const approved = await p.approve("--collect");
+  const flags = {}, p = fixture(t, flags); p.seedLegacy(...groupNames);
+  const approved = await p.approve("--collect");
   const codes = ["shape", "total", "id", "duplicate", "links", "pages", "next", "count", "bounds"].map((predicate) => `list-response-${predicate}`);
   flags.child = ({ group }) => { throw Object.assign(new Error("PRIVATE_PROVIDER_TOKEN"), {
     controlTreeUncertain: true, providerDiagnostic: { code: codes[groupNames.indexOf(group) % codes.length] } }); };
@@ -1129,8 +1301,8 @@ test("fleet receipts retain all closed census predicates without replay", async 
 });
 
 test("fleet receipt sanitizer rejects raw fields and accessors without changing failure outcomes", async (t) => {
-  const flags = {}, p = fixture(t, flags); await fleetMain(p.prepare(), p.deps);
-  for (const group of groupNames) p.seed(group); const approved = await p.approve("--collect");
+  const flags = {}, p = fixture(t, flags); p.seedLegacy(...groupNames);
+  const approved = await p.approve("--collect");
   const diagnostics = [{ code: "account-http", httpStatus: 403 }, { code: "PRIVATE_CODE" },
     { code: "list-http", httpStatus: 418 }, { code: "list-request", raw: "PRIVATE_RAW" }, undefined];
   flags.child = ({ group }) => {

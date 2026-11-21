@@ -13,12 +13,27 @@ export const catalogFleetPlacement = Object.freeze({
   cpuEnv: Object.freeze({ ...catalogCpuEnv, CATALOG_LOAD_CPUS: "4-15" }),
 });
 const historicalFleetSchema = "benchmark-group-fleet/v1", uniformFleetSchema = "benchmark-group-fleet/v2",
-  launchFleetSchema = "benchmark-group-fleet/v3";
-export const fleetCreateMode = (group) => group === "catalog-page" ? catalogFleetPlacement.loadLayout : "dedicated";
+  pinnedFleetSchema = "benchmark-group-fleet/v3", launchFleetSchema = "benchmark-group-fleet/v4";
+const stagedFleetSchema = "benchmark-group-fleet/v5";
+export const alternateFleetMode = "dedicated-sfo2";
+const pinnedFleetRegions = Object.freeze([host.region, legacyHost.region]);
+const fleetRegions = Object.freeze([...pinnedFleetRegions, "lon1", "blr1"]);
+export const fleetCatalogSlugs = Object.freeze({
+  sizes: Object.freeze([host.size, catalogFleetPlacement.host.size]),
+  regions: fleetRegions,
+});
+export const fleetCatalogCommand = Object.freeze(["compute", "placement", "catalog", "--output", "json"]);
+export const stagedFleet = (fleet) => fleet?.schema === stagedFleetSchema;
+const createMode = (region) => region === host.region ? "dedicated" : `dedicated-${region}`;
+export function fleetCreateMode(group, fleet, remainingRegion) {
+  if (group === "catalog-page") return catalogFleetPlacement.loadLayout;
+  return createMode(stagedFleet(fleet) ? fleetHost(remainingRegion).region : fleet.host.region);
+}
 export function providerCreateHost(mode) {
-  if (mode === "legacy") return legacyHost;
+  if (mode === "legacy" || mode === alternateFleetMode) return legacyHost;
   if (mode === "dedicated") return host;
   if (mode === catalogFleetPlacement.loadLayout) return catalogFleetPlacement.host;
+  if (mode === "dedicated-lon1" || mode === "dedicated-blr1") return fleetHost(mode.slice("dedicated-".length));
   assert.equal(mode, null, "unknown provider create mode");
 }
 export const tags = Object.freeze(["corten-bench", "corten-bench-groups"]);
@@ -63,7 +78,7 @@ function buildFleet(input, createdAt, schema, placement, selected) {
   full(sshKey, /[1-9]\d*/, "SSH key ID required"); date(createdAt);
   const jobs = names.map((group) => {
     const ownership = full(tokens[group], /[a-f0-9]{16}/, "ownership token");
-    const wide = schema === launchFleetSchema && fleetCreateMode(group) === catalogFleetPlacement.loadLayout;
+    const wide = [pinnedFleetSchema, launchFleetSchema, stagedFleetSchema].includes(schema) && group === "catalog-page";
     return { group, token: ownership, name: `corten-bench-groups-${round}-${ownership}`,
       tag: `corten-bench-groups-run-${ownership}`, ...(wide ? {
         host: { ...catalogFleetPlacement.host }, loadLayout: catalogFleetPlacement.loadLayout,
@@ -74,28 +89,84 @@ function buildFleet(input, createdAt, schema, placement, selected) {
     provider: { ...provider }, sshKey, host: { ...placement }, selection: selected, jobs };
   return { ...body, fleetSha256: digest(body) };
 }
-export function fleetPlan(input, createdAt = new Date().toISOString()) {
-  return buildFleet(input, createdAt, launchFleetSchema, host, selection());
+function fleetHost(region, regions = fleetRegions) {
+  assert.ok(regions.includes(region), "unsupported fleet region");
+  return { ...host, region };
+}
+export function fleetPlan(input, createdAt = new Date().toISOString(), region = host.region, { stagedPlacement = false } = {}) {
+  return buildFleet(input, createdAt, stagedPlacement ? stagedFleetSchema : launchFleetSchema,
+    fleetHost(region, stagedPlacement ? fleetRegions : pinnedFleetRegions), selection());
 }
 export function validateFleet(plan) {
   assert.ok(plan && Array.isArray(plan.jobs), "complete fleet plan required");
-  assert.ok([historicalFleetSchema, uniformFleetSchema, launchFleetSchema].includes(plan.schema), "unknown fleet schema");
+  assert.ok([historicalFleetSchema, uniformFleetSchema, pinnedFleetSchema, launchFleetSchema, stagedFleetSchema].includes(plan.schema), "unknown fleet schema");
   const historical = plan.schema === historicalFleetSchema;
   if (historical) assert.ok(historicalSelection(plan.selection), "historical fleet selection differs");
   const expected = buildFleet({ round: plan.round, commit: plan.commit, token: plan.token,
     tokens: Object.fromEntries(plan.jobs.map((row) => [row.group, row.token])), provider: plan.provider, sshKey: plan.sshKey },
-    plan.createdAt, plan.schema, historical ? legacyHost : host, historical ? plan.selection : selection());
+    plan.createdAt, plan.schema, historical ? legacyHost : stagedFleet(plan) ? fleetHost(plan.host?.region)
+      : plan.schema === launchFleetSchema ? fleetHost(plan.host?.region, pinnedFleetRegions) : host,
+    historical ? plan.selection : selection());
   assert.deepEqual(plan, expected, "fleet differs from complete fixed registry and owned hosts");
   return plan;
 }
 export function validateLaunchFleet(plan) {
-  assert.equal(plan?.schema, launchFleetSchema, "historical fleet cannot authorize launch");
+  assert.ok(stagedFleet(plan) || plan?.schema === launchFleetSchema, "historical fleet cannot authorize launch");
+  return validateFleet(plan);
+}
+export function requireStagedFleet(plan) {
+  assert.ok(stagedFleet(plan), "historical fleet cannot authorize launch");
   return validateFleet(plan);
 }
 // Only derive placement from a validated fleet, never from free-form launch options.
-const jobHost = (fleet, job) => job.host ?? fleet.host;
+const jobHost = (fleet, job, region) => job.host ?? (stagedFleet(fleet) ? fleetHost(region) : fleet.host);
 export const savedLoadLayout = (s) => s.fleet?.jobs.find((job) => job.group === s.group)?.loadLayout;
-export function assertFleetCensus(droplets, plan) {
+export function savedPlacement(s) {
+  if (s.fleet?.schema !== launchFleetSchema && !stagedFleet(s.fleet)) return;
+  const mode = fleetCreateMode(s.group, s.fleet, s.remainingPlacement?.region);
+  if (mode !== "dedicated" && mode !== catalogFleetPlacement.loadLayout) return mode;
+}
+function reservationRegion(fleet, job, placement) {
+  if (!stagedFleet(fleet) || job.host) {
+    assert.equal(placement, undefined, "only a v5 remaining host has a placement binding");
+    return;
+  }
+  exact(placement, ["region", "intentSha256"]);
+  full(placement.intentSha256, /[a-f0-9]{64}/, "remaining placement intent");
+  return fleetHost(placement.region).region;
+}
+
+// Keep the wider catalog job fixed, and use one common region for all other jobs.
+// Both directional listings must agree for each candidate pair.
+export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, staged = false } = {}) {
+  const listed = (kind, slug, membership, optional) => {
+    assert.ok(Array.isArray(catalog?.[kind]), "invalid fleet catalog listing");
+    const rows = catalog[kind].filter((row) => row?.slug === slug);
+    if (optional && rows.length === 0) return;
+    const members = rows[0]?.[membership];
+    assert.ok(rows.length === 1 && typeof rows[0].available === "boolean"
+      && Array.isArray(members) && members.every((value) => typeof value === "string")
+      && new Set(members).size === members.length, `missing or invalid fleet catalog entry: ${slug}`);
+    return rows[0];
+  };
+  const available = ({ size, region }) => {
+    // A staged c-8 candidate may be absent from a complete listing, but
+    // neither direction may claim that the absent side offers the pair.
+    const optional = staged && size === host.size;
+    const s = listed("sizes", size, "regions", optional), r = listed("regions", region, "sizes", optional);
+    const inSize = s?.regions.includes(region) ?? false, inRegion = r?.sizes.includes(size) ?? false;
+    assert.ok(inSize === inRegion, `fleet catalog listings disagree: ${size}/${region}`);
+    return inSize && s.available && r.available;
+  };
+  if (remainingOnly) assert.ok(staged || reservedRegion !== undefined, "remaining placement must already be reserved");
+  else assert.ok(available(catalogFleetPlacement.host), "fleet placement not advertised: c-16/sfo2");
+  const regions = staged ? fleetRegions : pinnedFleetRegions;
+  const options = (reservedRegion === undefined ? regions : [reservedRegion]).filter((region) => available(fleetHost(region, regions)));
+  assert.ok(options.length > 0, reservedRegion === undefined ? "no supported c-8 fleet placement advertised"
+    : `reserved fleet placement not advertised: c-8/${reservedRegion}`);
+  return options[0];
+}
+export function assertFleetCensus(droplets, plan, remainingRegion) {
   validateLaunchFleet(plan); assert.ok(Array.isArray(droplets));
   const names = new Set(), ids = new Set();
   for (const d of droplets) {
@@ -106,14 +177,15 @@ export function assertFleetCensus(droplets, plan) {
     assert.ok(!names.has(d.name) && !ids.has(String(d.id)), "duplicate fleet host identity");
     names.add(d.name); ids.add(String(d.id));
     for (const tag of [...tags, job.tag]) assert.ok(d.tags?.includes(tag), "fleet ownership tag differs");
-    const placement = jobHost(plan, job);
+    const placement = jobHost(plan, job, remainingRegion);
     assert.equal(d.size_slug ?? d.size?.slug, placement.size); assert.equal(d.region?.slug, placement.region);
   }
   return true;
 }
 export function reservation(input, createdAt = new Date().toISOString()) {
-  const { round, commit, token, group, fleet } = input;
-  exact(input, group === undefined ? ["round", "commit", "token"] : ["round", "commit", "token", "group", "fleet"]);
+  const { round, commit, token, group, fleet, remainingPlacement } = input;
+  exact(input, group === undefined ? ["round", "commit", "token"] : ["round", "commit", "token", "group", "fleet",
+    ...(remainingPlacement === undefined ? [] : ["remainingPlacement"])]);
   roundName(round);
   full(commit, /[a-f0-9]{40}/, "measured commit");
   full(token, /[a-f0-9]{16}/, "ownership token");
@@ -123,12 +195,14 @@ export function reservation(input, createdAt = new Date().toISOString()) {
     validateLaunchFleet(fleet); assert.equal(fleet.round, round); assert.equal(fleet.commit, commit);
     const job = fleet.jobs.find((row) => row.group === group);
     assert.equal(job?.token, token, "host not reserved in fleet");
-    placement = jobHost(fleet, job);
+    placement = jobHost(fleet, job, reservationRegion(fleet, job, remainingPlacement));
   }
   return validateState({ schema: group === undefined ? "benchmark-group-host/v1" : "benchmark-dedicated-group-host/v1", round, commit, token, name,
     tag: `corten-bench-groups-run-${token}`, unit: `${name}.service`, host: { ...placement },
     selection: fleet === undefined ? selection() : structuredClone(groupSelection(fleet, group)),
-    ...(group === undefined ? {} : { group, fleet: structuredClone(fleet) }), createdAt, status: "reserved" }, round);
+    ...(group === undefined ? {} : { group, fleet: structuredClone(fleet) }),
+    ...(remainingPlacement === undefined ? {} : { remainingPlacement: { ...remainingPlacement } }),
+    createdAt, status: "reserved" }, round);
 }
 function groupSelection(fleet, group) {
   return { schema: fleet.selection.schema, groups: fleet.selection.groups.filter((row) => row.group === group) };
@@ -147,11 +221,11 @@ export function validateState(s, round) {
     validateFleet(s.fleet); assert.equal(s.fleet.round, round); assert.equal(s.fleet.commit, s.commit);
     const job = s.fleet.jobs.find((row) => row.group === s.group);
     assert.equal(job?.token, s.token, "host not reserved in fleet");
-    assert.deepEqual(s.host, jobHost(s.fleet, job));
+    assert.deepEqual(s.host, jobHost(s.fleet, job, reservationRegion(s.fleet, job, s.remainingPlacement)));
     assert.deepEqual(s.selection, groupSelection(s.fleet, s.group), "complete native group required");
   } else {
     assert.deepEqual(s.host, legacyHost);
-    assert.ok(!Object.hasOwn(s, "group") && !Object.hasOwn(s, "fleet"), "legacy host cannot select a group");
+    assert.ok(!Object.hasOwn(s, "group") && !Object.hasOwn(s, "fleet") && !Object.hasOwn(s, "remainingPlacement"), "legacy host cannot select a group");
     if (!historicalSelection(s.selection))
       assert.deepEqual(s.selection, selection(), "complete current registry selection differs");
   }
@@ -456,6 +530,7 @@ ${listSshIngress} | cmp -s -- '${sshIngressSnapshot}' -`;
 export function remoteFiles(s) {
   validateState(s, s.round);
   const loadLayout = savedLoadLayout(s);
+  const placement = savedPlacement(s);
   const sshIngress = bootstrapWorkspaceScript(s) === dedicatedWorkspace;
   // Dedicated group runners are system services. Their root SSH sessions need
   // logind scopes, not a user service manager. Leave any existing session alone.
@@ -603,7 +678,7 @@ unset BENCH_APPS BENCH_TIER BENCH_EDGE PROFILE
 ${waitForIdleUserManager}${sshIngress ? `bootstrap_stage=ssh-ingress-verification
 ${verifySshIngress}
 ` : ""}bootstrap_stage=native-entry
-node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign${s.group === undefined ? "" : ` --group ${s.group}`}${loadLayout ? ` --load-layout ${loadLayout}` : ""}
+node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign${s.group === undefined ? "" : ` --group ${s.group}`}${loadLayout ? ` --load-layout ${loadLayout}` : ""}${placement ? ` --placement ${placement}` : ""}
 `;
   return { "job.sh": job, "pack.sh": pack, [s.unit]: `[Unit]
 Description=Official grouped benchmark ${s.round}, pinned ${s.commit}

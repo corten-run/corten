@@ -48,16 +48,39 @@ export function verifyApparatus(binding, registration, sample) {
   return { cpu: 0, registrationSha256: streamHash(registration), qualification: "pending-first-host-native-proof" };
 }
 
-export function apparatusProof(binding, registration, sample, cpus) {
-  const proof = verifyApparatus(binding, registration, sample);
-  assert.ok(cpus && ["app", "api", "load"].every((role) => typeof cpus[role] === "string"), "native CPU partition absent");
-  for (const role of ["app", "api", "load"]) {
+// Mixed has the throughput topology for its measured stage, not functional capture.
+export function nativeControlPartition(binding) {
+  const group = binding.request.group, { resources } = binding;
+  const browser = group === "fullstack-browser";
+  assert.ok(browser || ["catalog-page", "json-api", "localized-marketplace", "mixed-production"].includes(group),
+    `${group}: native CPU partition absent`);
+  const roles = browser ? ["application", "upstream", "browser"] : ["app", "api", "load"];
+  const cpus = browser ? resources.browserCpus : Object.fromEntries(Object.entries(
+    (group === "mixed-production" ? resources.measurement?.cpu : resources.expectedCpus) ?? {}).map(([role, value]) => [role, value.cpuset]));
+  verifyNativePartition(cpus, roles);
+  return { cpus, roles };
+}
+
+function verifyNativePartition(cpus, roles) {
+  assert.ok(cpus && roles.every((role) => typeof cpus[role] === "string" && cpus[role]), "native CPU partition absent");
+  assert.deepEqual(Object.keys(cpus).sort(), [...roles].sort(), "unexpected native CPU role");
+  const used = new Set();
+  for (const role of roles) {
     assert.match(cpus[role], /^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/);
     for (const part of cpus[role].split(",")) {
       const [first, last = first] = part.split("-").map(Number);
-      assert.ok(first > 0 && last >= first, "control CPU0 overlaps native CPUs");
+      assert.ok(Number.isSafeInteger(first) && last >= first && last <= 4095, "invalid native CPU range");
+      assert.ok(first > 0, "control CPU0 overlaps native CPUs");
+      for (let cpu = first; cpu <= last; cpu++) {
+        assert.ok(!used.has(cpu), "native CPU roles overlap"); used.add(cpu);
+      }
     }
   }
+}
+
+export function apparatusProof(binding, registration, sample, cpus, roles = ["app", "api", "load"]) {
+  const proof = verifyApparatus(binding, registration, sample);
+  verifyNativePartition(cpus, roles);
   return proof;
 }
 

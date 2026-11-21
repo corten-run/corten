@@ -34,7 +34,7 @@ const headerRules = {
   "referrer-policy": /^(?:no-referrer|no-referrer-when-downgrade|origin|origin-when-cross-origin|same-origin|strict-origin|strict-origin-when-cross-origin|unsafe-url)?$/,
   "x-frame-options": /^(?:DENY|SAMEORIGIN|deny|sameorigin)?$/,
   "cross-origin-opener-policy": /^(?:same-origin|same-origin-allow-popups|unsafe-none)?$/,
-  "permissions-policy": /^(?:(?:accelerometer|ambient-light-sensor|autoplay|battery|camera|clipboard-read|clipboard-write|display-capture|encrypted-media|fullscreen|geolocation|gyroscope|hid|idle-detection|interest-cohort|magnetometer|microphone|midi|payment|picture-in-picture|publickey-credentials-get|screen-wake-lock|serial|usb|web-share|xr-spatial-tracking)=\((?:self|\*)?\)(?:\s*,\s*|$))+$/,
+  "permissions-policy": /^(?:(?:(?:accelerometer|ambient-light-sensor|autoplay|battery|camera|clipboard-read|clipboard-write|display-capture|encrypted-media|fullscreen|geolocation|gyroscope|hid|idle-detection|interest-cohort|magnetometer|microphone|midi|payment|picture-in-picture|publickey-credentials-get|screen-wake-lock|serial|usb|web-share|xr-spatial-tracking)=\((?:self|\*)?\)|(?:bluetooth|local-fonts|window-management)=\(\))(?:\s*,\s*|$))+$/,
 };
 const directives = new Set(["default-src", "script-src", "script-src-elem", "script-src-attr", "style-src", "style-src-elem", "style-src-attr", "img-src", "font-src", "connect-src", "media-src", "object-src", "base-uri", "form-action", "frame-ancestors", "frame-src", "child-src", "worker-src", "manifest-src", "upgrade-insecure-requests", "block-all-mixed-content", "require-trusted-types-for"]);
 const cspWords = new Set(["'self'", "'none'", "'unsafe-inline'", "'unsafe-eval'", "'wasm-unsafe-eval'", "'strict-dynamic'", "'report-sample'", "'script'", "*", "data:", "blob:", "https:", "http:"]);
@@ -44,7 +44,13 @@ function cspProjection(value) {
   for (const part of value.split(";")) {
     const words = part.trim().split(/\s+/);
     if (!words[0]) continue;
-    assert.ok(directives.has(words[0].toLowerCase()), "unfilterable CSP directive");
+    const directive = words[0].toLowerCase();
+    if (directive === "trusted-types") {
+      // Policy names can be application data. Retain only Corten's fixed name.
+      assert.ok(words.length === 2 && words[1] === "corten", "unfilterable CSP policy name");
+      continue;
+    }
+    assert.ok(directives.has(directive), "unfilterable CSP directive");
     for (const word of words.slice(1)) assert.ok(cspWords.has(word) || /^'(?:nonce|sha256|sha384|sha512)-[A-Za-z0-9+/=_-]+'$/.test(word), "unfilterable CSP source");
   }
   return value.replace(/('(nonce|sha256|sha384|sha512)-)([A-Za-z0-9+/=_-]+)(')/g,

@@ -8,12 +8,13 @@ import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
 import { controllerState, full, parseDropletArgs, providerFailure, unsentDelete } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
-import { fleetCreateMode, validateLaunchFleet } from "./cloud-contract.mjs";
+import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { failedNativePolicy, failedNativeRoots, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
+import { readFleet, readGroup, readLaunchIntent, readRemainingIntent } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -37,7 +38,7 @@ export function parseProductionArgs(args) {
 }
 
 // compiler is a code-only synthetic TEST seam for the local bench install check.
-export async function productionPlan(options, { repo = checkout, run, compiler = localCompiler } = {}) {
+export async function productionPlan(options, { repo = checkout, run, compiler = localCompiler, remainingPlacement } = {}) {
   // All checks here are local/read-only. Missing integration stays visible, not imported.
   repo = realpathSync(repo);
   assert.ok(!/["$%\r\n\0]/.test(options.stateDir), "SSH config expansion in state path refused");
@@ -61,15 +62,26 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
   if ((options.detach || options.collect && options.unusedBootstrapKnownHosts === undefined && !options.r21MeasuredCheckout) && !compiler()) missing.push(localCompilerMissing);
   let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery;
   if (options.group !== undefined) {
-    const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = validateLaunchFleet(JSON.parse(bytes));
+    const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = requireStagedFleet(JSON.parse(bytes));
     assert.equal(fleet.round, options.round); assert.equal(fleet.commit, head); assert.equal(fleet.sshKey, options.sshKey);
     assert.deepEqual(fleet.provider, { accountId: options.accountId, context: options.context });
     fleetSha256 = digest(bytes);
+    const stagedSibling = options.group !== fleet.jobs[0].group;
+    assert.equal(remainingPlacement !== undefined, stagedSibling, "v5 sibling requires the staged remaining placement");
+    const root = dirname(resolve(options.fleet)), current = readFleet(root, options.round);
+    assert.equal(resolve(options.fleet), current.path);
+    assert.equal(physicalRequest, join(root, options.group));
+    assert.equal(current.manifestSha256, fleetSha256);
+    if (stagedSibling) fleetCreateMode(options.group, fleet, remainingPlacement.region);
   }
   if (options.detach) assert.equal(options.commit, head, "launch must measure the approved controller source");
   else {
     const bytes = regular(join(physicalRequest, `groups-${options.round}`, "state.json"), 1024 * 1024);
     const saved = controllerState(JSON.parse(bytes), options.round);
+    if (stagedFleet(saved.fleet)) {
+      const fleet = readFleet(dirname(physicalRequest), options.round), job = readGroup(fleet, saved.group);
+      assert.equal(job.stateRoot, physicalRequest); assert.equal(job.stateSha256, digest(bytes));
+    }
     if (options.r21MeasuredCheckout) {
       ownedR21(saved);
       assert.notEqual(head, saved.commit); await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
@@ -116,6 +128,7 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
   assert.equal(resolveStateRoot(options.stateDir), physicalRequest, "state root changed during approval");
   const subject = { action: options.detach ? "detach" : options.collect ? "collect" : options.cancelMixedWait ? "cancel-mixed-wait" : options.retireFailedNative ? "retire-failed-native" : "deliver-audit", controllerCommit: head,
     options, stateRoot: physicalRequest, reservationSha256, deliverySha256, ...(fleetSha256 ? { fleetSha256 } : {}),
+    ...(remainingPlacement === undefined ? {} : { remainingPlacement }),
     ...(recovery ? { recovery } : {}),
     declaration: options.unusedBootstrapKnownHosts !== undefined
       ? "operator-confirmed-original-local-process-tree-gone-and-exact-host-key-verified-for-unused-bootstrap-retirement-only"
@@ -126,11 +139,13 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
 }
 
-export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log, compiler } = {}) {
+export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log, compiler, remainingAdmission = false } = {}) {
   const { options, approval, preview } = parseProductionArgs(args);
   const processRun = shellTransport({ repo, spawn, streamSpawn });
-  const createMode = options.detach ? options.group === undefined ? "legacy" : fleetCreateMode(options.group) : null;
-  const providerRun = providerFactory({ repo, interrupted, createMode });
+  // Construct the legacy/recovery transport at the original boundary. It
+  // starts its worker only on the first authorized provider operation.
+  let providerRun = options.group === undefined
+    ? providerFactory({ repo, interrupted, createMode: options.detach ? "legacy" : null }) : undefined;
   let stage = "source-plan";
   const mark = (error, value) => {
     // Keep the original internal failure and uncertainty flags. Only this closed
@@ -167,7 +182,27 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     if (failure) throw failure;
     return result;
   };
-  const plan = await productionPlan(options, { repo, run, compiler });
+  const manifest = options.group === undefined ? undefined
+    : requireStagedFleet(JSON.parse(regular(resolve(options.fleet), 1024 * 1024)));
+  const stagedSibling = manifest && options.group !== manifest.jobs[0].group;
+  const readAdmission = () => {
+    const fleet = readFleet(dirname(resolve(options.fleet)), options.round);
+    assert.deepEqual(fleet.manifest, manifest);
+    const intent = stagedSibling ? readRemainingIntent(fleet) : readLaunchIntent(fleet);
+    const lock = JSON.parse(regular(join(fleet.root, ".fleet-operation.lock"), 1024));
+    assert.deepEqual(lock, { pid: process.pid, approvalSha256: intent.approvalSha256 }, "fleet launch requires the active batch lock");
+    if (stagedSibling) {
+      const first = readGroup(fleet, intent.placement.firstGroup.group);
+      assert.equal(first.outcome, "available");
+      assert.equal(first.state.status, "collected"); assert.ok(first.state.destroyedAt);
+      assert.equal(first.stateSha256, intent.placement.firstGroup.stateSha256, "catalog state changed after remaining admission");
+    }
+    return intent;
+  };
+  if (stagedSibling) assert.ok(remainingAdmission, "only fleet admission may launch a v5 sibling");
+  const admission = manifest && !preview ? readAdmission() : undefined;
+  const deps = { repo, run, compiler, remainingPlacement: admission?.placement };
+  const plan = await productionPlan(options, deps);
   if (preview) {
     write(JSON.stringify({ action: plan.subject.action, controllerCommit: plan.subject.controllerCommit, round: options.round,
       ...(plan.subject.recovery ? { recovery: plan.subject.recovery, reservationSha256: plan.subject.reservationSha256 } : {}),
@@ -177,6 +212,14 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   }
   stage = "exact-approval";
   assert.equal(approval, plan.approvalSha256, "explicit operator-approved exact action required");
+  const checkFleetAdmission = admission && (() => {
+    const current = readAdmission(), job = current.subject.jobs.find(({ group }) => group === options.group);
+    assert.equal(current.sha256, admission.sha256, "fleet admission changed");
+    assert.equal(current.subject.manifestSha256, plan.subject.fleetSha256);
+    assert.equal(job.approvalSha256, approval, "child approval differs from consumed fleet admission");
+    assert.deepEqual(job.subject, plan.subject);
+  });
+  checkFleetAdmission?.();
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");
   assert.ok(!interrupted(), "cancelled before approval");
   // Each parallel controller observes main independently, but must not race a
@@ -190,16 +233,23 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   stage = "remote-main-ancestry";
   await run("git", ["merge-base", "--is-ancestor", plan.subject.controllerCommit, remoteHead]);
   stage = "source-recheck";
-  const repeated = await productionPlan(options, { repo, run, compiler });
+  const repeated = await productionPlan(options, deps);
   assert.equal(repeated.approvalSha256, approval, "source/state/delivery changed after approval");
   assert.deepEqual(repeated.missing, []);
+  if (options.group !== undefined) {
+    const bytes = regular(resolve(options.fleet), 1024 * 1024);
+    assert.equal(digest(bytes), plan.subject.fleetSha256, "approved fleet bytes changed");
+    providerRun = providerFactory({ repo, interrupted, createMode: fleetCreateMode(options.group,
+      requireStagedFleet(JSON.parse(bytes)), admission?.placement?.region) });
+  }
   let entered = false;
   const authorizeLocked = async () => {
     assert.ok(!interrupted(), "cancelled before provider access");
-    const locked = await productionPlan(options, { repo, run, compiler });
+    const locked = await productionPlan(options, deps);
     assert.equal(locked.approvalSha256, approval, "locked action changed after approval");
     // The approval hash excludes missing inputs, such as a bench install removed since the recheck.
     assert.deepEqual(locked.missing, [], "native campaign integration missing; do not allocate");
+    checkFleetAdmission?.();
     return locked.subject;
   };
   const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration) => {
@@ -213,7 +263,9 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   };
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
-    mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked, approvedFleetSha256: plan.subject.fleetSha256,
+    mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked, approvedFleetSha256: plan.subject.fleetSha256, remainingAdmission,
+    ...(admission ? { checkFleetAdmission, ...(stagedSibling
+      ? { remainingPlacement: { region: admission.placement.region, intentSha256: admission.sha256 } } : {}) } : {}),
     ...(options.unusedBootstrapKnownHosts === undefined ? {} : { unusedBootstrapApproval: {
       reservationSha256: plan.subject.reservationSha256, knownHostsSha256: plan.subject.recovery.knownHostsSha256,
     } }), ...(options.retireFailedNative || options.cancelMixedWait || options.r21MeasuredCheckout ? {
@@ -229,7 +281,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   return result;
   } catch (error) { throw mark(error, stage); }
   finally {
-    try { await providerRun.close(); }
+    try { await providerRun?.close(); }
     catch (error) { throw mark(error, "provider-settlement"); }
   }
 }

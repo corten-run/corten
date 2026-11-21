@@ -180,23 +180,41 @@ impl Mode {
         Self::read(headers, false).0
     }
 
-    fn read(headers: &HeaderMap, check_html: bool) -> ((Mode, bool), bool) {
-        let runtime = match headers.get(MODE_HEADER).map(HeaderValue::as_bytes) {
+    /// The mode, and whether the runtime sent the request, from the two headers that say so:
+    /// `corten`, and the first `Accept` line, which is asked for only where `corten` names no
+    /// mode. With them, that `Accept` as text, empty where it was not asked for, not sent or not
+    /// text. The rule is written here and nowhere else in the request's path: [`Mode::asked`]
+    /// looks the two up and `crate::kept` gives them from its pass over a request's headers, so
+    /// a header this function is made to read is an argument each of them has to give. Browsers
+    /// never put JSON first for a navigation.
+    pub(crate) fn said<'a>(
+        runtime: Option<&HeaderValue>,
+        accept: impl FnOnce() -> Option<&'a HeaderValue>,
+    ) -> ((Mode, bool), &'a str) {
+        let runtime = match runtime.map(HeaderValue::as_bytes) {
             Some(b"nav") => Some(Mode::Navigation),
             Some(b"action") => Some(Mode::Action),
             Some(b"page") => Some(Mode::Document),
             _ => None,
         };
-        let accept = if runtime.is_none() { accept(headers) } else { "" };
-        // Browsers never put JSON first for a navigation.
-        let mode = runtime.unwrap_or_else(|| {
-            if crate::api::media_type(accept.split(',').next().unwrap_or("")) == crate::api::JSON {
-                Mode::Data
-            } else {
-                Mode::Document
-            }
-        });
-        ((mode, runtime.is_some()), check_html && mode == Mode::Document && accept.contains("text/html"))
+        if let Some(mode) = runtime {
+            return ((mode, true), "");
+        }
+        let accept = accept().and_then(|accept| accept.to_str().ok()).unwrap_or("");
+        let mode = if crate::api::media_type(accept.split(',').next().unwrap_or("")) == crate::api::JSON {
+            Mode::Data
+        } else {
+            Mode::Document
+        };
+        ((mode, false), accept)
+    }
+
+    /// [`Mode::said`] of the request's two headers, and whether a document was asked for by an
+    /// `Accept` that names HTML. Nothing of the mode is decided here: `crate::kept` decides
+    /// whether a kept page can answer without this function.
+    fn read(headers: &HeaderMap, check_html: bool) -> ((Mode, bool), bool) {
+        let (asked, accept) = Mode::said(headers.get(MODE_HEADER), || headers.get(header::ACCEPT));
+        (asked, check_html && asked.0 == Mode::Document && accept.contains("text/html"))
     }
 }
 
@@ -4522,5 +4540,58 @@ mod carried_tests {
         assert!(!own_page_whole(Mode::Action, &http::Method::GET, &headers));
         assert!(!own_page_whole(Mode::Action, &http::Method::HEAD, &headers));
         assert!(!own_page_whole(Mode::Document, &http::Method::POST, &headers));
+    }
+
+    #[test]
+    fn a_request_s_mode_is_its_corten_header_s_or_its_first_accept_line_s() {
+        /// A header's lines.
+        type Lines = &'static [&'static [u8]];
+        let read = |corten: Lines, accept: Lines, check_html| {
+            let mut headers = HeaderMap::new();
+            for (name, lines) in [(MODE_HEADER, corten), (header::ACCEPT, accept)] {
+                for line in lines {
+                    headers.append(name.clone(), HeaderValue::from_bytes(line).unwrap());
+                }
+            }
+            let read = Mode::read(&headers, check_html);
+            assert_eq!(Mode::asked(&headers), read.0);
+            assert_eq!(Mode::of(&headers), read.0 .0);
+            read
+        };
+        // The mode, whether the runtime sent the request, and whether a document was asked for by
+        // an `Accept` that names HTML.
+        let cases: [(Lines, Lines, Mode, bool, bool); 21] = [
+            // No `corten`: the first item of the first `Accept` line, JSON or anything else.
+            (&[], &[], Mode::Document, false, false),
+            (&[], &[b"text/html,application/xhtml+xml,*/*;q=0.8"], Mode::Document, false, true),
+            (&[], &[b"*/*"], Mode::Document, false, false),
+            (&[], &[b"application/json"], Mode::Data, false, false),
+            (&[], &[b" application/json ; q=0.9, text/html"], Mode::Data, false, false),
+            (&[], &[b"text/html, application/json"], Mode::Document, false, true),
+            (&[], &[b"application/jsonx, text/html"], Mode::Document, false, true),
+            (&[], &[b"application/problem+json"], Mode::Document, false, false),
+            (&[], &[b"text/html", b"application/json"], Mode::Document, false, true),
+            (&[], &[b"application/json", b"text/html"], Mode::Data, false, false),
+            // One that is not text is read as none.
+            (&[], &[b"application/json\xff"], Mode::Document, false, false),
+            (&[], &[b"text/html\xff"], Mode::Document, false, false),
+            (&[], &[b"text/html\xff", b"application/json"], Mode::Document, false, false),
+            // The runtime's three, whatever `Accept` says, which is then not read.
+            (&[b"nav"], &[b"application/json"], Mode::Navigation, true, false),
+            (&[b"action"], &[b"text/html"], Mode::Action, true, false),
+            (&[b"page"], &[b"text/html"], Mode::Document, true, false),
+            (&[b"page"], &[b"application/json"], Mode::Document, true, false),
+            (&[b"nav", b"page"], &[], Mode::Navigation, true, false),
+            // Any other value names no mode, and the runtime did not send it.
+            (&[b"another"], &[b"application/json"], Mode::Data, false, false),
+            (&[b"NAV"], &[b"text/html"], Mode::Document, false, true),
+            (&[b"another", b"nav"], &[b"text/html"], Mode::Document, false, true),
+        ];
+        for (corten, accept, mode, fetched, html) in cases {
+            let text = |lines: &[&[u8]]| lines.iter().map(|line| line.escape_ascii().to_string()).collect::<Vec<_>>();
+            let said = format!("corten {:?}, accept {:?}", text(corten), text(accept));
+            assert_eq!(read(corten, accept, true), ((mode, fetched), html), "{said}");
+            assert_eq!(read(corten, accept, false), ((mode, fetched), false), "{said}");
+        }
     }
 }

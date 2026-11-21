@@ -264,7 +264,9 @@ costs the app neither the render nor the compression. A purge at the cache in fr
 reach the app: the cache is sent the kept page again until its lifetime ends or a write through
 the app drops it, so a page that must change at once on a purge takes a short lifetime in the app
 and a long one nowhere. The pages are held in the process's memory, 32 MiB of them unless
-`App::kept_answers` says otherwise, with 256 KiB beside them once a `Public` page is asked for.
+`App::kept_answers` says otherwise, with 256 KiB beside them once a `Public` page is asked for
+and 128 KiB more once they fill it (a 256th of the bound, or up to a 128th where that is not a
+power of two).
 The bound counts the bytes asked of the allocator, and an allocator holds more than it is asked
 for when pages come and go: the benchmark app's resident memory settled 35 MiB above where it
 began with jemalloc and 58 MiB above with glibc's allocator
@@ -752,15 +754,22 @@ with the default inputs runs the whole evidence suite. Verify the run's commit
 and the successful jobs before counting them. Neither mode starts a droplet or
 produces framework timings.
 
+Before reserving a new grouped fleet, its [placement preflight](../../bench/workloads/CLOUD.md#dedicated-group-hosts)
+checks the provider's size and region listings for all required hosts. The
+reservation fixes those locations; create never tries a different region.
+
 The grouped benchmark's [disposable-host preparation](../../bench/workloads/CLOUD.md#evidence-and-cleanup)
 holds firmware-update services outside the measurement boundary before baseline.
 On a fresh dedicated group host it also limits incoming SSH to the controller's
 authenticated provisioning IPv4 source. Keep that egress for collection and
 cleanup; do not make a separate login during measurement.
 Its cleanup check retains all process observations and exempts only kernel threads
-proved by saved Linux stat flags and matching PID/start identity. A new user-space
-daemon or application process still fails cleanup; later observations cannot repair
-an old failed run. This is benchmark-host preparation, not app deployment advice.
+proved by saved Linux stat flags and matching PID/start identity. The supervised marketplace
+run can [take one additional cleanup observation](../../bench/workloads/isolated/CAMPAIGN.md#post-command-udev-settle)
+if every new user-space identity is a proven systemd-udevd worker born after the sealed
+command-lifetime cutoff. Cleanup still fails unless the monotonic wait is proved, the
+workers are gone, and the ordinary boundary checks pass. This cannot repair an old failed run
+or discount activity during measurement. This is benchmark-host preparation, not app deployment advice.
 
 A new benchmark allocation launched from a commit that includes
 [pinned unused-host recovery](../../bench/workloads/CLOUD.md#failed-allocation-retirement)

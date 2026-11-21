@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { controller } from "./droplet.mjs";
-import { reservation, selection, tags } from "./cloud-contract.mjs";
+import { fleetCatalogCommand, reservation, selection, tags } from "./cloud-contract.mjs";
 import { digest } from "./cloud-local.mjs";
 import { descriptor } from "../json-api/contract.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
@@ -14,6 +14,28 @@ import { registration as streamRegistration } from "./test-fixtures/control-stre
 
 export const commit = "a".repeat(40), campaign = "r21-0123456789abcdef", subject = "d".repeat(64);
 export const userId = "synthetic-user-0001", accountId = `user:${userId}`, context = "synthetic-cloud-control";
+export function syntheticPlacement(c8Regions = ["sfo2", "sfo3"]) {
+  return { sizes: [{ slug: "c-8", available: true, regions: [...c8Regions] },
+    { slug: "c-16", available: true, regions: ["sfo2"] }],
+  regions: ["sfo2", "sfo3", "lon1", "blr1"].map((slug) => ({ slug, available: true,
+    sizes: [...(c8Regions.includes(slug) ? ["c-8"] : []), ...(slug === "sfo2" ? ["c-16"] : [])] })) };
+}
+export function syntheticCatalogProvider(catalog = syntheticPlacement(), calls = []) {
+  return ({ createMode }) => {
+    assert.equal(createMode, undefined, "fleet catalog cannot create");
+    return Object.assign(async (args) => {
+      calls.push(args);
+      assert.deepEqual(args.slice(-2), ["--context", context]);
+      const command = args.slice(0, -2);
+      if (command[0] === "account") {
+        assert.deepEqual(command, ["account", "get", "--output", "json"]);
+        return { status: 0, stdout: JSON.stringify({ uuid: userId }) };
+      }
+      assert.deepEqual(command, fleetCatalogCommand);
+      return { status: 0, stdout: JSON.stringify(typeof catalog === "function" ? catalog() : catalog) };
+    }, { close: async () => {} });
+  };
+}
 export function syntheticDelivery(group = "json-api", subjectSha256 = subject) {
   const mixed = group === "mixed-production", prefix = mixed ? "mixed" : "json";
   const identities = mixed ? selectedApps(group).map((app) => ({ app, key: "mixed-native-source", payload: "marketplace-v2" }))
@@ -48,8 +70,9 @@ export const metadata = () => [{ name: "run.log", body: "synthetic fake-only evi
 export function harness(t, flags = {}) {
   const temp = mkdtempSync(join(tmpdir(), "groups-cloud-test-"));
   t.after(() => { assert.ok(temp.startsWith(join(tmpdir(), "groups-cloud-test-"))); rmSync(temp, { recursive: true, force: true }); });
-  const repo = join(temp, "repo"), base = join(temp, "control"), local = join(base, "groups-r21"), statePath = join(local, "state.json");
-  mkdirSync(repo); mkdirSync(base);
+  const repo = join(temp, "repo"), base = flags.fleetGroup === undefined ? join(temp, "control") : join(temp, "control", flags.fleetGroup);
+  const local = join(base, "groups-r21"), statePath = join(local, "state.json");
+  mkdirSync(repo); mkdirSync(flags.fleetGroup === undefined ? base : join(temp, "control"));
   const hostId = flags.hostId ?? "123";
   let s = { ...reservation({ round: "r21", commit, token: flags.token ?? "0123456789abcdef" }), createIntentAt: new Date().toISOString(),
     status: "running", id: hostId, ip: "192.0.2.10", provider: { accountId, context }, fullGroupQualified: false };
@@ -76,6 +99,10 @@ export function harness(t, flags = {}) {
       if (args[0] === "auth" && args[1] === "token") return good("SYNTHETIC_ONLY_CREDENTIAL_A\n");
       if (args[0] === "account") return good(JSON.stringify({ uuid: flags.accountId ?? userId,
         ...(flags.teamId === undefined ? {} : { team: { uuid: flags.teamId } }), droplet_limit: flags.noCapacity ? 0 : 20 }));
+      if (args[1] === "placement") {
+        assert.deepEqual(args.slice(0, -2), fleetCatalogCommand);
+        return good(JSON.stringify(flags.placement ?? syntheticPlacement()));
+      }
       if (args[2] === "list") { if (flags.listError) throw new Error("fake list failure"); return good(JSON.stringify(droplets)); }
       if (args[2] === "get") {
         if (flags.listError) throw new Error("fake host read failure");
@@ -189,7 +216,12 @@ export function syntheticProviderRequest(h, run = h.run) {
     assert.ok(credential === "SYNTHETIC_ONLY_CREDENTIAL_A");
     let args;
     if (path === "/v2/account") args = ["account", "get", "--output", "json"];
-    else if (method === "GET" && path.startsWith("/v2/droplets?")) args = ["compute", "droplet", "list", "--output", "json"];
+    else if (method === "GET" && /^\/v2\/(sizes|regions)\?page=1&per_page=200$/.test(path)) {
+      const kind = path.split(/[/?]/)[2];
+      const result = await run("doctl", [...fleetCatalogCommand, "--context", context], timeout);
+      const rows = JSON.parse(result.stdout)[kind];
+      return { status: 200, value: { [kind]: rows, meta: { total: rows.length } } };
+    } else if (method === "GET" && path.startsWith("/v2/droplets?")) args = ["compute", "droplet", "list", "--output", "json"];
     else if (method === "GET" && /^\/v2\/droplets\/[1-9]\d*$/.test(path)) args = ["compute", "droplet", "get", path.split("/").at(-1), "--output", "json"];
     else if (method === "POST" && path === "/v2/droplets") args = ["compute", "droplet", "create", body.name, "--size", body.size, "--region", body.region,
       "--image", body.image, "--ssh-keys", String(body.ssh_keys[0]), "--tag-names", body.tags.join(","), "--wait", "--output", "json"];

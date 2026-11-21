@@ -640,6 +640,8 @@ try {
         `${landed}: ${JSON.stringify(link)}`,
       );
       const posted = await sentBy(async () => {
+        // Armed first: the redirect lands on the URL already loaded, so a URL or load-state wait could pass on the old document.
+        const loaded = sw.waitForEvent("load");
         await sw.evaluate(() => {
           const form = document.createElement("form");
           form.method = "post";
@@ -647,8 +649,8 @@ try {
           document.body.append(form);
           form.submit();
         });
+        await loaded;
         await sw.waitForURL(`${base}/smoke/landed`);
-        await sw.waitForLoadState();
       });
       check(`${under} a form posted to a network-only path is sent once and redirected`, once(posted, ["/smoke/once", "/smoke/landed"]), JSON.stringify(posted));
       const page = await sentBy(() => sw.goto(`${base}/smoke/landed?again=${name}`));

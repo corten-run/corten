@@ -15,14 +15,16 @@ import { parseArgs as jsonOptions } from "../../json-api/contract.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
 import { nightly } from "../../marketplace/droplet-contract.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
-import { parseOptions as browserOptions, settings as browserSettings } from "../../fullstack-browser/contract.mjs";
+import { browserContainers, browserCpus, parseOptions as browserOptions, settings as browserSettings } from "../../fullstack-browser/contract.mjs";
 import { createClientWorkload } from "../client.mjs";
 import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../live/native.mjs";
 import { fanoutProfile } from "../../live/fanout.mjs";
 import { budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
-import { catalogFleetPlacement, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
+import { catalogFleetPlacement, fleetCatalogSlugs, host, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
 
 export const schema = "benchmark-isolated-contract/v1";
+export const alternateCampaignPlacements = Object.freeze(fleetCatalogSlugs.regions
+  .filter((region) => region !== host.region).map((region) => `dedicated-${region}`));
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 // New native v2 exposes a pure parser. Older committed runners retain their exact
 // reviewed source pin; a missing/invalid dependency inside a present parser fails.
@@ -130,6 +132,7 @@ const selection = (group) => ({ registry: registrySchema, group, contractSha256:
 
 function subjectFor(r, sources, campaignMode) {
   assert.ok(campaignMode === "dedicated" || campaignMode === "legacy"
+    || alternateCampaignPlacements.includes(campaignMode) && r.group !== "catalog-page"
     || campaignMode === catalogFleetPlacement.loadLayout && r.group === "catalog-page", "unknown campaign placement");
   const inputs = Object.fromEntries(Object.entries(latestStableSources).filter(([key]) => key === "policy" || r.group === "client-heavy").map(([key, path]) => {
     const bytes = git(["show", `${r.commit}:${path}`]);
@@ -182,7 +185,7 @@ function native(group, round, recipe, reviewId) {
     defaults.apps = [...selectedApps(group)]; effective.apps = [...selectedApps(group)];
   } else if (group === "fullstack-browser") {
     defaults = { targets: null, out: null, apps: selectedApps(group), cases: null, build: false };
-    args.push("--build", "--out", artifactRoot);
+    args.push("--build", "--out", artifactRoot, "--isolated");
     effective = browserOptions(args); settings = clone(browserSettings);
   } else if (group === "client-heavy") {
     if (clientParser) {
@@ -224,6 +227,8 @@ function native(group, round, recipe, reviewId) {
 }
 
 function resources(group, recipe, campaignMode) {
+  if (group === "fullstack-browser") return { ...browserContainers, browserCpus, requestedCpuEnv: null, state: "unknown",
+    requiredEvidence: "effective command cgroup cpuset for the browser and driver; Docker and kernel CPU/memory receipts for application and upstream" };
   if (group === "mixed-production") return { functional: { app: { cpu: 1, memoryBytes: 2 ** 30 },
     upstream: { cpu: 2, memoryBytes: 512 * 2 ** 20 }, capture: { cpu: 2, memoryBytes: 2 ** 30 }, pinning: "not available in functional capture" },
     measurement: ["mixed-measure", "mixed-production-measure"].includes(recipe) ? { cpu: cpuSettings({ CATALOG_APP_CPUS: "1", CATALOG_API_CPUS: "2-3", CATALOG_LOAD_CPUS: "4-7" }),
@@ -244,7 +249,7 @@ function resources(group, recipe, campaignMode) {
   if (group === "hardening") return { budget: budgets().resources, requestedCpuEnv: null, state: "blocked",
     requiredEvidence: "all native target/proxy/upstream processes charged; native pinning adapter is absent; direct/edge receipts stay separate" };
   return { app: group === "client-heavy" ? null : { cpu: 1, memoryBytes: 2 ** 30 },
-    upstream: group === "fullstack-browser" ? { cpu: 1, memoryBytes: 256 * 2 ** 20 } : null,
+    upstream: null,
     requestedCpuEnv: null, browser: "host process outside app budget; no native OS isolation/pinning interface",
     state: "blocked", requiredEvidence: "reviewed native isolation adapter plus actual browser/server process and resource inventory" };
 }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { roundName, validateFleet } from "./cloud-contract.mjs";
+import { fleetCreateMode, roundName, stagedFleet, validateFleet } from "./cloud-contract.mjs";
 import { campaignOutcome, controllerState, full } from "./cloud-options.mjs";
 import { digest, fileHash, physical, regular, resolveStateRoot, treeHash } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
@@ -30,6 +30,77 @@ export function readFleet(root, round) {
   assert.ok(readdirSync(root).every((name) => allowed.has(name)), "fleet-root-members");
   return { root, path, bytes, manifest, manifestSha256: digest(bytes) };
 }
+export function fleetChildOptions(fleet, group, mode) {
+  const f = fleet.manifest;
+  return { round: f.round, stateDir: join(fleet.root, group), [mode]: true,
+    ...(mode === "detach" ? { commit: f.commit, sshKey: f.sshKey, accountId: f.provider.accountId,
+      context: f.provider.context, group, fleet: fleet.path } : {}) };
+}
+function readIntent(fleet, file, schema, action) {
+  const bytes = regular(join(fleet.root, file), 1024 * 1024), intent = JSON.parse(bytes);
+  assert.deepEqual(Object.keys(intent).sort(), ["approvalSha256", "schema", "subject"]);
+  assert.equal(intent.schema, schema, "fleet-legacy-launch-cannot-admit");
+  const s = intent.subject;
+  assert.equal(intent.approvalSha256, digest(JSON.stringify(s)), "fleet-intent-changed");
+  assert.equal(s.schema, "benchmark-group-fleet-staged-approval/v1");
+  assert.equal(s.action, action); assert.equal(s.controllerCommit, fleet.manifest.commit);
+  assert.equal(s.stateRoot, fleet.root);
+  // A requested junction must still resolve to the approved physical root.
+  assert.equal(fleetRoot(s.requestedRoot), fleet.root, "fleet-requested-root-changed");
+  assert.equal(s.round, fleet.manifest.round);
+  assert.equal(s.manifestSha256, fleet.manifestSha256); assert.deepEqual(s.fleet, fleet.manifest);
+  assert.deepEqual(s.jobs.map(({ group }) => group), fleet.manifest.jobs.map(({ group }) => group));
+  return { subject: s, approvalSha256: intent.approvalSha256, sha256: digest(bytes) };
+}
+function validateIntentJob(fleet, job, remainingPlacement) {
+  assert.equal(job.outcome, "planned"); assert.deepEqual(job.missing, []);
+  assert.deepEqual(job.options, fleetChildOptions(fleet, job.group, "detach"));
+  assert.deepEqual(job.subject.options, job.options); assert.equal(job.subject.controllerCommit, fleet.manifest.commit);
+  assert.equal(job.approvalSha256, digest(JSON.stringify(job.subject)));
+  if (stagedFleet(fleet.manifest)) {
+    assert.equal(job.subject.action, "detach"); assert.equal(job.subject.stateRoot, job.options.stateDir);
+    assert.equal(job.subject.fleetSha256, fleet.manifestSha256);
+    assert.deepEqual(job.subject.remainingPlacement, remainingPlacement);
+  }
+}
+export function readLaunchIntent(fleet) {
+  const result = readIntent(fleet, "launch-intent.json", "benchmark-group-fleet-staged-launch-intent/v1", "detach");
+  const s = result.subject, first = fleet.manifest.jobs[0].group;
+  assert.deepEqual(s.records, {});
+  assert.deepEqual(s.admission, { mode: "first-group-only", firstGroup: first, gate: "collected-verified-deleted", nativeReadiness: false });
+  assert.equal(s.remainingRegion, undefined);
+  validateIntentJob(fleet, s.jobs[0]);
+  for (const job of s.jobs.slice(1)) assert.deepEqual(job, { group: job.group, outcome: "deferred" });
+  return result;
+}
+export function readRemainingIntent(fleet, legacyGroup) {
+  const launch = readLaunchIntent(fleet).sha256;
+  const result = readIntent(fleet, "remaining-intent.json", "benchmark-group-fleet-remaining-intent/v1", "admit-remaining");
+  const s = result.subject, first = fleet.manifest.jobs[0].group;
+  assert.equal(s.records["launch-intent.json"], launch);
+  assert.deepEqual(s.admission, { mode: "remaining-once", firstGroup: first, gate: "collected-verified-deleted", nativeReadiness: false });
+  assert.equal(s.firstGroup.evidenceMode, "native-replay"); assert.equal(s.firstGroup.row.outcome, "verified");
+  assert.equal(s.firstGroup.row.group, first);
+  let placement;
+  if (stagedFleet(fleet.manifest)) {
+    fleetCreateMode(fleet.manifest.jobs[1].group, fleet.manifest, s.remainingRegion); // Closed region list.
+    assert.deepEqual(s.firstGroup.row.host, fleet.manifest.jobs[0].host);
+    const snapshot = s.firstGroup.snapshot;
+    assert.deepEqual(Object.keys(snapshot).sort(), ["archiveSha256", "evidenceSha256", "group", "stateSha256"]);
+    assert.equal(snapshot.group, first);
+    for (const key of ["archiveSha256", "evidenceSha256", "stateSha256"]) {
+      full(snapshot[key], /[a-f0-9]{64}/, key);
+      assert.equal(s.firstGroup.row[key], snapshot[key]);
+    }
+    assert.deepEqual(s.jobs[0], { group: first, outcome: "verified", snapshot });
+    placement = { region: s.remainingRegion, firstGroup: snapshot };
+    for (const job of s.jobs.slice(1)) validateIntentJob(fleet, job, placement);
+  } else {
+    assert.equal(s.remainingRegion, undefined);
+    validateIntentJob(fleet, s.jobs.find((j) => j.group === legacyGroup));
+  }
+  return { ...result, launch, placement };
+}
 export function readGroup(fleet, group) {
   assert.ok(fleet.manifest.jobs.some((j) => j.group === group));
   physical(fleet.root);
@@ -42,6 +113,11 @@ export function readGroup(fleet, group) {
   assert.equal(state.schema, "benchmark-dedicated-group-host/v1");
   assert.equal(state.group, group); assert.deepEqual(state.fleet, fleet.manifest);
   assert.deepEqual(state.provider, fleet.manifest.provider);
+  if (stagedFleet(fleet.manifest) && group !== fleet.manifest.jobs[0].group) {
+    const intent = readRemainingIntent(fleet);
+    assert.deepEqual(state.remainingPlacement, { region: intent.placement.region, intentSha256: intent.sha256 },
+      "group-state-remaining-placement-differs");
+  }
   return { group, stateRoot, local, state, stateSha256: digest(bytes), outcome: present(join(local, "operation.lock")) ? "busy"
     : ["creating", "preparing", "starting", "running", "collected", "retired"].includes(state.status) ? "available" : "ambiguous" };
 }
@@ -116,6 +192,11 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
   const result = { ...base, round, commit, fleetSha256: fleet.manifest.fleetSha256,
     manifestSha256: fleet.manifestSha256, selection: fleet.manifest.selection, groups: [] };
   const snapshots = [], identities = new Set();
+  let remaining;
+  if (stagedFleet(fleet.manifest) && present(join(fleet.root, "remaining-intent.json"))) {
+    try { remaining = readRemainingIntent(fleet); }
+    catch { return { ...result, error: "fleet-remaining-intent-invalid" }; }
+  }
   let duplicate = false;
   for (const { group } of fleet.manifest.jobs) {
     let job;
@@ -159,6 +240,10 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
     assert.ok(!interrupted());
     assert.ok(!present(join(fleet.root, ".fleet-operation.lock")), "fleet-operation-active");
     assert.equal(readFleet(fleet.root, round).manifestSha256, fleet.manifestSha256);
+    if (remaining) {
+      assert.equal(readRemainingIntent(fleet).sha256, remaining.sha256);
+      assert.deepEqual(snapshots.find(({ group }) => group === fleet.manifest.jobs[0].group), remaining.placement.firstGroup);
+    }
     for (const snapshot of snapshots) recheckCollectedGroup(fleet, snapshot);
     assert.ok(!duplicate);
   } catch { return { ...result, error: "fleet-evidence-changed-or-duplicated" }; }

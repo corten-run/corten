@@ -55,27 +55,35 @@ test("clean worker uses one immutable private credential across account/create/a
   });
 });
 
-test("worker create mode accepts only its pinned size and region; recovery cannot create", async (t) => {
-  for (const [createMode, region, allowed, size = "c-8"] of [["legacy", "sfo2", true], ["dedicated", "sfo3", true],
+test("worker create mode accepts only its pinned size, region and image; recovery cannot create", async (t) => {
+  for (const [createMode, region, allowed, size = "c-8", image = "ubuntu-24-04-x64"] of [["legacy", "sfo2", true], ["dedicated", "sfo3", true],
     ["legacy", "sfo3", false], ["dedicated", "sfo2", false], ["dedicated", "nyc1", false], [null, "sfo3", false], ["sfo3", "sfo3", false],
+    ["dedicated-sfo2", "sfo2", true], ["dedicated-sfo2", "sfo3", false], ["dedicated-sfo2", "sfo2", false, "c-16"],
+    ["dedicated-lon1", "lon1", true], ["dedicated-blr1", "blr1", true], ["dedicated-lon1", "blr1", false],
+    ["dedicated-blr1", "nyc1", false], ["dedicated-blr1", "blr1", false, "c-16"], ["dedicated-lon1", "lon1", false, "c-8", "other-image"],
+    ["dedicated-nyc1", "nyc1", false],
     ["c16-generator-v1", "sfo2", true, "c-16"], ["c16-generator-v1", "sfo2", false],
-    ["c16-generator-v1", "sfo3", false, "c-16"], ["dedicated", "sfo3", false, "c-16"]]) {
-    const h = createMode === "sfo3"
-      ? harness(t, "success", (message) => message.sources ? { ...message, createMode } : message)
-      : harness(t, "success", undefined, undefined, undefined, createMode);
-    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", size, "--region", region,
-      "--image", "ubuntu-24-04-x64", "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef",
-      "--wait", "--output", "json", ...account.slice(-2)];
-    if (allowed) {
-      assert.equal((await h.run(create)).status, 0);
-      const listed = JSON.parse((await h.run(["compute", "droplet", "list", "--output", "json", ...account.slice(-2)])).stdout);
-      assert.equal(listed[0].region.slug, region);
-      assert.equal(listed[0].size_slug, size);
-    } else {
-      await assert.rejects(h.run(create));
-      assert.equal(h.state().consumes, 0);
-      assert.equal(h.state().requests, 0);
-    }
+    ["c16-generator-v1", "sfo3", false, "c-16"], ["c16-generator-v1", "lon1", false, "c-16"], ["dedicated", "sfo3", false, "c-16"]]) {
+    await t.test(`${createMode}: ${size}/${region}/${image}`, async (t) => {
+      const forged = ["sfo3", "dedicated-nyc1"].includes(createMode);
+      if (forged) assert.throws(() => provider.providerTransport({ repo: resolve("."), createMode }), /unknown provider create mode/);
+      const h = forged
+        ? harness(t, "success", (message) => message.sources ? { ...message, createMode } : message)
+        : harness(t, "success", undefined, undefined, undefined, createMode);
+      const create = ["compute", "droplet", "create", "corten-bench-groups-r25-0123456789abcdef", "--size", size, "--region", region,
+        "--image", image, "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef",
+        "--wait", "--output", "json", ...account.slice(-2)];
+      if (allowed) {
+        assert.equal((await h.run(create)).status, 0);
+        const listed = JSON.parse((await h.run(["compute", "droplet", "list", "--output", "json", ...account.slice(-2)])).stdout);
+        assert.equal(listed[0].region.slug, region);
+        assert.equal(listed[0].size_slug, size);
+      } else {
+        await assert.rejects(h.run(create));
+        assert.equal(h.state().consumes, 0);
+        assert.equal(h.state().requests, 0);
+      }
+    });
   }
 });
 

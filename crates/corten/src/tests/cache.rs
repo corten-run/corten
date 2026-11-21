@@ -1052,6 +1052,15 @@ async fn a_public_page_is_kept_and_given_again_in_its_handler_s_place() {
 
     let (status, mut again, same) = fetch(&router, "GET", "/", &[]).await;
     assert_eq!((status, runs.count()), (StatusCode::OK, 1), "the kept page, not the handler");
+    // Line for line, in the order the handler's answer was written in.
+    let lines = |headers: &http::HeaderMap| {
+        headers
+            .iter()
+            .filter(|(name, _)| *name != header::AGE)
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(lines(&again), lines(&first));
     assert_eq!(again.remove(header::AGE).expect("a kept answer says how old it is"), "0");
     assert_eq!(again, first, "every other header as the handler's answer had it");
     assert_eq!(same, body);
@@ -1100,6 +1109,50 @@ async fn a_public_page_is_kept_and_given_again_in_its_handler_s_place() {
     fetch(&router, "GET", "/?page=2", &[]).await;
     fetch(&router, "GET", "/?page=2", &[]).await;
     assert_eq!(runs.count(), ran + 1);
+}
+
+/// While the store has room a page is kept the first time it is made. Once it is full, keeping
+/// one drops another, so a page is kept from the second time its URL is asked for and a URL
+/// asked for once takes no page's room.
+#[tokio::test]
+async fn a_full_store_keeps_a_page_from_the_second_time_its_url_is_asked_for() {
+    let runs = Runs::default();
+    let router = App::new(Routes::from(kept_routes(&runs))).kept_answers(64 << 10).router();
+    let kept = |uri: String| {
+        let router = router.clone();
+        async move { fetch(&router, "GET", &uri, &[]).await.1.contains_key(header::AGE) }
+    };
+    // With room, the second request for each URL is given the page the first one made.
+    let mut room = 0;
+    while kept(format!("/?n={room}")).await || kept(format!("/?n={room}")).await {
+        room += 1;
+        assert!(room < 100, "the store never filled");
+    }
+    assert!(room > 5, "{room} pages were kept the first time");
+    // The store is full: the URL just asked for twice was made twice, and is kept now.
+    assert_eq!(runs.count(), room + 2);
+    assert!(kept(format!("/?n={room}")).await && runs.count() == room + 2, "kept from its second ask");
+    // URLs asked for once are made and not kept, but for one whose mark is another's: twice as
+    // many as the store holds, which kept one by one would drop every page, drop next to none.
+    for once in 0..room * 2 {
+        kept(format!("/?once={once}")).await;
+    }
+    assert_eq!(runs.count(), room * 3 + 2);
+    let mut still = 0;
+    for n in 0..=room {
+        still += usize::from(kept(format!("/?n={n}")).await);
+    }
+    assert!(still + 2 > room, "{still} of {} pages are kept after a walk over new URLs", room + 1);
+    // And a new URL is kept by its second request: the third is given the page.
+    let made = runs.count();
+    for again in 0..8 {
+        let uri = format!("/?again={again}");
+        kept(uri.clone()).await;
+        kept(uri.clone()).await;
+        assert!(kept(uri).await, "kept by its second request at the latest");
+    }
+    let twice = runs.count() - made - 8;
+    assert!(twice >= 6, "{twice} of 8 new URLs were made twice");
 }
 
 /// A kept page stands where the handler does: every middleware runs for the request it answers,

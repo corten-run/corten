@@ -10,8 +10,8 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { createProviderEngine as providerTransport, isSettledAccountFailure } from "./cloud-engine-test-fixture.mjs";
 import { providerTransport as workerTransport } from "./cloud-provider.mjs";
-import { context, harness } from "./cloud-fixtures.mjs";
-import { tags } from "./cloud-contract.mjs";
+import { context, harness, syntheticPlacement } from "./cloud-fixtures.mjs";
+import { fleetCatalogCommand, tags } from "./cloud-contract.mjs";
 
 const credential = "SYNTHETIC_ONLY_CREDENTIAL_A";
 const account = ["account", "get", "--output", "json", "--context", context];
@@ -32,13 +32,68 @@ const createAction = (status = "completed", resource_id = 3164444) => ({ status:
 
 test("provider engine refuses cross-mode or unbound create before consuming credentials", async () => {
   const legacy = create.with(7, "sfo2");
-  for (const [createMode, args] of [["legacy", create], ["dedicated", legacy], [null, create]]) {
+  for (const [createMode, args] of [["legacy", create], ["dedicated", legacy], [null, create],
+    ["dedicated-lon1", create.with(7, "blr1")], ["dedicated-blr1", create.with(7, "nyc1")]]) {
     let consumes = 0, requests = 0;
     const run = providerTransport({ repo: resolve("."), createMode,
       spawn() { consumes++; return spawn(); }, request() { requests++; return empty; } });
     await assert.rejects(run(args, 60000, true), /placement differs from authorized mode/);
     assert.equal(consumes, 0); assert.equal(requests, 0);
   }
+});
+
+test("placement catalog uses bounded fixed GETs, projects facts and rejects incomplete or foreign pages", async () => {
+  const command = [...fleetCatalogCommand, "--context", context];
+  for (const mode of ["complete", "foreign-next", "missing-page", "changed-count", "duplicate"]) {
+    const calls = [], { sizes, regions } = syntheticPlacement(["sfo2"]);
+    const first = { sizes: [{ ...sizes[0], price: credential }], meta: { total: 2 }, links: {
+      pages: { next: mode === "foreign-next" ? `https://foreign.invalid/${credential}` : "https://api.digitalocean.com/v2/sizes?page=2&per_page=200" },
+    } };
+    if (mode === "missing-page") delete first.links;
+    const run = providerTransport({ repo: resolve("."), createMode: null, spawn, request({ method, path, body, credential: token }) {
+      assert.equal(method, "GET"); assert.equal(body, undefined); assert.equal(token, credential);
+      calls.push(path);
+      if (path === "/v2/sizes?page=1&per_page=200") return { status: 200, value: first };
+      if (path === "/v2/sizes?page=2&per_page=200") return { status: 200, value: {
+        sizes: [mode === "duplicate" ? sizes[0] : sizes[1]], meta: { total: mode === "changed-count" ? 3 : 2 },
+      } };
+      assert.equal(path, "/v2/regions?page=1&per_page=200");
+      return { status: 200, value: { regions, meta: { total: regions.length } } };
+    } });
+    if (mode === "complete") assert.deepEqual(JSON.parse((await run(command)).stdout), { sizes, regions });
+    else await assert.rejects(run(command), { providerDiagnostic: { code: "catalog-response" } });
+    assert.deepEqual(calls, ["/v2/sizes?page=1&per_page=200",
+      ...(["foreign-next", "missing-page"].includes(mode) ? [] : ["/v2/sizes?page=2&per_page=200"]),
+      ...(mode === "complete" ? ["/v2/regions?page=1&per_page=200"] : [])]);
+  }
+});
+
+test("placement catalog retains both directions for supported candidates and drops unlisted regions", async () => {
+  const sizes = [
+    { slug: "c-8", available: true, regions: ["nyc1", "blr1", "lon1"] },
+    { slug: "c-16", available: true, regions: ["sfo2"] },
+    { slug: "c-4", available: true, regions: ["lon1"] },
+  ];
+  const regions = [
+    { slug: "sfo3", available: true, sizes: [] },
+    { slug: "sfo2", available: true, sizes: ["c-16"] },
+    { slug: "lon1", available: true, sizes: ["c-8", "c-4"] },
+    { slug: "blr1", available: true, sizes: ["c-8"] },
+    { slug: "nyc1", available: true, sizes: ["c-8"] },
+  ];
+  const calls = [];
+  const run = providerTransport({ repo: resolve("."), createMode: null, spawn, request({ method, path, body }) {
+    assert.equal(method, "GET"); assert.equal(body, undefined); calls.push(path);
+    if (path === "/v2/sizes?page=1&per_page=200") return { status: 200, value: { sizes, meta: { total: sizes.length } } };
+    assert.equal(path, "/v2/regions?page=1&per_page=200");
+    return { status: 200, value: { regions, meta: { total: regions.length } } };
+  } });
+  const result = await run([...fleetCatalogCommand, "--context", context]);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    sizes: [{ ...sizes[0], regions: ["lon1", "blr1"] }, sizes[1]],
+    regions: [regions[0], regions[1], { ...regions[2], sizes: ["c-8"] }, regions[3]],
+  });
+  assert.deepEqual(calls, ["/v2/sizes?page=1&per_page=200", "/v2/regions?page=1&per_page=200"]);
 });
 
 test("create-link diagnostics isolate each refused predicate without reflecting provider values", async (t) => {
@@ -724,6 +779,31 @@ test("HTTP failures, redirects and ambiguous requests are never retried or expos
   let count = 0;
   const uncertain = providerTransport({ repo: resolve("."), spawn, request() { count++; throw new Error(credential); } });
   await assert.rejects(uncertain(create, 1000, true), (error) => error.controlUncertain === true && !error.message.includes(credential)); assert.equal(count, 1);
+});
+
+test("native catalog transport refuses complete invalid JSON but cannot settle truncated or timed-out reads", { timeout: 10000 }, async (t) => {
+  let mode = "malformed";
+  const server = createServer((req, res) => {
+    assert.equal(req.method, "GET");
+    assert.equal(req.url, "/v2/sizes?page=1&per_page=200");
+    if (mode === "malformed") res.end("{");
+    else if (mode === "truncated") { res.writeHead(200, { "content-length": 10 }); res.end("{"); }
+    else { res.writeHead(200); res.flushHeaders(); }
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); });
+  const connect = (url, options, callback) =>
+    httpRequest({ ...options, hostname: "127.0.0.1", port: server.address().port, path: url.pathname + url.search }, callback);
+  const run = providerTransport({ repo: resolve("."), spawn, connect });
+  const command = [...fleetCatalogCommand, "--context", context];
+  const refused = await run(command, 1000, true);
+  assert.deepEqual({ status: refused.status, stdout: refused.stdout, stderr: refused.stderr, diagnostic: refused.providerDiagnostic },
+    { status: 1, stdout: "", stderr: "", diagnostic: { code: "catalog-response" } });
+  for (mode of ["truncated", "slow"]) {
+    await assert.rejects(run(command, mode === "slow" ? 100 : 1000, true), {
+      controlUncertain: true, providerDiagnostic: { code: "catalog-request" },
+    });
+  }
 });
 
 test("native HTTP boundary pins origin, sends only memory credential and bounds redirects/body/deadline/cancellation", { timeout: 10000 }, async (t) => {
