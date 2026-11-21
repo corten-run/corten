@@ -58,6 +58,7 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
     const committed = (await run("git", ["show", `${head}:${path}`])).stdout;
     assert.equal(loadedSources.get(path), committed, "loaded controller differs from approved source");
   }
+  let mode;
   const missing = [];
   for (const path of nativePaths)
     if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
@@ -66,7 +67,7 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
     if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
   // Native replay (ordinary collection, and so a launch's) reads this checkout's bench compiler.
   if ((options.detach || options.collect && options.unusedBootstrapKnownHosts === undefined && !options.r21MeasuredCheckout) && !compiler()) missing.push(localCompilerMissing);
-  let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery, mode;
+  let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery;
   if (options.group !== undefined) {
     const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = requireStagedFleet(JSON.parse(bytes));
     assert.equal(fleet.round, options.round); assert.equal(fleet.commit, head); assert.equal(fleet.sshKey, options.sshKey);
