@@ -7295,7 +7295,18 @@ rules something out.
     0.0% and -0.6% at the median with bounds of +4.4% and +2.1%, its instructions by +0.4% and +0.1%
     with bounds of +1.5% and +0.3%. A `Public` page asked for with a session cookie, which is never
     kept, took 2.1% more instructions at the median of 8 rounds, bound 3.4%, and its cycles were not
-    told from main's, -2.6% with a bound of +7.2%. 3,000 kept pages of 4,488 bytes with their zstd
+    told from main's, -2.6% with a bound of +7.2%. Reading the rest of such a request's headers in
+    one pass, where each had been looked up by its name, and copying the kept page's head with room
+    for what the stages add (`a383ca3d8` against `13b1252a9`, the change and main with the
+    catalog benchmark's page marked `Public`, by callgrind's count for 1,300 requests less its
+    count for 300): a kept page asked for with the fifteen headers a browser sends ran 44,221
+    instructions against 45,170 and missed the simulated first-level instruction cache 1,878 times
+    against 1,925, one asked for with curl's three ran 28,221 against 28,943, a page made and kept
+    95,178 against 95,791, a page asked for with a session cookie 81,011 against 81,006, a
+    navigation inside the app 79,970 against 79,976 and a data client's request 82,173 against
+    82,324; under load a kept page's cycles changed by -0.6% at the median of 140 pairs of turns,
+    with a one-sided 95% bound of +0.4%, and its user cycles by -1.2% with a bound of -0.3%. 3,000
+    kept pages of 4,488 bytes with their zstd
     form took 7,260 bytes each of resident memory with glibc's allocator and 8,107 with jemalloc;
     under a 32 MiB bound and three passes over 40,000 URLs the process settled 57.8 MiB above where
     it began with glibc's and 35.2 MiB above with jemalloc, so what an allocator holds beyond the
@@ -7328,13 +7339,19 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; or the
     connection speaks HTTP/2, where a request's target carries its authority.
 
-    Last checked: 2026-11-20, the rounds above with rustc 1.99.1, the app on one CPU under `wrk`
-    with 64 connections on three others, 500 URLs asked for unevenly, the app's cycles and
-    instructions counted by `perf stat` and divided by the requests answered. The bodies of the two
-    builds' answers were identical in each coding, and the headers differed by the kept page's `Age`
-    and, where compressed, the tag. The commits after `f7e53a594` change which writes count and
-    nothing a page's `GET` runs. `tests/kept_memory.rs` at this change, with all features and with
-    none.
+    Last checked: 2026-11-21, the pass over the headers with rustc 1.100.0: the counts under
+    callgrind, and the cycles from the two builds started once on one CPU, its core's other thread
+    left idle, and loaded in turn for three seconds each by `wrk` with 64 connections on the two
+    CPUs of another core, 500 URLs asked for unevenly and uncompressed, the order of the two
+    turned about from each pair to the next, the app's cycles counted by `perf stat` and divided
+    by the requests answered. 2026-11-20, the other rounds above with rustc 1.99.1, the app on one
+    CPU under `wrk` with 64 connections on three others, one of them the other thread of the
+    app's core, 500 URLs asked for unevenly, the app's cycles and instructions counted by
+    `perf stat` and divided by the requests answered. The bodies of the two builds' answers were
+    identical in each coding, and the headers differed by the kept page's `Age` and, where
+    compressed, the tag. The commits after `f7e53a594` up to `24e61b4b0` change which writes count
+    and nothing a page's `GET` runs. `tests/kept_memory.rs` at this change, with all features and
+    with none.
 
 ## Rules
 
