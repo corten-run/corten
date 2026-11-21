@@ -957,8 +957,8 @@ impl<M: Middleware> App<M> {
     /// kept page's key does not cover.
     ///
     /// Past the bound, a page not read since the last time room was made goes first, and one
-    /// larger than an eighth of the bound is not kept. A write to a page's path drops what is
-    /// kept there unless it is refused (a `4xx`), and so does one that redirects to it; a
+    /// larger than an eighth of the bound is not kept. A write to a page's path that a handler
+    /// there takes drops what is kept there, and so does one that redirects to it; a
     /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
     /// under `corten dev`. The bytes counted are each page's key, its headers, its body and each
     /// compressed form made of it.

@@ -17,6 +17,9 @@ use tokio::{
 /// The bound the app is given, and more pages than it has room for.
 const BOUND: usize = 4 << 20;
 const PAGES: usize = 3000;
+/// The counts of writes: 65,536 of four bytes, made once with the first page asked for and held
+/// beside the bound.
+const COUNTS: usize = 4 << 16;
 
 #[cfg(feature = "compress")]
 const CODINGS: &[&str] = &["identity", "zstd", "br", "gzip"];
@@ -125,11 +128,14 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
         for (asked, coding) in CODINGS.iter().enumerate() {
             let given = get(&mut stream, &mut read, &format!("/kept?n={n}"), coding).await;
             assert_eq!(given, asked > 0, "page {n} in {coding}: made once, then given in each coding");
+            // The counts are made here, inside what is counted, or taking them off below is wrong.
+            if (n, asked) == (0, 0) {
+                let first = LIVE.load(Ordering::Relaxed).saturating_sub(before);
+                assert!(first >= COUNTS, "the first page asked for took {first} bytes: the counts were made before it");
+            }
         }
     }
-    // Less the counts of writes: 65,536 of four bytes, made once with the first page asked for
-    // and held beside the bound.
-    let held = LIVE.load(Ordering::Relaxed).saturating_sub(before + (4 << 16));
+    let held = LIVE.load(Ordering::Relaxed).saturating_sub(before + COUNTS);
     assert!(get(&mut stream, &mut read, &format!("/kept?n={}", PAGES - 1), "identity").await, "the newest is kept");
     assert!(!get(&mut stream, &mut read, "/kept?n=0", "identity").await, "and the oldest went to make room");
     server.abort();

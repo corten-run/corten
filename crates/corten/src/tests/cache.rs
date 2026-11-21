@@ -1171,12 +1171,20 @@ async fn a_kept_page_has_the_tag_and_the_coded_bytes_of_the_handler_s_answer() {
     assert_eq!((runs.count(), each.count()), (1, 14), "one render for all of them");
 }
 
-/// A write that goes through drops what is kept at its path, whatever the query, and at the place
-/// it redirects to; one that fails changes nothing.
+/// A write a handler met drops what is kept at its path, whatever the query and whatever it
+/// answered, and one that goes through drops the place it redirects to; one the router turned
+/// away, for a method no handler at the path has, changes nothing.
 #[tokio::test]
 async fn a_write_drops_the_pages_kept_at_its_path() {
-    let runs = Runs::default();
-    let router = App::new(Routes::from(kept_routes(&runs))).router();
+    let (runs, read) = (Runs::default(), Runs::default());
+    let counted = read.clone();
+    // A page with no write of its own, in an app that has a `POST` elsewhere.
+    let only_read = move |req: Req| {
+        counted.ran();
+        async move { Public::new(Duration::from_secs(60), req.test_page_for("Read", html! { <p>"read"</p> })) }
+    };
+    let routes = kept_routes(&runs).route("/read", crate::route::get(only_read).0);
+    let router = App::new(Routes::from(routes)).router();
     let same_origin = [("sec-fetch-site", "same-origin")];
     let reads = |router: Router| async move {
         fetch(&router, "GET", "/", &[]).await;
@@ -1184,34 +1192,44 @@ async fn a_write_drops_the_pages_kept_at_its_path() {
     };
     reads(router.clone()).await;
     assert_eq!(runs.count(), 1);
+    // The router's own answers: the route has no `POST` (405), and no route has a `DELETE` (501).
+    fetch(&router, "GET", "/read", &[]).await;
+    let (status, _, _) = fetch(&router, "POST", "/read", &same_origin).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    let (status, _, _) = fetch(&router, "DELETE", "/", &same_origin).await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert!(fetch(&router, "GET", "/read", &[]).await.1.contains_key(header::AGE));
+    reads(router.clone()).await;
+    assert_eq!((runs.count(), read.count()), (1, 1), "a write no handler met");
     let (status, _, _) = fetch(&router, "PUT", "/", &same_origin).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     reads(router.clone()).await;
-    assert_eq!(runs.count(), 1, "a write that failed");
+    assert_eq!(runs.count(), 2, "a write its handler refused, which may have saved first");
     let (status, _, _) = fetch(&router, "POST", "/", &same_origin).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     reads(router.clone()).await;
-    assert_eq!(runs.count(), 2, "a write to the page's URL");
+    assert_eq!(runs.count(), 3, "a write to the page's URL");
     let (status, headers, _) = fetch(&router, "POST", "/saved", &same_origin).await;
     assert_eq!((status, headers[header::LOCATION].to_str().unwrap()), (StatusCode::SEE_OTHER, "/"));
     reads(router.clone()).await;
-    assert_eq!(runs.count(), 3, "a write that redirects to it");
+    assert_eq!(runs.count(), 4, "a write that redirects to it");
     // As the runtime's form submit is answered: the place is in `corten-location`.
     let (_, headers, _) = fetch(&router, "POST", "/saved", &[("sec-fetch-site", "same-origin"), ("corten", "action")]).await;
     assert_eq!(headers["corten-location"], "/", "{headers:?}");
     reads(router.clone()).await;
-    assert_eq!(runs.count(), 4);
+    assert_eq!(runs.count(), 5);
     // Every page at the path: a named post is `?do=name` there, and the page has other queries.
     fetch(&router, "GET", "/?page=2", &[]).await;
-    assert_eq!(runs.count(), 5);
+    assert_eq!(runs.count(), 6);
     let (status, _, _) = fetch(&router, "POST", "/?do=save", &same_origin).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     fetch(&router, "GET", "/?page=2", &[]).await;
     reads(router.clone()).await;
-    assert_eq!(runs.count(), 7, "the page and its other query, both made again");
+    assert_eq!(runs.count(), 8, "the page and its other query, both made again");
+    assert_eq!(read.count(), 1, "and no other path's page");
 }
 
-/// A write counts for its path however it ends, unless its answer says it was refused: one that
+/// A write counts for its path however it ends: one that
 /// failed after it may have written, one whose client left, and work that outlived its request.
 /// The path is the same page's however it is escaped.
 #[tokio::test]

@@ -600,6 +600,17 @@ impl Signal {
         self.0.write.store(count + 1, Ordering::Relaxed);
     }
 
+    /// The router turned the request away: the route at its path has no handler for its method,
+    /// so none ran and it wrote nothing a kept page shows.
+    pub(crate) fn turned_away(&self) {
+        self.0.write.store(0, Ordering::Relaxed);
+    }
+
+    /// True for a write (a request [`Signal::writes`] was told of) the router did not turn away.
+    pub(crate) fn may_write(&self) -> bool {
+        self.0.write.load(Ordering::Relaxed) != 0
+    }
+
     /// Work that outlived the request's handler has ended ([`Signal::finish`]): what it wrote
     /// after the request was answered or dropped counts as a write to the request's path too.
     fn wrote(&self) {
