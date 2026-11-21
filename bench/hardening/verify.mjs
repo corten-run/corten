@@ -16,7 +16,7 @@ const read = (file) => JSON.parse(readFileSync(file, "utf8"));
 
 // Preflight may finish with a real HTTP error before parity or timing starts.
 // Replay only the named control, never count this cell as observed or complete.
-function failedControl(folder, cell, paths) {
+export function verifyFailedControl(folder, cell, paths, summary, receipts) {
   if (cell.status !== "invalid" || cell.failureKind !== "target-functional-failure") return false;
   const edge = cell.failedStage === "edge-native-controls";
   if (!edge && cell.failedStage !== "native-controls") return false;
@@ -31,13 +31,39 @@ function failedControl(folder, cell, paths) {
   assert.deepEqual(assessment, edge ? cell.edgeAssessment : cell.nativeAssessment);
   assert.ok(assessment.targetFunctionalFailures?.length || assessment.sourceControl === "target-functional-failure",
     "failed control not corroborated by native responses");
-  return true;
+  const base = edge ? "https://localhost:8080" : "http://127.0.0.1:8080";
+  const page = base + "/marketplace/en-US/item_1", record = base + "/api/marketplace/item_1";
+  let bound = true;
+  const request = (row, url, method = "GET", host = new URL(url).host) => {
+    for (const [key, expected] of Object.entries({ url, method, host })) {
+      if (!Object.hasOwn(row, key)) bound = false;
+      else assert.equal(row[key], expected, `preflight request ${key} differs from its deployment`);
+    }
+  };
+  request(raw.host.allowed, page); request(raw.host.denied, page, "GET", "unrecognized.invalid");
+  request(raw.liveness.negative, base + "/__hardening_not_a_health_endpoint");
+  if (raw.liveness.path) request(raw.liveness.baseline, base + raw.liveness.path);
+  for (const { step, response } of raw.api?.responses ?? []) {
+    request(response, step === "live-503" ? base + raw.liveness.path : step.includes("page") ? page : record);
+  }
+  for (const { step, response } of raw.api?.controllers ?? [])
+    request(response, `http://${summary.runId}-cell-upstream:8080/__marketplace/control`, step.startsWith("count-") || step === "verify-reset" ? "GET" : "POST");
+  for (const row of qualification.probes.liveness) request(row, base + row.path);
+  if (!receipts || !summary.builds?.[cell.app]) return false;
+  try {
+    const list = verifyOwnedReceipts(receipts, summary, folder, cell).get(cell.key);
+    const { stdout } = list.find(r => r.intent.step === (edge ? "edge-controls" : "native-controls")).start;
+    if (!stdout.trim()) return false;
+    assert.deepEqual(JSON.parse(stdout), assessment, "owned control output differs from replay");
+  } catch (error) { if (error.code === "ENOENT") return false; throw error; }
+  return bound;
 }
 
 export function verifySavedProof(folder, summary, tree = savedFiles(folder)) {
   const proof = { schema: "native-hardening-saved-proof/v1", resources: "blocked", sources: "blocked", cleanupComplete: false, blockers: [] };
   if (summary.savedProofVersion === undefined || summary.savedProofVersion === 1) { proof.blockers.push("historical-capture-missing-execution-proof"); return proof; }
   assert.equal(summary.savedProofVersion, savedProofVersion);
+  let receipts;
   try {
     assert.deepEqual(read(join(folder, "run-manifest.json")), tree.filter((f) => f.path !== "run-manifest.json"), "run-wide saved byte closure differs");
     try {
@@ -53,7 +79,7 @@ export function verifySavedProof(folder, summary, tree = savedFiles(folder)) {
     assert.ok(Array.isArray(inventory.files));
     assert.deepEqual(inventory.files, inventory.files.map((_, i) => `${String(i).padStart(8, "0")}.json`));
     assert.deepEqual(readdirSync(join(folder, "owned-containers")).sort(), inventory.files, "unaccounted native launch receipts");
-    const receipts = inventory.files.map((file) => read(join(folder, "owned-containers", file)));
+    receipts = inventory.files.map((file) => read(join(folder, "owned-containers", file)));
     const usedNetworkIds = new Set();
     for (const cell of summary.cells.filter((c) => c.status === "observed")) {
       const { network } = read(join(folder, cell.key, "deployment.json"));
@@ -90,6 +116,11 @@ export function verifySavedProof(folder, summary, tree = savedFiles(folder)) {
     if (error.code !== "ENOENT") throw error;
     proof.blockers.push("saved-execution-proof-missing");
   }
+  const paths = new Set(tree.map(f => f.path));
+  for (const cell of summary.cells) {
+    if (verifyFailedControl(folder, cell, paths, summary, proof.sources === "verified" ? receipts : undefined))
+      (proof.failedControls ??= []).push({ key: cell.key, stage: cell.failedStage });
+  }
   assert.deepEqual(savedFiles(folder), tree, "saved execution bytes changed during replay");
   return proof;
 }
@@ -117,18 +148,14 @@ export function verify(folder) {
   }
   assert.deepEqual(summary.nativeGroup, nativeGroup(summary.cells));
   let observed = 0;
-  const dependencyRecovery = [], boundedRequests = [], qualifications = [], failedControls = [];
-  const paths = new Set(tree.map(f => f.path));
+  const dependencyRecovery = [], boundedRequests = [], qualifications = [];
   for (const cell of summary.cells) {
     const recovery = cell.phase === "dependency-recovery";
     for (const field of ["targetOutcome", "defense", "recovery", "sourceObservation",
       ...(recovery ? ["boundedRequests", "boundedTerminalHealthy"] : ["dependencyRecovery", "dependencyTerminalHealthy"])])
       assert.ok(!Object.hasOwn(cell, field), "legacy or mismatched phase outcome in native v3 cell");
     assert.ok(["observed", "invalid", "not-run"].includes(cell.status));
-    if (cell.status !== "observed") {
-      if (failedControl(folder, cell, paths)) failedControls.push({ key: cell.key, stage: cell.failedStage });
-      continue;
-    }
+    if (cell.status !== "observed") continue;
     const out = join(folder, cell.key), manifest = read(join(out, "manifest.json")); verifyArtifacts(out, manifest);
     const settings = read(join(out, "settings.json")), deployment = read(join(out, "deployment.json"));
     const qualification = validateBoundedQualification(read(join(out, "qualification.json"))); assert.deepEqual(qualification.missing, cell.nativeMissingFeatures);
@@ -207,6 +234,6 @@ export function verify(folder) {
   const proof = verifySavedProof(folder, summary, tree);
   assert.deepEqual(savedFiles(folder), tree, "saved native bytes changed during replay");
   return { schema, observed, groupReady: ready, notRun: summary.cells.filter((c) => c.status === "not-run").length, proof,
-    dependencyRecovery, boundedRequests, qualifications, failedControls };
+    dependencyRecovery, boundedRequests, qualifications };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) console.log(JSON.stringify(verify(resolve(process.argv[2]))));

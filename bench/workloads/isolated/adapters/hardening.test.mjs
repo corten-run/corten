@@ -148,6 +148,17 @@ test("an invalid cell cannot be made a target failure by a summary label", async
   assert.deepEqual(result.comparisonEligibleApps, []);
 });
 
+test("a launch-bound preflight failure fails the app without completing timing", async () => {
+  const cell = summary.cells[0]; setNonObserved(cell, "invalid");
+  cell.failedStage = "native-controls"; cell.failureKind = "target-functional-failure";
+  proof.failedControls = [{ key: cell.key, stage: cell.failedStage }];
+  const result = await inspect();
+  assert.equal(result.status, "blocked"); assert.equal(result.attemptComplete, false);
+  assert.deepEqual(result.outcomes[0], { app: cell.app, outcome: "failed" });
+  proof.sources = "blocked";
+  assert.equal((await inspect()).status, "invalid");
+});
+
 for (const version of [1, 2]) test(`native aggregate v${version} cannot qualify as v3`, async () => {
   summary.schema = `native-hardening-run/v${version}`;
   const historical = await inspect();

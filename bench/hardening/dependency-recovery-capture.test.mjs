@@ -310,14 +310,14 @@ test("real offline replay distinguishes an undiscovered endpoint from a terminal
 
   // No timing took place. Only the saved preflight responses establish a
   // target failure; retaining or inventing a failure label is insufficient.
-  const partial = matrix(), stopped = partial.find(c => c.app === cell.app && c.phase === "request-limit" && c.source === "api" && c.mode === "direct");
+  const partial = matrix(), stopped = partial.find(c => c.app === cell.app && c.phase === "request-limit" && c.source === "api" && c.mode === "deployed-edge");
   const dir = join(folder, stopped.key); mkdirSync(dir, { recursive: true });
   const persist = (path, value) => writeFileSync(join(dir, path), JSON.stringify(value));
   const q = apiQualification(false), controls = apiControls(false);
   controls.host.allowed = response(503);
-  Object.assign(stopped, { status: "invalid", failedStage: "native-controls", failureKind: "target-functional-failure",
-    apparatusValid: false, nativeAssessment: assessNative(controls, q) });
-  persist("qualification.json", q); persist("native-controls.json", controls);
+  Object.assign(stopped, { status: "invalid", failedStage: "edge-native-controls", failureKind: "target-functional-failure",
+    apparatusValid: false, edgeAssessment: assessNative(controls, q, "deployed-edge") });
+  persist("edge-qualification.json", q); persist("edge-native-controls.json", controls);
   const failure = { kind: stopped.failureKind, stage: stopped.failedStage };
   persist("failure.json", failure);
   const summary = JSON.parse(readFileSync(join(folder, "summary.json")));
@@ -327,7 +327,12 @@ test("real offline replay distinguishes an undiscovered endpoint from a terminal
   seal();
   const result = await inspectSaved(binding, folder);
   assert.equal(result.status, "blocked"); assert.equal(result.attemptComplete, false);
-  assert.equal(result.outcomes.find(o => o.app === stopped.app).outcome, "failed");
-  controls.host.allowed = response(200); persist("native-controls.json", controls); seal();
+  assert.equal(result.outcomes.find(o => o.app === stopped.app).outcome, "not-run", "unbound failure stays diagnostic");
+  for (const wrong of [{ url: "http://127.0.0.1:8080/marketplace/en-US/item_1" }, { method: "POST" }, { host: "127.0.0.1:8080" }]) {
+    controls.host.allowed = { ...response(503), url: "https://localhost:8080/marketplace/en-US/item_1", method: "GET", host: "localhost:8080", ...wrong };
+    persist("edge-native-controls.json", controls); seal();
+    assert.equal((await inspectSaved(binding, folder)).status, "invalid");
+  }
+  controls.host.allowed = response(200); persist("edge-native-controls.json", controls); seal();
   assert.equal((await inspectSaved(binding, folder)).status, "invalid");
 });

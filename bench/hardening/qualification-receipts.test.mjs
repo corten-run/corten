@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { boundedQualification, validateBoundedQualification } from "./qualification.mjs";
+import { livePaths } from "../fullstack/conformance.mjs";
 
 // Run the actual CLI with scripted HTTP responses and capture its output write.
 // Neither the network nor the container's /results directory is used.
@@ -11,6 +12,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
+import https from "node:https";
 import { syncBuiltinESMExports } from "node:module";
 const secret = "synthetic-private-value";
 const page = "<form method='post'><input type='hidden' name='_csrf' value='" + secret + "'></form>";
@@ -26,11 +28,17 @@ globalThis.fetch = async (url, options) => {
 process.on("exit", () => {
   if (scenario === "upstream-read-reset" && controls !== 2) process.exitCode = 2;
 });
+const originalRead = fs.readFileSync;
+fs.readFileSync = (path, ...args) => path === "/results/cert/cert.pem" ? "fixture CA" : originalRead(path, ...args);
 fs.writeFileSync = (path, contents) => {
-  if (path !== "/results/qualification.json") throw new Error("unexpected write");
+  if (path !== output) throw new Error("unexpected write");
   process.stdout.write(contents);
 };
-http.request = (options, onResponse) => {
+(edge ? https : http).request = (options, onResponse) => {
+  if (options.path === "/health/live") {
+    assert.equal(options.method, "GET"); assert.equal(options.headers.host, edge ? "localhost:8080" : "127.0.0.1:8080");
+    assert.equal(options.servername, edge ? "localhost" : undefined);
+  }
   const req = new EventEmitter();
   req.destroy = (error) => { req.emit("error", error); req.emit("close"); };
   req.end = () => queueMicrotask(() => {
@@ -41,6 +49,7 @@ http.request = (options, onResponse) => {
     }
     const res = Object.assign(new EventEmitter(), {
       statusCode: controls === 1 ? 503 : crossSite || scenario === "own-post-denied" && options.headers["sec-fetch-site"] === "same-origin" ? 403
+        : scenario === "discovery-503" && ${JSON.stringify(livePaths)}.includes(options.path) ? options.path === "/health/live" ? 503 : 404
         : options.path === "/health/live" && scenario === "liveness" ? 404 : 200,
       complete: !(options.path === "/healthz" && scenario === "liveness"),
       headers: { "set-cookie": ["session=" + secret] },
@@ -54,14 +63,25 @@ http.request = (options, onResponse) => {
 };
 syncBuiltinESMExports();`;
 
-function run(scenario, source = "fixture") {
-  const preload = "data:text/javascript;base64," + Buffer.from(`const scenario = ${JSON.stringify(scenario)};\n${fake}`).toString("base64");
+function run(scenario, source = "fixture", edge = false) {
+  const output = `/results/${edge ? "edge-" : ""}qualification.json`;
+  const preload = "data:text/javascript;base64," + Buffer.from(`const scenario = ${JSON.stringify(scenario)}, edge = ${edge}, output = ${JSON.stringify(output)};\n${fake}`).toString("base64");
   const script = fileURLToPath(new URL("./qualification.mjs", import.meta.url));
-  const child = spawnSync(process.execPath, ["--import", preload, script, source, "direct",
-    "http://hardening-000000000000-cell-upstream:8080", "/results/qualification.json"], { encoding: "utf8", timeout: 10000 });
+  const child = spawnSync(process.execPath, ["--import", preload, script, source, edge ? "deployed-edge" : "direct",
+    "http://hardening-000000000000-cell-upstream:8080", output], { encoding: "utf8", timeout: 10000 });
   assert.ifError(child.error);
   return { ...child, receipt: child.stdout ? JSON.parse(child.stdout) : null };
 }
+
+for (const edge of [false, true]) test(`qualification records the discovery request on the ${edge ? "TLS edge" : "direct app"}`, () => {
+  const { status, stderr, receipt } = run("discovery-503", "fixture", edge);
+  assert.equal(status, 0, stderr);
+  const url = new URL("/health/live", edge ? "https://localhost:8080" : "http://127.0.0.1:8080");
+  const row = receipt.probes.liveness[0];
+  assert.equal(receipt.probes.live, undefined);
+  assert.deepEqual([row.status, row.url, row.method, row.host], [503, url.href, "GET", url.host]);
+  assert.equal(validateBoundedQualification(receipt), receipt);
+});
 
 test("qualification counts a complete HTTP 403 as a cross-site refusal", () => {
   const { status, stderr, receipt } = run("refusal");

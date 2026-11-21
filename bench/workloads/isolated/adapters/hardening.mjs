@@ -200,7 +200,8 @@ export async function inspectSaved(binding, folder) {
     const bounded = replayedCells(observed.filter((c) => c.phase !== recoveryPhase), native.boundedRequests);
     const qualifications = replayedCells(observed, native.qualifications), dispositions = new Map();
     const invalid = summary.cells.filter(c => c.status === "invalid" && c.failureKind === "target-functional-failure");
-    for (const [key, control] of replayedCells(invalid, native.failedControls)) {
+    for (const [key, control] of replayedCells(invalid, proof?.failedControls)) {
+      same(proof.sources, "verified");
       same(control.stage, invalid.find(c => c.key === key).failedStage);
       dispositions.set(key, "failed");
     }

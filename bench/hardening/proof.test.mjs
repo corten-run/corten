@@ -9,7 +9,11 @@ import { budgets } from "./plan.mjs";
 import { qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { committedInputs, sourceGit, savedFiles, snapshotDependencies, verifyOwnedReceipts, verifyRunInputs, readyScript, buildNativeImage, digest, savedProofVersion, verifyNativeLimits, phaseInputs } from "./evidence.mjs";
 import { ownedCleanupObservation, verifyOwnedCleanup, ownedContainerRecorder } from "./lifecycle.mjs";
-import { verifySavedProof } from "./verify.mjs";
+import { verifyFailedControl, verifySavedProof } from "./verify.mjs";
+import { assessNative } from "./native.mjs";
+import { livePaths } from "../fullstack/conformance.mjs";
+import { boundedQualification } from "./qualification.mjs";
+import { qualificationProbes } from "../marketplace/qualification-fixture.mjs";
 import { nativeBuildContext } from "../mixed-production/build-context.mjs";
 
 // Docker-shaped replay vectors test the apparatus, not a native benchmark run.
@@ -23,23 +27,28 @@ const acknowledgeCreation = (r) => {
     "--label", `run.corten.hardening=${runId}`, "--label", "agent.owner=codex", "--label", `agent.task=${runId}`, ...r.intent.args.slice(1)];
 };
 
-function fixture() {
-  const cell = { key: "corten/fixture/direct/request-limit", app: "corten", source: "fixture", phase: "request-limit", mode: "direct", status: "observed" };
+function fixture(mode = "direct") {
+  const cell = { key: `corten/fixture/${mode}/request-limit`, app: "corten", source: "fixture", phase: "request-limit", mode, status: "observed" };
   const summary = { runId, startedAt: stamp, finishedAt: stamp, originalFolder: root, budget, cleanupFailures: [], cells: [cell],
     tools: { node: image(1), checker: image(2), cert: image(3), edge: image(4) }, builds: { corten: { imageId: image(5).Id, image: image(5) } } };
   const node = "/repo/bench/hardening/", upstream = `http://${runId}-cell-upstream:8080`, base = "http://127.0.0.1:8080";
   const commands = [
     ["upstream", ["node", "/repo/bench/marketplace/upstream.mjs"], "upstream"],
-    ["application", ["/server"], "applicationDirect"], ["ready", ["node", "--input-type=module", "-e", readyScript], "apparatus"],
+    ["application", ["/server"], mode === "direct" ? "applicationDirect" : "applicationEdge"], ["ready", ["node", "--input-type=module", "-e", readyScript], "apparatus"],
     ["qualification", ["node", node + "qualification.mjs", "fixture", "direct", upstream, "/results/qualification.json"], "qualification"],
     ["native-controls", ["node", node + "native.mjs", base, "fixture", upstream, "/results/qualification.json", "/results/native-controls.json"], "qualification"],
     ["parity", ["node", node + "parity.mjs", base, "fixture", upstream, "/results/parity.json"], "qualification"],
     ["probe", ["node", node + "bounded-requests-probe.mjs", "/results/probe.json", "/results/raw.jsonl"], "apparatus"],
     ...["terminal-clock", "terminal-clock", "cleanup-clock"].map((step) => [step, ["node", node + "clock.mjs"], "apparatus"]),
+    ...(mode === "direct" ? [] : [
+      ["proxy", ["/server"], "proxy"],
+      ["edge-qualification", ["node", node + "qualification.mjs", "fixture", mode, upstream, "/results/edge-qualification.json"], "qualification"],
+      ["edge-controls", ["node", node + "native.mjs", "https://localhost:8080", "fixture", upstream, "/results/edge-qualification.json", "/results/edge-native-controls.json", mode], "qualification"],
+    ]),
   ];
   const receipts = commands.map(([step, Cmd, role], index) => {
-    const tool = role === "qualification" ? "checker" : "node", limit = budget.resources[role];
-    const suffix = step === "application" ? "app" : step, name = step === "ready" ? `${runId}-ready` : `${runId}-cell-${suffix}`;
+    const tool = role === "qualification" ? "checker" : step === "proxy" ? "edge" : "node", limit = budget.resources[role];
+    const suffix = step === "application" ? "app" : step === "proxy" ? "edge" : step, name = step === "ready" ? `${runId}-ready` : `${runId}-cell-${suffix}`;
     const mounts = [], mount = (Destination, Source, RW = false) => mounts.push({ Destination, Source, RW });
     if (["upstream", "probe", "terminal-clock", "cleanup-clock"].includes(step)) mount("/repo", join(root, "corten-build-context"));
     if (role === "qualification") {
@@ -48,25 +57,29 @@ function fixture() {
     }
     if (["application", "upstream"].includes(step) || role === "qualification") mount("/fixtures", join(root, "fixtures"));
     if (step === "probe") mount("/results", join(root, cell.key), true);
+    if (step === "proxy") {
+      mount("/etc/nginx/nginx.conf", join(root, cell.key, "nginx.conf")); mount("/cert", join(root, cell.key, "cert"));
+    }
     const Env = step === "application" ? Object.entries({ MARKETPLACE_SOURCE: "fixture", MARKETPLACE_FIXTURE_PATH: "/fixtures/marketplace.json", API_BASE: upstream,
       PORT: "8080", HOSTS: "fsw-target,localhost,127.0.0.1", PROFILE: qualificationSettings.nativeProfile, MAX_CONNECTIONS: String(qualificationSettings.maxConnections) }).map(([k, v]) => `${k}=${v}`)
-      : role === "qualification" ? ["PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"] : [];
+      : role === "qualification" ? ["PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
+        ...(step.startsWith("edge-") ? ["NODE_EXTRA_CA_CERTS=/results/cert/cert.pem", "BENCH_EDGE_CERT=/results/cert/cert.pem"] : [])] : [];
     const created = { Id: id(index + 20), Name: "/" + name, Image: step === "application" ? summary.builds.corten.imageId : summary.tools[tool].Id,
       RestartCount: 0, Config: { Cmd, Entrypoint: null, Env, User: "", WorkingDir: "", Labels: { "run.corten.hardening": runId, "agent.owner": "codex", "agent.task": runId } }, Mounts: mounts,
       HostConfig: { NanoCpus: limit.cpu * 1e9, Memory: limit.memory, MemorySwap: limit.memory, PidsLimit: 512, Ulimits: [{ Name: "nofile", Hard: 65536, Soft: 65536 }],
         ShmSize: role === "qualification" ? 1024 ** 3 : 64 * 1024 ** 2,
-        RestartPolicy: { Name: "no" }, Privileged: false, PortBindings: {}, NetworkMode: ["upstream", "application"].includes(step) ? runId + "-net"
-          : ["terminal-clock", "cleanup-clock"].includes(step) ? "none" : `container:${id(21)}`,
+        RestartPolicy: { Name: "no" }, Privileged: false, PortBindings: {}, NetworkMode: ["upstream", "application", "proxy"].includes(step) ? runId + "-net"
+          : ["terminal-clock", "cleanup-clock"].includes(step) ? "none" : `container:${id(20 + commands.findIndex(([s]) => s === (step.startsWith("edge-") ? "proxy" : "application")))}`,
         PidMode: "", CgroupnsMode: "private" },
       State: { Running: false, ExitCode: 0, OOMKilled: false, Error: "", Dead: false, Restarting: false, StartedAt: stamp, FinishedAt: stamp } };
     const command = (args, stdout) => ({ args, stdout, exitCode: 0, timedOut: false, interrupted: false, startedAt: stamp, finishedAt: stamp });
-    const operation = ["upstream", "application"].includes(step) ? "run" : "create";
+    const operation = ["upstream", "application", "proxy"].includes(step) ? "run" : "create";
     const args = [operation, ...(operation === "run" ? ["-d"] : []), "--network", created.HostConfig.NetworkMode,
       ...(step === "application" ? ["--network-alias", "fsw-target"] : []),
       "--cpus", String(limit.cpu), "--memory", String(limit.memory), "--memory-swap", String(limit.memory), "--pids-limit", "512", "--ulimit", "nofile=65536:65536",
       ...(role === "qualification" ? ["--shm-size", "1g"] : []),
       ...mounts.flatMap((m) => ["-v", `${m.Source}:${m.Destination}${m.RW ? "" : ":ro"}`]), ...Env.flatMap((e) => ["-e", e]), created.Image,
-      ...(step === "application" ? [] : Cmd)];
+      ...(operation === "run" && step !== "upstream" ? [] : Cmd)];
     const r = { schema: "native-hardening-container/v2", index, intent: { cell: cell.key, name, step, role, tool, operation, args },
       created, terminal: structuredClone(created), removed: true, removedAt: stamp,
       creation: command(["create"], created.Id), removal: command(["rm", "-f", "-v", created.Id], created.Id),
@@ -81,6 +94,61 @@ test("complete actual-configuration vectors replay every charged native step", (
   // A target exit remains compatible with complete apparatus receipts.
   receipts[1].terminal.State.ExitCode = 137; receipts[1].terminal.State.OOMKilled = true;
   assert.doesNotThrow(() => verifyOwnedReceipts(receipts, summary));
+});
+
+for (const mode of ["direct", "deployed-edge"]) for (const discovery of [false, true])
+test(`ordinary ${mode} preflight failure (${discovery ? "discovery" : "allowed host"}) requires the matching owned launch`, () => {
+  const { receipts, summary } = fixture(mode), cell = summary.cells[0], edge = mode === "deployed-edge";
+  const probes = qualificationProbes(), keys = ["page", "json", "pageBr", "jsonBr", "jsonGzip", "ownPost", "crossSite",
+    "page404", "json404", "json405", "head", "badHost", "live", "liveness"];
+  const base = edge ? "https://localhost:8080" : "http://127.0.0.1:8080", prefix = edge ? "edge-" : "";
+  const p = Object.fromEntries(keys.map(k => [k, probes[k]]));
+  delete p.live;
+  p.liveness = livePaths.map((path, i) => ({ ...probes.live, path, status: discovery && i === 0 ? 503 : 404, url: base + path, method: "GET", host: new URL(base).host }));
+  const q = boundedQualification(p, cell.source);
+  const dir = join(root, "preflight"), out = join(dir, cell.key); mkdirSync(out, { recursive: true });
+  const qualification = join(out, prefix + "qualification.json"), capture = join(out, prefix + "native-controls.json");
+  writeFileSync(qualification, JSON.stringify(q));
+  // Run the actual control CLI (including stdout and its separate raw output);
+  // only the fixture read and HTTP transport are replaced.
+  const preload = `import fs from "node:fs"; import http from "node:http"; import https from "node:https";
+    import { EventEmitter } from "node:events"; import { syncBuiltinESMExports } from "node:module";
+    const read = fs.readFileSync; fs.readFileSync = (p, ...args) => p === "/fixtures/marketplace.json" ? '{"item_1":{}}' : read(p, ...args);
+    http.request = https.request = (url, options, receive) => {
+      const req = new EventEmitter();
+      req.end = () => { const res = Object.assign(new EventEmitter(), { headers: {}, statusCode: options.headers.host === "unrecognized.invalid" ? 403
+        : ${!discovery} && url.pathname === "/marketplace/en-US/item_1" ? 503 : 200 });
+        receive(res); res.emit("end"); req.emit("close"); }; return req;
+    }; syncBuiltinESMExports();`;
+  const stdout = execFileSync(process.execPath, ["--import", "data:text/javascript;base64," + Buffer.from(preload).toString("base64"),
+    fileURLToPath(new URL("native.mjs", import.meta.url)), base, cell.source, `http://${runId}-cell-upstream:8080`, qualification, capture, mode],
+    { cwd: out, encoding: "utf8" }).trim();
+  const raw = JSON.parse(readFileSync(capture)), assessment = assessNative(raw, q, mode);
+  assert.deepEqual(assessment.targetFunctionalFailures, [discovery ? { control: "liveness-discovery", path: livePaths[0], status: 503 }
+    : { control: "allowed-host", status: 503 }]);
+  Object.assign(cell, { status: "invalid", failedStage: prefix + "native-controls", failureKind: "target-functional-failure",
+    [edge ? "edgeAssessment" : "nativeAssessment"]: assessment });
+  writeFileSync(join(out, "failure.json"), JSON.stringify({ stage: cell.failedStage, kind: cell.failureKind }));
+  const paths = new Set(savedFiles(dir).map(f => f.path)), launches = edge ? receipts : receipts.slice(0, 5), control = launches.at(-1);
+  control.start.stdout = stdout;
+  const replay = (list) => verifyFailedControl(dir, cell, paths, summary, list);
+  assert.equal(replay(launches), true);
+  assert.equal(replay([]), false);
+  assert.equal(replay(launches.slice(0, -1)), false);
+  delete raw.host.allowed.host; writeFileSync(capture, JSON.stringify(raw));
+  assert.equal(replay(launches), false);
+  raw.host.allowed.host = new URL(base).host; writeFileSync(capture, JSON.stringify(raw));
+  const row = p.liveness[0], url = row.url;
+  delete row.url; writeFileSync(qualification, JSON.stringify(boundedQualification(p, cell.source)));
+  assert.equal(replay(launches), false);
+  row.url = (edge ? "http://127.0.0.1:8080" : "https://localhost:8080") + row.path;
+  writeFileSync(qualification, JSON.stringify(boundedQualification(p, cell.source)));
+  assert.throws(() => replay(launches), /request url differs/);
+  row.url = url; writeFileSync(qualification, JSON.stringify(q));
+  control.start.stdout = "{}"; assert.throws(() => replay(launches), /owned control output/);
+  control.start.stdout = JSON.stringify(assessment);
+  control.created.HostConfig.NetworkMode = control.terminal.HostConfig.NetworkMode = "container:" + launches[0].created.Id;
+  assert.throws(() => replay(launches), /namespace differs/);
 });
 
 for (const [name, mutate] of [

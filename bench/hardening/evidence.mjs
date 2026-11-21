@@ -442,12 +442,16 @@ function verifyWorker(r, cell, summary, receipts) {
 }
 
 const missingProof = (message) => { throw Object.assign(new Error(message), { code: "ENOENT" }); };
-export function verifyOwnedReceipts(receipts, summary, folder) {
+export function verifyOwnedReceipts(receipts, summary, folder, preflight) {
   assert.ok(Array.isArray(receipts)); if (!receipts.length) missingProof("missing owned container receipts");
   const ids = new Set(), launches = new Map(), resources = summary.budget.resources;
   const triggerByCell = new Map(), cellByTrigger = new Map();
+  const required = preflight && ["upstream", "application", ...(preflight.failedStage === "edge-native-controls"
+    ? ["proxy", "edge-qualification", "edge-controls"] : ["qualification", "native-controls"])];
   for (let i = 0; i < receipts.length; i++) {
-    const r = receipts[i]; assert.equal(r.index, i); assert.equal(r.schema, "native-hardening-container/v2");
+    const r = receipts[i];
+    if (preflight && (r.intent.cell !== preflight.key || !required.includes(r.intent.step))) continue;
+    assert.equal(r.index, i); assert.equal(r.schema, "native-hardening-container/v2");
     assert.ok(r.intent && ["create", "run"].includes(r.intent.operation));
     const before = r.created, end = r.terminal; if (!before || !end) missingProof("missing owned container lifetime");
     const cell = summary.cells.find((c) => c.key === r.intent.cell); assert.ok(cell);
@@ -515,9 +519,9 @@ export function verifyOwnedReceipts(receipts, summary, folder) {
       const list = launches.get(r.intent.cell) ?? []; list.push(r); launches.set(r.intent.cell, list);
     }
   }
-  for (const c of summary.cells.filter((c) => c.status === "observed")) {
+  for (const c of preflight ? [preflight] : summary.cells.filter((c) => c.status === "observed")) {
     const list = launches.get(c.key) ?? [];
-    for (const name of ["upstream", "application", "ready", "qualification", "native-controls", "parity",
+    for (const name of required ?? ["upstream", "application", "ready", "qualification", "native-controls", "parity",
       "probe", "terminal-clock", "cleanup-clock",
       ...(c.mode === "deployed-edge" ? ["certificate", "proxy", "edge-qualification", "edge-parity", "edge-controls"] : [])])
       if (!list.some((r) => r.intent.step === name)) missingProof("missing charged native apparatus step");

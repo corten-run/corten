@@ -15,9 +15,9 @@ const omitted = new Set(["bigHead", "bigBody", "deadline", "unfinishedHead", "co
 const ordinary = ["page", "json", "pageBr", "jsonBr", "jsonGzip", "page404", "json404", "json405", "head", "badHost"];
 const responseFields = new Set(["status", "headers", "bodyLength", "ms", "body", "path"]);
 
-function completed(row) {
+function completed(row, discovery = false) {
   assert.ok(row && Number.isInteger(row.status) && row.status >= 100 && row.status <= 599);
-  assert.ok(Object.keys(row).every((key) => responseFields.has(key)), "unexpected qualification response fields");
+  assert.ok(Object.keys(row).every((key) => responseFields.has(key) || discovery && ["url", "method", "host"].includes(key)), "unexpected qualification response fields");
   assert.ok(row.headers && typeof row.headers === "object" && !Array.isArray(row.headers));
   assert.ok(Number.isSafeInteger(row.bodyLength) && row.bodyLength >= 0 && row.bodyLength <= maxResponseBytes);
   assert.ok(Number.isFinite(row.ms) && row.ms >= 0 && row.ms <= deadlineMs, "qualification response missed its deadline");
@@ -54,7 +54,7 @@ export function validateBoundedQualification(report) {
   }
   assert.ok(Array.isArray(p.liveness) && p.liveness.length > 0 && p.liveness.length <= livePaths.length);
   p.liveness.forEach((row, i) => {
-    assert.equal(row.path, livePaths[i]); completed(row);
+    assert.equal(row.path, livePaths[i]); completed(row, true);
     if (i < p.liveness.length - 1) assert.notEqual(row.status, 200);
   });
   const last = p.liveness.at(-1);
@@ -71,7 +71,7 @@ export function validateBoundedQualification(report) {
 
 class RequestFailure extends Error {}
 
-function collect(origin, ca, path, headers, method, body) {
+function collect(origin, ca, path, headers, method, body, discovery = false) {
   assert.ok(path.startsWith("/") && !path.startsWith("//"));
   const tls = origin.startsWith("https:");
   if (body !== undefined && Buffer.byteLength(body) > maxFormBytes) throw new RequestFailure("form-byte-cap");
@@ -79,10 +79,11 @@ function collect(origin, ca, path, headers, method, body) {
     const started = performance.now();
     const fail = (kind) => reject(new RequestFailure(kind));
     const abort = (kind) => { fail(kind); req.destroy(); };
-    const req = (tls ? https : http)({ hostname: "127.0.0.1", port: 8080, path, method, agent: false,
+    const options = { hostname: "127.0.0.1", port: 8080, path, method, agent: false,
       ...(tls ? { servername: "localhost", ca } : {}),
       headers: { host: new URL(origin).host, connection: "close", "accept-encoding": "identity", ...headers,
-        ...(body === undefined ? {} : { "content-length": Buffer.byteLength(body) }) } }, (res) => {
+        ...(body === undefined ? {} : { "content-length": Buffer.byteLength(body) }) } };
+    const req = (tls ? https : http)(options, (res) => {
       const chunks = [];
       let bytes = 0;
       res.on("data", (chunk) => {
@@ -94,6 +95,7 @@ function collect(origin, ca, path, headers, method, body) {
       res.once("end", () => {
         if (!res.complete) { fail("incomplete-response"); return; }
         resolve({ status: res.statusCode, headers: res.headers, bodyLength: bytes,
+          ...(discovery ? { url: origin + options.path, method: options.method, host: options.headers.host } : {}),
           ms: performance.now() - started, ...(chunks.length ? { body: Buffer.concat(chunks).toString("base64") } : {}) });
       });
     });
@@ -129,7 +131,7 @@ async function qualify(source, mode, upstream, p, step) {
   }
   p.liveness = [];
   for (const path of livePaths) {
-    const row = { ...await step("liveness", () => request(path)), path }; p.liveness.push(row);
+    const row = { ...await step("liveness", () => collect(origin, ca, path, undefined, "GET", undefined, true)), path }; p.liveness.push(row);
     if (row.status === 200) { p.live = row; break; }
   }
   if (source === "api") {
