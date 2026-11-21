@@ -478,8 +478,25 @@ URL, say) refuses it, so `subscribe()` loads the snapshot again after a backoff 
 1 s to 30 s, not straight away; a `sync` later or after a reconnect (a `reset`) loads it at
 once. Against a feed that answers every stream with `sync`, one page made 544 snapshot requests
 in 3.5 s with the runtime before the backoff and 3 with it in Chromium (Firefox 328 and 3, WebKit
-221 and 3; measured with the check in `scripts/smoke.mjs`, which holds the 3). `corten-cluster`
-runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream).
+221 and 3; measured with the check in `scripts/smoke.mjs`, which holds the 3).
+
+A stream that drops is reconnected by the browser after the feed's `retry` (1 s), and in Chromium
+so is one whose connection is refused. An HTTP error ends `EventSource` for good, as a load
+balancer's 502 does while the only instance restarts; `subscribe()` then listens again from its
+cursor after a wait that doubles every second error in a row (1, 1, 1, 2, 2, 4, 4 s and on up to
+30 s), and 1 s again once a stream opens. Its tries come about 1, 2, 3, 4, 6, 8, 12, 16, 24 and
+32 s after the cut, so a page is current again within about half the outage after the server
+returns. With 20 Chromium pages and a server that answered 502 for 5, 8.5 and 20 s and came back
+with a new epoch, the pages had the new snapshot 6.2, 12.3 and 24.4 s after the cut at
+`074398815`, against 8.2, 16.2 and 32.3 s with the 1, 2, 4, 8 and 16 s waits before it at
+`42b474017` (medians of two runs and of three, the pages within 0.1 s of each other). A server
+that stays down is asked 11 times by each page in the first minute, where it was asked 6 times,
+and once every 30 s after that, as before. The tries are not spread at random: 2,000 clients
+that reconnected at the same moment to a `watchlist` instance on one CPU (its server code as at
+`42b474017`) were all current again within 0.7 s, 1.4 s on the first run after it started, and
+no sooner when their starts were spread over 0.5 s (three runs each, on Docker Desktop).
+
+`corten-cluster` runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream).
 The integration tests use PostgreSQL 19 and NATS JetStream. The crate uses async-nats 0.53 and
 SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why).
 An app upgrading `corten-cluster` must set `async-nats = "0.53"` in its own `Cargo.toml` too:
@@ -659,8 +676,8 @@ every patch arrived in both committed runs: 777,600 of 777,600, and 800,000 of 8
 clients back on the other instance after 1.1 s at the median (measured on async-nats 0.50,
 `examples/listings-feed/results/failover-r1.json` and `failover-r2.json`). Those 200
 clients are the benchmark's own Node client of the feed's protocol. When a stream is answered
-with an HTTP error they wait as `subscribe()` does (1 s, doubling to 30 s while the errors go
-on, and 1 s again once a stream has opened), but they are not an EventSource: they retry a
+with an HTTP error they wait 1 s, doubling to 30 s while the errors go on, and 1 s again once a
+stream has opened (`subscribe()` doubles every second error, above), but they are not an EventSource: they retry a
 failed snapshot on their own schedule and count a gap in `seq` as lost rather than loading a
 snapshot, so they show what the server sends through a failover. Beside them a Chromium page runs `subscribe()`
 itself through the same run, and it lost nothing either (3,888 of 3,888 and 4,000 of 4,000, one
