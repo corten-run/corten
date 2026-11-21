@@ -5,6 +5,9 @@ import { readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { processStat } from "./host-observation.mjs";
 import { socketProof } from "../cloud-control-session.mjs";
+import { verifyNativePartition } from "./native-roles.mjs";
+
+export { nativeControlPartition } from "./native-roles.mjs";
 
 export const streamLimits = Object.freeze({ leaseMs: 15000, challengeMs: 1000, maximumMs: 48 * 60 * 60 * 1000,
   frameBytes: 65536, journalBytes: 64 * 1024 * 1024, auditBytes: 256 * 1024 * 1024, auditFileBytes: 128 * 1024 * 1024,
@@ -46,36 +49,6 @@ export function verifyApparatus(binding, registration, sample) {
   }
   for (const [i, p] of registration.members.entries()) assert.equal(p.parentPid, i ? registration.members[i - 1].pid : registration.listener.pid);
   return { cpu: 0, registrationSha256: streamHash(registration), qualification: "pending-first-host-native-proof" };
-}
-
-// Mixed has the throughput topology for its measured stage, not functional capture.
-export function nativeControlPartition(binding) {
-  const group = binding.request.group, { resources } = binding;
-  const browser = group === "fullstack-browser";
-  assert.ok(browser || ["catalog-page", "json-api", "localized-marketplace", "mixed-production"].includes(group),
-    `${group}: native CPU partition absent`);
-  const roles = browser ? ["application", "upstream", "browser"] : ["app", "api", "load"];
-  const cpus = browser ? resources.browserCpus : Object.fromEntries(Object.entries(
-    (group === "mixed-production" ? resources.measurement?.cpu : resources.expectedCpus) ?? {}).map(([role, value]) => [role, value.cpuset]));
-  verifyNativePartition(cpus, roles);
-  return { cpus, roles };
-}
-
-function verifyNativePartition(cpus, roles) {
-  assert.ok(cpus && roles.every((role) => typeof cpus[role] === "string" && cpus[role]), "native CPU partition absent");
-  assert.deepEqual(Object.keys(cpus).sort(), [...roles].sort(), "unexpected native CPU role");
-  const used = new Set();
-  for (const role of roles) {
-    assert.match(cpus[role], /^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/);
-    for (const part of cpus[role].split(",")) {
-      const [first, last = first] = part.split("-").map(Number);
-      assert.ok(Number.isSafeInteger(first) && last >= first && last <= 4095, "invalid native CPU range");
-      assert.ok(first > 0, "control CPU0 overlaps native CPUs");
-      for (let cpu = first; cpu <= last; cpu++) {
-        assert.ok(!used.has(cpu), "native CPU roles overlap"); used.add(cpu);
-      }
-    }
-  }
 }
 
 export function apparatusProof(binding, registration, sample, cpus, roles = ["app", "api", "load"]) {

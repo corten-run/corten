@@ -20,6 +20,7 @@ import { createClientWorkload } from "../client.mjs";
 import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../live/native.mjs";
 import { fanoutProfile } from "../../live/fanout.mjs";
 import { budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
+import { clientActorCpus, hardeningActorCpus, liveActorCpus, liveApplication, liveGroup } from "./native-roles.mjs";
 import { catalogFleetPlacement, fleetCatalogSlugs, host, providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
 
 export const schema = "benchmark-isolated-contract/v1";
@@ -49,8 +50,8 @@ const exact = (value, keys, at) => {
 // below cannot silently survive a change to their actual default/CLI implementation.
 const snapshotPins = freeze({
   ...(!clientParser ? { "bench/client-heavy/run.mjs": "71fc21c81f109b4ae43eb6585c675fe3e9eb49fa526de57ab20e8d4f48edbb8e" } : {}),
-  // Native HTTP/wire capture and registered ports changed; CLI/defaults did not.
-  "bench/live/parity.mjs": "b50bf096ae7a310a88c2a4cc226f60dbad812721bce28636511214caf2f23b74",
+  // Native live adds explicit isolation and actor receipts; workload defaults are unchanged.
+  "bench/live/parity.mjs": "d02cefc6f8d44a5b8ab4f744232abbae996760df4906e8221c9a45c657428c59",
 });
 const clientSourceRoots = Object.freeze([...(clientParser?.sourceRoots ?? [])]);
 export const sourceRoots = Object.freeze([...new Set(["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", ".dockerignore", ".gitignore",
@@ -203,8 +204,8 @@ function native(group, round, recipe, reviewId) {
     }
   } else if (["live-delivery", "recoverable-live"].includes(group)) {
     defaults = { apps: selectedApps(group), build: false, profile: "bounded", measure: false };
-    args.push("--build");
-    effective = { ...defaults, build: true };
+    args.push("--build", "--isolated");
+    effective = { ...defaults, build: true, isolated: true };
     if (recipe === "native-feed-measure") {
       args.push("--profile", "native-feed", "--measure"); effective.profile = "native-feed"; effective.measure = true;
       changes.push({ profile: "native-feed", measure: true, reason: "explicit profile for every candidate, not a per-app fallback" });
@@ -214,7 +215,7 @@ function native(group, round, recipe, reviewId) {
       measurement: effective.measure ? clone(fanoutProfile) : null };
   } else {
     defaults = { round, profile: "bounded", review: null, build: false, verify: {}, out: artifactRoot, nodeModules: "node_modules" };
-    args.push("--build", "--review", reviewId);
+    args.push("--build", "--review", reviewId, "--isolated");
     effective = hardeningOptions(args); settings = budgets(effective.profile);
   }
   return { invocation: { executable: "node", argv: [entry, ...args], cwd: "repository-root", shell: false },
@@ -243,12 +244,13 @@ function resources(group, recipe, campaignMode) {
       hostProcesses: "unisolated driver; JSON functional checker also runs on host", state: "unknown",
       requiredEvidence: "actual per-role container quotas/cpusets/memory, tool identities, host topology and quiet-host/headroom observations" };
   }
-  if (group === "hardening") return { budget: budgets().resources, requestedCpuEnv: null, state: "blocked",
-    requiredEvidence: "all native target/proxy/upstream processes charged; native pinning adapter is absent; direct/edge receipts stay separate" };
-  return { app: group === "client-heavy" ? null : { cpu: 1, memoryBytes: 2 ** 30 },
-    upstream: null,
-    requestedCpuEnv: null, browser: "host process outside app budget; no native OS isolation/pinning interface",
-    state: "blocked", requiredEvidence: "reviewed native isolation adapter plus actual browser/server process and resource inventory" };
+  if (group === "hardening") return { budget: budgets().resources, actorCpus: clone(hardeningActorCpus), requestedCpuEnv: null, state: "unknown",
+    requiredEvidence: "effective CPU sets for ordinary bounded service and recovery participants; connection-flood resistance not measured" };
+  if (liveGroup(group)) return { app: liveApplication, upstream: null, actorCpus: liveActorCpus, requestedCpuEnv: null, state: "unknown",
+    requiredEvidence: "actual application Docker and kernel limits; same-window application and Chromium/driver CPU placement" };
+  assert.equal(group, "client-heavy");
+  return { app: null, upstream: null, actorCpus: clientActorCpus, requestedCpuEnv: null, state: "unknown",
+    requiredEvidence: "delegated command and observed browser/compiler/loopback server descendants; no additional quota or memory cap" };
 }
 function preparation(group) {
   const fixtures = ["catalog-page", "json-api", "localized-marketplace"].includes(group)

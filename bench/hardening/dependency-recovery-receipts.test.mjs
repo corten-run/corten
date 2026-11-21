@@ -3,7 +3,7 @@ import { posix, win32 } from "node:path";
 import test from "node:test";
 import { qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { readyScript, upstreamSourcePath, verifyOwnedReceipts } from "./evidence.mjs";
-import { budgets } from "./plan.mjs";
+import { budgets, parseArgs } from "./plan.mjs";
 
 const runId = "hardening-recovery-proof", stamp = "2026-11-18T00:00:00Z", handling = "dependency-recovery";
 const id = (n) => n.toString(16).padStart(64, "0");
@@ -21,7 +21,8 @@ function acknowledge(r) {
 
 function fixture({ paths = posix, originalFolder = "/native/results/w1", phase = handling, withForm = false, source = "api", triggerName = ".recovery-a1B2c3", offset = 0 } = {}) {
   const cell = { key: "corten/" + source + "/direct/" + phase, app: "corten", source, phase, mode: "direct", status: "observed" };
-  const summary = { runId, startedAt: stamp, finishedAt: stamp, originalFolder, budget: budgets(), cells: [cell],
+  const summary = { runId, startedAt: stamp, finishedAt: stamp, originalFolder, options: parseArgs(["w1", "--review", "receipt-fixture"]),
+    budget: budgets(), cells: [cell],
     tools: { node: image(1), checker: image(2) }, builds: { corten: { imageId: image(3).Id, image: image(3) } } };
   const harness = paths.join(originalFolder, "corten-build-context"), triggerSource = paths.join(originalFolder, triggerName);
   const delayed = phase !== "request-limit";
