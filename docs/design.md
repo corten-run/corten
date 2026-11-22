@@ -7637,7 +7637,27 @@ rules something out.
     claimed only as cycles that went the way of the instructions saved, as their user cycles
     did. Both builds' answers were compared before each case and were the same once a kept
     copy's `Age` was masked, and no turn failed. The merge with main after the run (`63ec8bd65`)
-    was counted again by callgrind alone (above), not in cycles.
+    was counted again by callgrind (above) and, on 2026-11-22, in cycles by the same method on a
+    second quiet host of the same size (Xeon Platinum 8358), `4e87017b9`, whose code is the
+    merge's, against main's `a0eeeacca`, 100 pairs a case, with perf counting every turn for all
+    of it: a new URL took 1.51% fewer cycles at the median of the pairs (bound 1.05% fewer) on
+    1.97% fewer user instructions (51,687 against 52,724), a new URL for the JSON body 2.64% fewer
+    (bound 2.11% fewer) on 1.80% fewer (57,087 against 58,131), a kept JSON body 0.59% fewer (bound
+    0.36% fewer) on 0.18% more, and the store off 0.27% more (bound 0.51% more) on 0.01% more,
+    each within the margin; a kept page, each build started once, took 1.80% more with a bound of
+    2.02% more (from 5.37% fewer to 5.25% more; user 2.56% more, kernel 0.92% more) on 0.19% more
+    instructions (24,247 against 24,202), and the page not `Public` 1.51% more with a bound of
+    1.67% more on 0.02% more, which missed it. Those two were run again on that host with every
+    turn on a newly started build, 100 pairs each, and both met the margin: a kept page took 0.31%
+    more with a bound of 0.90% more (from 8.08% fewer to 10.63% more; user 1.06% more, kernel
+    0.47% fewer) on 0.19% more instructions (24,235 against 24,190), and the page not `Public`
+    0.54% more with a bound of 0.86% more (from 10.13% fewer to 6.34% more) on 0.01% more. So
+    the two misses, taken on one start of each build, did not recur over a hundred starts, and
+    with that rerun every case has met the margin; it does not show a gain for a kept page, whose
+    0.19% more instructions stand. A new URL's kernel cycles, where the faults are counted, fell
+    by 0.54% and 0.93% for the page and the JSON body, so the kernel's share of a page asked for
+    once remains. These runs counted neither page faults nor first-level instruction-cache misses,
+    so that no turn's counters were multiplexed.
     By simulation from these counts (`bench/catalog/sim-kept-store.mjs` at `16f2f5480`: the
     store's clock with and without the rule, 5,461 pages of 6 KiB in 32 MiB, four million
     requests of which the second two million are counted, drawn from a Zipf law over the
@@ -7910,7 +7930,10 @@ rules something out.
     and kept with room at `b573520d1` against `04c209fca` under glibc and under jemalloc, as
     above, the JSON in a build with the `json` and `compress` features; 2026-11-22, the same at
     `63ec8bd65` against `a0eeeacca`; 2026-11-22, the cycles of a page and a JSON body at `30ff52ca0`
-    against `e7e89add8` on the quiet host above, with Debian's libjemalloc2 5.3.0 preloaded; 2026-11-21, the
+    against `e7e89add8` on the quiet host above, with Debian's libjemalloc2 5.3.0 preloaded; 2026-11-22,
+    the cycles of the same at `4e87017b9` against `a0eeeacca` on a second such host (Xeon
+    Platinum 8358, Linux 6.12.117, rustc 1.100.0), once with each build started once and once,
+    for a kept page and a page not `Public`, with every turn on a newly started build; 2026-11-21, the
     historical pair `30b39d455` and `45489ced9`, by callgrind alone; 2026-11-21, the rule for a full store with rustc 1.100.0: each count the
     difference of a run of 1,300 requests and one of 300 under callgrind, a new URL each, of
     which the first 28 or so fill a bound of 256 KiB, and for the second request the
