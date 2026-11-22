@@ -5,7 +5,7 @@ import { settings, alertsFromReadback, nativeFailures, sha256 } from "./contract
 import { architecture, classifyDisabledPreloads, nativeDOM, nativeForm, observeNetwork, responseDocument, sanitizeNative, visibleDOM, observedContext, closeObservedContext } from "./observe.mjs";
 import { UpstreamAudit, reconcileUpstream, upstreamReadFailures } from "./upstream.mjs";
 import { reconcileRequests } from "./ledger.mjs";
-import { replayDocumentNavigation } from "./document-navigation.mjs";
+import { cleanupObserved, replayDocumentNavigation, replayJSReplacement } from "./document-navigation.mjs";
 import { comparePage } from "../marketplace/check.mjs";
 import { labels } from "../marketplace/records.mjs";
 import { navigationDestination, writeDestination } from "./navigation.mjs";
@@ -230,7 +230,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
         row.platformRetirement = { realm: previousResources.realm, retiredAt: at };
         row.platformRetirementProbe = await lifecycle.probeRealm(previousResources.realm);
       }
-      if (row.retired?.owned === null && (profile.js || !row.platformRetirement)) evidence.gaps.push(row.retired.reason);
+      if (row.retired?.owned === null && !row.platformRetirement) evidence.gaps.push(row.retired.reason);
       if (row.retired?.owned && Object.values(row.retired.owned).some(Boolean)) row.lifecycleFailures.push("Retired native page still owns browser resources");
       if (Object.values(row.resources.unattributed).some(Boolean)) evidence.gaps.push("Native resources without provable marketplace ownership remain in the document-start ledger");
       if (row.resources.unsupported.length) evidence.gaps.push(...row.resources.unsupported);
@@ -273,7 +273,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     const cleanupPhase = await upstream.begin("cleanup");
     evidence.nativeCleanup = await resources.cleanup({ timeoutMs: settings.maxCleanupMs, observationMs: settings.observationMs, network, runtimeErrors });
     evidence.nativeCleanup.upstream = await upstream.end(cleanupPhase);
-    const documentLanding = !profile.js && evidence.nativeCleanup.outcome === "unsupported" && evidence.nativeCleanup.retired?.owned === null
+    const documentLanding = evidence.nativeCleanup.outcome === "unsupported" && evidence.nativeCleanup.retired?.owned === null
       && evidence.nativeCleanup.before?.realm !== evidence.nativeCleanup.after?.realm;
     if (evidence.nativeCleanup.after) try {
       const terminalResources = await resources.checkpoint();
@@ -319,13 +319,21 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       evidence.networkFailures = structuredClone(network.failures); evidence.runtimeErrors = structuredClone(runtimeErrors);
       evidence.requestLedgerEndedAt = performance.now();
     }
-    if (evidence.nativeCleanup?.landingResources) evidence.documentNavigationProof = replayDocumentNavigation(evidence, profile, settings);
+    if (profile.js && (evidence.steps.some((row) => row.platformRetirement) || evidence.nativeCleanup?.landingResources)) {
+      const proof = evidence.jsDocumentNavigationProof = replayJSReplacement(evidence, profile, settings);
+      if (proof.outcome !== "proved") {
+        for (const row of evidence.steps) if (row.retired?.owned === null && row.platformRetirement) evidence.gaps.push(row.retired.reason);
+        if (evidence.nativeCleanup?.outcome === "unsupported") evidence.gaps.push(...evidence.nativeCleanup.failures);
+        evidence.gaps.push(proof.reason);
+      }
+    }
+    if (!profile.js && evidence.nativeCleanup?.landingResources) evidence.documentNavigationProof = replayDocumentNavigation(evidence, profile, settings);
     if (!profile.js && evidence.documentNavigationProof?.outcome !== "proved") {
       for (const row of evidence.steps) if (row.retired?.owned === null && row.platformRetirement) evidence.gaps.push(row.retired.reason);
       if (evidence.nativeCleanup?.landingResources) evidence.gaps.push(...evidence.nativeCleanup.failures, evidence.documentNavigationProof.reason);
       else if (evidence.nativeCleanup?.outcome === "unsupported") evidence.gaps.push(...evidence.nativeCleanup.failures);
     }
-    evidence.requestReconciliation = reconcileRequests(evidence, evidence.documentNavigationProof);
+    evidence.requestReconciliation = reconcileRequests(evidence, evidence.documentNavigationProof, evidence.jsDocumentNavigationProof);
     if (evidence.requestReconciliation.outcome !== "reconciled") evidence.gaps.push(...evidence.requestReconciliation.reasons);
     const beforeClose = performance.now();
     if (bindings) try { await bindings.close(); } catch (error) { evidence.failures.push(`Binding observer detach: ${error.message}`); }
@@ -340,7 +348,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
   }
   evidence.gaps = [...new Set(evidence.gaps)];
   result.qualificationPassed = !evidence.failures.length && !evidence.gaps.length
-    && (evidence.nativeCleanup?.outcome === "observed" || evidence.documentNavigationProof?.outcome === "proved");
+    && cleanupObserved(evidence);
   result.outcome = evidence.failures.length ? "failed" : result.qualificationPassed ? "captured" : "unsupported";
   evidence.domChecksPassed = evidence.steps.length === profile.steps.length && evidence.steps.every((s) => s.domPassed);
   result.reason = evidence.failures[0] ?? evidence.gaps[0];
