@@ -114,7 +114,7 @@ test("enhanced alert POST returns JSON source failures without changing its sess
       const initial = await fetch(base + "/api/alerts");
       assert.deepEqual(await initial.json(), []);
       const cookie = initial.headers.getSetCookie().map((value) => value.split(";")[0]).join("; ");
-      const post = (id) => fetch(`${base}/api/marketplace/${id}?locale=en-US`, {
+      const post = (id) => fetch(`${base}/api/marketplace/${id}/alerts?locale=en-US`, {
         method: "POST", headers: { Origin: base, Cookie: cookie },
         body: new URLSearchParams({ email: "source@example.test", target_price: "1.25" }),
         signal: AbortSignal.timeout(10000),
@@ -238,6 +238,60 @@ for (const source of profile ? ["fixture", "api"] : []) {
     });
     try {
       await ready(base, app);
+      const result = await qualify({ base, source, upstream: upstreamBase });
+      await mkdir(new URL("./work/", import.meta.url), { recursive: true });
+      await writeFile(new URL(`./work/bounded-qualification-${source}.json`, import.meta.url), JSON.stringify(result, null, 2));
+      assert.deepEqual(result.missing, []);
+      assert.equal(result.cells.json405, "405 json");
+      assert.equal(result.eligible, true);
+      assert.ok(result.unmeasured.includes("connectionCap"));
+      const record = "/api/marketplace/item_1";
+      const alert = record + "/alerts";
+      const post = (path) => fetch(base + path, {
+        method: "POST", headers: { Origin: base },
+        body: new URLSearchParams({ email: "method@example.test", target_price: "1.25" }),
+        signal: AbortSignal.timeout(5000),
+      });
+      for (const send of [
+        () => fetch(base + record, { method: "POST", signal: AbortSignal.timeout(5000) }),
+        () => post(record + "?locale=en-US"),
+        () => fetch(base + record, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: "{", signal: AbortSignal.timeout(5000) }),
+      ]) {
+        const refused = await send();
+        assert.equal(refused.status, 405, "POST is not a method of the JSON record resource");
+        assert.equal(refused.headers.get("allow"), "GET, HEAD");
+        assert.deepEqual(await refused.json(), { error: "method not allowed" });
+        assert.deepEqual(refused.headers.getSetCookie(), []);
+      }
+      const put = await fetch(base + alert + "?locale=en-US", {
+        method: "PUT", headers: { Origin: base },
+        body: new URLSearchParams({ email: "method@example.test", target_price: "1.25" }),
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(put.status, 405);
+      assert.equal(put.headers.get("allow"), "POST");
+      assert.deepEqual(await put.json(), { error: "method not allowed" });
+      assert.deepEqual(put.headers.getSetCookie(), []);
+      const malformed = await fetch(base + alert + "?locale=en-US", {
+        method: "PUT", headers: { Origin: base, "Content-Type": "application/json" },
+        body: "{", signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(malformed.status, 400, "the write route keeps Next's native malformed-body rejection");
+      await malformed.text();
+      assert.deepEqual(malformed.headers.getSetCookie(), []);
+      const badInput = await post(alert);
+      assert.equal(badInput.status, 400, "the write resource accepts POST but requires a locale");
+      assert.deepEqual(await badInput.json(), { error: "Unsupported locale" });
+      assert.deepEqual(badInput.headers.getSetCookie(), []);
+      const accepted = await post(alert + "?locale=en-US");
+      assert.equal(accepted.status, 200);
+      assert.match((await accepted.json()).message, /method@example\.test/);
+      const cookie = accepted.headers.getSetCookie().map((value) => value.split(";")[0]).join("; ");
+      assert.ok(cookie);
+      const readback = await fetch(base + "/api/alerts", { headers: { Cookie: cookie }, signal: AbortSignal.timeout(5000) });
+      assert.equal(readback.status, 200);
+      assert.deepEqual(await readback.json(), [{ item_id: "item_1", email: "method@example.test", target_minor: 125 }]);
       const first = await fetch(base + "/marketplace/fr-FR/item_1", {
         headers: { "x-nonce": "attacker", "content-security-policy": "script-src * 'unsafe-eval'" },
       });
@@ -250,12 +304,6 @@ for (const source of profile ? ["fixture", "api"] : []) {
       const scripts = [...html.matchAll(/<script\b[^>]*>/g)];
       assert.ok(scripts.length > 0, "Next's native scripts must remain present");
       for (const [tag] of scripts) assert.ok(tag.includes(`nonce="${nonce}"`), "Next script missing document nonce");
-      const result = await qualify({ base, source, upstream: upstreamBase });
-      await mkdir(new URL("./work/", import.meta.url), { recursive: true });
-      await writeFile(new URL(`./work/bounded-qualification-${source}.json`, import.meta.url), JSON.stringify(result, null, 2));
-      assert.deepEqual(result.missing, []);
-      assert.equal(result.eligible, true);
-      assert.ok(result.unmeasured.includes("connectionCap"));
       const live = await fetch(base + "/health/live", { signal: AbortSignal.timeout(5000) });
       assert.equal(live.status, 200);
       assert.equal(await live.text(), "ok");

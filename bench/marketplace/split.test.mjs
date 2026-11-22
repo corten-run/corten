@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { summarizeSamples } from "../catalog/stats.mjs";
 import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupApps, groupNames } from "./groups.mjs";
@@ -17,6 +18,7 @@ import { report, validateSummary } from "./report.mjs";
 import { compare } from "./compare.mjs";
 import { betweenDroplets, cleanOutcome, mergeParts, outcomeFields } from "./split.mjs";
 import { controller, launcherSignals, processRuns, splitController, splitDryRun } from "./droplet.mjs";
+import { evidenceVersion } from "./raw-contract.mjs";
 
 const commit = "a".repeat(40), group = "production";
 const qualified = () => Object.fromEntries(sources.map((source) => [source, qualification(qualificationProbes(), source)]));
@@ -88,6 +90,22 @@ function stopRuns(a, key, pass, phase) {
   for (const p of phases) a.phases[key][p] = stageAggregate(runs, p, 3);
 }
 const merged = (n, options = {}) => validateSummary(mergeParts(options.round ?? "r17", Array.from({ length: n }, (_, i) => part(i + 1, n, i === 1 ? options : { round: options.round }))));
+
+test("split summary keeps a part's representable memory mean without claiming native receipts", () => {
+  const parts = [part(1, 2), part(2, 2)];
+  for (const p of parts) p.evidenceVersion = evidenceVersion;
+  const upstream = parts[1].apps.corten.runs["api-neutral-json"][0].phases.sat64.upstream;
+  const { samples, memAvgMiB, memMaxMiB } = summarizeSamples(Array(31).fill({ cpu: 50, mem: 100.9 }));
+  assert.ok(memAvgMiB > memMaxMiB);
+  Object.assign(upstream, { samples, memAvgMiB, memMaxMiB });
+  parts.forEach(validateSummary);
+  const summary = mergeParts("r17", parts);
+  assert.equal(summary.evidenceVersion, undefined);
+  assert.equal(summary.split.parts[1].corten.runs["api-neutral-json"][0].phases.sat64.upstream.memAvgMiB, memAvgMiB);
+  assert.match(report(summary), /split across 2 droplets/);
+  upstream.memAvgMiB = 100.90000000000005;
+  assert.throws(() => validateSummary(summary), /missing\/invalid measurement/);
+});
 
 test("a split gives every droplet Corten and each other candidate of its group to exactly one droplet, in the group's order", () => {
   assert.equal(splitSubject, "corten");

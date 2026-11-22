@@ -945,19 +945,21 @@ impl<M: Middleware> App<M> {
     }
 
     /// How many bytes of [`crate::Public`] answers the app keeps to give again (32 MiB unless
-    /// set; `0` keeps none): pages, and whole bodies of JSON or text where the app compresses
-    /// them (1,024 bytes or more, with the `compress` feature). A route that says its
+    /// set; `0` keeps none): pages, and whole bodies of JSON, text or a file where the app
+    /// compresses them (1,024 bytes or more, with the `compress` feature). A route that says its
     /// answer is the same for everyone names one any shared cache may keep for the lifetime it
     /// gives, and the app is the first of them: the whole document, or such a body of a route
-    /// that answers JSON or text, made for a `GET` with no cookie or `Authorization` is given to the
+    /// that answers JSON, text or a file, made for a `GET` with no cookie or `Authorization` is given to the
     /// next such request in the handler's place until that lifetime ends (`s-maxage` where the
     /// answer has `.shared(..)`, else `max_age`), with an `Age`. Every stage still runs for it,
     /// the app's middleware too; what it saves is the handler, the render or the writing of the
     /// JSON, the tag's hash and the compression. So a `Public` handler does not run for every
     /// request, and what it reads may be that old when it is seen, as it already may be behind a
     /// CDN. An answer whose handler takes an extractor of the app's own is not kept: it may read
-    /// a header the key does not cover. Neither is a file (`Media`), a relay, a stream or a feed,
-    /// but for a file of a known size that a page route answers in its page's place (`PageOr`).
+    /// a header the key does not cover. Neither is a relay, a stream or a feed, a file sent as
+    /// a stream, a file of a type the app does not compress (a PNG, a JPEG) or one at a URL
+    /// that names its content (`Public::immutable`); a file of a known size that a page route
+    /// answers in its page's place (`PageOr`) is kept as that page would be.
     ///
     /// Past the bound, a page not read since the last time room was made goes first, and one
     /// larger than an eighth of the bound is not kept. Once the kept pages are within an
@@ -966,8 +968,8 @@ impl<M: Middleware> App<M> {
     /// its page is kept. A write to a page's path drops what is
     /// kept there, whatever it is answered, and so does one that redirects to it; a
     /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
-    /// under `corten dev`, and an app with no `Public` route of a kind it keeps (a page, or JSON
-    /// or text in a build with `compress`) keeps none and counts no writes, whatever the bound. The bytes counted are each page's key, its headers, its body and each
+    /// under `corten dev`, and an app with no `Public` route of a kind it keeps (a page, or JSON,
+    /// text or a file in a build with `compress`) keeps none and counts no writes, whatever the bound. The bytes counted are each page's key, its headers, its body and each
     /// compressed form made of it.
     pub fn kept_answers(mut self, bytes: usize) -> Self {
         self.kept = bytes;
@@ -2651,8 +2653,8 @@ impl<S: Steps> Layer<S> {
             req.extensions_mut().remove::<crate::router::MatchedPath>();
         }
         let path = self.shared.dev.then(|| req.uri().path().to_string());
-        // A write may change what a kept page shows: it is counted for its path when it is
-        // answered, and when it is dropped before that. Only for a method that is not safe, in
+        // A write may change what a kept page shows: it is counted when it is answered, and
+        // when it is dropped before that, for its path once the app counts writes by path. Only for a method that is not safe, in
         // an app that keeps answers.
         let wrote = self.shared.kept.as_ref().filter(|_| !req.method().is_safe()).map(|kept| kept.writing(req, &watch.0));
         // A debug build times the runtime's hover prefetch, so a page that grew slow is named
