@@ -1600,15 +1600,18 @@ the page, and the others wait for its answer and are given the page when it is k
 a page whose handler reads a slow source does not send that source a request for each visitor
 who arrives meanwhile, after a deploy too. When the first request's page is not kept (its
 handler failed, or drew something for that request), each of the others then runs its own
-handler, and does not wait again, and for a minute, or until the page is kept (in that language,
-or for every language) or written to, requests for that page do not wait for each other (the
-latest 1,024 such pages are remembered); a page another request kept meanwhile is not remembered
-so;
+handler, and does not wait again, and for a minute, or until the page is kept for such a request
+or written to, requests for that page do not wait for each other (the latest 1,024 such pages are
+remembered); a page another request kept meanwhile is not remembered so;
 when the first request is dropped or panics, each of the others runs its own. A request waits no
 longer than its own deadline (`App::deadline`), which answers it as it would a slow handler. Only
 requests for one copy wait for each other: another query, host or `Accept-Language` does not
 wait, even for a page that is the same in every language, since what a page varies on is known
-only once it is made. A request that comes after a write to the page's path makes the page again
+only once it is made. A page is remembered as not kept for one copy in the same way: a copy kept
+for a request with another `Accept-Language` does not end it, even one that is the same in every
+language and is given in its place while it stands, so once that copy's lifetime ends within the
+minute, requests in the first language each run the handler again until the minute is up or one
+of them keeps the page. A request that comes after a write to the page's path makes the page again
 rather than wait for one read before the write. At most 1,024 pages are made at once with others
 waiting for them; past that, a request makes its page as it would with nothing kept.
 
