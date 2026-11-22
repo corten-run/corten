@@ -7352,7 +7352,15 @@ rules something out.
     compiles, in every build and whatever the store does (none kept, `corten dev`, a body
     route that leaves the store out, a build without `compress`); on any other route it compiles
     away. Held beside the handler's work in the future the route already makes, it adds a read and
-    a reset of a thread's mark around each poll (measured below). A render that reads
+    a reset of a thread's mark around each poll. Measured on 2026-11-22 with `tests::cache::what_settling_a_page_costs`
+    under callgrind (valgrind 3.24.0, rustc 1.100.0, release, all features), the difference of 1,200
+    and 200 requests, three alternated rounds that each gave the same counts, `ab331d0f5` against
+    this change, instructions a request: a `Public` page given from the store 16,870 and 16,870;
+    one made for each request (`kept_answers(0)`) 19,508 and 19,512 (+0.02%); a `Public` JSON
+    body given 15,939 and 15,939, made for each 54,269 and 54,222; a private page 16,733 and 16,684;
+    a `Public` page with a keyed form 22,115 and 22,170 (+0.25%). A first version, a router
+    endpoint around the handler, cost the page made for each request 149 more and the private page
+    24, from a second copy of the answer and a second form of every route's call. A render that reads
     the mark for itself (a page's, a patch's, one made with `req.rendered`) leaves a key drawn
     before it for the watch, also when it fails: a field rendered to a string and placed in a
     page as markup. A key drawn outside the handler's polls, or on another thread during one
