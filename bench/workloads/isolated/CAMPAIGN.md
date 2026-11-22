@@ -348,9 +348,21 @@ descriptors. Before/after descriptor identity must equal the original sampled id
 The helper must exit successfully within the existing 30-second bootstrap bound before
 finish returns or another command starts. Descriptor closure is unconditional. Unresolved,
 changed or unsealed hashes cannot qualify; `executables.json` binds the resolved digest
-to its sampled reference. Sample timestamps and the one-second gap gate are not rewritten
+to its sampled reference. When sealing fails, `terminal.json` distinguishes starting or
+running the helper, reading an inherited descriptor, rechecking its identity, and publishing
+the proof. An identity failure can name its sampled reference, not the executable path or
+arbitrary helper output. A ctime-only mismatch is still a failure, not proof of unlink.
+Sample timestamps and the one-second gap gate are not rewritten
 or relaxed. This post-sampling work is not benchmark timing and is not an OS authority
 claim by the saved JSON. The existing pre-gated bootstrap executable check is unchanged.
+
+For client-heavy, the campaign exclusively creates the native output's `.compiler` sibling
+and holds its directory descriptor. The gated builder checks that exact empty directory
+before using it as Cargo's fresh target. The campaign removes only its own target after
+descriptor sealing and terminal-empty cgroup cleanup, including a drained command whose
+native result or executable proof failed. An uncertain stop preserves the target. This
+scratch is outside the native and phase evidence trees. Standalone builds still exclusively
+create and remove their own target.
 
 `host-participant-linux.test.mjs` is a separate actual-kernel fixture, not a portable test
 or native-browser qualification. Its caller owns a fresh long-lived Node Docker container
