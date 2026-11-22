@@ -64,9 +64,9 @@
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
