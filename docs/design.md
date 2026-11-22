@@ -8257,8 +8257,8 @@ rules something out.
     Last checked: 2026-11-22, the runs above at `14471284c` on a DigitalOcean c-8 in sfo3 (Xeon
     Platinum 8358, one thread a core, Linux 6.12.117), rustc 1.100.0, LLD 23.1.5, perf 6.12.117,
     `wrk` 4.1.0 and Debian's libjemalloc2 5.3.0. The host's own record gives the CPU model, topology
-    and versions; the droplet size and region come from the account that made it, and a later
-    calibration records them with the rest.
+    and versions, but not the droplet size and region, which come from the account that made it and
+    which a later calibration records with the rest.
 
 ## Rules
 
