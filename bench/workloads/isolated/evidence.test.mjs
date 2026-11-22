@@ -12,8 +12,8 @@ import { productionFixture } from "../../json-api/production-fixtures.mjs";
 import { jsonSources, saveJsonFixture } from "./test-fixtures/json.mjs";
 import { marketplaceResult } from "./test-fixtures/marketplace.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
-import { selectedApps } from "../registry.mjs";
-import { featureProfile, qualification, qualificationSettings, produceBoundedQualification } from "../../marketplace/feature-contract.mjs";
+import { contractSha256, selectedApps } from "../registry.mjs";
+import { boundedFeatureProfile, featureProfile, qualification, qualificationSettings, produceBoundedQualification } from "../../marketplace/feature-contract.mjs";
 import { qualificationProbes, boundedQualificationProbes } from "../../marketplace/qualification-fixture.mjs";
 import { matchesWorkingSource } from "./worker.mjs";
 
@@ -144,7 +144,7 @@ for (const fault of ["none", "raw hash mismatch", "receipt string"]) {
 }
 test("marketplace uses its native schema, exact configuration and full excluded-candidate ledger", (t) => {
   const root = temporary(t), apps = selectedApps("localized-marketplace");
-  const b = { request: { group: "localized-marketplace", round: "w2", commit: "a".repeat(40) }, selection: { apps },
+  const b = { request: { group: "localized-marketplace", round: "w2", commit: "a".repeat(40) }, selection: { apps, contractSha256: contractSha256("localized-marketplace") },
     execution: { effectiveOptions: marketplaceOptions(["w2", "--group", "localized-marketplace", "--build"], Object.fromEntries(apps.map((a) => [a, {}]))) },
     resources: { expectedCpus: catalogBinding().resources.expectedCpus } };
   const s = marketplaceResult(b), path = join(root, "summary.json");
@@ -153,8 +153,9 @@ test("marketplace uses its native schema, exact configuration and full excluded-
   for (const app of Object.values(historical.apps)) for (const source of ["fixture", "api"])
     app.qualification[source] = qualification(qualificationProbes(), source);
   fs.writeFileSync(path, JSON.stringify(historical));
-  assert.throws(() => inspectEvidence(b, root), /requires bounded qualification/);
+  assert.throws(() => inspectEvidence(b, root), { code: "ERR_ASSERTION", actual: featureProfile, expected: boundedFeatureProfile });
   fs.writeFileSync(path, JSON.stringify(s));
+  assert.throws(() => inspectEvidence({ ...b, selection: { ...b.selection, contractSha256: "e7196bc53d5d9a48543dacdfa245c672d5dda68c514f43339779de58f022c9eb" } }, root), /native marketplace result schema/);
   assert.equal(inspectEvidence(b, root).qualification, "blocked");
   assert.equal(inspectEvidence(b, root).rawCompleteness, "not-established");
   const support = inspectEvidence(b, root).rawSupport;
@@ -165,6 +166,7 @@ test("marketplace uses its native schema, exact configuration and full excluded-
   excluded.apps.nextjs.qualification.api = produceBoundedQualification(probes, "api"); excluded.apps.nextjs.runs = {}; excluded.apps.nextjs.phases = {};
   fs.writeFileSync(path, JSON.stringify(excluded)); assert.equal(inspectEvidence(b, root).diagnosticNativeReport.outcomes.nextjs, "excluded-not-timed");
   for (const change of [(v) => { v.finishedCommit = "b".repeat(40); }, (v) => { v.options.duration = 1; },
+    (v) => { v.apps.corten.checks.api.profiles = v.apps.corten.checks.api.profiles.filter((p) => p.locale !== "fr-FR"); },
     (v) => { v.apps.corten.builtDirty = true; }, (v) => { delete v.apps.nextjs; }, (v) => { v.cleanupFailures.push("busy"); }]) {
     const bad = structuredClone(s); change(bad); fs.writeFileSync(path, JSON.stringify(bad)); assert.throws(() => inspectEvidence(b, root));
   }

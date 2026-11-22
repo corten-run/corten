@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { timedProfilesFor, v3Schema, v4Schema, v5Schema } from "./run-contract.mjs";
 import { afterPhase, appStop, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, profileStop, readLoadSummary, readOutcome, resultSchema, roundIdentity, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 test("versioned round namespace and safe defaults", () => {
   assert.match(inventory.nextjs.label, /Pages Router/);
@@ -19,12 +20,18 @@ test("versioned round namespace and safe defaults", () => {
   assert.throws(() => parseArgs(["w1", "--apps", "absent"], { corten: {} }));
 });
 
-test("timed schema has six localized pages and exactly two locale-neutral JSON profiles", () => {
-  assert.equal(resultSchema, "marketplace-results/v5");
-  assert.equal(timedProfiles.length, 8);
-  assert.equal(new Set(timedProfiles.map((p) => p.key)).size, 8);
+test("rotate locales in four current profiles; never reinterpret the eight historical profiles", () => {
+  assert.equal(resultSchema, "marketplace-results/v6");
+  assert.equal(timedProfilesFor(resultSchema), timedProfiles);
+  assert.equal(timedProfiles.length, 4);
+  assert.equal(new Set(timedProfiles.map((p) => p.key)).size, 4);
+  assert.throws(() => timedProfilesFor("unknown"));
   for (const source of ["fixture", "api"]) {
-    assert.deepEqual(timedProfiles.filter((p) => p.source === source && p.target === "page").map((p) => p.locale), ["en-US", "fr-FR", "de-DE"]);
+    for (const schema of [v3Schema, v4Schema, v5Schema]) {
+      assert.equal(timedProfilesFor(schema).length, 8);
+      assert.deepEqual(timedProfilesFor(schema).filter((p) => p.source === source && p.target === "page").map((p) => p.locale), ["en-US", "fr-FR", "de-DE"]);
+    }
+    assert.deepEqual(timedProfiles.filter((p) => p.source === source && p.target === "page"), [{ key: `${source}-rotating-page`, source, locale: "rotating", target: "page" }]);
     assert.deepEqual(timedProfiles.filter((p) => p.source === source && p.target === "json"), [{ key: `${source}-neutral-json`, source, locale: null, target: "json" }]);
   }
 });

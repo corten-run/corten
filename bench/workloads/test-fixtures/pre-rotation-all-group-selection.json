@@ -1,0 +1,14 @@
+{
+  "schema": "benchmark-groups/v1",
+  "groups": [
+    {"group":"catalog-page","contractSha256":"67e0bffbf6bc138c570b7d3855b9dc440c2d11526a1321269f14433155dd98f0","apps":["corten","aspnet","express","fastapi","axum-maud","drogon","gin"]},
+    {"group":"json-api","contractSha256":"b0015ffc90e28f85823f1e7a392e8ed5a97f2f2a6e56cf6c9287934589325fb9","apps":["corten","aspnet","fastapi","express","spring","axum-maud","drogon","gin","aspnet-aot"]},
+    {"group":"localized-marketplace","contractSha256":"e7196bc53d5d9a48543dacdfa245c672d5dda68c514f43339779de58f022c9eb","apps":["corten","nextjs","aspnet","django","topcoat","leptos","gin","drogon"]},
+    {"group":"mixed-production","contractSha256":"147a4689167b2bfa0edba103a5fdbe533f7f7b17126fe15e1d0f782983b9a894","apps":["corten","aspnet","spring","django","express","fastapi","topcoat","gin","drogon"]},
+    {"group":"fullstack-browser","contractSha256":"d4c219c71546b7c8cfdeb8b0e9b4c44cacc30cd42837dcfa5580db9d125f62d4","apps":["corten","nextjs","nuxt","react-router","rails","laravel","sveltekit","astro","tanstack-start","leptos"]},
+    {"group":"client-heavy","contractSha256":"29842bba6ec897e5a86a42cc7f8f777ac69f64b89f41d7c6f6774f9c067486d1","apps":["corten","react","vue","solid","svelte","remix"]},
+    {"group":"live-delivery","contractSha256":"ca5d6010d1a3ea088849d5ac40ec9aa8d41791c4e316f47a86233ce829b33328","apps":["corten","aspnet","express","phoenix","rails","gin","drogon","leptos"]},
+    {"group":"recoverable-live","contractSha256":"b6d91c14ed20babdc0e56719826a6d01bb993de6b16224f5f9b0e2544f3e9eff","apps":["corten","phoenix","rails","laravel","aspnet","leptos","topcoat"]},
+    {"group":"hardening","contractSha256":"635b2b9946a7fe96de1f2ab7eb49a2a16b397dbfb95f959790e94b2c9a114a03","apps":["corten","aspnet","spring","nextjs","django","express","gin","drogon","topcoat"]}
+  ]
+}

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { pathToFileURL } from "node:url";
-import { aggregateCold, coldStop, phases, resultSchema, roundIdentity, stopsEarlier, timedProfiles } from "./run-contract.mjs";
+import { aggregateCold, coldStop, phases, resultSchema, roundIdentity, stopsEarlier, v5Schema } from "./run-contract.mjs";
 import { validateSummary } from "./report.mjs";
 import { admitted } from "./feature-contract.mjs";
 
@@ -20,8 +20,7 @@ const splitShape = (s) => s.split ? s.split.parts.map((p) => ({ apps: p.apps, ad
 /** SHA-256 regression key, independent of round/build/commit and JSON property order.
  * Includes all measurement options (including future keys), full measurement metadata,
  * schema/workload/fixture, CPU hardware/topology/pinning, host software and tool images.
- * The schema in the key is the one a summary is read as: a v3 summary is read as v4 with no
- * stop records, so a v3 round and a v4 round with the same measurement share a key.
+ * Preserve the historical v5 key for the per-locale matrix (v3-v5); rotating pages start a new baseline.
  * An equal key is necessary, not sufficient: compare also requires earlier official
  * identity and full validated evidence. Reference adapters require caller attestation.
  * A split round's key also has each droplet's apps, host and tool images; a whole round's is
@@ -30,7 +29,7 @@ const splitShape = (s) => s.split ? s.split.parts.map((p) => ({ apps: p.apps, ad
 export function comparisonKey(s) {
   validateSummary(s);
   for (const key of hostFields) if (typeof s.host[key] !== "string" || !s.host[key]) throw new Error(`Missing host ${key}; no comparison key.`);
-  const input = { schema: resultSchema, workload: s.workload, fixtureSha256: s.fixtureSha256,
+  const input = { schema: s.schema === resultSchema ? resultSchema : v5Schema, workload: s.workload, fixtureSha256: s.fixtureSha256,
     options: measurementOptions(s.options), measurement: s.measurement,
     host: Object.fromEntries(hostFields.map((k) => [k, s.host[k]])),
     tools: Object.fromEntries(["upstream", "k6"].map((tool) => [tool, s.tools[tool].imageId])),
@@ -66,8 +65,8 @@ export function comparisonKey(s) {
  * baseline's: the stage has fewer measured passes, or the stop came in an earlier pass, or an
  * earlier phase of the same pass.
  * Equal measurement options, fixture, CPU model/topology/placement, host software and
- * load/upstream images are required, and both summaries in a schema the reporter reads (v3 or
- * v4: a v3 round, which failed on any stopped app, compares as a v4 round with no stop). Build
+ * load/upstream images and the same timed profile matrix are required. Historical v3 rounds,
+ * which failed on any stopped app, compare as rounds with no stop records. Build
  * flags are not measures. A round split across droplets (#816) compares only with one split the
  * same way, each droplet's host and images equal to the baseline's same droplet; Corten is d1's.
  * Each row and cold row of a split round also has droplet: the number of the droplet its app was
@@ -88,19 +87,25 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
   if (result.warnings.length) return result;
   try { result.comparisonKeys = { current: comparisonKey(current), baseline: comparisonKey(baseline) }; }
   catch (error) { warn(error.message); }
+  const timedProfiles = current.measurement.profiles;
   const now = roundIdentity(current.round), old = roundIdentity(baseline.round);
   // A lost capability is an observed investigation even when the changed admitted set
   // forbids performance deltas. It is not a claim about cause or statistical regression.
   if (now.kind === "official" && old.kind === "official" && old.number < now.number && current.options.group &&
     isDeepStrictEqual(measurementOptions(current.options), measurementOptions(baseline.options)) &&
-    isDeepStrictEqual(current.measurement, baseline.measurement) && current.fixtureSha256 === baseline.fixtureSha256) {
+    isDeepStrictEqual(current.measurement.featureProfile, baseline.measurement.featureProfile) &&
+    isDeepStrictEqual(current.measurement.qualificationSettings, baseline.measurement.qualificationSettings) &&
+    current.fixtureSha256 === baseline.fixtureSha256) {
     for (const app of current.options.apps) if (admitted(baseline.apps[app]) && !admitted(current.apps[app])) {
       result.qualificationLosses.push({ app, missing: Object.fromEntries(["fixture", "api"].map((source) => [source, current.apps[app].qualification[source].missing])) });
     }
   }
+  if (!isDeepStrictEqual(timedProfiles, baseline.measurement.profiles)) {
+    warn("Incompatible timed profile matrices (rotating versus per-locale pages); no deltas.");
+    return result;
+  }
   if (now.kind !== "official" || old.kind !== "official" || old.number >= now.number) warn("Comparison requires an earlier official marketplace-v2 r17+ baseline; development, legacy r16 and catalog rounds have no deltas.");
   const same = (label, a, b) => { if (!isDeepStrictEqual(a, b)) warn(`Incompatible ${label}; no deltas.`); };
-  // Both schemas passed validateSummary, so both are read as v4 (v3 with no stop records).
   for (const key of ["workload", "fixtureSha256", "measurement"]) same(key, current[key], baseline[key]);
   same("measurement options", measurementOptions(current.options), measurementOptions(baseline.options));
   same("qualified adapter set", Object.keys(current.apps).filter((a) => !current.options.group || admitted(current.apps[a])).sort(),

@@ -158,7 +158,7 @@ test("v3 public replay preserves unsupported Solid and qualified diagnostic peer
   assert.equal(r.cells.solid.outcome, "unsupported"); assert.equal(r.cells.solid.qualification, null); assert.equal(r.cells.solid.measurement, null);
   assert.equal(r.cells.solid.build.bytes, null);
   assert.equal(r.cells.react.replayPassed, true); assert.ok(r.cells.react.measurement.timings);
-  assert.ok(r.latestStable.candidates.every((row) => row.latestStableEligible === !["solid", "remix"].includes(row.app)));
+  assert.ok(r.latestStable.candidates.every((row) => row.latestStableEligible === (row.app !== "solid")));
 });
 
 test("v4 replays each block and recomputes summaries for native and policy passes only", async (t) => {
@@ -169,7 +169,7 @@ test("v4 replays each block and recomputes summaries for native and policy passe
   const attemptedOrder = f.plan.measurementOrder.map((block) => block.filter((app) => app !== "solid"));
   assert.deepEqual(r.cells.react.comparison, { samples: 3, attemptedOrder, actions: f.plan.workload.operations.map(({ id, kind }, i) =>
     ({ operation: id, kind, medianMs: i === 0 ? 0.5 : 0.25, minMs: 0.25, maxMs: i === 0 ? 0.75 : 0.25 })) });
-  assert.equal(r.cells.remix.replayPassed, true); assert.equal(r.cells.remix.comparison, undefined);
+  assert.equal(r.cells.remix.replayPassed, true); assert.deepEqual(r.cells.remix.comparison, r.cells.react.comparison);
   assert.equal(r.cells.solid.outcome, "unsupported"); assert.deepEqual(r.cells.solid.measurements, []);
   assert.deepEqual(r.processWindows.filter((w) => w.phase === "measurement").map((w) => w.app),
     attemptedOrder.flat());

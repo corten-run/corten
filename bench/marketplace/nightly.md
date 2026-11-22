@@ -99,7 +99,8 @@ are not guaranteed to finish by the morning check.
 1. Every feature-qualified app must pass the existing full browser/conformance gate for both sources
    before any app is timed. All three locales, desktop/phone, JS on/off, numeric cases,
    page sections, forms and uncached upstream probes remain required. Do not relax checks.
-2. Time pages in `en-US`, `fr-FR` and `de-DE`, doing equivalent request-time localization.
+2. Time one page profile per source, cycling through `en-US`, `fr-FR` and `de-DE` by
+   scenario iteration, doing equivalent request-time localization. Report that mix once.
    JSON remains numeric and locale-independent: time it once per source/pass, not three
    copies under locale names. Page and JSON do different application work; byte length alone
    does not predict equal throughput. Native algorithms need not be identical.
@@ -310,15 +311,16 @@ passed, no failures, a clean tree at the plan's commit) and parts that did not r
    Use compare.mjs with current and baseline summary paths and --unchanged-apps listing only
    verified unchanged reference adapters. It always compares Corten and reports the reference
    cohort's median percentage changes separately; an incompatible comparison emits no deltas.
-   Named-group rounds write `marketplace-results/v5`, including raw native qualification and
+   Named-group rounds write `marketplace-results/v6`, including raw native qualification and
    the exact reserved candidate set. The reader retains groupless `marketplace-results/v4`
    and `marketplace-results/v3` history. A v3 summary (r19 and other rounds before app stops
    were recorded) has no stop records, since under v3 an app that stopped failed the round.
    Compatible groupless v3/v4 rounds may compare, but neither becomes a named-group baseline.
-   report.mjs rejects any other schema and never relabels old evidence as qualified v5.
+   v5 named-group results retain their original separate page locales. Never compare them
+   with or merge them into a v6 round. The reporter rejects unknown schemas.
 5. Update marketplace README Results intro/link with round, UTC date, CPU, measured SHA,
    profile/windows and limits. Generate current server tables in docs/performance.md from the
-   reporter: all page locales, JSON once, sat64 and sat256 throughput/latency, fixed CPU/memory,
+   reporter: the timed page mix and neutral JSON for each source, sat64 and sat256 throughput/latency, fixed CPU/memory,
    counted efficiency, cold starts and pass ranges. Keep old build/bytes/instructions/browser
    sections explicitly historical. Replace root README's server headlines with measured v2
    numbers, no overall fastest claim. Rewrite the existing benchmark docs changelog entry,
