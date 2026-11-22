@@ -4,6 +4,8 @@
 //! build with the `compress` feature), as it keeps any `Public` text
 //! ([`App::kept_answers`](crate::App::kept_answers)): a sitemap's handler then does not run for
 //! every crawler that asks without credentials, and a URL added since may wait that hour to show.
+//! `.shared(..)` on the answer says another time for shared caches and the app
+//! (`seo::sitemap(urls).shared(Duration::from_secs(60))`), and `App::kept_answers(0)` keeps none.
 //!
 //! ```
 //! use corten::{prelude::*, seo};

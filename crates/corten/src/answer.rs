@@ -1536,9 +1536,10 @@ impl Answer for Relay {
 /// more of a type such as CSV or SVG, in a build with the `compress` feature) is kept by the app
 /// as `Public` text is, with its headers, and given again in the handler's place to a request
 /// that shows nothing about who asks, until its lifetime ends
-/// ([`App::kept_answers`](crate::App::kept_answers)); any other is the handler's for every
-/// request: a smaller one, a picture of a type the app does not compress, a stream, an
-/// immutable one.
+/// ([`App::kept_answers`](crate::App::kept_answers)); any other from such a route is the
+/// handler's for every request: a smaller one, a picture of a type the app does not compress, a
+/// stream, an immutable one, and any from an unstaged route. One a page route answers in its
+/// page's place ([`PageOr`]) is kept as that page would be, whatever its type.
 ///
 /// ```
 /// use corten::{prelude::*, Media};

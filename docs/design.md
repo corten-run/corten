@@ -7359,16 +7359,17 @@ rules something out.
     lifetime for the app, as before this, and is left to the caches that keep it for a year.
     A route of such files leaves the store out after its first 64 answers, as a route of small
     bodies does. A kept file is sent with the headers its handler gave it, its
-    `Content-Disposition` among them, and an unstaged route's file is never kept, since no
-    stage runs there to ask. What a page route answers in a page's place is kept as the page would be, as it was
+    `Content-Disposition` among them, and an unstaged route's file is never kept: its handler is routed
+    bare, with no stage to ask the store, and counts for nothing in whether the app has one. What a page route answers in a page's place is kept as the page would be, as it was
     before this: a file of a known size from a route that says it answers a page or a file
     (`PageOr`), and an answer type of the app's own that says it is a page. So a file is kept
     by its route's rule: from a route of files where the app compresses it, and from a page
     route whatever its type and its build, as the page at that URL is. A picture typed
-    `PageOr` is therefore kept where the same picture from a route of files is not, which
+    `PageOr` is therefore kept where the same picture from a route of files is not, and a
+    request for data is kept for a route of files and not for a page route, which
     this leaves as it was.
     One thing differs from a page. A page route has three answers at its URL (the document, its
-    swap and its data) and only the document is kept; a JSON or text route has one, so a request
+    swap and its data) and only the document is kept; a JSON, text or file route has one, so a request
     that asks for JSON first is kept too. A handler that takes `Req` can read which of the two
     asked (`req.mode`), and whether it does is not in its type, so the two are kept apart and a
     route asked both ways holds its body twice. It can read the request's language too
@@ -7376,8 +7377,8 @@ rules something out.
     in `Vary`, as a page is. With both, a URL's eight copies are shared by the ways of asking
     times the languages asked in. An answer may hold markup its handler rendered, and one with a form's new submit key is
     not kept; it is still sent `public`, a fault this does not mend
-    ([#1863 A `Public` answer with a submit key its handler rendered to a string is sent to shared caches as one any visitor may be given](https://github.com/corten-run/corten/issues/1863)). A page's render marks the key it drew; markup rendered any other way (into JSON
-    or text, or into a file a page route answers) carries no mark, so the route watches the handler's own polls for one being drawn, and a render that reads
+    ([#1863 A `Public` answer with a submit key its handler rendered to a string is sent to shared caches as one any visitor may be given](https://github.com/corten-run/corten/issues/1863)). A page's render marks the key it drew; markup rendered any other way (into JSON,
+    text or a file) carries no mark, so the route watches the handler's own polls for one being drawn, and a render that reads
     the mark for itself (a page's, a patch's, one made with `req.rendered`) leaves a key drawn
     before it for the watch, also when it fails: a field rendered to a string and placed in a
     page as markup. A key drawn outside the handler's polls, or on another thread during one
@@ -7443,7 +7444,7 @@ rules something out.
     removes pages as their lifetimes end, since a page that no longer stands is replaced when it
     is next asked for and goes when room is made; and, left for changes of their own, a call
     that drops a page for a change no write to its path made, a way for an extractor of the
-    app's own to say it reads only the URL, a `Public` file of a type the app does not compress kept for the hash of its tag (which is about 20,300 of the 61,024 instructions the PNG's request costs below with a coding named, at the price of a second copy of bytes the app may hold; [#1877 The tag's hash is a third of a request for a file the app does not compress: about 2.5 instructions a byte, made again for every answer that is not kept](https://github.com/corten-run/corten/issues/1877) has the ways to make the hash cheaper for every answer), every `Public` body kept whatever its size and its build
+    app's own to say it reads only the URL, a `Public` file of a type the app does not compress kept for the hash of its tag (which is 20,347 of the 61,024 instructions the PNG's request costs below with a coding named, by callgrind's count for the hash's function in `73f38661f`, at the price of a second copy of bytes the app may hold; [#1877 The tag's hash is a third of a request for a file the app does not compress: about 2.5 instructions a byte, made again for every answer that is not kept](https://github.com/corten-run/corten/issues/1877) has the ways to make the hash cheaper for every answer), every `Public` body kept whatever its size and its build
     (what this first did, for the 3.9% and at the price of the 13.8% below), a size of the store's own apart
     from the compressor's (no round supports one), a way for a route to say its bodies are
     worth keeping (a second way to say what `Public` says, until an app shows the handler it
@@ -7672,18 +7673,30 @@ rules something out.
     coding; the CSV 45,158 against 324,632, 44,684 against 905,697 and, with no coding, 40,348
     against 39,349, more, as a kept body the handler made nothing for is above; the PNG 61,497
     against 61,566, 60,910 against 61,024 and 37,493 against 37,712, the same within what two
-    builds differ by. Under load on a quiet cloud host (Xeon Platinum 8280, Linux 6.12.117,
+    builds differ by; each is one run at each count, with every answer's status, size and type
+    read. Under load on a quiet cloud host (Xeon Platinum 8280, Linux 6.12.117,
     `wrk` 4.1.0 with 64 connections from two threads on two cores of their own, the app on one,
     `perf stat` on the app's process; six starts of both builds, eight pairs of 3 s turns in
-    each with the order turned about, the change taken within each pair), cycles a request at
-    the median of the 48 pairs: the sitemap with four codings 53,074 against 346,018, 84.7%
-    fewer (84.5% to 84.8% by start), and with no coding 74,374 against 247,734, 70.0% fewer
-    (69.4% to 70.9%); the CSV with four codings 53,896 against 151,793, 64.5% fewer (64.1% to
-    65.1%), each fewer in all 48 pairs; the CSV with no coding 52,600 against 51,332, 2.9% more
-    (0.0% to 4.3% by start, more in 38 of 48), the price of a kept answer where its handler
-    makes nothing and nothing is compressed; the PNG 60,928 against 61,011 with four codings
-    (+0.2%, -2.1% to +1.2% by start) and 49,172 against 48,783 with none (+0.5%, -3.4% to
-    +3.4%), where the same build against itself gave +0.5% (-1.5% to +2.2%). The app's
+    each with the order turned about), cycles a request, each build's at its median turn and
+    the change at the median of the 48 changes within a pair: the sitemap with four codings
+    53,074 against 346,018, 84.7% fewer (84.1% to 86.2% by pair, 84.5% to 84.8% by start; user
+    cycles 26,440 against 314,057, kernel 26,620 against 31,836), and with no coding 74,374
+    against 247,734, 70.0% fewer (67.8% to 73.0% by pair, 69.4% to 70.9% by start; user 23,470
+    against 194,555, kernel 51,114 against 53,081); the CSV with four codings 53,896 against
+    151,793, 64.5% fewer (60.5% to 68.7% by pair, 64.1% to 65.1% by start; user 26,059 against
+    121,217, kernel 27,708 against 30,545), each fewer in all 48 pairs; the CSV with no coding
+    52,600 against 51,332, 2.9% more (3.5% fewer to 18.2% more by pair, 0.0% to 4.3% by start,
+    more in 38 of 48; user 22,619 against 21,491, kernel 29,912 against 29,994), the price of a
+    kept answer where its handler makes nothing and nothing is compressed; the PNG 60,928
+    against 61,011 with four codings (+0.2%; -15.6% to +4.0% by pair, -2.1% to +1.2% by start)
+    and 49,172 against 48,783 with none (+0.5%; -8.3% to +11.8% by pair, -3.4% to +3.4% by
+    start), where the same build against itself gave +0.5% (-1.5% to +2.2% by start), so no
+    cost to a file that is not kept is shown. No request failed in the 672 turns. No smallest
+    worthwhile reduction was declared for a file before this run: the 20% set before the body's
+    run above is what a kept answer the app compresses was held to, and the least of the 144
+    changes within a pair in the three cases that gained is 60.5%. Perf's running percentage
+    and the user instruction-cache misses were not recorded, and `gzip` alone was counted and
+    not run under load. The app's
     resident memory, about 10 MB, differed by at most 124 kB either way. A kept file is held as a copy
     of its own, so bytes the app holds are held twice while the copy is kept, with each coded
     form made of them.
@@ -7712,7 +7725,8 @@ rules something out.
     `Accept-Language`, which is the key, and of a body's `GET` those and whether JSON was asked
     for first, which is in its key too; the stages after the handler read the request and the
     answer and nothing the handler held, so they treat a kept answer as its own); bet (an app that
-    marks a page `Public` means the lifetime it wrote also with no CDN in front, and does in its
+    marks a page `Public` means the lifetime it wrote also with no CDN in front, and the hour
+    `seo` writes for a sitemap or `robots.txt` where it wrote none, and does in its
     handler nothing that must happen for every request; markup with a form's new submit key is rendered by the handler itself on the thread that
     runs it, not by a task it spawned, one it handed a render to, or a thread of its own; no app finishes work again and again on the
     `Signal` of a write from before its first answer that may be kept); value (fast and proven fast; standards
@@ -7723,9 +7737,14 @@ rules something out.
 
     Revisit when: apps report pages shown past what they meant, so the default should be off
     or the lifetime the app's to set apart from `s-maxage`; an app's handler for bodies the
-    app does not compress (small ones, or any in a build without `compress`) waits on a
+    app does not compress (small ones, ones of a type it leaves as it is, as a feed's
+    `application/rss+xml`, a PDF or a picture is, or any in a build without `compress`) waits on a
     database or another service, so keeping them would save more than asking costs and the
-    rule should be the route's to widen; a route's profile shows its few large bodies made
+    rule should be the route's to widen; an app's page route answers pictures or small files
+    in its page's place (`PageOr`) often enough that keeping them, which the page's rule does
+    whatever their type, costs more than their handler saves, so a file there should be kept
+    by the rule for a file; apps report a sitemap or `robots.txt` an hour behind their data
+    with no CDN in front, so `seo`'s hour should not be the app's too; a route's profile shows its few large bodies made
     for each request among many small ones, so a run is the wrong measure; an app's profile shows the copies
     for URLs asked for once in a store with room, so the rule should start before the store
     is full; an app's pages are made twice in a full store at a cost above the copies saved

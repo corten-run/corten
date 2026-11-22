@@ -2860,8 +2860,32 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
     let csv = || "sku,qty\n".repeat(200);
     let (sitemap, robots, cards, mark, picture, export) =
         (runs.clone(), runs.clone(), runs.clone(), runs.clone(), runs.clone(), runs.clone());
-    let (paged, chart) = (runs.clone(), runs.clone());
+    let (paged, chart, tagged, crawlers, flaky) = (runs.clone(), runs.clone(), runs.clone(), runs.clone(), runs.clone());
     let svg = || format!("<svg>{}</svg>", "<g/>".repeat(300));
+    // A file with a tag of its handler's own, which the app leaves as it is and does not keep.
+    struct ETag;
+    impl crate::answer::Header for ETag {
+        const NAME: &'static str = "etag";
+    }
+    let tagged = move || {
+        tagged.ran();
+        let file = crate::Media::new("text/csv", csv());
+        async move { Public::new(minute, file).header::<ETag>(HeaderValue::from_static("\"v1\"")) }
+    };
+    // A `robots.txt` large enough to compress.
+    let crawlers = move || {
+        crawlers.ran();
+        async move { seo::robots(&["/account/"; 120], None) }
+    };
+    // A file whose handler fails the first time it is asked.
+    let asked = Runs::default();
+    let flaky = move || {
+        flaky.ran();
+        asked.ran();
+        let failed = asked.count() == 1;
+        let file = if failed { Err(Error::not_found()) } else { Ok(crate::Media::new("text/csv", csv())) };
+        async move { Public::new(minute, file) }
+    };
     // A sitemap's page, which may not be there: the answer `seo`'s own example gives.
     let paged = move || {
         paged.ran();
@@ -2903,6 +2927,9 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
         .route("/sitemap/2.xml", crate::route::get(paged).0)
         .route("/cards.csv", crate::route::get(cards).0.post(|| async { StatusCode::NO_CONTENT }))
         .route("/chart.svg", crate::route::get(chart).0)
+        .route("/tagged.csv", crate::route::get(tagged).0)
+        .route("/crawlers/robots.txt", crate::route::get(crawlers).0)
+        .route("/flaky.csv", crate::route::get(flaky).0)
         .route("/mark.svg", crate::route::get(mark).0)
         .route("/picture.png", crate::route::get(picture).0)
         .route("/export.csv", crate::route::get(export).0);
@@ -2913,6 +2940,8 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
         ("/sitemap/2.xml", true),
         ("/cards.csv", true),
         ("/chart.svg", true),
+        ("/tagged.csv", false),
+        ("/crawlers/robots.txt", true),
         ("/mark.svg", false),
         ("/picture.png", false),
         ("/export.csv", false),
@@ -2936,6 +2965,23 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
     assert_eq!(cards[header::CACHE_CONTROL], "public, max-age=60");
     #[cfg(feature = "compress")]
     assert_eq!((cards.contains_key(header::AGE), &cards[header::CONTENT_ENCODING]), (true, &HeaderValue::from_static("gzip")));
+    // A file's key is its URL with its query, and a request with a cookie is its handler's.
+    let before = runs.count();
+    let (_, other, _) = fetch(&router, "GET", "/cards.csv?page=2", &[]).await;
+    let (_, again, _) = fetch(&router, "GET", "/cards.csv?page=2", &[]).await;
+    let (_, known, _) = fetch(&router, "GET", "/cards.csv", &[("cookie", "sid=1")]).await;
+    assert_eq!((other.contains_key(header::AGE), known.contains_key(header::AGE)), (false, false));
+    assert_eq!(again.contains_key(header::AGE), cfg!(feature = "compress"));
+    assert_eq!(runs.count() - before, if cfg!(feature = "compress") { 2 } else { 3 });
+    // A handler that failed is asked again, and what it then makes is kept.
+    let before = runs.count();
+    let (failed, first, _) = fetch(&router, "GET", "/flaky.csv", &[]).await;
+    let (made, second, _) = fetch(&router, "GET", "/flaky.csv", &[]).await;
+    let (_, third, _) = fetch(&router, "GET", "/flaky.csv", &[]).await;
+    assert_eq!((failed, made), (StatusCode::NOT_FOUND, StatusCode::OK));
+    assert_eq!((first.contains_key(header::AGE), second.contains_key(header::AGE)), (false, false));
+    assert_eq!(third.contains_key(header::AGE), cfg!(feature = "compress"));
+    assert_eq!(runs.count() - before, if cfg!(feature = "compress") { 2 } else { 3 });
     let (_, mark, _) = fetch(&router, "GET", "/mark.svg", &[]).await;
     assert_eq!(mark[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
     assert_eq!(mark[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
