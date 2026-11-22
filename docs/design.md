@@ -7483,6 +7483,11 @@ rules something out.
     asks for one set of numbers, so each count is of a header held. With jemalloc the three took
     the `Public` page from 37,682 to 36,851 and a kept page from 35,009 to 34,539, and the page
     for one visitor from 34,898 to 34,913.
+    Counted again at `caefab143`, where a `no-store` that replaces a `Public` answer's policy
+    keeps its word that the answer is the same for everyone, against main's `92a745a63` (the
+    framework's sources as at `564034b86`), with glibc: the page for one visitor 40,908 against
+    40,908, the `Public` page 43,253 against 44,420 (1,167 fewer), and a kept page 42,048 against
+    42,695 (647 fewer).
     Not measured: how the URLs of an app in use are spread,
     so how often one first asked for in a full store is asked for again (the simulation's
     spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
@@ -7526,8 +7531,8 @@ rules something out.
     Last checked: 2026-11-21, what a `Public` mark costs before anything is kept, with rustc
     1.99.1: each count the difference of a run of 1,200 requests and one of 200 under callgrind,
     in process, a release build of each tree, three rounds with glibc's allocator and two with
-    jemalloc, the builds' order turned about from each round to the next, every count within three
-    instructions of the others of its build; 2026-11-21 for a write's count, the callgrind rounds above at `fc86d8eff` and
+    jemalloc (three with glibc at `caefab143`), the builds' order turned about from each round to
+    the next, every count within three instructions of the others of its build; 2026-11-21 for a write's count, the callgrind rounds above at `fc86d8eff` and
     `6984b2ac4`, and the cycles of the same write from the two builds, built with rustc 1.100.0
     on a dedicated 8-CPU cloud host (Xeon Platinum 8358, one thread a core) with nothing else
     running, started once on one CPU, loaded in turn for three seconds each by `wrk` with 64
