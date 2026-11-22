@@ -1099,11 +1099,15 @@ async fn a_text_answer_s_header_map_holds_the_app_s_headers_without_growing() {
     let chunks = futures_util::stream::empty::<Result<crate::http::Bytes, std::io::Error>>();
     assert_eq!(crate::Media::stream("text/csv", chunks).into_response().headers().capacity(), reserved);
     // An SVG can be a document, so it gets `Permissions-Policy` too: the most the default policy leaves.
-    for (path, held) in [("/text", 11), ("/bytes", crate::response::APP_HEADERS)] {
+    // Without `compress` nothing adds `Content-Encoding` or `Vary`.
+    let compressed = cfg!(feature = "compress");
+    let coded = if compressed { 2 } else { 0 };
+    for (path, held) in [("/text", 9 + coded), ("/bytes", crate::response::APP_HEADERS - 2 + coded)] {
         let req = Request::get(path).header("accept-encoding", "br").body(Body::empty()).unwrap();
         let res = router.clone().oneshot(req).await.unwrap();
         let headers = res.headers();
-        assert!(headers.contains_key("content-encoding") && headers.contains_key("strict-transport-security"), "{path}");
+        assert_eq!(headers.contains_key("content-encoding"), compressed, "{path}");
+        assert!(headers.contains_key("strict-transport-security"), "{path}");
         assert_eq!((headers.keys_len(), headers.capacity()), (held, reserved), "{path}: {headers:?}");
     }
 }

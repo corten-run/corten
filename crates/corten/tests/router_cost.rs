@@ -5,6 +5,7 @@
 //! Subtract totals and divide by 1,000. `ROUTER_TARGET=missing` counts a 404; otherwise it
 //! counts the matched parameter route. No sockets, fixture or global allocator is needed.
 //! `ROUTER_TARGET=unstaged` counts a text answer from a route outside the app's stages.
+//! (`ROUTER_PUBLIC` and `ROUTER_ASKED` change nothing it counts: that route keeps no answer).
 //!
 //! What a write pays for the answers the app keeps: `ROUTER_TARGET=write` counts a `POST` to
 //! the same path (a route with no parameter, so the three apps share its handlers), in an app
