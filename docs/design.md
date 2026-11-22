@@ -1685,14 +1685,16 @@ rules something out.
     `form`, `query`, `tracing` and `tower-log` serve readers Corten has its own of.
 
     The router's own `404`, `405` and `501`, and its `400` for a named post none of the page's
-    handlers is for, mark the request as the router's on the signal the
-    stages hold, which `Next` carries past the app's middleware to the route
-    (`router::Endpoint::answer`), as the answer is polled (`router::Unrouted`), so the error page
-    in their place, and the failure sent as it is or as JSON, are never shared
-    ([caching](guide/app.md#caching)). A middleware passes on only a request: one that rebuilds it
-    with other extensions, or another signal, cannot take the mark off, and one that answers
-    without running the route, or makes the route's future and drops it unpolled, never reaches
-    it. A mark in the answer's
+    handlers is for, carry a private mark in their extensions from where the router makes them
+    (`cache::Unshared`), so the error page in their place, and the failure sent as it is or as
+    JSON, are never shared ([caching](guide/app.md#caching)), whatever a middleware does to the
+    answer in place: another status, a redirect, a body of its own. One that answers with a
+    response it made itself, having run the route or not, has answered the request. Until round
+    10 of the review the router marked the request instead, on the signal the stages hold, which
+    `Next` carried past the app's middleware (`router::Unrouted`), and the cache rule read that
+    signal with the final status; a middleware that turned the router's `404` into a `200` or a
+    redirect in place then kept the CDN caching headers on it, and the answer's own mark does not
+    depend on its status. Before that, a mark in the answer's
     extensions allocated the empty map on the bare `404` and, with its settlement after the page,
     cost 1,336 instructions a request on the default missing-route probe
     (`tests::cache::what_settling_a_page_costs`, `SETTLE_CASE=missing`: 19,421.7 at `7935404da`
@@ -1729,7 +1731,19 @@ rules something out.
     18,111.5; `custom` 854) and the `400` 694 (17,718.0 against 17,023.9). With the CDN headers
     the `400` costs 2,139 (27,032.2 against 24,893.2), 7 more than at `696d96a71`: by
     function, `memcmp` called from `cache::drop_cdn_caching` as many times as before, taking
-    more instructions a call.
+    more instructions a call. With the mark on the answer alone, at `2960a7abe` against main
+    `63e7c3314` (whose `crates/` are `7a275ef15`'s), the router's `404` costs 1,512 instructions a
+    request (19,624.0 in every run against 18,111.6; `custom` 1,510: 19,939.6 against 18,429.4),
+    659 more than at `57f2138a4`: by function against main, the extensions map is now allocated
+    on the bare `404` as the router makes it and again on the error page in its place
+    (`hashbrown`'s insert, rehash and drop, `malloc` and `free`, about 800 together), reading the
+    two marks a replacement keeps (`cache::Marks::of`, 81) and looking for the CDN caching headers
+    to drop (`cache::drop_cdn_caching`, 187). The named post's `400` costs 978 (18,002.0 against
+    17,023.9), 284 more than at `57f2138a4`, and with the six CDN caching headers 2,416 (27,309.3
+    against 24,893.2). Correctness comes first (the README's Values): a mark on the request was
+    lost when a middleware edited the answer in place, and a mark on the answer is not. Not
+    tried: moving the failed answer's map onto the error page when it holds the mark alone, which
+    would save one of the two allocations.
 
     Stands on: platform (RFC 9110 9.1: an origin server SHOULD answer `501` to a method it does
     not recognize or implement, and every server implements `GET` and `HEAD`; 15.5.6: `405` is
@@ -1995,7 +2009,10 @@ rules something out.
     `400` by function against `f02560816`; 2026-11-22, the same and the `400` with the CDN
     headers at `57f2138a4` against main `7a275ef15` (three rounds alternating the two builds,
     every run within 2.2 of the others), and the `400` with the CDN headers by function against
-    `696d96a71`.
+    `696d96a71`; 2026-11-22, the router's `404`, with and without the app's error page, and the
+    named post's `400`, with and without the CDN headers, at `2960a7abe` against main `63e7c3314`
+    (three rounds alternating the two builds, every run within 1.5 of the others), and the `404`
+    and the `400` by function against that main.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -2217,32 +2234,37 @@ rules something out.
     validator, a cache could freshen an older page of the same length ([Limit 21](#limit-etag)).
     The stage future holds the request once. Each stage moves its handle to the next, and
     dispatch consumes it to give the request to the first middleware or, when there is none,
-    the route. The compiler rejects a stage that reads it after hand-off. The `Next` a middleware
-    is given also carries the request's signal past it to the route, which it never sees, so the
-    router marks its own failure on the signal the stages read whatever request a middleware
-    passes on: 9 instructions a request on a plain page at `4630a2ff2` (6 in the stage future, 3
-    in `middleware::handle`, by function against `eaab8be27`). An answer that is no handler's
+    the route. The compiler rejects a stage that reads it after hand-off. An answer that is no handler's
     own (a refusal, an extractor's rejection, a panic's or the deadline's failure, and the page,
-    JSON failure or sign-in redirect Corten draws in place of one) carries a private mark in its
+    JSON failure or sign-in redirect Corten draws in place of one, the router's own failures, a
+    refusal sent at another status with `Error::with_status`, and what an error page's own
+    extractor answers in its place) carries a private mark in its
     extensions (`cache::Unshared`), put there by the code that made it, and the cache rule decides
     from the final answer alone on every exit, success or failure (`cache::settle`). The mark goes
     wherever the answer goes: out of a task the handler spawned, from before the request came in,
     from another app whose answer a middleware relays inline, under any status a middleware gives
-    it. It replaced a count of refusals on the thread compared before and after each poll
+    it, in place or by moving the answer's parts. Code that draws a new answer in place of one
+    (the error page, a debug build's error) copies the old one's marks onto it (`cache::Marks`),
+    `NoStore` included. It replaced a count of refusals on the thread compared before and after each poll
     (`402a11a08`), which lost the answers other code drew in a refusal's place (another app's
     error page and sign-in redirect relayed inline, a JSON failure turned into a `200`) and a
     refusal made outside the stages; a mark on the answer is what the answer is, wherever it was
-    polled. The router's own answers mark the signal as they are polled (`router::Unrouted`),
-    not when the future is made, so a middleware that makes the route's future and drops it
-    unpolled has answered the request itself. `middleware::handle` boxes that future as a route's
-    answer is boxed: inline in the stage future, the larger future cost the plain page about 116
-    instructions in copies (`4e7f650b2`). Together, 100 instructions a request on a plain page at
+    polled. The router's own answers are marked when they are made, so a middleware that makes the
+    route's future and drops it unpolled, and answers with a response of its own, has answered the
+    request itself. Round 9's head also marked the request's signal as the router's answer was polled
+    (`router::Unrouted`), carried by `Next` (9 instructions a request on a plain page at
+    `4630a2ff2`), and boxed that future in `middleware::handle` (inline in the stage future, the
+    larger future cost the plain page about 116 instructions in copies, `4e7f650b2`); both are
+    gone, as the answer's mark is enough. Together, 100 instructions a request on a plain page at
     `696d96a71` against main `153be9116` (16,504.6 against 16,404.6), 34 fewer than round 7's
     head merged with that main (`f02560816`, 16,538.6): by function against it, `page::run` 26
     fewer without the count, `page_or_error` 9 and `middleware::handle` 7 fewer, the dispatch
     future's drop glue 1 fewer, `cache::settle` 7 more for reading the mark, and the stage future
     1 more. After the merge of main `7a275ef15`, the same 100 at `57f2138a4` against it (16,504.7
-    against 16,404.6). The late layout poller
+    against 16,404.6). Without the signal's mark, at `2960a7abe` against main `63e7c3314`, 105
+    (16,509.6 against 16,404.7), 5 more than at `57f2138a4`: by function against main, the cache
+    rule's header reads (`HeaderMap::get2` and its hashing, 70, `cache::settle` 17 and
+    `cache::sets_cookie` 15). The late layout poller
     lives in the existing late-write box, so it neither enlarges the ordinary future nor adds
     a box to a late-eligible write.
     The stages read the incoming request's mode, credentials, validators, and the host and
@@ -2406,7 +2428,8 @@ rules something out.
     against main `e7e89add8`, and 6,403.5 to 6,405.0 at `4630a2ff2` against 6,390.7 to 6,395.1 for
     main `cf4435c91`, and 6,402.0 at `402a11a08` against 6,389.9 to 6,391.4 for main `56e9b6b66`, and 6,400.9 to
     6,401.0 at `696d96a71` against 6,389.9 to 6,390.0 for main `153be9116`, and 6,398.8 to 6,401.0
-    at `57f2138a4` against 6,387.8 to 6,390.0 for main `7a275ef15`;
+    at `57f2138a4` against 6,387.8 to 6,390.0 for main `7a275ef15`, and 6,400.9 to 6,401.0 at
+    `2960a7abe` against 6,387.8 to 6,390.0 for main `63e7c3314`;
     the `service_fn` control 3,083 to 3,088 in each build), which takes it to about 109
     over 6,932.
     Correctness comes first (the README's Values), so the check stays. Removing the CDN headers as
@@ -2583,7 +2606,9 @@ rules something out.
     measurement.
 
     Last checked: 2026-11-22, the plain page, the unstaged route and the `service_fn` control in
-    `tests::cache::what_settling_a_page_costs` at `57f2138a4` against main `7a275ef15`, which it
+    `tests::cache::what_settling_a_page_costs` at `2960a7abe` against main `63e7c3314` (three
+    rounds alternating the two builds, every run within 2.2 of the others), and the plain page by
+    function against it; 2026-11-22, the same at `57f2138a4` against main `7a275ef15`, which it
     merged (three rounds alternating the two builds, every run within 2.2 of the others);
     2026-11-22, the same at `696d96a71` against main `153be9116` and
     round 7's head merged with it (`f02560816`), three rounds alternating the three builds (every

@@ -1493,7 +1493,8 @@ redirect that app drew in a refusal's place included) is never shared, whatever 
 middleware sends it with. A handler's own failure is its answer, a plain-text one too: the error
 page a browser gets in its place keeps what a middleware wrote, as for its own 404. An unstaged route's `NoStore`
 answer goes out `private, no-store` with none of them either
-([a route outside the stages](#a-route-outside-the-stages)). A handler
+([a route outside the stages](#a-route-outside-the-stages)); its other answers, refusals
+included, go out as its handler made them, since no stage runs the cache rule there. A handler
 cannot mark an answer public any other way: a response it builds by hand is not an answer a route
 can name, and if anything read a caller the answer is private whatever its header says.
 
