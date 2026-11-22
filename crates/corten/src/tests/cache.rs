@@ -743,10 +743,13 @@ async fn a_public_answer_whose_handler_drew_a_submit_key_is_the_browser_s_alone_
                 "/placed",
                 typed(move |req: Req| async move {
                     let form = html! { <form method="post">{field()}</form> }.to_html();
-                    Public::new(
-                        minute,
-                        req.test_page_for("Placed", html! { <div>{crate::view::raw(form)}<p>{filler()}</p></div> }),
-                    )
+                    let main = html! {
+                        <div>
+                            {crate::view::raw(form)}
+                            <p>{filler()}</p>
+                        </div>
+                    };
+                    Public::new(minute, req.test_page_for("Placed", main))
                 })
                 .0,
             )
