@@ -1433,7 +1433,9 @@ impl Applied {
             Some(value) => headers.insert(header::X_FRAME_OPTIONS, value),
             None => headers.remove(header::X_FRAME_OPTIONS),
         };
-        headers.insert(HeaderName::from_static("cross-origin-opener-policy"), opener);
+        // A constant, so the name is checked when the crate is built, not on each answer.
+        const OPENER_POLICY: HeaderName = HeaderName::from_static("cross-origin-opener-policy");
+        headers.insert(OPENER_POLICY, opener);
         if self.hsts {
             headers.insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static("max-age=31536000; includeSubDomains"));
         }

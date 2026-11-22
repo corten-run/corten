@@ -127,9 +127,19 @@ impl<T: IntoResponse, E: IntoResponse> IntoResponse for Result<T, E> {
 #[inline]
 fn typed(body: Body, content_type: &'static str) -> Response {
     let mut res = Response::new(body);
-    res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    let headers = res.headers_mut();
+    // Room for the headers `App` adds too, so the map is allocated once, as a page's and JSON's
+    // are: a map made by its first header holds six, and grew when the security headers came.
+    headers.reserve(APP_HEADERS);
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
     res
 }
+
+/// The most headers a text or bytes answer leaves the app with: its own `Content-Type`, the
+/// security headers (seven for an SVG with HSTS), `Cache-Control`, its `ETag`, `Vary` and,
+/// compressed, `Content-Encoding`. A header of the handler's own on top of all of them grows the
+/// map once, as every answer's did before.
+pub(crate) const APP_HEADERS: usize = 12;
 
 const TEXT: &str = "text/plain; charset=utf-8";
 const OCTETS: &str = "application/octet-stream";

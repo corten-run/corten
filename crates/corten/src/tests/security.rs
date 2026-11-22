@@ -1082,6 +1082,29 @@ async fn big_error_page(_: Failure, req: Req) -> HtmlResult {
     req.test_page("Error", html! { <p>{text}</p> })
 }
 
+/// A text or bytes answer's header map starts with room for the headers the app adds
+/// (`APP_HEADERS`), so the security headers, `Cache-Control`, `Vary`, its tag and a compressed
+/// body's `Content-Encoding` go in without growing it, with HSTS too. A map its first header
+/// made holds six and grows to the same size, so the starting capacity is what tells them apart.
+#[tokio::test]
+async fn a_text_answer_s_header_map_holds_the_app_s_headers_without_growing() {
+    let routes = Table::new()
+        .route("/text", get(|| async { "text ".repeat(400) }))
+        .route("/bytes", get(|| async { crate::Media::new("image/svg+xml", "<svg/>".repeat(300)) }));
+    let router = App::new(Routes::from(routes)).policy(crate::security::Policy::new().hsts()).router();
+    let reserved = http::HeaderMap::<http::HeaderValue>::with_capacity(crate::response::APP_HEADERS).capacity();
+    assert_eq!("".into_response().headers().capacity(), reserved, "a text answer starts with room for them");
+    assert_eq!(crate::Media::new("image/png", "").into_response().headers().capacity(), reserved);
+    // An SVG can be a document, so it gets `Permissions-Policy` too: the most these answers hold.
+    for (path, held) in [("/text", 11), ("/bytes", crate::response::APP_HEADERS)] {
+        let req = Request::get(path).header("accept-encoding", "br").body(Body::empty()).unwrap();
+        let res = router.clone().oneshot(req).await.unwrap();
+        let headers = res.headers();
+        assert!(headers.contains_key("content-encoding") && headers.contains_key("strict-transport-security"), "{path}");
+        assert_eq!((headers.keys_len(), headers.capacity()), (held, reserved), "{path}: {headers:?}");
+    }
+}
+
 /// A page's header map starts at the capacity 13 slots give (24), and with HSTS and compression the
 /// headers each case holds need no more: a compressed page (13 headers, with its `ETag`), the
 /// default error page (12, uncompressed), a compressed app error page (13, with `X-Robots-Tag`)

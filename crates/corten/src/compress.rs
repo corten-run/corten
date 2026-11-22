@@ -143,8 +143,8 @@ fn each_accepted(headers: &HeaderMap, mut f: impl FnMut(u16, Coding)) {
     }
 }
 
-fn compressible(content_type: &str) -> bool {
-    let essence = crate::api::media_type(content_type);
+/// Whether a media type (`essence`, without its parameters) is worth compressing.
+fn compressible(essence: &str) -> bool {
     (essence.starts_with("text/") && essence != "text/event-stream")
         || matches!(
             essence,
@@ -272,14 +272,15 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     }
     let headers = res.headers();
     let content_type = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
-    let event_stream = crate::api::media_type(content_type) == "text/event-stream";
-    if event_stream {
+    // Read once: every answer passes here, and the checks below ask about the same type.
+    let essence = crate::api::media_type(content_type);
+    if essence == "text/event-stream" {
         return stream(res, accepts.streamed());
     }
     // A `Media::stream`: a chunk at a time as it comes, never collected, when its type is worth
     // it. Only a body of no stated size can be one, so a buffered answer pays one size check.
     if http_body::Body::size_hint(res.body()).exact().is_none() && res.extensions().get::<crate::answer::Streamed>().is_some() {
-        if !varies(content_type, headers) || headers.contains_key(header::CONTENT_ENCODING) {
+        if !varies_as(essence, headers) || headers.contains_key(header::CONTENT_ENCODING) {
             return res;
         }
         // One whose length is too small to be worth it keeps it, as a buffered body does.
@@ -291,7 +292,7 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
         }
         return stream(res, accepts.streamed());
     }
-    if !varies(content_type, headers)
+    if !varies_as(essence, headers)
         || headers.contains_key(header::CONTENT_ENCODING)
         || headers.contains_key(header::CONTENT_RANGE)
         || matches!(res.status(), StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED)
@@ -342,9 +343,7 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
 /// for the end takes it as whole; one that fails is cut where it failed, without that end.
 fn stream(res: Response, coding: Option<Coding>) -> Response {
     let headers = res.headers();
-    if headers.contains_key(header::CONTENT_ENCODING)
-        || headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("no-transform"))
-    {
+    if headers.contains_key(header::CONTENT_ENCODING) || headers.get(header::CACHE_CONTROL).is_some_and(no_transform) {
         return res;
     }
     let (mut parts, body) = res.into_parts();
@@ -508,19 +507,39 @@ impl Drop for StreamCoder {
 /// `accept-encoding`, whatever its size: a type worth compressing that does not say
 /// `no-transform`. A `304` in place of such an answer sends the same `Vary` (`cache::tag`).
 pub(crate) fn varies(content_type: &str, headers: &HeaderMap) -> bool {
-    compressible(content_type)
-        && !headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("no-transform"))
+    varies_as(crate::api::media_type(content_type), headers)
+}
+
+/// [`varies`], for a media type already read from its `Content-Type`.
+fn varies_as(essence: &str, headers: &HeaderMap) -> bool {
+    compressible(essence) && !headers.get(header::CACHE_CONTROL).is_some_and(no_transform)
+}
+
+/// Whether a `Cache-Control` value says `no-transform`. Read on every compressible answer, whose
+/// value is a few directives long: comparing each place costs less there than `str::contains`,
+/// which first prepares a search made for long text.
+fn no_transform(value: &HeaderValue) -> bool {
+    const DIRECTIVE: &[u8] = b"no-transform";
+    value.to_str().is_ok() && value.as_bytes().windows(DIRECTIVE.len()).any(|at| at == DIRECTIVE)
 }
 
 /// Adds `accept-encoding` to `Vary`, so a cache keeps one copy per coding.
 pub(crate) fn vary(headers: &mut HeaderMap) {
-    let already = headers
-        .get_all(header::VARY)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .any(|v| v.split(',').map(str::trim_ascii).any(|f| f.eq_ignore_ascii_case("accept-encoding") || f == "*"));
-    if !already {
-        headers.append(header::VARY, HeaderValue::from_static("accept-encoding"));
+    const ACCEPT_ENCODING: HeaderValue = HeaderValue::from_static("accept-encoding");
+    // One lookup: most answers have no `Vary` yet, or one line that does not name the header.
+    match headers.entry(header::VARY) {
+        header::Entry::Vacant(entry) => {
+            entry.insert(ACCEPT_ENCODING);
+        }
+        header::Entry::Occupied(mut entry) => {
+            let already = entry
+                .iter()
+                .filter_map(|v| v.to_str().ok())
+                .any(|v| v.split(',').map(str::trim_ascii).any(|f| f.eq_ignore_ascii_case("accept-encoding") || f == "*"));
+            if !already {
+                entry.append(ACCEPT_ENCODING);
+            }
+        }
     }
 }
 
@@ -567,7 +586,7 @@ impl Precompressed {
     /// could use a compressed form starts making them; it and any request before they are done
     /// get the identity bytes (which `apply` compresses at the fast level).
     pub fn pick(&self, headers: &HeaderMap) -> (Bytes, Option<Coding>) {
-        if !compressible(self.content_type) || (self.identity.len() as u64) < MIN_SIZE {
+        if !compressible(crate::api::media_type(self.content_type)) || (self.identity.len() as u64) < MIN_SIZE {
             return (self.identity.clone(), None);
         }
         let Some(coding) = accepted(headers, &[Coding::Brotli, Coding::Gzip]) else {
@@ -674,7 +693,7 @@ fn held_worker() -> Option<&'static std::sync::mpsc::SyncSender<Job>> {
 
 /// Sets the headers for a body [`Precompressed::pick`] chose.
 pub(crate) fn encoded_headers(headers: &mut HeaderMap, content_type: &str, coding: Option<Coding>) {
-    if compressible(content_type) {
+    if compressible(crate::api::media_type(content_type)) {
         vary(headers);
     }
     if let Some(coding) = coding {
@@ -713,6 +732,48 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_str(value).unwrap());
         headers
+    }
+
+    /// `Vary` names `accept-encoding` once: added where the answer has no `Vary`, as a line of
+    /// its own beside lines that do not name it, and not again where a line names it (in any
+    /// case, among other names) or says `*`. A line that is not text is passed over.
+    #[test]
+    fn vary_names_accept_encoding_once_whatever_lines_the_answer_has() {
+        let varied = |lines: &[&[u8]]| {
+            let mut headers = HeaderMap::new();
+            for line in lines {
+                headers.append(header::VARY, HeaderValue::from_bytes(line).unwrap());
+            }
+            vary(&mut headers);
+            headers.get_all(header::VARY).iter().map(|v| v.as_bytes().to_vec()).collect::<Vec<_>>()
+        };
+        let lines = |lines: &[&[u8]]| lines.iter().map(|line| line.to_vec()).collect::<Vec<_>>();
+        assert_eq!(varied(&[]), lines(&[b"accept-encoding"]));
+        assert_eq!(varied(&[b"corten"]), lines(&[b"corten", b"accept-encoding"]));
+        assert_eq!(varied(&[b"cookie", b"accept-language"]), lines(&[b"cookie", b"accept-language", b"accept-encoding"]));
+        assert_eq!(varied(&[b"Accept-Encoding"]), lines(&[b"Accept-Encoding"]));
+        assert_eq!(
+            varied(&[b"cookie", b"accept-language , ACCEPT-ENCODING"]),
+            lines(&[b"cookie", b"accept-language , ACCEPT-ENCODING"])
+        );
+        assert_eq!(varied(&[b"*"]), lines(&[b"*"]));
+        assert_eq!(varied(&[b"x-accept-encoding"]), lines(&[b"x-accept-encoding", b"accept-encoding"]));
+        assert_eq!(varied(&[b"caf\xE9"]), lines(&[b"caf\xE9", b"accept-encoding"]));
+    }
+
+    /// `no-transform` is found wherever `Cache-Control` says it, and only in a value that is text,
+    /// as `str::contains` found it.
+    #[test]
+    fn no_transform_is_read_anywhere_in_cache_control() {
+        let says = |value: &[u8]| no_transform(&HeaderValue::from_bytes(value).unwrap());
+        for value in ["no-transform", "private, no-transform", "no-transform, max-age=60", "public,no-transform,max-age=1"] {
+            assert!(says(value.as_bytes()), "{value}");
+        }
+        for value in ["", "private, no-cache", "no-transfor", "o-transform", "no-store", "no_transform", "No-Transform"] {
+            assert!(!says(value.as_bytes()), "{value}");
+            assert_eq!(says(value.as_bytes()), value.contains("no-transform"), "{value}");
+        }
+        assert!(!says(b"no-transform, caf\xE9"), "a value that is not text says nothing");
     }
 
     #[test]
