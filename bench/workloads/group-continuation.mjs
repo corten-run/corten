@@ -175,7 +175,12 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       const pinned = archives && Object.hasOwn(archives, group);
       // Only bound historical allocations past create/bootstrap (or with a
       // recorded terminal setup) can have cleanup settled by an account census.
-      const censusRequired = !!(archives && state?.id && !terminal(saved)
+      const setupSibling = single && !selected && lock === null && launch && saved.outcome === "available"
+        && state?.status === "starting" && state.preBootstrapTerminal && state.evidence;
+      const idle = () => !present(join(saved.stateRoot, ".groups-launch.lock")) && !present(join(saved.local, "stream-recovery.lock"));
+      const useSetupCensus = setupSibling && idle();
+      if (useSetupCensus) retainedLocks.push(() => assert.ok(idle(), "setup sibling recovery started"));
+      const censusRequired = useSetupCensus || !!(archives && state?.id && !terminal(saved)
         && (["running", "collected", "retired"].includes(state.status) || state.preBootstrapTerminal));
       assert.ok(!pinned || terminal(saved) || censusRequired, "unresolved custody: archive pin lacks a bound historical allocation");
       const noCreate = notCreated(fleet, saved, lock);

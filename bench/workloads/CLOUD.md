@@ -476,6 +476,12 @@ apparatus is not a result. An old bound host without confirmed cleanup is shown
 as such. Continuation then requires the same provider account and still refuses
 create if the existing pre-create census finds any foreign benchmark host.
 
+If a standalone group failed before native entry and its collector recorded the
+archive but not deletion, an unrelated group can use that same census. Its
+launch approval includes the stopped host's original ID: even a renamed or
+retagged host still present in the account prevents creation. An active cleanup
+blocks admission. This does not retire the failed group, retry it, or publish a result.
+
 When the launcher checkout advances or a measured checkout moves, use the
 optional sibling directory `ABSOLUTE_ROOT-checkouts/MEASURED_SHA` for that
 commit's clean worktree. Here `MEASURED_SHA` is the full 40-character Git commit.

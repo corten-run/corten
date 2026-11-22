@@ -15,10 +15,11 @@ import { fleetPlan, reservation, savedLoadLayout, savedPlacement, stagedFleet, t
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
 import { readFleet, readGroup, readRemainingIntent, verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
-import { inspectContinuation } from "./group-continuation.mjs";
+import { continuationAdmission, inspectContinuation } from "./group-continuation.mjs";
 import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { groupNames } from "./registry.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
+import { unitQuery } from "./cloud-options.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 
 // The fake committed tree is fixed for this process, like the captured loader.
@@ -263,6 +264,48 @@ function continuationFixture(t) {
   writeFileSync(index, "[]");
   return { ...p, group, old, next, manifest, index, prepare, preview, detach, history };
 }
+
+test("an unrelated standalone setup failure goes to the account census, not a retry or a result", async (t) => {
+  const p = continuationFixture(t), other = "hardening";
+  stubPreflight(p);
+  assert.equal(await p.prepare("r21"), 3);
+  p.flags.child = async () => 2;
+  assert.equal(await p.detach("r21", await p.preview("r21")), 2);
+  const fleet = readFleet(p.old, "r21").manifest;
+  const state = reservation({ round: "r21", commit, token: fleet.jobs[0].token, group: p.group, fleet });
+  const local = join(p.old, p.group, "groups-r21");
+  mkdirSync(local, { recursive: true });
+  Object.assign(state, { status: "starting", provider: fleet.provider, fullGroupQualified: false, id: "701", ip: "192.0.2.1",
+    createIntentAt: state.createdAt, control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256,
+      ledger: [], sealed: [], monitor: { schema: "benchmark-supervised-control/v1", id: "1".repeat(32), phase: "pending" } } });
+  for (const command of [`systemctl start ${state.unit}`, unitQuery(state)])
+    state.control.ledger.push({ request: controlRequest(state, "ssh", [command], 60000, "bootstrap"), localTerminal: true, code: 0 });
+  const save = () => writeFileSync(join(local, "state.json"), JSON.stringify(state));
+  save();
+  await assert.rejects(p.prepare("r22", commit, other), /unresolved custody/);
+  Object.assign(state, { preBootstrapTerminal: { hostId: state.id, ip: state.ip, monitorId: state.control.monitor.id,
+    invocation: state.control.ledger.at(-1).request.invocation.id, stdout: `Id=${state.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${state.unit}\nActiveState=failed\nRestart=no\nMainPID=0\nExecMainCode=1\nExecMainStartTimestamp=Fri 2026-11-13 01:00:00 UTC\n` },
+    evidence: "evidence-Synthetic", extractionAttempts: ["evidence-Synthetic"], archiveSha256: "a".repeat(64), evidenceSha256: "b".repeat(64) });
+  save();
+  await assert.rejects(p.prepare("r22"), /unresolved custody/);
+  const lock = join(local, "operation.lock");
+  writeFileSync(lock, "{}");
+  await assert.rejects(p.prepare("r22", commit, other), /unresolved custody/);
+  unlinkSync(lock);
+  const kept = treeHash(p.old);
+  assert.equal(await p.prepare("r22", commit, other), 3);
+  assert.equal(await fleetMain(["r22", "--continuation-root", p.h.base, "--group", other, "--detach", "--print-approval"], p.deps), 3);
+  assert.deepEqual(p.output.at(-1).subject.continuation.unconfirmed, [{ group: p.group, round: "r21", accountId,
+    manifestSha256: fileHash(p.manifest), stateSha256: fileHash(join(local, "state.json")), id: state.id }]);
+  const admission = await continuationAdmission(p.h.base, other, p.deps);
+  for (const lock of [join(local, "stream-recovery.lock"), join(p.old, p.group, ".groups-launch.lock")]) {
+    writeFileSync(lock, "{}");
+    assert.throws(() => admission.recheck(), /setup sibling recovery started/);
+    unlinkSync(lock);
+  }
+  admission.recheck();
+  assert.equal(treeHash(p.old), kept);
+});
 
 test("continuation refuses a live staged remaining owner before it writes its intent", async (t) => {
   const p = continuationFixture(t), staged = fixture(t);
