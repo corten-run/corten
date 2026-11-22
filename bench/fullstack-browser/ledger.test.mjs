@@ -5,13 +5,22 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { performance } from "node:perf_hooks";
 import { mkdir, writeFile } from "node:fs/promises";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { chromium } from "@playwright/test";
-import { reconcileRequests } from "./ledger.mjs";
+import { reconcileNativeNetwork, reconcileRequests } from "./ledger.mjs";
 import { createUpstream, UpstreamAudit, reconcileUpstream, upstreamDelta } from "./upstream.mjs";
 import { observeNetwork } from "./observe.mjs";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
 import { mutationProbes } from "./probes.mjs";
 import { runJourney } from "./journey.mjs";
+import { settings } from "./contract.mjs";
+import { replayDocumentNavigation } from "./document-navigation.mjs";
+import { EvidenceStore, openEvidence } from "./native-evidence.mjs";
+import { referenceHtml } from "../marketplace/reference.mjs";
+import { records } from "../marketplace/fixtures.mjs";
+import { createBrowserPlan } from "../workloads/browser.mjs";
 
 const request = (id) => ({ id, method: "GET", path: "/actual", status: 200, completed: true, failure: null, input: null });
 const evidence = () => ({ steps: [{ action: { id: "arrival" }, requests: [request("arrival")] }],
@@ -207,5 +216,106 @@ test("browser cleanup and mutation probes retain real final request and upstream
       assert.ok(e.requestLedger.some((r) => r.path === "/cleanup" && r.completed));
       assert.equal(e.cleanup.contextClosed, true); assert.ok(Array.isArray(e.harnessClosedRequestLedger));
     } finally { await context.close(); }
+  } finally { if (browser) await browser.close(); await close(app); await close(upstream); }
+});
+
+test("native document proof replays the producer's real no-JS receipts and rejects post-navigation work", { timeout: 60000 }, async (t) => {
+  const folder = mkdtempSync(join(tmpdir(), "browser-document-proof-"));
+  t.after(() => { assert.equal(dirname(resolve(folder)), resolve(tmpdir())); rmSync(folder, { recursive: true, force: true }); });
+  const upstream = createUpstream({}), source = await listen(upstream);
+  const fixture = records(), whole = createBrowserPlan({ records: fixture }).cases.find((p) => p.key === "fixture-en-US-desktop-no-js");
+  const profile = { ...whole, steps: whole.steps.slice(0, 2) };
+  const assets = '<link rel="stylesheet" href="/site.css"><link rel="modulepreload" href="/blocked.mjs">';
+  let unexpected = false, rejectStylesheet = false;
+  const app = createServer((req, res) => {
+    if (req.url === "/api/alerts") { res.setHeader("content-type", "application/json"); res.end("[]"); return; }
+    if (req.url === "/site.css") { res.setHeader("content-type", "text/css"); res.end("body{color:black}"); return; }
+    if (req.url === "/landing.css") {
+      if (rejectStylesheet) res.statusCode = 503;
+      res.setHeader("content-type", "text/css");
+      setTimeout(() => res.end("body{color:black}"), 850);
+      return;
+    }
+    if (req.url === "/blocked.mjs") { res.setHeader("content-type", "text/javascript"); res.end("throw new Error('must not run')"); return; }
+    res.setHeader("content-type", "text/html");
+    const record = fixture[req.url.split("/").at(-1)];
+    if (record) {
+      res.end(referenceHtml(record, "en-US").replace(/<base [^>]+>/, assets).replace("<body>", '<body><header><a href="/">Away</a></header>'));
+    } else {
+      const redirect = unexpected && req.url === "/" ? '<meta http-equiv="refresh" content="0;url=/unexpected">' : "";
+      res.end(`<!doctype html><head>${redirect}${assets.replace("/site.css", "/landing.css")}</head><body>Native landing</body>`);
+    }
+  });
+  let browser;
+  try {
+    const base = await listen(app);
+    browser = await chromium.launch({ headless: true });
+    const observe = () => runJourney({ browser, app: "react-router", base, profile, records: fixture, readback: { path: "/api/alerts" },
+      counters: async () => (await fetch(source + "/__browser/counters")).json() });
+    const cell = await observe(), e = cell.evidence;
+    assert.equal(e.nativeCleanup.requests.find((r) => r.path === "/landing.css")?.completed, true,
+      "Record the completed slow landing stylesheet, not its in-flight state at document commit");
+    assert.equal(cell.qualificationPassed, false, "apparatus has no marketplace semantic parity");
+    assert.equal(e.documentNavigationProof?.outcome, "proved", e.documentNavigationProof?.reason ?? e.failures.join("; "));
+    assert.equal(e.steps[1].retired.owned, null);
+    assert.equal(e.nativeCleanup.retired.owned, null); assert.equal(e.nativeCleanup.probe, null);
+    assert.equal(e.requestReconciliation.outcome, "reconciled");
+    assert.equal(reconcileNativeNetwork(e, false).outcome, "unknown", "strict stack requirement still applies outside the variant");
+    assert.deepEqual(Object.keys(Object.groupBy(e.documentNavigationProof.requests, (r) => r.classification)).sort(),
+      ["document", "intentionally-disabled-preload", "parser-asset"]);
+    assert.equal(e.documentNavigationProof.requests.length, e.requestLedger.length);
+    assert.ok(e.requestLedger.some((r) => r.path === "/blocked.mjs" && r.failure === "csp" && r.status === null && !r.completed));
+    const store = new EvidenceStore(folder), ref = store.recordJSON("cell", e); store.seal();
+    const reader = openEvidence(folder), raw = reader.json(ref); reader.finish();
+    assert.deepEqual(replayDocumentNavigation(raw, profile, settings), e.documentNavigationProof);
+
+    for (const [name, alter] of [
+      ["missing unique-context terminal probe", (r) => { r.platformLifecycle.events = r.platformLifecycle.events.filter((v) => v.event !== "unique-context-read-probe"); }],
+      ["forged replacement scope", (r) => { r.steps[1].resources.scope = r.steps[0].resources.scope; }],
+      ["invented dead realm counts", (r) => { r.nativeCleanup.retired.owned = r.nativeCleanup.before.scopes[0].owned; }],
+      ["missing landing settlement", (r) => { delete r.nativeCleanup.landingSettledAt; }],
+      ["landing settled before its request completion", (r) => {
+        const c = r.nativeCleanup, events = r.platformLifecycle.events;
+        const dispatch = events.find((v) => v.event === "Network.requestWillBeSent" && v.path === "/landing.css");
+        c.landingSettledAt = Math.max(dispatch.receivedAt, c.after.at);
+      }],
+      ["missing final checkpoint", (r) => { delete r.nativeCleanup.terminalResources; }],
+      ["post-navigation live resource", (r) => { r.nativeCleanup.terminalResources.scopes[0].owned.pendingTasks = 1; }],
+      ["missing native target inventory", (r) => { r.platformLifecycle.events = r.platformLifecycle.events.filter((v) => v.event !== "Target.getTargets" || v.phase !== "terminal"); }],
+      ["open long-lived peer", (r) => {
+        const j = r.platformLifecycle, index = j.events.findIndex((v) => v.event === "Network.requestWillBeSent");
+        j.events.splice(index, 0, { event: "Network.webSocketCreated", receivedAt: j.events[index].receivedAt, request: "unclosed" });
+      }],
+      ["transient worker with no network proof", (r) => {
+        const j = r.platformLifecycle, index = j.events.findIndex((v) => v.event === "Network.requestWillBeSent"), at = j.events[index].receivedAt;
+        j.events.splice(index, 0, { event: "Target.targetCreated", receivedAt: at, target: "worker", type: "worker", context: j.target.context },
+          { event: "Target.targetDestroyed", receivedAt: at, target: "worker" });
+      }],
+      ["missing HTTP stack receipt", (r) => {
+        const id = r.platformLifecycle.events.find((v) => v.event === "Network.requestWillBeSent" && v.type === "Stylesheet").request;
+        r.platformLifecycle.events = r.platformLifecycle.events.filter((v) => v.event !== "Network.requestWillBeSentExtraInfo" || v.request !== id);
+      }],
+      ["unmatched preload", (r) => { r.platformLifecycle.documents[0].preloads = []; }],
+      ["preload laundered into successful work", (r) => { const row = r.requestLedger.find((q) => q.failure); row.failure = null; row.completed = true; row.status = 200; }],
+      ["missing assigned failed request", (r) => { const rows = r.steps[0].requests; rows.splice(rows.findIndex((q) => q.failure), 1); }],
+      ["parser asset labelled application router transport", (r) => { r.steps[0].requests.find((q) => q.resource === "stylesheet").transport = "router"; }],
+      ["upstream terminal missing", (r) => { r.upstreamLedger.terminal = null; }],
+      ["upstream work still pending at cleanup", (r) => {
+        const event = { request: "late", id: "item_1", status: 200, started: 1, completed: null, cancelled: null };
+        r.upstreamLedger.phases.at(-1).after.snapshot.events.push(event);
+      }],
+    ]) await t.test(name, () => {
+      const changed = structuredClone(raw); alter(changed);
+      assert.equal(replayDocumentNavigation(changed, profile, settings).outcome, "unknown");
+    });
+    rejectStylesheet = true;
+    const badStylesheet = (await observe()).evidence;
+    assert.ok(badStylesheet.requestLedger.some((r) => r.path === "/landing.css" && r.status === 503));
+    assert.notEqual(badStylesheet.documentNavigationProof?.outcome, "proved");
+    rejectStylesheet = false;
+    unexpected = true;
+    const late = (await observe()).evidence;
+    assert.ok(late.requestLedger.some((r) => r.path === "/unexpected" && r.resource === "document"), "real post-navigation request reached Chromium");
+    assert.notEqual(late.documentNavigationProof?.outcome, "proved");
   } finally { if (browser) await browser.close(); await close(app); await close(upstream); }
 });
