@@ -164,6 +164,9 @@ jobs:
         run: |
           docker build --target build -t cb-spring-tests bench/fullstack/apps/spring
           docker run --rm --cpus 2 --memory 2g cb-spring-tests mvn -q -B test
+      - name: Test matched Leptos marketplace HTTP cells in both sources
+        if: matrix.app == 'leptos'
+        run: node bench/fullstack/apps/leptos/check-marketplace-production.mjs cb-marketplace-leptos
       - name: Test native Express alert persistence and rejected writes
         if: matrix.app == 'express'
         run: |
@@ -183,6 +186,9 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}
+      - name: Qualify the matched Drogon marketplace image with both sources
+        if: matrix.app == 'drogon'
+        run: node bench/fullstack/apps/drogon/tests/marketplace-matched.mjs cb-marketplace-drogon bench/marketplace/results/w1/drogon-matched
       - name: Test native Gin production boundaries and matched forms
         if: matrix.app == 'gin'
         run: |

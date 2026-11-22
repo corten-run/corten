@@ -118,8 +118,10 @@ sets first is taken as declared, even when the class declares its fields, so a m
 `this.naem = ..` is not flagged unless `this` is retyped to `Fields`, a typedef that repeats the
 class's fields (`/** @this {Fields} */` on a method, `/** @type {Fields} */ (this).name = ..` in
 the constructor), and a read of `naem` only when a method other than the constructor set it and
-`undefined` is not accepted. Keep behavior in exported functions, as components do, and have a
-class set only the fields it declares. For a function called with `new` and a call with more
+`undefined` is not accepted. Keep behavior in exported functions, as components do; a class that
+stays declares its fields with a first value (`status = 0;`, which TypeScript 7 requires of a field
+the constructor writes only through `Fields`) and writes them only through `Fields`, as the
+runtime's two classes do. For a function called with `new` and a call with more
 arguments than a function reading `arguments` declares, 6.x accepts these in JavaScript and
 7.0.2 refuses them; use a class and a rest parameter (`...rest`) instead. A value whose type
 nothing fixes (`new Promise((resolve) => ..)`, a type parameter no argument decides) is `any` in
@@ -1296,7 +1298,7 @@ cookie, so give it only what the page itself may show that user.
 
 Data the page needs when it loads is a handler argument, which costs no request; data it may never
 need, or that a choice the user makes picks, is a read; a change to what the server draws is a
-`data-patch` form. `corten/read` is a module of its own (749 bytes, 486 gzipped), served only to
+`data-patch` form. `corten/read` is a module of its own (767 bytes, 493 gzipped), served only to
 apps whose scripts import it and preloaded with those scripts, so a page that reads nothing does
 not download it and the runtime is unchanged; such an app's import map names it on every page (60
 bytes, under 10 compressed)

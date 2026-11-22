@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, fork } from "node:child_process";
 import * as fs from "node:fs";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
@@ -26,6 +27,42 @@ import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
 const checkout = fs.realpathSync(".");
 const checkoutCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim();
+
+// The synthetic trace is appended one newline-terminated row per write by workers and
+// provider children that may still be running, so a read can end inside a row. While
+// they run, take only newline-complete rows; once they have finished, a final row
+// without its newline is a truncated trace. Every complete row, empty ones included,
+// must parse.
+function readTrace(file, { finished = false } = {}) {
+  const text = fs.readFileSync(file, "utf8"), end = text.lastIndexOf("\n") + 1;
+  if (finished && end !== text.length) throw new Error(`truncated final trace row: ${JSON.stringify(text.slice(end))}`);
+  // The complete part ends in a newline (or is empty), so its last split element is not a row.
+  return text.slice(0, end).split("\n").slice(0, -1).map((line) => JSON.parse(line));
+}
+
+test("trace reader takes only newline-complete rows while writers run and is strict once they finish", (t) => {
+  const dir = fs.mkdtempSync(path.join(tmpdir(), "fleet-trace-")), trace = path.join(dir, "boundaries.jsonl");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(trace, "");
+  assert.deepEqual(readTrace(trace), [], "an empty trace has no rows");
+  assert.deepEqual(readTrace(trace, { finished: true }), []);
+  const first = JSON.stringify({ group: "catalog-page", boundary: "provider-child-start", pid: 1 });
+  const second = JSON.stringify({ group: "catalog-page", boundary: "remote-active", options: { input: "x".repeat(300) } });
+  fs.writeFileSync(trace, `${first}\n`);
+  fs.appendFileSync(trace, second.slice(0, 257));
+  assert.deepEqual(readTrace(trace), [JSON.parse(first)], "a partial row is not returned while writers run");
+  assert.throws(() => readTrace(trace, { finished: true }), /truncated final trace row/);
+  fs.appendFileSync(trace, `${second.slice(257)}\n`);
+  assert.deepEqual(readTrace(trace), [JSON.parse(first), JSON.parse(second)], "the row is returned whole once complete");
+  assert.deepEqual(readTrace(trace, { finished: true }), [JSON.parse(first), JSON.parse(second)]);
+  fs.appendFileSync(trace, `${second.slice(0, 257)}\n`);
+  assert.throws(() => readTrace(trace), SyntaxError, "a newline-complete malformed row still fails");
+  assert.throws(() => readTrace(trace, { finished: true }), SyntaxError);
+  fs.writeFileSync(trace, `${first}\n\n${second}\n`);
+  assert.throws(() => readTrace(trace), SyntaxError, "an empty newline-complete row fails");
+  assert.throws(() => readTrace(trace, { finished: true }), SyntaxError);
+});
+
 function roleCheckFor(fixtureCommit, sourceCommit) {
   // Reuse the real result for identical inputs within this fixture/worker so
   // role replay does not consume the offline monitor's peer-overlap window.
@@ -44,14 +81,23 @@ function roleCheckFor(fixtureCommit, sourceCommit) {
 }
 
 function fixture(t, mode = "success") {
+  // A throwing after hook skips the hooks after it, so the trace is checked before the
+  // harness removes it and a failure is raised only after that removal has run.
+  let traceFailure = null;
   t.after(() => {
-    const rows = events(), starts = rows.filter((row) => row.boundary === "provider-child-start");
-    const exits = rows.filter((row) => row.boundary === "provider-child-exit");
-    assert.deepEqual(exits.map((row) => row.pid).sort(), starts.map((row) => row.pid).sort(), "every owned child reaped");
-    assert.ok(exits.every((row) => row.terminal));
-    assert.ok(!rows.some((row) => row.tokenIPC || row.boundary === "forbidden-native-https"));
+    try {
+      // Every owned child has exited by now (asserted below), so the trace is complete.
+      const rows = readTrace(trace, { finished: true }), starts = rows.filter((row) => row.boundary === "provider-child-start");
+      const exits = rows.filter((row) => row.boundary === "provider-child-exit");
+      assert.deepEqual(exits.map((row) => row.pid).sort(), starts.map((row) => row.pid).sort(), "every owned child reaped");
+      assert.ok(exits.every((row) => row.terminal));
+      assert.ok(!rows.some((row) => row.tokenIPC || row.boundary === "forbidden-native-https"));
+    } catch (error) {
+      traceFailure = error;
+    }
   });
   const h = harness(t), output = [], workers = [];
+  t.after(() => { if (traceFailure) throw traceFailure; });
   const repo = path.join(h.temp, "captured"), trace = path.join(h.temp, "boundaries.jsonl"), hosts = path.join(h.temp, "provider.json");
   fs.mkdirSync(repo); fs.writeFileSync(trace, "");
   fs.mkdirSync(path.join(repo, "bench/workloads"), { recursive: true });
@@ -122,7 +168,7 @@ const synthetic = (${syntheticDependencies.toString()})({
   deps.catalogProvider = syntheticCatalogProvider(syntheticPlacement([mode === "overlap" ? "sfo2" : "sfo3"]));
   const args = ["r21", "--fleet-root", h.base];
   const saved = (group = groupNames[0]) => JSON.parse(fs.readFileSync(path.join(h.base, group, "groups-r21/state.json")));
-  const events = () => fs.readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const events = () => readTrace(trace);
   const prepareArgs = [...args, "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
   async function prepare() {
     assert.equal(await fleetMain(prepareArgs, deps), 3);
@@ -214,7 +260,19 @@ test("captured production composition ignores arbitrary hints, binds POST identi
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
 });
 
-test("continuation replays catalog, creates only the next whole group, and does not reallocate it after collection", { timeout: 60000 }, async (t) => {
+function unusedRetirement(root, fleet, group) {
+  const local = path.join(root, group, `groups-${fleet.round}`), ms = Date.now(), at = new Date(ms).toISOString();
+  const state = { ...reservation({ round: fleet.round, commit: fleet.commit, token: fleet.jobs[0].token, group, fleet }),
+    provider: fleet.provider, fullGroupQualified: false, status: "retired", createIntentAt: at, deletionIntentAt: at, destroyedAt: at,
+    id: "997", ip: "192.0.2.10", retirement: { kind: "unused", evidenceSha256: "a".repeat(64) } };
+  const observation = JSON.stringify({ schema: "benchmark-unused-host/v1", hostId: state.id, unit: state.unit, observedAtMs: ms, unused: true });
+  const proof = JSON.stringify(unusedEvidence(observation, state, unusedHostScript(state), ms, ms));
+  fs.mkdirSync(local, { recursive: true });
+  fs.writeFileSync(path.join(local, "unused-host.json"), proof);
+  fs.writeFileSync(path.join(local, "state.json"), JSON.stringify({ ...state, retirement: { kind: "unused", evidenceSha256: digest(proof) } }));
+}
+
+test("continuation schedules around pinned catalog and retired JSON without replaying either", { timeout: 60000 }, async (t) => {
   const p = fixture(t), before = new Map(), catalog = "catalog-page", json = "json-api", next = "localized-marketplace";
   const retained = path.join(p.h.temp, "retained"), index = path.join(p.h.base, "index.json");
   const history = fleetPlan({ round: "r20", commit: "b".repeat(40), token: "f".repeat(16), sshKey: "42", provider: { accountId, context },
@@ -261,7 +319,7 @@ test("continuation replays catalog, creates only the next whole group, and does 
     fleet: oldFleet, selection: { ...history.selection, groups: [oldCatalog] },
     provider: history.provider, fullGroupQualified: false, createIntentAt: at, id: "900", ip: "192.0.2.200" };
   const oldArchive = collected(retained, oldFleet, catalog, saved, at), oldBytes = fs.readFileSync(oldArchive), oldTree = treeHash(retained);
-  fs.writeFileSync(index, JSON.stringify([{ root: retained, checkout: p.h.repo, round: history.round, commit: history.commit,
+  fs.writeFileSync(index, JSON.stringify([{ root: retained, checkout: path.join(p.h.temp, "missing-measured-checkout"), round: history.round, commit: history.commit,
     archives: { [catalog]: saved.archiveSha256 } }]));
   p.deps.inspect = async ({ folder, round, commit }) => {
     const report = before.get(folder); assert.equal(report?.round, round); assert.equal(report?.commit, commit); return report;
@@ -274,6 +332,11 @@ test("continuation replays catalog, creates only the next whole group, and does 
   assert.equal(initial.groups.filter((row) => row.result).length, 1);
   assert.equal(initial.eligibleToRun.length, groupNames.length - 1);
   assert.ok(!initial.eligibleToRun.includes(catalog));
+  const replay = p.deps.inspect;
+  fs.appendFileSync(oldArchive, "changed");
+  await assert.rejects(inspectContinuation(p.h.base, p.deps), /retained catalog-page/);
+  let admissionReplay = 0;
+  p.deps.inspect = () => { admissionReplay++; assert.fail("admission must not replay another group"); };
   await assert.rejects(fleetMain(prepare(catalog), p.deps), /already verified/);
   assert.deepEqual(p.events(), []);
   const onlyC8 = syntheticPlacement(["sfo3"]); onlyC8.sizes.pop(); onlyC8.regions[0].sizes = [];
@@ -281,34 +344,55 @@ test("continuation replays catalog, creates only the next whole group, and does 
   assert.equal(await fleetMain(prepare(json), p.deps), 3);
   await assert.rejects(fleetMain(["r21", "--fleet-root", path.join(p.h.base, json), "--detach", "--print-approval"], p.deps), /use continuation detach/);
   assert.equal(await preview(json), 3);
+  const jsonApproval = p.output.at(-1).approvalSha256;
+  p.deps.main = async () => 2; // Consume a real-shaped independent intent without creating anything.
+  assert.equal(await detached(json, jsonApproval), 2);
+  delete p.deps.main;
+  const jsonRoot = path.join(p.h.base, json), jsonFleet = readFleet(jsonRoot, "r21").manifest;
+  unusedRetirement(jsonRoot, jsonFleet, json);
+  const reused = path.join(jsonRoot, ".fleet-operation.lock");
+  fs.writeFileSync(reused, JSON.stringify({ pid: process.pid, approvalSha256: jsonApproval }));
+  const retainedJson = treeHash(jsonRoot);
+  const running = "mixed-production", binding = history.jobs.find(({ group }) => group === running);
+  const runningPath = path.join(retained, running, "groups-r20");
+  fs.mkdirSync(runningPath, { recursive: true });
+  fs.writeFileSync(path.join(runningPath, "state.json"), JSON.stringify({
+    ...reservation({ round: history.round, commit: history.commit, token: binding.token, fleet: history, group: running }, at),
+    fleet: oldFleet, status: "running", createIntentAt: at, id: "902", ip: "192.0.2.202", provider: history.provider, fullGroupQualified: false,
+  }));
+  const beforePreview = p.events().length;
+  assert.equal(await fleetMain(prepare(next), p.deps), 3);
+  assert.equal(await preview(next), 3);
   const { approvalSha256, subject } = p.output.at(-1);
-  assert.deepEqual(subject.jobs.map((job) => job.group), [json]);
-  assert.deepEqual(subject.fleet.selection.groups, [history.selection.groups.find(({ group }) => group === json)]);
-  fs.appendFileSync(oldArchive, "changed");
-  await assert.rejects(detached(json, approvalSha256), /retained catalog-page/);
-  assert.equal(p.events().filter((row) => row.method === "POST").length, 0);
+  assert.deepEqual(subject.jobs.map((job) => job.group), [next]);
+  assert.deepEqual(subject.fleet.selection.groups, [history.selection.groups.find(({ group }) => group === next)]);
+  assert.deepEqual(subject.continuation.verified, []);
+  assert.deepEqual(subject.continuation.unconfirmed, [{ group: running, round: history.round, accountId,
+    manifestSha256: fileHash(path.join(retained, "fleet-r20.json")), stateSha256: fileHash(path.join(runningPath, "state.json")), id: "902" }]);
+  assert.equal(p.events().length, beforePreview, "prepare/preview have no child/provider mutation path");
+  assert.ok(!fs.existsSync(path.join(p.h.base, next, "launch-intent.json")));
+  delete p.deps.inspect; // There is no measured checkout to load and the old archive is still corrupt.
+  assert.equal(await preview(next), 3);
+  assert.equal(p.output.at(-1).approvalSha256, approvalSha256);
+  assert.equal(await detached(next, approvalSha256), 3, JSON.stringify(p.output.at(-1)));
+  assert.equal(admissionReplay, 0);
+  assert.equal(treeHash(jsonRoot), retainedJson, "scheduler did not change the retired slot or its reused-PID lock");
+  assert.deepEqual(p.events().filter((row) => row.method === "POST").map(({ group, body }) => [group, body.size]), [[next, "c-8"]]);
+  await assert.rejects(detached(next, approvalSha256), /unresolved custody|already attempted/);
+  fs.unlinkSync(reused); // Historical lock interpretation is a separate report-only concern.
+  fs.unlinkSync(path.join(runningPath, "state.json"));
+  fs.rmdirSync(runningPath); fs.rmdirSync(path.dirname(runningPath));
   fs.writeFileSync(oldArchive, oldBytes);
-  const statePath = path.join(retained, catalog, "groups-r20/state.json");
-  const originalState = fs.readFileSync(statePath);
-  fs.writeFileSync(statePath, JSON.stringify({ ...saved, destroyedAt: undefined }));
-  await assert.rejects(detached(json, approvalSha256), /retained catalog-page/);
-  const extracted = path.join(retained, catalog, "groups-r20", saved.evidence), host = path.join(extracted, "host.txt");
-  fs.writeFileSync(host, "changed!!\n");
-  fs.writeFileSync(statePath, JSON.stringify({ ...saved, evidenceSha256: treeHash(extracted) }));
-  assert.equal(fileHash(oldArchive), saved.archiveSha256);
-  await assert.rejects(detached(json, approvalSha256), /retained catalog-page/);
-  fs.writeFileSync(host, "synthetic\n");
-  fs.writeFileSync(statePath, originalState);
-  assert.equal(await detached(json, approvalSha256), 3, JSON.stringify(p.output.at(-1)));
-  await assert.rejects(detached(json, approvalSha256), /unresolved custody|already attempted/);
-  const job = path.join(p.h.base, json), fleet = readFleet(job, "r21").manifest;
-  const jsonState = JSON.parse(fs.readFileSync(path.join(job, json, "groups-r21/state.json")));
+  p.deps.inspect = replay;
+  const job = path.join(p.h.base, next), fleet = readFleet(job, "r21").manifest;
+  const state = JSON.parse(fs.readFileSync(path.join(job, next, "groups-r21/state.json")));
   const at2 = "2026-11-21T00:00:00.000Z";
-  collected(job, fleet, json, jsonState, at2); fs.writeFileSync(p.hosts, "[]");
+  collected(job, fleet, next, state, at2); fs.writeFileSync(p.hosts, "[]");
   const report = (await inspectContinuation(p.h.base, { repo: p.h.repo, inspect: p.deps.inspect })).report;
   assert.equal(report.status, "incomplete"); assert.equal(report.publishableBaseline, false);
   assert.deepEqual(report.groups.map(({ group }) => group), groupNames);
-  for (const [i, [round, measuredCommit, date, group]] of [["r20", history.commit, at, catalog], ["r21", commit, at2, json]].entries()) {
+  for (const [round, measuredCommit, date, group] of [["r20", history.commit, at, catalog], ["r21", commit, at2, next]]) {
+    const i = groupNames.indexOf(group);
     assert.equal(report.groups[i].outcome, "verified", JSON.stringify(report.groups[i]));
     const result = report.groups[i].result;
     assert.deepEqual([result.round, result.commit, result.campaignCreatedAt, result.baseEffectiveOptions], [round, measuredCommit, date, { fixture: group }]);
@@ -316,17 +400,87 @@ test("continuation replays catalog, creates only the next whole group, and does 
   assert.equal(report.groups[0].result.matchesCurrentContract, false);
   assert.deepEqual(report.groups[0].result.selection, oldCatalog);
   assert.equal(report.groups[0].result.archiveSha256, saved.archiveSha256);
-  assert.equal(report.groups[1].result.matchesCurrentContract, true);
+  assert.equal(report.groups[groupNames.indexOf(next)].result.matchesCurrentContract, true);
   assert.equal(report.groups[0].result.appOutcomes.find((app) => app.app === "express").comparisonEligible, false);
-  await assert.rejects(fleetMain(prepare(json), p.deps), /already verified/);
-  assert.equal(await fleetMain(prepare(next), p.deps), 3); assert.equal(await preview(next), 3);
-  assert.equal(await detached(next, p.output.at(-1).approvalSha256), 3, JSON.stringify(p.output.at(-1)));
-  assert.deepEqual(p.events().filter((row) => row.method === "POST").map(({ group, body }) => [group, body.size]), [[json, "c-8"], [next, "c-8"]]);
+  await assert.rejects(fleetMain(prepare(next), p.deps), /already verified/);
+  const pending = "hardening", historical = path.join(retained, catalog, "groups-r20", "state.json");
+  const original = fs.readFileSync(historical), unconfirmed = { ...saved, destroyedAt: undefined };
+  fs.writeFileSync(historical, JSON.stringify(unconfirmed));
+  try {
+    await assert.rejects(fleetMain(prepare(pending).map((part) => part === accountId ? "user:foreign" : part), p.deps), /same provider account/);
+    assert.equal(await fleetMain(prepare(pending), p.deps), 3);
+    assert.equal(await preview(pending), 3);
+    const approval = p.output.at(-1);
+    assert.deepEqual(approval.subject.continuation.unconfirmed, [{ group: catalog, round: history.round, accountId,
+      manifestSha256: fileHash(path.join(retained, "fleet-r20.json")), stateSha256: fileHash(historical), id: saved.id }]);
+    const beforeCensus = p.events().length;
+    fs.writeFileSync(historical, JSON.stringify({ ...unconfirmed, id: "901" }));
+    await assert.rejects(detached(pending, approval.approvalSha256), /exact-approval-required/);
+    assert.equal(p.events().length, beforeCensus, "changed historical identity cannot reach provider");
+    fs.writeFileSync(historical, JSON.stringify(unconfirmed));
+    fs.writeFileSync(p.hosts, JSON.stringify([{ id: Number(saved.id), name: "renamed-unrelated-looking", tags: [] }]));
+    assert.equal(await detached(pending, approval.approvalSha256), 2);
+    const trace = p.events().slice(beforeCensus).filter(({ boundary }) => boundary === "provider");
+    assert.deepEqual(trace.map(({ method, path }) => [method, path]), [
+      ["GET", "/v2/account"], ["GET", "/v2/droplets?page=1&per_page=200"], ["GET", "/v2/account"],
+    ]);
+    assert.equal(p.saved(path.join(pending, pending)).createIntentAt, undefined);
+  } finally { fs.writeFileSync(historical, original); fs.writeFileSync(p.hosts, "[]"); }
   const fork = path.join(p.h.temp, "incomplete-reindex"); fs.mkdirSync(fork);
   fs.writeFileSync(path.join(fork, "index.json"), JSON.stringify([{ root: job, checkout: p.h.repo, round: fleet.round, commit,
-    archives: { [json]: report.groups[1].result.archiveSha256 } }]));
+    archives: { [next]: report.groups[groupNames.indexOf(next)].result.archiveSha256 } }]));
   await assert.rejects(inspectContinuation(fork, { repo: p.h.repo, inspect: p.deps.inspect }), /stay in their original continuation root/);
   assert.equal(treeHash(retained), oldTree, "historical bytes untouched");
+});
+
+test("continuation child refuses a historical staged lock acquired after parent intent", { timeout: 60000 }, async (t) => {
+  const p = fixture(t), retained = path.join(p.h.temp, "retained"), [first, group] = groupNames;
+  const historical = ["r20", "--fleet-root", retained];
+  const source = ["--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
+  assert.equal(await fleetMain([...historical, "--prepare", ...source], p.deps), 3);
+  assert.equal(await fleetMain([...historical, "--detach", "--print-approval"], p.deps), 3);
+  const oldApproval = p.output.at(-1).approvalSha256;
+  assert.equal(await fleetMain([...historical, "--detach", "--approve-reviewed-merged-ready", oldApproval],
+    { ...p.deps, main: async () => 2 }), 2);
+  const fleet = readFleet(retained, "r20").manifest, token = fleet.jobs[0].token, at = new Date().toISOString();
+  const local = path.join(retained, first, "groups-r20");
+  const archiveSha256 = "a".repeat(64);
+  fs.mkdirSync(local, { recursive: true });
+  fs.writeFileSync(path.join(local, "state.json"), JSON.stringify({
+    ...reservation({ round: fleet.round, commit, token, fleet, group: first }, at),
+    provider: fleet.provider, fullGroupQualified: false, status: "collected", id: "900", ip: "192.0.2.200",
+    createIntentAt: at, collectedAt: at, deletionIntentAt: at, destroyedAt: at, archiveSha256, evidenceSha256: "b".repeat(64),
+    evidence: "evidence-Synthetic", extractionAttempts: ["evidence-Synthetic"], evidenceOutcome: "validated", exitCode: 0,
+    validation: { status: "verified", campaign: `r20-${token}`, collectionIntegrity: "manifest-verified" },
+  }));
+  fs.writeFileSync(path.join(p.h.base, "index.json"), JSON.stringify([{ root: retained, checkout: path.join(p.h.temp, "no-measured-checkout"),
+    round: fleet.round, commit, archives: { [first]: archiveSha256 } }]));
+  const independent = ["r21", "--continuation-root", p.h.base, "--group", group];
+  assert.equal(await fleetMain([...independent, "--prepare", ...source], p.deps), 3);
+  assert.equal(await fleetMain([...independent, "--detach", "--print-approval"], p.deps), 3);
+  const { approvalSha256, subject } = p.output.at(-1), oldLock = path.join(retained, ".fleet-operation.lock");
+  assert.deepEqual(subject.continuation.indexedCustody, [{ root: fs.realpathSync(retained),
+    manifestSha256: fileHash(path.join(retained, "fleet-r20.json")), lock: null,
+    launch: fileHash(path.join(retained, "launch-intent.json")) }]);
+  assert.ok(!fs.existsSync(oldLock));
+  let barrierReached = false;
+  p.deps.WorkerClass = class extends p.deps.WorkerClass {
+    constructor(entry, options) {
+      assert.ok(fs.existsSync(path.join(p.h.base, group, "launch-intent.json")));
+      assert.ok(!fs.existsSync(path.join(retained, "remaining-intent.json")));
+      // Model a live remaining owner acquiring its lock before consuming intent.
+      fs.writeFileSync(oldLock, JSON.stringify({ pid: process.pid, approvalSha256: digest("remaining action") }), { flag: "wx" });
+      barrierReached = true;
+      super(entry, options);
+    }
+  };
+  assert.equal(await fleetMain([...independent, "--detach", "--approve-reviewed-merged-ready", approvalSha256], p.deps),
+    2, JSON.stringify(p.output.at(-1)));
+  assert.ok(barrierReached);
+  const trace = p.events().filter(({ boundary }) => boundary === "provider");
+  assert.ok(trace.some(({ method, path }) => method === "GET" && path.startsWith("/v2/droplets?")), "child reached its fresh census");
+  assert.ok(trace.every(({ method }) => method === "GET"), "no provider mutation");
+  assert.equal(p.saved(path.join(group, group)).createIntentAt, undefined);
 });
 
 test("independent continuation admits two remote-active hosts and collects a failed terminal host without waiting for its peer", { timeout: 90000 }, async (t) => {

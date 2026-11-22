@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { readFile, writeFile, mkdir, realpath } from "node:fs/promises";
-import { join, resolve, relative, extname, isAbsolute, dirname, basename } from "node:path";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { join, resolve, relative, extname, isAbsolute, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { cpus, platform, release } from "node:os";
 import { selectedApps, definition } from "../workloads/registry.mjs";
@@ -10,7 +10,7 @@ import { buildApps, readLatestStable, root, here, sha256 } from "./build.mjs";
 import { installObserver } from "./observer.mjs";
 import { Evidence, closeObserved, clock, json, failure } from "./evidence.mjs";
 import { options, configurationNames } from "./contract.mjs";
-import { launchBrowser, browserIdentity } from "./launch.mjs";
+import { launchBrowser, browserIdentity, nodeIdentity } from "./launch.mjs";
 export { options, defaults } from "./contract.mjs";
 
 export const schema = "client-heavy-native/v3";
@@ -241,11 +241,7 @@ export async function run(args) {
       selectedApps: output.selectedApps, definition: output.definition, sourceBefore: provenance.sourceBefore,
       root, platform: process.platform,
       nodeClock: { clock: "node-performance", timeOrigin: performance.timeOrigin }, inheritedConfigurationNames });
-    try {
-      const executablePath = await realpath(process.execPath);
-      await evidence.save("evidence/node.json", { version: process.version, requestedExecutable: process.execPath, executablePath,
-        executable: await evidence.file(dirname(executablePath), basename(executablePath)) });
-    }
+    try { await evidence.save("evidence/node.json", await nodeIdentity(evidence)); }
     catch { evidence.blockers.push("node-executable-bytes-unavailable"); }
     const cargoIdentity = await evidence.tool(config.cargo, ["--version", "--verbose"], "cargo-version");
     assert.ok(cargoIdentity.receipt.status === 0 && cargoIdentity.receipt.failure === null, "native-cargo-unavailable");

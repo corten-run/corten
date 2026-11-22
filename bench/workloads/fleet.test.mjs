@@ -148,12 +148,26 @@ async function independentDetach(t) {
   return { p, root, index, approved, errors, cli, notDispatched };
 }
 
-test("independent detach names invalid replay without leaking the exception", async (t) => {
+test("independent detach names invalid admission without leaking the exception", async (t) => {
   const f = await independentDetach(t);
   writeFileSync(f.index, "SYNTHETIC_PRIVATE_INDEX");
   assert.equal(await f.cli(), 2);
-  assert.deepEqual(f.errors, ["fleet-operation-failed: continuation-replay"]);
+  assert.deepEqual(f.errors, ["fleet-operation-failed: continuation-admission"]);
   f.notDispatched();
+});
+
+test("independent prepare names its admission or reservation stage without exposing inputs", async (t) => {
+  const p = continuationFixture(t), errors = [];
+  const args = ["r21", "--continuation-root", p.h.base, "--group", p.group, "--prepare", "--commit",
+    commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
+  const cli = () => fleetCli(args, { ...p.deps, writeError: (line) => errors.push(line) });
+  writeFileSync(p.index, "SYNTHETIC_PRIVATE_INDEX");
+  assert.equal(await cli(), 2);
+  writeFileSync(p.index, "[]"); p.flags.head = "b".repeat(40);
+  assert.equal(await cli(), 2);
+  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission", "fleet-operation-failed: prepare-reservation"]);
+  assert.equal(existsSync(p.old), false);
+  assert.deepEqual(p.children, []);
 });
 
 test("independent detach names the pre-intent stage and preserves placement diagnostics", async (t) => {
@@ -249,6 +263,91 @@ function continuationFixture(t) {
   writeFileSync(index, "[]");
   return { ...p, group, old, next, manifest, index, prepare, preview, detach, history };
 }
+
+test("continuation refuses a live staged remaining owner before it writes its intent", async (t) => {
+  const p = continuationFixture(t), staged = fixture(t);
+  const remaining = await staged.remaining(), lock = join(staged.h.base, ".fleet-operation.lock");
+  const launch = JSON.parse(readFileSync(join(staged.h.base, "launch-intent.json")));
+  writeFileSync(p.index, JSON.stringify([{ root: staged.h.base, checkout: staged.h.repo, round: "r21", commit,
+    archives: { [groupNames[0]]: staged.first.state.archiveSha256 } }]));
+  assert.equal(await p.prepare("r21"), 3);
+  const approval = await p.preview("r21");
+  // Same live PID, different actions. The first-only action really is spent:
+  // its only planned child was deleted and every other child was deferred.
+  writeFileSync(lock, JSON.stringify({ pid: process.pid, approvalSha256: launch.approvalSha256 }));
+  assert.notEqual(await p.preview("r21"), approval);
+  // Barrier: the remaining action holds the lock but has not written its intent.
+  writeFileSync(lock, JSON.stringify({ pid: process.pid, approvalSha256: remaining.at(-1) }));
+  assert.ok(!existsSync(join(staged.h.base, "remaining-intent.json")));
+  await assert.rejects(p.detach("r21", approval), /active batch/);
+  assert.ok(!existsSync(join(p.old, "launch-intent.json")));
+  assert.deepEqual(p.children, []);
+
+  // Now consume the remaining intent through the synthetic runner. Simulate a
+  // retained lock with one bound sibling and other planned siblings missing.
+  unlinkSync(lock);
+  staged.flags.child = async () => 2;
+  assert.equal(await fleetMain(remaining, staged.deps), 2);
+  const sibling = staged.seed(groupNames[1]), pid = 123;
+  writeFileSync(lock, JSON.stringify({ pid, approvalSha256: remaining.at(-1) }));
+  let ownerGone = false;
+  const kill = process.kill;
+  t.mock.method(process, "kill", (target, signal) => {
+    if (target !== pid || signal !== 0) return kill(target, signal);
+    if (ownerGone) throw Object.assign(new Error("synthetic original owner gone"), { code: "ESRCH" });
+    return true;
+  });
+  await assert.rejects(p.preview("r21"), /active batch/);
+  ownerGone = true;
+  const updated = await p.preview("r21");
+  assert.notEqual(updated, approval);
+  assert.equal(p.output.at(-1).subject.continuation.unconfirmed[0].id, sibling.id);
+  p.flags.placement = () => { ownerGone = false; return syntheticPlacement(); };
+  await assert.rejects(p.detach("r21", updated), /source lock changed/);
+  assert.ok(!existsSync(join(p.old, "launch-intent.json")));
+  assert.deepEqual(p.children, []);
+});
+
+test("continuation archive pins cannot establish missing or in-flight historical custody", async (t) => {
+  for (const status of ["missing", "reserved", "creating", "preparing", "starting"]) await t.test(status, async (t) => {
+    const p = continuationFixture(t), retained = fixture(t), [catalog] = groupNames;
+    retained.seedLegacy();
+    if (status !== "missing") retained.seed(catalog, (state) => {
+      Object.assign(state, { status, bootstrapReady: undefined });
+      if (status === "reserved" || status === "creating") { delete state.id; delete state.ip; }
+      if (status === "reserved") delete state.createIntentAt;
+    });
+    writeFileSync(p.index, JSON.stringify([{ root: retained.h.base, checkout: retained.h.repo, round: "r21", commit,
+      archives: { [catalog]: "a".repeat(64) } }]));
+    await assert.rejects(p.prepare("r21"), /unresolved custody/);
+    assert.deepEqual(p.catalogCalls, []);
+    assert.deepEqual(p.children, []);
+    assert.ok(!existsSync(p.old));
+  });
+});
+
+test("continuation refuses an ID-less create outside the current group roster", async (t) => {
+  const p = continuationFixture(t), retained = fixture(t), former = "json-api", removed = "former-json";
+  retained.seedLegacy();
+  const state = retained.seed(former, (s) => {
+    s.status = "creating"; delete s.id; delete s.ip;
+  });
+  const { fleetSha256, ...body } = state.fleet;
+  body.jobs.find(({ group }) => group === former).group = removed;
+  body.selection.groups.find(({ group }) => group === former).group = removed;
+  state.fleet = { ...body, fleetSha256: digest(JSON.stringify(body)) };
+  state.group = removed; state.selection.groups[0].group = removed;
+  renameSync(join(retained.h.base, former), join(retained.h.base, removed));
+  writeFileSync(join(retained.h.base, removed, "groups-r21", "state.json"), JSON.stringify(state));
+  writeFileSync(join(retained.h.base, "fleet-r21.json"), JSON.stringify(state.fleet));
+  const historical = readFleet(retained.h.base, "r21", { priorSelection: true });
+  assert.ok(!groupNames.includes(removed));
+  assert.equal(readGroup(historical, removed).state.status, "creating");
+  writeFileSync(p.index, JSON.stringify([{ root: retained.h.base, checkout: retained.h.repo, round: "r21", commit, archives: {} }]));
+  await assert.rejects(p.prepare("r21"), /unresolved custody for a historical group/);
+  assert.deepEqual(p.catalogCalls, []);
+  assert.ok(!existsSync(p.old));
+});
 
 test("a pristine continuation prepare appends a different measured commit without dispatch or changing the verified catalog", async (t) => {
   const p = continuationFixture(t), retained = fixture(t), catalog = "catalog-page";

@@ -1,0 +1,17 @@
+<%c++ const auto &locale = @@.get<std::string>("locale");
+const char *message = locale == "fr-FR" ? "Article indisponible" :
+                      locale == "de-DE" ? "Artikel nicht verf&uuml;gbar" : "Item unavailable"; %>
+<!doctype html>
+<html lang="{% locale %}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% message %} | Card Market</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/components.css">
+</head>
+<body>
+<header class="site-header__bar"><a href="/">Card Market</a></header>
+<main><h1>{% message %}</h1></main>
+</body>
+</html>

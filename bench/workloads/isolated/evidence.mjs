@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
-import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { deploymentSha256 } from "../deployments.mjs";
 import { validateCollected } from "../../catalog/droplet-contract.mjs";
@@ -36,14 +36,18 @@ export function physical(path, directory = true) {
   return path;
 }
 const same = (a, b) => ["dev", "ino", "size", "mtimeMs", "ctimeMs", "nlink"].every((k) => a[k] === b[k]);
-export function readRegular(path) {
+export function readRegular(path) { return readEvidenceFile(path, false); }
+function readEvidenceFile(path, sync) {
   physical(dirname(path));
   const before = lstatSync(path);
   assert.ok(before.isFile() && !before.isSymbolicLink() && before.nlink === 1, "link/special evidence file refused");
-  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  // Windows requires write access for FlushFileBuffers even though we only read.
+  const access = sync && process.platform === "win32" ? constants.O_RDWR : constants.O_RDONLY;
+  const fd = openSync(path, access | (constants.O_NOFOLLOW ?? 0));
   try {
     assert.ok(same(before, fstatSync(fd)), "file replaced before read");
     const bytes = readFileSync(fd);
+    if (sync) fsyncSync(fd);
     assert.ok(same(before, fstatSync(fd)) && same(before, lstatSync(path)), "file mutated while reading");
     physical(dirname(path));
     return bytes;
@@ -55,6 +59,24 @@ export function durable(path, bytes) {
   try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
   syncDirectory(dirname(path));
 }
+export function publishDurable(path, bytes) {
+  const staged = `${path}.pending`;
+  durable(staged, bytes);
+  const identity = lstatSync(staged);
+  assert.equal(lstatSync(path, { throwIfNoEntry: false }), undefined, "evidence publication already exists");
+  try {
+    renameSync(staged, path); syncDirectory(dirname(path));
+  } catch (error) {
+    // Withdraw only this publication if directory sync did not complete.
+    try {
+      const current = lstatSync(path, { throwIfNoEntry: false });
+      if (current?.dev === identity.dev && current.ino === identity.ino && !lstatSync(staged, { throwIfNoEntry: false })) {
+        renameSync(path, staged); syncDirectory(dirname(path));
+      }
+    } catch { /* Leave unproven evidence in place. */ }
+    throw error;
+  }
+}
 export function syncDirectory(path) {
   if (process.platform === "win32") return;
   const fd = openSync(path, "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
@@ -62,7 +84,8 @@ export function syncDirectory(path) {
 function safeName(name) {
   assert.ok(portableEvidenceSegment(name), "unsafe evidence path segment");
 }
-export function tree(root) {
+export function tree(root) { return inventory(root, false); }
+function inventory(root, sync) {
   physical(root);
   const entries = [], seen = new Set();
   function walk(path, key) {
@@ -76,13 +99,27 @@ export function tree(root) {
         assert.ok(!seen.has(folded), "case-colliding evidence paths"); seen.add(folded);
         walk(join(path, name), next);
       }
+      if (sync) syncDirectory(path);
     } else {
-      const bytes = readRegular(path);
+      const bytes = readEvidenceFile(path, sync);
       entries.push({ path: key, type: "file", bytes: bytes.length, sha256: digest(bytes) });
     }
   }
   walk(root, "");
   return { entries, sha256: deploymentSha256(entries) };
+}
+
+// Called only for a fresh, owned output after verified terminal command lifetime.
+// On a different filesystem, rename fails and leaves the source for custody.
+export function transferEvidence(source, destination) {
+  assert.ok(!inside(source, destination) && !inside(destination, source), "source/destination overlap");
+  physical(dirname(destination));
+  assert.equal(lstatSync(destination, { throwIfNoEntry: false }), undefined, "native evidence destination already exists");
+  const before = inventory(source, true);
+  renameSync(source, destination);
+  syncDirectory(dirname(destination)); syncDirectory(dirname(source));
+  assert.ok(isDeepStrictEqual(tree(destination), before), "transferred evidence differs");
+  return before;
 }
 
 // JSON image observations are appended only after the safely collected prepare

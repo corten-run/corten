@@ -91,7 +91,8 @@
 //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
 //! the compressed forms made for it, with an allowance for what holds them; the body, the key
 //! and each compressed form are held in allocations of their own size
-//! (`tests/kept_memory.rs` holds the count to what the allocator is asked for).
+//! (`tests/kept_memory.rs` holds the count to what the allocator is asked for). The key is
+//! built when an answer is kept, so a miss that is not kept never builds it ([`Key`]).
 //!
 //! A write is counted when it is answered or dropped, so what it changes must be there for a
 //! reader by then, or be made under `Signal::finish`. One that lands later (a task the handler
@@ -108,7 +109,7 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher};
+use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher, RandomState};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
@@ -116,6 +117,7 @@ use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use std::time::Instant;
 
 use bytes::Bytes;
+use http::uri::PathAndQuery;
 use http::{header, HeaderMap, HeaderValue, StatusCode};
 
 use crate::body::Body;
@@ -393,6 +395,9 @@ struct Store {
     marks: OnceLock<Box<[AtomicU64]>>,
     /// How many of the marks are set.
     marked: AtomicUsize,
+    /// The keys of its hash of a URL, the process's own, so a client cannot choose URLs that share
+    /// a place in its table.
+    keys: RandomState,
     inner: RwLock<Inner>,
 }
 
@@ -401,6 +406,28 @@ struct Store {
 /// count, and then a write to either drops the other's pages early.
 fn count_of(path: &[u8]) -> usize {
     (crate::page::path_hash(path) >> 32) as usize % WRITES
+}
+
+/// The hasher of the store's table, whose keys are hashes already: a request's URL is hashed once,
+/// by the store's keys ([`Asked::of`]), and not again for each lookup.
+#[derive(Default)]
+struct Prehashed(u64);
+
+impl Hasher for Prehashed {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write_u64(&mut self, hash: u64) {
+        self.0 = hash;
+    }
+
+    /// Not called for a `u64`.
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.0 = self.0.rotate_left(8) ^ u64::from(byte);
+        }
+    }
 }
 
 /// A path's count of writes, as a request found it.
@@ -518,8 +545,9 @@ struct Place {
 
 #[derive(Default)]
 struct Inner {
-    /// By path and query, the copies for each `Host`, `Accept-Language` and way of asking.
-    at: HashMap<Box<str>, Vec<Arc<Entry>>>,
+    /// By the hash of their path and query ([`Prehashed`]), the copies for each `Host`,
+    /// `Accept-Language` and way of asking: each holds its URL, as two URLs may share a hash.
+    at: HashMap<u64, Vec<Arc<Entry>>, BuildHasherDefault<Prehashed>>,
     /// Every entry, in the place the clock's hand finds it: one not used since the hand last
     /// passed is the next to go when the bound is passed.
     slots: Vec<Option<Arc<Entry>>>,
@@ -527,15 +555,65 @@ struct Inner {
     hand: usize,
 }
 
+/// What a copy is kept for, in one allocation: its URL (the path and query), the `Host` it was
+/// asked with and, when its `Vary` names the header, the `Accept-Language`, as they were sent. A
+/// copy of its own, made once the answer is to be kept: a request's URL and header values are
+/// slices of the connection's read buffer, which a kept one would hold whole. A miss that is not
+/// kept never builds it; until then the request's URL and header values are held by handles that
+/// copy none of their bytes, though the first clone of a header a middleware made for itself may
+/// allocate the count of its holders.
+struct Key {
+    /// The URL, then the `Host` and the `Accept-Language` that were sent.
+    bytes: Box<[u8]>,
+    /// Where the URL ends.
+    at: usize,
+    /// Where the `Host` ends, if one was sent.
+    host: Option<usize>,
+    /// Where the `Accept-Language` ends, if one was sent.
+    language: Option<usize>,
+}
+
+impl Key {
+    /// The bytes a key of these holds.
+    fn length(at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> usize {
+        at.len() + host.map_or(0, HeaderValue::len) + language.map_or(0, HeaderValue::len)
+    }
+
+    fn new(at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Self {
+        let mut bytes = Vec::with_capacity(Key::length(at, host, language));
+        let (host, language) = (host.map(HeaderValue::as_bytes), language.map(HeaderValue::as_bytes));
+        bytes.extend_from_slice(at.as_bytes());
+        let mut end = |sent: &[u8]| {
+            bytes.extend_from_slice(sent);
+            bytes.len()
+        };
+        let (host, language) = (host.map(&mut end), language.map(&mut end));
+        Key { bytes: bytes.into_boxed_slice(), at: at.len(), host, language }
+    }
+
+    fn at(&self) -> &[u8] {
+        &self.bytes[..self.at]
+    }
+
+    fn host(&self) -> Option<&[u8]> {
+        self.host.map(|end| &self.bytes[self.at..end])
+    }
+
+    fn language(&self) -> Option<&[u8]> {
+        self.language.map(|end| &self.bytes[self.host.unwrap_or(self.at)..end])
+    }
+}
+
 /// One kept answer, as its handler gave it.
 pub(crate) struct Entry {
-    at: Box<str>,
+    key: Key,
+    /// Its URL's hash, its key in the store's table.
+    hash: u64,
     place: Place,
     written: Written,
-    host: Option<HeaderValue>,
-    /// The `Accept-Language` it was asked with, when its `Vary` names the header or its handler
-    /// read the language the header asks for.
-    language: Option<Option<HeaderValue>>,
+    /// Whether its `Vary` names `Accept-Language` (as it does once its handler read the language
+    /// the header asks for), so the one it was asked with is part of its key.
+    by_language: bool,
     /// Asked for as data (`Accept: application/json` first): what [`Mode`] its handler saw.
     data: bool,
     made: Instant,
@@ -767,8 +845,15 @@ impl Entry {
         self.age(now) < self.lifetime && self.written.stands(store)
     }
 
+    /// The `Accept-Language` it was asked with, when its `Vary` names the header.
+    fn language(&self) -> Option<Option<&[u8]>> {
+        self.by_language.then(|| self.key.language())
+    }
+
     fn is_for(&self, host: Option<&HeaderValue>, language: Option<&HeaderValue>, data: bool) -> bool {
-        self.data == data && self.host.as_ref() == host && self.language.as_ref().is_none_or(|kept| kept.as_ref() == language)
+        self.data == data
+            && self.key.host() == host.map(HeaderValue::as_bytes)
+            && self.language().is_none_or(|kept| kept == language.map(HeaderValue::as_bytes))
     }
 }
 
@@ -819,10 +904,10 @@ impl Store {
             inner.slots[slot] = None;
             inner.free.push(slot);
         }
-        if let Some(copies) = inner.at.get_mut(&entry.at) {
+        if let Some(copies) = inner.at.get_mut(&entry.hash) {
             copies.retain(|copy| !Arc::ptr_eq(copy, entry));
             if copies.is_empty() {
-                inner.at.remove(&entry.at);
+                inner.at.remove(&entry.hash);
             }
         }
         let size = entry.size.swap(GONE, Ordering::AcqRel);
@@ -864,6 +949,7 @@ impl Answers {
                 early: AtomicU32::new(0),
                 marks: OnceLock::new(),
                 marked: AtomicUsize::new(0),
+                keys: RandomState::new(),
                 inner: RwLock::default(),
             }))
         })
@@ -875,9 +961,23 @@ impl Answers {
         self.0.bytes.load(Ordering::Acquire)
     }
 
-    /// The answer kept for a request, while it stands, with its age in seconds.
+    /// [`Answers::found`], for a test.
+    #[cfg(test)]
     fn find(
         &self,
+        at: &str,
+        host: Option<&HeaderValue>,
+        language: Option<&HeaderValue>,
+        data: bool,
+    ) -> Option<(Arc<Entry>, u64)> {
+        self.found(self.0.keys.hash_one(at), at, host, language, data)
+    }
+
+    /// The answer kept for a request for `at`, whose hash by the store's keys is `hash`, while it
+    /// stands, with its age in seconds.
+    fn found(
+        &self,
+        hash: u64,
         at: &str,
         host: Option<&HeaderValue>,
         language: Option<&HeaderValue>,
@@ -886,7 +986,10 @@ impl Answers {
         let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
         // The copy that stands: one that no longer does is in no other's way until it goes.
-        let entry = inner.at.get(at)?.iter().find(|entry| entry.is_for(host, language, data) && entry.stands(&self.0, now))?;
+        let entry =
+            inner.at.get(&hash)?.iter().find(|entry| {
+                entry.key.at() == at.as_bytes() && entry.is_for(host, language, data) && entry.stands(&self.0, now)
+            })?;
         let age = entry.age(now);
         // Stored only when it changes: a page read often is marked once for each pass of the hand.
         if !entry.used.load(Ordering::Relaxed) {
@@ -906,21 +1009,23 @@ impl Answers {
             store: Arc::downgrade(&self.0),
         }));
         let now = Instant::now();
-        let copies = inner.at.get(&entry.at).map(Vec::as_slice).unwrap_or_default();
+        let copies = inner.at.get(&entry.hash).map(Vec::as_slice).unwrap_or_default();
         // The copies this one takes the place of: the one asked the same way, and those that no
         // longer stand. With none of either in a full set, the oldest not read since it was kept
         // (or since the hand passed it), so a way of asking seen once does not take the place of
         // one seen often; else the oldest.
+        let mut copies = copies.iter().filter(|copy| copy.key.at() == entry.key.at());
         let mut replaced: Vec<_> = copies
-            .iter()
+            .clone()
             .filter(|copy| {
-                (copy.host == entry.host && copy.language == entry.language && copy.data == entry.data)
+                (copy.key.host() == entry.key.host() && copy.language() == entry.language() && copy.data == entry.data)
                     || !copy.stands(store, now)
             })
             .cloned()
             .collect();
-        if replaced.is_empty() && copies.len() >= COPIES {
-            replaced.extend(copies.iter().find(|copy| !copy.used.load(Ordering::Relaxed)).or(copies.first()).cloned());
+        if replaced.is_empty() && copies.clone().count() >= COPIES {
+            let unread = copies.clone().find(|copy| !copy.used.load(Ordering::Relaxed));
+            replaced.extend(unread.or_else(|| copies.next()).cloned());
         }
         for replaced in &replaced {
             store.drop_entry(&mut inner, replaced);
@@ -929,7 +1034,7 @@ impl Answers {
             inner.slots.push(None);
         }
         inner.slots[slot] = Some(entry.clone());
-        inner.at.entry(entry.at.clone()).or_default().push(entry.clone());
+        inner.at.entry(entry.hash).or_default().push(entry.clone());
         store.bytes.fetch_add(entry.size.load(Ordering::Acquire), Ordering::AcqRel);
         store.make_room(&mut inner, &entry);
         entry
@@ -979,7 +1084,9 @@ impl Answers {
 pub(crate) struct Asked<'a> {
     answers: &'a Answers,
     signal: &'a crate::Signal,
-    at: &'a str,
+    at: &'a PathAndQuery,
+    /// `at`'s hash, by the store's keys.
+    hash: u64,
     host: Option<&'a HeaderValue>,
     language: Option<&'a HeaderValue>,
     data: bool,
@@ -1072,16 +1179,16 @@ impl<'a> Asked<'a> {
         if req.extensions().get::<crate::router::MatchedPath>().is_none_or(|matched| matched.matched() != at) {
             return None;
         }
-        let at = at.as_str();
-        Some(Asked { answers, signal, at, host, language, data })
+        let hash = answers.0.keys.hash_one(at.as_str());
+        Some(Asked { answers, signal, at, hash, host, language, data })
     }
 
     /// The kept answer for this request, as its handler gave it, with its age.
     pub(crate) fn find(&self) -> Option<Response> {
-        let (entry, age) = self.answers.find(self.at, self.host, self.language, self.data)?;
+        let (entry, age) = self.answers.found(self.hash, self.at.as_str(), self.host, self.language, self.data)?;
         // Kept for the language it was asked in: the answer names `Accept-Language` as it leaves
         // the app, whatever `Vary` a middleware puts on it after this (`crate::page::vary_on_language`).
-        if entry.language.is_some() {
+        if entry.by_language {
             self.signal.ask_language();
         }
         let mut res = Response::new(Body::from(entry.body.clone()));
@@ -1105,19 +1212,18 @@ impl<'a> Asked<'a> {
     /// handler's and nothing here is paid for it but the mark it leaves.
     pub(crate) fn missed(&self, req: &Request, route: Option<Arc<Unkept>>) -> Option<Missed> {
         let store = &*self.answers.0;
-        if store.full() && !store.asked(self.host, self.at) {
+        if store.full() && !store.asked(self.host, self.at.as_str()) {
             return None;
         }
         Some(Missed {
             asked: Instant::now(),
-            written: Written::of(&self.answers.0, self.at),
+            written: Written::of(&self.answers.0, self.at.as_str()),
             signal: req.extensions().get::<crate::Signal>().cloned(),
             nonce: req.extensions().get::<crate::security::NonceSlot>().cloned(),
-            at: self.at.into(),
-            // Copies of their own: a request's header values are slices of the connection's read
-            // buffer, which a kept one would hold whole.
-            host: self.host.and_then(|host| HeaderValue::from_bytes(host.as_bytes()).ok()),
-            language: self.language.and_then(|language| HeaderValue::from_bytes(language.as_bytes()).ok()),
+            at: self.at.clone(),
+            host: self.host.cloned(),
+            language: self.language.cloned(),
+            hash: self.hash,
             data: self.data,
             told: Told(route, false),
         })
@@ -1130,9 +1236,14 @@ pub(crate) struct Missed {
     written: Written,
     signal: Option<crate::Signal>,
     nonce: Option<crate::security::NonceSlot>,
-    at: Box<str>,
+    /// The URL, `Host` and `Accept-Language` it was asked with, sharing the request's bytes until
+    /// its answer is kept: its [`Key`] is copied from them then, with the `Accept-Language` only
+    /// when the answer varies on it, so a header the page does not read is neither held nor
+    /// counted.
+    at: PathAndQuery,
     host: Option<HeaderValue>,
     language: Option<HeaderValue>,
+    hash: u64,
     data: bool,
     /// Of a route of whole bodies, which is told whether this request's answer was kept.
     told: Told,
@@ -1176,11 +1287,9 @@ impl Missed {
             return res;
         }
         let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
-        // The URL is held twice, by the entry and by the map.
-        let key = self.at.len() * 2
-            + self.host.as_ref().map_or(0, HeaderValue::len)
-            + self.language.as_ref().filter(|_| language).map_or(0, HeaderValue::len);
-        let size = key + head + OVERHEAD + length as usize;
+        // The URL is held once, by the entry: the map holds its hash.
+        let sent = self.language.as_ref().filter(|_| language);
+        let size = Key::length(self.at.as_str(), self.host.as_ref(), sent) + head + OVERHEAD + length as usize;
         if length == 0 || size > answers.0.bound / SHARE {
             return res;
         }
@@ -1197,16 +1306,20 @@ impl Missed {
             // A body of an exact size that could not be read: not a page to send as it is.
             return crate::response::IntoResponse::into_response(StatusCode::INTERNAL_SERVER_ERROR);
         };
-        // A copy of its own length: a page's buffer is sized for the last page rendered, and the
-        // bytes made from it hold all of that for as long as they are kept.
+        // A copy of its own length: a page's buffer is sized for the last page rendered and an
+        // eighth more, and the bytes made from it would hold all of that for as long as they are
+        // kept. Asking the allocator to shrink the buffer instead moves it under jemalloc, the
+        // template's allocator, whenever the page is in a smaller size class than its buffer,
+        // which is a copy with more work around it (`docs/design.md#choice-kept-pages`).
         let body = Bytes::copy_from_slice(&body);
-        let Missed { at, host, language: asked, data, asked: made, written, mut told, .. } = self;
+        let key = Key::new(self.at.as_str(), self.host.as_ref(), sent);
+        let Missed { hash, data, asked: made, written, mut told, .. } = self;
         let entry = answers.keep(|place| Entry {
-            at,
+            key,
+            hash,
             place,
             written,
-            host,
-            language: language.then_some(asked),
+            by_language: language,
             data,
             made,
             lifetime,
@@ -1532,14 +1645,14 @@ mod tests {
     /// be kept, so the counts are made, as [`Missed::keep`] makes them.
     fn entry(answers: &Answers, at: &str, host: Option<&'static str>, lifetime: u64, body: usize) -> impl FnOnce(Place) -> Entry {
         answers.counts();
-        let written = Written::of(&answers.0, at);
-        let at: Box<str> = at.into();
+        let (hash, written) = (answers.0.keys.hash_one(at), Written::of(&answers.0, at));
+        let key = Key::new(at, host.map(HeaderValue::from_static).as_ref(), None);
         move |place| Entry {
-            at,
+            key,
+            hash,
             place,
             written,
-            host: host.map(HeaderValue::from_static),
-            language: None,
+            by_language: false,
             data: false,
             made: Instant::now(),
             lifetime,
@@ -1928,11 +2041,72 @@ mod tests {
         let (fr, en) = (HeaderValue::from_static("fr"), HeaderValue::from_static("en"));
         // For every language, and past its lifetime.
         answers.keep(entry(&answers, "/p", None, 0, 10));
-        let (french, asked) = (entry(&answers, "/p", None, 60, 20), fr.clone());
-        answers.keep(move |place| Entry { language: Some(Some(asked)), ..french(place) });
+        let (french, asked) = (entry(&answers, "/p", None, 60, 20), Key::new("/p", None, Some(&fr)));
+        answers.keep(move |place| Entry { key: asked, by_language: true, ..french(place) });
         assert_eq!(answers.find("/p", None, Some(&fr), false).expect("the one that stands").0.body.len(), 20);
         assert!(answers.find("/p", None, Some(&en), false).is_none());
         assert_eq!(answers.bytes(), 20 + OVERHEAD, "the one past its lifetime went when the URL was kept again");
+    }
+
+    /// Two URLs with the same hash share a place in the table and are told apart by the URL each
+    /// copy holds: neither is found for the other, takes the other's place or goes with it, and
+    /// the copies one URL keeps are counted, and give way, among its own.
+    #[test]
+    fn urls_that_share_a_hash_are_told_apart() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let keep = |at: &str, body| {
+            let make = entry(&answers, at, None, 60, body);
+            answers.keep(move |place| Entry { hash: 7, ..make(place) })
+        };
+        let a = keep("/a", 10);
+        keep("/b", 20);
+        assert_eq!(answers.found(7, "/a", None, None, false).expect("kept").0.body.len(), 10);
+        assert_eq!(answers.found(7, "/b", None, None, false).expect("kept").0.body.len(), 20);
+        assert!(answers.found(7, "/c", None, None, false).is_none());
+        keep("/b", 30);
+        assert_eq!(answers.bytes(), 40 + OVERHEAD * 2, "the second /b took the first /b's place alone");
+        answers.0.drop_entry(&mut answers.0.inner.write().unwrap_or_else(PoisonError::into_inner), &a);
+        assert!(answers.found(7, "/a", None, None, false).is_none());
+        assert_eq!(answers.found(7, "/b", None, None, false).expect("still kept").0.body.len(), 30);
+        assert_eq!(answers.bytes(), 30 + OVERHEAD);
+
+        // `/b`, never read, then a copy of `/a` for as many hosts as a URL keeps: none is in
+        // `/b`'s way. One more `/a` takes an `/a`'s place, not the unread `/b`'s.
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let keep = |at: &str, host, body| {
+            let make = entry(&answers, at, host, 60, body);
+            answers.keep(move |place| Entry { hash: 7, ..make(place) })
+        };
+        let hosts: Vec<&'static str> = (0..=COPIES).map(|n| &*Box::leak(format!("h{n}.example").into_boxed_str())).collect();
+        keep("/b", None, 20);
+        for &host in &hosts[..COPIES] {
+            keep("/a", Some(host), 10);
+        }
+        assert_eq!(answers.bytes(), 20 + 10 * COPIES + OVERHEAD * (COPIES + 1), "no copy went");
+        keep("/a", Some(hosts[COPIES]), 10);
+        assert_eq!(answers.bytes(), 20 + 10 * COPIES + OVERHEAD * (COPIES + 1), "one went for the new one");
+        assert_eq!(answers.found(7, "/b", None, None, false).expect("still kept").0.body.len(), 20);
+        let found = |host| answers.found(7, "/a", Some(&HeaderValue::from_static(host)), None, false);
+        assert!(found(hosts[0]).is_none(), "the oldest /a not read");
+        for &host in &hosts[1..] {
+            assert!(found(host).is_some(), "{host}");
+        }
+    }
+
+    /// A key reads back the URL, `Host` and `Accept-Language` it was made of, each apart, in one
+    /// allocation of their length.
+    #[test]
+    fn a_key_reads_back_what_it_was_made_of() {
+        let (host, language) = (HeaderValue::from_static("a.example"), HeaderValue::from_static("fr"));
+        for (sent_host, sent_language) in
+            [(None, None), (Some(&host), None), (None, Some(&language)), (Some(&host), Some(&language))]
+        {
+            let key = Key::new("/p?q=1", sent_host, sent_language);
+            assert_eq!(key.at(), b"/p?q=1");
+            assert_eq!(key.host(), sent_host.map(HeaderValue::as_bytes));
+            assert_eq!(key.language(), sent_language.map(HeaderValue::as_bytes));
+            assert_eq!(key.bytes.len(), 6 + sent_host.map_or(0, HeaderValue::len) + sent_language.map_or(0, HeaderValue::len));
+        }
     }
 
     #[test]
