@@ -329,6 +329,7 @@ export function recheckSetupSibling(root, selectedGroup, row) {
   };
   evidenceSnapshot(idleAttempt());
   idleAttempt(); // Hashing the archive/tree may overlap the start of collection.
+  return idleAttempt;
 }
 
 // Read-only per-group replay, shared by final inspection and staged admission.

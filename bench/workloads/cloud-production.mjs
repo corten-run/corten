@@ -279,7 +279,8 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       const currentPeers = recheckContinuationPeers(root, indexSha256, manifest.provider, options.group, peers);
       if (beforeCreate === true) {
         recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
-        for (const row of unconfirmed) if (row.root !== undefined) recheckSetupSibling(root, options.group, row);
+        const checks = unconfirmed.filter((row) => row.root !== undefined).map((row) => recheckSetupSibling(root, options.group, row));
+        for (const stillIdle of checks) stillIdle(); // A different sibling's archive may have taken time to hash.
       }
       return currentPeers;
     }
