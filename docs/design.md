@@ -8124,6 +8124,101 @@ rules something out.
     and nothing a page's `GET` runs. `tests/kept_memory.rs` at this change, with all features and
     with none.
 
+71. <a id="choice-layout-floor"></a>**The cycle gate allows a measured layout floor where a workload's instructions
+    are flat.** A request-path pull request holds a workload it should leave as fast as it was to
+    a margin of +1% in paired cycles, declared before the run
+    ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2). Placement alone moves cycles by
+    more than that: on a DigitalOcean c-8 whose CPU is a Xeon Platinum 8358, main built against
+    main with one never-called function added, which moves every function in the binary and
+    changes no instruction a request retires, took 1.16% more user and kernel cycles a request at
+    the median of the pairs, with a one-sided 95% bound of +1.62%, while main built twice met the
+    margin at +0.59%. So a workload whose bound is at or above +1% but under the floor passes when
+    its user instructions are flat (the bound on their paired change at or below +0.05%, the
+    median between -0.05% and +0.05%); the pull request reports it as within the layout floor,
+    claims nothing about its speed and gives its user and kernel split. A bound at or above the
+    floor, or instructions that moved, fails as before. The floor is +1.62%, the larger of the two
+    layout bounds measured, and holds for that host type only: a run on another measures its own
+    layout control in the same run, or holds such workloads to +1%. A reduction inside the floor
+    is not claimed as a win, since a placement that can add cycles could as well take them away.
+    This answers
+    [#1923 Control workloads with flat instructions miss the +1% cycle margin by up to 2.8% of user cycles, so the gate blocks changes it cannot attribute](https://github.com/corten-run/corten/issues/1923),
+    whose pull requests missed by bounds of +1.13% to +1.67% on controls whose instructions did
+    not move.
+
+    The runs: one host with nothing else running (Debian 13, Linux 6.12.117, rustc 1.100.0 with
+    LLD 23.1.5 and the repository's release profile, jemalloc 5.3.0 preloaded), every binary
+    built there from main `14471284c`, under the protocol pull requests are gated on. The
+    workload was `plain`: a page for one visitor in a probe app that keeps pages, a control on
+    which those pull requests missed. Every turn ran on a freshly started build pinned to one CPU
+    and loaded for 3 s by `wrk -t2 -c64` on two others, the two builds' order turned every pair,
+    their answers compared first; 100 recorded pairs after one that was not, `cycles:u`,
+    `cycles:k` and `instructions:u` counted by `perf stat` at 100% running and divided by the
+    requests answered; the bound is the 59th of the 100 sorted per-pair changes. The plan was
+    written before the run and tested no margin. The layout builds add a function marked
+    `#[inline(never)]` whose body is 40 or 3,100 NOP bytes after the imports of
+    `crates/corten/src/router.rs`, kept by one `black_box` of its address in `Router::new`,
+    which runs once as the app starts; no request calls it. Each of the binary's 3,402 functions
+    moved, by 64 to 160 bytes with 40 and by 64 to 3,216 with 3,100. Main built twice gave
+    byte-identical binaries.
+
+    | Comparison | User+kernel median | Bound | Range | User median / bound | Kernel median / bound | Instructions:u |
+    | --- | ---: | ---: | --- | ---: | ---: | ---: |
+    | main twice | +0.09% | +0.59% | -7.52% to +6.60% | -0.02% / +0.87% | +0.44% / +0.74% | +0.00% |
+    | 40-byte pad | +1.16% | +1.62% | -9.58% to +9.90% | +1.40% / +1.71% | +0.89% / +1.41% | +0.00% |
+    | 3,100-byte pad | +1.06% | +1.39% | -10.83% to +6.61% | +1.83% / +2.58% | +0.28% / +0.66% | +0.00% |
+
+    A second pass on the two layout comparisons, 30 recorded pairs each (the bound the 20th of
+    30), counted user L1 instruction-cache misses, iTLB misses and branch misses beside user
+    instructions, each at 100% running. L1 instruction-cache misses fell, by 1.09% and 1.84% at
+    the median with bounds of -0.38% and -0.97%, of about 2,000 a request. iTLB misses moved by
+    +2.24% and +4.71% with bounds of +7.74% and +18.94%, of about 13 a request, too spread to
+    resolve. Branch misses rose by 9.85% and 7.45%, with bounds of +14.26% and +16.14%, of about
+    22 a request. That suggests branch-predictor aliasing at the new addresses as the likely
+    mechanism; it is not shown to be the only one. What the runs do not show: the floor on
+    another host, another workload or another placement, any of which may be larger or smaller
+    (one host, `plain` alone, two pads in one place); whether a placement can lower cycles by as
+    much as both pads raised them, which the rule on wins assumes; a protocol with each build
+    started once; and latency, since these are cycles under load.
+
+    Not chosen: the margin raised to the floor for every workload, which would let a change that
+    adds instructions pass a cost of up to 1.62%; the miss reported and the pull request held
+    until a rerun met +1%, the rule until now, which held a pull request on byte-identical
+    binaries that missed with one start and with fresh starts alike, and would pass a real cost of
+    the same size on a lucky placement; more pairs, pooled runs or a margin declared again after a
+    run, since more pairs narrow the bound around the placement's own offset (+1.16% here), not
+    toward zero, and the others are what Values 9 rules out; a layout control in every run on
+    every host type, which adds about twelve minutes of host time a workload (each comparison of
+    100 pairs took 11 minutes 37 seconds here) where the host type's floor is recorded, and is
+    still asked of a host type without one; and builds that pin placement (function alignment, a
+    fixed link order), not tried, which would gate a binary other than the one apps build.
+
+    Stands on: measured (the three comparisons and the second pass above, one run of each on one
+    host, 100 pairs for cycles and 30 for the misses); reasoned (a placement moves no instruction a
+    request retires, as the layout builds' +0.00% shows, so a change that adds work to a request
+    in user code shows in its user instructions, and a bound under the floor on flat instructions
+    is no more than placement alone was seen to give); bet (a change whose cost is in cycles and
+    not in user instructions, such as data laid out to miss the cache more, work in the kernel or
+    waiting on a lock, is rare on a workload whose instructions it leaves flat, and the floor lets
+    one of up to 1.62% through there; and `plain`'s floor holds for the gate's other workloads on
+    the same host type); value (Fast, and proven fast: a cycle change is attributed to the code
+    that made it before it blocks a change or proves one fast; Verified, not assumed: the floor is
+    measured with A/A builds rather than argued, and is held to the host type it was measured on,
+    README Values).
+
+    Revisit when: the gate runs on a host type or CPU family it has no floor for (another droplet
+    size, or a c-8 with another CPU: the c-8s used for the gate have also had a Xeon Platinum 8168
+    and 8280), whose own layout control then gives a floor to record here; the gate's toolchain
+    changes how code is placed, such as a rustc whose LLVM is a new major version (LLVM 23 under
+    rustc 1.100.0 here) or whose release notes change inlining or function alignment, a linker
+    other than LLD, or a release profile with other LTO, codegen units or opt-level; a later A/A of
+    main built twice under the same protocol has a bound over +1%, so the protocol and not the
+    placement fails the gate; a layout A/A on the gate's host type has a bound over the recorded
+    floor; or a cost that passed inside the floor is later measured as real.
+
+    Last checked: 2026-11-22, the runs above at `14471284c` on a DigitalOcean c-8 in sfo3 (Xeon
+    Platinum 8358, one thread a core, Linux 6.12.117), rustc 1.100.0, LLD 23.1.5, perf 6.12.117,
+    `wrk` 4.1.0 and Debian's libjemalloc2 5.3.0.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

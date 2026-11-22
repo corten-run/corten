@@ -396,6 +396,22 @@ establish a general ranking.
       (`null`) in either build, or if the bound on the paired changes does not establish the
       predeclared margin. Say what the run did not resolve. Retired instructions measure work,
       not speed; fewer cycles per request show lower CPU cost, not lower request latency.
+
+      A workload the change should leave as fast as it was is held to the predeclared margin of
+      +1%: the one-sided 95% upper bound on the median per-pair change in user plus kernel cycles
+      per request is under +1%. Moving code alone moves cycles, so a workload whose bound is at
+      or above +1% but under the layout floor recorded in
+      [design Choice 71](docs/design.md#choice-layout-floor) (+1.62% on the host type it names)
+      still passes when the same workload's user instructions are flat: the bound on its paired
+      change in user instructions per request is at or below +0.05%, and its median is between
+      -0.05% and +0.05%. The pull request reports that workload as within the layout floor,
+      claims nothing about its speed and gives its user and kernel split. A bound at or above
+      the floor, or instructions that are not flat, fails as before. A win is never claimed from
+      a change inside the floor: a reduction in cycles is a win only when its bound is below
+      minus the floor as well as the predeclared margin. A run on a host type the floor was not
+      measured on either measures its own A/A layout control in the same run, main against main
+      with one never-called function added as the Choice describes, whose bound is that run's
+      floor, or holds every such workload to +1%.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,
