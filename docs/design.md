@@ -7243,7 +7243,10 @@ rules something out.
     is dated when it is sent, and its `Age` counts from the handler's date as a cache counts one
     (RFC 9111, 4.2.3, the apparent age less the time the answer took): a cache after the app then
     finds the page as old whichever answer it is given. A page that date makes older than its
-    lifetime, or whose date is not in IMF-fixdate form, the form HTTP sends, is not kept. A page is
+    lifetime, or whose date is not in IMF-fixdate form, the form HTTP sends, is not kept, and
+    neither is one with more than one `Date` line: the field holds one date (RFC 9110, 6.6.1) and
+    a recipient may not join a second line to the first (5.3), so no one line says how old the
+    page is, where reading the last one read let two contradictory dates keep a page. A page is
     put in the store only while no write to its path has been counted since its handler read,
     seen under the store's lock, so one read before a write and kept late never takes the place of
     one read after it.
@@ -7346,14 +7349,24 @@ rules something out.
     is made. When the first request's page is not kept (an error, a page drawn for that request),
     the others run their own handlers then, and the page is remembered as not kept for a minute,
     until a write to its path, or until a request that made it alone keeps it (a page so kept
-    while another request makes it is not remembered when that one's page is not kept), so
-    requests for a page never kept wait for each other about once a minute. That is best effort: the table
+    while another request makes it is not remembered when that one's page is not kept), or until
+    a copy that stands for every language (its `Vary` does not name `Accept-Language`) is kept at
+    its path, before that page was answered or after, since such a copy is kept for its language
+    too. Those copies are counted by path as the writes are, a byte for each of the 65,536 counts
+    (64 KiB, made with the first page that misses): a request reads its path's count as it is
+    admitted and a page remembered as not kept holds the one its request read, so a request that
+    finds the count changed makes the page for the others again. A copy kept at another path that
+    shares the count ends that early, which costs requests for the page one wait for a handler
+    that fails, and the byte comes round to the value it held after 256 such copies, which leaves
+    the page remembered until its minute ends. So requests for a page never kept wait for each
+    other about once a minute. That is best effort: the table
     remembers the latest 1,024 such pages and forgets the one remembered first, so with more than
     that in a minute a page may be waited for again sooner. At most 1,024 pages are made at once
     that others wait for; past that, a request makes its page as it would with nothing kept. So
     the table holds at most 2,048 entries and 1,024 remembered times, about 130 KB at most beside
-    the bound by their sizes, and a request that ends does a lookup and forgets at most one page
-    beside those whose time is up. When that request is dropped (its client left, its deadline
+    the bound by their sizes, with the 64 KiB of counts beside it, and a request that ends does a
+    lookup and forgets at most one page beside those whose time is up. When that request is
+    dropped (its client left, its deadline
     passed) or panics, the wait ends with it and they run their own, with nothing remembered. A
     request that waited and was not given a page runs its own handler and does not wait again,
     even where a write has meanwhile started another request making the page: in a burst of
@@ -7371,7 +7384,15 @@ rules something out.
     that miss a URL new to a full store together run its handler at most twice, the first
     request's and one for the rest, where with room they run it once. Nothing is remembered of
     the first request's answer, which was not made for any other, so an error there does not keep
-    the next requests from waiting for each other. The second run is the price of keeping the
+    the next requests from waiting for each other. That bound holds while the URL's mark does.
+    The marks are cleared once an eighth of them are set, all but the mark of the URL whose
+    request clears them, which is set in the same pass, so a request for that URL meanwhile finds
+    it; a URL whose first request is being made when other new URLs clear them is new again, so
+    its handler runs once more for each time they are cleared while its requests come. A review
+    found the first case gave three runs for one copy, the URL that cleared the marks losing its
+    own with the rest; keeping it costs the clearing a comparison a word. The second takes an
+    eighth of the marks set by other new URLs (131,072 at 32 MiB) while one page is made. The
+    second run is the price of keeping the
     first request for every URL in a full store as cheap as before: making its page for the
     others (below) cost that request 18.6% more, on the stream of new URLs a crawler sends, which
     the rule for a full store exists to make cheap.
@@ -7417,7 +7438,13 @@ rules something out.
     keyed hash, the second look and the future that keeps the answer, 4,338 instructions a
     request (below), and needed its refusal settled in one step with the end of the wait, under
     the table's lock, so that a request that came between the two did not wait for a page never
-    kept and then run its own; leaving a handler's `Date` out with nothing for its age, with which a cache
+    kept and then run its own; marks that live through a clearing (two tables cleared in turn),
+    which doubles their memory and has every new URL in a full store look in both, to close a case
+    that needs an eighth of the marks set while one page is made; ending a page's memory of not
+    being kept in other languages by a second index by page or a scan of the table, which each
+    copy kept would pay for under the table's lock, or only by a copy in its own language, with
+    which a review found a language's requests each ran the handler for the rest of the minute
+    after a copy for every language had stood for them and expired; leaving a handler's `Date` out with nothing for its age, with which a cache
     after the app counted the first answer older than each given in its place, and not keeping a
     page that sets a `Date` at all, which loses the page for an input HTTP gives a meaning to; and,
     left for changes of their own, a call
@@ -7563,14 +7590,25 @@ rules something out.
     rule for stopping set beforehand. The host was not quiet: the workstation's other work kept
     its CPUs 95 to 100% busy, and one pair's change ranged from -7.7% to +16.1%.
     The first request for a URL in a full store left out of the table, as this Choice has it,
-    against main with its handling of a drawn submit key (`b1cfca825` against main's
+    against main with its handling of a drawn submit key (`9d0bd5e47` against main's
     `564034b86`, `tests/kept_cost.rs` as above with a fifth case, a new URL in a full store, the
-    bound at 4 MiB and filled before the counted requests so that the store refuses each of
-    them, in 3 rounds that alternated the two builds): a new URL in a full store ran 23,408
-    instructions against 23,357 at the median (51 more, 0.2%); a page made and kept at a new URL
-    with room 35,855 against 34,852 (2.9% more), a write and the page made again 46,086 against
-    44,922 (2.6% more), a kept page given again 19,227 against 19,226 and a page for one visitor
-    18,315 against 18,334, each build's rounds within 9 instructions of each other. The same
+    bound at 4 MiB and filled before the counted requests, in 3 rounds that alternated the two
+    builds). A URL whose mark another set is kept the first time, with an answer no different
+    from a refused one's, so the counted URLs are those a first pass over 1,300 new URLs, in a
+    second store filled the same way, found it refuses (each asked for twice in a row, the
+    second not given the page): 1,290 in both builds, the other 10 taken for known. A new URL in
+    a full store ran 22,681 instructions against 22,712 at the median (31 fewer, 0.1%); a page
+    made and kept at a new URL with room 35,821 against 34,803 (2.9% more), a write and the page
+    made again 46,073 against 44,763 (2.9% more), a kept page given again 19,475 against 19,482
+    and a page for one visitor 18,206 against 18,206, each build's rounds within 21 instructions
+    of each other. A write and the page made again is 2.9% more where it was 2.6% with the fixture
+    before, not by this build: its count is 12 fewer than `b1cfca825`'s by callgrind's inclusive
+    counts, where main's is 159 fewer than with the fixture before, which sent each request from a
+    closure. The
+    fixture before it counted `/kept?n=200` to `?n=1199` whatever the store
+    did, so by the same fill 9 of those 10 among them (`b1cfca825`): it ran 23,408 against 23,357
+    for a new URL in a full store, 35,855 against 34,852 for a page made with room and 46,086
+    against 44,922 for a write and the page made again. The same
     fixture and rounds with that first request making the page for the others (`5fbe4e9ef`
     against `564034b86`, not chosen above) ran 27,692 for a new URL in a full store (4,338 more,
     18.6%), 35,954 for a page made with room and 46,129 for a write and the page made again. Of
@@ -7647,7 +7685,9 @@ rules something out.
     `5fbe4e9ef` and `564034b86`, and of `35c98f2bc` against `e388e070c`, counted by valgrind
     3.24.0's callgrind. 2026-11-21, a new URL in a full store left out of the table and the four
     cases beside it, rustc 1.100.0, release builds of `b1cfca825` and `564034b86` counted by
-    valgrind 3.24.0's callgrind.
+    valgrind 3.24.0's callgrind; and with the fixture counting only refused URLs, the marks of
+    the URL that clears them kept and the counts of copies kept for every language, release
+    builds of `9d0bd5e47` and `564034b86`, the same way.
     2026-11-21 for a write's count, the callgrind rounds above at `fc86d8eff` and
     `6984b2ac4`, and the cycles of the same write from the two builds, built with rustc 1.100.0
     on a dedicated 8-CPU cloud host (Xeon Platinum 8358, one thread a core) with nothing else

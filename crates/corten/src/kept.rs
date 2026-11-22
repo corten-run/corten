@@ -74,15 +74,17 @@
 //! panics, each runs its own handler then, and none waits again. At most [`MAKING`] pages are
 //! made at once that others wait for; past that a request makes its page as it would with
 //! nothing kept. A page answered and not kept is remembered as not kept for [`FORGOT`], until a
-//! write to its path or until it is kept (by that request or another meanwhile), so the requests
-//! that meet in that time each run the handler at once, as they would with nothing kept; that is
-//! best effort, as only the latest [`NOT_KEPT`] are remembered. A request waits no longer than
+//! write to its path or until it is kept (by that request or another meanwhile, in its language or
+//! for every language), so the requests that meet in that time each run the handler at once, as
+//! they would with nothing kept; that is best effort, as only the latest [`NOT_KEPT`] are
+//! remembered, and a copy kept for every language at another path that shares its count ends it
+//! early. A request waits no longer than
 //! its own deadline, which drops its wait as it would its handler. In a full store the first
 //! request for a URL not asked for before is the handler's as with nothing kept: it leaves its
 //! mark and nothing more, and no other request waits for it. Those that come while it is made
 //! find the mark, so they are the URL's second request: the first of them makes the page and the
 //! others wait for that one, so a new URL's handler runs at most twice for requests that miss it
-//! together.
+//! together, and once more each time other new URLs clear the marks meanwhile ([`Store::asked`]).
 
 use std::collections::{hash_map, HashMap, VecDeque};
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher, RandomState};

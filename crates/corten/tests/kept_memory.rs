@@ -18,8 +18,9 @@ use tokio::{
 const BOUND: usize = 4 << 20;
 const PAGES: usize = 3000;
 /// The counts of writes: 65,536 of four bytes, made once with the first page asked for and held
-/// beside the bound.
-const COUNTS: usize = 4 << 16;
+/// beside the bound, and the counts of copies kept for every language, 65,536 of one byte, made
+/// with them.
+const COUNTS: usize = (4 + 1) << 16;
 /// The marks of the URLs asked for: a bit for every 32 bytes of the bound, made once when the
 /// store first fills and held beside the bound too.
 const MARKS: usize = BOUND / 256;

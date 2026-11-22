@@ -1546,7 +1546,10 @@ A `Date` header the handler set is its own answer's and is not kept: each answer
 place is dated when it is sent, and its `Age` counts from the handler's date, so a cache in front
 finds every answer as old as the first. A page that date makes older than its lifetime, or whose
 date is not written as HTTP writes one (`Sun, 06 Nov 1994 08:49:37 GMT`, with the day of the
-week that date fell on, and a date that exists), is not kept.
+week that date fell on, and a date that exists), is not kept, and neither is one with more than
+one `Date` line: a `Date` holds one date, and a second line is not one to join to the first
+([RFC 9110, 5.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-5.3)), so neither says how
+old the page is.
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
@@ -1597,9 +1600,10 @@ the page, and the others wait for its answer and are given the page when it is k
 a page whose handler reads a slow source does not send that source a request for each visitor
 who arrives meanwhile, after a deploy too. When the first request's page is not kept (its
 handler failed, or drew something for that request), each of the others then runs its own
-handler, and does not wait again, and for a minute, or until the page is kept or written to,
-requests for that page do not wait for each other (the latest 1,024 such pages are remembered);
-a page another request kept meanwhile is not remembered so;
+handler, and does not wait again, and for a minute, or until the page is kept (in that language,
+or for every language) or written to, requests for that page do not wait for each other (the
+latest 1,024 such pages are remembered); a page another request kept meanwhile is not remembered
+so;
 when the first request is dropped or panics, each of the others runs its own. A request waits no
 longer than its own deadline (`App::deadline`), which answers it as it would a slow handler. Only
 requests for one copy wait for each other: another query, host or `Accept-Language` does not
@@ -1616,7 +1620,8 @@ an eighth of the bound, keeping one may drop another, so a page is kept only whe
 asked for before: a crawler's first walk over more URLs than there is room for, or searches no
 one repeats, are answered by the handler and all but a few of them take no kept page's room.
 The app remembers the URLs asked for as bits in a table, not as a list, and forgets them all
-once an eighth of the bits are set (after 131,072 new URLs at 32 MiB), so a crawler's second
+but the one being asked for once an eighth of the bits are set (after 131,072 new URLs at
+32 MiB), so a crawler's second
 walk over the same URLs is kept as the first was before this rule. The price is one more run
 of a page's handler: in a full store the answer to the first request for a URL the app does
 not remember is not kept, whether the page is new, or was kept while there was room or before
@@ -1624,7 +1629,8 @@ the bits were last cleared and has since passed its lifetime or been dropped. Th
 is answered as with nothing kept, and no other request waits for it. The requests that ask for
 the URL while it is made are its second: the first of them makes the page, which is kept, and the
 others wait for that one as above. So requests that ask together for a URL new to a full store
-run its handler at most twice, where with room they run it once. A store that has filled mostly stays full, since a page past its lifetime keeps
+run its handler at most twice, where with room they run it once, and once more each time other
+new URLs have the app forget the URLs it remembers while they come. A store that has filled mostly stays full, since a page past its lifetime keeps
 its room until another needs it. Nothing is kept under `corten dev`,
 so a change shows on the next load. An app with no `Public` page keeps nothing whatever the
 bound, and its writes are not counted, so it pays nothing for pages it cannot keep. An app's tests keep pages as a deploy does (`App::test`,
