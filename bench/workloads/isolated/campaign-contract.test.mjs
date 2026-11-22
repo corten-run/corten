@@ -81,6 +81,21 @@ test("official rounds are one fixed mapping with disjoint preparation and timing
   assert.equal(rounds["live-delivery"], "r17"); assert.equal(rounds["recoverable-live"], "r17");
   for (const bad of ["r16", "r0", "r017", "r1000000001", ["r17"], "r17/escape", 17]) assert.throws(() => campaignRounds(bad));
 });
+
+test("dedicated client-heavy campaign binds the fixed comparison profile and rejects a downgrade", () => {
+  const plan = campaigns.bindGroupCampaign({ round: "r17", commit, group: "client-heavy" });
+  const [binding] = plan.bindings;
+  assert.equal(productionRecipes["client-heavy"], "native-defaults");
+  assert.equal(binding.request.recipe, clientComparisonRecipe);
+  assert.deepEqual(binding.execution.invocation.argv.slice(-2), ["--profile", clientComparisonRecipe]);
+  assert.equal(binding.execution.effectiveOptions.measurementOrder.length, 3);
+  assert.deepEqual(campaigns.campaignRoleBlockers(plan), []);
+  const downgraded = structuredClone(plan);
+  downgraded.recipes["client-heavy"] = downgraded.bindings[0].request.recipe = "native-defaults";
+  const { campaignSha256, ...body } = downgraded;
+  assert.notEqual(campaignSha256, deploymentSha256(body));
+  assert.throws(() => validateCampaign({ ...body, campaignSha256: deploymentSha256(body) }), /fixed native bindings/);
+});
 test("full campaign binds real committed procedures, all groups, exact native defaults and honest unknown gates", () => {
   const plan = bindCampaign({ round: "r17", commit });
   assert.deepEqual(plan.order, groupNames); assert.equal(plan.bindings.length, 9); assert.equal(plan.procedures.length, 9);
@@ -157,13 +172,6 @@ test("group campaigns bind the entire exact native group with stable all-group p
     for (const field of ["procedures", "sourceSha256", "ready", "executionAuthorized"])
       assert.deepEqual(plan[field], all[field]);
     assert.deepEqual(plan.recipes, { ...all.recipes, [group]: recipe });
-    if (group === "client-heavy") {
-      assert.equal(legacy.request.recipe, "native-defaults");
-      assert.deepEqual(dedicated.execution.invocation.argv.slice(-2), ["--profile", clientComparisonRecipe]);
-      assert.equal(dedicated.execution.effectiveOptions.measurementOrder.length, 3);
-      const downgraded = { ...plan, bindings: [bindExecution({ ...legacy.request, review: null }, "dedicated")] };
-      assert.throws(() => validateCampaign(downgraded), /fixed native bindings/);
-    }
     assert.ok(Object.isFrozen(plan) && Object.isFrozen(plan.bindings[0].selection.apps));
     if (group === "hardening") {
       assert.ok(dedicated.sources.files.some((f) => f.path === hardeningCpuGate));
