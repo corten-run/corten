@@ -94,8 +94,7 @@ export function livePeerLease(local, state) {
   const status = localStreamStatus(local), frame = status.frame, now = Date.now();
   if (status.kind !== "progress" || frame?.kind !== "peer-lease" || frame.id !== state.control.monitor.id
     || !Number.isSafeInteger(frame.atMs) || frame.atMs > now || now - frame.atMs >= streamLimits.leaseMs) return false;
-  monitorRegistration(local, state);
-  return true;
+  return monitorRegistration(local, state).host.hostname === state.name;
 }
 
 export function streamRecoveryReady(local, monitor) {

@@ -198,7 +198,8 @@ export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, st
 export function assertFleetCensus(droplets, plan, remainingRegion, peers = []) {
   validateLaunchFleet(plan); assert.ok(Array.isArray(droplets));
   const peerRows = new Set(peers.map((s) => {
-    assert.ok(plan.single && s.fleet.single && s.group !== plan.single.group && s.provider.accountId === plan.provider.accountId,
+    assert.ok(plan.single && s.fleet.single?.indexSha256 === plan.single.indexSha256
+      && s.group !== plan.single.group && s.provider.accountId === plan.provider.accountId,
       "peer belongs to a different reservation or account");
     return ownedDroplet(droplets, s, { priorSelection: true });
   }));

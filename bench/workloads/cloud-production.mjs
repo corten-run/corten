@@ -223,7 +223,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       assert.equal(first.state.status, "collected"); assert.ok(first.state.destroyedAt);
       assert.equal(first.stateSha256, intent.placement.firstGroup.stateSha256, "catalog state changed after remaining admission");
     }
-    return intent;
+    return { ...intent, fleetRoot: fleet.root };
   };
   if (stagedSibling) assert.ok(remainingAdmission, "only fleet admission may launch a v5 sibling");
   const admission = manifest && !preview ? readAdmission() : undefined;
@@ -248,7 +248,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     if (beforeCreate && manifest.single) {
       const { verified, peers } = current.subject.continuation;
       if (beforeCreate === true) recheckContinuationProofs(verified);
-      return recheckContinuationPeers(dirname(dirname(resolve(options.fleet))), manifest.single.indexSha256, manifest.provider, options.group, peers);
+      return recheckContinuationPeers(dirname(current.fleetRoot), manifest.single.indexSha256, manifest.provider, options.group, peers);
     }
   });
   checkFleetAdmission?.();

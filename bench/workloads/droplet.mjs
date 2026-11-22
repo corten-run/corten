@@ -649,7 +649,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             fleetRegion(catalog, remainingPlacement?.region ?? fleet.host.region,
               { remainingOnly: remainingAdmission, staged: stagedFleet(fleet), group: fleet.single?.group });
           }
-          checkFleetAdmission?.(true);
+          const peers = checkFleetAdmission?.(true);
           state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
           const created = await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,
             "--ssh-keys", options.sshKey, "--tag-names", [...tags, state.tag].join(","), "--wait", "--output", "json"], 10 * 60000, true);
@@ -664,6 +664,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             const diagnostic = providerFailure(created);
             throw Object.assign(new Error("create completion was not proved; allocation retained for recovery"), diagnostic ? { providerDiagnostic: diagnostic } : {});
           }
+          assert.ok(!fleet?.single || !peers?.some((peer) => peer.id === state.id || peer.ip === state.ip),
+            "newly bound host duplicates a supervised peer; retain custody without provisioning");
           const completed = JSON.parse(created.stdout);
           assert.ok(Array.isArray(completed) && completed.length === 1 && Number.isSafeInteger(completed[0]?.id)
             && completed[0].id > 0 && String(completed[0].id) === state.id,

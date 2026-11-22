@@ -4,7 +4,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import * as contract from "./cloud-contract.mjs";
 import { host as catalogHost } from "../catalog/droplet-contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
@@ -69,6 +69,23 @@ test("the reviewed roster binds only catalog to c-16/sfo2, including census and 
   const { fleetSha256, ...body } = structuredClone(fleet);
   body.jobs[0].loadLayout = "arbitrary";
   assert.throws(() => contract.validateFleet({ ...body, fleetSha256: digest(JSON.stringify(body)) }));
+});
+
+test("independent census binds a supervised sibling's exact host without admitting foreign hosts", () => {
+  const [first, second] = groupNames, indexSha256 = "1".repeat(64);
+  const single = (group, index = indexSha256) => contract.fleetPlan(input(), at, "sfo3",
+    { stagedPlacement: true, single: { group, indexSha256: index, checkout: resolve(".") } });
+  const source = single(second), launch = single(first);
+  const peer = { ...state(source, second), status: "running", provider: source.provider, id: "123", ip: "192.0.2.10" };
+  const actual = droplet(source.jobs[0]);
+  assert.equal(contract.assertFleetCensus([actual], launch, undefined, [peer]), true);
+  for (const rows of [[], [{ ...actual, id: 456 }], [{ ...actual, region: { slug: "sfo2" } }],
+    [{ ...actual, size_slug: "c-16" }], [{ ...actual, tags: [] }], [{ ...actual, networks: {} }],
+    [actual, { ...actual, id: 456 }], [actual, { id: 999, name: "foreign", tags: [contract.tags[0]] }]]) {
+    assert.throws(() => contract.assertFleetCensus(rows, launch, undefined, [peer]));
+  }
+  assert.throws(() => contract.assertFleetCensus([actual], launch), /foreign benchmark host/);
+  assert.throws(() => contract.assertFleetCensus([actual], single(first, "2".repeat(64)), undefined, [peer]), /different reservation/);
 });
 
 test("uniform v2 receipts stay bound to c-8/sfo3 and cannot authorize a new launch", () => {

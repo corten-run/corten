@@ -128,7 +128,8 @@ export function watchSupervisedHost(options, notify) {
   const timer = setInterval(() => {
     try {
       if (present(registration)) {
-        const proof = supervisedHost(readGroup(fleet, options.group), "live", { peer: independent });
+        const saved = independent ? continuationPeer(fleet).proof : supervisedHost(readGroup(fleet, options.group), "live");
+        const proof = saved && { id: saved.id, ip: saved.ip, registration: saved.registration };
         if (proof) { clearInterval(timer); notify(proof); }
       }
     } catch { /* Settlement still runs and must independently pass the final check. */ }
@@ -329,11 +330,11 @@ export async function fleetMain(args, deps = {}) {
     const accountId = options.prepare ? options.accountId : slot.manifest.provider.accountId;
     assert.ok([...continuation.needsCensus].every((account) => account === accountId), "continuation custody requires the same provider account");
     continuation.recheck();
-    return await runFleet({ ...options, root: attemptRoot }, deps, { ...continuation, onReady(fleet, proof) {
-      try {
-        const peer = continuationPeer(fleet).proof;
-        if (ownsLock && peer.id === proof.id && peer.ip === proof.ip && peer.registration === proof.registration) release();
-      } catch { /* No handoff without confirmed custody. Wait for the original child. */ }
+    return await runFleet({ ...options, root: attemptRoot }, deps, { ...continuation, onReady() {
+      // The worker verified custody on its writing event loop. Every later
+      // admission independently rechecks the peer; this only releases the gate.
+      try { if (ownsLock) release(); }
+      catch { /* No lock takeover. Wait for the original child. */ }
     } });
   } catch (error) {
     uncertain = error?.controlUncertain === true || error?.controlTreeUncertain === true;
@@ -532,7 +533,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
           const done = operate(job, stopped, watch ? (proof) => {
             if (!claimHost(job.group, proof)) stopped = "prior-admission-failed";
             ready.resolve();
-          } : continuation ? (proof) => continuation.onReady(preview.fleet, proof) : undefined,
+          } : continuation?.onReady,
           watch ? () => { stopped ??= "prior-admission-failed"; } : undefined).then((value) => {
             settled[i] = { status: "fulfilled", value };
             if (!["pending", "deferred", "verified"].includes(value.outcome)) stopped ??= "prior-admission-failed";

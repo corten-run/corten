@@ -187,7 +187,7 @@ export function continuationPeer(fleet) {
 
 export function recheckContinuationPeers(root, indexSha256, provider, group, peers = []) {
   assert.ok(Array.isArray(peers) && peers.length < selection().groups.length);
-  const groups = new Set([group]);
+  const groups = new Set([group]), ids = new Set(), ips = new Set();
   return peers.map((proof) => {
     assert.equal(dirname(proof.root), root, "peer belongs to another continuation");
     const fleet = readFleet(proof.root, proof.round, { priorSelection: true });
@@ -198,6 +198,8 @@ export function recheckContinuationPeers(root, indexSha256, provider, group, pee
     assert.equal(fleet.manifest.provider.accountId, provider.accountId, "peer belongs to another provider account");
     const peer = continuationPeer(fleet);
     assert.deepEqual(peer.proof, proof, "approved peer changed");
+    assert.ok(!ids.has(proof.id) && !ips.has(proof.ip), "duplicate continuation peer host");
+    ids.add(proof.id); ips.add(proof.ip);
     return peer.state;
   });
 }

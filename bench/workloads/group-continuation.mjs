@@ -89,16 +89,20 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
     return { name, group, round };
   });
   const attempts = new Map(names.map((group) => [group, []])), slots = new Map(), ids = new Set();
-  const proofs = [], retryEvidence = [], manifests = [], states = [], peers = [], needsCensus = new Set();
+  const proofs = [], retryEvidence = [], manifests = [], states = [], peers = [], needsCensus = new Set(), liveIps = new Set();
   const claim = (id) => { assert.ok(!ids.has(id), "duplicate continuation host identity"); ids.add(id); };
+  const matchesCurrentContract = (selected) => groups.groups.some((s) => s.group === selected.group
+    && s.contractSha256 === selected.contractSha256 && JSON.stringify(s.apps) === JSON.stringify(selected.apps));
   const read = async (fleet, checkout, archives) => {
     const { manifest, manifestSha256 } = fleet, { round, commit } = manifest;
     const lock = fleetLockSnapshot(fleet.root);
     if (lock === "busy" && manifest.single) {
       const { proof, state } = continuationPeer(fleet);
+      assert.ok(!liveIps.has(proof.ip), "duplicate continuation peer address"); liveIps.add(proof.ip);
       claim(proof.id); peers.push({ fleet, proof });
+      const selected = manifest.selection.groups[0];
       attempts.get(state.group).push({ group: state.group, outcome: "running", round, commit, id: state.id, host: state.host,
-        reservationCreatedAt: state.createdAt, manifestSha256, selection: manifest.selection.groups[0], attemptRoot: fleet.root });
+        reservationCreatedAt: state.createdAt, manifestSha256, selection: selected, matchesCurrentContract: matchesCurrentContract(selected), attemptRoot: fleet.root });
       return;
     }
     assert.notEqual(lock, "busy", "continuation source has an active batch");
@@ -120,8 +124,6 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
       }[outcome];
       states.push({ fleet, group, stateSha256: saved.stateSha256, outcome: saved.outcome, noCreate, retirementFile });
       const selected = manifest.selection.groups.find((s) => s.group === group);
-      const matches = groups.groups.some((s) => s.group === group && s.contractSha256 === selected.contractSha256
-        && JSON.stringify(s.apps) === JSON.stringify(selected.apps));
       const verified = outcome === "verified";
       if (archives) {
         const pinned = Object.hasOwn(archives, group);
@@ -141,7 +143,7 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
         && saved.state.validation?.status !== "verified");
       if (censusRequired) needsCensus.add(manifest.provider.accountId);
       assert.ok(attempts.has(group) || censusRequired || acceptable(row), "unresolved custody for a historical group");
-      attempts.get(group)?.push({ ...row, outcome, round, commit, manifestSha256, selection: selected, matchesCurrentContract: matches,
+      attempts.get(group)?.push({ ...row, outcome, round, commit, manifestSha256, selection: selected, matchesCurrentContract: matchesCurrentContract(selected),
         ...(manifest.single ? { attemptRoot: fleet.root } : {}),
         ...(censusRequired ? { cleanupUnconfirmed: true } : {}),
         ...(row.archiveSha256 ? { archive: `${group}/groups-${round}/results.tgz` } : {}) });
