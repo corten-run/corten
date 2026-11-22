@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { setTimeout as wait } from "node:timers/promises";
 import { accountId, archive, commit, context } from "./cloud-fixtures.mjs";
 import { fleetPlan, reservation } from "./cloud-contract.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { digest, extractArchive } from "./cloud-local.mjs";
 import { remoteFiles } from "./cloud-remote.mjs";
 import { failedNativeArchive, failedNativeScript, groupedFailure, groupedPreplanFailure, verifyFailedNativeCustody,
-  verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
+  retainedInvalidOwner, verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
+import { verifyFleet } from "./fleet-verify.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 import { streamLimits } from "./isolated/control-stream.mjs";
 
@@ -23,12 +25,13 @@ async function stash(local, name, directory, entries) {
   return { bytes, sha, tree: await extractArchive(path, join(local, directory), sha) };
 }
 
-async function setup(t, { changeLog = (line) => line, exit = "2\n", campaign = [{ name: "campaign/" }], single = true } = {}) {
-  const temp = realpathSync(tmpdir()), base = mkdtempSync(join(temp, "groups-preplan-test-"));
+async function setup(t, { changeLog = (line) => line, exit = "2\n", campaign = [{ name: "campaign/" }], single = true, report = false } = {}) {
+  const temp = realpathSync(tmpdir()), scratch = mkdtempSync(join(temp, "groups-preplan-test-"));
   t.after(() => {
-    assert.ok(base.startsWith(join(temp, "groups-preplan-test-")) && realpathSync(base) === base);
-    rmSync(base, { recursive: true, force: true });
+    assert.ok(scratch.startsWith(join(temp, "groups-preplan-test-")) && realpathSync(scratch) === scratch);
+    rmSync(scratch, { recursive: true, force: true });
   });
+  const base = report ? join(scratch, group) : scratch;
   const local = join(base, group, `groups-${round}`); mkdirSync(local, { recursive: true });
   const at = "2026-11-21T00:00:00.000Z", provider = { accountId, context };
   const fleet = fleetPlan({ round, commit, token, provider, sshKey: "42",
@@ -91,8 +94,8 @@ for (const [label, options, error] of [
 }
 
 const fileFrame = (name, bytes) => Buffer.concat([Buffer.from(`f\0${name}\0${bytes.length}\0`), bytes]);
-async function custody(t, { present = [true, true], hiddenRoot, reportedRoots = roots, campaignData = false } = {}) {
-  const { base, local, state, metadata, wrapper } = await setup(t);
+async function custody(t, { present = [true, true], hiddenRoot, reportedRoots = roots, campaignData = false, report = false } = {}) {
+  const { base, local, state, metadata, wrapper } = await setup(t, { report });
   const intent = JSON.stringify({ subject: "synthetic original launch intent" }), intentPath = join(base, "launch-intent.json");
   put(base, "launch-intent.json", intent);
   const grouped = groupedPreplanFailure(local, state), entries = [...metadata, { name: "campaign/" }];
@@ -123,7 +126,7 @@ async function custody(t, { present = [true, true], hiddenRoot, reportedRoots = 
     launchIntentSha256: digest(intent),
     reservationSha256: digest(prior), scriptSha256: digest(failedNativeScript(state, null, null, grouped)),
     observation, startedAtMs: now, finishedAtMs: now, evidence: "custody-test", evidenceSha256: saved.tree };
-  return { local, state, grouped, capture, intentPath };
+  return { base, local, state, grouped, capture, intentPath };
 }
 
 function recordRetirement({ local, state, grouped, capture }) {
@@ -146,6 +149,53 @@ for (const present of [[true, true], [true, false], [false, true], [false, false
     assert.deepEqual(verifyFailedNativeRetirement(local, state), receipt);
   });
 }
+
+test("historical child PID reuse preserves strict retired replay and never settles paid custody", async (t) => {
+  const fixture = await custody(t, { report: true }), { base, local, state } = fixture;
+  recordRetirement(fixture);
+  const operation = join(local, "operation.lock"), launch = join(dirname(local), ".groups-launch.lock");
+  const save = () => writeFileSync(join(local, "state.json"), JSON.stringify(state));
+  const verify = (deps) => verifyFleet({ root: base, round, commit },
+    { inspect: () => assert.fail("failed retirement is not timing evidence"), ...deps });
+  putJson(base, `fleet-${round}.json`, state.fleet);
+  state.destroyedAt = new Date().toISOString(); save();
+  const dead = await verify({ processStart: () => assert.fail("absent PID") });
+  assert.equal(dead.groups[0].outcome, "native-failed-retired");
+
+  const at = JSON.parse(readFileSync(operation)).at;
+  writeFileSync(operation, JSON.stringify({ at, pid: process.pid }));
+  writeFileSync(launch, JSON.stringify({ round, pid: process.pid }));
+  await wait(20);
+  state.destroyedAt = new Date().toISOString(); save();
+  assert.equal((await verify()).groups[0].outcome, "busy", "actual original owner is still live");
+  assert.equal((await verify({ processStart: () => undefined })).groups[0].outcome, "busy", "missing process time");
+  const deps = { processStart: () => Date.now() };
+  const before = [operation, launch, join(local, "failed-native-host.json")].map((path) => digest(readFileSync(path)));
+  const checks = [];
+  assert.deepEqual(await verify({ ...deps, retainCheck: (check) => checks.push(check) }), dead);
+  assert.equal(checks.length, 1); checks[0]();
+  assert.deepEqual([operation, launch, join(local, "failed-native-host.json")].map((path) => digest(readFileSync(path))), before);
+  assert.ok(retainedInvalidOwner(local, state));
+  assert.throws(() => verifyFailedNativeRetirement(local, state), /original monitor owner/);
+
+  delete state.destroyedAt; save();
+  assert.equal((await verify(deps)).groups[0].outcome, "busy", "pending cleanup cannot use the reporting exception");
+  state.destroyedAt = new Date().toISOString(); save();
+  const recovery = join(local, "stream-recovery.lock");
+  writeFileSync(recovery, JSON.stringify({ pid: process.pid }));
+  assert.equal((await verify(deps)).groups[0].outcome, "busy", "a recovery collector still blocks replay");
+  unlinkSync(recovery);
+  await wait(20);
+  appendFileSync(launch, "\n");
+  await wait(20);
+  assert.throws(() => checks[0](), /historical child locks changed/);
+  assert.equal((await verify(deps)).groups[0].outcome, "busy", "a child lock written after confirmed retirement is not historical");
+  state.destroyedAt = new Date().toISOString(); save();
+  appendFileSync(join(local, "failed-native-host.json"), "\n");
+  assert.equal((await verify(deps)).groups[0].outcome, "error", "reuse is not evidence authority");
+  writeFileSync(launch, JSON.stringify({ round: "r35", pid: process.pid }));
+  assert.equal((await verify(deps)).groups[0].outcome, "error", "foreign launch lock");
+});
 
 test("preplan custody refuses a capture without the launch-intent digest", async (t) => {
   const { local, state, capture } = await custody(t);
