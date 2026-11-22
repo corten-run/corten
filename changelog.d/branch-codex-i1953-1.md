@@ -1,0 +1,1 @@
+- Fresh hardening benchmark hosts now prepare the fixed tool images before the first cell, so an empty Docker image store no longer stops the run at image inspection ([missing tool images](https://github.com/corten-run/corten/issues/1953)).
