@@ -30,7 +30,7 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit,
-  unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission } = {}) {
+  unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission, renameBootstrapSeal = renameSync } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
   if (mergedHead !== "origin/main") full(mergedHead, /[a-f0-9]{40}/, "exact observed main commit required");
   const fleetBytes = options.group === undefined ? undefined : regular(options.fleet, 1024 * 1024);
@@ -290,14 +290,59 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       invocation: state.control.ledger.at(-1).request.invocation.id, stdout };
     state.status = "starting"; save(); assert.fail(message);
   };
-  async function sealControl(epoch) {
+  async function publishWindowsBootstrapSeal(remaining) {
+    remaining();
+    assert.ok(state.control.monitor.phase === "live" && acknowledgedBootstrapSeal(state.control.ledger), "live acknowledged bootstrap seal required");
+    const snapshot = (path, limit) => {
+      const stat = () => lstatSync(path, { bigint: true });
+      const before = stat(), bytes = regular(path, limit);
+      const verify = (expected = bytes) => {
+        const actual = regular(path, limit), after = stat();
+        assert.ok(actual.equals(expected) && ["dev", "ino", "size", "nlink", "mtimeNs", "ctimeNs"].every((k) => before[k] === after[k]),
+          "bootstrap seal publication input changed; preserve custody");
+      };
+      return { bytes, verify };
+    };
+    const encode = () => Buffer.from(`${JSON.stringify(state, null, 2)}\n`);
+    const saved = snapshot(statePath, 1024 * 1024);
+    saved.verify(encode());
+    const operation = snapshot(join(local, "operation.lock"), 1024), launch = snapshot(join(base, ".groups-launch.lock"), 1024);
+    assert.ok(JSON.parse(operation.bytes).pid === process.pid && JSON.parse(launch.bytes).pid === process.pid
+      && JSON.parse(launch.bytes).round === options.round, "bootstrap seal owner changed");
+    state.control.sealed.push("bootstrap");
+    controllerState(state, options.round);
+    const staging = `${statePath}.tmp`, bytes = encode();
+    durable(staging, bytes);
+    const staged = snapshot(staging, 1024 * 1024);
+    let retryUntil;
+    const delays = [25, 50, 100];
+    for (let attempt = 0; ; attempt++) {
+      remaining();
+      assert.ok(!lstatSync(join(local, "monitor-invalid.json"), { throwIfNoEntry: false }), "bootstrap seal monitor revoked");
+      operation.verify(); launch.verify(); saved.verify(); staged.verify(bytes);
+      remaining();
+      assert.ok(retryUntil === undefined || performance.now() < retryUntil, "bootstrap seal rename retry expired");
+      try { renameBootstrapSeal(staging, statePath); break; }
+      catch (error) {
+        // Windows can report a delete-sharing denial as EPERM, also used for permanent denials.
+        const delay = delays[attempt];
+        if (error.code !== "EPERM" || error.syscall !== "rename" || delay === undefined) throw error;
+        retryUntil ??= performance.now() + 250;
+        if (delay >= remaining() || performance.now() + delay >= retryUntil) throw error;
+        await sleep(delay);
+      }
+    }
+  }
+  async function sealControl(epoch, remaining) {
     if (!state.control) return;
     assert.equal(controlEpoch, epoch);
     const rows = state.control.ledger.filter((r) => r.request.epoch === epoch);
     assert.ok(rows.length > 0 && rows.every((r) => r.localTerminal), "unsettled local control ledger");
     sealing = rows.map((r) => r.request.invocation);
     try { await ssh(":"); } finally { sealing = undefined; }
-    state.control.sealed.push(epoch); save(); controlEpoch = "collection";
+    if (epoch === "bootstrap" && process.platform === "win32") await publishWindowsBootstrapSeal(remaining);
+    else { state.control.sealed.push(epoch); save(); }
+    controlEpoch = "collection";
   }
   async function commonBootstrap() {
     const deadline = now() + 45 * 60000; let previous = deadline - 45 * 60000;
@@ -329,7 +374,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           state.control.monitor.registrationSha256 = digest(JSON.stringify(monitor.registration));
           state.control.monitor.phase = "live"; save();
         }
-        await sealControl("bootstrap"); return;
+        await sealControl("bootstrap", remaining); return;
       }
       assert.equal(result.status, 3, "common bootstrap marker observation failed");
       await sleep(Math.min(30000, remaining()));

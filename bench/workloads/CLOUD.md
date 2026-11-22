@@ -273,6 +273,11 @@ If native validation finished but sealing or later collection failed, raw
 exit 2 permits custody only. The collector keeps both archives, leaves the host
 in place and returns 3. It does not create a retirement intent.
 
+On Windows, after SSH acknowledges the bootstrap seal, the controller can
+briefly retry a local rename that reports `EPERM`. It rechecks the same staged
+file, canonical state and owner locks before retrying. It never repeats SSH or
+uses an abandoned temporary file, and stops on cancellation or deadline.
+
 Use the per-child command above if an invalid monitor left locks behind. The
 foreground controller writes the invalid status without reusing an interrupted
 state write's temporary file. If the bootstrap seal completed just before that
