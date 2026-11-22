@@ -2717,6 +2717,10 @@ where
         }
     }
 
+    fn shared(&self) -> bool {
+        self.shared
+    }
+
     #[inline]
     fn call(self, mut req: Request, state: S) -> impl Future<Output = Response> + Send + 'static {
         // A whole document's layout reads (`crate::LayoutRead`) start as its page route is called,

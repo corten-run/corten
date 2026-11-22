@@ -7340,16 +7340,31 @@ rules something out.
     route asked both ways holds its body twice. It can read the request's language too
     (`req.t()`, `req.lang()`), and a body is kept for the header as it was sent and names it
     in `Vary`, as a page is. With both, a URL's eight copies are shared by the ways of asking
-    times the languages asked in. An answer may hold markup its handler rendered, and one with a form's new submit key is
-    not kept; it is still sent `public`, a fault this does not mend
-    ([#1863 A `Public` answer with a submit key its handler rendered to a string is sent to shared caches as one any visitor may be given](https://github.com/corten-run/corten/issues/1863)). A page's render marks the key it drew; markup rendered any other way (into JSON
-    or text, or into a file a page route answers) carries no mark, so the route watches the handler's own polls for one being drawn, and a render that reads
+    times the languages asked in. An answer may hold markup its handler rendered, and one with a
+    form's new submit key is the request's alone: not kept, and sent `private, no-cache` without
+    a CDN's caching header, as a page whose render drew the key is. A page's render marks the key it drew; markup rendered any other way (into JSON
+    or text, into a file a page route answers, or to a string a page holds as `raw` markup)
+    carries no mark, so every `Public` route's handler is watched (its own polls) for one being
+    drawn, and the watch marks the answer (`cache::Unrepeatable`) as a page's render does.
+    It wraps a route whose answer type is `Public`, known when the route is made, in every
+    build and whatever the store does (none kept, `corten dev`, a body route that leaves the
+    store out, a build without `compress`); no other route pays for it. Holding the handler's
+    work in place, it adds no allocation, only a read and a reset of a thread's mark around each
+    poll (measured below). A render that reads
     the mark for itself (a page's, a patch's, one made with `req.rendered`) leaves a key drawn
     before it for the watch, also when it fails: a field rendered to a string and placed in a
     page as markup. A key drawn outside the handler's polls, or on another thread during one
     (by a task it spawned, a render it handed to a blocking task, a thread of its own), is not
-    seen, and such an answer is kept with it, as every cache in front already
-    keeps it for the lifetime its route wrote. `Json` of bytes the app holds (`json::Raw`) is
+    seen, and such an answer is kept with it and sent `public`, as its route wrote. Making the
+    mistake a compile error instead (a key field that renders only into something that carries
+    the mark) was looked at and not done
+    ([#1863 A `Public` answer with a submit key its handler rendered to a string is sent to shared caches as one any visitor may be given](https://github.com/corten-run/corten/issues/1863)):
+    a key is drawn inside an outer view (a form, a component, a branch taken at run time), and
+    that view's `to_html()` gives a plain string, so the mark would have to be in every view's
+    type through `html!`, components, `dyn Render` and an app's own `Render`, whose
+    `render(&self, &mut String)` writes any field to a plain string; and it would refuse what
+    apps use, a live stream's fragment that draws a form (`Fragment::new(view.to_html())`) and
+    a view rendered to text for a test or an agent's tool result. `Json` of bytes the app holds (`json::Raw`) is
     left out by its type: it keeps its compressed forms itself, so the store would refuse
     every one. An API's `Access-Control-Allow-Origin` is
     written from the request's `Origin` by the stage after the handler, so it is no part of a
@@ -8152,8 +8167,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     are not in the tag, so one that only some answers at a URL carry (`Content-Disposition`) stays
     on a cache's copy after a `304`. An app value drawn at random for each render (a token in the
     markup) makes a tag that never matches and still costs its hash; Corten skips the hash for its
-    own (the nonce, a submit key), which saves time only, and not for a submit key placed as
-    `raw(..)` markup.
+    own (the nonce, a submit key), which saves time only, and for a key placed as `raw(..)`
+    markup only in a `Public` answer, whose handler is watched for one.
 22. <a id="limit-multipart-overread"></a>A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
     included, so the browser is answered with the form's message rather than a reset connection.
     Each such request holds its connection and searches what it reads for the next boundary, which

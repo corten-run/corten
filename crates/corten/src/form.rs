@@ -2628,25 +2628,33 @@ impl Drop for Drawing {
 /// and a mark another request left on the thread counts for no one, since every reader clears
 /// it first. A key drawn outside the polls of `work`, or on another thread during one (by a task
 /// the handler spawned, a render it handed to a blocking task, a thread of its own), is not seen.
-pub(crate) async fn watched<F: std::future::Future + Unpin>(mut work: F) -> (F::Output, bool) {
-    struct Poll<'a> {
-        drawing: Drawing,
-        drew: &'a mut bool,
-    }
+/// It holds `work` in place, so watching a handler adds no allocation to its request.
+pub(crate) fn watched<F: std::future::Future>(work: F) -> Watched<F> {
+    Watched { work, drew: false }
+}
 
-    impl Drop for Poll<'_> {
-        fn drop(&mut self) {
-            *self.drew |= self.drawing.drew();
-        }
+pin_project_lite::pin_project! {
+    /// [`watched`]'s work: its output, and whether a submit key was drawn in any of its polls.
+    pub(crate) struct Watched<F> {
+        #[pin]
+        work: F,
+        drew: bool,
     }
+}
 
-    let mut drew = false;
-    let out = std::future::poll_fn(|cx| {
-        let _poll = Poll { drawing: Drawing::start(), drew: &mut drew };
-        std::pin::Pin::new(&mut work).poll(cx)
-    })
-    .await;
-    (out, drew)
+impl<F: std::future::Future> std::future::Future for Watched<F> {
+    type Output = (F::Output, bool);
+
+    #[inline]
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        let this = self.project();
+        // Dropped as the poll unwinds too, which puts back the mark the thread had before.
+        let drawing = Drawing::start();
+        let polled = this.work.poll(cx);
+        *this.drew |= drawing.drew();
+        drop(drawing);
+        polled.map(|out| (out, *this.drew))
+    }
 }
 
 impl Render for SubmitField {

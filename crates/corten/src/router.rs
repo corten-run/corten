@@ -72,6 +72,36 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
     }
 }
 
+/// A handler whose answer is the same for everyone (`Public`), watched for a form's new submit
+/// key drawn in its polls however it was rendered (into JSON or text, into a file, or to a string
+/// placed in a page as markup): an answer that holds one is the request's alone
+/// (`cache::Unrepeatable`), so no cache gives it to another visitor and the app does not keep it.
+/// A page's render marks a key it drew itself; this sees the rest. Only a route whose answer type
+/// is `Public` is wrapped, which is known when the route is made, so no other route's request
+/// pays for it.
+struct Watching<H, T, S>(Handled<H, T, S>);
+
+impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint for Watching<H, T, S> {
+    #[inline]
+    fn call(&self, req: Request) -> Answering {
+        let answer = self.0.handler.clone().call(req, self.0.state.clone());
+        Box::pin(futures_util::FutureExt::map(crate::form::watched(answer), unrepeatable))
+    }
+
+    fn action_patches(&self) -> bool {
+        H::ACTION_PATCHES
+    }
+}
+
+/// The answer, marked as the request's alone where its handler drew a submit key.
+#[inline]
+fn unrepeatable((mut res, drew_key): (Response, bool)) -> Response {
+    if drew_key {
+        res.extensions_mut().insert(crate::cache::Unrepeatable);
+    }
+    res
+}
+
 /// An answer that is a status alone: the router's `404` and `405`.
 struct Status(StatusCode);
 
@@ -145,17 +175,15 @@ impl Endpoint for Keeping {
         let here = req.extensions().get::<crate::layout::StartHere>().cloned();
         let answer = self.inner.call(req);
         Box::pin(async move {
-            // An answer with a form's new submit key is this request's alone. A page's render
-            // marks one it drew (`cache::Unrepeatable`); markup rendered any other way (into
-            // JSON or text, into a file a page route answers, or to a string the page then
-            // holds as markup) has no mark to carry, so the handler is watched for one being
-            // drawn.
-            let (res, drew_key) = crate::form::watched(answer).await;
+            let res = answer.await;
             let res = match here {
                 Some(here) => here.fill(res).await,
                 None => res,
             };
-            if drew_key {
+            // An answer with a form's new submit key is this request's alone: marked by the
+            // render that drew it (a page's, the layout's reads') or by the watch around the
+            // handler (`Watching`), which sees one rendered any other way.
+            if res.extensions().get::<crate::cache::Unrepeatable>().is_some() {
                 return res;
             }
             missed.keep(res).await
@@ -293,10 +321,12 @@ impl<S> Clone for Slot<S> {
 
 impl<S: Clone + Send + Sync + 'static> Slot<S> {
     fn handler<H: Handler<T, S>, T: 'static>(handler: H) -> Self {
-        // Known when the route is made, so no other route's requests ask.
+        // Known when the route is made, so no other route's requests ask or are watched.
         let keeps = handler.keeps();
+        let shared = handler.shared();
         Slot::Unbound(Arc::new(move |state| {
-            let handled: Route = Arc::new(Handled { handler: handler.clone(), state, types: PhantomData });
+            let handled = Handled { handler: handler.clone(), state, types: PhantomData };
+            let handled: Route = if shared { Arc::new(Watching(handled)) } else { Arc::new(handled) };
             match keeps {
                 Some(shape) => {
                     let unkept = (shape == crate::kept::Shape::Body).then(Default::default);

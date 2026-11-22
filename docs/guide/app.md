@@ -1395,7 +1395,7 @@ but an unstaged one):
 | a full document, no `Cookie` or `Authorization`, nothing read a caller | as asked, plus `Vary: cookie` |
 | a request with a `Cookie` or `Authorization`, or one whose handler or middleware read a caller | `private, no-cache` |
 | a client navigation, a form answer or a data client's JSON from a page route | `private`, same lifetime: only the document is shared |
-| a response that sets a cookie, HTML with the request's nonce, or a page that draws a form's new submit key (`SubmitKey::field`) | `private, no-cache`, logged under `corten dev` |
+| a response that sets a cookie, HTML with the request's nonce, a page that draws a form's new submit key (`SubmitKey::field`), or a `Public` answer whose handler drew one, however it rendered it | `private, no-cache`, logged under `corten dev` |
 
 A page that draws a submit key also goes out without the caching headers a CDN or proxy reads
 before `Cache-Control` that a middleware wrote, even when its `Cache-Control` already says
@@ -1407,7 +1407,12 @@ before `Cache-Control` that a middleware wrote, even when its `Cache-Control` al
 any other means is the deployment's: a name its CDN is configured to read (RFC 9213 allows any),
 a layer around the app (`App::layer`, which runs after Corten settles the answer), and an edge
 rule that caches whatever the origin says. The key's render marks the answer: a page, a patch,
-the layout's reads, and a `Rendered` placed in one. A live stream's fragments are text rendered
+the layout's reads, and a `Rendered` placed in one. A `Public` route's handler is also watched
+for a key it draws any other way, rendered to a string and put in JSON, in text or in a page as
+`raw` markup, and such an answer goes out as a page that draws one does, in every build and
+with or without the app's kept answers. The watch sees what the handler draws itself: a key
+drawn in a task it spawned, a render it handed to a blocking task or a thread of its own is not
+seen, so a `Public` handler draws its forms itself. A live stream's fragments are text rendered
 after its headers went out and carry no mark, so a stream that may draw a key is not `Public`,
 says `Cache-Control: private` itself and carries none of those headers
 ([live data](live-data.md)).

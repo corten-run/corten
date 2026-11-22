@@ -321,7 +321,7 @@ const NOTICE_GONE: [&[u8]; 2] = [b"__Host-corten-notice=;", b"corten-notice=;"];
 /// Sets the response's `Cache-Control`: the default when it has none, and a private one instead
 /// of a shared one when the response may differ between users.
 pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
-    // A page that drew a submit key ([`Unrepeatable`]) is the browser's alone, whatever its
+    // An answer that drew a submit key ([`Unrepeatable`]) is the browser's alone, whatever its
     // `Cache-Control` says: a CDN reads its own header first, so none of those Corten names stays.
     let drew_key = res.extensions().get::<Unrepeatable>().is_some();
     if drew_key {
@@ -495,9 +495,12 @@ pub(crate) fn accepts_a_coding(headers: &HeaderMap) -> bool {
 /// make two bodies share a tag.
 static TAG_KEY: std::sync::LazyLock<std::hash::RandomState> = std::sync::LazyLock::new(std::hash::RandomState::new);
 
-/// Marks a page whose body holds a value drawn for this request alone (a [`crate::SubmitKey`]'s
+/// Marks an answer whose body holds a value drawn for this request alone (a [`crate::SubmitKey`]'s
 /// new key): its tag would never match, so it is not made; no cache may give it to another
 /// visitor or reuse it unasked ([`settle`]), and the app does not keep it ([`crate::kept`]).
+/// The render that draws the key sets it on a page, a patch or the layout's reads, and the watch
+/// around a `Public` route's handler sets it on any answer whose handler drew one, rendered to a
+/// string included (`router::Watching`).
 #[derive(Clone, Copy)]
 pub(crate) struct Unrepeatable;
 
