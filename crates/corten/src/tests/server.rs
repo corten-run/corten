@@ -1136,6 +1136,76 @@ async fn a_connect_tunnel_outlives_the_header_timeout_and_a_refused_connect_does
     server.await.unwrap().unwrap();
 }
 
+/// A `2xx` to `CONNECT` whose handler says `Content-Length` (as one that writes `0` itself,
+/// `Media::stream_sized` or a `Relay` of an upstream's `2xx` may) is sent without it, as RFC 9110
+/// 9.3.6 asks, and opens its tunnel: hyper refuses to send a head that has it, which left the
+/// client a closed connection and no answer (#1915).
+#[tokio::test]
+async fn a_connect_answered_with_a_length_is_sent_without_it() {
+    a_tunnel_answered_with(header::CONTENT_LENGTH, "0").await;
+}
+
+/// As `a_connect_answered_with_a_length_is_sent_without_it`, for `Transfer-Encoding`.
+#[tokio::test]
+async fn a_connect_answered_chunked_is_sent_without_transfer_encoding() {
+    a_tunnel_answered_with(header::TRANSFER_ENCODING, "chunked").await;
+}
+
+/// Asks over a socket for a tunnel whose route answers `200` with `name: value`, and checks that
+/// the head arrives with neither `Content-Length` nor `Transfer-Encoding` and the tunnel echoes.
+async fn a_tunnel_answered_with(name: http::HeaderName, value: &'static str) {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let said = name.clone();
+    let tunnel = crate::router::any(move |mut req: Request<Body>| {
+        let name = said.clone();
+        async move {
+            let on = hyper::upgrade::on(&mut req);
+            tokio::spawn(async move {
+                let Ok(upgraded) = on.await else { return };
+                let mut io = hyper_util::rt::TokioIo::new(upgraded);
+                let mut buf = [0u8; 64];
+                loop {
+                    match io.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) if io.write_all(&buf[..n]).await.is_err() => return,
+                        Ok(_) => {}
+                    }
+                }
+            });
+            (StatusCode::OK, [(name, value)])
+        }
+    });
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(Table::new().route("/", tunnel)));
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream.write_all(b"CONNECT / HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+    // The head, a byte at a time so nothing after it is taken.
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        let byte = tokio::time::timeout(Duration::from_secs(3), stream.read_u8()).await.expect("an answer in time");
+        let byte = byte
+            .unwrap_or_else(|error| panic!("{name}: the connection closed ({error}) after {:?}", String::from_utf8_lossy(&head)));
+        head.push(byte);
+    }
+    let head = String::from_utf8(head).unwrap().to_ascii_lowercase();
+    assert!(head.starts_with("http/1.1 200"), "{name}: {head}");
+    assert!(!head.contains("\r\ncontent-length:") && !head.contains("\r\ntransfer-encoding:"), "{name}: {head}");
+    stream.write_all(b"through the tunnel\n").await.unwrap();
+    let mut echo = [0u8; 19];
+    tokio::time::timeout(Duration::from_secs(3), stream.read_exact(&mut echo)).await.expect("an echo").unwrap();
+    assert_eq!(&echo, b"through the tunnel\n", "{name}");
+    drop(stream);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 /// `corten::serve_wrapped`: the app's step on each connection before HTTP (a TLS handshake) runs
 /// in the connection's own task, counts against `App::max_connections` and is closed at
 /// `App::header_timeout` when it stalls; a step that fails closes the connection.
@@ -1860,20 +1930,35 @@ async fn a_panic_in_finished_work_is_the_handlers() {
 }
 
 /// A `2xx` to `CONNECT` is a tunnel, so the router sends it with no body, whatever the handler
-/// wrote; a refusal keeps its body.
+/// wrote, and without any `Content-Length` or `Transfer-Encoding` it said (RFC 9110 9.3.6,
+/// #1915); a refusal keeps its body and its length.
 #[tokio::test]
 async fn a_connect_answered_with_success_has_no_body() {
     let routes = Table::new().route(
         "/",
         crate::router::any(|req: Request<Body>| async move {
-            let status = if req.headers().contains_key("x-refuse") { StatusCode::FORBIDDEN } else { StatusCode::OK };
-            (status, "tunnel")
+            use crate::response::IntoResponse;
+            if req.headers().contains_key("x-refuse") {
+                return (StatusCode::FORBIDDEN, [(header::CONTENT_LENGTH, "6")], "tunnel").into_response();
+            }
+            if req.headers().contains_key("x-unframed") {
+                return (StatusCode::OK, "tunnel").into_response();
+            }
+            (StatusCode::OK, [(header::CONTENT_LENGTH, "6"), (header::TRANSFER_ENCODING, "chunked")], "tunnel").into_response()
         }),
     );
-    let (status, _, body) = call(routes.clone(), "CONNECT", None).await;
+    let (status, headers, body) = call(routes.clone(), "CONNECT", None).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, ""));
+    assert!(!headers.contains_key(header::CONTENT_LENGTH) && !headers.contains_key(header::TRANSFER_ENCODING), "{headers:?}");
+    // A body with neither framing header is emptied for its size alone.
+    let req = Request::builder().method("CONNECT").uri("/").header("x-unframed", "1").body(Body::empty()).unwrap();
+    let res = Router::from(routes.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(!res.headers().contains_key(header::CONTENT_LENGTH) && !res.headers().contains_key(header::TRANSFER_ENCODING));
+    assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), "");
     let req = Request::builder().method("CONNECT").uri("/").header("x-refuse", "1").body(Body::empty()).unwrap();
     let res = Router::from(routes).oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(res.headers()[header::CONTENT_LENGTH], "6");
     assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), "tunnel");
 }

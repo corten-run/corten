@@ -111,21 +111,28 @@ export function launchHostKey(local, state) {
   return key;
 }
 
-export function retainedInvalidOwner(local, state) {
-  // Both locks belong to the original foreground controller, not to the
-  // separate recovery operation. Never take them over or treat a live or
-  // inaccessible PID (including a reused PID) as a settled owner.
-  const lock = JSON.parse(regular(join(local, "operation.lock"), 1024)), { pid } = lock;
+export function readRetainedInvalidLocks(local, state, read = regular) {
+  const lock = JSON.parse(read(join(local, "operation.lock"), 1024)), { pid } = lock;
   assert.deepEqual(Object.keys(lock).sort(), ["at", "pid"], "not an original operation lock");
   assert.equal(new Date(lock.at).toISOString(), lock.at, "invalid original operation lock time");
   assert.ok(Number.isSafeInteger(pid) && pid > 0, "invalid original operation lock");
-  assert.deepEqual(JSON.parse(regular(join(dirname(local), ".groups-launch.lock"), 1024)),
+  assert.deepEqual(JSON.parse(read(join(dirname(local), ".groups-launch.lock"), 1024)),
     { pid, round: state.round }, "retained launch lock differs");
+  return lock;
+}
+
+export function retainedInvalidOwner(local, state) {
+  // A reused PID is still busy for any operation with paid authority.
+  const { pid } = readRetainedInvalidLocks(local, state);
   try { process.kill(pid, 0); } catch (error) { if (error.code === "ESRCH") return false; }
   return true;
 }
 
 export function groupedFailure(local, state) {
+  return groupedFailureEvidence(local, state, () => assert.ok(!retainedInvalidOwner(local, state), "original monitor owner is still live or uncertain"));
+}
+
+function groupedFailureEvidence(local, state, settledOwner) {
   assert.ok(groupedFailureCandidate(state), "official dedicated reservation required");
   launchHostKey(local, state);
   const { registration, terminal } = state.control?.monitor?.phase === "closed" ? sealedMonitor(local, state) : settledMonitor(local, state);
@@ -133,7 +140,7 @@ export function groupedFailure(local, state) {
   assert.equal(registration.host.hostname, state.name, "registered host differs");
   if (terminal.kind === "invalid") {
     assert.ok(terminal.publicationRevoked === true && terminal.remoteTerminal === false, "invalid monitor publication not revoked");
-    assert.ok(!retainedInvalidOwner(local, state), "original monitor owner is still live or uncertain");
+    settledOwner();
   }
   const round = campaignRounds(state.round)[state.group];
   assert.ok(round, "unknown reserved group");
@@ -144,8 +151,8 @@ export function groupedFailure(local, state) {
     roots: ["/bench/campaign", ...Object.values(phases).map(path => `/bench/repo/${path}`)] };
 }
 
-function preplanGroup(local, state) {
-  const grouped = groupedFailure(local, state);
+function preplanGroup(local, state, readGrouped = groupedFailure) {
+  const grouped = readGrouped(local, state);
   assert.ok(stagedFleet(state.fleet) && state.fleet.single?.group === state.group, "staged single-group reservation required");
   assert.equal(grouped.terminal.kind, "invalid", "an archived campaign is required for a sealed result");
   return { ...grouped, preplan: true };
@@ -180,11 +187,15 @@ export function groupedPreplanFailure(local, state) {
 }
 
 export function failedNativeArchive(local, state, grouped) {
+  return failedNativeArchiveEvidence(local, state, grouped, groupedFailure);
+}
+
+function failedNativeArchiveEvidence(local, state, grouped, readGrouped) {
   const roots = grouped?.roots ?? failedNativeRoots(state);
   let retirementAllowed = true;
   const wrapper = originalFailedWrapper(local, state), { folder } = wrapper;
   if (grouped?.preplan === true) {
-    assert.ok(isDeepStrictEqual(grouped, preplanGroup(local, state)), "grouped preplan identity differs");
+    assert.ok(isDeepStrictEqual(grouped, preplanGroup(local, state, readGrouped)), "grouped preplan identity differs");
     verifyPreplanArchive(wrapper, state);
     return { roots, retirementAllowed };
   }
@@ -634,11 +645,15 @@ export function verifyFailedNativeReservation(state, prior, grouped) {
 }
 
 export function verifyFailedNativeCustody(local, state, capture, grouped, requireRetirement = false) {
+  return verifyFailedNativeCustodyEvidence(local, state, capture, grouped, requireRetirement, groupedFailure);
+}
+
+function verifyFailedNativeCustodyEvidence(local, state, capture, grouped, requireRetirement, readGrouped) {
   const preplan = Object.hasOwn(capture, "scope");
   if (preplan) assert.ok(capture.scope === "grouped-preplan", "unknown custody scope");
-  if (preplan && grouped === undefined) grouped = preplanGroup(local, state);
+  if (preplan && grouped === undefined) grouped = preplanGroup(local, state, readGrouped);
   assert.equal(grouped?.preplan === true, preplan, "custody preplan scope differs");
-  const { retirementAllowed } = failedNativeArchive(local, state, grouped);
+  const { retirementAllowed } = failedNativeArchiveEvidence(local, state, grouped, readGrouped);
   if (requireRetirement) assert.ok(retirementAllowed, "ambiguous native outcome permits custody only");
   assert.equal(capture.schema, "benchmark-failed-native-custody/v1");
   assert.equal(capture.measuredCommit, state.commit);
@@ -695,6 +710,16 @@ export function verifyFailedNativeCustody(local, state, capture, grouped, requir
 }
 
 export function verifyFailedNativeRetirement(local, state, expectedSha256 = state.retirement.evidenceSha256) {
+  return replayFailedNativeRetirement(local, state, expectedSha256, groupedFailure);
+}
+
+export function verifyHistoricalFailedNativeRetirement(local, state, settledOwner) {
+  assert.ok(state.status === "retired" && state.destroyedAt && state.retirement.kind === "native-failed");
+  return replayFailedNativeRetirement(local, state, state.retirement.evidenceSha256,
+    (dir, saved) => groupedFailureEvidence(dir, saved, settledOwner));
+}
+
+function replayFailedNativeRetirement(local, state, expectedSha256, readGrouped) {
   const bytes = regular(join(local, "failed-native-host.json"));
   assert.match(expectedSha256, /^[a-f0-9]{64}$/);
   assert.equal(digest(bytes), expectedSha256, "failed-native retirement receipt changed");
@@ -703,9 +728,9 @@ export function verifyFailedNativeRetirement(local, state, expectedSha256 = stat
   assert.equal(record.schema, "benchmark-failed-native-retirement/v1");
   // The explicit scope distinguishes grouped successor custody from historical
   // recovery; ordinary grouped receipts still replay at the measured commit.
-  const grouped = record.capture.scope === "grouped-preplan" ? preplanGroup(local, state)
-    : record.capture.controllerCommit === state.commit ? groupedFailure(local, state) : undefined;
-  verifyFailedNativeCustody(local, state, record.capture, grouped, true);
+  const grouped = record.capture.scope === "grouped-preplan" ? preplanGroup(local, state, readGrouped)
+    : record.capture.controllerCommit === state.commit ? readGrouped(local, state) : undefined;
+  verifyFailedNativeCustodyEvidence(local, state, record.capture, grouped, true, readGrouped);
   assert.deepEqual(Object.keys(record.rehash).sort(), ["finishedAtMs", "observation", "scriptSha256", "startedAtMs"]);
   const rehash = failedNativeObservation(JSON.stringify(record.rehash.observation), state, record.rehash.startedAtMs, record.rehash.finishedAtMs, grouped);
   assert.equal(record.rehash.scriptSha256, digest(failedNativeScript(state, record.capture.observation.snapshotSha256, null, grouped)));
