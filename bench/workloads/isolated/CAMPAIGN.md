@@ -181,11 +181,13 @@ For example, native client v2 intentionally exits 2 after a positive diagnostic 
 that exact source-defined exit is distinguished from cancellation, a fixture error or an
 unknown nonzero exit. No validator injection or selected-app filtering is permitted.
 
-Status includes uncollectedNativeRoots. A terminal command's entire native tree is copied
-even when subsequent host cleanup/source observations fail. If terminal ownership or safe
-copy cannot be established, the original root remains explicitly uncollected: the parent
-must retain the host for inspection/terminal-safe collection, not delete it merely because
-the campaign logs or partial archive were saved.
+Status includes uncollectedNativeRoots. A terminal command's entire native tree is collected
+even when subsequent host cleanup/source observations fail. The live reservation records both
+the checkout-relative original and the campaign-relative transferDestination before any move.
+Both remain pending until the durable phase seal; an interrupted transfer may have bytes at
+either path but cannot qualify. If terminal ownership or safe collection cannot be established,
+the parent must retain the host for inspection/terminal-safe collection, not delete it merely
+because the campaign logs or partial archive were saved.
 
 Host observations retain boot/host, CPU/memory/pressure/cgroup information, PID start
 identities and Docker container/network boundaries before/after each group. A new persistent

@@ -45,9 +45,10 @@ export function createCampaign({ authorize }) {
     c.files.push({ path, sha256: digest(bytes) });
   }
   function event(c, kind, data = {}) {
-    const value = { schema: "benchmark-isolated-campaign-event/v1", sequence: c.sequence++, campaign: c.handle.id,
+    const value = { schema: "benchmark-isolated-campaign-event/v1", sequence: c.sequence, campaign: c.handle.id,
       round: c.plan.round, campaignSha256: c.plan.campaignSha256, at: new Date().toISOString(), kind, ...data, status: status(c) };
     save(c, `${String(value.sequence).padStart(5, "0")}-${kind}.json`, value);
+    c.sequence++;
   }
   function verifyPhases(c) {
     own(c.handle);
@@ -143,7 +144,9 @@ export function createCampaign({ authorize }) {
     const relative = `${String(c.index).padStart(2, "0")}-${binding.request.group}-${phaseName}`;
     const directory = join(c.directory, relative); mkdirSync(directory, { mode: 0o700 }); syncDirectory(c.directory);
     c.attempted.add(binding.request.group);
-    const pending = { group: binding.request.group, phase: phaseName, artifactRoot: binding.validation.artifactRoot };
+    const transfer = liveGroup(binding.request.group);
+    const pending = { group: binding.request.group, phase: phaseName, artifactRoot: binding.validation.artifactRoot,
+      ...(transfer ? { transferDestination: `${relative}/native` } : {}) };
     c.pendingNative.push(pending); event(c, "native-output-reserved", pending);
     if (c.stream) {
       const { cpus, roles } = nativeControlPartition(binding);
@@ -164,7 +167,6 @@ export function createCampaign({ authorize }) {
     }
     let after, settled, boundaryError;
     const terminalClock = commands.at(-1)?.terminalClock;
-    const transfer = liveGroup(binding.request.group);
     try {
       if (!transfer) verifyWorkingSources(c.plan.bindings[0]);
       after = observeHost(c.stream?.registration, retainUdev);
@@ -183,10 +185,11 @@ export function createCampaign({ authorize }) {
     if (present) manifest = transfer ? transferEvidence(original, native) : copyEvidence(original, native);
     else { assert.ok(commands.some((r) => !r.success), "native output missing"); mkdirSync(native, { mode: 0o700 }); manifest = tree(native); }
     const p = { relative, native, original, manifest, retainsOriginal: present && !transfer, commands, cleanup: null };
-    c.phases.push(p); save(c, `${relative}/native-manifest.json`, manifest);
-    c.pendingNative.splice(c.pendingNative.indexOf(pending), 1);
+    save(c, `${relative}/native-manifest.json`, manifest);
     event(c, "phase-sealed", { ...pending, nativeManifestSha256: manifest.sha256,
       phaseManifestSha256: phaseSnapshot(directory, binding.request.group === "json-api" && phaseName === "prepare").sha256 });
+    c.phases.push(p);
+    c.pendingNative.splice(c.pendingNative.indexOf(pending), 1);
     if (boundaryError) throw boundaryError;
     // The live runners write Git-visible result trees. Recheck every source
     // only after the exact reserved tree is in external phase custody.

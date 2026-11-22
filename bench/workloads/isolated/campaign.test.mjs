@@ -652,6 +652,52 @@ test("live output is not transferred without proven command cleanup", async () =
   assert.equal(s.campaign.status(h).uncollectedNativeRoots.length, 1);
 });
 
+for (const failure of ["moved bytes", "phase seal"]) test(`live transfer keeps both pending paths after I/O failure reading or sealing ${failure}`, async (t) => {
+  const group = "recoverable-live", s = setupLiveOutput(group, 0), h = await begin(s);
+  const transferDestination = `00-${group}-timing/native`, native = join(h.directory, transferDestination);
+  const expected = [{ group, phase: "timing", artifactRoot: s.plan.bindings[0].validation.artifactRoot, transferDestination }];
+  const open = fs.openSync;
+  let faulted = false;
+  const injected = t.mock.method(fs, "openSync", (path, ...args) => {
+    const target = failure === "moved bytes" ? path === join(native, "coverage.json") : String(path).endsWith("-phase-sealed.json");
+    if (!faulted && target) {
+      faulted = true;
+      assert.equal(existsSync(s.original), false);
+      assert.equal(existsSync(join(native, "coverage.json")), true);
+      throw Object.assign(new Error("injected transfer EIO"), { code: "EIO" });
+    }
+    return open(path, ...args);
+  });
+  syncBuiltinESMExports();
+  try { await assert.rejects(s.campaign.advance(h), { code: "EIO", message: "injected transfer EIO" }); }
+  finally { injected.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(faulted, true);
+  assert.deepEqual(evidence.tree(native), liveOutput.generatedTree);
+  const journal = (kind) => join(h.directory, fs.readdirSync(h.directory).find((name) => name.endsWith(`-${kind}.json`)));
+  const reservation = JSON.parse(readFileSync(journal("native-output-reserved")));
+  assert.deepEqual(reservation.status.uncollectedNativeRoots, expected);
+  assert.equal(reservation.transferDestination, transferDestination);
+  assert.ok(!fs.readdirSync(h.directory).some((name) => name.endsWith("-phase-sealed.json")));
+  const resultPath = join(h.directory, "campaign-result.json"), result = JSON.parse(readFileSync(resultPath));
+  assert.equal(result.status.state, "preserved-uncertain");
+  assert.deepEqual(result.status.uncollectedNativeRoots, expected);
+  assert.deepEqual(s.campaign.status(h).uncollectedNativeRoots, expected);
+  const request = { folder: root, round: s.plan.round, commit: s.plan.commit };
+  const saved = await validateSavedCampaign(request);
+  assert.equal(saved.status, "blocked");
+  assert.equal(saved.collectionIntegrity, "unsealed-partial");
+  assert.equal(saved.deletionAuthorized, false);
+  assert.deepEqual(saved.uncollectedNativeRoots, expected);
+
+  // Editing both terminal copies cannot hide the move or direct recovery elsewhere.
+  const haltedPath = journal("halted"), halted = JSON.parse(readFileSync(haltedPath));
+  for (const pending of [[], [{ ...expected[0], transferDestination: "wrong/native" }]]) {
+    halted.status.uncollectedNativeRoots = pending; result.status.uncollectedNativeRoots = pending;
+    writeFileSync(haltedPath, JSON.stringify(halted)); writeFileSync(resultPath, JSON.stringify(result));
+    assert.equal((await validateSavedCampaign(request)).status, "invalid");
+  }
+});
+
 test("one root, opaque handle, all nine fixed native commands and retained failed outcome", async () => {
   const s = setup(), handle = await begin(s), { campaign } = s;
   assert.throws(() => campaign.status({ ...handle }), /not owned/);
