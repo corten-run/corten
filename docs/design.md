@@ -7653,8 +7653,8 @@ rules something out.
     more (from 8.08% fewer to 10.63% more; user 1.06% more, kernel 0.47% fewer) on 0.19% more
     instructions (24,235 against 24,190), and the page not `Public` 0.54% more with a bound of
     0.86% more (from 10.13% fewer to 6.34% more) on 0.01% more. The rerun is another protocol, not
-    a repeat, and does not clear the first run's misses. By the maintainer's decision, not as a
-    result of either run, the fresh-start run is the merge gate for these two: one start measures
+    a repeat, and does not clear the first run's misses. As a judgment, not a result of either
+    run, the fresh-start run is taken as the merge gate for these two: one start measures
     one placement of the code in memory, which differs from build to build and deploy to deploy,
     while a hundred starts average over placements as deployments meet them; and the page not
     `Public`, whose code this change does not touch, missed by a like amount. Whether a long-lived
