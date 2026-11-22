@@ -113,38 +113,57 @@ impl Endpoint for Giving {
     }
 }
 
-/// A handler whose answer is a page that is the same for everyone (`Public`): a kept answer is
-/// given in its place, and the one it makes is kept ([`crate::kept`]). Its page is filled here,
-/// as [`crate::middleware`] would after it, so what is kept is the page as it leaves the route.
-/// Requests that miss the same copy together wait for the first to make it.
+/// A handler whose answer is the same for everyone (`Public`), a page or a whole body: a kept
+/// answer is given in its place, and the one it makes is kept ([`crate::kept`]). A page is filled
+/// here, as [`crate::middleware`] would after it, so what is kept is the page as it leaves the
+/// route. Requests that miss the same copy together wait for the first to make it.
 struct Keeping {
+    shape: crate::kept::Shape,
+    /// Of a route of whole bodies: whether any of the answers it made last was kept.
+    unkept: Option<Arc<crate::kept::Unkept>>,
     inner: Route,
 }
 
 impl Endpoint for Keeping {
     #[inline]
     fn call(&self, req: Request) -> Answering {
+        // A route none of whose bodies is kept (each too small, most often) is its handler's, as
+        // it was before the app kept bodies.
+        if self.unkept.as_ref().is_some_and(|route| route.leaves()) {
+            return self.inner.call(req);
+        }
         // Any other request (a navigation, one with a cookie, a write) is the handler's as before.
-        let Some(asked) = crate::kept::Asked::of(&req) else { return self.inner.call(req) };
+        let Some(asked) = crate::kept::Asked::of(&req, self.shape) else { return self.inner.call(req) };
         if let Some(kept) = asked.find() {
+            if let Some(route) = &self.unkept {
+                route.found();
+            }
             return Box::pin(std::future::ready(kept));
         }
-        let making = match asked.missed(&req) {
-            crate::kept::Miss::Kept(kept) => return Box::pin(std::future::ready(kept)),
+        let making = match asked.missed(&req, self.unkept.clone()) {
+            crate::kept::Miss::Kept(kept) => {
+                if let Some(route) = &self.unkept {
+                    route.found();
+                }
+                return Box::pin(std::future::ready(kept));
+            }
             crate::kept::Miss::Make(missed) => return made(&self.inner, req, missed),
             crate::kept::Miss::Wait(making) => making,
             // In a full store a URL not asked for before is the handler's as any other request.
             crate::kept::Miss::Pass => return self.inner.call(req),
         };
-        // Another request is making the page: the page it keeps is this one's too.
-        let inner = self.inner.clone();
+        // Another request is making the answer: the one it keeps is this one's too.
+        let (shape, unkept, inner) = (self.shape, self.unkept.clone(), self.inner.clone());
         Box::pin(async move {
             making.ended().await;
-            let Some(asked) = crate::kept::Asked::of(&req) else { return inner.call(req).await };
+            let Some(asked) = crate::kept::Asked::of(&req, shape) else { return inner.call(req).await };
             if let Some(kept) = asked.find() {
+                if let Some(route) = &unkept {
+                    route.found();
+                }
                 return kept;
             }
-            let missed = asked.missed_again(&req);
+            let missed = asked.missed_again(&req, unkept);
             made(&inner, req, missed).await
         })
     }
@@ -155,17 +174,26 @@ impl Endpoint for Keeping {
 }
 
 /// `inner`'s answer to `req`, its page filled here as [`crate::middleware`] would after it, and
-/// kept if it may be.
+/// kept if it may be. The requests waiting for it are given it once it is kept, and run their own
+/// handlers when it is not.
 #[inline]
 fn made(inner: &Route, req: Request, missed: crate::kept::Missed) -> Answering {
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
     let answer = inner.call(req);
     Box::pin(async move {
-        let res = answer.await;
+        // An answer with a form's new submit key is this request's alone. A page's render marks
+        // one it drew (`cache::Unrepeatable`); markup rendered any other way (into JSON or text,
+        // into a file a page route answers, or to a string the page then holds as markup) has no
+        // mark to carry, so the handler is watched for one being drawn.
+        let (res, drew_key) = crate::form::watched(answer).await;
         let res = match here {
             Some(here) => here.fill(res).await,
             None => res,
         };
+        if drew_key {
+            missed.not_kept();
+            return res;
+        }
         missed.keep(res).await
     })
 }
@@ -300,10 +328,12 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
         let keeps = handler.keeps();
         Slot::Unbound(Arc::new(move |state| {
             let handled: Route = Arc::new(Handled { handler: handler.clone(), state, types: PhantomData });
-            if keeps {
-                Arc::new(Keeping { inner: handled })
-            } else {
-                handled
+            match keeps {
+                Some(shape) => {
+                    let unkept = (shape == crate::kept::Shape::Body).then(Default::default);
+                    Arc::new(Keeping { shape, unkept, inner: handled })
+                }
+                None => handled,
             }
         }))
     }
@@ -442,7 +472,7 @@ impl<S> Default for MethodSet<S> {
 impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
     fn on<H: Handler<T, S>, T: 'static>(mut self, at: usize, handler: H) -> Self {
         assert!(self.slots[at].is_none(), "corten: a route has two handlers for {}", NAMES[at]);
-        self.keeps |= handler.keeps();
+        self.keeps |= handler.keeps().is_some();
         self.slots[at] = Some(Slot::handler(handler));
         let names: &[&'static str] = if at == GET { &["GET", "HEAD"] } else { &NAMES[at..=at] };
         if let Allow::Methods(allowed) = &mut self.allow {
@@ -459,7 +489,7 @@ impl<S: Clone + Send + Sync + 'static> MethodSet<S> {
     /// (its answer still says, in `Allow`, the methods the route has).
     pub(crate) fn fallback<H: Handler<T, S>, T: 'static>(mut self, handler: H) -> Self {
         assert!(self.fallback.is_none(), "corten: a route has two handlers for any method");
-        self.keeps |= handler.keeps();
+        self.keeps |= handler.keeps().is_some();
         self.fallback = Some(Slot::handler(handler));
         self
     }

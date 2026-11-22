@@ -370,17 +370,22 @@ or campaign readiness. The v2 native adapter/producer integration remains a sepa
 
 ## Post-command udev settle
 
-In supervised localized-marketplace timing only, a first-after inventory containing
-new sleeping children of the same baseline `systemd-udevd` can trigger one five-second wait
-and one more host observation after the marketplace command and its kernel observation are
-terminal. The Linux start ticks must place every new non-kernel identity strictly after the
-cutoff in the sealed command-lifetime record. Both the uptime and the monotonic apparatus
-samples must support the wait. Cancellation keeps the first-after inventory and skips the
-second census. Exact cgroup, parent PID/start identity and matching executable path,
-device and inode are required, not just the worker name. Saved replay checks all the sealed
-observations by the same rules. A worker or replacement still present, uncertain timing or
-ownership, a new login, benchmark process, or changed Docker baseline still stops sequencing. This does not rerun or
-alter a measured window, prove the host was quiet, or repair historical evidence.
+Supervised JSON preparation and localized-marketplace timing can take one additional
+host observation if the first-after inventory contains only new sleeping children of
+the same baseline `systemd-udevd`. The last command must have sealed terminal and empty
+lifetime evidence before the five-second wait begins. For untimed JSON preparation,
+the Linux start ticks must place each worker strictly after the pre-phase census
+cutoff. Marketplace timing still requires birth strictly after the sealed terminal
+cutoff; other timing phases do not use this rule.
+
+Both uptime and the monotonic apparatus samples must support the wait. Cancellation
+keeps the first-after inventory and skips the second census. Exact cgroup, parent
+PID/start identity and matching executable path, device and inode are required, not
+just the worker name. Saved replay uses the same rule and requires cleanup proof
+before accepting JSON audit readiness. A surviving or replacement worker, uncertain
+timing or ownership, a new login or benchmark process, or a changed Docker baseline
+still stops sequencing. This does not alter a measured window, prove the host was
+quiet, or repair historical evidence.
 
 ## Awaitable intrinsic API
 
