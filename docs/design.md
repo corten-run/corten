@@ -7348,8 +7348,8 @@ rules something out.
     PNG of 1 MiB 47.7% fewer; one of 1,024 bytes, the least kept, took the same (below).
     Once kept, a body is given to a request that accepts
     no coding too, which gets no tag and so saves nothing by it where its handler makes
-    nothing: that request pays for asking the store, and for something more that grows with the
-    body and was not found: 1.5% to 5.0% more cycles in the four
+    nothing: that request pays for asking the store, and the kernel runs the same path slower
+    after it (below): 1.5% to 5.0% more cycles in the four
     cases run, over the 3% set before the run in two of them (below). A body's size is known only once it is made, so a route whose bodies are
     all too small would ask the store and have each refused: after 64 answers in a row of
     which none was kept, with none between given from the store, the route's requests are its
@@ -7807,9 +7807,28 @@ rules something out.
     and 98 to 226 more user instruction-cache misses (2,529 against 2,303, 2,539 against
     2,354, 2,403 against 2,305, 2,473 against 2,374), but 945 more cycles at 1,024 bytes
     (user 20,466 against 19,684, kernel 25,619 against 25,471) and 2,637 more at 8,000, of
-    which 1,141 are the kernel's on 229 more of its instructions. Nothing in the change's
-    code accounts for the kernel's part, and it was not looked for further, so the price is
-    more than the asking and what the rest is stands open. The other splits: the 1,024 bytes
+    which 1,141 are the kernel's on 229 more of its instructions. A second
+    look at the kernel's part, on one host of the same kind (the same two builds, the PNG of
+    8,000 bytes and the one of 1,024, no coding; six pairs of turns for each count, two
+    sampled turns of each build; `strace` on one answer), found no other path through
+    the kernel: 2.02 system calls a request in both builds, one `writev` of the head and the
+    body in both (the kept answer's head is the 8 bytes of its `Age` longer), 1.001 packets
+    sent and received a request in both, kernel instructions 17,173 against 17,058 at 8,000
+    bytes and 15,764 against 15,744 at 1,024, and no kernel symbol whose cycles differ by
+    more than its own spread between two turns of one build (the copy to the socket, 979 and
+    1,376 cycles a request in the kept build's two turns, 1,057 and 1,238 in the other's).
+    The kernel's cycles were again more where kept, 31,367 against 30,518 at 8,000 bytes and
+    26,657 against 26,431 at 1,024. What differed: the data-cache misses, the user's 797
+    against 751 a request and the kernel's 1,123 against 1,102 at 8,000 bytes (793 against
+    754 and 730 against 727 at 1,024); and how often an answer woke a thread of the load
+    that slept, 0.92 against 0.89 and 0.92 against 0.86 of the requests in two starts at
+    8,000 bytes (0.92 against 0.95 at 1,024), where a turn with more of them took more
+    kernel cycles in either build. With the wake-ups held equal by least squares over each
+    start's twelve turns, 377 to 585 kernel cycles a request were left where kept. So the
+    kernel's part is the same work done slower, after an ask that touches more of the app's
+    own memory and, on this load, with more threads to wake; how much is each was not
+    separated, and why it showed more at 8,000 bytes than at 1,024 in the six starts above
+    was not found. It follows the ask, so what cuts the ask cuts it. The other splits: the 1,024 bytes
     with four codings, user 23,550 against 23,655 and kernel 26,159 against 26,084; the CSV
     kept before, user 25,785 against 26,090 and kernel 27,711 against 27,847; the PNG of
     8,000 bytes with no coding without `compress`, user 19,694 against 18,665 and kernel
@@ -7822,7 +7841,7 @@ rules something out.
     bytes, under 1,024 or over 1 MiB; a store that kept pictures or downloads fill, where
     pages are turned out for them; a picture asked for with `gzip` alone; a request with a
     cookie for a body route in a build without `compress`, which now passes the stage that
-    asks; what the kernel's part of the price with no coding is; a new URL for every request for a
+    asks; the kernel's part of the price with no coding on a load whose threads do not sleep; a new URL for every request for a
     file, which takes the path a body's does above; a body kept for a handler that waits on a database or another service,
     where the wait and not the compression is what a kept body saves (the benchmark's handler
     reads memory, and the rule for bodies is drawn from it); a route of a few large bodies
