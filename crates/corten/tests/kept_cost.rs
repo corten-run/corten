@@ -144,11 +144,12 @@ fn request_cost() {
         };
         let send = |req: Request| send(&router, req);
         assert!(std::str::from_utf8(&body).unwrap().contains("<main><p>Kept cost fixture</p></main>"));
+        let mut refused = full.iter();
         for n in 0..requests {
             let (expected, answer) = match case.as_str() {
                 "hit" => (true, send(get("/kept")).await),
                 "made" => (false, send(get(&format!("/kept?n={n}"))).await),
-                "full" => (false, send(get(&full[n])).await),
+                "full" => (false, send(get(refused.next().expect("a URL the store refused"))).await),
                 "again" => {
                     let write = Request::post("/kept")
                         .header("host", "localhost")
