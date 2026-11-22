@@ -374,6 +374,7 @@ export async function runLiveAdapters({ group, out, requested, build, round, pro
           try { const r = await fetch(`${base}/parity/resources`, { signal: AbortSignal.any([signal, AbortSignal.timeout(1000)]) }); if (r.ok) { up = true; break; } } catch {}
           await sleep(100);
         }
+        signal.throwIfAborted();
         assert.ok(up, "native app did not start within 15s");
         const provenance = { commit, diffSha256: hash(diff), code, contractSha256: contractSha256(group), sourceHashes, sourceSha256, imageSourceSha256,
           imageId, containerId: inspect.Id, nativePort: port.transport,

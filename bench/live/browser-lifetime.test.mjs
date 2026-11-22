@@ -155,6 +155,28 @@ test("live runner uses a fresh Chromium for the next adapter after a real discon
   assert.equal(replay.inspected.length, 4); assert.deepEqual(replay.unqualified, []);
 });
 
+test("production cancellation of the last readiness probe is not a startup failure", { timeout: 10000 }, async (t) => {
+  const { out, history, spawn } = await runnerFixture(t);
+  const stop = new AbortController(), reason = new Error("aborted during last readiness probe");
+  let probes = 0;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.method(globalThis, "fetch", async (url, { signal }) => {
+    assert.equal(new URL(url).pathname, "/parity/resources");
+    setImmediate(() => t.mock.timers.tick(100)); // Release the wait after the probe.
+    if (++probes < 150) return { ok: false };
+    stop.abort(reason);
+    signal.throwIfAborted();
+  });
+  await assert.rejects(runLiveAdapters({ ...options, out }, { spawn, signal: stop.signal,
+    chromium: { launch: () => assert.fail("cancelled runner launched Chromium") } }), (error) => error === reason);
+  assert.equal(probes, 150);
+  assert.deepEqual(history, ["start:aspnet", "remove:aspnet"]);
+  await assert.rejects(readFile(join(out, "aspnet-failure.json")), { code: "ENOENT" });
+  const replay = await verifyRound(out);
+  assert.equal(replay.cancelled, true); assert.equal(replay.readyForLoad, false);
+  assert.deepEqual(replay.notAttempted.aspnet, { scenarios: ["normal", "slow-reader"], clients: [] });
+});
+
 test("production cancellation during launch closes the browser and removes its owned container once", async (t) => {
   const { out, history, spawn } = await runnerFixture(t);
   const stop = new AbortController();
