@@ -18,11 +18,11 @@ import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, reservation, savedLoadLayout, savedPlacement, verifySshIngress } from "./cloud-contract.mjs";
-import { readFleet, recheckSetupSibling, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { readFleet, recheckSetupAttempt, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { unitQuery } from "./cloud-options.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
-import { inspectContinuation } from "./group-continuation.mjs";
+import { continuationAdmission, inspectContinuation } from "./group-continuation.mjs";
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
@@ -436,20 +436,31 @@ test("continuation schedules around pinned catalog and retired JSON without repl
   assert.equal(treeHash(retained), oldTree, "historical bytes untouched");
 });
 
-for (const change of ["none", "cleanup lock", "late account lock", "reservation bytes", "renamed host"]) test(`stopped sibling, after intent: ${change}`, { timeout: 60000 }, async (t) => {
-  const p = fixture(t, "ssh-late"), group = "fullstack-browser", other = "hardening", old = path.join(p.h.base, group);
+for (const [retry, change] of [
+  ...["none", "cleanup lock", "late account lock", "reservation bytes", "renamed host"].map((change) => [false, change]),
+  ...["none", "late account lock", "archive bytes", "renamed host"].map((change) => [true, change]),
+]) test(`stopped ${retry ? "predecessor" : "sibling"}, after intent: ${change}`, { timeout: 60000 }, async (t) => {
+  const p = fixture(t, "ssh-late"), group = retry ? "recoverable-live" : "fullstack-browser", other = "hardening";
+  const old = path.join(p.h.base, group), target = retry ? group : other, round = retry ? "r22" : "r21";
+  const slot = path.join(p.h.base, retry ? `${group}--${round}` : other);
+  const historical = retry ? "b".repeat(40) : commit;
+  const oldDeps = retry ? { ...p.deps,
+    spawn: (binary, argv) => binary === "git" && argv[0] === "rev-parse" && argv[1] === "HEAD"
+      ? { status: 0, stdout: historical } : p.deps.spawn(binary, argv),
+    plan: (options, deps) => productionPlan(options, { ...deps, roleCheck: roleCheckFor(historical, checkoutCommit) }),
+  } : p.deps;
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
   const args = (g, round) => [round, "--continuation-root", p.h.base, "--group", g];
-  const prepare = (g, round) => fleetMain([...args(g, round), "--prepare", "--commit", commit,
-    "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps);
-  const approve = async (g, round) => {
-    assert.equal(await fleetMain([...args(g, round), "--detach", "--print-approval"], p.deps), 3);
+  const prepare = (g, r, source = commit, deps = p.deps, account = accountId) => fleetMain([...args(g, r), "--prepare", "--commit", source,
+    "--ssh-key", "42", "--account-id", account, "--context", context], deps);
+  const approve = async (g, round, deps = p.deps) => {
+    assert.equal(await fleetMain([...args(g, round), "--detach", "--print-approval"], deps), 3);
     return [...args(g, round), "--detach", "--approve-reviewed-merged-ready", p.output.at(-1).approvalSha256];
   };
-  assert.equal(await prepare(group, "r21"), 3);
-  assert.equal(await fleetMain(await approve(group, "r21"), { ...p.deps, main: async () => 2 }), 2);
+  assert.equal(await prepare(group, "r21", historical, oldDeps), 3);
+  assert.equal(await fleetMain(await approve(group, "r21", oldDeps), { ...oldDeps, main: async () => 2 }), 2);
   const fleet = readFleet(old, "r21").manifest;
-  const state = reservation({ round: "r21", commit, token: fleet.jobs[0].token, group, fleet });
+  const state = reservation({ round: "r21", commit: historical, token: fleet.jobs[0].token, group, fleet });
   const local = path.join(old, group, "groups-r21");
   fs.mkdirSync(local, { recursive: true });
   Object.assign(state, { status: "starting", provider: fleet.provider, fullGroupQualified: false, id: "701", ip: "192.0.2.1",
@@ -460,6 +471,7 @@ for (const change of ["none", "cleanup lock", "late account lock", "reservation 
   const save = () => fs.writeFileSync(path.join(local, "state.json"), JSON.stringify(state));
   save();
   await assert.rejects(prepare(other, "r22"), /unresolved custody/);
+  if (retry) await assert.rejects(prepare(group, "r22"), /unresolved custody/);
   const evidence = path.join(local, "evidence-Synthetic"), tar = path.join(local, "results.tgz");
   fs.mkdirSync(evidence); fs.writeFileSync(path.join(evidence, "exit-code"), "124\n");
   const bytes = archive([{ name: "exit-code", body: "124\n" }]);
@@ -467,13 +479,33 @@ for (const change of ["none", "cleanup lock", "late account lock", "reservation 
     invocation: state.control.ledger.at(-1).request.invocation.id, stdout: `Id=${state.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${state.unit}\nActiveState=failed\nRestart=no\nMainPID=0\nExecMainCode=1\nExecMainStartTimestamp=Fri 2026-11-13 01:00:00 UTC\n` },
     evidence: "evidence-Synthetic", extractionAttempts: ["evidence-Synthetic"], archiveSha256: digest(bytes), evidenceSha256: treeHash(evidence) });
   save();
-  await assert.rejects(prepare(group, "r22"), /unresolved custody/);
   await assert.rejects(prepare(other, "r22"), /ENOENT/);
+  if (retry) await assert.rejects(prepare(group, "r22"), /ENOENT/);
   fs.writeFileSync(tar, "replaced"); await assert.rejects(prepare(other, "r22"), assert.AssertionError);
   fs.writeFileSync(tar, bytes);
   const original = treeHash(old);
-  assert.equal(await prepare(other, "r21"), 3);
-  const approved = await approve(other, "r21");
+  if (retry) {
+    await assert.rejects(prepare(group, "r22", historical, oldDeps), /different measured commit/);
+    await assert.rejects(prepare(group, "r22", commit, p.deps, "user:other-account"), /same provider account/);
+    await assert.rejects(prepare(group, "r21"), /higher round/);
+    assert.ok(!fs.existsSync(slot));
+  } else await assert.rejects(prepare(group, "r22"), /different measured commit/);
+  assert.equal(await prepare(target, round), 3);
+  if (retry) {
+    await assert.rejects(prepare(group, "r23", historical, oldDeps), /different measured commit/);
+    await assert.rejects(approve(group, "r21", oldDeps), /group round not prepared/);
+    const deps = { repo: p.h.repo, inspect: syntheticInspection };
+    const selected = (await continuationAdmission(p.h.base, group, deps)).rows.find((row) => row.group === group);
+    const siblingView = (await continuationAdmission(p.h.base, other, deps)).rows.find((row) => row.group === group);
+    const reported = (await inspectContinuation(p.h.base, deps)).report.groups.find((row) => row.group === group);
+    for (const row of [selected, siblingView, reported]) {
+      assert.equal(row.outcome, "prepared");
+      assert.deepEqual(row.attempts.map(({ round, outcome }) => [round, outcome]), [
+        ["r21", "setup-failed-needs-census"], ["r22", "prepared"],
+      ]);
+    }
+  }
+  const approved = await approve(target, round);
   const census = p.output.at(-1).subject.continuation.unconfirmed;
   assert.deepEqual(census, [{ group, round: "r21", accountId, manifestSha256: fileHash(path.join(old, "fleet-r21.json")),
     stateSha256: fileHash(path.join(local, "state.json")), id: state.id, root: old, launch: fileHash(path.join(old, "launch-intent.json")) }]);
@@ -487,16 +519,17 @@ for (const change of ["none", "cleanup lock", "late account lock", "reservation 
       return fd;
     });
     syncBuiltinESMExports();
-    try { assert.throws(() => recheckSetupSibling(p.h.base, other, census[0]), /setup sibling recovery started/); }
+    try { assert.throws(() => recheckSetupAttempt(p.h.base, census[0]), /setup attempt recovery started/); }
     finally { mock.mock.restore(); syncBuiltinESMExports(); }
     fs.unlinkSync(lock);
   }
   let reached = false;
   p.deps.WorkerClass = class extends p.deps.WorkerClass {
     constructor(entry, options) {
-      assert.ok(fs.existsSync(path.join(p.h.base, other, "launch-intent.json")));
+      assert.ok(fs.existsSync(path.join(slot, "launch-intent.json")));
       if (change === "cleanup lock") fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }), { flag: "wx" });
       if (change === "reservation bytes") fs.appendFileSync(path.join(local, "state.json"), "\n");
+      if (change === "archive bytes") fs.appendFileSync(tar, "changed");
       if (change === "renamed host") fs.writeFileSync(p.hosts, JSON.stringify([{ id: 701, name: "renamed", tags: [] }]));
       reached = true;
       super(entry, options);
@@ -506,13 +539,15 @@ for (const change of ["none", "cleanup lock", "late account lock", "reservation 
   assert.ok(reached);
   const trace = p.events().filter(({ boundary }) => boundary === "provider");
   assert.ok(trace.some(({ method, path }) => method === "GET" && path.startsWith("/v2/droplets?")));
-  if (change === "none") assert.deepEqual(trace.filter(({ method }) => method === "POST").map(({ group }) => group), [other]);
+  if (change === "none") assert.deepEqual(trace.filter(({ method }) => method === "POST").map(({ group }) => group), [target]);
   else {
     assert.ok(trace.every(({ method }) => method === "GET"), "no provider mutation after handoff");
-    assert.equal(p.saved(path.join(other, other)).createIntentAt, undefined);
+    const saved = JSON.parse(fs.readFileSync(path.join(slot, target, `groups-${round}`, "state.json")));
+    assert.equal(saved.createIntentAt, undefined);
   }
   if (change === "cleanup lock" || change === "late account lock") fs.unlinkSync(lock);
   if (change === "reservation bytes") save();
+  if (change === "archive bytes") fs.writeFileSync(tar, bytes);
   assert.equal(treeHash(old), original);
 });
 

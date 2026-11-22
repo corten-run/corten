@@ -322,7 +322,7 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
 export async function fleetMain(args, deps = {}, preIntentFailures) {
   const options = parseFleetArgs(args), repo = realpathSync(deps.repo ?? checkout);
   if (!options.continuationRoot) return runFleet(options, deps);
-  const { continuationLock, continuationAdmission } = await import("./group-continuation.mjs");
+  const { continuationLock, continuationAdmission, requireSetupRetryCommit } = await import("./group-continuation.mjs");
   const root = fleetRoot(options.continuationRoot, repo), lock = join(root, continuationLock);
   const owner = json({ pid: process.pid, group: options.group });
   const locked = options.prepare || !!options.approval;
@@ -342,6 +342,7 @@ export async function fleetMain(args, deps = {}, preIntentFailures) {
     if (options.prepare) {
       const superseding = continuation.unlaunched.has(slot?.root) && options.commit !== slot.manifest.commit;
       assert.ok(row.outcome === "missing" || row.retryable || superseding, "group already reserved; never allocate again");
+      requireSetupRetryCommit(row.attempts, options.commit);
       if (slot) {
         assert.ok(Number(options.round.slice(1)) > Number(slot.manifest.round.slice(1)), "use a new, higher round for this group");
         attemptRoot = join(root, `${options.group}--${options.round}`);
