@@ -233,8 +233,9 @@ rules something out.
    and writes them only through a typedef of them (`LiveFields`, `ReadErrorFields`), so `tsc`
    refuses a misspelled write in either; `scripts/escapes.mjs` lists the two, keyed by the tag
    `customElements.define` gives `<corten-live>`, fails when the runtime, kit, template or example
-   scripts gain a class or lose one, and refuses a class's field written through a `this` no cast
-   types, which `tsc` accepts; the classes it
+   scripts gain a class or lose one, and refuses a class's field written through a `this` that no
+   cast or `@this` tag types (by assignment, `++`, `delete`, a `for` target, destructuring or
+   `Object.assign(this, ..)` and its kin), which `tsc` accepts; the classes it
    generates, one per view (the macro writes them) and one per typed event (`assets.rs` writes
    them), are typed by the declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
    was read, and none's value is used as a type it is not; the unstable parser API lets
@@ -369,8 +370,10 @@ rules something out.
    either of `<corten-live>`'s two writes misspelled, passed on both. Written through a typedef,
    each of the four misspellings is refused at the write (TS2551) on both, a misspelled field
    declaration at each cast (TS2352), and a plain `this.` write is still accepted by `tsc`, so
-   `scripts/escapes.mjs` refuses one (its test writes it twelve ways, and restoring either class's
-   plain write fails the scan at that line). 7.0.2 refused the fields declared with no value
+   `scripts/escapes.mjs` refuses one (its test writes it each of those ways, and restoring either
+   class's plain write fails the scan at that line). `tsc` also accepted
+   `Object.assign(this, { redirecetd: redirected })` in `ReadError`'s constructor, after which a
+   redirect's error had `redirected` false, and the scan refuses that form too. 7.0.2 refused the fields declared with no value
    (TS2564), 6.0.3 accepted them.
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility

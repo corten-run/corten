@@ -49,8 +49,23 @@ function definedTag(node, source) {
   if (call?.kind !== ts.SyntaxKind.CallExpression) return null;
   const { expression, arguments: args } = /** @type {ts.CallExpression} */ (call);
   const tag = args[0];
-  if (args[1] !== node || tag?.kind !== ts.SyntaxKind.StringLiteral || expression.getText(source) !== "customElements.define") return null;
+  if (args[1] !== node || tag?.kind !== ts.SyntaxKind.StringLiteral || !member(expression, "customElements", "define")) return null;
   return `<${/** @type {ts.StringLiteral} */ (tag).text}>`;
+}
+
+/** Whether `node` is `object.name`, read from its nodes so comments and spacing do not matter. @param {ts.Node} node @param {string} object @param {string} name */
+function member(node, object, name) {
+  if (node.kind !== ts.SyntaxKind.PropertyAccessExpression) return false;
+  const access = /** @type {ts.PropertyAccessExpression} */ (node);
+  return access.expression.kind === ts.SyntaxKind.Identifier && /** @type {ts.Identifier} */ (access.expression).text === object && access.name.text === name;
+}
+
+// Calls that write the properties of their first argument.
+const WRITERS = [["Object", "assign"], ["Object", "defineProperty"], ["Object", "defineProperties"], ["Reflect", "set"], ["Reflect", "defineProperty"], ["Reflect", "deleteProperty"]];
+
+/** Whether `node`, a function-like, has a `@this` tag, which types its `this`. @param {ts.Node} node */
+function typedThis(node) {
+  return (node.jsDoc ?? []).some((doc) => (doc.tags ?? []).some((tag) => tag.kind === ts.SyntaxKind.JSDocThisTag));
 }
 
 /** Whether `node` is `this`, bare or in parentheses, with no cast giving it a type. @param {ts.Node} node */
@@ -73,7 +88,10 @@ function written(target, out) {
 /**
  * Each write to a field of a hand-written class through a `this` no cast types, by line: checked
  * JavaScript takes a field such a write sets first as declared, so a misspelling there is no error.
- * A function expression has a `this` of its own and is not looked in; an arrow function is.
+ * A write is an assignment of any operator, `++`, `--`, `delete`, a `for .. of` or `for .. in`
+ * target, through any destructuring, or `this` handed to `Object.assign` and the like. A function,
+ * and an object literal's method or accessor, has a `this` of its own and is not looked in; an
+ * arrow function is, and a method with a `@this` tag has its `this` typed.
  * @param {string} file @param {ts.SourceFile} source
  */
 function plainWritesIn(file, source) {
@@ -87,6 +105,15 @@ function plainWritesIn(file, source) {
     const kind = node.kind;
     if (kind === ts.SyntaxKind.ClassDeclaration || kind === ts.SyntaxKind.ClassExpression) inClass = true;
     else if (kind === ts.SyntaxKind.FunctionDeclaration || kind === ts.SyntaxKind.FunctionExpression) inClass = false;
+    else if (kind === ts.SyntaxKind.MethodDeclaration || kind === ts.SyntaxKind.GetAccessor || kind === ts.SyntaxKind.SetAccessor) {
+      // A computed name is read with the enclosing `this`; the body has the method's own.
+      const { name, body } = /** @type {ts.MethodDeclaration} */ (node);
+      if (name) visit(name, inClass);
+      const own = inClass && node.parent?.kind !== ts.SyntaxKind.ObjectLiteralExpression && !typedThis(node);
+      node.forEachChild((child) => { if (child !== name && child !== body) visit(child, own); });
+      if (body) visit(body, own);
+      return;
+    }
     if (inClass) {
       /** @type {ts.Node[]} */
       let targets = [];
@@ -97,6 +124,13 @@ function plainWritesIn(file, source) {
         const { operator, operand } = /** @type {ts.PrefixUnaryExpression} */ (node);
         if (operator === ts.SyntaxKind.PlusPlusToken || operator === ts.SyntaxKind.MinusMinusToken) targets = written(operand, []);
       } else if (kind === ts.SyntaxKind.DeleteExpression) targets = written(/** @type {ts.DeleteExpression} */ (node).expression, []);
+      else if (kind === ts.SyntaxKind.ForOfStatement || kind === ts.SyntaxKind.ForInStatement) targets = written(/** @type {ts.ForOfStatement} */ (node).initializer, []);
+      else if (kind === ts.SyntaxKind.CallExpression) {
+        const { expression, arguments: args } = /** @type {ts.CallExpression} */ (node);
+        if (args[0] && plainThis(args[0]) && WRITERS.some(([object, name]) => member(expression, object, name))) {
+          found.push(`${at(node)}: a class's fields are written by handing it a \`this\` with no type, so a misspelled name is taken as a new field; write each through a typedef of its fields, \`/** @type {Fields} */ (this).name = ..\` (docs/design.md#choice-handlers-checked-where-called)`);
+        }
+      }
       for (const target of targets) {
         if (seen.has(target.pos)) continue;
         seen.add(target.pos);
