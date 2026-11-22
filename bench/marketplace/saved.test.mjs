@@ -3,7 +3,7 @@ import test from "node:test";
 import { summaryFixture, writeSavedFixture } from "./saved-fixture.mjs";
 import { report, validateSummary } from "./report.mjs";
 import { validateSaved } from "./validate.mjs";
-import { containerReceipt, evidenceVersion, imageReceipt, sourceTree } from "./raw-contract.mjs";
+import { containerReceipt, evidenceVersion, imageReceipt, producerSchema, sourceTree } from "./raw-contract.mjs";
 import childProcess, { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
@@ -23,6 +23,28 @@ function temporary(t) {
   const folder = mkdtempSync(join(tmpdir(), "marketplace-raw-test-"));
   t.after(() => rmSync(folder, { recursive: true, force: true }));
   return folder;
+}
+
+// Real Git reads even on a depth-one checkout. Only redirect their working
+// directory; no objects are added to the checkout.
+function measuredSource(t, schema, declaration = "  export\tconst resultSchema  =\n 'marketplace-results/v5' ;\n") {
+  if (schema === resultSchema) return { commit, tree: sourceTree(commit) };
+  const repo = temporary(t), exec = childProcess.execFileSync;
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key)));
+  const git = (args, input) => exec("git", args, { cwd: repo, env, input, encoding: "utf8", windowsHide: true }).trim();
+  git(["init", "-q", "--bare", "--object-format=sha1"]);
+  const blob = git(["hash-object", "-w", "--stdin"], declaration);
+  const app = git(["mktree"], `100644 blob ${blob}\trun-contract.mjs\n`);
+  const bench = git(["mktree"], `040000 tree ${app}\tmarketplace\n`);
+  const tree = git(["mktree"], `040000 tree ${bench}\tbench\n`);
+  const who = "fixture <fixture@example.invalid> 1 +0000";
+  const measured = git(["hash-object", "-t", "commit", "-w", "--stdin"], `tree ${tree}\nauthor ${who}\ncommitter ${who}\n\nSynthetic per-locale source\n`);
+  const redirect = t.mock.method(childProcess, "execFileSync", (file, args, options) => {
+    assert.equal(file, "git"); return exec(file, args, { ...options, cwd: repo });
+  });
+  syncBuiltinESMExports();
+  t.after(() => { redirect.mock.restore(); syncBuiltinESMExports(); });
+  return { commit: measured, tree };
 }
 
 test("a summary-only native round passes the read-only summary reader", () => {
@@ -206,8 +228,9 @@ test("native replay requires the retained executable identity and raw version pr
 });
 
 for (const schema of [v5Schema, resultSchema]) test(`native ${schema} binds page attempts, neutral JSON and cold path to the schema`, (t) => {
-  const folder = temporary(t), args = { folder, round: "r17", commit };
-  const s = writeSavedFixture(folder, commit, sourceTree(commit), { schema });
+  const { commit: measured, tree } = measuredSource(t, schema);
+  const folder = temporary(t), args = { folder, round: "r17", commit: measured };
+  const s = writeSavedFixture(folder, measured, tree, { schema });
   assert.deepEqual(validateSaved(args), s);
   const rotating = schema === resultSchema, locale = rotating ? "rotating" : "en-US";
   const page = `fixture/corten/p1-${locale}-page`, json = "api/corten/p1-neutral-json";
@@ -233,6 +256,24 @@ for (const schema of [v5Schema, resultSchema]) test(`native ${schema} binds page
     ["sat64", (m) => { m.marketplace_locale_de_DE.rate = 0; }, /engine elapsed clock/],
     ["sat256", (m) => { m.marketplace_locale_it_IT = { count: 0, rate: 0 }; }, /unexpected locale counter/],
   ]) probe(`${page}/${phase}.json`, (v) => edit(v.metrics), error);
+});
+
+for (const schema of [v5Schema, resultSchema]) test(`coherent raw evidence cannot change the ${schema} producer at the same commit and tree`, (t) => {
+  const { commit: measured, tree } = measuredSource(t, schema), wrongSchema = schema === v5Schema ? resultSchema : v5Schema;
+  const folder = temporary(t);
+  const s = writeSavedFixture(folder, measured, tree, { schema: wrongSchema });
+  validateSummary(s); // Not just a relabeled summary: all reports and raw phases agree.
+  assert.equal(sourceTree(measured), tree);
+  assert.throws(() => validateSaved({ folder, round: "r17", commit: measured }), /measured producer schema/);
+});
+
+for (const [label, declaration] of [
+  ["ambiguous", `export const resultSchema = "${v5Schema}";\nexport const resultSchema = "${resultSchema}";`],
+  ["computed", `export const resultSchema = "${v5Schema}" + suffix;`],
+  ["oversized", " ".repeat(65536) + `export const resultSchema = "${v5Schema}";`],
+]) test(`reject ${label} measured schema contract`, (t) => {
+  const { tree } = measuredSource(t, v5Schema, declaration);
+  assert.throws(() => producerSchema(tree), /measured producer schema/);
 });
 
 test("hostile saved edits fail replay, even when the summary remains internally plausible", (t) => {

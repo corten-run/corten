@@ -9,7 +9,7 @@ import { admitted } from "./feature-contract.mjs";
 import { qualificationValidator, validateSummary } from "./report.mjs";
 import { imageProvenance, inventory, loadPhases, parseArgs, passPlan, phaseEnd, readLoadSummary, readOutcome, resultSchema, roundIdentity, sources, timedProfilesFor, upstreamErrors, v5Schema } from "./run-contract.mjs";
 import { validateLoadExecution } from "./load-evidence.mjs";
-import { evidenceVersion, k6Image, loadEnvironment, maxStatsSamples, nodeImage, sourceTree, upstreamInterpretation, validateLocaleCounters } from "./raw-contract.mjs";
+import { evidenceVersion, k6Image, loadEnvironment, maxStatsSamples, nodeImage, producerSchema, sourceTree, upstreamInterpretation, validateLocaleCounters } from "./raw-contract.mjs";
 import { savedFiles } from "./saved-files.mjs";
 import { verifyK6Provenance } from "../load-tool.mjs";
 
@@ -83,6 +83,7 @@ function replay({ folder, round, commit }) {
   assert.match(s.runId, new RegExp(`^marketplace-${round}-[a-f0-9]{10}$`));
   const source = files.json("source.json");
   assert.deepEqual(source, { evidenceVersion, commit, tree: sourceTree(commit), dirty: false, finishedCommit: commit, finishedDirty: false });
+  assert.equal(s.schema, producerSchema(source.tree), "saved schema differs from the measured producer schema");
   const fixture = files.text("fixture.json");
   assert.equal(createHash("sha256").update(fixture).digest("hex"), s.fixtureSha256, "wrong saved fixture bytes");
   assert.deepEqual(JSON.parse(fixture), records(), "saved fixture differs from the workload");

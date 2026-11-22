@@ -28,16 +28,35 @@ export function imageReceipt(i) {
 }
 // An absent local object is a failure, never an invitation to fetch. Ignore inherited Git
 // redirection/replacement/configuration variables, and bound both output and elapsed time.
-export function sourceTree(commit) {
-  assert.match(commit, /^[a-f0-9]{40}$/);
+function gitObject(args, maxBuffer) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^GIT_/i.test(k)));
   Object.assign(env, { GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0",
     GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null" });
-  const text = execFileSync("git", ["-c", "protocol.allow=never", "cat-file", "commit", commit],
-    { cwd: fileURLToPath(new URL("../../", import.meta.url)), env, encoding: "utf8", timeout: 10000, maxBuffer: 4 * 2 ** 20, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  return execFileSync("git", ["-c", "protocol.allow=never", ...args],
+    { cwd: fileURLToPath(new URL("../../", import.meta.url)), env, encoding: "utf8", timeout: 10000, maxBuffer, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+}
+export function sourceTree(commit) {
+  assert.match(commit, /^[a-f0-9]{40}$/);
+  const text = gitObject(["cat-file", "commit", commit], 4 * 2 ** 20);
   const tree = /^tree ([a-f0-9]{40})\n/.exec(text)?.[1];
   assert.ok(tree, "local source commit has no tree");
   return tree;
+}
+
+// run.mjs takes its schema from this export. Read the measured tree's literal,
+// not a saved copy or the working tree; never execute the committed module.
+export function producerSchema(tree) {
+  assert.match(tree, /^[a-f0-9]{40}$/);
+  const limit = 64 * 1024;
+  const entry = gitObject(["ls-tree", "-lz", tree, "--", "bench/marketplace/run-contract.mjs"], 1024);
+  const blob = /^100(?:644|755) blob ([a-f0-9]{40}) +([0-9]+)\tbench\/marketplace\/run-contract\.mjs\0$/.exec(entry);
+  assert.ok(blob && Number(blob[2]) > 0 && Number(blob[2]) <= limit, "measured producer schema source absent, nonregular or oversized");
+  const source = gitObject(["cat-file", "blob", blob[1]], limit);
+  assert.equal(Buffer.byteLength(source), Number(blob[2]), "measured producer schema source size differs");
+  const declarations = source.split(/^[ \t]*export\s+const\s+resultSchema\b/m);
+  const literal = declarations.length === 2 && /^\s*=\s*(["'])(marketplace-results\/v[56])\1\s*;/.exec(declarations[1]);
+  assert.ok(literal, "unrecognized or ambiguous measured producer schema");
+  return literal[2];
 }
 export function loadEnvironment(s, profile, phase, name) {
   return { ...(profile.target === "page" ? { LOCALE: profile.locale } : {}), BASE: `http://${name}:8080`, TARGET: profile.target,
