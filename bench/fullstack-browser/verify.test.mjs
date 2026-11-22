@@ -19,7 +19,7 @@ import { referenceHtml } from "../marketplace/reference.mjs";
 import { createBrowserPlan } from "../workloads/browser.mjs";
 import { exportBrowserCaptures, projectCase, oracleSettings } from "./capture.mjs";
 import { createUpstream, UpstreamAudit, reconcileUpstream } from "./upstream.mjs";
-import { reconcileRequests } from "./ledger.mjs";
+import { reconcileNativeNetwork, reconcileRequests } from "./ledger.mjs";
 import { classifyNoJSRequests, validatePlatformRetirement } from "./lifecycle.mjs";
 import { PlatformLifecycle } from "./lifecycle.mjs";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
@@ -84,16 +84,18 @@ test("native v2 malformed namespace is awaitable invalid evidence, never an obse
   assert.deepEqual(treeHashes(f.folder), before);
 });
 
-async function documentFixture(profile, check, { busyLanding = false } = {}) {
+async function documentFixture(profile, check, { busyLanding = false, lateLanding = false } = {}) {
   const app = "react-router";
   const upstream = createUpstream({}), sessions = new Map(), locale = labels[profile.locale];
   const assets = '<link rel="stylesheet" href="/fixture.css"><script>window.__reactRouter = {};</script>'
     + (profile.js ? '<script defer src="/fixture.js"></script>' : '<link rel="modulepreload" href="/disabled.mjs">');
-  let base;
+  let base, landingServed = false, lateSent = false;
   // Loopback conformance apparatus, not a contender or an authenticated image.
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, base), itemId = url.pathname.split("/").at(-1), record = records[itemId];
     const send = (status, type, body) => { res.writeHead(status, { "content-type": type }); res.end(body); };
+    if (url.pathname === "/") landingServed = true;
+    if (url.pathname === "/late-cleanup") return send(200, "text/plain", "Late work finished");
     if (url.pathname === "/fixture.css") return send(200, "text/css", "body{color:black}");
     if (url.pathname === "/fixture.js") return send(200, "text/javascript", `
       if (location.pathname === "/" && ${busyLanding}) setInterval(() => {}, 1000);
@@ -145,7 +147,16 @@ async function documentFixture(profile, check, { busyLanding = false } = {}) {
     const source = await listen(upstream);
     browser = await chromium.launch({ headless: true });
     const cell = await runJourney({ browser, app, base, profile, records, readback: { path: "/api/alerts" },
-      counters: async () => (await fetch(source + "/__browser/counters")).json() });
+      counters: async () => {
+        // The first counters sample after the cleanup link is the post-cleanup sample,
+        // after the producer has settled the landing and taken its request slice.
+        if (lateLanding && landingServed && !lateSent) {
+          lateSent = true;
+          const page = browser.contexts().flatMap((c) => c.pages()).find((p) => p.url() === base + "/");
+          assert.equal(await page.evaluate(async () => (await fetch("/late-cleanup")).text()), "Late work finished");
+        }
+        return (await fetch(source + "/__browser/counters")).json();
+      } });
     await check(cell, app);
   } finally {
     if (browser) await browser.close();
@@ -285,6 +296,51 @@ test("JS journey with real live landing work survives saved replay only as unsup
     assert.equal(replayed.outcome, "unsupported");
     assert.ok(replayed.blocked.some((r) => /Native JS document replacement unproved: Live JS landing retains resources/.test(r)));
   }, { busyLanding: true });
+});
+
+test("saved JS cleanup cannot hide a real post-settlement GET in a same-document action", { timeout: 60000 }, async (t) => {
+  const profile = plan.cases.find((p) => p.key === "fixture-en-US-desktop-js");
+  await documentFixture(profile, async (cell, app) => {
+    const e = cell.evidence, c = e.nativeCleanup;
+    assert.equal(cell.outcome, "unsupported");
+    assert.equal(e.functionalChecksPassed, true);
+    assert.equal(e.domChecksPassed, true);
+    const network = reconcileNativeNetwork(e, false);
+    assert.equal(network.outcome, "reconciled", network.reasons.join("; "));
+    const native = network.requests.find((r) => r.dispatch.path === "/late-cleanup");
+    assert.equal(native.dispatch.method, "GET");
+    assert.equal(native.response.status, 200);
+    assert.equal(native.terminal.event, "Network.loadingFinished");
+    assert.ok(native.dispatch.receivedAt > c.landingSettledAt);
+    assert.ok(native.body.receivedAt <= e.platformLifecycle.boundaries.endedAt);
+    const late = e.requestLedger.find((r) => r.path === "/late-cleanup");
+    assert.ok(late.completed);
+    assert.ok(!c.requests.some((r) => r.id === late.id));
+    assert.match(e.jsDocumentNavigationProof.reason, /Native request dispatched after JS cleanup landing settled/);
+    const { f } = savedDocumentFixture(t, cell, app, profile);
+    const honest = await f.check();
+    assert.deepEqual(honest.invalid, []);
+    const replayed = honest.cells.find((r) => r.app === app && r.case === profile.key);
+    assert.equal(replayed.outcome, "unsupported");
+    assert.ok(replayed.blocked.some((r) => /Native request dispatched after JS cleanup landing settled/.test(r)));
+
+    // Change the semantic assignment and refresh its derived claims, but leave the
+    // actual native dispatch/body/terminal receipts and landing cutoff intact.
+    const filter = e.steps.find((r) => r.action.kind === "filter");
+    assert.equal(filter.retired.probeAvailable, true);
+    filter.requests.push(late);
+    e.jsDocumentNavigationProof = { outcome: "proved", reason: null,
+      actions: e.steps.filter((r) => r.platformRetirement).map((r) => r.action.id), cleanup: true };
+    e.requestReconciliation = reconcileRequests(e, null, e.jsDocumentNavigationProof);
+    assert.equal(e.requestReconciliation.outcome, "reconciled");
+    e.gaps = [];
+    Object.assign(cell, { outcome: "captured", qualificationPassed: true, reason: undefined });
+    f.save();
+    const reassigned = await f.check();
+    assert.equal(reassigned.outcome, "invalid", JSON.stringify({ invalid: reassigned.invalid,
+      cell: reassigned.cells.find((r) => r.app === app && r.case === profile.key) }));
+    assert.match(reassigned.invalid.join("; "), /stored JS document replacement proof differs/i);
+  }, { lateLanding: true });
 });
 
 function failedRaw(summary, profile = plan.cases.find((p) => p.source === "api"), app = "nuxt") {

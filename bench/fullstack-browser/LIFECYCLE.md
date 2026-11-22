@@ -179,9 +179,11 @@ When the actual cleanup link replaces the document, landing work must settle wit
 cleanup deadline and before terminal observation. This variant supports the landing document
 and its successful ordinary same-origin parser scripts, stylesheets and images only. The
 settled and terminal landing checkpoints must both be clean. Worker and long-lived peer
-absence and the final upstream ledger must be proved. Nonempty landing work, late requests,
-unknown coverage and missing observations stay unsupported. Dead-realm counts, DOM and the
-event probe remain null. Same-document cleanup still runs the original event probe.
+absence and the final upstream ledger must be proved. A native request dispatched after
+landing settlement blocks cleanup even if the summary assigns it to an earlier action.
+Nonempty landing work, unknown coverage and missing observations also stay unsupported.
+Dead-realm counts, DOM and the event probe remain null. Same-document cleanup still runs
+the original event probe.
 
 ## No-JS request boundary
 

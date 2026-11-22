@@ -187,6 +187,8 @@ export function replayJSReplacement(e, profile, { observationMs, maxCleanupMs, a
       need(ordered(rows.at(-1).resources.at, c.before.at, c.navigation.at, c.after.at, c.landingSettledAt, c.landingResources.at, b.terminalStartedAt,
         b.endedAt, c.terminalResources.at, e.requestLedgerEndedAt) && c.landingResources.at - c.navigation.at <= maxCleanupMs,
       "JS cleanup landing/terminal observation is unbounded");
+      need(network.requests.every((r) => r.dispatch.receivedAt <= c.landingSettledAt),
+        "Native request dispatched after JS cleanup landing settled");
       for (const s of [c.landingResources, c.terminalResources])
         need(s.scriptExecutionEnabled === true && s.document?.path === "/" && empty(s.unattributed) && s.unsupported?.length === 0
           && s.scopes?.length === 1 && s.scopes[0].scope === s.scope && s.scopes[0].connected === true && empty(s.scopes[0].owned),
