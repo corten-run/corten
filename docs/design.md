@@ -7560,15 +7560,37 @@ rules something out.
     rustc 1.99.1, release with line tables, every feature) with the request-cost harness's
     write cases (`crates/corten/tests/router_cost.rs`: a `POST` sent in process as a form of
     the same origin sends one, as (instructions at 1,200 requests less those at 200) over
-    1,000, in three rounds that agree to within 2.4), `48ef77477` (this change's `3f86d3992`
-    with two bench routes) against `3d23cf64f` (main's `e7e89add8` with the harness's cases
-    and those routes): in an app whose one `Public` route answers text too small to keep,
-    15,446.1 a write against 16,425.2, 979.0 fewer (6.0%), and 15,221.1 against 16,205.1 once
-    that text had been asked for; with a `Public` page not yet asked for, 15,222.1 against
-    16,201.2; with no `Public` route, 15,357.1 in both. Where the counts are there the change
-    costs a little: a write with a page kept took 16,734.0 against 16,714.0, 19.9 more (0.12%)
-    to find the counts made, and a kept page given again 17,971.3 against 17,966.5, 4.8 more
-    (0.03%) for the second count it reads.
+    1,000, the median of three rounds that agree to within 2.3), `aa34d8d78` (this change)
+    against `1091ae766` (main's `e7e89add8` with the harness's cases): in an app whose one
+    `Public` route answers text too small to keep, 15,446.1 a write against 16,425.1, 979.0
+    fewer (6.0%), and 15,221.1 against 16,205.0 once that text had been asked for; with a
+    `Public` page not yet asked for, 15,221.9 against 16,201.1; with no `Public` route,
+    15,357.1 against 15,357.0. Where the counts are there the change costs a little: a write
+    with a page kept took 16,734.1 against 16,714.1, 20.0 more (0.12%) to find the counts
+    made, and a kept page given again 17,971.5 against 17,966.5, 5.0 more (0.03%) for the
+    second count it reads. What the store still costs a write that finds no counts is not
+    resolved: with the store turned off in the same app (`kept_answers(0)`) a write took
+    15,357.0 in the app with the text route and 15,359.1 in the one with the page, against
+    the 15,446.1 and 15,221.9 above, 89 more and 137 fewer.
+    The counts differ between apps and between warm-ups by more than what is compared within
+    one, which this does not explain: a write is about 220 cheaper once the text route had been
+    asked for, in both builds, and the app with no `Public` route costs more than the one with
+    a page not yet asked for. Each figure above is a pair in one app. Under load on a quiet
+    cloud host (Xeon Platinum 8280, Linux 6.12.117), with the catalog benchmark app given a
+    `POST` route and a `Public` text route too small to keep (`48ef77477`, this change's first
+    commit `3f86d3992` with those routes, against `3d23cf64f`, main's `e7e89add8` with them;
+    the commits after `3f86d3992` change tests and text), `wrk` 4.1.0 sending the write on 64
+    connections from two threads on two cores of their own, the app on one, `perf stat` on the
+    app's process, six starts of both builds and eight pairs of 3 s turns in each with the
+    order turned about: 42,961 cycles a write against 43,832, 1.7% fewer at the median of the
+    48 pairs (+0.6% to -3.1% by start, fewer in 34), with 22,694 user instructions a write
+    against 23,345. The same build against itself gave +0.2% (-1.8% to +2.0% by start), and
+    the two trees built without compression, where neither has a store and a write does the
+    same work in both, +0.2% (-5.8% to +4.8% by start, 20,687 user instructions against
+    20,704). Two builds differ from one start to the next by more than this saves, so the
+    cycles agree with the instructions saved and do not show the saving on their own; what a
+    write with a page kept and a kept page given again pay in cycles for their 19.9 and 4.8
+    instructions is not measured, being far under what that run can tell apart.
     A kept body, with the catalog benchmark's JSON route marked `Public` for a minute and two
     routes beside it that make nothing, of 2 bytes and of 2,000 (`69c8fb1bf` with this
     change's code against `c26cbdb5a` on main's `564034b86`), counted under callgrind with a
@@ -7665,10 +7687,10 @@ rules something out.
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-21 for when a write is counted by path, `3d23cf64f` (main's `e7e89add8` with the
-    request-cost harness's write cases and two routes in the catalog benchmark) and `48ef77477`
-    (this change's `3f86d3992` with those routes), kept under the tag
-    `evidence/early-writes-1874`; 2026-11-21 for a kept body, `c26cbdb5a` (main's `564034b86` with the catalog
+    Last checked: 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
+    request-cost harness's write cases and two routes in the catalog benchmark) for the counts,
+    and for the run under load its parent `3d23cf64f` and `48ef77477` (this change's
+    `3f86d3992` with those routes), kept under the tag `evidence/early-writes-1874`; 2026-11-21 for a kept body, `c26cbdb5a` (main's `564034b86` with the catalog
     benchmark's JSON route marked `Public` for a minute and two routes that make nothing, of 2
     bytes and of 2,000) against `69c8fb1bf` (the same on this change), built with rustc 1.99.1
     with the app's default features, and without them for the build that does not compress:
