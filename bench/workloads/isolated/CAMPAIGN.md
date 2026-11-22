@@ -122,9 +122,11 @@ procedure files alongside all measured sources. The production map uses native d
 except the existing marketplace-short-window, explicit native-feed-measure for both live
 groups and new mixed-production-measure. Mixed adds --measure --profile matched as the
 native README specifies. The older mixed-measure remains the default-profile recipe,
-unchanged. Numeric defaults come from native parsers, not new CLI constants. Browser,
-client and hardening retain their declared native bounded production procedures; this is
-not a claim that their measurements or proof are available. All need merged-source review.
+unchanged. Numeric defaults come from native parsers, not new CLI constants. Dedicated
+client-heavy campaigns bind `client-heavy-comparison-v1` from the measured source; the
+legacy full campaign retains client-heavy's single-sample diagnostic recipe. Browser
+and hardening keep their bounded production procedures. No recipe name establishes
+measurement or host proof. All need merged-source review.
 
 ## Durable evidence
 
@@ -346,9 +348,21 @@ descriptors. Before/after descriptor identity must equal the original sampled id
 The helper must exit successfully within the existing 30-second bootstrap bound before
 finish returns or another command starts. Descriptor closure is unconditional. Unresolved,
 changed or unsealed hashes cannot qualify; `executables.json` binds the resolved digest
-to its sampled reference. Sample timestamps and the one-second gap gate are not rewritten
+to its sampled reference. When sealing fails, `terminal.json` distinguishes starting or
+running the helper, reading an inherited descriptor, rechecking its identity, and publishing
+the proof. An identity failure can name its sampled reference, not the executable path or
+arbitrary helper output. A ctime-only mismatch is still a failure, not proof of unlink.
+Sample timestamps and the one-second gap gate are not rewritten
 or relaxed. This post-sampling work is not benchmark timing and is not an OS authority
 claim by the saved JSON. The existing pre-gated bootstrap executable check is unchanged.
+
+For client-heavy, the campaign exclusively creates the native output's `.compiler` sibling
+and holds its directory descriptor. The gated builder checks that exact empty directory
+before using it as Cargo's fresh target. The campaign removes only its own target after
+descriptor sealing and terminal-empty cgroup cleanup, including a drained command whose
+native result or executable proof failed. An uncertain stop preserves the target. This
+scratch is outside the native and phase evidence trees. Standalone builds still exclusively
+create and remove their own target.
 
 `host-participant-linux.test.mjs` is a separate actual-kernel fixture, not a portable test
 or native-browser qualification. Its caller owns a fresh long-lived Node Docker container
@@ -412,6 +426,12 @@ selection shape, ordered groups, collectionIntegrity manifest-verified, commandL
 observed-terminal, empty uncollectedNativeRoots and blockers, archiveTreeSha256 and
 reservationSha256. Each group has group/outcome native-validated/bindingSha256/
 nativeManifestSha256 plus ordered appOutcomes entries {app,outcome,comparisonEligible}.
+For a verified dedicated client-heavy comparison only, eligible rows also
+carry a `comparison` with sample count, actual attempted order for each block,
+and per-action median/min/max milliseconds. Skips can leave order effects; the
+range is not a winner claim. Native replay ties all three measured blocks to
+the fixed recipe and host process windows. An unverified campaign exposes only
+dispositions, even if a group's comparison was sealed before the halt.
 Failed/unsupported apps remain comparison-ineligible. It has no qualified/controllerReady/
 deletion approval claim. The live controller separately establishes operator authorization,
 approved merged source, provider/unit ownership and exact unchanged archive-tree binding.
