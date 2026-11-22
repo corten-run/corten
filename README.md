@@ -234,7 +234,7 @@ general: [what the numbers cover](#what-the-numbers-cover) says what they leave 
 Each cell is the median [min-max] of the passes. Corten's p95 was 2.85 ms from memory and
 9.75 ms from HTTP, and the median of its per-pass memory peaks was 9.62 MiB and 9.73 MiB.
 Express and FastAPI ran too and had requests time out at 256 users, so they are not ranked; the
-report records what happened, not why. Their numbers, the 256-user phase and every pass are in
+report records what happened, not why. Their numbers, the 256-user phase, pass counts and ranges are in
 the [r24 report](bench/workloads/results/r24/catalog-page/report.md), listed with the other
 groups in the [group results](bench/workloads/results/README.md).
 

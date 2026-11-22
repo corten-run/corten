@@ -15,7 +15,7 @@ const STEEL: &str = include_str!("steel.rs");
 const CORTEN: &str = include_str!("../../../crates/corten/Cargo.toml");
 
 /// The file that says it, what it says, the document, and what the document says.
-const HELD: [(&str, &str, &str, &str); 25] = [
+const HELD: [(&str, &str, &str, &str); 27] = [
     (STEEL, r#"With the Cargo feature " <code>"agent"</code>"#, CORTEN, "agent = ["),
     (
         CERT,
@@ -64,6 +64,8 @@ const HELD: [(&str, &str, &str, &str); 25] = [
     (AFTER, "there Corten rendered 29,160 a second", R24, "| corten | 29,160 [28,051, 29,803] (3/3) |"),
     (AFTER, "29,160 a second against 25,709", R24, "| axum-maud | 25,709 [25,201, 25,920] (3/3) |"),
     (AFTER, "from memory at 64 users", R24, "At 64 users, Corten had the highest successful page throughput"),
+    (AFTER, "from memory at 64 users on one core", R24, "| app | 1.0 | 1 |"),
+    (AFTER, "(2026-11-21, at 30b39d455)", R24, "Started: 2026-11-21T"),
     (AFTER, "(2026-11-21, at 30b39d455)", R24, "Measured commit: `30b39d455"),
     (AFTER, "not a before and after", R24, "No change against a prior round is claimed."),
     (
