@@ -24,20 +24,21 @@ const folder = await mkdtemp(join(tmpdir(), "leptos-marketplace-"));
 const fixture = records();
 const record = "/api/marketplace/item_1";
 const site = "market.example.test";
-let reads = 0;
+const recordRead = { method: "GET", path: "/marketplace/records/item_1" };
+const upstreamRequests = [];
 const upstream = createServer((req, res) => {
-  if (req.method !== "GET" || req.url !== "/marketplace/records/item_1") { res.writeHead(404).end(); return; }
-  reads++;
+  upstreamRequests.push({ method: req.method, path: req.url });
+  if (req.method !== recordRead.method || req.url !== recordRead.path) { res.writeHead(404).end(); return; }
   res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(fixture.item_1));
 });
 try {
   await new Promise((resolve, reject) => upstream.once("error", reject).listen(0, "0.0.0.0", resolve));
   await writeFixtures(folder, { "marketplace.json": fixture });
   for (const source of ["fixture", "api"]) {
-    const before = reads;
+    const before = upstreamRequests.length;
     const container = docker("create", "--pull=never", "--cpus", "1", "--memory", "512m", "-p", "127.0.0.1::8080",
       ...(process.platform === "linux" ? ["--add-host", "host.docker.internal:host-gateway"] : []),
-      "-v", `${folder}:/fixtures:ro`, "-e", "PROFILE=matched", "-e", `HOSTS=${site}`,
+      "-v", `${folder}:/fixtures:ro`, "-e", "PROFILE=matched", "-e", `HOSTS=${site},Localhost:8443`,
       "-e", `MARKETPLACE_SOURCE=${source}`, "-e", "MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json",
       "-e", `API_BASE=http://host.docker.internal:${upstream.address().port}`, imageId);
     try {
@@ -62,13 +63,17 @@ try {
       assert.equal((await request("/marketplace/en-US/item_1", "GET", "unrecognized.invalid")).status, 400, `${source}: host`);
       assert.equal((await request("/health/live")).status, 200, `${source}: live`);
       assert.equal((await request("/health/live", "GET", new URL(base).host)).status, 200, `${source}: local access still works`);
-      assert.equal(reads, before, `${source}: none of the three probes may read the upstream`);
+      assert.equal((await request("/health/live", "GET", "localhost:8443")).status, 200, `${source}: configured loopback port`);
+      for (const host of ["localhost:8444", "localhost"]) {
+        assert.equal((await request("/health/live", "GET", host)).status, 400, `${source}: explicit localhost port takes precedence (${host})`);
+      }
+      assert.deepEqual(upstreamRequests.slice(before), [], `${source}: controls must not contact upstream`);
 
       assert.equal((await request(record)).status, 200, `${source}: configured host still serves the record`);
-      assert.equal(reads - before, source === "api" ? 1 : 0, `${source}: verify the actual source`);
     } finally {
       docker("rm", "-f", "-v", container);
     }
+    assert.deepEqual(upstreamRequests.slice(before), source === "api" ? [recordRead] : [], `${source}: verify the actual source`);
     console.log(`PASS leptos ${source}: json405, host policy, liveness`);
   }
 } finally {

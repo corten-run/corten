@@ -12,13 +12,16 @@ pub struct Hosts(Arc<[Authority]>);
 
 impl Hosts {
     pub fn configured() -> Self {
-        let mut values: Vec<_> = ["localhost", "127.0.0.1", "[::1]"].map(|value| authority(value).unwrap()).into();
-        match env::var("HOSTS") {
-            Ok(configured) => {
-                values.extend(configured.split(',').map(|value| authority(value.trim()).expect("invalid HOSTS entry")))
-            }
-            Err(env::VarError::NotPresent) => (),
+        let mut values: Vec<_> = match env::var("HOSTS") {
+            Ok(configured) => configured.split(',').map(|value| authority(value.trim()).expect("invalid HOSTS entry")).collect(),
+            Err(env::VarError::NotPresent) => Vec::new(),
             Err(env::VarError::NotUnicode(_)) => panic!("HOSTS must contain valid HTTP authorities"),
+        };
+        // An explicit loopback entry replaces that host's implicit any-port entry.
+        for local in ["localhost", "127.0.0.1", "[::1]"] {
+            if !values.iter().any(|value: &Authority| value.host().eq_ignore_ascii_case(local)) {
+                values.push(authority(local).unwrap());
+            }
         }
         Self(values.into())
     }
