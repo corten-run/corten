@@ -1656,7 +1656,8 @@ rules something out.
     route for axum's router, which Corten's now does itself (`corten::middleware::MatchedPath`), and
     `form`, `query`, `tracing` and `tower-log` serve readers Corten has its own of.
 
-    The router's own `404`, `405` and `501` mark the request as the router's on the signal the
+    The router's own `404`, `405` and `501`, and its `400` for a named post none of the page's
+    handlers is for, mark the request as the router's on the signal the
     stages hold, which `Next` carries past the app's middleware to the route
     (`router::Endpoint::answer`), so the error page in their place, and the failure sent as it is
     or as JSON, are never shared ([caching](guide/app.md#caching)). A middleware passes on only a
@@ -1670,7 +1671,17 @@ rules something out.
     the same (`custom`: 18,783.9 against 18,420.3); against main `a0eeeacca`, 380 at `d7404206d`
     (18,453.6 against 18,073.6, `custom` 18,788.8 against 18,408.3); and with the mark carried
     by `Next`, 341 at `4630a2ff2` against main `cf4435c91` (18,411.6 in every run against
-    18,069.2 to 18,070.6; `custom` 18,748.3 to 18,748.4 against 18,407.3 to 18,408.8). A probe
+    18,069.2 to 18,070.6; `custom` 18,748.3 to 18,748.4 against 18,407.3 to 18,408.8); and 322
+    at `402a11a08` against main `56e9b6b66` (18,421.6 in every run against 18,099.5 to 18,099.6;
+    `custom` 18,745.3 to 18,745.4 against 18,421.8 to 18,423.3). The named post's `400`, which
+    the router marks too at `402a11a08`, is settled there: 376 more than at `2e8d9bafc`, which
+    left it unmarked, and 579 more than main (`SETTLE_CASE=unnamed`, a
+    same-origin post naming a post the page has none of: 17,569.9 in every run against 17,193.8
+    to 17,193.9 and 16,988.6 to 16,991.0), on a failure only a post the app's own pages never
+    send meets. The chooser passing the signal on costs a named post that has a handler 12
+    (`tests::actions::what_a_page_with_posts_costs`, `ACTION_CASE=named`: 21,641.0 against
+    21,629.0 at `2e8d9bafc`; by function, 8 in `Chooser::answer`, 3 in `page::run` and 1 in the
+    handler's `answer`). A probe
     whose middleware writes the CDN caching headers is cheaper than main (25,672.2 against
     27,558.5 at `d7404206d`), but main sends those headers, so that pair is not like for like.
     This probe is not the harness this Choice's 404 counts against axum come from, so it says
@@ -1931,7 +1942,10 @@ rules something out.
     router's `404` with and without an error page of the app's under callgrind (release,
     jemalloc, three rounds alternating the builds, every run within 2 of the others) at
     `d9dbf11d2` and `7935404da` against main `e7e89add8`, and at `d7404206d` against main
-    `a0eeeacca`, and at `4630a2ff2` against main `cf4435c91` (every run within 1.5 of the others).
+    `a0eeeacca`, and at `4630a2ff2` against main `cf4435c91` (every run within 1.5 of the others),
+    and with the named post's `400` at `402a11a08` against main `56e9b6b66` and `2e8d9bafc`
+    (main six runs, every run within 2.4 of the others), and a named post by function against
+    `2e8d9bafc`.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -2157,7 +2171,12 @@ rules something out.
     is given also carries the request's signal past it to the route, which it never sees, so the
     router marks its own failure on the signal the stages read whatever request a middleware
     passes on: 9 instructions a request on a plain page at `4630a2ff2` (6 in the stage future, 3
-    in `middleware::handle`, by function against `eaab8be27`). The late layout poller
+    in `middleware::handle`, by function against `eaab8be27`). A refusal made while the stages
+    run is counted on the thread and the count compared before and after each poll
+    (`page::run`), never cleared, so another app's stages polled inside that poll (a middleware
+    that asks a second router for an answer inline) can neither take the request's mark nor hide
+    their own refusal from it: 3 instructions a request on a plain page at `402a11a08`, all in
+    `page::run`, by function against `2e8d9bafc`. The late layout poller
     lives in the existing late-write box, so it neither enlarges the ordinary future nor adds
     a box to a late-eligible write.
     The stages read the incoming request's mode, credentials, validators, and the host and
@@ -2319,7 +2338,8 @@ rules something out.
     `route::unstaged_headers` (`tests::cache::what_settling_a_page_costs` with `SETTLE_CASE` set to
     `unstaged`: 6,405 at `ab6f8d3a2` against 6,394 for main `564034b86`, the same at `9e2002468`
     against main `e7e89add8`, and 6,403.5 to 6,405.0 at `4630a2ff2` against 6,390.7 to 6,395.1 for
-    main `cf4435c91`; the `service_fn` control 3,088 in each build), which takes it to about 109
+    main `cf4435c91`, and 6,402.0 at `402a11a08` against 6,389.9 to 6,391.4 for main `56e9b6b66`;
+    the `service_fn` control 3,083 to 3,088 in each build), which takes it to about 109
     over 6,932.
     Correctness comes first (the README's Values), so the check stays. Removing the CDN headers as
     the `NoStore` answer is made instead counted 1 more, but a header the handler writes after the
@@ -2495,9 +2515,11 @@ rules something out.
     measurement.
 
     Last checked: 2026-11-22, the unstaged route and the `service_fn` control in
-    `tests::cache::what_settling_a_page_costs` at `4630a2ff2` against main `cf4435c91`
-    (callgrind, release, jemalloc, three rounds alternating the builds, every run within 4.4 of
-    the others), and the plain page's instructions by function at `4630a2ff2` against
+    `tests::cache::what_settling_a_page_costs` at `402a11a08` against main `56e9b6b66`
+    (callgrind, release, jemalloc, three rounds alternating the builds, main six, every run
+    within 3.7 of the others) and at `4630a2ff2` against main `cf4435c91` (every run within 4.4
+    of the others), and the plain page's instructions by function at `402a11a08` against
+    `2e8d9bafc` and at `4630a2ff2` against
     `eaab8be27`; 2026-11-21, the same two at `ab6f8d3a2` against main `564034b86`, and at
     `9e2002468`, after merging main `e7e89add8`, against it, the same counts (every run within 0.2
     of the others); 2026-11-20,
