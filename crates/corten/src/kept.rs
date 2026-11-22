@@ -1082,9 +1082,15 @@ mod tests {
         route.counted(read);
         assert_eq!(route.0.load(Ordering::Relaxed), 0);
         assert!(!route.leaves());
-        // With nothing between, the same count ends the run's length.
+        // With nothing between, the count read is the one counted from.
         route.counted(0);
         assert_eq!(route.0.load(Ordering::Relaxed), 1);
+        // A run stops at its length, however many more answers are not kept.
+        let route = left();
+        for _ in 0..600 {
+            route.made(false);
+        }
+        assert_eq!(route.0.load(Ordering::Relaxed), UNKEPT_RUN);
     }
 
     /// The request that asks is drawn: of two routes that left the store out and are asked
