@@ -51,7 +51,7 @@ defaults:
 
 jobs:
   check:
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -85,7 +85,7 @@ jobs:
     needs: check
     # Only main is applied, whatever ref the workflow is run from by hand.
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.SITE_STATE_BUCKET != ''
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     # The keys are this environment's secrets, and its deployment branch rule is main
     # (bootstrap.sh), so no other branch's workflow can read them.
     environment: site-machine
