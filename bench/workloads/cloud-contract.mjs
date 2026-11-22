@@ -270,6 +270,8 @@ export function validateState(s, round, options) {
   }
   // Hosts launched since the bench package existed install it. Absent means the original job bytes.
   if (s.benchPackage !== undefined) assert.equal(s.benchPackage, true, "bench package marker");
+  if (s.quietBootstrap !== undefined)
+    assert.ok(s.quietBootstrap === true && dedicated && s.control?.monitor, "quiet bootstrap requires a supervised group");
   date(s.createdAt);
   assert.ok(["reserved", "creating", "preparing", "starting", "running", "collected", "retired"].includes(s.status));
   if (["preparing", "starting", "running", "collected", "retired"].includes(s.status)) assert.ok(s.id && s.ip, "owned host identity missing");
@@ -565,6 +567,8 @@ test ! -L '${sshIngressSnapshot}'
 test -s '${sshIngressSnapshot}'
 ${listSshIngress} | cmp -s -- '${sshIngressSnapshot}' -`;
 
+export const rootManagerDrainSeconds = 120;
+
 // Fixed source-bound entry point. No caller-provided command or adapter filtering.
 export function remoteFiles(s) {
   validateState(s, s.round);
@@ -586,7 +590,7 @@ test ! -L "$dropin"
 systemctl daemon-reload
 ` : "";
   const waitForIdleUserManager = marker ? `bootstrap_stage=root-manager-idle
-timeout 120 bash -ec '
+timeout ${rootManagerDrainSeconds} bash -ec '
   while :; do
     echo "root-manager: querying ActiveState" >&2
     state=$(systemctl show user@0.service --property=ActiveState --value)
@@ -624,9 +628,9 @@ bootstrap_stage=supervisor
 bootstrap_error() { local code=$?; trap - ERR; printf 'benchmark job failed: stage=%s line=%s exit=%s\\n' "$bootstrap_stage" "$1" "$code" >&2; return "$code"; }
 trap 'bootstrap_error "$LINENO"' ERR
 ${supervisorBootstrap(s.unit)}
-bootstrap_stage=cloud-init
+${s.quietBootstrap ? loginPolicy + waitForIdleUserManager : ""}bootstrap_stage=cloud-init
 timeout 900 cloud-init status --wait
-${loginPolicy}# Fresh disposable hosts only: prevent timer and D-Bus firmware activation before baseline.
+${s.quietBootstrap ? "" : loginPolicy}# Fresh disposable hosts only: prevent timer and D-Bus firmware activation before baseline.
 bootstrap_stage=firmware-mask
 systemctl mask --runtime --now fwupd.service fwupd-refresh.service fwupd-refresh.timer
 bootstrap_stage=package-services
@@ -714,7 +718,7 @@ done
 # The entry derives all nine groups and their native settings from this measured source.
 # Popular/performance views reuse the same evidence; no second workload execution.
 unset BENCH_APPS BENCH_TIER BENCH_EDGE PROFILE
-${waitForIdleUserManager}${sshIngress ? `bootstrap_stage=ssh-ingress-verification
+${s.quietBootstrap ? "" : waitForIdleUserManager}${sshIngress ? `bootstrap_stage=ssh-ingress-verification
 ${verifySshIngress}
 ` : ""}bootstrap_stage=native-entry
 node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign${s.group === undefined ? "" : ` --group ${s.group}`}${loadLayout ? ` --load-layout ${loadLayout}` : ""}${placement ? ` --placement ${placement}` : ""}

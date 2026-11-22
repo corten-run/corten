@@ -246,7 +246,7 @@ mock_nft() {
   }
 });
 
-function rootManagerStages(script) {
+function rootManagerStages(script, quiet = false) {
   const stages = [...script.matchAll(/^bootstrap_stage=([a-z-]+)$/gm)];
   function section(name, next) {
     const index = stages.findIndex((stage) => stage[1] === name);
@@ -255,10 +255,12 @@ function rootManagerStages(script) {
     assert.equal(stages[index + 1][1], next);
     return { offset: stages[index].index, shell: script.slice(stages[index].index, stages[index + 1].index) };
   }
-  return [section("root-manager-policy", "firmware-mask"), section("root-manager-idle", "native-entry")];
+  return quiet
+    ? [section("root-manager-policy", "root-manager-idle"), section("root-manager-idle", "cloud-init")]
+    : [section("root-manager-policy", "firmware-mask"), section("root-manager-idle", "native-entry")];
 }
 
-function executeRootManager(t, script, { mode = "drain", marker = true, prior } = {}) {
+function executeRootManager(t, script, { mode = "drain", marker = true, prior, quiet = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "corten-root-manager-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const bin = join(root, "bin"), path = join(root, dropin.slice(1));
@@ -312,7 +314,7 @@ sleep() {
 export -f sleep
 exec "$@"
 `, { mode: 0o700 });
-  const shell = rootManagerStages(script).map((stage) => stage.shell).join("");
+  const shell = rootManagerStages(script, quiet).map((stage) => stage.shell).join("");
   // Only the two extracted stages run. Redirect their paths into the fixture,
   // except the literal condition written into the drop-in.
   assert.doesNotMatch(shell, /\/(?:usr\/)?(?:s?bin|etc)\//);
@@ -358,6 +360,32 @@ for (const [name, generate] of [["contract", remoteFiles], ["production", produc
       "show user@0.service --property=MainPID --value"]);
   });
 }
+
+test("new dedicated reservations drain before cloud-init without changing marker or native command", () => {
+  const saved = ingressState();
+  const original = productionFiles(saved)["job.sh"];
+  const quiet = productionFiles({ ...saved, quietBootstrap: true })["job.sh"];
+  rootManagerStages(quiet, true);
+  assert.equal(quiet.slice(quiet.indexOf("bootstrap_stage=ssh-ingress-verification")),
+    original.slice(original.indexOf("bootstrap_stage=ssh-ingress-verification")));
+  for (const plain of [state, { ...state, control }, dedicated, { ...dedicated, control: ledger }])
+    assert.throws(() => productionFiles({ ...plain, quietBootstrap: true }), /quiet bootstrap requires a supervised group/);
+  assert.throws(() => productionFiles({ ...saved, quietBootstrap: false }), /quiet bootstrap requires a supervised group/);
+});
+
+test("new dedicated setup proceeds after natural drain but not with a busy manager", {
+  skip: process.platform !== "linux",
+}, (t) => {
+  const quiet = true, script = productionFiles({ ...ingressState(), quietBootstrap: quiet })["job.sh"];
+  const drained = executeRootManager(t, script, { quiet });
+  assert.equal(drained.status, 0, drained.stderr);
+  assert.equal(drained.stdout, "NATIVE_ENTRY_REACHED\n");
+  assert.equal(drained.contents, policy);
+  const busy = executeRootManager(t, script, { quiet, mode: "busy" });
+  assert.equal(busy.status, 124, busy.stderr);
+  assert.equal(busy.stdout, "");
+  assert.match(busy.stderr, /ActiveState=active MainPID=42/);
+});
 
 test("root-manager preparation fails closed without overwriting policy or stopping busy services", {
   skip: process.platform !== "linux",

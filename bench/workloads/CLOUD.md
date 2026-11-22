@@ -1401,10 +1401,14 @@ other user process from native cleanup evidence.
 
 On dedicated group hosts, the benchmark and Docker run as system services.
 Root SSH still needs a normal logind session, but not a separate user manager.
-During provisioning, a runtime systemd drop-in skips new starts of
+For new dedicated reservations, the detached job installs a runtime systemd
+drop-in before waiting for cloud-init or installing packages. The drop-in skips new starts of
 `user@0.service` while the host's control binding exists. It does not stop
-the current manager or change SSH or PAM. Before publishing the bootstrap
-marker, the job waits up to two minutes for the manager to exit naturally.
+the current manager or change SSH or PAM. The job immediately waits up to two
+minutes for the manager to exit naturally. After the controller's start command
+returns, the controller opens no SSH connections for two minutes, then resumes
+its normal bootstrap checks. Saved reservations without `quietBootstrap` still
+regenerate their original job, with the drain check near native entry.
 The run log records which property it is querying and the observed state and
 main PID, so a busy manager can be distinguished from a stalled query.
 If it stays busy the group fails setup, without terminating anyone's work.
