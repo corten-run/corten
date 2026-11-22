@@ -23,7 +23,9 @@ In `PROFILE=matched`, `HOSTS` is a comma-separated list of HTTP hostnames or IP
 addresses. A host entry without a port allows any valid port; an entry with a port
 allows only that port. `localhost`, `127.0.0.1` and `[::1]` default to any port
 only when that host has no explicit entry. For example, `HOSTS=localhost:8443`
-does not allow `Host: localhost` or `Host: localhost:8444`.
+does not allow `Host: localhost` or `Host: localhost:8444`. Equivalent IPv6
+spellings identify the same host, so `[0:0:0:0:0:0:0:1]:8443` also restricts
+`[::1]` to port 8443.
 Unknown hosts are rejected, and forwarding headers do not choose the host.
 Deployments that rewrite Host must allow the authority seen by Leptos. Set
 `MARKETPLACE_PUBLIC_ORIGIN` separately for browser form origin checks as above.

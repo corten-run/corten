@@ -12,14 +12,14 @@ pub struct Hosts(Arc<[Authority]>);
 
 impl Hosts {
     pub fn configured() -> Self {
-        let mut values: Vec<_> = match env::var("HOSTS") {
+        let mut values: Vec<Authority> = match env::var("HOSTS") {
             Ok(configured) => configured.split(',').map(|value| authority(value.trim()).expect("invalid HOSTS entry")).collect(),
             Err(env::VarError::NotPresent) => Vec::new(),
             Err(env::VarError::NotUnicode(_)) => panic!("HOSTS must contain valid HTTP authorities"),
         };
         // An explicit loopback entry replaces that host's implicit any-port entry.
         for local in ["localhost", "127.0.0.1", "[::1]"] {
-            if !values.iter().any(|value: &Authority| value.host().eq_ignore_ascii_case(local)) {
+            if !values.iter().any(|value| same_host(value.host(), local)) {
                 values.push(authority(local).unwrap());
             }
         }
@@ -28,23 +28,32 @@ impl Hosts {
 
     fn allows(&self, requested: &Authority) -> bool {
         self.0.iter().any(|allowed| {
-            allowed.host().eq_ignore_ascii_case(requested.host())
+            same_host(allowed.host(), requested.host())
                 && allowed.port_u16().is_none_or(|port| Some(port) == requested.port_u16())
         })
     }
 }
 
+fn ipv6_host(host: &str) -> Option<Ipv6Addr> {
+    host.strip_prefix('[')?.strip_suffix(']')?.parse().ok()
+}
+
+fn same_host(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b) || ipv6_host(a).is_some_and(|addr| ipv6_host(b) == Some(addr))
+}
+
 fn authority(value: &str) -> Option<Authority> {
     let authority: Authority = value.parse().ok()?;
     let host = authority.host();
-    let valid_host = match host.strip_prefix('[').and_then(|host| host.strip_suffix(']')) {
-        Some(ipv6) => ipv6.parse::<Ipv6Addr>().is_ok(),
-        None => host.split('.').all(|label| {
+    let valid_host = if host.starts_with('[') {
+        ipv6_host(host).is_some()
+    } else {
+        host.split('.').all(|label| {
             !label.is_empty()
                 && !label.starts_with('-')
                 && !label.ends_with('-')
                 && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        }),
+        })
     };
     // A URI authority may contain userinfo and may parse with an unusable port.
     // Do not let either compare equal to a bare configured hostname.

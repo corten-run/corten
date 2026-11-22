@@ -24,6 +24,7 @@ const folder = await mkdtemp(join(tmpdir(), "leptos-marketplace-"));
 const fixture = records();
 const record = "/api/marketplace/item_1";
 const site = "market.example.test";
+const ipv6Loopback = "[0:0:0:0:0:0:0:1]";
 const recordRead = { method: "GET", path: "/marketplace/records/item_1" };
 const upstreamRequests = [];
 const upstream = createServer((req, res) => {
@@ -38,7 +39,7 @@ try {
     const before = upstreamRequests.length;
     const container = docker("create", "--pull=never", "--cpus", "1", "--memory", "512m", "-p", "127.0.0.1::8080",
       ...(process.platform === "linux" ? ["--add-host", "host.docker.internal:host-gateway"] : []),
-      "-v", `${folder}:/fixtures:ro`, "-e", "PROFILE=matched", "-e", `HOSTS=${site},Localhost:8443`,
+      "-v", `${folder}:/fixtures:ro`, "-e", "PROFILE=matched", "-e", `HOSTS=${site},Localhost:8443,${ipv6Loopback}:8443`,
       "-e", `MARKETPLACE_SOURCE=${source}`, "-e", "MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json",
       "-e", `API_BASE=http://host.docker.internal:${upstream.address().port}`, imageId);
     try {
@@ -63,9 +64,11 @@ try {
       assert.equal((await request("/marketplace/en-US/item_1", "GET", "unrecognized.invalid")).status, 400, `${source}: host`);
       assert.equal((await request("/health/live")).status, 200, `${source}: live`);
       assert.equal((await request("/health/live", "GET", new URL(base).host)).status, 200, `${source}: local access still works`);
-      assert.equal((await request("/health/live", "GET", "localhost:8443")).status, 200, `${source}: configured loopback port`);
-      for (const host of ["localhost:8444", "localhost"]) {
-        assert.equal((await request("/health/live", "GET", host)).status, 400, `${source}: explicit localhost port takes precedence (${host})`);
+      for (const host of ["localhost:8443", `${ipv6Loopback}:8443`, "[::1]:8443"]) {
+        assert.equal((await request("/health/live", "GET", host)).status, 200, `${source}: configured loopback port (${host})`);
+      }
+      for (const host of ["localhost:8444", "localhost", "[::1]:8444", "[::1]"]) {
+        assert.equal((await request("/health/live", "GET", host)).status, 400, `${source}: explicit loopback port takes precedence (${host})`);
       }
       assert.deepEqual(upstreamRequests.slice(before), [], `${source}: controls must not contact upstream`);
 
