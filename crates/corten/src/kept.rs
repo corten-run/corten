@@ -980,17 +980,35 @@ impl Answers {
 /// effects there: a `Public` handler can still reach the store through a handle it captured from
 /// [`crate::App::kept`], as it can do anything else it holds.
 #[derive(Clone)]
-pub struct KeptAnswers(Arc<OnceLock<Answers>>);
+pub struct KeptAnswers(Reach);
+
+/// Where a handle finds the store.
+#[derive(Clone)]
+enum Reach {
+    /// A request's: the store of the app serving it, or none. Taking it allocates nothing.
+    Now(Option<Answers>),
+    /// The app's, taken before its router is made ([`crate::App::kept`]): the store once it is.
+    Later(Arc<OnceLock<Answers>>),
+}
 
 impl KeptAnswers {
     /// A handle with no store yet: [`KeptAnswers::set`] gives it the app's.
     pub(crate) fn pending() -> KeptAnswers {
-        KeptAnswers(Arc::new(OnceLock::new()))
+        KeptAnswers(Reach::Later(Arc::new(OnceLock::new())))
     }
 
     /// The app's store, once its router is made.
     pub(crate) fn set(&self, answers: &Answers) {
-        let _ = self.0.set(answers.clone());
+        if let Reach::Later(later) = &self.0 {
+            let _ = later.set(answers.clone());
+        }
+    }
+
+    fn store(&self) -> Option<&Answers> {
+        match &self.0 {
+            Reach::Now(now) => now.as_ref(),
+            Reach::Later(later) => later.get(),
+        }
     }
 
     /// What the page at `to` shows has changed, so nothing this process kept at its path before
@@ -1091,7 +1109,7 @@ impl KeptAnswers {
     /// checked to be a path on this site and nothing more, so it is the one way to pass a path
     /// no route is known to serve.
     pub fn changed(&self, to: &(impl crate::route::OnSite + ?Sized)) {
-        let Some(answers) = self.0.get() else { return };
+        let Some(answers) = self.store() else { return };
         let link = crate::route::link(to);
         let path = link.split(['?', '#']).next().unwrap_or_default();
         answers.changed(path.as_bytes());
@@ -1100,7 +1118,7 @@ impl KeptAnswers {
 
 impl std::fmt::Debug for KeptAnswers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KeptAnswers").field("store", &self.0.get().is_some()).finish()
+        f.debug_struct("KeptAnswers").field("store", &self.store().is_some()).finish()
     }
 }
 
@@ -1109,12 +1127,8 @@ impl<S: Send + Sync> crate::extract::FromRequestParts<S> for KeptAnswers {
 
     /// The store of the app serving the request; none outside an app (a bare router in a test).
     async fn from_request_parts(parts: &mut http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
-        let kept = KeptAnswers::pending();
         let shared = parts.extensions.get::<crate::Signal>().and_then(crate::Signal::shared);
-        if let Some(answers) = shared.and_then(|shared| shared.kept.as_ref()) {
-            kept.set(answers);
-        }
-        Ok(kept)
+        Ok(KeptAnswers(Reach::Now(shared.and_then(|shared| shared.kept.clone()))))
     }
 }
 
