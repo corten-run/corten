@@ -1,0 +1,9 @@
+/m/1923/results/aa-pad40/counts-plain-misses.csv: 30 pairs; the one-sided 95% upper bound is the change of rank 20 from the smallest (A = base rows, B = head rows)
+| per request | A median | B median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| L1_icache_load_misses_u | 2048.37 | 2029.72 | -1.09% | -0.38% | -8.95% to +8.06% |
+| iTLB_load_misses_u | 12.62 | 12.88 | +2.24% | +7.74% | -24.71% to +25.37% |
+| branch_misses_u | 22.56 | 25.46 | +9.85% | +14.26% | -27.52% to +48.56% |
+| instructions user | 39455.43 | 39455.94 | +0.00% | +0.00% | -0.01% to +0.01% |
+median requests/s: A 66511, B 65591
+JSON {"file":"/m/1923/results/aa-pad40/counts-plain-misses.csv","pairs":30,"boundRank":20,"measures":{"L1_icache_load_misses_u":{"a":2048.3664492059174,"b":2029.7233319844058,"change":-0.010938642663921916,"bound":-0.003829829708427379,"min":-0.08953364729243096,"max":0.08061216133223348},"iTLB_load_misses_u":{"a":12.6177212349277,"b":12.883838796415022,"change":0.022401604702137035,"bound":0.07740048620316986,"min":-0.2470503684344031,"max":0.2537422935741138},"branch_misses_u":{"a":22.561501757016067,"b":25.46094484639793,"change":0.09851826461961266,"bound":0.14258768189636473,"min":-0.27517266322250133,"max":0.4856090022623123},"instructions user":{"a":39455.433866090636,"b":39455.9432545391,"change":0.00000913428669457872,"bound":0.000016379896719653786,"min":-0.000057506025445963616,"max":0.00007962993742105517}},"aRequestsPerSecond":66511,"bRequestsPerSecond":65590.66666666666}

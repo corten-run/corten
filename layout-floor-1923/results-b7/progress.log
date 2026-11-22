@@ -1,0 +1,15 @@
+== 1923 check start 16:21:25
+== 1923 checks ok 16:22:00
+== aa-same plain start 16:22:00
+== aa-same plain ok 16:33:38
+== aa-pad40 plain start 16:33:38
+== aa-pad40 plain ok 16:45:15
+== aa-pad3100 plain start 16:45:15
+== aa-pad3100 plain ok 16:56:52
+== aa-pad40 plain-misses start 16:56:53
+== aa-pad40 plain-misses ok 17:00:27
+== aa-pad3100 plain-misses start 17:00:27
+== aa-pad3100 plain-misses ok 17:04:01
+report: /m/1923/results/floor.md
+failed: none
+ALL-DONE

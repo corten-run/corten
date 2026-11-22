@@ -1,0 +1,10 @@
+checked 1 requests: same
+plain: done, /m/1923/results/check-only/aa-same/cycles-plain.csv
+checked 1 requests: same
+plain: done, /m/1923/results/check-only/aa-pad40/cycles-plain.csv
+checked 1 requests: same
+plain: done, /m/1923/results/check-only/aa-pad3100/cycles-plain.csv
+checked 1 requests: same
+plain-misses: done, /m/1923/results/check-only/aa-pad40/counts-plain-misses.csv
+checked 1 requests: same
+plain-misses: done, /m/1923/results/check-only/aa-pad3100/counts-plain-misses.csv

@@ -1,0 +1,992 @@
+## pair w1 base
+# started on Sun Nov 22 16:56:53 2026
+
+400803996,,L1-icache-load-misses,2993976223,100.00,,
+2599945,,iTLB-load-misses,2993976223,100.00,,
+3951318,,branch-misses:u,2993976223,100.00,,
+8171814799,,instructions:u,2993976223,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.93ms  107.19us   5.70ms   97.17%
+    Req/Sec    34.72k   684.68    35.62k    85.00%
+  207128 requests in 3.03s, 1.38GB read
+Requests/sec:  68340.63
+Transfer/sec:    465.87MB
+RESULT 207128 0 0 0 0 0
+## pair w1 head
+# started on Sun Nov 22 16:56:56 2026
+
+408833572,,L1-icache-load-misses,2998146108,100.00,,
+2355038,,iTLB-load-misses,2998146108,100.00,,
+5489715,,branch-misses:u,2998146108,100.00,,
+7706030273,,instructions:u,2998146108,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms   52.07us   1.59ms   82.53%
+    Req/Sec    32.74k     0.97k   36.81k    93.33%
+  195305 requests in 3.04s, 1.30GB read
+Requests/sec:  64349.53
+Transfer/sec:    438.66MB
+RESULT 195305 0 0 0 0 0
+## pair 1 base
+# started on Sun Nov 22 16:57:00 2026
+
+396874103,,L1-icache-load-misses,2998143507,100.00,,
+2929713,,iTLB-load-misses,2998143507,100.00,,
+4668396,,branch-misses:u,2998143507,100.00,,
+7773546572,,instructions:u,2998143507,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.97ms   70.20us   2.05ms   85.48%
+    Req/Sec    33.01k   803.62    36.16k    83.33%
+  197018 requests in 3.04s, 1.31GB read
+Requests/sec:  64899.99
+Transfer/sec:    442.41MB
+RESULT 197018 0 0 0 0 0
+## pair 1 head
+# started on Sun Nov 22 16:57:03 2026
+
+392447043,,L1-icache-load-misses,2994239932,100.00,,
+2307169,,iTLB-load-misses,2994239932,100.00,,
+4928580,,branch-misses:u,2994239932,100.00,,
+7544308915,,instructions:u,2994239932,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.00ms  114.55us   5.62ms   94.82%
+    Req/Sec    32.04k   739.85    34.87k    90.00%
+  191206 requests in 3.03s, 1.27GB read
+Requests/sec:  63163.45
+Transfer/sec:    430.58MB
+RESULT 191206 0 0 0 0 0
+## pair 2 head
+# started on Sun Nov 22 16:57:06 2026
+
+400029943,,L1-icache-load-misses,2994311021,100.00,,
+2321325,,iTLB-load-misses,2994311021,100.00,,
+4926932,,branch-misses:u,2994311021,100.00,,
+7670865394,,instructions:u,2994311021,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.99ms  106.86us   5.61ms   96.04%
+    Req/Sec    32.60k   556.13    33.71k    73.33%
+  194413 requests in 3.03s, 1.29GB read
+Requests/sec:  64227.44
+Transfer/sec:    437.83MB
+RESULT 194413 0 0 0 0 0
+## pair 2 base
+# started on Sun Nov 22 16:57:10 2026
+
+390591055,,L1-icache-load-misses,2998262921,100.00,,
+2483450,,iTLB-load-misses,2998262921,100.00,,
+4016515,,branch-misses:u,2998262921,100.00,,
+8093412118,,instructions:u,2998262921,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.93ms   47.25us   1.47ms   82.12%
+    Req/Sec    34.40k     0.87k   37.37k    81.67%
+  205128 requests in 3.04s, 1.37GB read
+Requests/sec:  67501.85
+Transfer/sec:    460.15MB
+RESULT 205128 0 0 0 0 0
+## pair 3 base
+# started on Sun Nov 22 16:57:13 2026
+
+425276191,,L1-icache-load-misses,2998096406,100.00,,
+3158231,,iTLB-load-misses,2998096406,100.00,,
+3964971,,branch-misses:u,2998096406,100.00,,
+7976154778,,instructions:u,2998096406,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms   47.33us   1.68ms   85.80%
+    Req/Sec    33.90k   494.73    34.70k    73.33%
+  202156 requests in 3.03s, 1.35GB read
+Requests/sec:  66779.20
+Transfer/sec:    455.22MB
+RESULT 202156 0 0 0 0 0
+## pair 3 head
+# started on Sun Nov 22 16:57:17 2026
+
+394600734,,L1-icache-load-misses,2994093467,100.00,,
+2618484,,iTLB-load-misses,2994093467,100.00,,
+4877447,,branch-misses:u,2994093467,100.00,,
+7837076222,,instructions:u,2994093467,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.97ms  102.30us   5.34ms   96.46%
+    Req/Sec    33.28k   541.17    34.20k    91.67%
+  198628 requests in 3.02s, 1.32GB read
+Requests/sec:  65783.93
+Transfer/sec:    448.44MB
+RESULT 198628 0 0 0 0 0
+## pair 4 head
+# started on Sun Nov 22 16:57:20 2026
+
+396350821,,L1-icache-load-misses,2998216328,100.00,,
+2918294,,iTLB-load-misses,2998216328,100.00,,
+4050530,,branch-misses:u,2998216328,100.00,,
+8085995814,,instructions:u,2998216328,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.94ms   50.14us   1.69ms   80.84%
+    Req/Sec    34.35k   818.00    37.10k    76.67%
+  204939 requests in 3.02s, 1.36GB read
+Requests/sec:  67881.34
+Transfer/sec:    462.74MB
+RESULT 204939 0 0 0 0 0
+## pair 4 base
+# started on Sun Nov 22 16:57:24 2026
+
+423950277,,L1-icache-load-misses,3078509557,100.00,,
+2662583,,iTLB-load-misses,3078509557,100.00,,
+4295716,,branch-misses:u,3078509557,100.00,,
+8207933125,,instructions:u,3078509557,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.96ms  612.86us  19.76ms   99.70%
+    Req/Sec    34.28k     3.33k   58.91k    96.72%
+  208031 requests in 3.10s, 1.38GB read
+Requests/sec:  67107.73
+Transfer/sec:    457.46MB
+RESULT 208031 0 0 0 0 0
+## pair 5 base
+# started on Sun Nov 22 16:57:27 2026
+
+410875353,,L1-icache-load-misses,2998502842,100.00,,
+2752895,,iTLB-load-misses,2998502842,100.00,,
+4221955,,branch-misses:u,2998502842,100.00,,
+7938447414,,instructions:u,2998502842,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms   53.86us   1.68ms   78.32%
+    Req/Sec    33.71k     0.95k   36.51k    73.33%
+  201200 requests in 3.02s, 1.34GB read
+Requests/sec:  66643.41
+Transfer/sec:    454.30MB
+RESULT 201200 0 0 0 0 0
+## pair 5 head
+# started on Sun Nov 22 16:57:31 2026
+
+379353961,,L1-icache-load-misses,2999489959,100.00,,
+2430833,,iTLB-load-misses,2999489959,100.00,,
+4761994,,branch-misses:u,2999489959,100.00,,
+7866410827,,instructions:u,2999489959,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.96ms   45.11us   1.38ms   81.33%
+    Req/Sec    33.42k   435.97    34.63k    75.00%
+  199372 requests in 3.02s, 1.33GB read
+Requests/sec:  66037.60
+Transfer/sec:    450.17MB
+RESULT 199372 0 0 0 0 0
+## pair 6 head
+# started on Sun Nov 22 16:57:34 2026
+
+399496844,,L1-icache-load-misses,2998283535,100.00,,
+2497339,,iTLB-load-misses,2998283535,100.00,,
+5419164,,branch-misses:u,2998283535,100.00,,
+7659851336,,instructions:u,2998283535,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.99ms   75.47us   1.71ms   84.23%
+    Req/Sec    32.54k     1.52k   37.09k    86.67%
+  194135 requests in 3.03s, 1.29GB read
+Requests/sec:  64139.03
+Transfer/sec:    437.23MB
+RESULT 194135 0 0 0 0 0
+## pair 6 base
+# started on Sun Nov 22 16:57:38 2026
+
+390323767,,L1-icache-load-misses,2998508475,100.00,,
+2413185,,iTLB-load-misses,2998508475,100.00,,
+3882385,,branch-misses:u,2998508475,100.00,,
+7954380790,,instructions:u,2998508475,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms   51.01us   2.15ms   87.12%
+    Req/Sec    33.80k   484.79    34.91k    71.67%
+  201603 requests in 3.03s, 1.34GB read
+Requests/sec:  66511.80
+Transfer/sec:    453.40MB
+RESULT 201603 0 0 0 0 0
+## pair 7 base
+# started on Sun Nov 22 16:57:41 2026
+
+408819506,,L1-icache-load-misses,2998639943,100.00,,
+2366221,,iTLB-load-misses,2998639943,100.00,,
+4553577,,branch-misses:u,2998639943,100.00,,
+7795136112,,instructions:u,2998639943,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.97ms   46.68us   1.78ms   83.90%
+    Req/Sec    33.12k   813.69    37.05k    91.67%
+  197568 requests in 3.03s, 1.32GB read
+Requests/sec:  65181.39
+Transfer/sec:    444.33MB
+RESULT 197568 0 0 0 0 0
+## pair 7 head
+# started on Sun Nov 22 16:57:44 2026
+
+406730370,,L1-icache-load-misses,2998597219,100.00,,
+2539535,,iTLB-load-misses,2998597219,100.00,,
+5310727,,branch-misses:u,2998597219,100.00,,
+7765217730,,instructions:u,2998597219,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.97ms   54.45us   1.63ms   80.90%
+    Req/Sec    32.98k   729.74    35.33k    80.00%
+  196806 requests in 3.02s, 1.31GB read
+Requests/sec:  65090.71
+Transfer/sec:    443.71MB
+RESULT 196806 0 0 0 0 0
+## pair 8 head
+# started on Sun Nov 22 16:57:48 2026
+
+402545136,,L1-icache-load-misses,2998829848,100.00,,
+2377406,,iTLB-load-misses,2998829848,100.00,,
+5066267,,branch-misses:u,2998829848,100.00,,
+7724392649,,instructions:u,2998829848,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms   43.78us   1.80ms   82.05%
+    Req/Sec    32.83k   346.64    33.62k    66.67%
+  195774 requests in 3.02s, 1.30GB read
+Requests/sec:  64748.92
+Transfer/sec:    441.38MB
+RESULT 195774 0 0 0 0 0
+## pair 8 base
+# started on Sun Nov 22 16:57:51 2026
+
+397093455,,L1-icache-load-misses,2998338992,100.00,,
+2119947,,iTLB-load-misses,2998338992,100.00,,
+4669507,,branch-misses:u,2998338992,100.00,,
+7590425942,,instructions:u,2998338992,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.00ms   43.77us   1.39ms   81.07%
+    Req/Sec    32.24k   404.25    33.20k    63.33%
+  192383 requests in 3.02s, 1.28GB read
+Requests/sec:  63640.12
+Transfer/sec:    433.83MB
+RESULT 192383 0 0 0 0 0
+## pair 9 base
+# started on Sun Nov 22 16:57:55 2026
+
+406673764,,L1-icache-load-misses,2998825937,100.00,,
+2452417,,iTLB-load-misses,2998825937,100.00,,
+4719877,,branch-misses:u,2998825937,100.00,,
+7678825393,,instructions:u,2998825937,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms   41.02us   1.85ms   82.93%
+    Req/Sec    32.62k   299.08    33.24k    61.67%
+  194617 requests in 3.03s, 1.30GB read
+Requests/sec:  64290.84
+Transfer/sec:    438.26MB
+RESULT 194617 0 0 0 0 0
+## pair 9 head
+# started on Sun Nov 22 16:57:58 2026
+
+405352279,,L1-icache-load-misses,2998319911,100.00,,
+2246470,,iTLB-load-misses,2998319911,100.00,,
+5274996,,branch-misses:u,2998319911,100.00,,
+7750580027,,instructions:u,2998319911,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms   45.14us   1.49ms   81.50%
+    Req/Sec    32.93k   440.81    33.95k    71.67%
+  196435 requests in 3.03s, 1.31GB read
+Requests/sec:  64891.82
+Transfer/sec:    442.36MB
+RESULT 196435 0 0 0 0 0
+## pair 10 head
+# started on Sun Nov 22 16:58:02 2026
+
+394351981,,L1-icache-load-misses,2998355639,100.00,,
+2398641,,iTLB-load-misses,2998355639,100.00,,
+5193368,,branch-misses:u,2998355639,100.00,,
+7600050814,,instructions:u,2998355639,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.00ms   46.07us   1.60ms   81.02%
+    Req/Sec    32.31k   426.99    33.16k    70.00%
+  192629 requests in 3.03s, 1.28GB read
+Requests/sec:  63551.30
+Transfer/sec:    433.22MB
+RESULT 192629 0 0 0 0 0
+## pair 10 base
+# started on Sun Nov 22 16:58:05 2026
+
+404729200,,L1-icache-load-misses,2999741682,100.00,,
+2364417,,iTLB-load-misses,2999741682,100.00,,
+4819608,,branch-misses:u,2999741682,100.00,,
+7686570222,,instructions:u,2999741682,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms   38.46us   1.61ms   82.88%
+    Req/Sec    32.67k   410.00    33.39k    61.67%
+  194813 requests in 3.04s, 1.30GB read
+Requests/sec:  64187.95
+Transfer/sec:    437.56MB
+RESULT 194813 0 0 0 0 0
+## pair 11 base
+# started on Sun Nov 22 16:58:09 2026
+
+405059719,,L1-icache-load-misses,2998269485,100.00,,
+2039256,,iTLB-load-misses,2998269485,100.00,,
+5084658,,branch-misses:u,2998269485,100.00,,
+7560235648,,instructions:u,2998269485,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.00ms   44.59us   1.78ms   84.19%
+    Req/Sec    32.10k   275.24    32.67k    70.00%
+  191619 requests in 3.02s, 1.28GB read
+Requests/sec:  63387.41
+Transfer/sec:    432.10MB
+RESULT 191619 0 0 0 0 0
+## pair 11 head
+# started on Sun Nov 22 16:58:12 2026
+
+402017129,,L1-icache-load-misses,3070775526,100.00,,
+2478628,,iTLB-load-misses,3070775526,100.00,,
+5153961,,branch-misses:u,3070775526,100.00,,
+7714544678,,instructions:u,3070775526,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.06ms    1.08ms  28.57ms   99.46%
+    Req/Sec    32.24k     4.12k   58.10k    95.08%
+  195520 requests in 3.10s, 1.30GB read
+Requests/sec:  63077.66
+Transfer/sec:    429.99MB
+RESULT 195520 0 0 0 0 0
+## pair 12 head
+# started on Sun Nov 22 16:58:15 2026
+
+407129211,,L1-icache-load-misses,2998253960,100.00,,
+2923620,,iTLB-load-misses,2998253960,100.00,,
+3953041,,branch-misses:u,2998253960,100.00,,
+8241801785,,instructions:u,2998253960,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.92ms   56.89us   1.68ms   82.55%
+    Req/Sec    35.00k     1.14k   39.71k    88.33%
+  208902 requests in 3.03s, 1.39GB read
+Requests/sec:  69000.26
+Transfer/sec:    470.37MB
+RESULT 208902 0 0 0 0 0
+## pair 12 base
+# started on Sun Nov 22 16:58:19 2026
+
+395980606,,L1-icache-load-misses,2998149963,100.00,,
+2325488,,iTLB-load-misses,2998149963,100.00,,
+3642788,,branch-misses:u,2998149963,100.00,,
+7967706843,,instructions:u,2998149963,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms   91.88us   1.71ms   88.84%
+    Req/Sec    33.84k     2.54k   36.10k    90.00%
+  201943 requests in 3.03s, 1.34GB read
+Requests/sec:  66626.06
+Transfer/sec:    454.18MB
+RESULT 201943 0 0 0 0 0
+## pair 13 base
+# started on Sun Nov 22 16:58:22 2026
+
+416762867,,L1-icache-load-misses,2998587817,100.00,,
+2445432,,iTLB-load-misses,2998587817,100.00,,
+4856114,,branch-misses:u,2998587817,100.00,,
+7829922942,,instructions:u,2998587817,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.97ms   68.52us   1.75ms   85.16%
+    Req/Sec    33.28k     1.36k   36.18k    83.33%
+  198457 requests in 3.05s, 1.32GB read
+Requests/sec:  65116.95
+Transfer/sec:    443.89MB
+RESULT 198457 0 0 0 0 0
+## pair 13 head
+# started on Sun Nov 22 16:58:26 2026
+
+399585691,,L1-icache-load-misses,3070479308,100.00,,
+2306428,,iTLB-load-misses,3070479308,100.00,,
+5295988,,branch-misses:u,3070479308,100.00,,
+7474130056,,instructions:u,3070479308,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.08ms    1.02ms  27.45ms   99.59%
+    Req/Sec    31.24k     4.61k   55.96k    80.33%
+  189424 requests in 3.10s, 1.26GB read
+Requests/sec:  61122.08
+Transfer/sec:    416.66MB
+RESULT 189424 0 0 0 0 0
+## pair 14 head
+# started on Sun Nov 22 16:58:29 2026
+
+398726297,,L1-icache-load-misses,2998497113,100.00,,
+2290821,,iTLB-load-misses,2998497113,100.00,,
+4978317,,branch-misses:u,2998497113,100.00,,
+7584564968,,instructions:u,2998497113,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.00ms   78.25us   1.78ms   88.17%
+    Req/Sec    32.21k     1.35k   36.16k    90.00%
+  192225 requests in 3.03s, 1.28GB read
+Requests/sec:  63343.68
+Transfer/sec:    431.81MB
+RESULT 192225 0 0 0 0 0
+## pair 14 base
+# started on Sun Nov 22 16:58:33 2026
+
+407991233,,L1-icache-load-misses,3000080163,100.00,,
+2208169,,iTLB-load-misses,3000080163,100.00,,
+4822190,,branch-misses:u,3000080163,100.00,,
+7679856579,,instructions:u,3000080163,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms   88.57us   1.73ms   89.12%
+    Req/Sec    32.64k     1.99k   34.84k    88.33%
+  194641 requests in 3.03s, 1.30GB read
+Requests/sec:  64215.00
+Transfer/sec:    437.74MB
+RESULT 194641 0 0 0 0 0
+## pair 15 base
+# started on Sun Nov 22 16:58:36 2026
+
+399680959,,L1-icache-load-misses,2998207287,100.00,,
+3017525,,iTLB-load-misses,2998207287,100.00,,
+4405975,,branch-misses:u,2998207287,100.00,,
+7718798774,,instructions:u,2998207287,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms   65.95us   2.35ms   91.66%
+    Req/Sec    32.79k   655.63    34.19k    90.00%
+  195640 requests in 3.05s, 1.30GB read
+Requests/sec:  64207.06
+Transfer/sec:    437.69MB
+RESULT 195640 0 0 0 0 0
+## pair 15 head
+# started on Sun Nov 22 16:58:40 2026
+
+403012614,,L1-icache-load-misses,2998443013,100.00,,
+2526358,,iTLB-load-misses,2998443013,100.00,,
+5508743,,branch-misses:u,2998443013,100.00,,
+7687490932,,instructions:u,2998443013,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms   48.89us   1.74ms   79.91%
+    Req/Sec    32.64k   771.21    34.04k    65.00%
+  194845 requests in 3.03s, 1.30GB read
+Requests/sec:  64355.87
+Transfer/sec:    438.71MB
+RESULT 194845 0 0 0 0 0
+## pair 16 head
+# started on Sun Nov 22 16:58:43 2026
+
+399457804,,L1-icache-load-misses,2998579657,100.00,,
+2377444,,iTLB-load-misses,2998579657,100.00,,
+5020091,,branch-misses:u,2998579657,100.00,,
+7906781916,,instructions:u,2998579657,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.96ms   50.02us   1.80ms   86.58%
+    Req/Sec    33.58k   435.81    34.51k    66.67%
+  200395 requests in 3.03s, 1.33GB read
+Requests/sec:  66116.28
+Transfer/sec:    450.71MB
+RESULT 200395 0 0 0 0 0
+## pair 16 base
+# started on Sun Nov 22 16:58:47 2026
+
+411801628,,L1-icache-load-misses,2996233396,100.00,,
+2666631,,iTLB-load-misses,2996233396,100.00,,
+5090561,,branch-misses:u,2996233396,100.00,,
+7953337346,,instructions:u,2996233396,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms  103.47us   5.08ms   95.50%
+    Req/Sec    33.79k   778.13    35.82k    68.33%
+  201578 requests in 3.03s, 1.34GB read
+Requests/sec:  66591.41
+Transfer/sec:    453.94MB
+RESULT 201578 0 0 0 0 0
+## pair 17 base
+# started on Sun Nov 22 16:58:50 2026
+
+403442601,,L1-icache-load-misses,2998342922,100.00,,
+2357053,,iTLB-load-misses,2998342922,100.00,,
+3994805,,branch-misses:u,2998342922,100.00,,
+7900589520,,instructions:u,2998342922,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.96ms   41.90us   1.64ms   80.83%
+    Req/Sec    33.56k   415.69    34.37k    70.00%
+  200239 requests in 3.04s, 1.33GB read
+Requests/sec:  65802.40
+Transfer/sec:    448.57MB
+RESULT 200239 0 0 0 0 0
+## pair 17 head
+# started on Sun Nov 22 16:58:54 2026
+
+411277214,,L1-icache-load-misses,3079185848,100.00,,
+3070308,,iTLB-load-misses,3079185848,100.00,,
+4165755,,branch-misses:u,3079185848,100.00,,
+8477855260,,instructions:u,3079185848,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.93ms  610.64us  19.72ms   99.68%
+    Req/Sec    35.42k     3.70k   62.27k    96.72%
+  214876 requests in 3.10s, 1.43GB read
+Requests/sec:  69318.22
+Transfer/sec:    472.53MB
+RESULT 214876 0 0 0 0 0
+## pair 18 head
+# started on Sun Nov 22 16:58:57 2026
+
+404176138,,L1-icache-load-misses,2998563171,100.00,,
+2697103,,iTLB-load-misses,2998563171,100.00,,
+5103016,,branch-misses:u,2998563171,100.00,,
+7871418649,,instructions:u,2998563171,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.96ms   57.26us   1.66ms   78.58%
+    Req/Sec    33.46k     1.13k   37.72k    78.33%
+  199498 requests in 3.02s, 1.33GB read
+Requests/sec:  65995.37
+Transfer/sec:    449.88MB
+RESULT 199498 0 0 0 0 0
+## pair 18 base
+# started on Sun Nov 22 16:59:00 2026
+
+417421682,,L1-icache-load-misses,2998310169,100.00,,
+2647317,,iTLB-load-misses,2998310169,100.00,,
+4171913,,branch-misses:u,2998310169,100.00,,
+7871137872,,instructions:u,2998310169,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.96ms   90.32us   1.72ms   85.51%
+    Req/Sec    33.46k     2.33k   37.47k    86.67%
+  199502 requests in 3.03s, 1.33GB read
+Requests/sec:  65908.76
+Transfer/sec:    449.29MB
+RESULT 199502 0 0 0 0 0
+## pair 19 base
+# started on Sun Nov 22 16:59:04 2026
+
+407064870,,L1-icache-load-misses,2998398402,100.00,,
+2500762,,iTLB-load-misses,2998398402,100.00,,
+4473784,,branch-misses:u,2998398402,100.00,,
+7809346769,,instructions:u,2998398402,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.97ms   41.77us   1.55ms   79.10%
+    Req/Sec    33.16k   612.85    34.48k    68.33%
+  197936 requests in 3.03s, 1.32GB read
+Requests/sec:  65391.67
+Transfer/sec:    445.77MB
+RESULT 197936 0 0 0 0 0
+## pair 19 head
+# started on Sun Nov 22 16:59:07 2026
+
+382891984,,L1-icache-load-misses,2998325419,100.00,,
+2632022,,iTLB-load-misses,2998325419,100.00,,
+4470555,,branch-misses:u,2998325419,100.00,,
+7746840551,,instructions:u,2998325419,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms  122.65us   1.75ms   85.44%
+    Req/Sec    32.92k     2.98k   36.51k    83.33%
+  196341 requests in 3.03s, 1.31GB read
+Requests/sec:  64774.68
+Transfer/sec:    441.56MB
+RESULT 196341 0 0 0 0 0
+## pair 20 head
+# started on Sun Nov 22 16:59:11 2026
+
+398287400,,L1-icache-load-misses,2998115510,100.00,,
+2506462,,iTLB-load-misses,2998115510,100.00,,
+4854592,,branch-misses:u,2998115510,100.00,,
+7756024237,,instructions:u,2998115510,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms  109.73us   1.57ms   85.33%
+    Req/Sec    32.97k     2.72k   37.15k    80.00%
+  196583 requests in 3.04s, 1.31GB read
+Requests/sec:  64690.19
+Transfer/sec:    440.98MB
+RESULT 196583 0 0 0 0 0
+## pair 20 base
+# started on Sun Nov 22 16:59:14 2026
+
+383963815,,L1-icache-load-misses,2998602569,100.00,,
+2354883,,iTLB-load-misses,2998602569,100.00,,
+3922369,,branch-misses:u,2998602569,100.00,,
+7873615840,,instructions:u,2998602569,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.96ms   45.85us   1.48ms   81.26%
+    Req/Sec    33.45k   423.04    34.43k    68.33%
+  199564 requests in 3.03s, 1.33GB read
+Requests/sec:  65839.35
+Transfer/sec:    448.82MB
+RESULT 199564 0 0 0 0 0
+## pair 21 base
+# started on Sun Nov 22 16:59:18 2026
+
+416973345,,L1-icache-load-misses,2998389820,100.00,,
+2595999,,iTLB-load-misses,2998389820,100.00,,
+5374603,,branch-misses:u,2998389820,100.00,,
+7946282789,,instructions:u,2998389820,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms   55.10us   1.71ms   80.13%
+    Req/Sec    33.77k     1.22k   37.16k    80.00%
+  201399 requests in 3.03s, 1.34GB read
+Requests/sec:  66434.14
+Transfer/sec:    452.87MB
+RESULT 201399 0 0 0 0 0
+## pair 21 head
+# started on Sun Nov 22 16:59:21 2026
+
+383352887,,L1-icache-load-misses,2998400446,100.00,,
+2832985,,iTLB-load-misses,2998400446,100.00,,
+4809773,,branch-misses:u,2998400446,100.00,,
+7762533970,,instructions:u,2998400446,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.97ms  114.19us   1.98ms   91.76%
+    Req/Sec    32.99k     2.93k   35.04k    90.00%
+  196738 requests in 3.04s, 1.31GB read
+Requests/sec:  64821.16
+Transfer/sec:    441.88MB
+RESULT 196738 0 0 0 0 0
+## pair 22 head
+# started on Sun Nov 22 16:59:25 2026
+
+387373190,,L1-icache-load-misses,2994646488,100.00,,
+2757190,,iTLB-load-misses,2994646488,100.00,,
+4411306,,branch-misses:u,2994646488,100.00,,
+7909618370,,instructions:u,2994646488,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.96ms  139.29us   5.81ms   93.19%
+    Req/Sec    33.59k     2.66k   36.69k    90.00%
+  200470 requests in 3.03s, 1.33GB read
+Requests/sec:  66143.64
+Transfer/sec:    450.89MB
+RESULT 200470 0 0 0 0 0
+## pair 22 base
+# started on Sun Nov 22 16:59:28 2026
+
+412656300,,L1-icache-load-misses,2998525018,100.00,,
+2241655,,iTLB-load-misses,2998525018,100.00,,
+4775060,,branch-misses:u,2998525018,100.00,,
+7671629746,,instructions:u,2998525018,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.99ms   44.48us   1.72ms   81.41%
+    Req/Sec    32.58k   433.44    33.42k    66.67%
+  194434 requests in 3.04s, 1.29GB read
+Requests/sec:  64062.15
+Transfer/sec:    436.70MB
+RESULT 194434 0 0 0 0 0
+## pair 23 base
+# started on Sun Nov 22 16:59:32 2026
+
+400382272,,L1-icache-load-misses,2998718605,100.00,,
+2462552,,iTLB-load-misses,2998718605,100.00,,
+5050006,,branch-misses:u,2998718605,100.00,,
+7816201921,,instructions:u,2998718605,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.97ms   48.60us   1.74ms   84.82%
+    Req/Sec    33.23k   531.42    34.04k    70.00%
+  198099 requests in 3.03s, 1.32GB read
+Requests/sec:  65450.99
+Transfer/sec:    446.17MB
+RESULT 198099 0 0 0 0 0
+## pair 23 head
+# started on Sun Nov 22 16:59:35 2026
+
+397327429,,L1-icache-load-misses,2995895302,100.00,,
+3201489,,iTLB-load-misses,2995895302,100.00,,
+3795638,,branch-misses:u,2995895302,100.00,,
+8104814984,,instructions:u,2995895302,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.94ms  111.78us   5.90ms   98.36%
+    Req/Sec    34.44k     0.85k   35.60k    80.00%
+  205419 requests in 3.02s, 1.37GB read
+Requests/sec:  68039.20
+Transfer/sec:    463.81MB
+RESULT 205419 0 0 0 0 0
+## pair 24 head
+# started on Sun Nov 22 16:59:38 2026
+
+401592344,,L1-icache-load-misses,2994357846,100.00,,
+2493298,,iTLB-load-misses,2994357846,100.00,,
+4886492,,branch-misses:u,2994357846,100.00,,
+7806643865,,instructions:u,2994357846,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.97ms  134.16us   5.66ms   94.51%
+    Req/Sec    33.16k     2.08k   34.58k    88.33%
+  197859 requests in 3.02s, 1.32GB read
+Requests/sec:  65536.36
+Transfer/sec:    446.75MB
+RESULT 197859 0 0 0 0 0
+## pair 24 base
+# started on Sun Nov 22 16:59:42 2026
+
+410406110,,L1-icache-load-misses,2998339316,100.00,,
+3196665,,iTLB-load-misses,2998339316,100.00,,
+4449389,,branch-misses:u,2998339316,100.00,,
+7925695470,,instructions:u,2998339316,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms   58.20us   2.27ms   88.54%
+    Req/Sec    33.66k   657.32    34.54k    91.67%
+  200877 requests in 3.03s, 1.34GB read
+Requests/sec:  66362.40
+Transfer/sec:    452.38MB
+RESULT 200877 0 0 0 0 0
+## pair 25 base
+# started on Sun Nov 22 16:59:45 2026
+
+400865544,,L1-icache-load-misses,2998252880,100.00,,
+2965150,,iTLB-load-misses,2998252880,100.00,,
+4564400,,branch-misses:u,2998252880,100.00,,
+7677633413,,instructions:u,2998252880,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.99ms   43.23us   1.55ms   84.53%
+    Req/Sec    32.60k   325.51    33.45k    65.00%
+  194596 requests in 3.03s, 1.30GB read
+Requests/sec:  64118.00
+Transfer/sec:    437.08MB
+RESULT 194596 0 0 0 0 0
+## pair 25 head
+# started on Sun Nov 22 16:59:49 2026
+
+404253694,,L1-icache-load-misses,2998477746,100.00,,
+2249038,,iTLB-load-misses,2998477746,100.00,,
+5112079,,branch-misses:u,2998477746,100.00,,
+7733917363,,instructions:u,2998477746,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms   48.13us   1.71ms   81.33%
+    Req/Sec    32.84k   595.67    35.19k    81.67%
+  196028 requests in 3.03s, 1.30GB read
+Requests/sec:  64673.23
+Transfer/sec:    440.87MB
+RESULT 196028 0 0 0 0 0
+## pair 26 head
+# started on Sun Nov 22 16:59:52 2026
+
+396862952,,L1-icache-load-misses,2999021682,100.00,,
+2511787,,iTLB-load-misses,2999021682,100.00,,
+4779671,,branch-misses:u,2999021682,100.00,,
+7634733402,,instructions:u,2999021682,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.99ms   72.05us   1.75ms   89.70%
+    Req/Sec    32.43k     1.60k   34.46k    90.00%
+  193498 requests in 3.02s, 1.29GB read
+Requests/sec:  64009.34
+Transfer/sec:    436.34MB
+RESULT 193498 0 0 0 0 0
+## pair 26 base
+# started on Sun Nov 22 16:59:56 2026
+
+423319989,,L1-icache-load-misses,3070759060,100.00,,
+3343626,,iTLB-load-misses,3070759060,100.00,,
+4717682,,branch-misses:u,3070759060,100.00,,
+8049979231,,instructions:u,3070759060,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.01ms    1.05ms  28.14ms   99.57%
+    Req/Sec    33.65k     3.87k   56.37k    93.44%
+  204034 requests in 3.10s, 1.36GB read
+Requests/sec:  65821.45
+Transfer/sec:    448.70MB
+RESULT 204034 0 0 0 0 0
+## pair 27 base
+# started on Sun Nov 22 16:59:59 2026
+
+409304949,,L1-icache-load-misses,2995513033,100.00,,
+3109993,,iTLB-load-misses,2995513033,100.00,,
+4148952,,branch-misses:u,2995513033,100.00,,
+7863680898,,instructions:u,2995513033,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.96ms  104.08us   5.70ms   96.61%
+    Req/Sec    33.40k   556.03    34.11k    85.00%
+  199305 requests in 3.03s, 1.33GB read
+Requests/sec:  65757.15
+Transfer/sec:    448.26MB
+RESULT 199305 0 0 0 0 0
+## pair 27 head
+# started on Sun Nov 22 17:00:03 2026
+
+401832840,,L1-icache-load-misses,2994385651,100.00,,
+2590443,,iTLB-load-misses,2994385651,100.00,,
+5078604,,branch-misses:u,2994385651,100.00,,
+7767755054,,instructions:u,2994385651,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.98ms  130.32us   6.18ms   96.27%
+    Req/Sec    32.99k     1.12k   34.89k    91.67%
+  196880 requests in 3.02s, 1.31GB read
+Requests/sec:  65134.32
+Transfer/sec:    444.01MB
+RESULT 196880 0 0 0 0 0
+## pair 28 head
+# started on Sun Nov 22 17:00:06 2026
+
+401415208,,L1-icache-load-misses,2998189912,100.00,,
+2692534,,iTLB-load-misses,2998189912,100.00,,
+4059641,,branch-misses:u,2998189912,100.00,,
+8179449345,,instructions:u,2998189912,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.92ms   67.63us   1.68ms   71.08%
+    Req/Sec    34.76k     1.69k   38.60k    66.67%
+  207311 requests in 3.03s, 1.38GB read
+Requests/sec:  68399.49
+Transfer/sec:    466.27MB
+RESULT 207311 0 0 0 0 0
+## pair 28 base
+# started on Sun Nov 22 17:00:10 2026
+
+407482961,,L1-icache-load-misses,2998448571,100.00,,
+2951122,,iTLB-load-misses,2998448571,100.00,,
+4089140,,branch-misses:u,2998448571,100.00,,
+7985094664,,instructions:u,2998448571,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.95ms   56.50us   1.87ms   81.72%
+    Req/Sec    33.91k     0.89k   35.69k    61.67%
+  202382 requests in 3.04s, 1.35GB read
+Requests/sec:  66674.49
+Transfer/sec:    454.51MB
+RESULT 202382 0 0 0 0 0
+## pair 29 base
+# started on Sun Nov 22 17:00:13 2026
+
+396708900,,L1-icache-load-misses,2998568691,100.00,,
+2400579,,iTLB-load-misses,2998568691,100.00,,
+3611772,,branch-misses:u,2998568691,100.00,,
+7890605009,,instructions:u,2998568691,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.96ms   57.41us   2.00ms   76.80%
+    Req/Sec    33.52k     1.07k   35.44k    55.00%
+  199987 requests in 3.03s, 1.33GB read
+Requests/sec:  65978.64
+Transfer/sec:    449.77MB
+RESULT 199987 0 0 0 0 0
+## pair 29 head
+# started on Sun Nov 22 17:00:16 2026
+
+415298455,,L1-icache-load-misses,3058788648,100.00,,
+2819994,,iTLB-load-misses,3058788648,100.00,,
+5258793,,branch-misses:u,3058788648,100.00,,
+8072828063,,instructions:u,3058788648,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.07ms    1.79ms  39.95ms   99.36%
+    Req/Sec    33.73k     3.34k   55.37k    96.72%
+  204605 requests in 3.10s, 1.36GB read
+Requests/sec:  66005.91
+Transfer/sec:    449.95MB
+RESULT 204605 0 0 0 0 0
+## pair 30 head
+# started on Sun Nov 22 17:00:20 2026
+
+391299760,,L1-icache-load-misses,2998412136,100.00,,
+2337363,,iTLB-load-misses,2998412136,100.00,,
+5129578,,branch-misses:u,2998412136,100.00,,
+7785288396,,instructions:u,2998412136,100.00,,
+Running 3s test @ http://127.0.0.1:18082/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.97ms   42.64us   1.62ms   82.00%
+    Req/Sec    33.07k   446.46    34.30k    73.33%
+  197316 requests in 3.03s, 1.31GB read
+Requests/sec:  65186.88
+Transfer/sec:    444.37MB
+RESULT 197316 0 0 0 0 0
+## pair 30 base
+# started on Sun Nov 22 17:00:23 2026
+
+404158620,,L1-icache-load-misses,2998564401,100.00,,
+2723496,,iTLB-load-misses,2998564401,100.00,,
+3597860,,branch-misses:u,2998564401,100.00,,
+8112072324,,instructions:u,2998564401,100.00,,
+Running 3s test @ http://127.0.0.1:18081/private
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     0.93ms   48.08us   1.83ms   84.55%
+    Req/Sec    34.46k   654.22    36.12k    75.00%
+  205603 requests in 3.02s, 1.37GB read
+Requests/sec:  68017.81
+Transfer/sec:    463.67MB
+RESULT 205603 0 0 0 0 0

@@ -1,0 +1,5 @@
+.text: A 2360086 bytes at 0x14fbe0; B 2360086 bytes at 0x14fbe0 (B - A 0 bytes)
+all functions in both: 3402; at the same address: 3402; moved: 0
+corten functions in both: 1709; at the same address: 1709; moved: 0
+probe functions in both: 852; at the same address: 852; moved: 0
+only in A: 0; only in B: 0 (0 named layout_pad)

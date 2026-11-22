@@ -1,0 +1,12 @@
+/m/1923/results/aa-same/cycles-plain.csv: 100 pairs; the one-sided 95% upper bound is the 59th smallest change
+| per request | base median | head median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| cycles user+kernel | 43454 | 43520 | +0.09% | +0.59% | -7.52% to +6.60% |
+| cycles user | 19130 | 19143 | -0.02% | +0.87% | -9.86% to +8.86% |
+| cycles kernel | 24371 | 24437 | +0.44% | +0.74% | -5.60% to +6.80% |
+| instructions user | 39455.3 | 39455.5 | +0.00% | +0.00% | -0.01% to +0.01% |
+base: median requests/s 66859
+head: median requests/s 66843
+cycles margin (bound on user+kernel change under +1%): met (+0.59%)
+instructions:u per request (medians): 39455.3 -> 39455.5 (+0.1); bound on the change +0.00%, at or below -2%: false
+JSON {"file":"/m/1923/results/aa-same/cycles-plain.csv","pairs":100,"boundRank":59,"measures":{"cycles user+kernel":{"base":43453.56647793784,"head":43520.40507285693,"change":0.0008980601246958431,"bound":0.005907358109726868,"min":-0.07523292097407286,"max":0.06603497369737243},"cycles user":{"base":19129.660672374637,"head":19142.92274614267,"change":-0.00017718070768135696,"bound":0.008723258326332584,"min":-0.09864082156261278,"max":0.08864135690268249},"cycles kernel":{"base":24371.200745744754,"head":24437.256303494498,"change":0.00435287899524317,"bound":0.007368862920628105,"min":-0.05600531222195515,"max":0.06801583836933145},"instructions user":{"base":39455.33497377717,"head":39455.45577297156,"change":0.000004053159338379686,"bound":0.000008249416000527532,"min":-0.00006677228244345024,"max":0.00007160131364147837}},"baseRequestsPerSecond":66859,"headRequestsPerSecond":66843.33333333334,"cyclesMarginMet":true,"instructionsFallAtLeast2Pct":false}

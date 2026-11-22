@@ -1,0 +1,67 @@
+== 1923 check start 16:21:25
+checked 1 requests: same
+checked 1 requests: same
+checked 1 requests: same
+== 1923 checks ok 16:22:00
+== aa-same plain start 16:22:00
+== aa-same plain ok 16:33:38
+/m/1923/results/aa-same/cycles-plain.csv: 100 pairs; the one-sided 95% upper bound is the 59th smallest change
+| per request | base median | head median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| cycles user+kernel | 43454 | 43520 | +0.09% | +0.59% | -7.52% to +6.60% |
+| cycles user | 19130 | 19143 | -0.02% | +0.87% | -9.86% to +8.86% |
+| cycles kernel | 24371 | 24437 | +0.44% | +0.74% | -5.60% to +6.80% |
+| instructions user | 39455.3 | 39455.5 | +0.00% | +0.00% | -0.01% to +0.01% |
+base: median requests/s 66859
+head: median requests/s 66843
+cycles margin (bound on user+kernel change under +1%): met (+0.59%)
+instructions:u per request (medians): 39455.3 -> 39455.5 (+0.1); bound on the change +0.00%, at or below -2%: false
+== aa-pad40 plain start 16:33:38
+== aa-pad40 plain ok 16:45:15
+/m/1923/results/aa-pad40/cycles-plain.csv: 100 pairs; the one-sided 95% upper bound is the 59th smallest change
+| per request | base median | head median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| cycles user+kernel | 43395 | 44029 | +1.16% | +1.62% | -9.58% to +9.90% |
+| cycles user | 19059 | 19301 | +1.40% | +1.71% | -13.26% to +11.69% |
+| cycles kernel | 24354 | 24660 | +0.89% | +1.41% | -6.49% to +8.47% |
+| instructions user | 39455.5 | 39455.7 | +0.00% | +0.00% | -0.01% to +0.01% |
+base: median requests/s 67108
+head: median requests/s 66180
+cycles margin (bound on user+kernel change under +1%): NOT met (+1.62%)
+instructions:u per request (medians): 39455.5 -> 39455.7 (+0.2); bound on the change +0.00%, at or below -2%: false
+== aa-pad3100 plain start 16:45:15
+== aa-pad3100 plain ok 16:56:52
+/m/1923/results/aa-pad3100/cycles-plain.csv: 100 pairs; the one-sided 95% upper bound is the 59th smallest change
+| per request | base median | head median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| cycles user+kernel | 43403 | 43908 | +1.06% | +1.39% | -10.83% to +6.61% |
+| cycles user | 19136 | 19412 | +1.83% | +2.58% | -13.66% to +7.81% |
+| cycles kernel | 24431 | 24488 | +0.28% | +0.66% | -8.43% to +5.73% |
+| instructions user | 39455.6 | 39455.7 | +0.00% | +0.00% | -0.01% to +0.01% |
+base: median requests/s 67034
+head: median requests/s 66365
+cycles margin (bound on user+kernel change under +1%): NOT met (+1.39%)
+instructions:u per request (medians): 39455.6 -> 39455.7 (+0.1); bound on the change +0.00%, at or below -2%: false
+== aa-pad40 plain-misses start 16:56:53
+== aa-pad40 plain-misses ok 17:00:27
+/m/1923/results/aa-pad40/counts-plain-misses.csv: 30 pairs; the one-sided 95% upper bound is the change of rank 20 from the smallest (A = base rows, B = head rows)
+| per request | A median | B median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| L1_icache_load_misses_u | 2048.37 | 2029.72 | -1.09% | -0.38% | -8.95% to +8.06% |
+| iTLB_load_misses_u | 12.62 | 12.88 | +2.24% | +7.74% | -24.71% to +25.37% |
+| branch_misses_u | 22.56 | 25.46 | +9.85% | +14.26% | -27.52% to +48.56% |
+| instructions user | 39455.43 | 39455.94 | +0.00% | +0.00% | -0.01% to +0.01% |
+median requests/s: A 66511, B 65591
+== aa-pad3100 plain-misses start 17:00:27
+== aa-pad3100 plain-misses ok 17:04:01
+/m/1923/results/aa-pad3100/counts-plain-misses.csv: 30 pairs; the one-sided 95% upper bound is the change of rank 20 from the smallest (A = base rows, B = head rows)
+| per request | A median | B median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| L1_icache_load_misses_u | 2078.22 | 2025.04 | -1.84% | -0.97% | -5.39% to +9.06% |
+| iTLB_load_misses_u | 12.78 | 13.33 | +4.71% | +18.94% | -35.71% to +46.43% |
+| branch_misses_u | 21.20 | 23.16 | +7.45% | +16.14% | -19.14% to +44.09% |
+| instructions user | 39455.56 | 39455.98 | +0.00% | +0.00% | -0.01% to +0.01% |
+median requests/s: A 66403, B 65860
+report: /m/1923/results/floor.md
+failed: none
+ALL-DONE

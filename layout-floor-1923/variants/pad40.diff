@@ -1,0 +1,26 @@
+--- a/crates/corten/src/router.rs
++++ b/crates/corten/src/router.rs
+@@ -39,6 +39,15 @@
+ 
+ use crate::form::FormError;
+ 
++/// corten-run/corten#1923 layout probe, not in the repository: 40 bytes of NOPs and a return,
++/// never called. `Router::new` takes its address once at startup so the linker keeps it, and
++/// the code placed after it moves; no request runs it or anything it changes.
++#[inline(never)]
++pub(crate) fn layout_pad() {
++    // SAFETY: never executed; if it were, it would run NOPs and return.
++    unsafe { core::arch::asm!(".skip 40, 0x90", options(nomem, nostack, preserves_flags)) }
++}
++
+ /// A request's answer on its way: what an [`Endpoint`] and the stages give.
+ pub(crate) type Answering = Pin<Box<dyn Future<Output = Response> + Send>>;
+ 
+@@ -763,6 +772,7 @@
+     /// gives none (and an unknown URL too, a `404`), unless it has a lane of its own. A path the
+     /// router cannot hold beside another (`/a/{x}` beside `/a/{y}`) stops the app, naming it.
+     pub(crate) fn new(table: Table, stages: Option<Arc<dyn Stages>>, at: impl Fn(&str) -> Option<Arc<dyn Stages>>) -> Self {
++        std::hint::black_box(layout_pad as fn());
+         let mut paths = matchit::Router::new();
+         let mut routes = Vec::with_capacity(table.routes.len());
+         for Placed { path, methods, written, through } in table.routes {

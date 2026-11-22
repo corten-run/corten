@@ -1,0 +1,5 @@
+.text: A 2360086 bytes at 0x14fbe0; B 2363238 bytes at 0x14fc20 (B - A 3152 bytes)
+all functions in both: 3402; at the same address: 0; moved: 3402; most common moves: +3168 B (mod 64 = 32): 1246, +64 B (a multiple of 64): 1097, +3216 B (mod 64 = 16): 1059
+corten functions in both: 1709; at the same address: 0; moved: 1709; most common moves: +64 B (a multiple of 64): 823, +3168 B (mod 64 = 32): 712, +3216 B (mod 64 = 16): 174
+probe functions in both: 852; at the same address: 0; moved: 852; most common moves: +3168 B (mod 64 = 32): 613, +3216 B (mod 64 = 16): 239
+only in A: 0; only in B: 1 (1 named layout_pad)

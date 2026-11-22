@@ -1,0 +1,25 @@
+[package]
+name = "p1923"
+version = "0.0.0"
+edition = "2021"
+
+# #1829's probe program (src/main.rs, unchanged), built once per variant from one place:
+# build.sh puts the variant's tree at ../work (main's, or main's with a layout patch applied), so
+# every binary is built from the same paths and differs only in what the tree holds.
+[[bin]]
+name = "probe"
+path = "src/main.rs"
+
+# Features: the template's (the defaults, log, and compress) and json, as #1829's probe. Third-party
+# versions come from main's Cargo.lock, copied here.
+[dependencies]
+corten = { package = "corten-run", path = "../work/crates/corten", features = ["json", "compress"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+# The repository's release profile.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[workspace]

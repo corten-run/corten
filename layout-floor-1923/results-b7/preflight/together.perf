@@ -1,0 +1,6 @@
+# started on Sun Nov 22 16:21:24 2026
+
+39845638,,L1-icache-load-misses,1074360920,100.00,,
+5688,,iTLB-load-misses,1074360920,100.00,,
+19708,,branch-misses:u,1074360920,100.00,,
+11061372939,,instructions:u,1074360920,100.00,,
