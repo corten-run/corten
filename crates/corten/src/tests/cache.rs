@@ -1458,8 +1458,7 @@ async fn the_router_s_own_failure_page_is_not_shared_when_a_middleware_rebuilds_
         ] {
             let pwa = crate::pwa::Pwa::new(crate::pwa::Manifest::new("A", "A"));
             let steps = (CdnRecaches(cache), AnswersShort, how);
-            let router =
-                App::new(Routes::from(routes())).middleware(steps).error_page(greeting_error_page, ()).pwa(pwa).router();
+            let router = App::new(Routes::from(routes())).middleware(steps).error_page(greeting_error_page, ()).pwa(pwa).router();
             for (method, uri, status) in [
                 ("GET", "/nowhere", StatusCode::NOT_FOUND),
                 ("GET", "/form", StatusCode::METHOD_NOT_ALLOWED),
@@ -1628,9 +1627,7 @@ impl<S: Send + Sync> crate::extract::FromRequestParts<S> for GreetsInstead {
 /// what the middleware wrote.
 #[tokio::test]
 async fn a_refusal_before_the_handler_that_answers_200_is_not_shared() {
-    let routes = || {
-        Table::new().route("/greet", get(|_: GreetsInstead| async { "never" })).route("/", get(|| async { "home" }))
-    };
+    let routes = || Table::new().route("/greet", get(|_: GreetsInstead| async { "never" })).route("/", get(|| async { "home" }));
     let mut wrong = Vec::new();
     for (cache, sent) in
         [(None, "private, no-cache"), (Some("public, max-age=60"), "private, no-cache"), (Some("no-store"), "private, no-store")]
@@ -1747,7 +1744,10 @@ async fn a_refusal_whose_status_a_middleware_changes_is_still_not_shared() {
             let (status, headers, _) = from_ann(&router, "GET", "/", &[("accept", accept), ("x-turn", "own")]).await;
             assert_eq!(status, StatusCode::SEE_OTHER, "own {accept} {cache:?}");
             for name in CDN_OVERRIDES {
-                assert_eq!(headers[name], "public, max-age=60", "own {accept} {cache:?}: the middleware's own answer keeps {name}");
+                assert_eq!(
+                    headers[name], "public, max-age=60",
+                    "own {accept} {cache:?}: the middleware's own answer keeps {name}"
+                );
             }
         }
     }
