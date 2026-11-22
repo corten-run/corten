@@ -7609,8 +7609,8 @@ rules something out.
     change before it merged main's [#1883 Count a write by path only once an answer may be kept](https://github.com/corten-run/corten/pull/1883),
     its code outside tests that of `11824d580`) against main's `e7e89add8`, in a probe app on
     jemalloc as the template runs it, with the `json` feature: a record page of 6,124 bytes and a
-    JSON body of 1,999 bytes, asked for with no coding. Each build was started once on a CPU of
-    its own (afresh for each turn where every request is for a new URL, so each turn begins with
+    JSON body of 1,999 bytes, asked for with no coding. Both builds were pinned to the same CPU, one whose core had no
+    other work, each started once (afresh for each turn where every request is for a new URL, so each turn begins with
     an empty store that keeps room) and loaded in turn for 3 s by `wrk` with 64 connections on
     two other CPUs, the order turned about each pair, 100 pairs a case after one not recorded,
     the app's user and kernel cycles and user instructions counted by `perf stat` and divided by
@@ -7620,8 +7620,9 @@ rules something out.
     the pairs with a bound of 0.59% fewer (user 2.27% fewer, kernel 0.13% fewer with a bound of
     0.31% more), on 2.02% fewer user instructions (51,687 against 52,755); a new URL for the
     JSON body 68,424 against 69,324, 1.37% fewer with a bound of 0.92% fewer (user 2.48% fewer,
-    kernel 0.07% more), on 1.83% fewer instructions (57,081 against 58,146). The kernel's part,
-    the faults of memory the store touches for the first time, is as it was. A kept page took
+    kernel 0.07% more), on 1.83% fewer instructions (57,081 against 58,146). Kernel cycles, where
+    the faults of memory the store touches first are counted, were about flat; this run did not
+    count the faults themselves again. A kept page took
     0.51% fewer (bound 0.39% fewer) on 0.19% more instructions (24,244 against 24,198), a kept
     JSON body 0.01% fewer (bound 0.08% more) on 0.18% more, and the store off 0.58% fewer (bound
     0.45% fewer) on the same instructions. A page not `Public`, whose code this change does not
