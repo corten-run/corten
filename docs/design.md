@@ -7300,9 +7300,10 @@ rules something out.
     feature, when it is one the app would compress (1,024 bytes or more, of a type it
     compresses, with no `no-transform` and no coding of its own). What a kept body saves is its
     handler, its writing and its compression, and the benchmark's handler reads only memory, so
-    there the compression is most of it: a body the app does not compress cost more cycles
-    kept than made (below), and the rule keeps a body where the saving is one the app can
-    count on whatever its handler does. Once kept, a body is given to a request that accepts
+    there the compression is most of it: with nothing compressed, keeping saved such a body
+    3.9% of its cycles and cost one from a handler that makes nothing 13.8% more (below), and
+    the rule keeps a body where the saving is one the app can count on whatever its handler
+    does. Once kept, a body is given to a request that accepts
     no coding too, which saves that request less. A build that does not compress keeps no body
     and its body routes ask the store nothing, which is known when the route is made. In a
     build that does, a body's size is known only once it is made, so a route whose bodies are
@@ -7340,7 +7341,8 @@ rules something out.
     (`req.t()`, `req.lang()`), and a body is kept for the header as it was sent and names it
     in `Vary`, as a page is. With both, a URL's eight copies are shared by the ways of asking
     times the languages asked in. An answer may hold markup its handler rendered, and one with a form's new submit key is
-    not kept. A page's render marks the key it drew; markup rendered any other way (into JSON
+    not kept; it is still sent `public`, a fault this does not mend
+    ([#1863 A `Public` answer with a submit key its handler rendered to a string is sent to shared caches as one any visitor may be given](https://github.com/corten-run/corten/issues/1863)). A page's render marks the key it drew; markup rendered any other way (into JSON
     or text, or into a file a page route answers) carries no mark, so the route watches the handler's own polls for one being drawn, and a render that reads
     the mark for itself (a page's, a patch's, one made with `req.rendered`) leaves a key drawn
     before it for the watch, also when it fails: a field rendered to a string and placed in a
@@ -7408,7 +7410,12 @@ rules something out.
     that drops a page for a change no write to its path made, a way for an extractor of the
     app's own to say it reads only the URL, `Public` files (a `Media` may be a stream, which
     has no size to keep, or bytes the app already holds, which cost no render, and what keeping
-    one saves is not measured), one copy
+    one saves is not measured), every `Public` body kept whatever its size and its build
+    (what this first did, for the 3.9% and at the price of the 13.8% below), a size of the store's own apart
+    from the compressor's (no round supports one), a way for a route to say its bodies are
+    worth keeping (a second way to say what `Public` says, until an app shows the handler it
+    would be for), a count over all of a route's answers in place of a run (a route whose
+    bodies grew would wait on its past), one copy
     of a body for both ways of asking where its handler does not take `Req`, a page served stale
     while it is made again, one render for requests that miss together, and one copy for each
     locale rather than for each `Accept-Language` sent.
@@ -7530,7 +7537,58 @@ rules something out.
     workstation, with other builds running, gave +1.5% (bound +2.8%) and is set aside as noise. Historical, a parent and child from
     before main changed the reading of a request's mode that a write runs: 16,292.0 a write at
     `30b39d455` against 15,210.8 at `45489ced9`, and with a `Public` page 16,308.7 against 16,310.7.
-    Not measured: how the URLs of an app in use are spread,
+    A kept body, with the catalog benchmark's JSON route marked `Public` for a minute and two
+    routes beside it that make nothing, of 2 bytes and of 2,000 (`69c8fb1bf` with this
+    change's code against `c26cbdb5a` on main's `564034b86`), counted under callgrind with a
+    browser's request headers and its four codings: the JSON of twenty records asked for in
+    turn took 41,063 instructions a request against 137,464, and 39,392 against 51,152 asked
+    for with no coding; the 2,000 bytes 40,589 against 54,870, and with no coding 38,964
+    against 37,746, more, a kept answer's own part costing more there than a handler that
+    makes nothing and a body that is not compressed; the 2 bytes, which are not kept, 38,388
+    against 38,376 at the medians of five runs (38,264 to 38,842 and 38,319 to 38,812). A new
+    URL for every request took 170,490 against 154,551 with room and 157,703 against 154,535
+    in a full store. In a build that does not compress, which keeps no body, the JSON took
+    48,925 against 48,877 and the 2 bytes 35,518 against 35,481 at the medians of five
+    (48,911 to 49,891 and 48,860 to 49,882, 35,481 to 35,888 and 35,471 to 35,491), the 2
+    bytes' difference in two functions whose code the change does not touch, by their own
+    counts. The change as merged counts a run in a function of its own (`5112aa392`), and
+    came within 884 instructions either way of `69c8fb1bf` in eight of these cases, as two
+    runs of one build do.
+    The first form of this change kept every `Public` body, whatever its size and its build
+    (`8ef8ee2ad`, the benchmark's route marked as above, against main with nothing
+    compressed, in cycles on a cloud host as above): a kept JSON answer took 3.9% fewer at
+    the median of the pairs, with a one-sided 95% bound of 2.3%, under the 5% set before the
+    run, and a constant from a handler that makes nothing 13.8% more.
+    In cycles on such a host, the two builds each started six times and loaded in
+    turn for eight pairs of three seconds a start: the JSON of 500 URLs asked for unevenly
+    with a browser's codings took 48,290 cycles a request against 92,786 at the medians,
+    48.1% fewer within a pair at the median, fewer in all 48 and 47.2% to 48.7% fewer by
+    start, where the margin set before the run was 20%; with no coding 49,898 against
+    55,709, 10.3% fewer, fewer in all 48 and 8.3% to 12.2% by start; the 2,000 bytes 17.7%
+    fewer, fewer in all 48 and 16.7% to 20.4% by start, and with no coding 1.6% more, more
+    in 37 of 48 and from 2.5% fewer to 3.0% more by start. The 2 bytes took 1.0% fewer, 0.1%
+    to 3.3% fewer by start, where one build started twice differed by 0.3% at the median and
+    from 4.8% fewer to 2.3% more by start (and on the JSON by 1.1%, from 2.4% fewer to 1.9%
+    more), so no cost to a body that is not kept is shown. In the build that does not
+    compress the JSON took 1.7% fewer, 1.1% to 3.5% fewer by start, on the same user
+    instructions (35,462 against 35,414), which is not claimed as a gain, and the 2 bytes
+    0.1% fewer, from 2.7% fewer to 4.0% more by start. A new URL for every request in a
+    full store took 100,248 cycles against 95,372, 5.7% more, more in all 48 and 3.6% to
+    6.4% more by start: the ask and the mark for a URL the store then leaves to its
+    handler, as a page pays against the store off (5.2%, above). A route that counted these
+    toward its run would leave and be spared them, and would give up its kept bodies while
+    a crawler walks it, where a handler that waits loses more than the ask costs. With room
+    (a bound of 6 GiB, four pairs of two seconds a start) a new URL took 140,357 against
+    95,090, 47.3% more, more in all 24 and 41.2% to 60.5% more by start, 48,853 against
+    28,128 of it in the kernel: the first touch of the store's memory, as for a page above.
+    A body took about 5.3 KB of resident memory there (185 MB more at the end of each turn
+    of about 35,000 requests), so the default bound has room for about six thousand such
+    before it is full and the rule for a full store applies.
+    Not measured: a body kept for a handler that waits on a database or another service,
+    where the wait and not the compression is what a kept body saves (the benchmark's handler
+    reads memory, and the rule for bodies is drawn from it); a route of a few large bodies
+    among many small, in cycles (how often it leaves the store out is reasoned from the run's
+    length); how the URLs of an app in use are spread,
     so how often one first asked for in a full store is asked for again (the simulation's
     spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
     kept page in those rounds is the rule, two builds of the same code having differed by
@@ -7557,7 +7615,11 @@ rules something out.
     setting for the bound, README Values).
 
     Revisit when: apps report pages shown past what they meant, so the default should be off
-    or the lifetime the app's to set apart from `s-maxage`; an app's profile shows the copies
+    or the lifetime the app's to set apart from `s-maxage`; an app's handler for bodies the
+    app does not compress (small ones, or any in a build without `compress`) waits on a
+    database or another service, so keeping them would save more than asking costs and the
+    rule should be the route's to widen; a route's profile shows its few large bodies made
+    for each request among many small ones, so a run is the wrong measure; an app's profile shows the copies
     for URLs asked for once in a store with room, so the rule should start before the store
     is full; an app's pages are made twice in a full store at a cost above the copies saved
     (its URLs are each asked for a few times together, the spread where the simulation's
@@ -7571,7 +7633,22 @@ rules something out.
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-21 for a write's count, the callgrind rounds above at `fc86d8eff` and
+    Last checked: 2026-11-21 for a kept body, `c26cbdb5a` (main's `564034b86` with the catalog
+    benchmark's JSON route marked `Public` for a minute and two routes that make nothing, of 2
+    bytes and of 2,000) against `69c8fb1bf` (the same on this change), built with rustc 1.99.1
+    with the app's default features, and without them for the build that does not compress:
+    each count the difference of a run of 1,300 requests and one of 300 under callgrind
+    (valgrind 3.19.0), asked for one at a time with the fifteen headers a browser sends,
+    `Accept: application/json` and `Accept-Encoding: gzip, deflate, br, zstd` or `identity`,
+    `5112aa392` counted the same way against `69c8fb1bf`,
+    and the cycles on a cloud host with eight dedicated CPUs (Xeon Platinum 8280, Linux 6.12,
+    `wrk` 4.1.0) that ran nothing else of its own, the app on one CPU and `wrk` with 64
+    connections on two others, each pair of builds started six times for eight pairs of
+    three seconds (four pairs of two seconds where the store was to keep its room, under a
+    bound of 6 GiB), the order turned about from each pair to the next, the app's cycles and
+    instructions counted by `perf stat` and divided by the requests answered, with one of
+    500 URLs asked for unevenly, one URL, or a new URL for every request, and the same
+    binary started twice as the measure of what two starts differ by; 2026-11-21 for a write's count, the callgrind rounds above at `fc86d8eff` and
     `6984b2ac4`, and the cycles of the same write from the two builds, built with rustc 1.100.0
     on a dedicated 8-CPU cloud host (Xeon Platinum 8358, one thread a core) with nothing else
     running, started once on one CPU, loaded in turn for three seconds each by `wrk` with 64
