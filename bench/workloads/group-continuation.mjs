@@ -60,13 +60,14 @@ const retryable = (row) => ["not-created", "native-failed-retired", "setup-faile
 const acceptable = (row) => ["missing", "prepared", "verified", "running"].includes(row.outcome) || retryable(row);
 const manifestOnly = (fleet, entries = readdirSync(fleet.root)) =>
   entries.length === 1 && entries[0] === `fleet-${fleet.manifest.round}.json`;
-const terminal = ({ state }) => state?.destroyedAt && ["collected", "retired"].includes(state.status);
-const known = ({ state }) => state?.status === "collected" && state.validation?.status === "verified";
+const terminal = ({ state }) => state?.id && state.destroyedAt && ["collected", "retired"].includes(state.status);
+const known = ({ state }) => state?.id && state.status === "collected" && state.validation?.status === "verified";
 const retirementFile = (kind) => ({ "native-failed": "failed-native-host.json", "setup-failed": "failed-setup-host.json", unused: "unused-host.json" })[kind];
-const lockBytes = (root) => {
+const readBatchLock = (root) => {
   const path = join(root, ".fleet-operation.lock");
-  return present(path) ? digest(regular(path, 1024)) : null;
+  return present(path) ? regular(path, 1024) : null;
 };
+const lockBytes = (root) => { const bytes = readBatchLock(root); return bytes && digest(bytes); };
 
 function verifyRetryRetirement(saved) {
   const { local, state, stateRoot } = saved, { kind, evidenceSha256 } = state.retirement;
@@ -148,23 +149,34 @@ async function scanContinuation(root, { repo, interrupted, inspect } = {}, admit
   const readAdmission = async (fleet, checkout, archives) => {
     assert.ok(!interrupted?.(), "continuation admission cancelled");
     const { manifest, manifestSha256 } = fleet, { round, commit, single } = manifest;
-    const lock = lockBytes(fleet.root), children = manifest.jobs.map(({ group }) => readGroup(fleet, group));
+    const bytes = readBatchLock(fleet.root), lock = bytes && digest(bytes);
+    const children = manifest.jobs.map(({ group }) => readGroup(fleet, group));
     if (lock !== null && single && !terminal(children[0])) { addPeer(fleet); return; }
-    const launch = (single || stagedFleet(manifest)) && present(join(fleet.root, "launch-intent.json"))
-      ? readLaunchIntent(fleet).sha256 : undefined;
-    const remaining = !single && stagedFleet(manifest) && present(join(fleet.root, "remaining-intent.json"))
-      ? readRemainingIntent(fleet).sha256 : undefined;
-    if (lock !== null && !single) {
-      // A spent staged launch has no pending creator for jobs it deferred.
-      // Never use PID liveness to reinterpret a destroyed reservation.
-      const firstOnly = launch && !remaining;
-      if (!(firstOnly ? children.slice(0, 1) : children).every(terminal))
-        assert.notEqual(fleetLockSnapshot(fleet.root), "busy", "continuation source has an active batch");
+    const launchIntent = (single || stagedFleet(manifest)) && present(join(fleet.root, "launch-intent.json"))
+      ? readLaunchIntent(fleet) : undefined;
+    const remainingIntent = !single && stagedFleet(manifest) && present(join(fleet.root, "remaining-intent.json"))
+      ? readRemainingIntent(fleet) : undefined;
+    const launch = launchIntent?.sha256, remaining = remainingIntent?.sha256;
+    let requireDeadOwner = false;
+    if (bytes && !single) {
+      const { pid, approvalSha256, ...extra } = JSON.parse(bytes);
+      assert.deepEqual(extra, {}, "continuation source has an active batch");
+      assert.ok(Number.isSafeInteger(pid) && pid > 0, "continuation source has an active batch");
+      // A retained lock is spent only for its exact consumed action. A first
+      // launch intent says nothing about a live remaining owner before intent.
+      const consumed = [launchIntent, remainingIntent].find((it) => it && it.approvalSha256 === approvalSha256);
+      requireDeadOwner = !consumed || !consumed.subject.jobs.every((job, i) => job.outcome !== "planned" || terminal(children[i]));
+      if (requireDeadOwner) assert.equal(fleetLockSnapshot(fleet.root), lock, "continuation source has an active batch");
     }
-    manifests.push({ ...fleet, lock, launch, remaining });
+    manifests.push({ ...fleet, lock, launch, remaining, requireDeadOwner });
     for (const saved of children) {
       const { group, state, stateSha256 } = saved, selected = group === admittedGroup;
       const pinned = archives && Object.hasOwn(archives, group);
+      // Only bound historical allocations past create/bootstrap (or with a
+      // recorded terminal setup) can have cleanup settled by an account census.
+      const censusRequired = !!(archives && state?.id && !terminal(saved)
+        && (["running", "collected", "retired"].includes(state.status) || state.preBootstrapTerminal));
+      assert.ok(!pinned || terminal(saved) || censusRequired, "unresolved custody: archive pin lacks a bound historical allocation");
       const noCreate = notCreated(fleet, saved, lock);
       let outcome = noCreate ? "not-created" : saved.outcome === "available" ? "uncollected" : saved.outcome;
       let receipt;
@@ -192,11 +204,10 @@ async function scanContinuation(root, { repo, interrupted, inspect } = {}, admit
       if (state?.id) claim(state.id);
       // Historical allocations without deletion confirmation cannot grant a
       // peer exception. Only a fresh census in their account may exclude them.
-      const censusRequired = !!(archives && (pinned || state?.id) && !terminal(saved));
       if (censusRequired) {
         const { accountId } = manifest.provider;
         needsCensus.add(accountId);
-        unconfirmed.push({ group, round, accountId, manifestSha256, stateSha256, id: state?.id });
+        unconfirmed.push({ group, round, accountId, manifestSha256, stateSha256, id: state.id });
       }
       states.push({ fleet, group, stateSha256, outcome: saved.outcome, noCreate, retirementFile: receipt });
       attempts.get(group)?.push({ group, outcome, round, commit, manifestSha256, stateSha256, launch,
@@ -307,11 +318,11 @@ async function scanContinuation(root, { repo, interrupted, inspect } = {}, admit
       const current = readFleet(fleet.root, fleet.manifest.round, { priorSelection: true });
       assert.deepEqual(continuationPeer(current).proof, proof, "continuation peer changed");
     }
-    for (const { root, manifest, manifestSha256, lock, launch, remaining } of manifests) {
+    for (const { root, manifest, manifestSha256, lock, launch, remaining, requireDeadOwner } of manifests) {
       const current = readFleet(root, manifest.round, { priorSelection: true });
       assert.equal(current.manifestSha256, manifestSha256);
       if (root !== operatingRoot) {
-        assert.equal((admittedGroup ? lockBytes : fleetLockSnapshot)(root), lock, "continuation source lock changed");
+        assert.equal((!admittedGroup || requireDeadOwner ? fleetLockSnapshot : lockBytes)(root), lock, "continuation source lock changed");
         if (unlaunched.has(root)) assert.ok(manifestOnly(current), "unlaunched attempt changed");
       }
       if (admittedGroup && (manifest.single || stagedFleet(manifest))) {

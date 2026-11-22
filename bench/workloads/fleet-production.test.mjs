@@ -353,6 +353,13 @@ test("continuation schedules around pinned catalog and retired JSON without repl
   const reused = path.join(jsonRoot, ".fleet-operation.lock");
   fs.writeFileSync(reused, JSON.stringify({ pid: process.pid, approvalSha256: jsonApproval }));
   const retainedJson = treeHash(jsonRoot);
+  const running = "mixed-production", binding = history.jobs.find(({ group }) => group === running);
+  const runningPath = path.join(retained, running, "groups-r20");
+  fs.mkdirSync(runningPath, { recursive: true });
+  fs.writeFileSync(path.join(runningPath, "state.json"), JSON.stringify({
+    ...reservation({ round: history.round, commit: history.commit, token: binding.token, fleet: history, group: running }, at),
+    fleet: oldFleet, status: "running", createIntentAt: at, id: "902", ip: "192.0.2.202", provider: history.provider, fullGroupQualified: false,
+  }));
   const beforePreview = p.events().length;
   assert.equal(await fleetMain(prepare(next), p.deps), 3);
   assert.equal(await preview(next), 3);
@@ -360,6 +367,8 @@ test("continuation schedules around pinned catalog and retired JSON without repl
   assert.deepEqual(subject.jobs.map((job) => job.group), [next]);
   assert.deepEqual(subject.fleet.selection.groups, [history.selection.groups.find(({ group }) => group === next)]);
   assert.deepEqual(subject.continuation.verified, []);
+  assert.deepEqual(subject.continuation.unconfirmed, [{ group: running, round: history.round, accountId,
+    manifestSha256: fileHash(path.join(retained, "fleet-r20.json")), stateSha256: fileHash(path.join(runningPath, "state.json")), id: "902" }]);
   assert.equal(p.events().length, beforePreview, "prepare/preview have no child/provider mutation path");
   assert.ok(!fs.existsSync(path.join(p.h.base, next, "launch-intent.json")));
   delete p.deps.inspect; // There is no measured checkout to load and the old archive is still corrupt.
@@ -371,6 +380,8 @@ test("continuation schedules around pinned catalog and retired JSON without repl
   assert.deepEqual(p.events().filter((row) => row.method === "POST").map(({ group, body }) => [group, body.size]), [[next, "c-8"]]);
   await assert.rejects(detached(next, approvalSha256), /unresolved custody|already attempted/);
   fs.unlinkSync(reused); // Historical lock interpretation is a separate report-only concern.
+  fs.unlinkSync(path.join(runningPath, "state.json"));
+  fs.rmdirSync(runningPath); fs.rmdirSync(path.dirname(runningPath));
   fs.writeFileSync(oldArchive, oldBytes);
   p.deps.inspect = replay;
   const job = path.join(p.h.base, next), fleet = readFleet(job, "r21").manifest;
@@ -407,7 +418,7 @@ test("continuation schedules around pinned catalog and retired JSON without repl
     await assert.rejects(detached(pending, approval.approvalSha256), /exact-approval-required/);
     assert.equal(p.events().length, beforeCensus, "changed historical identity cannot reach provider");
     fs.writeFileSync(historical, JSON.stringify(unconfirmed));
-    fs.writeFileSync(p.hosts, JSON.stringify([{ id: Number(saved.id), name: saved.name, tags: [] }]));
+    fs.writeFileSync(p.hosts, JSON.stringify([{ id: Number(saved.id), name: "renamed-unrelated-looking", tags: [] }]));
     assert.equal(await detached(pending, approval.approvalSha256), 2);
     const trace = p.events().slice(beforeCensus).filter(({ boundary }) => boundary === "provider");
     assert.deepEqual(trace.map(({ method, path }) => [method, path]), [
