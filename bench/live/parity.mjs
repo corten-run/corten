@@ -75,8 +75,8 @@ function beginActorWindow(isolated) {
   } };
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-function command(program, args, options = {}) {
-  const result = spawnSync(program, args, { cwd: root, encoding: "utf8", timeout: 180000, maxBuffer: 16 * 1024 * 1024, ...options });
+function command(program, args, options = {}, spawn = spawnSync) {
+  const result = spawn(program, args, { cwd: root, encoding: "utf8", timeout: 180000, maxBuffer: 16 * 1024 * 1024, ...options });
   if (result.status !== 0) {
     const error = new Error(`${program} ${args.join(" ")}: ${result.error?.message ?? `exit ${result.status}`}\n${result.stderr?.slice(-12000) ?? ""}`);
     error.receipt = { program, args, status: result.status, signal: result.signal, error: result.error?.message,
@@ -285,7 +285,10 @@ export function verifyArtifact(artifact, expected) {
   return summary;
 }
 
-export async function run({ group, out, apps: requested, build = false, round, profile = "bounded", measure = false, isolated = false }) {
+// Dependency overrides serve bounded tests only. The CLI always uses the real
+// browser, Docker and capture code; both paths save and verify identical evidence.
+export async function run({ group, out, apps: requested, build = false, round, profile = "bounded", measure = false, isolated = false },
+  { spawn = spawnSync, chromium, signal: testSignal, journey = browserJourney, fanout = fanoutJourney } = {}) {
   if (isolated) requireNativeCommandCpuSet(liveActorCpus.browser);
   const apps = select(group, requested);
   const workload = workloadFor(profile);
@@ -314,20 +317,26 @@ export async function run({ group, out, apps: requested, build = false, round, p
   await writeFile(join(out, "plan.json"), JSON.stringify(plan, null, 2));
   await writeFile(join(out, "source.diff.gz"), gzipSync(diff));
   const cells = [];
-  const stop = new AbortController(), { signal } = stop;
+  const stop = new AbortController(), signal = testSignal ? AbortSignal.any([stop.signal, testSignal]) : stop.signal;
   const handlers = ["SIGINT", "SIGTERM", "SIGHUP"].map((name) => [name, () => stop.abort(new Error(`native live runner cancelled (${name})`))]);
   for (const [name, handler] of handlers) process.on(name, handler);
   let wroteActorTools = false;
   try {
-    const { chromium } = await import("playwright");
+    chromium ??= (await import("playwright")).chromium;
     for (const app of apps) {
       signal.throwIfAborted();
       const port = portFor(app, profile);
       if (!port) continue;
       const name = `parity-live-${randomUUID()}`, context = join(here, "apps", port.directory);
       let ownedId, actorStart, launched;
-      const docker = (args) => command("docker", args);
-      const cases = [], files = [], qualified = [];
+      const docker = (args, options) => command("docker", args, options, spawn);
+      const files = [], qualified = [], measurementFiles = [];
+      const scenarioManifest = `${app}-artifacts.json`;
+      let scenarioFailures = 0, measurementFailures = 0, adapterError, wroteScenarios = false;
+      const saveScenarios = async () => {
+        await writeFile(join(out, scenarioManifest), JSON.stringify({ app, group, files }, null, 2));
+        wroteScenarios = true;
+      };
       try {
         const appSources = async () => port.rootContext ? {
           app: await sources(context), crates: await sources(join(root, "crates")),
@@ -336,12 +345,12 @@ export async function run({ group, out, apps: requested, build = false, round, p
         const sourceHashes = await appSources();
         signal.throwIfAborted();
         const sourceSha256 = hash(JSON.stringify(sourceHashes));
-        const existing = spawnSync("docker", ["image", "inspect", port.image], { encoding: "utf8", timeout: 15000 });
+        const existing = spawn("docker", ["image", "inspect", port.image], { encoding: "utf8", timeout: 15000 });
         const existingImage = existing.status === 0 ? JSON.parse(existing.stdout)[0] : undefined;
-        if (build || existingImage?.Config.Labels?.["bench.live.source-sha256"] !== sourceSha256) command("docker", ["build", "--label", "agent.owner=codex", "--label", "agent.task=bench-parity-live",
+        if (build || existingImage?.Config.Labels?.["bench.live.source-sha256"] !== sourceSha256) docker(["build", "--label", "agent.owner=codex", "--label", "agent.task=bench-parity-live",
           "--label", `bench.live.source-sha256=${sourceSha256}`, "-t", port.image,
           ...(port.dockerfile ? ["-f", join(context, port.dockerfile)] : []), port.rootContext ? root : context], { timeout: port.buildTimeoutMs ?? 300000 });
-        const built = JSON.parse(command("docker", ["image", "inspect", port.image]))[0];
+        const built = JSON.parse(docker(["image", "inspect", port.image]))[0];
         const imageId = built.Id, imageSourceSha256 = built.Config.Labels?.["bench.live.source-sha256"];
         assert.equal(imageSourceSha256, sourceSha256, "stale/unbound native image: rerun with --build");
         signal.throwIfAborted();
@@ -365,7 +374,7 @@ export async function run({ group, out, apps: requested, build = false, round, p
         const provenance = { commit, diffSha256: hash(diff), code, contractSha256: contractSha256(group), sourceHashes, sourceSha256, imageSourceSha256,
           imageId, containerId: inspect.Id, nativePort: port.transport,
           ...(port.wire === "laravel-livewire" ? { instance: { args: ["inspect", "--format", nativeInstanceFormat, inspect.Id], status: 0,
-            stdout: command("docker", ["inspect", "--format", nativeInstanceFormat, inspect.Id]) } } : {}),
+            stdout: docker(["inspect", "--format", nativeInstanceFormat, inspect.Id]) } } : {}),
           processTopology: port.topology ?? "one application process; no broker, database or shared renderer",
           processInventory: docker(["top", ownedId, "-eo", "pid,ppid,comm"]), container: {
             nanoCpus: inspect.HostConfig.NanoCpus, memory: inspect.HostConfig.Memory, memorySwap: inspect.HostConfig.MemorySwap,
@@ -383,8 +392,8 @@ export async function run({ group, out, apps: requested, build = false, round, p
           let artifact;
           const actor = beginActorWindow(isolated);
           try {
-            const journey = await browserJourney(browser, base, workload, settings, port, actor.recordRenderer);
-            artifact = { schema: "native-live-evidence/v1", profile, app, group, scenario, provenance, workload, settings, ...journey };
+            const observed = await journey(browser, base, workload, settings, port, actor.recordRenderer);
+            artifact = { schema: "native-live-evidence/v1", profile, app, group, scenario, provenance, workload, settings, ...observed };
             verifyArtifact(artifact, { app, group, scenario });
           } catch (error) {
             artifact = { schema: "native-live-failure/v1", profile, app, group, scenario, provenance, workload, settings, error: error.message, ...error.evidence };
@@ -393,26 +402,23 @@ export async function run({ group, out, apps: requested, build = false, round, p
           const bytes = gzipSync(JSON.stringify(artifact));
           await writeFile(join(out, file), bytes); files.push({ file, sha256: hash(bytes) });
           const saved = JSON.parse(gunzipSync(await readFile(join(out, file))));
-          if (saved.schema === "native-live-evidence/v1") { verifyArtifact(saved, { app, group, scenario }); cases.push(scenario); qualified.push(saved); }
-          else console.error(`${app}/${scenario}: ${saved.error}`);
+          if (saved.schema === "native-live-evidence/v1") { verifyArtifact(saved, { app, group, scenario }); qualified.push(saved); }
+          else { scenarioFailures++; console.error(`${app}/${scenario}: ${saved.error}`); }
         }
+        signal.throwIfAborted();
         assert.deepEqual(await appSources(), sourceHashes, "native source changed during capture");
         assert.equal(inspectOwnedLiveContainer(docker, ownedId).Image, imageId);
-        const allPassed = cases.length === scenarios(group).length;
-        await writeFile(join(out, `${app}-artifacts.json`), JSON.stringify({ app, group, files }, null, 2));
-        let measurement = "not-run", measurementArtifact;
-        if (measure && allPassed) {
+        await saveScenarios();
+        if (measure && qualified.length === scenarios(group).length) {
           // Independent admission: revalidate every saved native fault journey before any timing.
           assert.deepEqual(qualified.map((a) => a.scenario), scenarios(group));
           for (const a of qualified) {
             assert.deepEqual(a.provenance, provenance, "qualification scenario provenance differs from the measured native instance");
             verifyArtifact(a, { app, group, scenario: a.scenario });
           }
-          const measurementFiles = [];
-          measurement = "complete"; measurementArtifact = `${app}-measurements.json`;
           const kernelCounters = (id, phase) => {
             const capture = (args) => {
-              const startedAt = performance.now(), stdout = command("docker", args), finishedAt = performance.now();
+              const startedAt = performance.now(), stdout = docker(args), finishedAt = performance.now();
               return { request: { program: "docker", args }, stdout, status: 0, startedAt, finishedAt };
             };
             const instance = capture(["inspect", "--format", inspectFormat, provenance.containerId]);
@@ -424,12 +430,12 @@ export async function run({ group, out, apps: requested, build = false, round, p
             let a;
             const actor = beginActorWindow(isolated);
             try {
-              const observed = await fanoutJourney(browser, base, settingsFor(group, "normal", profile), clients, port, kernelCounters, actor.recordRenderer);
+              const observed = await fanout(browser, base, settingsFor(group, "normal", profile), clients, port, kernelCounters, actor.recordRenderer);
               a = { schema: "native-live-fanout/v3", profile: fanoutProfile, app, group, provenance, qualification: files,
                 comparative: false, repeats: 1, ...observed };
               a.summary = verifyFanout(a, { app, group, provenance, qualification: files, settings: qualified[0].settings, wire: port.wire });
             } catch (error) {
-              measurement = "failed";
+              measurementFailures++;
               a = { schema: "native-live-fanout-failure/v1", app, group, clients, provenance, qualification: files, error: error.message, ...error.evidence };
               if (!browser.isConnected()) a.browserFailure = { stage: "fanout", disconnected: true };
               console.error(`${app}/fanout-${clients}: ${error.message}`);
@@ -438,26 +444,40 @@ export async function run({ group, out, apps: requested, build = false, round, p
             const file = `${app}-fanout-${clients}.json.gz`, bytes = gzipSync(JSON.stringify(a));
             await writeFile(join(out, file), bytes); measurementFiles.push({ file, sha256: hash(bytes) });
           }
-          await writeFile(join(out, measurementArtifact), JSON.stringify({ app, group, profile: fanoutProfile, files: measurementFiles }, null, 2));
         }
+        signal.throwIfAborted();
         assert.deepEqual(await appSources(), sourceHashes, "native source changed during measurement");
-        cells.push({ app, case: group === "live-delivery" ? "delivery" : "recovery", implementation: "implemented",
-          parity: allPassed ? "passed" : "failed", measurement, ...(measurementArtifact ? { measurementArtifact } : {}),
-          reason: `${cases.length}/${scenarios(group).length} bounded native browser journeys passed; no load qualification`, artifact: `${app}-artifacts.json` });
       } catch (error) {
-        await writeFile(join(out, `${app}-failure.json`), JSON.stringify({ app, error: error.message, receipt: error.receipt }, null, 2));
-        cells.push({ app, case: group === "live-delivery" ? "delivery" : "recovery", implementation: "implemented", parity: "failed", measurement: "not-run", reason: error.message });
+        if (!signal.aborted || error !== signal.reason) adapterError = error;
       } finally {
         try {
+          // Finalize completed case files even if the next boundary observed
+          // cancellation. Unattempted cases do not get synthetic artifacts.
+          const artifact = files.length ? scenarioManifest : undefined;
+          const measurementArtifact = measurementFiles.length ? `${app}-measurements.json` : undefined;
+          if (artifact && !wroteScenarios) await saveScenarios();
+          if (measurementArtifact) await writeFile(join(out, measurementArtifact),
+            JSON.stringify({ app, group, profile: fanoutProfile, files: measurementFiles }, null, 2));
+          if (adapterError) await writeFile(join(out, `${app}-failure.json`), JSON.stringify({ app, error: adapterError.message, receipt: adapterError.receipt }, null, 2));
+          const parity = scenarioFailures || adapterError ? "failed" : qualified.length === scenarios(group).length ? "passed" : "not-run";
+          const measurement = measurementFailures || (adapterError && measurementFiles.length) ? "failed"
+            : measurementFiles.length === fanoutProfile.clients.length ? "complete" : "not-run";
+          cells.push({ app, case: group === "live-delivery" ? "delivery" : "recovery", implementation: "implemented", parity, measurement,
+            ...(artifact ? { artifact } : {}), ...(measurementArtifact ? { measurementArtifact } : {}),
+            reason: artifact ? `${qualified.length}/${scenarios(group).length} bounded native browser journeys passed; no load qualification`
+              : adapterError?.message ?? "Cancelled before first scenario" });
+        } finally {
           try { await launched?.close(); }
           finally {
-            if (actorStart !== undefined) {
-              const endedAt = Date.now(), info = inspectOwnedLiveContainer(docker, ownedId);
-              const actor = appActor(info, app, { startedAt: actorStart, endedAt });
-              await writeFile(join(out, `${app}-host-actor.json`), JSON.stringify(actor), { flag: "wx" });
-            }
+            try {
+              if (actorStart !== undefined) {
+                const endedAt = Date.now(), info = inspectOwnedLiveContainer(docker, ownedId);
+                const actor = appActor(info, app, { startedAt: actorStart, endedAt });
+                await writeFile(join(out, `${app}-host-actor.json`), JSON.stringify(actor), { flag: "wx" });
+              }
+            } finally { if (ownedId) removeOwnedLiveContainer(docker, ownedId); }
           }
-        } finally { if (ownedId) removeOwnedLiveContainer(docker, ownedId); }
+        }
       }
     }
     signal.throwIfAborted();
@@ -465,10 +485,12 @@ export async function run({ group, out, apps: requested, build = false, round, p
     for (const [name, handler] of handlers) process.off(name, handler);
     const rows = inventory(group, profile).map((entry) => cells.find((c) => c.app === entry.app) ?? {
       app: entry.app, case: group === "live-delivery" ? "delivery" : "recovery", implementation: entry.implementation,
-      parity: "not-run", measurement: "not-run", reason: entry.reason,
+      parity: "not-run", measurement: "not-run", reason: signal.aborted && apps.includes(entry.app) && portFor(entry.app, profile)
+        ? "Cancelled before adapter started" : entry.reason,
     });
     const ledger = coverage(group, rows);
-    ledger.readyForLoad = rows.every((r) => r.implementation === "implemented" && r.parity === "passed"
+    if (signal.aborted) ledger.cancelled = true;
+    ledger.readyForLoad = !signal.aborted && rows.every((r) => r.implementation === "implemented" && r.parity === "passed"
       && (!measure || r.measurement === "complete"));
     await writeFile(join(out, "coverage.json"), JSON.stringify(ledger, null, 2));
   }

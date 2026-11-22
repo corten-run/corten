@@ -140,11 +140,15 @@ individual waits are bounded, startup is bounded, and owned containers are remov
 in `finally`. The local browser runs outside that app budget and is explicitly inventoried.
 Chromium is owned by one adapter at a time: it starts after the app is ready and closes before
 the next adapter. A disconnect remains a case failure with its browser stage, not an app crash
-or a retried success. A cancellation stops the run instead of opening another browser.
+or a retried success. Cooperative cancellation stops the run instead of opening another
+browser. The runner saves the attempted scenario and fan-out prefixes in the usual manifests,
+including failures; replay lists the remaining cases as unattempted and never qualifies a
+cancelled round. This does not recover writes interrupted by an abrupt process or host loss.
 
-The focused lifecycle test in `parity.test.mjs` uses bundled Chromium, the ASP.NET and Express
-browser clients, and one loopback update per client. It deliberately closes the first browser
-and verifies the next adapter's journey independently, without starting the apps or measuring fan-out.
+The lifecycle test in `browser-lifetime.test.mjs` drives the production adapter loop with
+bundled Chromium and the ASP.NET and Express clients on loopback. It deliberately closes the
+first browser, replays the retained failure, and verifies that the next adapter completes its
+normal journey. Cancellation tests exercise the same loop without starting app images or timing fan-out.
 
 Each final detach closes the real EventSource and waits for the native subscription, writer
 task and queue to reach zero. The independent post-detach write is acknowledged, followed
