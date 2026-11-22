@@ -1921,6 +1921,79 @@ mod layout_reads {
         assert_eq!(count.started.load(Ordering::SeqCst), 0);
     }
 
+    /// An answer type of the app's own that is a page, and `Public` or not as the handler decides.
+    enum PublicOrNot {
+        Public(Public<HtmlResult>),
+        One(HtmlResult),
+    }
+
+    impl crate::response::IntoResponse for PublicOrNot {
+        fn into_response(self) -> crate::response::Response {
+            match self {
+                PublicOrNot::Public(answer) => answer.into_response(),
+                PublicOrNot::One(answer) => answer.into_response(),
+            }
+        }
+    }
+
+    impl crate::Answer for PublicOrNot {
+        const FORMAT: crate::answer::Format = crate::answer::Format::Html;
+        const PAGE: bool = true;
+        type Inputs = crate::answer::AnyInputs;
+        type Rows = crate::answer::NotAFeed;
+        type Kind = crate::AnyAnswer;
+    }
+
+    async fn public_or_not(req: Req) -> PublicOrNot {
+        let chosen = html! { <p>"chosen"</p> };
+        if req.path().ends_with("-one") {
+            PublicOrNot::One(req.page(Layout { req: &req, children: chosen }))
+        } else {
+            PublicOrNot::Public(Public::new(Duration::from_secs(60), req.page(Layout { req: &req, children: chosen })))
+        }
+    }
+
+    async fn public_or_not_kept_by_none(req: Req) -> crate::NoStore<PublicOrNot> {
+        crate::NoStore(public_or_not(req).await)
+    }
+
+    #[crate::routes]
+    mod public_or_not_url {
+        #[route("/route-no-store", get = public_or_not, no_store)]
+        pub struct RouteNoStore;
+
+        #[route("/route-no-store-one", get = public_or_not, no_store)]
+        pub struct RouteNoStoreOne;
+
+        #[route("/wrapped-no-store", get = public_or_not_kept_by_none)]
+        pub struct WrappedNoStore;
+    }
+
+    /// A `Public` answer stays the same for everyone when what wraps it says nothing may keep it
+    /// (`no_store` on its route, or `NoStore` around an answer type of the app's own that chose
+    /// it): `no-store` replaces how long caches keep it, not who it is for, so no one's values are
+    /// drawn in it. The same route's page for one visitor draws them.
+    #[tokio::test]
+    async fn a_public_answer_kept_by_none_still_draws_no_one_s_values() {
+        let router = App::new(public_or_not_url::router())
+            .layout_read(CartCount::default())
+            .layout_read(SignedIn)
+            .middleware(AsViewer(Some("ada")))
+            .router();
+        for uri in ["/route-no-store", "/wrapped-no-store"] {
+            let (status, headers, body) = call_with(router.clone(), "GET", uri, None, None).await;
+            assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+            assert_eq!(headers[http::header::CACHE_CONTROL], "no-store", "{uri}");
+            assert!(body.contains("<header>Cart </header>") && !body.contains("corten-later"), "{uri}: {body}");
+            assert!(!headers.contains_key(http::header::AGE), "{uri}: not kept");
+        }
+        let (_, again, _) = call_with(router.clone(), "GET", "/route-no-store", None, None).await;
+        assert!(!again.contains_key(http::header::AGE), "not kept the second time either");
+        let (_, headers, body) = call_with(router, "GET", "/route-no-store-one", None, None).await;
+        assert_eq!(headers[http::header::CACHE_CONTROL], "no-store");
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{body}");
+    }
+
     #[tokio::test]
     async fn the_page_is_filled_before_the_app_s_middleware_sees_it() {
         let routes = Table::new().route(

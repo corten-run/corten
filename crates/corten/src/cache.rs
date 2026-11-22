@@ -154,7 +154,8 @@ impl Cache {
             return if self.kind == Kind::NoStore { NO_STORE } else { crate::assets::IMMUTABLE };
         };
         // A route answers with the same numbers each time: its header is made once on a thread and
-        // each answer after shares its bytes (a clone counts a reference).
+        // each answer after shares its bytes (a clone counts a reference), while it is one of the
+        // last `HELD` sets of numbers that thread made one for.
         MADE.try_with(|made| {
             let mut made = made.borrow_mut();
             if let Some((_, value)) = made.headers.iter().flatten().find(|(kind, _)| *kind == self.kind) {
@@ -172,13 +173,25 @@ impl Cache {
 
 thread_local! {
     /// The `public` headers this thread made last, by their numbers ([`Cache::header`]).
-    static MADE: std::cell::RefCell<Made> = const { std::cell::RefCell::new(Made { headers: [const { None }; 4], next: 0 }) };
+    static MADE: std::cell::RefCell<Made> = const { std::cell::RefCell::new(Made { headers: [const { None }; HELD], next: 0 }) };
 }
 
+/// How many `public` headers a thread holds ([`MADE`]): one made for numbers past these is made
+/// again when they come back.
+const HELD: usize = 4;
+
 struct Made {
-    headers: [Option<(Kind, HeaderValue)>; 4],
+    headers: [Option<(Kind, HeaderValue)>; HELD],
     /// Where the next one goes, in place of the oldest.
     next: usize,
+}
+
+#[cfg(test)]
+impl Made {
+    /// How many headers this thread holds.
+    fn held() -> usize {
+        MADE.with(|made| made.borrow().headers.iter().flatten().count())
+    }
 }
 
 /// A `public` header with these numbers, made anew.
@@ -202,9 +215,13 @@ fn public(max_age: u64, shared: Option<u64>, stale: u64, if_error: u64) -> Heade
 }
 
 impl Cache {
-    /// Sets the response's `Cache-Control` to this, as [`settle`] reads it.
+    /// Sets the response's `Cache-Control` to this, as [`settle`] reads it. In place of a
+    /// [`crate::Public`] answer's own ([`crate::NoStore`] around an answer that chose to be one, or
+    /// `no_store` on its route), it changes how long caches keep the answer, not who it is for: it
+    /// is still the same for everyone, so no one's layout values are drawn in it.
     pub(crate) fn apply(self, res: &mut Response) {
-        self.apply_marked(res, false);
+        let for_all = Typed::for_all(res);
+        self.apply_marked(res, for_all);
     }
 
     /// [`Cache::apply`] on a [`crate::Public`] answer: its one mark says too that the answer is
@@ -245,7 +262,8 @@ impl IntoResponseParts for Cache {
 pub(crate) struct Typed {
     /// A [`Cache::immutable`] answer: its URL names it, so the request's cookies do not change it.
     named: bool,
-    /// A [`crate::Public`] answer, the same for everyone ([`crate::layout::same_for_all`]).
+    /// A [`crate::Public`] answer, the same for everyone ([`crate::layout::same_for_all`]), still
+    /// when [`Cache::apply`] replaced its policy.
     for_all: bool,
     /// [`Cache::lifetime`], for the app's own keeping of the answer ([`crate::kept`]).
     lifetime: u64,
@@ -890,6 +908,27 @@ mod tests {
             }
         }
         assert!(std::ptr::eq(minute.header().as_bytes(), minute.header().as_bytes()), "made once again");
+    }
+
+    /// A thread holds `HELD` headers: one for numbers past the last `HELD` it made is made again,
+    /// and then shared again. `first` is alive throughout, so a header made again cannot reuse its
+    /// bytes' address.
+    #[test]
+    fn a_thread_holds_its_last_headers_and_makes_an_older_one_again() {
+        // Numbers no other test asks for, so each below is new to the thread whatever ran on it.
+        let numbers = |n: u64| Cache::public(Duration::from_secs(1_000_000 + n)).stale_while_revalidate(Duration::from_secs(7));
+        let first = numbers(0).header();
+        assert!(Made::held() >= 1 && Made::held() <= HELD);
+        for n in 1..=HELD as u64 {
+            assert_eq!(numbers(n).header(), format!("public, max-age={}, stale-while-revalidate=7", 1_000_000 + n));
+            assert!(Made::held() <= HELD, "held {} after {n}", Made::held());
+        }
+        assert_eq!(Made::held(), HELD, "full, and no more");
+        let again = numbers(0).header();
+        assert_eq!(again, first);
+        assert!(!std::ptr::eq(first.as_bytes(), again.as_bytes()), "made again: the oldest went for the last");
+        assert!(std::ptr::eq(again.as_bytes(), numbers(0).header().as_bytes()), "then held again");
+        assert_eq!(Made::held(), HELD);
     }
 
     #[test]
