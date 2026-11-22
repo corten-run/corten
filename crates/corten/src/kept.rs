@@ -94,28 +94,33 @@
 //!
 //! Requests that miss a page together run its handler once: the first makes the page, and the
 //! others asking for the same copy (the same URL, `Host` and `Accept-Language` as sent, with no
-//! write to its path between them) wait for it ([`Making`]) and are given the page when it is
-//! kept for them. A whole body is waited for the same way, by the requests asking for it the same
+//! write to its path between them, nor one that found no counts by path, below) wait for it
+//! ([`Making`]) and are given the page when it is kept for them. A whole body is waited for the
+//! same way, by the requests asking for it the same
 //! way (as data or not), as it is kept: so for one too small to keep, the others run their
 //! handlers once it is made, and its route soon stops asking ([`Unkept`]). A request looks for
 //! the page again once it is to make it or wait for it, so one kept since its first look is given
 //! at once. When the page is not kept (an error, a page drawn for that request, an answer whose
-//! handler drew a form's new submit key), or that request is dropped (its client left, its
-//! deadline passed) or panics, each runs its own handler then, and none waits again. At most
+//! handler drew a form's new submit key the watch saw), or that request is dropped (its client
+//! left, its deadline passed) or panics, each runs its own handler then, and none waits again. A
+//! key drawn outside the handler's own polls (by a task it spawned, a render handed to a blocking
+//! task, a thread of its own) is not seen: that answer is kept and given to those waiting, as it
+//! is to later requests (Choice 70 in `docs/design.md`). At most
 //! [`MAKING`] pages are made at once that others wait for; past that a request makes its page as
 //! it would with nothing kept. A page answered and not kept is remembered as not kept for
-//! [`FORGOT`], until a write to its path or until it is kept (by that request or another
+//! [`FORGOT`], until a write to its path (to any path, while there are no counts by path) or
+//! until it is kept (by that request or another
 //! meanwhile), so the requests that meet in that time each run the handler at once, as they would
 //! with nothing kept; that is best effort, as only the latest [`NOT_KEPT`] are remembered. It is
 //! remembered for the copy asked for (its URL, `Host` and `Accept-Language` as sent, and of a
 //! whole body whether a data client asked), so a copy kept for a request in another language,
 //! even one that stands for every language, does not end it before its time. A request waits no
-//! longer than its own deadline, which drops its wait as it would its handler. In a full store the
-//! first request for a URL not asked for before is the handler's as with nothing kept: it leaves
-//! its mark and nothing more, and no other request waits for it. Those that come while it is made
-//! find the mark, so they are the URL's second request: the first of them makes the page and the
-//! others wait for that one, so a new URL's handler runs at most twice for requests that miss it
-//! together, and once more each time other new URLs clear the marks meanwhile ([`Store::asked`]).
+//! longer than its own deadline, which drops its wait as it would its handler; with the deadline
+//! removed (`deadline(None)`), until the request it waits for ends or its own client leaves. In a
+//! full store the first request for a URL not asked for before is the handler's as with nothing
+//! kept ([`Miss::Pass`]): it leaves its mark ([`Store::asked`]) and no other request waits for it.
+//! Those that come while it is made are the URL's second request and wait as above. When that
+//! runs a new URL's handler at most twice, and when more, is said once, in Choice 70.
 //!
 //! Writes are counted by path once the app has made an answer it may keep, and not before: an
 //! app can have a store and keep nothing in it (its `Public` text is all too small, which is

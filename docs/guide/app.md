@@ -1605,7 +1605,9 @@ handler, and does not wait again, and for a minute, or until the page is kept fo
 or written to, requests for that page do not wait for each other (the latest 1,024 such pages are
 remembered); a page another request kept meanwhile is not remembered so;
 when the first request is dropped or panics, each of the others runs its own. A request waits no
-longer than its own deadline (`App::deadline`), which answers it as it would a slow handler. Only
+longer than its own deadline (`App::deadline`), which answers it as it would a slow handler; with
+`deadline(None)` nothing but the first request's handler bounds the wait, so one that never
+answers holds the others until it does or their clients leave. Only
 requests for one copy wait for each other: another query, host or `Accept-Language` does not
 wait, even for a page that is the same in every language, since what a page varies on is known
 only once it is made. A page is remembered as not kept for one copy in the same way: a copy kept
@@ -1613,7 +1615,8 @@ for a request with another `Accept-Language` does not end it, even one that is t
 language and is given in its place while it stands, so once that copy's lifetime ends within the
 minute, requests in the first language each run the handler again until the minute is up or one
 of them keeps the page. A request that comes after a write to the page's path makes the page again
-rather than wait for one read before the write. At most 1,024 pages are made at once with others
+rather than wait for one read before the write (before the app has made a page it may keep, a write
+to any path does, and ends what is remembered of every page not kept). At most 1,024 pages are made at once with others
 waiting for them; past that, a request makes its page as it would with nothing kept.
 
 `App::kept_answers(bytes)` sets how much is kept: 32 MiB unless set, and `0` keeps none. What is
@@ -1631,10 +1634,11 @@ of a page's handler: in a full store the answer to the first request for a URL t
 not remember is not kept, whether the page is new, or was kept while there was room or before
 the bits were last cleared and has since passed its lifetime or been dropped. That first request
 is answered as with nothing kept, and no other request waits for it. The requests that ask for
-the URL while it is made are its second: the first of them makes the page, which is kept, and the
-others wait for that one as above. So requests that ask together for a URL new to a full store
-run its handler at most twice, where with room they run it once, and once more each time other
-new URLs have the app forget the URLs it remembers while they come. A store that has filled mostly stays full, since a page past its lifetime keeps
+the URL while it is made are its second: the first of them makes the page and the others wait
+for that one as above. So requests that ask together for a URL new to a full store can run its
+handler twice where with room they run it once, and more when that second page is not kept or
+the app forgets the URL meanwhile; [design Choice 70](../design.md#choice-kept-pages) says
+exactly when, and what the first request costs. A store that has filled mostly stays full, since a page past its lifetime keeps
 its room until another needs it. Nothing is kept under `corten dev`,
 so a change shows on the next load. An app with no `Public` page, and no `Public` JSON or text route in a build with `compress`, keeps nothing whatever the
 bound, and its writes are not counted, so it pays nothing for pages it cannot keep; one whose `Public` JSON or text
@@ -1676,7 +1680,9 @@ Requests that miss a body together run its handler once, as for a page (above), 
 requests apart from a browser's. One too small to keep is known only once it is made, so the
 others then run their own handlers, as when a page's handler fails, and do not wait for it again
 for a minute. An answer whose handler drew a form's new submit key is not kept, and is not given
-to those waiting.
+to those waiting; one drawn where the handler is not watched (the table above) is not seen, so
+the answer is kept and those waiting are given it, as later requests are
+([design Choice 70](../design.md#choice-kept-pages)).
 
 A file (`Media`), a sitemap or `robots.txt` (`seo::File`), a relay, a live stream and a feed are
 not kept: each is its handler's for every request, and so is JSON the app holds as bytes

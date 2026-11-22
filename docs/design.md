@@ -7275,7 +7275,8 @@ rules something out.
     known. The rule so errs toward keeping, where the next visitor is given the page, and not
     toward the handler, which an app's reads may make far dearer than a copy: a URL not asked
     for before whose bit is another's is taken for known and its answer kept the first time,
-    as with room. Once an eighth of the marks are set all are cleared, which holds that to
+    as with room. Once an eighth of the marks are set they are cleared (all but one, where
+    requests that miss together meet this rule, below), which holds that to
     one new URL in eight at most and about one in sixteen over time, and after which a page
     asked for again when its kept copy has gone has its handler run once more than it had
     to. A mark does not age. A URL asked for again, however long after, is known until the
@@ -7285,8 +7286,9 @@ rules something out.
     request on. What the rule spares is the copy for a URL's first request, and for URLs
     that outnumber what the marks remember. The marks are each host's own, so one host's
     answers do not show what was asked of another, and a URL's in any language. No list of
-    URLs is held, a request whose answer is not kept takes no lock but the read lock of the
-    lookup, and the hash needs no key of the process's: a client that chooses URLs sharing a
+    URLs is held, a request the marks refuse takes no lock but the read lock of the lookup (one
+    they admit takes the table's lock too, below, whether or not its answer is kept), and the
+    hash needs no key of the process's: a client that chooses URLs sharing a
     mark gains an answer kept the first time, and one that asks for enough new URLs to clear
     the marks gains one more run of each page's handler, with requests that each ran a
     handler.
@@ -7421,7 +7423,11 @@ rules something out.
     as sent and the count of writes to the path the request found, under a lock taken for no
     wait. The table holds no page, so a slow handler keeps nothing alive outside the bound,
     keeping one copy of a URL does not end the wait for another, and a request after a write
-    makes the page again rather than wait for one read before it. Two copies whose hashes meet are
+    makes the page again rather than wait for one read before it. The count the key takes
+    includes the writes that found no counts by path (above), so before the app has made an
+    answer it may keep, when no count by path is there to change, a write to any path still
+    parts the requests before it from those after, and ends what is remembered of every page not
+    kept (below). Two copies whose hashes meet are
     made one after the other, since each request looks its own copy up once it has waited. A
     request looks for a kept copy again once it holds or has joined the page being made, so one
     kept between its first look and then (the first request's, or one made for every language by
@@ -7451,7 +7457,11 @@ rules something out.
     request that waited and was not given a page runs its own handler and does not wait again,
     even where a write has meanwhile started another request making the page: in a burst of
     writes such requests may each read the source, which bounds every request to one wait. A
-    request's own deadline drops its wait as it would its handler. The first requests after a
+    request's own deadline drops its wait as it would its handler. With the deadline removed
+    (`deadline(None)`, for handlers that bound themselves) nothing but the first request bounds
+    the wait: a handler that never answers holds the requests waiting for it until it does, or
+    until each one's client leaves. A wait takes no timer of its own, as no handler under `None`
+    does. The first requests after a
     start wait as the others do, so a deploy does not send a slow source a request for each
     visitor who comes while each page is first made.
 
@@ -7464,19 +7474,38 @@ rules something out.
     and the body is remembered as not kept for a minute; its route soon leaves the store out, and
     its requests then wait for nothing (the run above). An answer whose handler drew a form's new
     submit key is that request's alone and is not kept, so those waiting for it run their own,
-    and it is remembered as not kept as a page drawn for one request is.
+    and it is remembered as not kept as a page drawn for one request is. That holds for a key the
+    watch sees (above). One drawn outside the handler's polls or on another thread during one is
+    not seen, so that answer is kept and the requests waiting for it are given it, as later
+    requests are given it from the store, where before this change each request that missed
+    together ran its own handler and drew its own key. So the limit the store has for later
+    requests holds for requests that wait, and
+    [#1895 Keep a Public answer whose handler rendered a submit key out of shared caches, however it was rendered](https://github.com/corten-run/corten/pull/1895)
+    keeps the same limit for shared caches. The guide and `kept.rs` refer here for it.
 
     The two rules meet at a full store's first request for a URL, and the rule for a full store
-    goes first: that request is the handler's as with nothing kept. It leaves its mark and takes
-    no part in the table, so it pays what it paid before requests met there (measured below), and
-    no other request waits for it. The requests that miss the URL while it is made find its mark,
-    so they are its second request, and meet in the table as any others do: the first of them
-    makes the page, which is kept, and the rest wait for that one and are given it. So requests
-    that miss a URL new to a full store together run its handler at most twice, the first
-    request's and one for the rest, where with room they run it once. Nothing is remembered of
-    the first request's answer, which was not made for any other, so an error there does not keep
-    the next requests from waiting for each other. That bound holds while the URL's mark does.
-    The marks are cleared once an eighth of them are set, all but the mark of the URL whose
+    goes first. This is the one account of that case, which the guide and the changelog refer to.
+    That first request is the handler's as with nothing kept: it leaves its mark, takes no part
+    in the table, and no other request waits for it. It is not free for that: merged with main's
+    kept bodies, that request ran 236 instructions (1.0%) more than on main (below), which the
+    annotated runs put in glibc's `malloc` and in no step of this change's own, a cause reasoned
+    and not measured. The requests that miss the URL while it is
+    made find its mark, so they are its second request and meet in the table as any others do:
+    the first of them makes the page and the rest wait for that one. From there a request the
+    marks admit takes the table's lock when it starts and when it ends, whether or not its answer
+    is then kept. Nothing is remembered of the first request's answer, which was not made for any
+    other, so an error there does not keep the next requests from waiting for each other.
+
+    So requests that miss a URL new to a full store together run its handler at most twice, the
+    first request's and one for the rest, where with room they run it once, when all of these
+    hold: they ask for one copy (the table's key, above: the URL, `Host` and `Accept-Language` as
+    sent, whether a data client asked and the count of writes to the path each found, so
+    requests for different copies, or on either side of a write, do not join); the second run's
+    answer is kept (when it fails or cannot be kept, as a page drawn for one request, a submit
+    key the watch sees or a body too small cannot, each request that waited then runs its own
+    handler); the table admits them (past 1,024 pages being made, and while the copy is
+    remembered as not kept, each request makes its own); and the URL's mark stays while they
+    come. The marks are cleared once an eighth of them are set, all but the mark of the URL whose
     request clears them, which is set in the same pass, so a request for that URL meanwhile finds
     it; a URL whose first request is being made when other new URLs clear them is new again, so
     its handler runs once more for each time they are cleared while its requests come. A review
@@ -7484,10 +7513,10 @@ rules something out.
     own with the rest; keeping it costs the clearing a comparison a word. The second takes an
     eighth of the marks set since they were last cleared (131,072 at 32 MiB) to be reached while
     the page is made, not that many new URLs meanwhile: with most of them set before, one other
-    new URL can reach it. The second run is the price of keeping the
-    first request for every URL in a full store as cheap as before: making its page for the
-    others (below) cost that request 18.6% more, on the stream of new URLs a crawler sends, which
-    the rule for a full store exists to make cheap.
+    new URL can reach it. The second run is the price of keeping the first request for every URL
+    in a full store out of the table: making its page for the others (below) cost that request
+    18.6% more, on the stream of new URLs a crawler sends, which the rule for a full store exists
+    to make cheap.
 
     Not chosen: in front of the middleware, for the reasons above, though it would save the
     stages too; asking the marks whether or not the store has room, which spares the copy
@@ -7548,7 +7577,9 @@ rules something out.
     handler's `Date` out with nothing for its age, with which a cache
     after the app counted the first answer older than each given in its place, and not keeping a
     page that sets a `Date` at all, which loses the page for an input HTTP gives a meaning to; and,
-    left for changes of their own, a call
+    left for changes of their own, a mark carried with a render across a task or a thread, so
+    that requests waiting are not given an answer with a submit key drawn there, which the store
+    has for no later request either (above), a call
     that drops a page for a change no write to its path made, a way for an extractor of the
     app's own to say it reads only the URL, `Public` files (a `Media` may be a stream, which
     has no size to keep, or bytes the app already holds, which cost no render, and what keeping
@@ -7859,10 +7890,12 @@ rules something out.
     so how often one first asked for in a full store is asked for again (the simulation's
     spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
     kept page in those rounds is the rule, two builds of the same code having differed by
-    more from one start to the next; a miss kept with room in memory the store has used
-    before (room made by a write or by a page's lifetime ending), in cycles; a store read
-    from more than one core; the cycles of a miss, and requests that miss together on a quiet
-    host or with a real source; how often an app's first requests for a URL in a full store meet
+    more from one start to the next; a store read from more than one core; the cycles of a
+    miss, among them one kept with room in memory the store has used before (room made by a
+    write or by a page's lifetime ending), and the time of requests that miss together against
+    main's, on a quiet host or with a real source; this change merged with main's counts by
+    path made late (`250e4b81c`), counted only before that merge; how often an app's first
+    requests for a URL in a full store meet
     another, and what the second run of its handler costs a source then; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
