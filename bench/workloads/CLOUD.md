@@ -482,6 +482,12 @@ apparatus is not a result. An old bound host without confirmed cleanup is shown
 as such. Continuation then requires the same provider account and still refuses
 create if the existing pre-create census finds any foreign benchmark host.
 
+If a standalone group failed before native entry and its collector recorded the
+archive but not deletion, an unrelated group can use that same census. Its
+launch approval includes the stopped host's original ID: even a renamed or
+retagged host still present in the account prevents creation. An active cleanup
+blocks admission. This does not retire the failed group, retry it, or publish a result.
+
 When retrying a group on a new host, a proved Windows PID reuse on a destroyed
 host does not make its old monitor active again. Preparation reads the original
 retirement evidence and rechecks the unchanged locks; it never removes them or

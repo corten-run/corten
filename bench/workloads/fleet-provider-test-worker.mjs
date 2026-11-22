@@ -17,7 +17,7 @@ if (mode === "startup-refusal") { record({ boundary: "before-provider-boot" }); 
 const state = () => JSON.parse(readFileSync(join(stateDir, "groups-r21/state.json")));
 const hosts = () => existsSync(hostsPath) ? JSON.parse(readFileSync(hostsPath)) : [];
 const later = mode === "overlap" && group !== "catalog-page";
-let clock = 0;
+let clock = 0, accountsAfterRegions;
 serveProviderWorker({
   now: () => clock,
   spawn(binary, argv) {
@@ -29,6 +29,9 @@ serveProviderWorker({
   request({ method, path, body, credential }) {
     assert.equal(credential, "SYNTHETIC_FLEET_CREDENTIAL");
     record({ boundary: "provider", method, path, body });
+    if (path === "/v2/regions?page=1&per_page=200") accountsAfterRegions = 0;
+    if (path === "/v2/account" && accountsAfterRegions !== undefined && ++accountsAfterRegions === 2 && existsSync(hostsPath + ".late-lock"))
+      writeFileSync(readFileSync(hostsPath + ".late-lock", "utf8"), "sibling started during the create account check", { flag: "wx" });
     if (path === "/v2/account") return mode === "provider-failure" ? { status: 403, value: null }
       : { status: 200, value: { account: { uuid: userId,
         droplet_limit: existsSync(hostsPath + ".limit") ? Number(readFileSync(hostsPath + ".limit", "utf8")) : 20 } } };

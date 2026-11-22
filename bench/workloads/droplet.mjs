@@ -66,6 +66,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     replace(staging, statePath); syncDirectory(local);
   };
   const save = () => { check(); writeState(state); };
+  let launchPeers;
   // Cancellation forbids further work, not recording how the owned monitor ended.
   // Record only the ending and, if cancellation beat the live-state write,
   // the registration already received from this stream. Never adopt a file alone.
@@ -148,6 +149,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.equal(providerAccount(value), state.provider.accountId, "provider account identity changed; preserve uncertainty");
     };
     await account();
+    if (args[0] === "compute" && args[1] === "droplet" && args[2] === "create") {
+      // Check after the final account read, before recording or dispatching a create.
+      launchPeers = checkFleetAdmission?.(true);
+      state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
+    }
     const expiry = prepareDelete ? await prepareDelete.expiresAt() : deleteProofExpiresAtMs;
     const result = await invoke(scoped(args), allowFail, expiry);
     if (prepareDelete) assert.ok(result.status === 0 && !result.error, "delete outcome uncertain; preserve intent");
@@ -738,8 +744,6 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             fleetRegion(catalog, remainingPlacement?.region ?? fleet.host.region,
               { remainingOnly: remainingAdmission, staged: stagedFleet(fleet), group: fleet.single?.group });
           }
-          const peers = checkFleetAdmission?.(true);
-          state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
           const created = await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,
             "--ssh-keys", options.sshKey, "--tag-names", [...tags, state.tag].join(","), "--wait", "--output", "json"], 10 * 60000, true);
           // Lost acknowledgement permits only identity reconciliation, never another create.
@@ -753,7 +757,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             const diagnostic = providerFailure(created);
             throw Object.assign(new Error("create completion was not proved; allocation retained for recovery"), diagnostic ? { providerDiagnostic: diagnostic } : {});
           }
-          assert.ok(!fleet?.single || !peers?.some((peer) => peer.id === state.id || peer.ip === state.ip),
+          assert.ok(!fleet?.single || !launchPeers?.some((peer) => peer.id === state.id || peer.ip === state.ip),
             "newly bound host duplicates a supervised peer; retain custody without provisioning");
           const completed = JSON.parse(created.stdout);
           assert.ok(Array.isArray(completed) && completed.length === 1 && Number.isSafeInteger(completed[0]?.id)
