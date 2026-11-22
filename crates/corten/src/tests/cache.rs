@@ -2017,6 +2017,270 @@ async fn a_route_a_middleware_drops_unpolled_has_not_answered() {
     assert!(wrong.is_empty(), "a middleware's own 404 after it dropped the route unpolled: {wrong:#?}");
 }
 
+/// Staged middleware that runs the route and then changes its answer in place (`Greets`: a `200`
+/// greeting the visitor its cookie names; `Redirects`: a `303` to a place the cookie names), or
+/// drops it and answers with a `200` of its own that greets the visitor (`OwnAnswer`).
+#[derive(Clone, Copy, Debug)]
+enum TurnsTheAnswer {
+    Greets,
+    Redirects,
+    OwnAnswer,
+}
+
+impl crate::Middleware for TurnsTheAnswer {
+    async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        let cookie = req.headers().get(header::COOKIE).and_then(|cookie| cookie.to_str().ok()).unwrap_or("");
+        let name = cookie.strip_prefix("name=").unwrap_or("stranger").to_owned();
+        let mut res = next.run(req).await;
+        match self {
+            TurnsTheAnswer::Greets => {
+                *res.status_mut() = StatusCode::OK;
+                res.headers_mut().remove(header::CONTENT_TYPE);
+                *res.body_mut() = Body::from(format!("Hello, {name}."));
+            }
+            TurnsTheAnswer::Redirects => {
+                *res.status_mut() = StatusCode::SEE_OTHER;
+                res.headers_mut().insert(header::LOCATION, HeaderValue::from_str(&format!("/welcome/{name}")).unwrap());
+            }
+            TurnsTheAnswer::OwnAnswer => {
+                drop(res);
+                return (StatusCode::OK, format!("Hello, {name}.")).into_response();
+            }
+        }
+        res
+    }
+}
+
+/// The router's own failure stays the router's when a staged middleware changes it in place: made
+/// a `200` with the visitor's name in it, or a redirect to a place the cookie names, for an unknown
+/// URL, a method the route lacks or no route has and a named post the page has none of, it goes
+/// out `private` (`private, no-store` where a middleware named `no-store`) with none of the caching
+/// headers a CDN reads first, to a browser and to a data client. A `200` the middleware made of
+/// its own after running the route is its answer and keeps what it wrote, and so is a handler's
+/// own `404` changed in place.
+#[tokio::test]
+async fn the_router_s_own_failure_a_middleware_changes_in_place_is_not_shared() {
+    let routes = || {
+        Table::new()
+            .route("/", get(|| async { "home" }).post(|| async { "saved" }).named("save"))
+            .route("/form", crate::router::post(|| async { "saved" }))
+            .route("/gone", get(|| async { StatusCode::NOT_FOUND }))
+    };
+    let mut wrong = Vec::new();
+    for (cache, sent, own) in [
+        (None, "private, no-cache", "private, no-cache"),
+        (Some("public, max-age=60"), "private, no-cache", "public, max-age=60"),
+        (Some("no-store"), "private, no-store", "no-store"),
+    ] {
+        for how in [TurnsTheAnswer::Greets, TurnsTheAnswer::Redirects, TurnsTheAnswer::OwnAnswer] {
+            let router = App::new(Routes::from(routes())).middleware((CdnRecaches(cache), how)).router();
+            for (method, uri) in [("GET", "/nowhere"), ("GET", "/form"), ("PATCH", "/"), ("POST", "/?do=sell"), ("GET", "/gone")]
+            {
+                for accept in ["text/html", "application/json"] {
+                    let asked = [("accept", accept), ("sec-fetch-site", "same-origin")];
+                    let (status, headers, body) = from_ann(&router, method, uri, &asked).await;
+                    let at = format!("{how:?} {method} {uri} {accept} {cache:?}");
+                    if matches!(how, TurnsTheAnswer::Redirects) {
+                        assert_eq!(status, StatusCode::SEE_OTHER, "{at}");
+                        assert_eq!(headers[header::LOCATION], "/welcome/ann", "{at}");
+                    } else {
+                        assert!(status == StatusCode::OK && body == "Hello, ann.", "{at}: {status} {body}");
+                    }
+                    if matches!(how, TurnsTheAnswer::OwnAnswer) || uri == "/gone" {
+                        if headers[header::CACHE_CONTROL] != own {
+                            wrong.push(format!("{at}: its own answer, Cache-Control {:?}", headers[header::CACHE_CONTROL]));
+                        }
+                        for name in CDN_OVERRIDES {
+                            if headers.get(name).is_none_or(|value| value != "public, max-age=60") {
+                                wrong.push(format!("{at}: its own answer lost {name}"));
+                            }
+                        }
+                    } else {
+                        for what in kept_from_cdns(&headers, sent) {
+                            wrong.push(format!("{at}: {what}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "the router's own failure changed in place, open to a CDN, or a middleware's own answer kept from one: {wrong:#?}"
+    );
+}
+
+/// An extractor of an app's error page that refuses by the request's cookie: at `/gone-denied`, a
+/// `403` in plain text naming the visitor (the error page then fails, and plain text goes out in
+/// its place); anywhere else, a `303` to a place the cookie names.
+struct WelcomesInstead;
+
+impl<S: Send + Sync> crate::extract::FromRequestParts<S> for WelcomesInstead {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut http::request::Parts, _: &S) -> std::result::Result<Self, Response> {
+        let cookie = parts.headers.get(header::COOKIE).and_then(|cookie| cookie.to_str().ok()).unwrap_or("");
+        let name = cookie.strip_prefix("name=").unwrap_or("stranger");
+        if parts.uri.path() == "/gone-denied" {
+            return Err((StatusCode::FORBIDDEN, format!("Not for {name}.")).into_response());
+        }
+        let to = HeaderValue::from_str(&format!("/welcome/{name}")).unwrap();
+        Err((StatusCode::SEE_OTHER, [(header::LOCATION, to)]).into_response())
+    }
+}
+
+/// An app's error page whose extractor refuses ([`WelcomesInstead`]).
+async fn welcoming_error_page(_: Failure, req: Req, _: WelcomesInstead) -> HtmlResult {
+    req.test_page("Sorry", html! { <p>"Sorry."</p> })
+}
+
+/// An app's error page whose extractor refuses sends the refusal in the page's place, and it is
+/// never shared, as a handler's extractor's refusal is not, also in place of a handler's own `404`,
+/// whose error page otherwise keeps what a staged middleware wrote: a redirect to a place the
+/// visitor's cookie names, and the plain text a failed error page is replaced with, go out
+/// `private` (`private, no-store` where a middleware named `no-store`) with none of the caching
+/// headers a CDN reads first. An error page that does not refuse keeps them, as before.
+#[tokio::test]
+async fn an_error_page_s_own_refusal_is_not_shared() {
+    let routes = || {
+        Table::new()
+            .route("/gone", get(|| async { StatusCode::NOT_FOUND }))
+            .route("/gone-denied", get(|| async { StatusCode::NOT_FOUND }))
+    };
+    let html = [("accept", "text/html")];
+    let mut wrong = Vec::new();
+    for (cache, sent, own) in [
+        (None, "private, no-cache", "private, no-cache"),
+        (Some("public, max-age=60"), "private, no-cache", "private, no-cache"),
+        (Some("no-store"), "private, no-store", "no-store"),
+    ] {
+        let router =
+            App::new(Routes::from(routes())).middleware(CdnRecaches(cache)).error_page(welcoming_error_page, ()).router();
+        let (status, headers, _) = from_ann(&router, "GET", "/gone", &html).await;
+        assert_eq!(status, StatusCode::SEE_OTHER, "{cache:?}");
+        assert_eq!(headers[header::LOCATION], "/welcome/ann", "{cache:?}");
+        for what in kept_from_cdns(&headers, sent) {
+            wrong.push(format!("the error page's redirect, {cache:?}: {what}"));
+        }
+        let (status, headers, body) = from_ann(&router, "GET", "/gone-denied", &html).await;
+        assert!(status == StatusCode::NOT_FOUND && body.contains("could not be shown"), "{cache:?}: {status} {body}");
+        for what in kept_from_cdns(&headers, sent) {
+            wrong.push(format!("the plain text for the failed error page, {cache:?}: {what}"));
+        }
+        let greeting =
+            App::new(Routes::from(routes())).middleware(CdnRecaches(cache)).error_page(greeting_error_page, ()).router();
+        let (status, headers, body) = from_ann(&greeting, "GET", "/gone", &html).await;
+        assert!(status == StatusCode::NOT_FOUND && body.contains("Sorry, ann."), "{cache:?}: {status} {body}");
+        assert_eq!(headers[header::CACHE_CONTROL], own, "{cache:?}: the error page for a handler's own 404");
+        for name in CDN_OVERRIDES {
+            assert_eq!(headers[name], "public, max-age=60", "{cache:?}: the error page for a handler's own 404 keeps {name}");
+        }
+    }
+    assert!(wrong.is_empty(), "an error page's own refusal, open to a CDN: {wrong:#?}");
+}
+
+/// A handler's [`crate::Refused`] sent at another status (`Error::with_status`, a `404` in place of
+/// a `403`, with and without a message for the client) drops the refusal's own form, not its
+/// privacy: to a browser and to a data client it goes out `private` (`private, no-store` where a
+/// middleware named `no-store`) with none of the caching headers a CDN reads first. A plain
+/// `Error::not_found()` is the handler's own failure and keeps them.
+#[tokio::test]
+async fn a_refusal_sent_at_another_status_is_still_not_shared() {
+    let hidden = |refused: crate::Refused| Err::<&'static str, Error>(Error::from(refused).with_status(StatusCode::NOT_FOUND));
+    let routes = move || {
+        Table::new()
+            .route("/hidden", get(move || async move { hidden(crate::Refused::forbidden()) }))
+            .route("/hidden-saying", get(move || async move { hidden(crate::Refused::forbidden().message("No such order")) }))
+            .route("/missing", get(|| async { Err::<&'static str, Error>(Error::not_found()) }))
+    };
+    let mut wrong = Vec::new();
+    for (cache, sent) in
+        [(None, "private, no-cache"), (Some("public, max-age=60"), "private, no-cache"), (Some("no-store"), "private, no-store")]
+    {
+        let router = App::new(Routes::from(routes())).middleware(CdnRecaches(cache)).router();
+        for accept in ["text/html", "application/json"] {
+            for uri in ["/hidden", "/hidden-saying"] {
+                let (status, headers, body) = from_ann(&router, "GET", uri, &[("accept", accept)]).await;
+                assert_eq!(status, StatusCode::NOT_FOUND, "{uri} {accept} {cache:?}");
+                if accept == "application/json" {
+                    let said = if uri == "/hidden" { "Not Found" } else { "No such order" };
+                    assert!(body.contains(said) && !body.contains("Forbidden"), "{uri} {cache:?}: {body}");
+                }
+                for what in kept_from_cdns(&headers, sent) {
+                    wrong.push(format!("{uri} {accept}, {cache:?}: {what}"));
+                }
+            }
+            let (status, headers, _) = from_ann(&router, "GET", "/missing", &[("accept", accept)]).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{accept} {cache:?}");
+            for name in CDN_OVERRIDES {
+                assert_eq!(headers[name], "public, max-age=60", "{accept} {cache:?}: a handler's own 404 keeps {name}");
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "a refusal sent at another status, open to a CDN: {wrong:#?}");
+}
+
+/// A debug build's error in place of a `NoStore` answer a browser would have shown wrongly (a page
+/// with a `Refresh` header, a write redirected outside the form's `form-action`, a patch answering
+/// a plain request) is `NoStore` too, whatever a staged middleware made of the answer's
+/// `Cache-Control` (rewrote or took out): `private, no-store`, with none of the caching headers a
+/// CDN reads first. (The middleware's other headers are the replaced answer's, which an error in
+/// place of a page or a patch does not keep, so only these two are read.)
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_debug_build_s_error_in_place_of_a_no_store_answer_is_no_store() {
+    #[derive(crate::view::Id)]
+    struct SavedId;
+
+    let routes = || {
+        Table::new()
+            .route(
+                "/refresh",
+                get(|req: Req| async move {
+                    NoStore(req.test_page("Saving", html! { <p>"Saving"</p> }).map(|mut res| {
+                        res.headers_mut().insert("refresh", HeaderValue::from_static("2"));
+                        res
+                    }))
+                }),
+            )
+            .route(
+                "/go",
+                crate::router::post(|req: Req| async move {
+                    NoStore(req.redirect::<()>(&"https://else.example/x".parse::<http::Uri>().unwrap()))
+                }),
+            )
+            .route(
+                "/patch",
+                crate::router::post(|mut req: Req| async move {
+                    req.mode = crate::Mode::Action; // Deliberate override: the debug guard checks the original request.
+                    let patch: crate::answer::HtmlResult = req
+                        .action()
+                        .ok_or_else(crate::Error::not_found)
+                        .and_then(|action| action.patch(html! { <p id={SavedId}>"saved"</p> }));
+                    NoStore(patch)
+                }),
+            )
+    };
+    let mut wrong = Vec::new();
+    for cache in [None, Some("public, max-age=60")] {
+        let router = App::new(Routes::from(routes())).middleware(CdnRecaches(cache)).router();
+        // No fetch metadata, as a router test sends: the write is taken for one of the app's
+        // pages', so its redirect is held to that page's `form-action`.
+        for (method, uri) in [("GET", "/refresh"), ("POST", "/go"), ("POST", "/patch")] {
+            let (status, headers, body) = from_ann(&router, method, uri, &[("accept", "text/html")]).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{method} {uri} {cache:?}: {body}");
+            if headers[header::CACHE_CONTROL] != "private, no-store" {
+                wrong.push(format!("{method} {uri}, {cache:?}: Cache-Control {:?}", headers[header::CACHE_CONTROL]));
+            }
+            let kept: Vec<_> = CDN_OVERRIDES.into_iter().filter(|name| headers.contains_key(*name)).collect();
+            if !kept.is_empty() {
+                wrong.push(format!("{method} {uri}, {cache:?}: still sends {kept:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "a debug build's error in place of a NoStore answer, kept: {wrong:#?}");
+}
+
 /// A handler's own failure in plain text is its answer, as its own empty `404` is: the error page a
 /// browser gets in its place keeps what a staged middleware wrote, from a route's handler and from
 /// a named post's.

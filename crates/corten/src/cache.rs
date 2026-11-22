@@ -285,9 +285,6 @@ pub(crate) struct Seen {
     pub partial: bool,
     /// The response's HTML has this request's nonce.
     pub nonce: bool,
-    /// The router answered the request itself ([`crate::Signal::is_unrouted`]): a failure that
-    /// goes out is never shared ([`settle`]).
-    pub unrouted: bool,
     pub dev: bool,
 }
 
@@ -364,14 +361,9 @@ fn sets_cookie(headers: &HeaderMap) -> bool {
 /// CDN reads first ([`CDN_CACHING`]), whatever its `Cache-Control` says, and a `NoStore` one goes
 /// out `private, no-store` whatever a middleware made of its header.
 pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
-    // An answer marked as no handler's own ([`Unshared`]), or a failure after the router answered
-    // the request itself: never shared, whatever it says and whatever status it goes out with. The
-    // usual answer has no extensions, so this is a null check and a flag.
-    let marked = res.extensions().get::<Unshared>().is_some();
-    if marked || (seen.unrouted && (res.status().is_client_error() || res.status().is_server_error())) {
-        if !marked {
-            res.extensions_mut().insert(Unshared);
-        }
+    // An answer marked as no handler's own ([`Unshared`]): never shared, whatever it says and
+    // whatever status it goes out with. The usual answer has no extensions, so this is a null check.
+    if res.extensions().get::<Unshared>().is_some() {
         settle_unshared(res);
         return;
     }
@@ -540,15 +532,17 @@ pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
 }
 
 /// The mark of an answer that is no handler's own, put on it by the code that made it: an
-/// extractor's rejection (`crate::handler`), a typed [`crate::Refused`] whoever returned it, a
-/// handler that panicked or passed its deadline (`crate::page`), the router's own failure as it
-/// goes out ([`settle`]), and the page or redirect Corten draws in the place of any of those. Such
-/// an answer may be about who is asking (the error page can read the request's `Cookie` and
+/// extractor's rejection (`crate::handler`, and an app's error page's own extractors), a typed
+/// [`crate::Refused`] whoever returned it, and as an [`crate::Error`] at another status, a handler
+/// that panicked or passed its deadline (`crate::page`), the router's own `404`, `405`, `501` and
+/// its `400` for a named post none of the page's handlers is for (`crate::router`), and the page,
+/// redirect or debug build's diagnostic Corten draws in the place of any of those ([`Marks`]).
+/// Such an answer may be about who is asking (the error page can read the request's `Cookie` and
 /// `Authorization` without reading a caller), so it is never shared, in whatever form and with
 /// whatever status it goes out ([`settle`]). The mark stays on the answer: a middleware that
-/// changes the answer (its status, headers or body) keeps it, another Corten app that relays the
-/// answer inline settles it the same way, and an answer a middleware builds in its place is its
-/// own.
+/// changes the answer in place (its status, headers or body) keeps it, another Corten app that
+/// relays the answer inline settles it the same way, and an answer a middleware builds in its
+/// place is its own.
 #[derive(Clone, Copy)]
 pub(crate) struct Unshared;
 
@@ -557,6 +551,42 @@ pub(crate) struct Unshared;
 pub(crate) fn unshared(mut res: Response) -> Response {
     res.extensions_mut().insert(Unshared);
     res
+}
+
+/// What an answer's replacement keeps of it, read from the answer it replaces: that it is no
+/// handler's own ([`Unshared`]) and that it is a [`crate::NoStore`] answer. The error page in a
+/// failure's place, the plain text in a failed error page's, and a debug build's diagnostic in an
+/// answer's each read them with [`Marks::of`] and put them on what they send ([`Marks::put`]), so
+/// [`settle`] holds the replacement to what held the answer, whatever a middleware made of its
+/// headers.
+#[derive(Clone, Copy)]
+#[must_use = "put the marks on the answer that replaces the one they were read from"]
+pub(crate) struct Marks {
+    pub(crate) unshared: bool,
+    pub(crate) no_store: bool,
+}
+
+impl Marks {
+    /// The marks of the answer whose extensions are `answer`.
+    #[inline]
+    pub(crate) fn of(answer: &http::Extensions) -> Self {
+        Marks {
+            unshared: answer.get::<Unshared>().is_some(),
+            no_store: answer.get::<Typed>().is_some_and(|typed| typed.no_store),
+        }
+    }
+
+    /// Puts the marks on `res`, the answer that replaces the one they were read from: [`Unshared`],
+    /// and a `NoStore` one's `Cache-Control` and its mark ([`Cache::apply`]).
+    #[inline]
+    pub(crate) fn put(self, res: &mut Response) {
+        if self.unshared {
+            res.extensions_mut().insert(Unshared);
+        }
+        if self.no_store {
+            Cache::no_store().apply(res);
+        }
+    }
 }
 
 /// Settles an [`Unshared`] answer: the default, whatever it said, and none of the CDN caching
@@ -847,7 +877,7 @@ mod tests {
     }
 
     fn seen() -> Seen {
-        Seen { credentials: false, caller: false, partial: false, nonce: false, unrouted: false, dev: false }
+        Seen { credentials: false, caller: false, partial: false, nonce: false, dev: false }
     }
 
     #[test]

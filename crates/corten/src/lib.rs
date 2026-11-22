@@ -1372,7 +1372,8 @@ impl Error {
     /// The same error with another status: `Error::new("no item 7").with_status(StatusCode::NOT_FOUND)`.
     /// A JSON client (an [`App::api`] route, or a request for `application/json`) gets a 4xx
     /// error's message, so give it one written for the client; the error page never shows it. On a
-    /// handler's [`Refused`], another status makes it a plain failure at that status.
+    /// handler's [`Refused`], another status makes it a plain failure at that status, which is
+    /// still never shared, as the refusal is not (see [`crate::cache`]).
     pub fn with_status(mut self, status: StatusCode) -> Self {
         self.status = status;
         self
@@ -1457,10 +1458,14 @@ impl IntoResponse for Error {
             // `with_status` gave it another status, which is answered as a plain failure's is,
             // telling a client only the refusal's own message: without one, the new status's
             // reason, so a 404 that hides a record does not say it was a 403. The log has the cause.
-            Ok(refused) if refused.message().is_some() => Error { status: self.status, source: refused }.answer(),
+            // It drops the refusal's challenge or redirect, not its privacy: the refusal was about
+            // who is asking, whatever status it is sent with ([`cache::Unshared`]).
+            Ok(refused) if refused.message().is_some() => {
+                cache::unshared(Error { status: self.status, source: refused }.answer())
+            }
             Ok(refused) => {
                 let reason = self.status.canonical_reason().unwrap_or("Error");
-                Error { status: self.status, source: refused }.answer_saying(Arc::from(reason))
+                cache::unshared(Error { status: self.status, source: refused }.answer_saying(Arc::from(reason)))
             }
             Err(source) => {
                 // A second error that carries headers should share one mechanism with `Refused`

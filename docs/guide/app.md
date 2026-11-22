@@ -1450,7 +1450,9 @@ A `Public` page in an app with several locales is one copy per `Accept-Language`
 for a CDN that ignores a bare `no-store`) with none of the CDN caching headers above, whatever a
 staged middleware made of its `Cache-Control`: `NoStore` may be all that says an answer is someone's
 (a code in a link, before sign-in). A failure it returns is not kept either: the error page for
-an expired code or someone else's statement goes out the same way. In a
+an expired code or someone else's statement goes out the same way, as does the error a debug build
+sends in place of an answer a browser would show wrongly (a `Refresh` header, a redirect outside
+`form-action`). In a
 routes module the route can say it instead, `#[route("/statement", get = statement, no_store)]`,
 and the handler keeps its own result: a handler that uses `?` (`async fn statement(req: Req) ->
 HtmlResult`) is wrapped as it is, where `NoStore<HtmlResult>` would need its body moved into an
@@ -1472,19 +1474,19 @@ the 501 of one no route has, the 400 of a post whose `do` names none of the page
 names two), the PWA's offline page included, which its service worker keeps
 whatever its `Cache-Control` says; a handler's own 404 is its answer, under the rules above. Nor
 is the router's own failure shared as it is or as JSON (an API's 404 for a path under its prefix
-that a route outside it matched included), whatever a middleware wrote into it, nor a failure a
-middleware sends in its place once the router has answered; an answer that is not a failure,
-which a middleware makes in its place (a redirect, a page), is the middleware's. A
-middleware that passes on a request rebuilt without its extensions changes none of this; one that
-makes the route's future (`next.run(req)`) and drops it before it answers has answered the
-request itself, so its own failure keeps what it says. A
+that a route outside it matched included), whatever a middleware wrote into it or made of it in
+place (another status, a redirect, a body of its own): the router marks the answer as it makes it.
+A response a middleware makes of its own in its place, whether or not it ran the route
+(`next.run(req)`), is the middleware's, a failure included, and keeps what it says. A
 request refused before the handler runs is not shared in the other forms it goes out in either,
 whatever the refusal is: a `200` its extractor's rejection chose, a redirect, a relayed failure
 or a sign-in goes out as it was made, a failure as it is to a client that does not ask for HTML,
 or as JSON. Nor is a `Refused` in any form, whoever returns it (an extractor, a handler, a
-middleware turning a request away), whatever status a middleware gives it after (a redirect, a
-`200`), nor a panic's or the deadline's failure as JSON; a response a middleware makes in a
-refusal's place is its own. Corten marks each of these answers where it makes it, and the mark goes
+middleware turning a request away), whatever status a handler (`Error::with_status`, a 404 in
+place of a 403) or a middleware gives it after (a redirect, a `200`), nor a panic's or the
+deadline's failure as JSON, nor the answer an extractor of the app's error page refuses with in
+the page's place (a redirect, or the plain text a failed error page is replaced with); a response a
+middleware makes in a refusal's place is its own. Corten marks each of these answers where it makes it, and the mark goes
 out with the answer: a refusal made in a task the handler spawned, before the request came in, or
 by another app of Corten's that a middleware asks for an answer inline (the error page or sign-in
 redirect that app drew in a refusal's place included) is never shared, whatever status the
