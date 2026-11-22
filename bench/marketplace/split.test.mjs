@@ -12,7 +12,7 @@ import { records } from "./fixtures.mjs";
 import { groupApps, groupNames } from "./groups.mjs";
 import { boundedFeatureProfile, boundedQualificationSettings, featureProfile, produceBoundedQualification, qualification, qualificationSettings } from "./feature-contract.mjs";
 import { boundedQualificationProbes, qualificationProbes } from "./qualification-fixture.mjs";
-import { appStop, cpuSettings, inventory, maxDroplets, parseArgs, parsePart, partName, phases, resultSchema, sources, splitApps, splitSubject, stageAggregate, timedProfiles } from "./run-contract.mjs";
+import { appStop, cpuSettings, inventory, maxDroplets, parseArgs, parsePart, partName, phases, resultSchema, sources, splitApps, splitSubject, stageAggregate, timedProfilesFor, v5Schema } from "./run-contract.mjs";
 import { leftoverDroplets, nightly, parseDropletArgs, remoteFiles, safeArchive, splitExit, splitPlan, validatePlan, validateState } from "./droplet-contract.mjs";
 import { report, validateSummary } from "./report.mjs";
 import { compare } from "./compare.mjs";
@@ -31,9 +31,10 @@ function unsupported() {
 const exclude = (a) => Object.assign(a, { qualification: unsupported(), runs: {}, phases: {} });
 // A whole round of a named group shaped like run.mjs writes it: candidate i serves 1000 + 37i +
 // pass requests per phase, and every candidate qualified on both sources.
-function full(round = "r17", g = group) {
+function full(round = "r17", g = group, schema = resultSchema) {
+  const timedProfiles = timedProfilesFor(schema);
   const apps = groupApps(g);
-  const s = { schema: resultSchema, workload, round, runId: `marketplace-${round}-0000000000`, commit, dirty: false, complete: true, checksPassed: true,
+  const s = { schema, workload, round, runId: `marketplace-${round}-0000000000`, commit, dirty: false, complete: true, checksPassed: true,
     failures: [], cleanupFailures: [], finishedCommit: commit, finishedDirty: false,
     startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T01:00:00.000Z", options: { round, build: true, apps, checkOnly: false, ...nightly, startupTimeout: 120, group: g }, apps: {},
     host: { cpu: "Synthetic CPU", onlineCpus: "0-7", platform: "test", release: "test", node: "test", docker: "test" }, tools: Object.fromEntries(["upstream", "checker", "k6"].map((k) => [k, { imageId: `sha256:${"b".repeat(64)}` }])),
@@ -49,7 +50,7 @@ function full(round = "r17", g = group) {
           const stats = { cpuUsec: 1000000, samples: 3, cpuAvgPct: 100, cpuMaxPct: 110, memAvgMiB: 10, memMaxMiB: 11 };
           const n = 1000 + 37 * i + pass;
           return { pass, locale, complete: true, startedAt: "2026-01-01T00:01:00.000Z", finishedAt: "2026-01-01T00:03:00.000Z",
-            cold: { containerStartedAt: "2026-01-01T00:02:00.000Z", first200At: "2026-01-01T00:02:01.000Z", first200MsFromContainerStart: 1000, measuredBeforeReadinessOrWarmup: true, path: target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale}/item_1`, attempts: 1, bytes: 100, successfulRequestMs: 1 },
+            cold: { containerStartedAt: "2026-01-01T00:02:00.000Z", first200At: "2026-01-01T00:02:01.000Z", first200MsFromContainerStart: 1000, measuredBeforeReadinessOrWarmup: true, path: target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale === "rotating" ? "en-US" : locale}/item_1`, attempts: 1, bytes: 100, successfulRequestMs: 1 },
             warmup, phases: Object.fromEntries(phases.map((p) => [p, { ...warmup, ...stats, requests: n, rps: n, perCpuSecond: n, upstream: source === "api" ? { ...stats, cpuAvgPct: 50, highCpu: false } : null }])) };
         });
         a.phases[key] = Object.fromEntries(phases.map((p) => [p, stageAggregate(a.runs[key], p, 3)]));
@@ -67,8 +68,8 @@ function scale(a, f) {
 }
 // Droplet k's part of a group round split n ways, as run.mjs --group g --part k/n writes it:
 // its share of the candidates, each qualified, the ones in excluded not timed.
-function part(k, n, { round = "r17", g = group, cortenScale = 1, excluded = [] } = {}) {
-  const s = full(round, g), share = splitApps(g, n)[k - 1];
+function part(k, n, { round = "r17", g = group, cortenScale = 1, excluded = [], schema = resultSchema } = {}) {
+  const s = full(round, g, schema), share = splitApps(g, n)[k - 1];
   s.options = { ...s.options, apps: share, part: { index: k, of: n } };
   s.apps = Object.fromEntries(share.map((app) => [app, s.apps[app]]));
   s.runId = `marketplace-${round}-d${k}`;
@@ -91,8 +92,8 @@ function stopRuns(a, key, pass, phase) {
 }
 const merged = (n, options = {}) => validateSummary(mergeParts(options.round ?? "r17", Array.from({ length: n }, (_, i) => part(i + 1, n, i === 1 ? options : { round: options.round }))));
 
-test("split summary keeps a part's representable memory mean without claiming native receipts", () => {
-  const parts = [part(1, 2), part(2, 2)];
+for (const schema of [v5Schema, resultSchema]) test(`${schema} split keeps a part's representable memory mean without claiming native receipts`, () => {
+  const parts = [part(1, 2, { schema }), part(2, 2, { schema })];
   for (const p of parts) p.evidenceVersion = evidenceVersion;
   const upstream = parts[1].apps.corten.runs["api-neutral-json"][0].phases.sat64.upstream;
   const { samples, memAvgMiB, memMaxMiB } = summarizeSamples(Array(31).fill({ cpu: 50, mem: 100.9 }));
@@ -226,7 +227,7 @@ test("droplets' parts merge into one round of the group, each candidate from its
   assert.throws(() => mergeParts("r18", parts));
   assert.throws(() => mergeParts("r17", [parts[0]]), "one part is not a split");
   for (const change of [(v) => { v.split.parts[1].apps.pop(); }, (v) => { delete v.split.parts[1].corten; }, (v) => { v.split.parts[0].host = { ...v.split.parts[0].host, cpu: "other" }; },
-    (v) => { v.split.parts[1].corten.phases["fixture-en-US-page"].sat64.rps.median++; }, (v) => { v.split.parts[1].startedAt = "2025-12-31T00:00:00.000Z"; }, (v) => { v.options.part = { index: 1, of: 2 }; },
+    (v) => { v.split.parts[1].corten.phases["fixture-rotating-page"].sat64.rps.median++; }, (v) => { v.split.parts[1].startedAt = "2025-12-31T00:00:00.000Z"; }, (v) => { v.options.part = { index: 1, of: 2 }; },
     (v) => { delete v.apps.leptos; }, (v) => { v.options.apps = v.options.apps.slice(0, 4); }, (v) => { delete v.options.group; }, (v) => { v.schema = "marketplace-results/v4"; }]) {
     const bad = structuredClone(s); change(bad); assert.throws(() => validateSummary(bad));
   }
@@ -297,11 +298,11 @@ test("a split round's parts ran together, each its own run", () => {
 });
 
 test("a ratio with a stopped stage on either side, its droplet's Corten or its own, is -", () => {
-  const s = structuredClone(merged(2)), key = "fixture-en-US-page";
+  const s = structuredClone(merged(2)), key = "fixture-rotating-page";
   stopRuns(s.split.parts[1].corten, key, 2, "sat64"); // d2's Corten
   stopRuns(s.apps.nextjs, key, 3, "sat256"); // a candidate on d1
   validateSummary(s);
-  const text = report(s), start = text.indexOf("## en-US\n");
+  const text = report(s), start = text.indexOf("## Rotating pages (en-US/fr-FR/de-DE)\n");
   const rows = text.slice(start, text.indexOf("### HTTP source", start)).split("\n");
   const stopped = (a) => phases.filter((p) => a.phases[key][p].stopped).length;
   const dashes = (prefix) => rows.filter((l) => l.startsWith(prefix) && l.endsWith("| - | - |")).length;
@@ -324,13 +325,13 @@ test("a part whose peers are all excluded is no comparison: it fails alone and i
   assert.throws(() => validateSummary(mergeParts("r17", [d1, part(2, 2)])));
 });
 
-test("the v5 reader keeps its whole-inventory check for a single host and takes no arbitrary subset", () => {
+test("the group reader keeps its whole-inventory check for a single host and takes no arbitrary subset", () => {
   // A whole round's candidates are its whole group; a share of them is a part, only with its part.
   const subset = full(); subset.options.apps = splitApps(group, 2)[0]; subset.apps = Object.fromEntries(subset.options.apps.map((a) => [a, subset.apps[a]]));
   assert.throws(() => validateSummary(subset));
   const wrongShare = structuredClone(part(1, 2)); wrongShare.options.part = { index: 2, of: 2 };
   assert.throws(() => validateSummary(wrongShare));
-  const ungrouped = structuredClone(part(1, 2)); delete ungrouped.options.group; ungrouped.schema = "marketplace-results/v4";
+  const ungrouped = structuredClone(part(1, 2, { schema: v5Schema })); delete ungrouped.options.group; ungrouped.schema = "marketplace-results/v4";
   for (const app of Object.values(ungrouped.apps)) delete app.qualification;
   assert.throws(() => validateSummary(ungrouped), /named group/);
   validateSummary(full());
@@ -343,12 +344,12 @@ test("a merged round prints every droplet's Corten in every table, with each can
   assert.match(text, /CPU: d1 Synthetic CPU d1 \(online CPUs 0-7\); d2 Synthetic CPU d2 \(online CPUs 0-7\)\./);
   assert.match(text, /on its own droplet before that droplet's load/);
   const tables = text.split("\n").filter((l) => l.startsWith("| Framework |"));
-  assert.equal(tables.length, 8 * 4);
+  assert.equal(tables.length, 4 * 4);
   for (const header of tables) assert.match(header, /^\| Framework \| Droplet \|/);
   for (const header of tables.filter((h) => h.includes("req/s |"))) assert.match(header, /req\/s ratio to Corten \| CPU us\/request ratio to Corten \|$/);
   // Measured rows; the Feature Qualification table has one more row for each droplet's Corten.
-  for (const droplet of ["r17-d1", "r17-d2"]) assert.equal(text.split("\n").filter((l) => l.startsWith(`| corten | ${droplet} |`) && !l.includes("admitted")).length, 8 * 4, droplet);
-  assert.equal(text.split("\n").filter((l) => l.startsWith("| nextjs |") && !l.includes("admitted")).length, 8 * 4);
+  for (const droplet of ["r17-d1", "r17-d2"]) assert.equal(text.split("\n").filter((l) => l.startsWith(`| corten | ${droplet} |`) && !l.includes("admitted")).length, 4 * 4, droplet);
+  assert.equal(text.split("\n").filter((l) => l.startsWith("| nextjs |") && !l.includes("admitted")).length, 4 * 4);
   // axum-maud is outside the production group: listed as omitted, never a row or an anchor.
   assert.match(text, /^Omitted adapters: .*axum-maud/m);
   assert.doesNotMatch(text, /^\| axum-maud|anchor/m);
@@ -357,7 +358,7 @@ test("a merged round prints every droplet's Corten in every table, with each can
   assert.match(text, /^\| leptos \| r17-d2 \|.* \| 1\.22 \| 0\.82 \|$/m);
   assert.match(text, /^## Between droplets$/m);
   assert.match(text, /^\| r17-d2 \| Synthetic CPU d2 \| 0-7 \| corten, aspnet, express, leptos \|$/m);
-  assert.match(text, /^Flagged: none\. Corten's numbers on no two droplets differ by more than the noise in any of the 48 stages\.$/m);
+  assert.match(text, /^Flagged: none\. Corten's numbers on no two droplets differ by more than the noise in any of the 24 stages\.$/m);
   const part2 = report(part(2, 3));
   assert.match(part2, /^# Marketplace v2 r17 part d2 of 3$/m);
   assert.match(part2, /This part qualifies its share of the group's candidates \(corten, aspnet, topcoat\)/);
@@ -369,18 +370,27 @@ test("droplets are flagged where Corten's own numbers differ beyond the noise", 
   const faster = merged(2, { cortenScale: 1.2 });
   const check = betweenDroplets(faster);
   // Corten is 20% faster on d2: its req/s and its CPU per request differ in every stage.
-  assert.equal(check.flagged.length, 48);
+  assert.equal(check.flagged.length, 24);
   assert.ok(check.flagged.every((r) => r.differ.length === 1 && r.differ[0].join() === "1,2"));
   const text = report(faster);
-  assert.match(text, /^Flagged: 48 of 48 stages \(d1 and d2 differ\)\.$/m);
-  assert.match(text, /^\| fixture-en-US-page \| sat64 \| req\/s \| 1002\.00 \[1001\.00-1003\.00\] \| 1202\.00 \[1201\.00-1204\.00\] \| d1 and d2 differ \|$/m);
+  assert.match(text, /^Flagged: 24 of 24 stages \(d1 and d2 differ\)\.$/m);
+  assert.match(text, /^\| fixture-rotating-page \| sat64 \| req\/s \| 1002\.00 \[1001\.00-1003\.00\] \| 1202\.00 \[1201\.00-1204\.00\] \| d1 and d2 differ \|$/m);
   // Each candidate's ratio uses its own droplet's Corten, so d2's are lower against the faster Corten.
   assert.match(text, /^\| leptos \| r17-d2 \|.* \| 1\.02 \| /m);
   const even = betweenDroplets(merged(2));
   assert.equal(even.flagged.length, 0);
   // With three droplets each pair that differs is named.
   const three = validateSummary(mergeParts("r17", [part(1, 3), part(2, 3), part(3, 3, { cortenScale: 1.5 })]));
-  assert.match(report(three), /^Flagged: 48 of 48 stages \(d1 and d3 differ; d2 and d3 differ\)\.$/m);
+  assert.match(report(three), /^Flagged: 24 of 24 stages \(d1 and d3 differ; d2 and d3 differ\)\.$/m);
+});
+
+test("split parts retain their historical matrix and cannot merge across the rotation boundary", () => {
+  const old = [part(1, 2, { schema: v5Schema }), part(2, 2, { schema: v5Schema })];
+  const summary = validateSummary(mergeParts("r17", old));
+  assert.equal(betweenDroplets(summary).stages.length, 8 * 3 * 2);
+  assert.match(report(summary), /^\| api-de-DE-page \| sat256 \| req\/s \|/m);
+  assert.throws(() => mergeParts("r17", [old[0], part(2, 2)]), /schema differs/);
+  assert.throws(() => mergeParts("r17", [part(1, 2), old[1]]), /schema differs/);
 });
 
 test("a split round compares only with one split the same way, droplet by droplet", () => {

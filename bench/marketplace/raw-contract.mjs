@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { locales } from "./contract.mjs";
 
 export const evidenceVersion = "marketplace-raw/v3";
 export const maxStatsSamples = 1000;
@@ -42,4 +43,43 @@ export function loadEnvironment(s, profile, phase, name) {
   return { ...(profile.target === "page" ? { LOCALE: profile.locale } : {}), BASE: `http://${name}:8080`, TARGET: profile.target,
     DURATION: `${phase === "warmup" ? s.options.warmup : s.options.duration}s`, MODE: phase === "fixed" ? "fixed" : "closed",
     RATE: String(s.options.rate), VUS: String(phase === "sat256" ? 256 : phase === "warmup" ? 32 : 64) };
+}
+
+// Called after the engine clock, native counter rates, request/check coverage
+// and schema-specific profile have been checked. These counters mark selections
+// before the GET, not successes: a 503, timeout or app stop is not a missing locale.
+export function validateLocaleCounters(profile, metrics, elapsedMs, seconds, env) {
+  const names = locales.map((locale) => `marketplace_locale_${locale.replace("-", "_")}`);
+  const rotating = profile.target === "page" && profile.locale === "rotating";
+  for (const name of Object.keys(metrics).filter((n) => n.startsWith("marketplace_locale_"))) {
+    assert.ok(rotating && names.includes(name), `unexpected locale counter ${name}`);
+  }
+  if (!rotating) return;
+  const metric = (name) => metrics[name]?.values ?? metrics[name];
+  const counts = names.map((name) => {
+    if (!Object.hasOwn(metrics, name)) return 0; // k6 may omit an unsampled Counter
+    const count = metric(name)?.count;
+    assert.ok(Number.isSafeInteger(count) && count >= 0 && (!Object.hasOwn(metrics[name], "type") || metrics[name].type === "counter"), `invalid locale counter ${name}`);
+    return count;
+  });
+  const selected = counts.reduce((a, b) => a + b, 0);
+  const requests = metric("http_reqs").count, completed = metric("iterations").count;
+  assert.ok(Number.isSafeInteger(selected) && selected >= requests, "locale selections do not cover HTTP requests");
+  // Single local scenario, sequential iterationInTest starting at zero. Each
+  // observed occurrence requires at least this many starts in the round robin.
+  const starts = Math.max(...counts.map((n, i) => n ? (n - 1) * names.length + i + 1 : 0));
+  // A normal graceful drain finishes every selection. At the actual 10s
+  // gracefulStop cutoff, a VU can be interrupted before adding its Counter or
+  // before HTTP emits its sample. Dropped arrival slots never start an iteration.
+  const atCutoff = elapsedMs >= (seconds + 10) * 1000 - 1e-6;
+  if (!atCutoff) {
+    assert.equal(selected, requests, "locale selections differ from HTTP requests");
+    assert.equal(starts, selected, "locale selections differ from the native rotation");
+  } else {
+    assert.ok(Number.isSafeInteger(starts) && starts - completed <= metric("vus_max").max, "interrupted locale rotation exceeds active VUs");
+    if (env.MODE === "fixed") {
+      const slots = Math.floor(Math.ceil(elapsedMs * 1e6 + 1) / Math.floor(1e9 / Number(env.RATE))) + 1;
+      assert.ok(starts + (metric("dropped_iterations")?.count ?? 0) <= slots, "locale selections exceed arrival slots");
+    }
+  }
 }

@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
-import { passPlan, stageAggregate, timedProfiles } from "./run-contract.mjs";
+import { passPlan, resultSchema, stageAggregate, timedProfiles, v5Schema } from "./run-contract.mjs";
 import { boundedFeatureProfile, featureProfile } from "./feature-contract.mjs";
 import { sampleStats, summarizeSamples } from "../catalog/stats.mjs";
 
@@ -205,10 +205,40 @@ test("native replay requires the retained executable identity and raw version pr
   invalid(() => validateSaved(args));
 });
 
+for (const schema of [v5Schema, resultSchema]) test(`native ${schema} binds page attempts, neutral JSON and cold path to the schema`, (t) => {
+  const folder = temporary(t), args = { folder, round: "r17", commit };
+  const s = writeSavedFixture(folder, commit, sourceTree(commit), { schema });
+  assert.deepEqual(validateSaved(args), s);
+  const rotating = schema === resultSchema, locale = rotating ? "rotating" : "en-US";
+  const page = `fixture/corten/p1-${locale}-page`, json = "api/corten/p1-neutral-json";
+  const probe = (path, edit, expected) => {
+    const file = join(folder, path), saved = readFileSync(file), v = JSON.parse(saved);
+    try { edit(v); writeFileSync(file, JSON.stringify(v)); assert.throws(() => validateSaved(args), expected); }
+    finally { writeFileSync(file, saved); }
+  };
+  probe("summary.json", (v) => { v.schema = rotating ? v5Schema : resultSchema; }, /profile matrix/);
+  probe(`${json}/fixed-receipt.json`, (v) => { v.load.env.LOCALE = "en-US"; }, /LOCALE/);
+  probe(`${json}/fixed.json`, (v) => { v.metrics.marketplace_locale_en_US = { count: 0, rate: 0 }; }, /unexpected locale counter/);
+  probe(`${page}/fixed-receipt.json`, (v) => { v.load.env.LOCALE = rotating ? "en-US" : "rotating"; }, /LOCALE/);
+  const wrongCold = "/marketplace/fr-FR/item_1";
+  probe("summary.json", (v) => { v.apps.corten.runs[`fixture-${locale}-page`][0].cold.path = wrongCold; }, /item_1/);
+  probe(`${page}/probe-container.json`, (v) => { v.cmd[3] = wrongCold; }, /item_1/);
+  if (!rotating) {
+    probe(`${page}/fixed.json`, (v) => { v.metrics.marketplace_locale_en_US = v.metrics.http_reqs; }, /unexpected locale counter/);
+    return;
+  }
+  for (const [phase, edit, error] of [
+    ["warmup", (m) => { delete m.marketplace_locale_fr_FR; }, /cover HTTP/],
+    ["fixed", (m) => { m.marketplace_locale_en_US = m.http_reqs; m.marketplace_locale_fr_FR = m.marketplace_locale_de_DE = { rate: 0, count: 0 }; }, /rotation/],
+    ["sat64", (m) => { m.marketplace_locale_de_DE.rate = 0; }, /engine elapsed clock/],
+    ["sat256", (m) => { m.marketplace_locale_it_IT = { count: 0, rate: 0 }; }, /unexpected locale counter/],
+  ]) probe(`${page}/${phase}.json`, (v) => edit(v.metrics), error);
+});
+
 test("hostile saved edits fail replay, even when the summary remains internally plausible", (t) => {
   const folder = temporary(t), args = { folder, round: "r17", commit };
   writeSavedFixture(folder, commit, sourceTree(commit));
-  const base = "fixture/corten/p1-en-US-page", api = "api/corten/p1-neutral-json";
+  const base = "fixture/corten/p1-rotating-page", api = "api/corten/p1-neutral-json";
   const change = (path, mutate) => {
     const full = join(folder, path), saved = readFileSync(full);
     try { const value = JSON.parse(saved); mutate(value); writeFileSync(full, JSON.stringify(value)); invalid(() => validateSaved(args)); }
@@ -250,11 +280,11 @@ test("hostile saved edits fail replay, even when the summary remains internally 
   change("source.json", (v) => { v.tree = "c".repeat(40); });
   change("summary.json", (v) => { v.host.cpu = "edited host"; });
   change("summary.json", (v) => { v.options.build = "true"; });
-  change("summary.json", (v) => { v.apps.corten.phases["fixture-en-US-page"].fixed.rps.median++; });
-  change("summary.json", (v) => { v.apps.corten.runs["fixture-en-US-page"][0].phases.fixed.cpuUsec++; });
+  change("summary.json", (v) => { v.apps.corten.phases["fixture-rotating-page"].fixed.rps.median++; });
+  change("summary.json", (v) => { v.apps.corten.runs["fixture-rotating-page"][0].phases.fixed.cpuUsec++; });
   change("summary.json", (v) => {
-    const a = v.apps.corten, runs = a.runs["fixture-en-US-page"], p = runs[0].phases.fixed;
-    p.cpuUsec *= 2; p.perCpuSecond = p.requests / (p.cpuUsec / 1e6); a.phases["fixture-en-US-page"].fixed = stageAggregate(runs, "fixed", 3);
+    const a = v.apps.corten, runs = a.runs["fixture-rotating-page"], p = runs[0].phases.fixed;
+    p.cpuUsec *= 2; p.perCpuSecond = p.requests / (p.cpuUsec / 1e6); a.phases["fixture-rotating-page"].fixed = stageAggregate(runs, "fixed", 3);
     validateSummary(v); // Self-consistent edited summary still disagrees with retained counters.
   });
   change("summary.json", (v) => { delete v.apps.corten.runs["api-neutral-json"]; });
@@ -332,10 +362,10 @@ test("native run windows follow the serial rotated pass plan and cannot overlap"
 test("coherent summary aggregates cannot hide a k6 count/rate/elapsed contradiction", (t) => {
   const folder = temporary(t), args = { folder, round: "r17", commit };
   const s = writeSavedFixture(folder, commit, sourceTree(commit));
-  const path = join(folder, "fixture/corten/p1-en-US-page/fixed.json"), raw = JSON.parse(readFileSync(path));
+  const path = join(folder, "fixture/corten/p1-rotating-page/fixed.json"), raw = JSON.parse(readFileSync(path));
   raw.metrics.http_reqs.rate = 1e9; writeFileSync(path, JSON.stringify(raw));
-  const a = s.apps.corten, runs = a.runs["fixture-en-US-page"];
-  runs[0].phases.fixed.rps = 1e9; a.phases["fixture-en-US-page"].fixed = stageAggregate(runs, "fixed", 3);
+  const a = s.apps.corten, runs = a.runs["fixture-rotating-page"];
+  runs[0].phases.fixed.rps = 1e9; a.phases["fixture-rotating-page"].fixed = stageAggregate(runs, "fixed", 3);
   validateSummary(s); writeFileSync(join(folder, "summary.json"), JSON.stringify(s)); invalid(() => validateSaved(args));
 });
 

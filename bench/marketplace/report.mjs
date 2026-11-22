@@ -8,7 +8,7 @@ import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupApps } from "./groups.mjs";
 import { admitted, boundedFeatureProfile, boundedQualificationSettings, featureProfile, qualificationSettings, validateActiveQualification, validateQualification } from "./feature-contract.mjs";
-import { aggregateCold, cpuSettings, loadPhases, parsePart, phases, readableSchemas, resultSchema, roundIdentity, sources, splitApps, splitSubject, stageAggregate, timedProfiles, v3Schema } from "./run-contract.mjs";
+import { aggregateCold, cpuSettings, loadPhases, parsePart, phases, readableSchemas, resultSchema, roundIdentity, sources, splitApps, splitSubject, stageAggregate, timedProfilesFor, v3Schema, v5Schema } from "./run-contract.mjs";
 import { betweenDroplets, cleanOutcome, differText, outcomeFields, subjectMetrics } from "./split.mjs";
 import { maxStatsSamples } from "./raw-contract.mjs";
 const finite = (n, min = 0) => assert.ok(Number.isFinite(n) && n >= min, "missing/invalid measurement");
@@ -122,8 +122,9 @@ function splitEvidence(s, v3, start, end, validateQualificationRecord) {
   return windows;
 }
 function validateApp(s, a, start, end, v3, validateQualificationRecord) {
-  // A merged v5 summary carries the parts' measurements but not their raw-receipt version.
-  const allowRoundedMemory = s.schema === resultSchema;
+  // A merged summary carries the parts' measurements but not their raw-receipt version.
+  const allowRoundedMemory = s.schema === v5Schema || s.schema === resultSchema;
+  const timedProfiles = s.measurement.profiles;
   assert.match(a.imageId, /^sha256:[a-f0-9]{64}$/);
   assert.equal(a.builtCommit, s.commit);
   assert.equal(a.builtDirty, false);
@@ -160,7 +161,7 @@ function validateApp(s, a, start, end, v3, validateQualificationRecord) {
         assert.equal(cold.first200MsFromContainerStart, first - coldStart);
         assert.equal(cold.measuredBeforeReadinessOrWarmup, true);
         assert.ok(cold.first200MsFromContainerStart <= s.options.startupTimeout * 1000);
-        assert.equal(cold.path, target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale}/item_1`);
+        assert.equal(cold.path, target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale === "rotating" ? locales[0] : locale}/item_1`);
         assert.ok(Number.isSafeInteger(cold.attempts) && cold.attempts > 0);
         finite(cold.successfulRequestMs); assert.ok(Number.isSafeInteger(cold.bytes) && cold.bytes > 0);
         if (run.stopped?.phase !== "warmup") loadEvidence(run.warmup);
@@ -194,7 +195,7 @@ export function validateSummary(s) {
   // A v3 round is read as v4 with no stop records: under v3 an app that stopped failed the round.
   const v3 = s.schema === v3Schema;
   assert.equal(s.workload, workload); roundIdentity(s.round);
-  assert.deepEqual(s.measurement.profiles, timedProfiles, "timed profile matrix must contain localized pages and locale-neutral JSON only");
+  assert.deepEqual(s.measurement.profiles, timedProfilesFor(s.schema), "timed profile matrix differs from the result schema");
   assert.match(s.commit, /^[a-f0-9]{40}$/); assert.equal(s.dirty, false);
   assert.equal(s.finishedCommit, s.commit); assert.equal(s.finishedDirty, false);
   assert.equal(s.complete, true); assert.equal(s.checksPassed, true);
@@ -219,7 +220,7 @@ export function validateSummary(s) {
   assert.equal(s.fixtureSha256, createHash("sha256").update(JSON.stringify(records())).digest("hex"));
   let validateQualificationRecord;
   if (s.options.group) {
-    assert.equal(s.schema, "marketplace-results/v5", "named feature groups require the v5 schema");
+    assert.ok(s.schema === v5Schema || s.schema === resultSchema, "named feature groups require v5 or newer");
     validateQualificationRecord = qualificationValidator(s.measurement);
     // A merged split round checks this on each droplet (splitEvidence).
     if (s.split === undefined) assert.ok(admitted(s.apps.corten) && Object.values(s.apps).filter(admitted).length > 1, "a group needs a feature-qualified Corten and peer");
@@ -245,7 +246,7 @@ export function report(s) {
     ...(part ? [`This part qualifies its share of the group's candidates (${candidates.join(", ")}); the round's other droplets qualify the rest.`] : []),
     "A new localized baseline, not a change from marketplace r16 or catalog c1.", "",
     "Every number is the median [min-max] of three measured passes, not a confidence interval, except in a row marked stopped, which has fewer: of two passes each number is the lower of the two values in its column, of one pass that pass. Overlapping ranges do not establish a speed difference.",
-    `Pages cover all three locales; JSON is locale-neutral and timed once per source/pass. ${gate}`,
+    `${s.schema === resultSchema ? `Timed page requests rotate through ${locales.join("/")}; each source reports one combined result, not per-locale throughput. The cold page probe uses ${locales[0]}.` : "Pages cover all three locales;"} JSON is locale-neutral and timed once per source/pass. ${gate}`,
     `Fixed load asks for ${s.options.rate} requests/second. Closed-loop 64/256-user results are observed throughput and latency, not proven maximum capacity. Warmup ${s.options.warmup}s; each phase ${s.options.duration}s; identity encoding.`,
     "CPU % is sampled app-container usage (100% = one core). CPU us/request and requests/CPU-second use counted whole-container cgroup CPU, not instructions or handler-only time. CPU % and steady memory average the central 15%-95% of samples; peak memory is the sampled maximum, not an unsampled high-water mark.",
     "These load results do not measure browser interactivity, bytes, build cost or instructions.",
@@ -276,8 +277,9 @@ export function report(s) {
     droplet: `${s.round}-d${p.index}`, at: `@${s.round}-d${p.index}`, corten: p.corten })))
     : apps.map((app) => ({ app, a: s.apps[app], droplet: null, at: "", corten: null }));
   if (split) lines.push(...betweenLines(s, cell));
-  for (const locale of [...locales, null]) {
-    lines.push("", `## ${locale ?? "Locale-neutral JSON"}`);
+  const timedProfiles = s.measurement.profiles;
+  for (const locale of new Set(timedProfiles.map((p) => p.locale))) {
+    lines.push("", `## ${locale === "rotating" ? `Rotating pages (${locales.join("/")})` : locale ?? "Locale-neutral JSON"}`);
     for (const { key, source } of timedProfiles.filter((p) => p.locale === locale)) {
       lines.push("", `### ${source === "fixture" ? "Memory source" : "HTTP source"}`);
       lines.push("", "#### Cold start", "", "Docker-host container StartedAt to first complete HTTP 200, before readiness/warmup; not process-exec or browser-interactive time.", "",

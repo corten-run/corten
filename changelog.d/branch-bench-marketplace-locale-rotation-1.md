@@ -1,0 +1,1 @@
+- The [localized marketplace benchmark](https://github.com/corten-run/corten/tree/main/bench/marketplace) now times one page mix and one neutral JSON endpoint per source. All three locales still have to pass correctness checks. Earlier per-locale timings remain separate.
