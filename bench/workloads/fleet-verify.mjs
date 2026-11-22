@@ -23,12 +23,16 @@ export function fleetRoot(path, repo) {
   return root;
 }
 export function present(path) { return lstatSync(path, { throwIfNoEntry: false }) !== undefined; }
+export function fleetBatchLock(root) {
+  const path = join(root, ".fleet-operation.lock");
+  return present(path) ? regular(path, 1024) : null;
+}
 // For inspection only. A dead original batch owner does not unlock the fleet.
 export function fleetLockSnapshot(root) {
-  const path = join(root, ".fleet-operation.lock");
   try {
-    if (!present(path)) return null;
-    const bytes = regular(path, 1024), { pid, approvalSha256, ...rest } = JSON.parse(bytes);
+    const bytes = fleetBatchLock(root);
+    if (!bytes) return null;
+    const { pid, approvalSha256, ...rest } = JSON.parse(bytes);
     assert.deepEqual(rest, {});
     assert.ok(Number.isSafeInteger(pid) && pid > 0);
     full(approvalSha256, /[a-f0-9]{64}/, "fleet lock approval");
@@ -222,13 +226,27 @@ export function recheckCollectedGroup(fleet, snapshot) {
   const { group, ...hashes } = snapshot;
   assert.deepEqual(evidenceSnapshot(job), hashes, "group-evidence-changed");
 }
-export function recheckContinuationProofs(proofs) {
-  assert.ok(Array.isArray(proofs) && proofs.length <= selection().groups.length);
-  for (const { root, round, manifestSha256, ...snapshot } of proofs) {
-    const fleet = readFleet(root, round, { priorSelection: true });
+// Launch custody is ordered by the exact index, separate from replay evidence.
+// In particular the worker must see a newly acquired staged batch lock even
+// after the independent parent has consumed its own launch intent.
+export function recheckIndexedLaunchCustody(root, indexSha256, custody) {
+  const bytes = continuationIndex(root);
+  assert.equal(digest(bytes), indexSha256, "continuation index changed");
+  const entries = JSON.parse(bytes);
+  assert.ok(Array.isArray(entries) && entries.length <= 64 && Array.isArray(custody) && entries.length === custody.length,
+    "indexed launch custody must cover the continuation index");
+  for (const [i, entry] of entries.entries()) {
+    const { root: saved, manifestSha256, lock, launch, remaining, requireDeadOwner } = custody[i];
+    const fleet = readFleet(fleetRoot(entry.root), entry.round, { priorSelection: true });
+    assert.equal(fleet.root, saved, "continuation source root changed");
+    assert.ok(!fleet.manifest.single && fleet.manifest.commit === entry.commit);
     assert.equal(fleet.manifestSha256, manifestSha256, "continuation manifest changed");
-    assert.notEqual(fleetLockSnapshot(root), "busy", "continuation source busy");
-    recheckCollectedGroup(fleet, snapshot);
+    if (lock !== null) full(lock, /[a-f0-9]{64}/, "indexed fleet lock digest");
+    const batch = requireDeadOwner ? undefined : fleetBatchLock(saved);
+    assert.equal(requireDeadOwner ? fleetLockSnapshot(saved) : batch && digest(batch), lock, "continuation source lock changed");
+    const intent = (file, read) => stagedFleet(fleet.manifest) && present(join(saved, file)) ? read(fleet).sha256 : undefined;
+    assert.equal(intent("launch-intent.json", readLaunchIntent), launch, "historical launch intent changed");
+    assert.equal(intent("remaining-intent.json", readRemainingIntent), remaining, "historical remaining intent changed");
   }
 }
 export async function verifyCollectedGroup(fleet, group, { inspect, start, details, bindArchive, interrupted = () => false } = {}) {

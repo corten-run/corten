@@ -9,8 +9,8 @@ import { roundName, selection, stagedFleet } from "./cloud-contract.mjs";
 import { digest, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { full } from "./cloud-options.mjs";
 import { retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
-import { continuationIndex, continuationIndexSha256, continuationPeer, fleetLockSnapshot, fleetRoot, outside, present, readFleet, readGroup, readLaunchIntent,
-  readRemainingIntent, recheckCollectedGroup, verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
+import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, outside, present, readFleet, readGroup,
+  readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
 
 export const continuationLock = ".continuation-operation.lock";
 const groups = selection(), names = groups.groups.map(({ group }) => group);
@@ -58,16 +58,13 @@ async function measuredReplay(repo, checkout, commit) {
 const retryable = (row) => ["not-created", "native-failed-retired", "setup-failed-retired", "unused-retired"].includes(row.outcome)
   || ["failed", "blocked"].includes(row.outcome) && !!row.destroyedAt;
 const acceptable = (row) => ["missing", "prepared", "verified", "running"].includes(row.outcome) || retryable(row);
+const unresolved = (row) => row.custodyUnresolved || row.outcome !== "known-result" && !acceptable(row) && !row.cleanupUnconfirmed;
 const manifestOnly = (fleet, entries = readdirSync(fleet.root)) =>
   entries.length === 1 && entries[0] === `fleet-${fleet.manifest.round}.json`;
 const terminal = ({ state }) => state?.id && state.destroyedAt && ["collected", "retired"].includes(state.status);
 const known = ({ state }) => state?.id && state.status === "collected" && state.validation?.status === "verified";
 const retirementFile = (kind) => ({ "native-failed": "failed-native-host.json", "setup-failed": "failed-setup-host.json", unused: "unused-host.json" })[kind];
-const readBatchLock = (root) => {
-  const path = join(root, ".fleet-operation.lock");
-  return present(path) ? regular(path, 1024) : null;
-};
-const lockBytes = (root) => { const bytes = readBatchLock(root); return bytes && digest(bytes); };
+const lockBytes = (root) => { const bytes = fleetBatchLock(root); return bytes && digest(bytes); };
 
 function verifyRetryRetirement(saved) {
   const { local, state, stateRoot } = saved, { kind, evidenceSha256 } = state.retirement;
@@ -133,6 +130,7 @@ async function scanContinuation(root, { repo, interrupted, inspect } = {}, admit
     return { name, group, round };
   });
   const attempts = new Map(names.map((group) => [group, []])), slots = new Map(), unlaunched = new Map(), ids = new Set();
+  const indexedCustody = [];
   const proofs = [], retryEvidence = [], manifests = [], states = [], peers = [], unconfirmed = [], needsCensus = new Set(), liveIps = new Set();
   const claim = (id) => { assert.ok(!ids.has(id), "duplicate continuation host identity"); ids.add(id); };
   const matchesCurrentContract = (selected) => groups.groups.some((s) => s.group === selected.group
@@ -149,7 +147,7 @@ async function scanContinuation(root, { repo, interrupted, inspect } = {}, admit
   const readAdmission = async (fleet, checkout, archives) => {
     assert.ok(!interrupted?.(), "continuation admission cancelled");
     const { manifest, manifestSha256 } = fleet, { round, commit, single } = manifest;
-    const bytes = readBatchLock(fleet.root), lock = bytes && digest(bytes);
+    const bytes = fleetBatchLock(fleet.root), lock = bytes && digest(bytes);
     const children = manifest.jobs.map(({ group }) => readGroup(fleet, group));
     if (lock !== null && single && !terminal(children[0])) { addPeer(fleet); return; }
     const launchIntent = (single || stagedFleet(manifest)) && present(join(fleet.root, "launch-intent.json"))
@@ -168,7 +166,8 @@ async function scanContinuation(root, { repo, interrupted, inspect } = {}, admit
       requireDeadOwner = !consumed || !consumed.subject.jobs.every((job, i) => job.outcome !== "planned" || terminal(children[i]));
       if (requireDeadOwner) assert.equal(fleetLockSnapshot(fleet.root), lock, "continuation source has an active batch");
     }
-    manifests.push({ ...fleet, lock, launch, remaining, requireDeadOwner });
+    if (single) manifests.push({ ...fleet, lock, launch });
+    else indexedCustody.push({ root: fleet.root, manifestSha256, lock, launch, remaining, ...(requireDeadOwner ? { requireDeadOwner } : {}) });
     for (const saved of children) {
       const { group, state, stateSha256 } = saved, selected = group === admittedGroup;
       const pinned = archives && Object.hasOwn(archives, group);
@@ -210,10 +209,12 @@ async function scanContinuation(root, { repo, interrupted, inspect } = {}, admit
         unconfirmed.push({ group, round, accountId, manifestSha256, stateSha256, id: state.id });
       }
       states.push({ fleet, group, stateSha256, outcome: saved.outcome, noCreate, retirementFile: receipt });
-      attempts.get(group)?.push({ group, outcome, round, commit, manifestSha256, stateSha256, launch,
+      const attempt = { group, outcome, round, commit, manifestSha256, stateSha256, launch,
         destroyedAt: state?.destroyedAt, ...(single ? { attemptRoot: fleet.root } : {}),
         ...(single && known(saved) && !terminal(saved) ? { custodyUnresolved: true } : {}),
-        ...(censusRequired ? { cleanupUnconfirmed: true } : {}) });
+        ...(censusRequired ? { cleanupUnconfirmed: true } : {}) };
+      assert.ok(attempts.has(group) || !unresolved(attempt), "unresolved custody for a historical group");
+      attempts.get(group)?.push(attempt);
     }
   };
   const read = async (fleet, checkout, archives) => {
@@ -303,7 +304,7 @@ async function scanContinuation(root, { repo, interrupted, inspect } = {}, admit
   const rows = names.map((group) => {
     const history = attempts.get(group), verified = history.filter((row) => row.outcome === (admittedGroup ? "known-result" : "verified"));
     assert.ok(verified.length < 2, `duplicate verified group: ${group}`);
-    const blocked = history.some((row) => row.custodyUnresolved || row.outcome !== "known-result" && !acceptable(row) && !row.cleanupUnconfirmed);
+    const blocked = history.some(unresolved);
     const canRetry = !blocked && !verified.length && slots.has(group) && retryable(history.at(-1));
     return { group, outcome: blocked ? "blocked" : verified.length ? verified[0].outcome : slots.has(group) ? history.at(-1).outcome : "missing",
       ...(blocked ? { unresolved: true } : {}), ...(verified.length ? admittedGroup ? { knownResult: true } : { result: verified[0] } : {}),
@@ -311,25 +312,24 @@ async function scanContinuation(root, { repo, interrupted, inspect } = {}, admit
   });
   const recheck = (operatingRoot, preparing = false) => {
     assert.ok(!interrupted?.());
-    assert.equal(continuationIndexSha256(root), indexSha256, "continuation index changed");
+    if (admittedGroup) recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
+    else assert.equal(continuationIndexSha256(root), indexSha256, "continuation index changed");
     const prior = (entries) => preparing ? entries.filter((name) => name !== basename(operatingRoot)) : entries;
     assert.deepEqual(prior(members()), prior(paths), "continuation slots changed");
     for (const { fleet, proof } of peers) {
       const current = readFleet(fleet.root, fleet.manifest.round, { priorSelection: true });
       assert.deepEqual(continuationPeer(current).proof, proof, "continuation peer changed");
     }
-    for (const { root, manifest, manifestSha256, lock, launch, remaining, requireDeadOwner } of manifests) {
+    for (const { root, manifest, manifestSha256, lock, launch } of manifests) {
       const current = readFleet(root, manifest.round, { priorSelection: true });
       assert.equal(current.manifestSha256, manifestSha256);
       if (root !== operatingRoot) {
-        assert.equal((!admittedGroup || requireDeadOwner ? fleetLockSnapshot : lockBytes)(root), lock, "continuation source lock changed");
+        assert.equal((admittedGroup ? lockBytes : fleetLockSnapshot)(root), lock, "continuation source lock changed");
         if (unlaunched.has(root)) assert.ok(manifestOnly(current), "unlaunched attempt changed");
       }
-      if (admittedGroup && (manifest.single || stagedFleet(manifest))) {
+      if (admittedGroup)
         assert.equal(present(join(root, "launch-intent.json")) ? readLaunchIntent(current).sha256 : undefined, launch, "group launch intent changed");
-        if (!manifest.single)
-          assert.equal(present(join(root, "remaining-intent.json")) ? readRemainingIntent(current).sha256 : undefined, remaining, "historical admission changed");
-      } else if (launch) assert.equal(readLaunchIntent(current).sha256, launch, "group launch intent changed");
+      else if (launch) assert.equal(readLaunchIntent(current).sha256, launch, "group launch intent changed");
     }
     for (const { fleet, group, stateSha256, outcome, noCreate, retirementFile } of states) {
       const current = readGroup(fleet, group);
@@ -351,7 +351,7 @@ async function scanContinuation(root, { repo, interrupted, inspect } = {}, admit
   recheck();
   for (const { fleet } of peers) needsCensus.add(fleet.manifest.provider.accountId);
   if (admittedGroup) return { root, indexSha256, slots, unlaunched, needsCensus, recheck, rows,
-    subject: { indexSha256, verified: [], // Launch compatibility field: no publication proofs travel through admission.
+    subject: { indexSha256, indexedCustody, verified: [], // Launch compatibility field: no publication proofs travel through admission.
       priorAttempts: attempts.get(admittedGroup).filter((row) => retryable(row)).map(({ round, commit, manifestSha256, stateSha256, launch }) =>
         ({ round, commit, manifestSha256, stateSha256, launch })),
       ...(unconfirmed.length ? { unconfirmed } : {}),
