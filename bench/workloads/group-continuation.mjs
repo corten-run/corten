@@ -8,8 +8,8 @@ import { pathToFileURL } from "node:url";
 import { roundName, selection, stagedFleet } from "./cloud-contract.mjs";
 import { digest, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { full } from "./cloud-options.mjs";
-import { retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
-import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, outside, present, readFleet, readGroup,
+import { setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readFleet, readGroup,
   readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, reportBatch, sameReportBatch,
   verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
 
@@ -67,13 +67,19 @@ const known = ({ state }) => state?.id && state.status === "collected" && state.
 const retirementFile = (kind) => ({ "native-failed": "failed-native-host.json", "setup-failed": "failed-setup-host.json", unused: "unused-host.json" })[kind];
 const lockBytes = (root) => { const bytes = fleetBatchLock(root); return bytes && digest(bytes); };
 
-function verifyRetryRetirement(saved) {
+function verifyRetryRetirement(saved, processStart, retainedLocks) {
   const { local, state, stateRoot } = saved, { kind, evidenceSha256 } = state.retirement;
   assert.ok(!present(join(local, "stream-recovery.lock")), "group recovery remains active");
   if (kind === "native-failed") {
-    assert.ok(saved.outcome === "available" || state.control?.monitor?.phase === "invalid" && !retainedInvalidOwner(local, state),
-      "unresolved custody for the selected group");
-    verifyFailedNativeRetirement(local, state);
+    if (saved.outcome === "available") verifyFailedNativeRetirement(local, state);
+    else {
+      const sameLocks = historicalChildLocks(saved, processStart);
+      assert.ok(sameLocks, "unresolved custody for the selected group");
+      const check = () => assert.ok(sameLocks(), "historical child locks changed");
+      verifyHistoricalFailedNativeRetirement(local, state, check);
+      check();
+      retainedLocks.push(check);
+    }
   } else {
     assert.ok(saved.outcome === "available" && !present(join(stateRoot, ".groups-launch.lock")), "unresolved custody for the selected group");
     const bytes = regular(join(local, retirementFile(kind)), 4096), record = JSON.parse(bytes);
@@ -185,7 +191,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       else if (terminal(saved)) {
         if (state.status === "retired") {
           if (selected) {
-            try { verifyRetryRetirement(saved); }
+            try { verifyRetryRetirement(saved, processStart, retainedLocks); }
             catch (cause) { throw new Error("unresolved custody: selected group retirement is not verified", { cause }); }
             receipt = retirementFile(state.retirement.kind);
           }
