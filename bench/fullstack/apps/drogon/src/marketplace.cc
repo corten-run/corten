@@ -34,7 +34,16 @@ Json::Value readFile(const std::string &path) {
 using Callback = std::function<void(const drogon::HttpResponsePtr &)>;
 struct Authority {
  std::string_view host;
+ std::optional<in6_addr> ipv6;
  unsigned port = 0;
+
+ bool accepts(const Authority &requested) const {
+  if (port != 0 && port != requested.port) return false;
+  if (ipv6 || requested.ipv6)
+   return ipv6 && requested.ipv6 && IN6_ARE_ADDR_EQUAL(&*ipv6, &*requested.ipv6);
+  return host.size() == requested.host.size() &&
+         strncasecmp(host.data(), requested.host.data(), host.size()) == 0;
+ }
 };
 
 std::optional<Authority> authority(std::string_view text) {
@@ -43,9 +52,8 @@ std::optional<Authority> authority(std::string_view text) {
  if (!text.empty() && text.front() == '[') {
   const auto end = text.find(']');
   if (end == text.npos) return std::nullopt;
-  value.host = text.substr(1, end - 1);
-  in6_addr address;
-  if (inet_pton(AF_INET6, std::string(value.host).c_str(), &address) != 1) return std::nullopt;
+  const auto literal = std::string(text.substr(1, end - 1));
+  if (inet_pton(AF_INET6, literal.c_str(), &value.ipv6.emplace()) != 1) return std::nullopt;
   colon = end + 1 == text.size() ? text.npos : end + 1;
  } else {
   value.host = text.substr(0, colon);
@@ -87,9 +95,7 @@ class MatchedPolicy : public drogon::HttpMiddleware<MatchedPolicy, false> {
              drogon::MiddlewareCallback &&callback) override {
   const auto requested = authority(request->getHeader("host"));
   const bool allowed = requested && std::any_of(allowed_.begin(), allowed_.end(), [&](const Authority &host) {
-   return host.host.size() == requested->host.size() &&
-          strncasecmp(host.host.data(), requested->host.data(), host.host.size()) == 0 &&
-          (host.port == 0 || host.port == requested->port);
+   return host.accepts(*requested);
   });
   if (!allowed) {
    auto response = drogon::HttpResponse::newHttpResponse(drogon::k421MisdirectedRequest, drogon::CT_TEXT_PLAIN);

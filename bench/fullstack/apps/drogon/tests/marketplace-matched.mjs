@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "playwright";
 import { collectBoundedResponse } from "../../../../hardening/qualification.mjs";
+import { submitAlert } from "../../../../marketplace/check.mjs";
 import { records } from "../../../../marketplace/fixtures.mjs";
 import { qualify } from "../../../../marketplace/qualify.mjs";
 import { marketplaceServer } from "../../../../marketplace/upstream.mjs";
@@ -31,6 +32,7 @@ server.prependListener("request", request => {
 const fixtureDir = resolve("bench/marketplace/fixtures");
 const pagePath = "/marketplace/en-US/item_1";
 const host = "market.drogon.test";
+const ipv6Host = "[::1]:8443";
 
 async function live(base) {
   const deadline = Date.now() + 20_000;
@@ -42,23 +44,44 @@ async function live(base) {
   assert.fail("native liveness did not return 200");
 }
 
-async function scripts(browser, base) {
-  const page = await browser.newPage();
+async function scriptsAndAlert(browser, base) {
+  const context = await browser.newContext({ javaScriptEnabled: true });
   try {
+    const page = await context.newPage();
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
     await page.addInitScript(() => {
       window.policyViolations = [];
       document.addEventListener("securitypolicyviolation", event => window.policyViolations.push(event.violatedDirective));
     });
+    const checkCsp = async () => {
+      assert.deepEqual(await page.evaluate(() => window.policyViolations), []);
+      assert.deepEqual(errors, []);
+    };
+    const read = async () => {
+      const response = await context.request.get(base + "/api/alerts");
+      assert.equal(response.status(), 200);
+      assert.match(response.headers()["content-type"], /^application\/json\b/);
+      return response.json();
+    };
     const response = await page.goto(base + pagePath, { timeout: 10_000 });
     assert.equal(response.status(), 200);
     assert.equal(await page.evaluate(() => typeof window.htmx === "object" && Number.isFinite(window.__hydratedAt)), true,
       "the existing same-origin scripts did not run");
-    assert.deepEqual(await page.evaluate(() => window.policyViolations), []);
-    assert.deepEqual(errors, []);
-    return "both scripts ran without CSP violations or page errors";
-  } finally { await page.close(); }
+    await checkCsp();
+    assert.deepEqual(await read(), []);
+    const form = page.locator(".marketplace__alert form");
+    const email = "matched-browser@example.test";
+    await form.locator('[name="email"]').fill(email);
+    await form.locator('[name="target_price"]').fill("1.005");
+    await submitAlert(page, form, true);
+    const message = await page.locator(".marketplace__message").innerText();
+    assert.ok(message.includes(email) && message.includes("$1.01"), "browser did not confirm the saved alert");
+    const expected = [{ item_id: "item_1", email, target_minor: 101 }];
+    assert.deepEqual(await read(), expected, "the browser form must commit exactly one alert");
+    await checkCsp();
+    return "scripts, browser form and independent alert readback passed without CSP violations or page errors";
+  } finally { await context.close(); }
 }
 
 let browser;
@@ -90,7 +113,7 @@ try {
     const name = `drogon-marketplace-matched-${source}-${process.pid}`;
     const container = docker("run", "-d", "--name", name, "--cpus", "1", "--memory", "512m",
       "--add-host", "host.docker.internal:host-gateway", "-p", "127.0.0.1::8080",
-      "-v", `${fixtureDir}:/fixtures:ro`, "-e", "PROFILE=matched", "-e", `HOSTS=127.0.0.1,${host}`,
+      "-v", `${fixtureDir}:/fixtures:ro`, "-e", "PROFILE=matched", "-e", `HOSTS=127.0.0.1,${host},${ipv6Host}`,
       "-e", `MARKETPLACE_SOURCE=${source}`, "-e", `API_BASE=http://host.docker.internal:${server.address().port}`, imageId);
     try {
       const port = docker("port", container, "8080/tcp");
@@ -103,9 +126,17 @@ try {
       await control({});
       const qualification = await qualify({ base, source, upstream });
       row.qualification = qualification;
-      row.configuredHost = (await collectBoundedResponse(base, undefined, pagePath, { host }, "GET")).status;
+      const getWithHost = async host => (await collectBoundedResponse(base, undefined, pagePath, { host }, "GET")).status;
+      row.configuredHost = await getWithHost(host);
       assert.equal(row.configuredHost, 200);
-      row.browser = await scripts(browser, base);
+      row.ipv6Host = {
+        compressed: await getWithHost(ipv6Host),
+        expanded: await getWithHost("[0:0:0:0:0:0:0:1]:8443"),
+        otherAddress: await getWithHost("[::2]:8443"),
+        wrongPort: await getWithHost("[::1]:8444"),
+      };
+      assert.deepEqual(row.ipv6Host, { compressed: 200, expanded: 200, otherAddress: 421, wrongPort: 421 });
+      row.browser = await scriptsAndAlert(browser, base);
       console.log(`${source}: eligible=${qualification.eligible} missing=${qualification.missing.join(",") || "none"}; ${row.browser}`);
     } catch (error) {
       console.error(docker("logs", container));
