@@ -644,6 +644,14 @@ export function verifyFailedNativeCustody(local, state, capture, grouped, requir
   assert.equal(capture.measuredCommit, state.commit);
   assert.match(capture.controllerCommit, /^[a-f0-9]{40}$/);
   assert.equal(capture.controllerCommit === state.commit, !!grouped && !preplan, "custody controller scope differs");
+  if (preplan) {
+    const expected = capture.launchIntentSha256;
+    assert.ok(Object.hasOwn(capture, "launchIntentSha256") && typeof expected === "string" && /^[a-f0-9]{64}$/.test(expected),
+      "preplan launch intent digest required");
+    // The capture binds the same raw fleet-root bytes as production approval.
+    const launch = join(dirname(dirname(local)), "launch-intent.json");
+    assert.equal(fileHash(launch, 1024 * 1024), expected, "preplan launch intent changed");
+  }
   assert.match(capture.reservationSha256, /^[a-f0-9]{64}$/);
   const original = regular(join(local, "failed-native-reservation.json"), 1024 * 1024);
   assert.equal(digest(original), capture.reservationSha256);

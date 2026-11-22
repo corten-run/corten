@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { accountId, archive, commit, context } from "./cloud-fixtures.mjs";
 import { fleetPlan, reservation } from "./cloud-contract.mjs";
@@ -29,7 +29,7 @@ async function setup(t, { changeLog = (line) => line, exit = "2\n", campaign = [
     assert.ok(base.startsWith(join(temp, "groups-preplan-test-")) && realpathSync(base) === base);
     rmSync(base, { recursive: true, force: true });
   });
-  const local = join(base, `groups-${round}`); mkdirSync(local);
+  const local = join(base, group, `groups-${round}`); mkdirSync(local, { recursive: true });
   const at = "2026-11-21T00:00:00.000Z", provider = { accountId, context };
   const fleet = fleetPlan({ round, commit, token, provider, sshKey: "42",
     tokens: single ? { [group]: "0".repeat(16) } : Object.fromEntries(reservation({ round, commit, token }).selection.groups.map(({ group }, i) =>
@@ -54,7 +54,7 @@ async function setup(t, { changeLog = (line) => line, exit = "2\n", campaign = [
   putJson(local, "monitor-local-closed.json", { binding, id: reg.id, code: 254, signal: null, remoteDrained: false,
     closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs });
   const pid = 2147483647;
-  putJson(local, "operation.lock", { pid, at }); putJson(base, ".groups-launch.lock", { pid, round });
+  putJson(local, "operation.lock", { pid, at }); putJson(dirname(local), ".groups-launch.lock", { pid, round });
   put(local, "known_hosts", key);
   const line = remoteFiles(state)["job.sh"].split("\n").findIndex((line) => line.startsWith("node 'bench/workloads/isolated/campaign-entry.mjs' ")) + 1;
   assert.ok(line > 1);
@@ -62,7 +62,7 @@ async function setup(t, { changeLog = (line) => line, exit = "2\n", campaign = [
     { name: "host.txt", body: "synthetic host\n" }, { name: "exit-code", body: exit }];
   const wrapper = await stash(local, "results.tgz", "evidence-test", [...metadata, ...campaign]);
   Object.assign(state, { archiveSha256: wrapper.sha, evidenceSha256: wrapper.tree, evidence: "evidence-test", extractionAttempts: ["evidence-test"] });
-  return { local, state, metadata, wrapper };
+  return { base, local, state, metadata, wrapper };
 }
 
 test("only explicit grouped preplan validation admits the empty wrapper and binds the reserved roots", async (t) => {
@@ -92,7 +92,9 @@ for (const [label, options, error] of [
 
 const fileFrame = (name, bytes) => Buffer.concat([Buffer.from(`f\0${name}\0${bytes.length}\0`), bytes]);
 async function custody(t, { present = [true, true], hiddenRoot, reportedRoots = roots, campaignData = false } = {}) {
-  const { local, state, metadata, wrapper } = await setup(t);
+  const { base, local, state, metadata, wrapper } = await setup(t);
+  const intent = JSON.stringify({ subject: "synthetic original launch intent" }), intentPath = join(base, "launch-intent.json");
+  put(base, "launch-intent.json", intent);
   const grouped = groupedPreplanFailure(local, state), entries = [...metadata, { name: "campaign/" }];
   const nativeRoots = reportedRoots.map((path, i) => {
     const name = `campaign/root-${i}`, bytes = Buffer.from("unqualified residual output\n");
@@ -118,26 +120,46 @@ async function custody(t, { present = [true, true], hiddenRoot, reportedRoots = 
     custody: true, historicalAccountingQualified: false, archiveSha256: saved.sha, metadataSha256,
     snapshotSha256: digest(snapshot), roots: rootInventory, observedAtMs: now };
   const capture = { schema: "benchmark-failed-native-custody/v1", scope: "grouped-preplan", measuredCommit: commit, controllerCommit: repair,
+    launchIntentSha256: digest(intent),
     reservationSha256: digest(prior), scriptSha256: digest(failedNativeScript(state, null, null, grouped)),
     observation, startedAtMs: now, finishedAtMs: now, evidence: "custody-test", evidenceSha256: saved.tree };
-  return { local, state, grouped, capture };
+  return { local, state, grouped, capture, intentPath };
+}
+
+function recordRetirement({ local, state, grouped, capture }) {
+  const { observation, startedAtMs, finishedAtMs } = capture;
+  const scriptHash = (fence) => digest(failedNativeScript(state, observation.snapshotSha256, fence, grouped));
+  const receipt = { schema: "benchmark-failed-native-retirement/v1", capture, confirmation: observation,
+    startedAtMs, finishedAtMs, scriptSha256: scriptHash(observation),
+    rehash: { observation, startedAtMs, finishedAtMs, scriptSha256: scriptHash(null) } };
+  const bytes = JSON.stringify(receipt); put(local, "failed-native-host.json", bytes);
+  Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: digest(bytes) },
+    deletionIntentAt: new Date(finishedAtMs).toISOString() });
+  return receipt;
 }
 
 for (const present of [[true, true], [true, false], [false, true], [false, false]]) {
   test(`complete preplan custody and retired replay: campaign=${present[0]}, native=${present[1]}`, async (t) => {
-    const { local, state, grouped, capture } = await custody(t, { present });
+    const fixture = await custody(t, { present }), { local, state, capture } = fixture;
     assert.equal(verifyFailedNativeCustody(local, state, capture), capture);
-    const { observation, startedAtMs, finishedAtMs } = capture;
-    const scriptHash = (fence) => digest(failedNativeScript(state, observation.snapshotSha256, fence, grouped));
-    const receipt = { schema: "benchmark-failed-native-retirement/v1", capture, confirmation: observation,
-      startedAtMs, finishedAtMs, scriptSha256: scriptHash(observation),
-      rehash: { observation, startedAtMs, finishedAtMs, scriptSha256: scriptHash(null) } };
-    const bytes = JSON.stringify(receipt); put(local, "failed-native-host.json", bytes);
-    Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: digest(bytes) },
-      deletionIntentAt: new Date(finishedAtMs).toISOString() });
+    const receipt = recordRetirement(fixture);
     assert.deepEqual(verifyFailedNativeRetirement(local, state), receipt);
   });
 }
+
+test("preplan custody refuses a capture without the launch-intent digest", async (t) => {
+  const { local, state, capture } = await custody(t);
+  const { launchIntentSha256, ...unpinned } = capture;
+  assert.throws(() => verifyFailedNativeCustody(local, state, unpinned), /preplan launch intent digest required/);
+});
+
+test("preplan retirement replay refuses a byte-only change to the launch intent", async (t) => {
+  const fixture = await custody(t), { local, state, intentPath } = fixture;
+  const receipt = recordRetirement(fixture);
+  assert.deepEqual(verifyFailedNativeRetirement(local, state), receipt);
+  appendFileSync(intentPath, "\n");
+  assert.throws(() => verifyFailedNativeRetirement(local, state), /preplan launch intent changed/);
+});
 
 test("preplan scope cannot be omitted, forged, or used at the measured commit", async (t) => {
   const { local, state, grouped, capture } = await custody(t);
