@@ -8166,7 +8166,8 @@ rules something out.
     LLD 23.1.5, with the probe built as the receipt's `build.sh` builds it (the release profile,
     features `json` and `compress`, zstd linked to the system's `libzstd`), the same third-party
     crate versions as the receipt's `probe/Cargo.lock` (main `14471284c`'s) and Debian's `libzstd1`
-    1.5.7+dfsg-1, so that only Corten's own source differs from the calibration's; and `wrk` 4.1.0
+    1.5.7+dfsg-1 (these listed inputs must match; matching them does not show that every other
+    build input, such as the native compiler, is the same); and `wrk` 4.1.0
     with `-t2 -c64` and 3 s turns, every turn, warm-up included, on a freshly started build, the
     builds' order turned every pair, 100 recorded pairs after one that is not and the bound the 59th
     of the 100 sorted per-pair changes. Any VM counts if it matches. A difference in any item, such
@@ -8291,8 +8292,9 @@ rules something out.
     tried, which would gate a binary other than the one apps build.
 
     Stands on: measured (the three comparisons and the second pass above, one run of each on one
-    host and one workload, 100 pairs for cycles and 30 for the misses, passing every check a layout
-    control must pass); reasoned (the layout builds changed the count of user instructions retired
+    host and one workload, 100 pairs for cycles and 30 for the misses, passing checks 2 to 5 as
+    written and the response check only after its kit's normalization, which review accepted for
+    this receipt alone); reasoned (the layout builds changed the count of user instructions retired
     per request by no more than 0.0102% in any pair, so a control whose code the change does not
     touch and whose instruction count passes the screen is, as far as a count shows, where the A/A
     builds were in its user code; the screen shows no more than that); bet (a declaration, accepted

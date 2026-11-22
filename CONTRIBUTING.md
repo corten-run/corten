@@ -405,7 +405,8 @@ establish a general ranking.
       names before the run as one whose code paths the change does not touch, with the reason,
       which the pull request's review accepts. A workload the change touches is held to +1% with
       no floor, however flat its instructions, and so is a workload not named so before the run; a
-      declaration is never added or changed after a run to clear its result.
+      declaration is never added or changed after a run to clear its result, and a plan that
+      made +1% decisive before this exception existed stays bound by it.
 
       A negative control whose bound is at or above +1% but under the layout floor that applies
       to it may go ahead when its user instructions pass a screen: the median of the paired
@@ -438,8 +439,7 @@ establish a general ranking.
          with the repository's release profile (`opt-level = 3`, thin LTO, one codegen unit),
          features `json` and `compress`, and zstd linked to the system's `libzstd`
          (`ZSTD_SYS_USE_PKG_CONFIG=1`); the same third-party crate versions as the receipt's
-         `probe/Cargo.lock` and Debian's `libzstd1` 1.5.7+dfsg-1, so only Corten's own source
-         differs from the calibration's.
+         `probe/Cargo.lock` and Debian's `libzstd1` 1.5.7+dfsg-1.
       6. Load: `wrk` 4.1.0 with `-t2 -c64` and 3 s turns; every turn, warm-up included, on a
          freshly started build; the two builds' order turned every pair; 100 recorded pairs after
          one that is not; the bound the 59th of the 100 sorted per-pair changes.
