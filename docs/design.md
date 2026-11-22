@@ -2188,7 +2188,8 @@ rules something out.
     client that reads it as data sees nothing else change, and a PDF the browser opens still shows
     in Chrome's, Edge's and Firefox's viewers; an answer that sets a cookie is
     `private, no-cache` (`private, no-store` when it says `no-store`) with no CDN caching header, so no shared cache hands one
-    visitor's cookie to another; a panic is logged and answered `500` by the lane. It
+    visitor's cookie to another, and a `NoStore` answer is `private, no-store` with none either,
+    whatever the handler wrote after it; a panic is logged and answered `500` by the lane. It
     answers `get` alone and its handler reads no body: no same-origin check covers it, a form
     posted to it needs no preflight, so any site could make its visitors send one, and no deadline
     would end a slow body. An unstaged route whose path can answer at one of Corten's own paths
@@ -2282,6 +2283,18 @@ rules something out.
     moved the same Corten code by up to 8); either way it counts against the bound: 7,030 is 98 over 6,932 and
     7,076 is 94 over 6,982 (jemalloc), so the next change that adds to an unstaged route reopens
     this.
+
+    It was reopened when a `NoStore` answer on an unstaged route, which no stage settles, was
+    found to go out with the CDN caching headers its handler or a relayed upstream wrote, and with
+    a `Cache-Control` written after the mark: the lane now reads the answer's `NoStore` mark. An
+    unstaged route that answers without one costs 11 instructions more for it, 7 of them in
+    `route::unstaged_headers` (`tests::cache::what_settling_a_page_costs` with `SETTLE_CASE` set to
+    `unstaged`: 6,405 against 6,394 for main `564034b86`, the `service_fn` control 3,088 in both
+    builds), which takes it to about 109 over 6,932. Correctness comes first (the README's Values),
+    so the check stays. Removing the CDN headers as the `NoStore` answer is made instead counted 1
+    more, but a header the handler writes after the mark (a later part of the same tuple) would
+    then go out, so it was not taken. The bound below moves by those 11, as it moved for the host
+    check, so the next change that adds to an unstaged route reopens this again.
 
     The instruction bounds below bound work on the measured routes, not speed. For a change
     to the request path, also measure cycles under load as
@@ -2415,9 +2428,11 @@ rules something out.
     browser the runtime supports shows a PDF sent with a sandbox differently from one sent without
     it; or no
     app but listings-feed uses `unstaged` by the next minor release; or an unstaged route costs more
-    than about 100 instructions over what it cost with its checks in its handler at `8ddeaea2`
-    with jemalloc, 6,932 in the app's routes and 6,982 in an API's module (7,003 and 7,068
-    through its lane, 7,030 and 7,076 since step 4), when a control that shares no code with
+    than about 100 instructions over 6,943 in the app's routes and 6,993 in an API's module with
+    jemalloc: what it cost with its checks in its handler at `8ddeaea2` (6,932 and 6,982), and the
+    11 that reading a `NoStore` mark added, measured in the app's routes and taken as the same in
+    an API's module, whose lane runs the same `unstaged_headers` (7,003 and 7,068 through its lane,
+    7,030 and 7,076 since step 4), when a control that shares no code with
     Corten counts the same in both builds (a plain axum router, 7,085 in both, until step 4; since
     step 4 a `service_fn` with no framework, 3,190 in both), or the control itself moves between
     builds by more than the route does, which says the harness no longer separates them; or, in
@@ -2448,7 +2463,10 @@ rules something out.
     much, which only lowers the measurement. Measure both profiles again before moving a
     measurement.
 
-    Last checked: 2026-11-20, `staged_page_future_sizes` at `3089d0a97`, after it failed on
+    Last checked: 2026-11-21, the unstaged route and the `service_fn` control in
+    `tests::cache::what_settling_a_page_costs` on this change against main `564034b86`
+    (callgrind, release, jemalloc, three rounds alternating the builds, every run within 0.2 of
+    the others but one control run 2.1 under); 2026-11-20, `staged_page_future_sizes` at `3089d0a97`, after it failed on
     main: the stage future grew from 2,632 to 3,008 bytes in a debug build and from 2,176 to
     2,280 in a release one, holding the page snapshot that sharing the staged header reads keeps
     before dispatch, not the request again (the stage owns one request slot, and dispatch takes
