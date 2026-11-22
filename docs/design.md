@@ -7599,21 +7599,28 @@ rules something out.
     another difference in layout or warm-up) these runs do not separate.
     Under load on a quiet cloud host (Xeon Platinum 8280, Linux 6.12.117, rustc 1.100.0; a probe
     app serving a record page of about 6 KB and the JSON body of `tests/kept_coding_cost.rs` on
-    jemalloc, as `corten new`'s Dockerfile runs an app, built at `5d72a9315` and at main's `e7e89add8`; one start of each build, 100
-    pairs of 3 s turns of `wrk` with 64 connections with the order turned about, `perf stat` on
-    the app's process; the commits after `5d72a9315` change tests and comments), cycles a request
+    jemalloc, as `corten new`'s Dockerfile runs an app, built at `5d72a9315` and at main's
+    `e7e89add8`; one start of each build, 100 pairs of 3 s turns of `wrk` with 64 connections with
+    the order turned about, `perf stat` on the app's process), cycles a request
     changed at the median of the pairs by -1.12% for a kept page given again to a browser (1,634
     bytes of brotli 5 against 1,818 of zstd 1; one-sided 95% bound -0.94%), -0.99% for it in gzip
     alone (bound -0.80%), +1.00% where its brotli found no room (bound +1.14%) and +2.84% for the
     kept JSON body given to a data client with a browser's codings (280 bytes of brotli 5 against
     328 of zstd 1; bound +3.05%; user cycles +4.95%, kernel +0.84%; 66,567 requests a second
-    against 68,255), with user instructions within 0.04% in each. The margin set before the run,
-    a bound under +1%, was met for the first two and not for the last two; two other changes'
-    builds in the same run, which leave the path measured as it was, read +1.07% and +1.27% with
-    their instructions flat. The JSON body's 5% more user cycles at the same instructions is not
-    this change's work, by what follows (the same two commits built as on that host, callgrind
-    with its cache and branch simulation, valgrind 3.24.0, and `perf stat` on a Comet Lake
-    workstation under Docker Desktop that ran other work). Given that body 2,000 times on 64
+    against 68,255), with user instructions within 0.04% in each. That run is historical, a
+    result for those two commits only: the commits from `5d72a9315` to `50105442c` change
+    production code as well (`kept.rs`, `compress.rs`, `signal.rs`, `app.rs` and seven other
+    files, among them when a write is counted and the merge of the rule for a kept file), so it
+    does not measure this change's head. The margin set
+    before the run, a bound under +1%, was met for the first two and not for the last two; two
+    other changes' builds in the same run, which leave the path measured as it was, read +1.07%
+    and +1.27% with their instructions flat. The JSON body's 5% more user cycles at the same
+    instructions is not explained by these runs; what follows points at the binary's layout and
+    the process's start as plausible contributors without ruling out the change (the same two
+    commits built as on that host, callgrind with its cache and branch simulation, valgrind
+    3.24.0, and `perf stat` on a Comet Lake workstation under Docker Desktop that ran other work).
+    Equal instructions do not rule out a stall or a cost in the socket, and the path a warmed
+    answer takes does change its code and what it holds. Given that body 2,000 times on 64
     connections once it was warm, the app ran 31,602 instructions an answer against 31,623, and
     the function that gives the kept bytes (`compress::finish`, with `Kept::coded` in it) 713
     against 724, with 8 conditional and 2 indirect mispredictions against 12 and 7 and 4.5
@@ -7621,8 +7628,9 @@ rules something out.
     taken, and the thread that made them ran nothing while the answers were counted. The app's
     simulated first-level data misses were 330 against 310 an answer and its instruction misses
     1,811 against 1,798, with its mispredictions the same (284 and 81 against 287 and 84) and none
-    at the last level; the 20 more data misses fall in code this change does not touch
+    at the last level; the 20 more data misses fall in functions this change does not edit
     (`malloc`, `free`, `httparse`, `Asked::find`, the stages' run and the tag, 2 to 5 each),
+    which its placement in the binary or the state it leaves can still move,
     and come to the same, 327 against 305, when the body is asked for in zstd alone and no brotli
     is ever made. In process (`tests/kept_coding_cost.rs` with `KEPT_ROUTE=json`) it was 166
     against 156, and 21 more mispredictions, 10 of them in `compress::negotiate`, whose code is
@@ -7630,16 +7638,32 @@ rules something out.
     jemalloc's size classes for both) took 309. Relinked with its functions in three other orders
     (LLD's `--shuffle-sections`) or its constants in three others, or run with its stack moved
     by eight steps of 512 bytes or with eight sizes of a preloaded library's thread-local data, the base took 293
-    to 327 and this change 312 to 344: a difference of the two builds' layout, which moves either
-    by as much and which none of these removes. On the workstation's counters, in eight starts
+    to 327 and this change 312 to 344: layout moves either build's simulated misses by as much as
+    the two differ, though this change's stay the higher in most of those arrangements, so the
+    count is shown to depend on layout and the difference is not shown to be layout alone. On the
+    workstation's counters, in eight starts
     of both builds (116 pairs of 3 s turns), this change's user cycles for that answer were
     -0.42% at the pooled median (-3.27% to +4.40% by start) with user instructions -0.05%, its
     first-level load misses +4.6% (+3.0% to +5.8% by start), its mispredictions -0.9% and its
     page walks 13.0 an answer as the base's; the same binary started twice differed by -0.94% to
     +3.77% by start (first-level load misses +0.9%), and the base relinked in other orders by
-    +0.2% to +4.5% against it. So the JSON body's cost on the quiet host, one start of each
-    build, is inside what a layout and a start move, and the change makes no difference in code
-    for it.
+    +0.2% to +4.5% against it. Those are diagnostics, not a result to hold the margin to: that
+    machine ran other work and its scripts did not keep perf's running percentages, and it did not
+    reproduce the quiet host's result. So layout and the start of the process are plausible
+    contributors to the JSON body's cycles on the quiet host, which saw one start of each build,
+    and, with no diagnostic run of its own, to the refused page's; the measured regression is not
+    yet explained or ruled out.
+    The test is a second run on the quiet host of this change's code as of `50105442c` (the
+    commits after it change tests and documentation only) against main's `a0eeeacca`, with every
+    turn on a newly started build, 100 pairs a workload, the order turned about each pair and the
+    workloads and margin of the first: this change merges only if the one-sided 95% bound on the
+    median change within a pair in user plus kernel cycles a request is under +1% on both the
+    kept JSON body given to a browser's codings (`json-browser`) and the page whose brotli found
+    no room (`refused`), and on the other two as well. A bound at or above +1% on either blocks
+    the merge, and a run that fails or cannot be used does not clear it; a bound under +1% clears
+    this gate, and shows neither a lower cost nor that layout was the cause.
+    Fresh-start result (`50105442c` against `a0eeeacca`): **not yet recorded; the gate above is
+    open until it is.**
     The levels'
     bytes and instructions above are a probe's that compresses as `compress::encode` does, whose
     level-1 bytes matched the app's answers, on the catalog benchmark's ten record pages and
@@ -7993,8 +8017,8 @@ rules something out.
     JSON body, and with fast bins off on `9831ef711` and `564034b86`, in
     rust:1-trixie with glibc's allocator, and `tests/kept_memory.rs` at `9831ef711`, with all
     features and with none. 2026-11-22, a kept page's and JSON body's brotli 5 under load on the
-    quiet host at `5d72a9315` against `e7e89add8`, and the JSON body's layout under callgrind and
-    a workstation's counters on the same commits, rustc 1.100.0 in rust:1-trixie, jemalloc 5.3.0
+    quiet host at `5d72a9315` against `e7e89add8`, and the JSON body under callgrind with its layout
+    varied and on a workstation's counters on the same commits, rustc 1.100.0 in rust:1-trixie, jemalloc 5.3.0
     preloaded.
 
 ## Rules

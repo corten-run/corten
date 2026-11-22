@@ -2908,7 +2908,8 @@ async fn a_public_json_or_text_answer_is_kept_and_given_again() {
 /// made for gzip. Its brotli is queued on that second answer exactly: not on the handler's, which
 /// is the first, nor on an answer in no coding between them, and once. A data client's copy
 /// (`Accept: application/json` first) is kept apart, so it counts its own answers toward its own
-/// brotli.
+/// brotli. The brotli is sent with its handler's type, file name and `Vary`; a picture of a type
+/// the app does not compress is not kept, so it queues none however often a browser asks.
 #[cfg(all(feature = "json", feature = "compress"))]
 #[tokio::test]
 async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
@@ -2929,12 +2930,18 @@ async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
     let file = move || {
         file_ran.ran();
         let rows: String = (0..120u32).map(|n| format!("card {n},{}\n", n * 7919 % 1000)).collect();
-        async move { Public::new(minute, crate::Media::new("text/csv", rows)) }
+        async move { Public::new(minute, crate::Media::new("text/csv", rows).attachment("cards.csv")) }
+    };
+    let picture_ran = runs.clone();
+    let picture = move || {
+        picture_ran.ran();
+        async move { Public::new(minute, crate::Media::new("image/png", vec![0x89; 4096])) }
     };
     let routes = Table::new()
         .route("/items", crate::route::get(items).0)
         .route("/text", crate::route::get(text).0)
-        .route("/cards.csv", crate::route::get(file).0);
+        .route("/cards.csv", crate::route::get(file).0)
+        .route("/picture.png", crate::route::get(picture).0);
     let router = App::new(Routes::from(routes)).router();
     let browser = [("accept-encoding", "gzip, deflate, br, zstd")];
     let data = [("accept-encoding", "gzip, deflate, br, zstd"), ("accept", "application/json")];
@@ -2982,6 +2989,27 @@ async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
             tokio::time::sleep(Duration::from_millis(5)).await;
         };
         assert_eq!(given, better, "{path} {asked:?}");
+        // The brotli copy is sent with the head its handler gave: its type, its name as a file,
+        // and the `Vary` it had, with `accept-encoding` added once and nothing replaced.
+        for name in [header::CONTENT_TYPE, header::CONTENT_DISPOSITION] {
+            assert_eq!(headers.get(&name), first.get(&name), "{path} {asked:?}: {name}");
+        }
+        let vary = |headers: &HeaderMap| {
+            let mut names: Vec<String> = headers
+                .get_all(header::VARY)
+                .iter()
+                .flat_map(|line| line.to_str().unwrap().split(','))
+                .map(|name| name.trim().to_ascii_lowercase())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(vary(&headers), vary(&first), "{path} {asked:?}: {headers:?}");
+        assert_eq!(vary(&headers), ["accept-encoding", "cookie"], "{path} {asked:?}: {headers:?}");
+        if path == "/cards.csv" {
+            assert_eq!(headers[header::CONTENT_TYPE], "text/csv");
+            assert_eq!(headers[header::CONTENT_DISPOSITION], "attachment; filename=\"cards.csv\"");
+        }
         assert_eq!(headers.get(header::ETAG), first.get(header::ETAG), "{path}: the tag is the body's, whatever its coding");
         let (_, _, same) = fetch(&router, "GET", path, asked).await;
         assert_eq!(same.as_ptr(), given.as_ptr(), "{path} {asked:?}: made once");
@@ -2992,6 +3020,16 @@ async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
         assert_eq!(queued.get(), before + 1, "{path} {asked:?}: queued once");
         assert_eq!(runs.count() - ran, 1, "{path} {asked:?}: one run for all of them");
     }
+    // A picture of a type the app does not compress is not kept, whatever its size, so no answer
+    // to a browser queues a brotli for it.
+    let (ran, before) = (runs.count(), queued.get());
+    for n in 0..4 {
+        let (status, headers, body) = fetch(&router, "GET", "/picture.png", &browser).await;
+        assert_eq!((status, body.len()), (StatusCode::OK, 4096), "answer {n}");
+        assert!(!headers.contains_key(header::AGE) && !headers.contains_key(header::CONTENT_ENCODING), "answer {n}: {headers:?}");
+        assert_eq!(headers[header::CONTENT_TYPE], "image/png", "answer {n}");
+    }
+    assert_eq!((queued.get(), runs.count() - ran), (before, 4), "no brotli queued, its handler's every time");
     crate::compress::QUEUEING.take();
 }
 
