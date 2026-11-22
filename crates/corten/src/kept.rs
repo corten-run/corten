@@ -938,7 +938,7 @@ impl<'a> Asked<'a> {
         head.insert(header::AGE, HeaderValue::from(age));
         *res.headers_mut() = head;
         let extensions = res.extensions_mut();
-        extensions.insert(entry.cache.clone());
+        extensions.insert(entry.cache);
         if let Some(style) = &entry.style {
             extensions.insert(style.clone());
         }

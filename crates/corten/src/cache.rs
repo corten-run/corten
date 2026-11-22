@@ -149,13 +149,24 @@ impl Cache {
         }
     }
 
-    fn header(self) -> HeaderValue {
+    /// The header, held by the thread where an answer's header can be ([`Cache::held_header`]), and made
+    /// for the answer alone while the thread runs an unstaged route's handler ([`Unstaged`]).
+    fn value(self) -> HeaderValue {
+        if UNSTAGED.get() {
+            self.header()
+        } else {
+            self.held_header()
+        }
+    }
+
+    /// The header, held: a route answers with the same numbers each time, so its header is made
+    /// once on a thread and each answer after shares its bytes (a clone counts a reference), while
+    /// it is one of the last `HELD` sets of numbers that thread made one for. A held header is
+    /// how [`settle`] knows the line it finds is one `Cache` made ([`held_alone`]).
+    fn held_header(self) -> HeaderValue {
         let Kind::Public { max_age, shared, stale, if_error } = self.kind else {
-            return if self.kind == Kind::NoStore { NO_STORE } else { crate::assets::IMMUTABLE };
+            return self.header();
         };
-        // A route answers with the same numbers each time: its header is made once on a thread and
-        // each answer after shares its bytes (a clone counts a reference), while it is one of the
-        // last `HELD` sets of numbers that thread made one for.
         MADE.try_with(|made| {
             let mut made = made.borrow_mut();
             if let Some((_, value)) = made.headers.iter().flatten().find(|(kind, _)| *kind == self.kind) {
@@ -170,13 +181,13 @@ impl Cache {
         .unwrap_or_else(|_| public(max_age, shared, stale, if_error))
     }
 
-    /// The header made for this answer alone, from a `Vec`, as every one was before a thread held
-    /// them: for an unstaged route's answer ([`Unstaged`]), which no [`settle`] reads. Held, or
-    /// made as one that is, it would cost such an answer more than this and save it nothing.
-    #[inline(never)]
-    fn made(self) -> HeaderValue {
-        let Kind::Public { max_age, shared, stale, if_error } = self.kind else {
-            return if self.kind == Kind::NoStore { NO_STORE } else { crate::assets::IMMUTABLE };
+    /// The header made for this answer alone, from a `Vec`: an unstaged route's answer's, which no
+    /// [`settle`] reads, so holding it would cost such an answer more and save it nothing.
+    fn header(self) -> HeaderValue {
+        let (max_age, shared, stale, if_error) = match self.kind {
+            Kind::Public { max_age, shared, stale, if_error } => (max_age, shared, stale, if_error),
+            Kind::NoStore => return NO_STORE,
+            Kind::Immutable => return crate::assets::IMMUTABLE,
         };
         let mut text = Vec::with_capacity(96);
         let mut push = |name: &str, n: u64| {
@@ -203,9 +214,9 @@ thread_local! {
 }
 
 /// Held while a thread runs an unstaged route's handler ([`crate::route::Lane`]), whose answer no
-/// [`settle`] reads: [`Cache`] makes its header for it alone ([`Cache::made`]), with no mark of
-/// its bytes. A request the handler has an app's router answer meanwhile is settled as one with a
-/// header written by hand is: read, line by line.
+/// [`settle`] reads: [`Cache`] makes its header for it alone ([`Cache::header`]), and the thread
+/// holds none of its bytes. A request the handler has an app's router answer meanwhile is settled
+/// as one with a header written by hand is: read, line by line.
 pub(crate) struct Unstaged(bool);
 
 impl Unstaged {
@@ -221,7 +232,7 @@ impl Drop for Unstaged {
 }
 
 thread_local! {
-    /// The `public` headers this thread made last, by their numbers ([`Cache::header`]).
+    /// The `public` headers this thread made last, by their numbers ([`Cache::held_header`]).
     static MADE: std::cell::RefCell<Made> = const { std::cell::RefCell::new(Made { headers: [const { None }; HELD], next: 0 }) };
 }
 
@@ -249,10 +260,23 @@ pub(crate) fn held(cache: Cache) -> bool {
     MADE.with(|made| made.borrow().headers.iter().flatten().any(|(kind, _)| *kind == cache.kind))
 }
 
+/// Whether `lines` are one line whose bytes this thread holds ([`MADE`]): a `public` header
+/// [`Cache`] made, which says nothing [`settle`] reads a line for. The line and the thread each
+/// hold those bytes, so no other value can have their address while both do; a line a middleware
+/// or a handler wrote, even with the same text, has bytes of its own and is read.
+fn held_alone(lines: &header::OccupiedEntry<'_, HeaderValue>) -> bool {
+    let mut lines = lines.iter();
+    let Some(line) = lines.next() else { return false };
+    lines.next().is_none()
+        && MADE
+            .try_with(|made| made.borrow().headers.iter().flatten().any(|(_, value)| std::ptr::eq(value.as_bytes(), line.as_bytes())))
+            .unwrap_or(false)
+}
+
 /// A `public` header with these numbers, made anew: its text and the count of its references in
-/// one allocation, so holding it in [`MADE`] and in the mark allocates nothing more. (Made from a
-/// `Vec`, `Bytes` allocates that count beside the text, or on the first clone when the text fills
-/// the `Vec`.)
+/// one allocation, so holding it in [`MADE`] and in the answer allocates nothing more. (Made from
+/// a `Vec`, `Bytes` allocates that count beside the text, or on the first clone when the text
+/// fills the `Vec`.)
 fn public(max_age: u64, shared: Option<u64>, stale: u64, if_error: u64) -> HeaderValue {
     let mut text = Text { len: 0, bytes: [0; Text::LONGEST] };
     let mut push = |name: &str, n: u64| {
@@ -298,22 +322,8 @@ impl AsRef<[u8]> for Text {
 impl Cache {
     /// Sets the response's `Cache-Control` to this, as [`settle`] reads it.
     pub(crate) fn apply(self, res: &mut Response) {
-        let (value, typed) = self.typed(self.kind == Kind::Immutable);
-        res.headers_mut().insert(header::CACHE_CONTROL, value);
-        res.extensions_mut().insert(typed);
-    }
-
-    /// The header and the mark [`settle`] reads it by. A `public` one says none of what [`settle`]
-    /// reads a line for, so the mark holds it to know it while it stands as written; on an
-    /// unstaged route's answer, which nothing settles, it holds none ([`Unstaged`]).
-    fn typed(self, named: bool) -> (HeaderValue, Typed) {
-        let lifetime = self.lifetime();
-        if UNSTAGED.get() {
-            return (self.made(), Typed { named, lifetime, wrote: None });
-        }
-        let value = self.header();
-        let wrote = matches!(self.kind, Kind::Public { .. } | Kind::Immutable).then(|| value.clone());
-        (value, Typed { named, lifetime, wrote })
+        res.headers_mut().insert(header::CACHE_CONTROL, self.value());
+        res.extensions_mut().insert(Typed { named: self.kind == Kind::Immutable, lifetime: self.lifetime() });
     }
 }
 
@@ -321,44 +331,33 @@ impl IntoResponseParts for Cache {
     type Error = std::convert::Infallible;
 
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
-        let (value, typed) = self.typed(false);
-        res.headers_mut().insert(header::CACHE_CONTROL, value);
-        res.extensions_mut().insert(typed);
+        res.headers_mut().insert(header::CACHE_CONTROL, self.value());
+        res.extensions_mut().insert(Typed { named: false, lifetime: self.lifetime() });
         Ok(res)
     }
 }
 
 /// Marks a `Cache-Control` that came from [`Cache`], which [`settle`] checks against the request.
 /// One extension, not two, since each costs a lookup.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub(crate) struct Typed {
     /// A [`Cache::immutable`] answer: its URL names it, so the request's cookies do not change it.
     named: bool,
     /// [`Cache::lifetime`], for the app's own keeping of the answer ([`crate::kept`]).
     lifetime: u64,
-    /// The `public` header [`Cache`] wrote, held so no other value has its bytes.
-    wrote: Option<HeaderValue>,
 }
 
 impl Typed {
     /// `res`'s mark and its lifetime in seconds, when it is an answer a shared cache may keep for
     /// one: what the app itself keeps ([`crate::kept`]).
     pub(crate) fn shared(res: &Response) -> Option<(Typed, u64)> {
-        let typed = res.extensions().get::<Typed>()?;
-        (!typed.named && typed.lifetime > 0).then(|| (typed.clone(), typed.lifetime))
-    }
-
-    /// Whether `lines` are the header [`Cache`] wrote and nothing else: one line with its very
-    /// bytes, not text a middleware or the handler wrote, which [`settle`] reads.
-    fn as_written(&self, lines: &header::OccupiedEntry<'_, HeaderValue>) -> bool {
-        let Some(wrote) = &self.wrote else { return false };
-        let mut lines = lines.iter();
-        lines.next().is_some_and(|line| std::ptr::eq(line.as_bytes(), wrote.as_bytes())) && lines.next().is_none()
+        let typed = *res.extensions().get::<Typed>()?;
+        (!typed.named && typed.lifetime > 0).then_some((typed, typed.lifetime))
     }
 
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
-        Typed { named: false, lifetime: 60, wrote: None }
+        Typed { named: false, lifetime: 60 }
     }
 }
 
@@ -473,15 +472,14 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     if drew_key {
         drop_cdn_caching(res.headers_mut());
     }
-    let typed = res.extensions().get::<Typed>().cloned();
     // One lookup for the usual response, which says nothing.
     match res.headers_mut().entry(header::CACHE_CONTROL) {
         header::Entry::Vacant(entry) => {
             entry.insert(PRIVATE);
             return;
         }
-        // `public` and its ages as [`Cache`] wrote them say nothing read for below.
-        header::Entry::Occupied(entry) if typed.as_ref().is_some_and(|typed| typed.as_written(&entry)) => {}
+        // `public` and its ages as [`Cache`] made them say nothing read for below.
+        header::Entry::Occupied(entry) if held_alone(&entry) => {}
         header::Entry::Occupied(mut entry) => {
             // The directives of every line count, as HTTP joins them (a second line is rare: only
             // a header written by hand has one). Only a plain `private` makes the answer private:
@@ -547,6 +545,7 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
             PRIVATE
         }
     };
+    let typed = res.extensions().get::<Typed>().copied();
     let bug = if seen.nonce {
         Some("its HTML has this request's CSP nonce (req.nonce() in the layout, or a handler that takes Nonce)")
     } else if res
@@ -571,7 +570,7 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
         headers.insert(header::CACHE_CONTROL, personal(headers));
         return;
     }
-    if seen.caller || typed.as_ref().is_some_and(|typed| seen.credentials && !typed.named) {
+    if seen.caller || typed.is_some_and(|typed| seen.credentials && !typed.named) {
         headers.insert(header::CACHE_CONTROL, personal(headers));
         return;
     }
@@ -922,7 +921,7 @@ mod tests {
             res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
         }
         if typed {
-            res.extensions_mut().insert(Typed::for_test());
+            res.extensions_mut().insert(Typed { named: false, lifetime: 60 });
         }
         if cookie {
             res.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_static("a=b"));
@@ -960,18 +959,18 @@ mod tests {
     #[test]
     fn a_header_with_the_same_numbers_is_made_once() {
         let minute = Cache::public(Duration::from_secs(60));
-        let (first, again) = (minute.header(), minute.header());
+        let (first, again) = (minute.held_header(), minute.held_header());
         assert!(std::ptr::eq(first.as_bytes(), again.as_bytes()), "made once");
-        let other = minute.shared(Duration::from_secs(3600)).header();
+        let other = minute.shared(Duration::from_secs(3600)).held_header();
         assert_eq!(first, "public, max-age=60");
         assert_eq!(other, "public, max-age=60, s-maxage=3600");
         for round in 0..3 {
             for n in 1..=9 {
                 let cache = Cache::public(Duration::from_secs(n)).stale_if_error(Duration::from_secs(n * 10));
-                assert_eq!(cache.header(), format!("public, max-age={n}, stale-if-error={}", n * 10), "round {round}");
+                assert_eq!(cache.held_header(), format!("public, max-age={n}, stale-if-error={}", n * 10), "round {round}");
             }
         }
-        assert!(std::ptr::eq(minute.header().as_bytes(), minute.header().as_bytes()), "made once again");
+        assert!(std::ptr::eq(minute.held_header().as_bytes(), minute.held_header().as_bytes()), "made once again");
     }
 
     /// A thread holds `HELD` headers: one for numbers past the last `HELD` it made is made again,
@@ -981,23 +980,23 @@ mod tests {
     fn a_thread_holds_its_last_headers_and_makes_an_older_one_again() {
         // Numbers no other test asks for, so each below is new to the thread whatever ran on it.
         let numbers = |n: u64| Cache::public(Duration::from_secs(1_000_000 + n)).stale_while_revalidate(Duration::from_secs(7));
-        let first = numbers(0).header();
+        let first = numbers(0).held_header();
         assert!(Made::held() >= 1 && Made::held() <= HELD);
         for n in 1..=HELD as u64 {
-            assert_eq!(numbers(n).header(), format!("public, max-age={}, stale-while-revalidate=7", 1_000_000 + n));
+            assert_eq!(numbers(n).held_header(), format!("public, max-age={}, stale-while-revalidate=7", 1_000_000 + n));
             assert!(Made::held() <= HELD, "held {} after {n}", Made::held());
         }
         assert_eq!(Made::held(), HELD, "full, and no more");
-        let again = numbers(0).header();
+        let again = numbers(0).held_header();
         assert_eq!(again, first);
         assert!(!std::ptr::eq(first.as_bytes(), again.as_bytes()), "made again: the oldest went for the last");
-        assert!(std::ptr::eq(again.as_bytes(), numbers(0).header().as_bytes()), "then held again");
+        assert!(std::ptr::eq(again.as_bytes(), numbers(0).held_header().as_bytes()), "then held again");
         assert_eq!(Made::held(), HELD);
     }
 
     /// While a thread runs an unstaged route's handler, an answer's header has the same text but is
-    /// made for that answer alone: the thread holds none for its numbers and the mark none of its
-    /// bytes. After, the thread holds it again, and the mark its bytes.
+    /// made for that answer alone: the thread holds none for its numbers. After, the thread holds
+    /// it again.
     #[test]
     fn an_unstaged_answer_s_header_is_made_for_it_alone() {
         let numbers =
@@ -1005,25 +1004,51 @@ mod tests {
         let text = "public, max-age=2000000, s-maxage=9, stale-if-error=3";
         {
             let _unstaged = Unstaged::enter();
-            let (value, typed) = numbers.typed(false);
-            let (again, _) = numbers.typed(false);
+            let (value, again) = (numbers.value(), numbers.value());
             assert_eq!((value.to_str().unwrap(), again.to_str().unwrap()), (text, text));
-            assert!(typed.wrote.is_none() && !held(numbers), "nothing holds it");
+            assert!(!held(numbers), "nothing holds it");
             assert!(!std::ptr::eq(value.as_bytes(), again.as_bytes()), "each made for its answer");
-            assert_eq!(typed.lifetime, 9);
             drop(Unstaged::enter());
             assert!(UNSTAGED.get(), "a guard within leaves it as it found it");
         }
         assert!(!UNSTAGED.get());
-        let (value, typed) = numbers.typed(false);
+        let value = numbers.value();
         assert_eq!(value, text);
-        assert!(typed.wrote.is_some_and(|wrote| std::ptr::eq(wrote.as_bytes(), value.as_bytes())) && held(numbers));
+        assert!(held(numbers) && std::ptr::eq(value.as_bytes(), numbers.value().as_bytes()));
         let minute = Duration::from_secs(60);
         for cache in
             [Cache::no_store(), Cache::immutable(), Cache::public(minute), Cache::public(minute).stale_while_revalidate(minute)]
         {
-            assert_eq!(cache.made(), cache.header());
+            assert_eq!(cache.held_header(), cache.header());
         }
+    }
+
+    /// `settle` skips its read of a `Cache-Control` only when it is one line whose bytes this
+    /// thread holds: not the same text made apart, not beside a second line, and not a header the
+    /// thread no longer holds.
+    #[test]
+    fn only_a_held_header_alone_is_not_read() {
+        let numbers = |n: u64| Cache::public(Duration::from_secs(4_000_000 + n));
+        let alone = |lines: &[HeaderValue]| {
+            let mut headers = HeaderMap::new();
+            for line in lines {
+                headers.append(header::CACHE_CONTROL, line.clone());
+            }
+            match headers.entry(header::CACHE_CONTROL) {
+                header::Entry::Occupied(entry) => held_alone(&entry),
+                header::Entry::Vacant(_) => unreachable!("a line was added"),
+            }
+        };
+        let held = numbers(0).held_header();
+        assert!(alone(std::slice::from_ref(&held)), "the held header, alone");
+        assert!(!alone(&[numbers(0).header()]), "the same text, made apart");
+        assert!(!alone(&[HeaderValue::from_static("public, max-age=4000000")]), "the same text, written");
+        assert!(!alone(&[held.clone(), HeaderValue::from_static("no-store")]), "beside a second line");
+        assert!(!alone(&[HeaderValue::from_static("no-store"), held.clone()]), "after a first line");
+        for n in 1..=HELD as u64 {
+            numbers(n).held_header();
+        }
+        assert!(!alone(&[held]), "no longer held, though still alive");
     }
 
     #[test]
