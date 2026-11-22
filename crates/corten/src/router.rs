@@ -182,9 +182,9 @@ fn made(inner: &Route, req: Request, missed: crate::kept::Missed) -> Answering {
     let answer = inner.call(req);
     Box::pin(async move {
         // An answer with a form's new submit key is this request's alone. A page's render marks
-        // one it drew (`cache::Unrepeatable`); markup rendered any other way (into JSON or text,
-        // into a file a page route answers, or to a string the page then holds as markup) has no
-        // mark to carry, so the handler is watched for one being drawn.
+        // one it drew (`cache::Unrepeatable`); markup rendered any other way (into JSON, text or
+        // a file, or to a string the page then holds as markup) has no mark to carry, so the
+        // handler is watched for one being drawn.
         let (res, drew_key) = crate::form::watched(answer).await;
         let res = match here {
             Some(here) => here.fill(res).await,
@@ -441,7 +441,7 @@ pub(crate) struct MethodSet<S = ()> {
     /// The page's named posts (`post(hold) = ..`), each chosen by the `do` of the post's
     /// address ([`Chooser`]).
     actions: Vec<(&'static str, Slot<S>)>,
-    /// One of its handlers answers with a page the app keeps (`Public`, [`Keeping`]).
+    /// One of its handlers answers with a page or a body the app keeps (`Public`, [`Keeping`]).
     keeps: bool,
 }
 
@@ -690,8 +690,9 @@ impl<S: Clone + Send + Sync + 'static> Table<S> {
         self
     }
 
-    /// Whether a route's answer is a page the app keeps (`Public`): an app with none has no page
-    /// a write could drop, so it counts no writes ([`crate::kept`]).
+    /// Whether a route's answer is one the app keeps (`Public`: a page, or a whole body in a
+    /// build that compresses): an app with none has nothing a write could drop, so it counts no
+    /// writes ([`crate::kept`]).
     pub(crate) fn keeps(&self) -> bool {
         self.routes.iter().any(|placed| placed.methods.keeps)
     }

@@ -166,6 +166,25 @@ A present worker, stream or socket remains unproved even after CDP close; the ru
 server-side peer receipt collector. The independent numeric source and browser request ledgers
 must reconcile through the terminal observation window, with no pending or unassigned work.
 
+## JS-enabled document replacement
+
+The JS producer, exporter and verifier independently derive `jsDocumentNavigationProof` for
+the actions whose default realm really changes. A same-document action still needs its
+ordinary resource observations and its framework's native request transport. The proof
+binds each replacement to its native document request, matched context destruction,
+replacement loader, and terminal unique-context probe. It uses strict JS request
+reconciliation, not the no-JS parser or disabled-preload exceptions.
+
+When the actual cleanup link replaces the document, landing work must settle within the
+cleanup deadline and before terminal observation. This variant supports the landing document
+and its successful ordinary same-origin parser scripts, stylesheets and images only. The
+settled and terminal landing checkpoints must both be clean. Worker and long-lived peer
+absence and the final upstream ledger must be proved. A native request dispatched after
+landing settlement blocks cleanup even if the summary assigns it to an earlier action.
+Nonempty landing work, unknown coverage and missing observations also stay unsupported.
+Dead-realm counts, DOM and the event probe remain null. Same-document cleanup still runs
+the original event probe.
+
 ## No-JS request boundary
 
 The alternative keeps `document` transport for no-JS workload actions, including form POSTs.

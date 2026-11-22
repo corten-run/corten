@@ -245,12 +245,19 @@ export class ResourceAudit {
       evidence.after = after;
       evidence.retired = this.retired(evidence.before, after);
       if (!evidence.retired?.probeAvailable) {
-        if (evidence.retired && !this.javaScriptEnabled && evidence.before.realm !== after?.realm) {
+        if (evidence.retired && evidence.before.realm !== after?.realm) {
           // Commit proves replacement, not completion of the landing document's parser work.
-          await this.page.waitForLoadState("load", { timeout: Math.max(1, deadline - performance.now()) });
-          await network.settle(offset, deadline);
+          const landingDeadline = evidence.navigation.at + timeoutMs;
+          await this.page.waitForLoadState("load", { timeout: Math.max(1, landingDeadline - performance.now()) });
+          if (this.javaScriptEnabled) {
+            const loaded = await this.checkpoint();
+            if (loaded.realm !== after.realm || !loaded.scope) throw new Error("Cleanup landing scope changed or is unavailable at load");
+            evidence.after = loaded;
+            evidence.retired = this.retired(evidence.before, loaded);
+          }
+          await network.settle(offset, landingDeadline);
           const settledAt = performance.now();
-          if (settledAt > deadline) throw new Error("Cleanup landing exceeded the request deadline");
+          if (settledAt > landingDeadline) throw new Error("Cleanup landing exceeded the request deadline");
           evidence.landingSettledAt = settledAt;
         }
         if (this.lifecycle && evidence.before.realm !== after?.realm) evidence.platformProbe = await this.lifecycle.probeRealm(evidence.before.realm);

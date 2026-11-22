@@ -129,12 +129,12 @@ function expectedMessage(step, locale, record) {
  *
  * Settings are caller-reviewed viewport/network/cache/service-worker configurations and
  * cleanup bounds, not performance claims. Same-realm cleanup still probes the retired scope.
- * The native exporter can also supply a case whose separate no-JS destruction proof has
- * already replayed from raw receipts. This oracle checks the resulting projection, not CDP.
+ * Only the native exporter supplies destruction proof replayed from raw receipts, for a
+ * no-JS journey or particular JS-enabled transitions. This oracle checks the projection, not CDP.
  * Provenance/authentication, continuous instrumentation, measured bytes/readiness/actions,
  * native parse/render work and real browser execution are still runner responsibilities.
  */
-export function validateBrowserCapture(plan, capture, records, settings, normalizeCapture = (record) => record, verifiedDocuments = new Set()) {
+export function validateBrowserCapture(plan, capture, records, settings, normalizeCapture = (record) => record, verifiedDocuments = new Set(), verifiedJS = new Map()) {
   need(same(plan, createBrowserPlan({ records })), "corrupt or incompatible effective plan");
   exact(settings, ["profiles", "maxCleanupMs", "cleanupObservationMs"]);
   exact(settings.profiles, ["desktop", "mobile"]);
@@ -196,8 +196,13 @@ export function validateBrowserCapture(plan, capture, records, settings, normali
       results.push({ case: c.case, outcome: c.outcome, functionalPassed: c.outcome === "failed" ? false : null, reason: c.reason, observedSteps: null }); continue;
     }
     need(c.reason === null && models[capture.app]?.includes(c.architecture), "wrong or SSR-only native architecture");
-    const nativeDocument = c.cleanup?.kind === "platform-destruction";
-    if (nativeDocument) need(!profile.js && verifiedDocuments.has(c.case), "Independent native document replacement proof required");
+    const documentCleanup = c.cleanup?.kind === "platform-destruction";
+    const nativeDocument = documentCleanup && !profile.js;
+    const jsProof = profile.js ? verifiedJS.get(c.case) : null;
+    const jsReplacement = jsProof?.outcome === "proved" ? jsProof : null;
+    if (documentCleanup) need(nativeDocument ? verifiedDocuments.has(c.case) : jsReplacement?.cleanup,
+      "Independent native document replacement proof required");
+    if (jsReplacement) need(jsReplacement.cleanup === documentCleanup, "JS cleanup differs from native replacement proof");
     need(same(c.environment, { ...settings.profiles[profile.device], js: profile.js, device: profile.device }), "wrong JS/device/environment profile");
     resources(c.baseline); need(zero(c.baseline), "owned baseline not empty");
     need(Array.isArray(c.steps) && c.steps.length === profile.steps.length, "every journey step required");
@@ -238,14 +243,15 @@ export function validateBrowserCapture(plan, capture, records, settings, normali
       } else need(row.document === null, "unexpected initial SSR observation");
       need(Array.isArray(row.retired), "retired page-scope resource observations required");
       const currentRetired = new Set();
+      const replaced = nativeDocument || jsReplacement?.actions.includes(step.id);
       for (const entry of row.retired) {
-        exact(entry, ["scope", "owned", ...(nativeDocument ? ["basis"] : [])]);
-        if (nativeDocument) need(entry.basis === "platform-destruction" && entry.owned === null && entry.scope === previous?.scope, "unproved retired document");
+        exact(entry, ["scope", "owned", ...(replaced ? ["basis"] : [])]);
+        if (replaced) need(entry.basis === "platform-destruction" && entry.owned === null && entry.scope === previous?.scope, "unproved retired document");
         else { resources(entry.owned); need(zero(entry.owned), "retired page resource leak"); }
         need(text(entry.scope) && !retired.has(entry.scope) && !currentRetired.has(entry.scope) && entry.scope !== row.dom.scope, "retired page resource leak");
         currentRetired.add(entry.scope); retired.add(entry.scope);
       }
-      if (nativeDocument) need(previous ? currentRetired.size === 1 : currentRetired.size === 0, "each post-arrival action must replace the old document");
+      if (replaced) need(previous ? currentRetired.size === 1 : currentRetired.size === 0, "proved replacement requires the exact retired document");
       if (previous && previous.scope !== row.dom.scope) need(currentRetired.has(previous.scope), "old page subscription cleanup missing");
       exact(row.upstream, ["started", "completed", "cancelled", "pending"]);
       need(Object.values(row.upstream).every(integer) && row.upstream.pending === 0
@@ -255,14 +261,14 @@ export function validateBrowserCapture(plan, capture, records, settings, normali
       previous = row.dom;
     }
     const cleanup = c.cleanup;
-    if (nativeDocument) {
+    if (documentCleanup) {
       exact(cleanup, ["kind", "scope", "navigationAt", "replacementAt", "observationStartedAt", "afterAt", "detached", "afterProbe", "probe", "dom", "network", "errors"]);
       need(cleanup.scope === previous.scope && [cleanup.navigationAt, cleanup.replacementAt, cleanup.observationStartedAt, cleanup.afterAt].every(Number.isFinite)
         && cleanup.navigationAt > lastAt && cleanup.replacementAt >= cleanup.navigationAt && cleanup.replacementAt - cleanup.navigationAt <= settings.maxCleanupMs
         && cleanup.observationStartedAt >= cleanup.replacementAt && cleanup.afterAt - cleanup.observationStartedAt >= settings.cleanupObservationMs, "missing bounded document replacement");
       need([cleanup.detached, cleanup.afterProbe, cleanup.probe, cleanup.dom].every((v) => v === null) && same(cleanup.errors, [])
         && Array.isArray(cleanup.network), "dead realm observations must be unavailable");
-      for (const request of cleanup.network) checkRequest(request, profile, true);
+      for (const request of cleanup.network) checkRequest(request, profile, nativeDocument);
       const documents = cleanup.network.filter((r) => r.transport === "document");
       need(documents.length === 1 && documents[0].method === "GET" && documents[0].path === "/" && documents[0].status === 200, "wrong cleanup document request");
       results.push({ case: c.case, outcome: "captured", functionalPassed: true, observedSteps: c.steps.length });

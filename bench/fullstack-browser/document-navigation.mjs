@@ -116,4 +116,97 @@ export function replayDocumentNavigation(e, profile, { observationMs, maxCleanup
   return result;
 }
 
-export const cleanupObserved = (e) => e.nativeCleanup?.outcome === "observed" || e.documentNavigationProof?.outcome === "proved";
+// JS actions may replace only a root or may replace the whole document. Do not
+// classify their requests with the no-JS rules or claim zeros for dead realms.
+export function replayJSReplacement(e, profile, { observationMs, maxCleanupMs, actionTimeoutMs }) {
+  const unavailable = { outcome: "unknown", reason: null, actions: [], cleanup: false };
+  try {
+    const j = e.platformLifecycle, b = j?.boundaries, c = e.nativeCleanup, rows = e.steps;
+    need(profile.js === true && j?.contextConfiguration?.javaScriptEnabled === true && rows?.length === profile.steps.length
+      && rows.length > 0, "No complete JS journey with native context configuration");
+    need(ordered(b.applicationStartedAt, b.terminalStartedAt, b.endedAt, e.requestLedgerEndedAt)
+      && b.endedAt - b.terminalStartedAt >= observationMs, "JS replacement native observation is unbounded");
+    const network = reconcileNativeNetwork(e, false);
+    need(network.outcome === "reconciled", network.reasons.join("; "));
+    const workers = replayWorkerAbsence(j), peer = replayPeerApplicability(j, workers);
+    need(workers.status === "verified" && peer.status === "verified" && peer.applicability === "empty-set",
+      `JS replacement worker/long-lived peer absence unproved: ${peer.blocked.join("; ")}`);
+    function replacement({ before, after, observer, retirement, at, end, path, method, requests, statuses, landing = false }) {
+      const actual = replacedRealm(before, after);
+      need(actual && before.scriptExecutionEnabled === true && after.scriptExecutionEnabled === true, "JS replacement is not a new default realm");
+      same(retirement, actual, "JS replacement reports unavailable old scope observations inconsistently");
+      const proof = validatePlatformRetirement(j, { realm: before.realm, retiredAt: at, observationMs });
+      const binding = proof.replacement?.binding, commit = proof.replacement?.commit;
+      need(proof.outcome === "proved" && binding?.realm === after.realm && after.document?.path === path && commit?.path === path
+        && ordered(before.at, at, proof.destruction?.receivedAt, commit.receivedAt, binding.observedAt, after.at, end, b.terminalStartedAt),
+      proof.reasons.join("; ") || "JS replacement realm and destination do not bind to the action");
+      const documents = j.documents.filter((d) => d.observer === observer && d.realm === after.realm && d.scope === after.scope
+        && d.frame === binding.frame && d.loader === binding.loader && d.path === path && d.identityObservation?.uniqueId === binding.uniqueId
+        && ordered(after.at, d.observedAt, d.identityObservation.startedAt, d.identityObservation.finishedAt, b.terminalStartedAt));
+      need(documents.length === 1, "JS replacement lacks the uniquely bound live document observation");
+      const native = network.requests.filter((r) => r.dispatch.receivedAt >= at && r.dispatch.receivedAt <= end);
+      const docs = native.filter((r) => r.dispatch.type === "Document"), final = docs.at(-1);
+      need(final?.dispatch.path === path && final.dispatch.urlSha256 === documents[0].identityObservation.documentSha256
+        && docs[0]?.dispatch.method === method && final.terminal.event === "Network.loadingFinished"
+        && statuses.includes(final.response?.status) && docs.every((r) => r.dispatch.request === final.dispatch.request)
+        && docs.slice(0, -1).every((r) => r.terminal.event === "native-redirect"), "JS replacement requires one observed document chain to the action destination");
+      need(native.every((r) => r.dispatch.frame === binding.frame && r.dispatch.loader === binding.loader
+        && ordered(r.dispatch.receivedAt, r.terminal.receivedAt, r.body?.receivedAt ?? r.terminal.receivedAt, end)),
+      "JS replacement work has unrelated ownership or did not finish within the boundary");
+      same(native.map((r) => JSON.stringify(r.phaseKey)).sort(), requests.map((r) => JSON.stringify(semanticRequestKey(r))).sort(),
+        "JS replacement native and semantic request assignments differ");
+      if (landing) need(docs.length === 1 && native.every((r) => r === final || ["Script", "Stylesheet", "Image"].includes(r.dispatch.type)
+        && r.dispatch.method === "GET" && r.dispatch.sameDocumentOrigin === true && r.dispatch.initiator?.type === "parser"
+        && r.dispatch.initiator.urlSha256 === final.dispatch.urlSha256 && r.response?.status >= 200 && r.response.status < 300),
+      "JS landing has work other than the successful document and its ordinary parser assets");
+    }
+    const actions = [];
+    for (const [i, row] of rows.entries()) {
+      same(row.action, profile.steps[i], "Wrong action in JS replacement journey");
+      const before = rows[i - 1]?.resources, after = row.resources;
+      const mandatory = ["reset", "missing", "return"].includes(row.action.kind);
+      if (!before?.realm || !after?.realm || before.realm === after.realm) {
+        need(!mandatory && row.retired?.owned !== null, "Expected document replacement or same-document resource counts unavailable");
+        continue;
+      }
+      const at = row.dispatchStartedAt;
+      same(row.platformRetirement, { realm: before.realm, retiredAt: at }, "JS action retirement does not bind its dispatch and old realm");
+      need(row.dom?.scope === after.scope && sameScope(row.resourcesAtDOM, after) && row.dom.url?.path === row.action.path
+        && ordered(at, row.resourcesAtDOM.at, after.at) && after.at - at <= actionTimeoutMs, "JS replacement action DOM/resource window differs");
+      replacement({ before, after, observer: row.dom.observer, retirement: row.retired, at, end: after.at, path: row.action.path,
+        method: row.action.input ? "POST" : "GET", requests: row.requests,
+        statuses: row.action.kind === "missing" ? [404] : ["invalid-email", "invalid-price"].includes(row.action.kind) ? [200, 400, 422] : [200] });
+      actions.push(row.action.id);
+    }
+    const cleanup = c?.outcome === "unsupported" && Boolean(replacedRealm(c.before, c.after));
+    if (cleanup) {
+      need(c.navigation?.via === "native-header-link" && c.navigation.path === "/" && sameScope(c.before, rows.at(-1).resources)
+        && sameScope(c.after, c.landingResources) && sameScope(c.after, c.terminalResources)
+        && c.probe == null && c.dom == null && c.released == null, "JS cleanup not bound to live landing and unavailable old realm");
+      same(c.failures, [c.retired?.reason], "Other JS native cleanup failures remain");
+      need(ordered(rows.at(-1).resources.at, c.before.at, c.navigation.at, c.after.at, c.landingSettledAt, c.landingResources.at, b.terminalStartedAt,
+        b.endedAt, c.terminalResources.at, e.requestLedgerEndedAt) && c.landingResources.at - c.navigation.at <= maxCleanupMs,
+      "JS cleanup landing/terminal observation is unbounded");
+      need(network.requests.every((r) => r.dispatch.receivedAt <= c.landingSettledAt),
+        "Native request dispatched after JS cleanup landing settled");
+      for (const s of [c.landingResources, c.terminalResources])
+        need(s.scriptExecutionEnabled === true && s.document?.path === "/" && empty(s.unattributed) && s.unsupported?.length === 0
+          && s.scopes?.length === 1 && s.scopes[0].scope === s.scope && s.scopes[0].connected === true && empty(s.scopes[0].owned),
+        "Live JS landing retains resources or has unknown ownership");
+      replacement({ before: c.before, after: c.after, observer: c.landingResources.observer, retirement: c.retired,
+        at: c.navigation.at, end: c.landingSettledAt, path: "/", method: "GET", requests: c.requests, statuses: [200], landing: true });
+    } else need(c?.outcome === "observed", "JS cleanup lacks a live same-document probe or a proved replacement");
+    need(actions.length > 0 || cleanup, "No JS document replacement observed");
+    const proof = { outcome: "proved", reason: null, actions, cleanup };
+    const assigned = reconcileRequests(e, null, proof);
+    need(assigned.outcome === "reconciled", assigned.reasons.join("; "));
+    const upstream = reconcileUpstream(e.upstreamLedger, { source: profile.source, actions: profile.steps.map((s) => s.id), steps: rows, observationMs });
+    need(upstream.outcome === "reconciled", upstream.reasons.join("; "));
+    need(ordered(b.endedAt, e.upstreamLedger.terminal.startedAt, e.upstreamLedger.terminal.finishedAt, e.requestLedgerEndedAt),
+      "Final upstream observation does not cover JS replacement");
+    return proof;
+  } catch (error) { return { ...unavailable, reason: error.message }; }
+}
+
+export const cleanupObserved = (e) => e.nativeCleanup?.outcome === "observed" || e.documentNavigationProof?.outcome === "proved"
+  || e.jsDocumentNavigationProof?.outcome === "proved" && e.jsDocumentNavigationProof.cleanup;
