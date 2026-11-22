@@ -97,7 +97,7 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher};
+use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
@@ -527,23 +527,16 @@ impl Kept {
         (entry.body.as_ptr() == body.as_ptr() && entry.body.len() == body.len()).then_some(&**entry)
     }
 
-    /// The tag's hasher with `body` read, which `start` makes: kept with the answer `body` is
+    /// The tag's hasher with `body` read, which `read` makes: kept with the answer `body` is
     /// from, so only its first tag reads the body.
-    pub(crate) fn hashed<S: BuildHasher<Hasher = DefaultHasher>>(
+    pub(crate) fn hashed(
         extensions: &http::Extensions,
         body: &Bytes,
-        key: &S,
+        read: impl FnOnce(&[u8]) -> DefaultHasher,
     ) -> DefaultHasher {
-        let start = || {
-            let mut hasher = key.build_hasher();
-            // Its length first, so no body and headers read as another body and fewer headers.
-            hasher.write_usize(body.len());
-            hasher.write(body);
-            hasher
-        };
         match Kept::of(extensions, body) {
-            Some(entry) => entry.hashed.get_or_init(start).clone(),
-            None => start(),
+            Some(entry) => entry.hashed.get_or_init(|| read(body)).clone(),
+            None => read(body),
         }
     }
 
@@ -1803,8 +1796,14 @@ mod tests {
         let kept = answers.keep(entry(&answers, "/p", None, 60, 2000));
         let mut extensions = http::Extensions::new();
         extensions.insert(Kept(kept.clone()));
+        use std::hash::Hasher;
         let key = std::hash::RandomState::new();
-        let hash = |body: &Bytes| Kept::hashed(&extensions, body, &key).finish();
+        let read = |body: &[u8]| {
+            let mut hasher = key.build_hasher();
+            hasher.write(body);
+            hasher
+        };
+        let hash = |body: &Bytes| Kept::hashed(&extensions, body, read).finish();
         let copy = Bytes::copy_from_slice(&kept.body);
         assert!(kept.hashed.get().is_none());
         assert_eq!(hash(&copy), hash(&kept.body), "the same bytes, the same hash, kept or not");
