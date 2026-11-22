@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
@@ -326,6 +327,41 @@ test("continuation replays catalog, creates only the next whole group, and does 
     archives: { [json]: report.groups[1].result.archiveSha256 } }]));
   await assert.rejects(inspectContinuation(fork, { repo: p.h.repo, inspect: p.deps.inspect }), /stay in their original continuation root/);
   assert.equal(treeHash(retained), oldTree, "historical bytes untouched");
+});
+
+test("independent continuation admits a second host while the first is remotely active", { timeout: 90000 }, async (t) => {
+  const p = fixture(t, "independent-overlap"), first = "json-api", second = "localized-marketplace";
+  fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
+  p.deps.inspect = () => assert.fail("no collected results yet");
+  const args = (group) => ["r21", "--continuation-root", p.h.base, "--group", group];
+  const prepare = (group) => fleetMain([...args(group), "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps);
+  const approve = async (group) => {
+    assert.equal(await fleetMain([...args(group), "--detach", "--print-approval"], p.deps), 3);
+    return [...args(group), "--detach", "--approve-reviewed-merged-ready", p.output.at(-1).approvalSha256];
+  };
+  const wait = async (ready) => {
+    const deadline = Date.now() + 15000;
+    while (!ready()) { assert.ok(Date.now() < deadline, "synthetic readiness deadline"); await delay(50); }
+  };
+  const active = (group) => p.events().some((row) => row.group === group && row.boundary === "monitor-registered");
+  const finish = (group) => fs.writeFileSync(path.join(p.h.temp, "finish-" + group), "");
+  const running = [];
+  try {
+    assert.equal(await prepare(first), 3);
+    const approved = await approve(first);
+    running.push(fleetMain(approved, p.deps));
+    await wait(() => active(first));
+    assert.equal(await prepare(second), 3);
+    running.push(fleetMain(await approve(second), p.deps));
+    await wait(() => active(second));
+    const events = p.events();
+    assert.deepEqual(events.filter((row) => row.method === "POST").map(({ group }) => group), [first, second]);
+    assert.ok(!events.some((row) => row.boundary === "monitor-terminal"));
+  } finally {
+    finish(first); finish(second);
+    await Promise.all(running);
+  }
 });
 
 test("a settled continuation placement refusal leaves the unallocated slot available", async (t) => {
