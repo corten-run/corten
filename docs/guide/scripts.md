@@ -1298,7 +1298,7 @@ cookie, so give it only what the page itself may show that user.
 
 Data the page needs when it loads is a handler argument, which costs no request; data it may never
 need, or that a choice the user makes picks, is a read; a change to what the server draws is a
-`data-patch` form. `corten/read` is a module of its own (772 bytes, 494 gzipped), served only to
+`data-patch` form. `corten/read` is a module of its own (767 bytes, 493 gzipped), served only to
 apps whose scripts import it and preloaded with those scripts, so a page that reads nothing does
 not download it and the runtime is unchanged; such an app's import map names it on every page (60
 bytes, under 10 compressed)

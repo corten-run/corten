@@ -5,7 +5,8 @@
 // fixtures, which are not among these files. Types are read with TypeScript's parser: those in
 // JSDoc, over any number of lines, and a declaration file's. It also holds the scripts'
 // hand-written classes to the list below, the ones the Choice
-// docs/design.md#choice-handlers-checked-where-called names with what holds their fields. Run by npm run check.
+// docs/design.md#choice-handlers-checked-where-called names, and refuses a write to one's field
+// that is not through a typed cast of `this`. Run by npm run check.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,13 +14,13 @@ import { fileURLToPath } from "node:url";
 import * as ts from "typescript/unstable/ast";
 import { parse, parseFiles } from "./typescript.mjs";
 
-// The hand-written classes in these scripts, by file and name ("anonymous" for a class expression
-// with none: `<corten-live>`'s). A class is where checked JavaScript is weakest: a property its
-// constructor or a method sets first is taken as declared, so a misspelled write is an error only
-// through a typedef of its fields. docs/design.md#choice-handlers-checked-where-called stands on
-// these being all of them, each writing its fields that way; a class added or removed changes that
-// Choice and this list together.
-export const CLASSES = ["crates/corten/js/corten.js: anonymous", "crates/corten/js/read.js: ReadError"];
+// The hand-written classes in these scripts, by file and name: a class expression with none is
+// named by the tag `customElements.define` gives it (`<corten-live>`), else "anonymous". A class is
+// where checked JavaScript is weakest: a property its constructor or a method sets first is taken
+// as declared, so a misspelled write is an error only through a typedef of its fields.
+// docs/design.md#choice-handlers-checked-where-called stands on these being all of them, each
+// writing its fields that way; a class added or removed changes that Choice and this list together.
+export const CLASSES = ["crates/corten/js/corten.js: <corten-live>", "crates/corten/js/read.js: ReadError"];
 
 /** The classes `text`, the file `file`, has, declared or as an expression, as `CLASSES` lists them. @param {string} file @param {string} text @returns {string[]} */
 export function classes(file, text) {
@@ -34,11 +35,77 @@ function classesIn(file, source) {
   const visit = (node) => {
     if (node.kind === ts.SyntaxKind.ClassDeclaration || node.kind === ts.SyntaxKind.ClassExpression) {
       const name = /** @type {ts.ClassLikeDeclaration} */ (node).name;
-      found.push(`${file}: ${name ? name.text : "anonymous"}`);
+      found.push(`${file}: ${name ? name.text : (definedTag(node, source) ?? "anonymous")}`);
     }
     node.forEachChild(visit);
   };
   visit(source);
+  return found;
+}
+
+/** The tag of `customElements.define("tag", class ..)` when `node` is that class. @param {ts.Node} node @param {ts.SourceFile} source */
+function definedTag(node, source) {
+  const call = node.parent;
+  if (call?.kind !== ts.SyntaxKind.CallExpression) return null;
+  const { expression, arguments: args } = /** @type {ts.CallExpression} */ (call);
+  const tag = args[0];
+  if (args[1] !== node || tag?.kind !== ts.SyntaxKind.StringLiteral || expression.getText(source) !== "customElements.define") return null;
+  return `<${/** @type {ts.StringLiteral} */ (tag).text}>`;
+}
+
+/** Whether `node` is `this`, bare or in parentheses, with no cast giving it a type. @param {ts.Node} node */
+function plainThis(node) {
+  while (node.kind === ts.SyntaxKind.ParenthesizedExpression) node = /** @type {ts.ParenthesizedExpression} */ (node).expression;
+  return node.kind === ts.SyntaxKind.ThisKeyword;
+}
+
+/** The property accesses `target`, the left of an assignment, writes, through any destructuring. @param {ts.Node} target @param {ts.Node[]} out */
+function written(target, out) {
+  while (target.kind === ts.SyntaxKind.ParenthesizedExpression) target = /** @type {ts.ParenthesizedExpression} */ (target).expression;
+  if (target.kind === ts.SyntaxKind.PropertyAccessExpression || target.kind === ts.SyntaxKind.ElementAccessExpression) out.push(target);
+  else if (target.kind === ts.SyntaxKind.ArrayLiteralExpression || target.kind === ts.SyntaxKind.ObjectLiteralExpression) target.forEachChild((part) => { written(part, out); });
+  else if (target.kind === ts.SyntaxKind.PropertyAssignment) written(/** @type {ts.PropertyAssignment} */ (target).initializer, out);
+  else if (target.kind === ts.SyntaxKind.SpreadElement || target.kind === ts.SyntaxKind.SpreadAssignment) written(/** @type {ts.SpreadElement} */ (target).expression, out);
+  else if (target.kind === ts.SyntaxKind.BinaryExpression) written(/** @type {ts.BinaryExpression} */ (target).left, out);
+  return out;
+}
+
+/**
+ * Each write to a field of a hand-written class through a `this` no cast types, by line: checked
+ * JavaScript takes a field such a write sets first as declared, so a misspelling there is no error.
+ * A function expression has a `this` of its own and is not looked in; an arrow function is.
+ * @param {string} file @param {ts.SourceFile} source
+ */
+function plainWritesIn(file, source) {
+  /** @type {string[]} */
+  const found = [];
+  // A destructuring default (`[this.a = 1] = []`) is reached as its pattern and as an assignment.
+  const seen = new Set();
+  const at = (/** @type {ts.Node} */ node) => `${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`;
+  /** @param {ts.Node} node @param {boolean} inClass */
+  const visit = (node, inClass) => {
+    const kind = node.kind;
+    if (kind === ts.SyntaxKind.ClassDeclaration || kind === ts.SyntaxKind.ClassExpression) inClass = true;
+    else if (kind === ts.SyntaxKind.FunctionDeclaration || kind === ts.SyntaxKind.FunctionExpression) inClass = false;
+    if (inClass) {
+      /** @type {ts.Node[]} */
+      let targets = [];
+      if (kind === ts.SyntaxKind.BinaryExpression) {
+        const { left, operatorToken } = /** @type {ts.BinaryExpression} */ (node);
+        if (operatorToken.kind >= ts.SyntaxKind.FirstAssignment && operatorToken.kind <= ts.SyntaxKind.LastAssignment) targets = written(left, []);
+      } else if (kind === ts.SyntaxKind.PrefixUnaryExpression || kind === ts.SyntaxKind.PostfixUnaryExpression) {
+        const { operator, operand } = /** @type {ts.PrefixUnaryExpression} */ (node);
+        if (operator === ts.SyntaxKind.PlusPlusToken || operator === ts.SyntaxKind.MinusMinusToken) targets = written(operand, []);
+      } else if (kind === ts.SyntaxKind.DeleteExpression) targets = written(/** @type {ts.DeleteExpression} */ (node).expression, []);
+      for (const target of targets) {
+        if (seen.has(target.pos)) continue;
+        seen.add(target.pos);
+        if (plainThis(/** @type {ts.PropertyAccessExpression} */ (target).expression)) found.push(`${at(target)}: a class's field is written through a \`this\` with no type, so a misspelled name is taken as a new field; write it through a typedef of its fields, \`/** @type {Fields} */ (this).name = ..\` (docs/design.md#choice-handlers-checked-where-called)`);
+      }
+    }
+    node.forEachChild((child) => { visit(child, inClass); });
+  };
+  visit(source, false);
   return found;
 }
 
@@ -59,7 +126,7 @@ export function unlisted(found, listed) {
 
 /** What `text`, the file `file`, has that this check forbids, by line. @param {string} file @param {string} text @returns {string[]} */
 export function problems(file, text) {
-  return parse(file, text, (source) => problemsIn(file, text, source));
+  return parse(file, text, (source) => [...problemsIn(file, text, source), ...(file.endsWith(".d.ts") ? [] : plainWritesIn(file, source))]);
 }
 
 /** @param {string} file @param {string} text @param {ts.SourceFile} source */
@@ -114,7 +181,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     .filter((file) => /\.(js|d\.ts)$/.test(file) && !file.includes("/dist/") && !file.includes("node_modules/"));
   const inputs = files.filter((file) => existsSync(join(root, file))).map((file) => ({ file, text: readFileSync(join(root, file), "utf8") }));
   const scanned = parseFiles(inputs, (file, text, source) => ({
-    problems: problemsIn(file, text, source),
+    problems: [...problemsIn(file, text, source), ...(file.endsWith(".d.ts") ? [] : plainWritesIn(file, source))],
     // A declaration file's class has no body to write a field in.
     classes: file.endsWith(".d.ts") ? [] : classesIn(file, source),
   }));

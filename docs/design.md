@@ -229,10 +229,12 @@ rules something out.
    reasoned (with the check at the call, no declarations sit between markup and script to go stale;
    component behavior is exported functions, not classes; the runtime has two hand-written
    classes, `<corten-live>` (its fields `source` and `applied`) and `corten/read`'s `ReadError`
-   (`status` and `redirected`, and the `name` it inherits), and each declares its fields and
-   writes them only through a typedef of them (`LiveFields`, `ReadErrorFields`), so `tsc` refuses
-   a misspelled write in either, and `scripts/escapes.mjs` lists the two and fails when the
-   runtime, kit, template or example scripts gain a class or lose one; the classes it
+   (`status` and `redirected`; its `name` is a field's first value), and each declares its fields
+   and writes them only through a typedef of them (`LiveFields`, `ReadErrorFields`), so `tsc`
+   refuses a misspelled write in either; `scripts/escapes.mjs` lists the two, keyed by the tag
+   `customElements.define` gives `<corten-live>`, fails when the runtime, kit, template or example
+   scripts gain a class or lose one, and refuses a class's field written through a `this` no cast
+   types, which `tsc` accepts; the classes it
    generates, one per view (the macro writes them) and one per typed event (`assets.rs` writes
    them), are typed by the declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
    was read, and none's value is used as a type it is not; the unstable parser API lets
@@ -366,8 +368,10 @@ rules something out.
    failed only at the fixture's typed read of it (TS2551), and a misspelled `redirected`, or
    either of `<corten-live>`'s two writes misspelled, passed on both. Written through a typedef,
    each of the four misspellings is refused at the write (TS2551) on both, a misspelled field
-   declaration at each cast (TS2352), and a plain `this.` write is still accepted. 7.0.2 refused
-   the fields declared with no value (TS2564), 6.0.3 accepted them.
+   declaration at each cast (TS2352), and a plain `this.` write is still accepted by `tsc`, so
+   `scripts/escapes.mjs` refuses one (its test writes it twelve ways, and restoring either class's
+   plain write fails the scan at that line). 7.0.2 refused the fields declared with no value
+   (TS2564), 6.0.3 accepted them.
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in
@@ -5528,7 +5532,7 @@ rules something out.
     that imports it, each page's import map names it
     (`,"corten/read":"/assets/<version>/scripts/corten-read.js"`, 60 bytes, 4 to 9 once the page
     is compressed), and the pages whose scripts import it preload it (a 77-byte
-    `<link rel="modulepreload">`). The module is 772 bytes, 494 with gzip and 415 with brotli,
+    `<link rel="modulepreload">`). The module is 767 bytes, 493 with gzip and 413 with brotli,
     which the users of an app that reads download once a release. The server's work is
     unchanged: a `req.screen` page costs 37,950 instructions a request as HTML and 41,211 as a
     data client's JSON on `dea1788d2` and on `4eb3d62d1`, within 0.2 of each other in every run
@@ -5557,7 +5561,7 @@ rules something out.
     module's again on `c74c4fa83`, once it cancels a refused answer's body, gives a malformed
     success a `cause` and lets an abort win over a failed answer, 666, 438 and 367, and on
     `7664551c8`, once it tells a redirect apart (`redirected`), 749, 486 and 409, and on
-    `06d7a766a` and the change, once `ReadError` declares its fields, 772, 494 and 415; a
+    `06d7a766a` and the change, once `ReadError` declares its fields, 767, 493 and 413; a
     `req.screen` page's instructions a request under callgrind, 1,200 requests through the
     router in process less 200, over 1,000, in both modes, three alternated runs of each build,
     release, in `rust:1-bookworm`: HTML 37,949.68 to 37,949.73 on `dea1788d2` and 37,949.64 to
