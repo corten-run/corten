@@ -74,6 +74,20 @@ pub async fn marketplace_json(axum::extract::Path(id): axum::extract::Path<Strin
         }
     }
 }
+
+#[cfg(feature = "ssr")]
+pub async fn marketplace_method_not_allowed() -> impl axum::response::IntoResponse {
+    use axum::{
+        http::{header, StatusCode},
+        Json,
+    };
+    // Axum's method router sets Allow from the methods registered on this route.
+    (
+        StatusCode::METHOD_NOT_ALLOWED,
+        [(header::CONTENT_TYPE, "application/problem+json")],
+        Json(serde_json::json!({ "type": "about:blank", "title": "Method Not Allowed", "status": 405 })),
+    )
+}
 /// Plain POST fallback rendered by the same Leptos route and resource as GET.
 /// The built-in listener serves HTTP. A TLS-terminating deployment must set
 /// `MARKETPLACE_PUBLIC_ORIGIN` to its public HTTP(S) origin (scheme, name and port;

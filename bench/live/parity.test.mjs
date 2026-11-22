@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { EventEmitter } from "node:events";
 import "./native-http.test.mjs";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,7 +9,7 @@ import { gunzipSync } from "node:zlib";
 import { selectedApps } from "../workloads/registry.mjs";
 import { inventory, nativePorts, portFor, recordedInventory, scenarios, settingsFor, workloadFor } from "./native.mjs";
 import { wireEvents, wireSnapshots, wireResources, wireResumes } from "./wire.mjs";
-import { fanoutProfile, verifyFanout } from "./fanout.mjs";
+import { fanoutJourney, fanoutProfile, verifyFanout } from "./fanout.mjs";
 import { select, runRound, verifyArtifact, browserJourney } from "./parity.mjs";
 import { verifyRound } from "./verify.mjs";
 
@@ -17,6 +18,48 @@ const recovery = new URL("../recoverable-live/evidence/native-feed-aspnet/", imp
 const fanout = new URL("./evidence/native-fanout/", import.meta.url);
 const artifact = async (name = "express-normal", base = fanout) => JSON.parse(gunzipSync(await readFile(new URL(`${name}.json.gz`, base))));
 const verify = (a) => verifyArtifact(a, { app: a.app, group: a.group, scenario: a.scenario });
+
+test("fan-out capture uses the native port binding for every reader before any timed publication", async (t) => {
+  const base = "http://127.0.0.1:8080", group = "live-delivery", url = () => base + "/livewire/update";
+  const raw = JSON.stringify({ _token: "test-token", components: [{ snapshot: "test-snapshot", calls: [], updates: {} }] });
+  t.mock.method(globalThis, "fetch", async (target) => {
+    if (target === base + "/parity/configure") return Response.json({ configured: true });
+    assert.equal(target, base + "/parity/resources");
+    return Response.json({}, { status: 503 }); // Stop before kernel sampling or the publish schedule.
+  });
+  for (const app of ["corten", "aspnet", "laravel"]) for (const clients of fanoutProfile.clients) {
+    const port = portFor(app, "native-feed"), settings = settingsFor(group, "normal", "native-feed");
+    let opened = 0, closed = 0;
+    const browser = { async newContext() {
+      const id = String(++opened), page = new EventEmitter();
+      Object.assign(page, { setDefaultTimeout() {}, async waitForFunction() {}, async evaluate() { return []; },
+        async content() { return "<html></html>"; },
+        async goto() { page.emit("request", { url, method: () => "POST", postData: () => raw }); } });
+      return {
+        async newPage() { return page; },
+        async newCDPSession() {
+          return { on() {}, async send() { return { targetInfo: { targetId: id, browserContextId: id } }; } };
+        },
+        async close() { closed++; },
+      };
+    } };
+    await assert.rejects(fanoutJourney(browser, base, settings, clients, port, () => assert.fail("no timing in this test")), error => {
+      assert.equal(error.message, "native resources failed: 503", `${app}/fanout-${clients}`);
+      assert.equal(error.evidence.browsers.length, clients);
+      for (const reader of error.evidence.browsers) {
+        const [request] = reader.network;
+        assert.equal(request.url, url());
+        if (port.wire === "laravel-livewire") {
+          assert.doesNotMatch(request.body, /test-token|test-snapshot/);
+          assert.match(JSON.parse(request.body).components[0].snapshotSha256, /^[a-f0-9]{64}$/);
+        } else assert.equal(request.body, raw);
+      }
+      return true;
+    });
+    assert.equal(opened, clients);
+    assert.equal(closed, clients);
+  }
+});
 
 test("failed native journeys retain observed configuration and negative HTTP controls", async () => {
   for (const rejectedStatus of [400, 200]) {
