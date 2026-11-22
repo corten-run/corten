@@ -233,9 +233,13 @@ rules something out.
    and writes them only through a typedef of them (`LiveFields`, `ReadErrorFields`), so `tsc`
    refuses a misspelled write in either; `scripts/escapes.mjs` lists the two, keyed by the tag
    `customElements.define` gives `<corten-live>`, fails when the runtime, kit, template or example
-   scripts gain a class or lose one, and refuses a class's field written through a `this` that no
-   cast or `@this` tag types (by assignment, `++`, `delete`, a `for` target, destructuring or
-   `Object.assign(this, ..)` and its kin), which `tsc` accepts; the classes it
+   scripts gain a class or lose one, and refuses a class's public field written through a `this`
+   that no cast or `@this` tag types (by assignment, `++`, `delete`, a `for` target or
+   destructuring), which `tsc` accepts, and a `this`, typed or not, handed first to
+   `Object.assign`, `Object.defineProperty`, `Object.defineProperties`, `Reflect.set`,
+   `Reflect.defineProperty` or `Reflect.deleteProperty` named directly, whose keys no type
+   checks; a writer reached through an alias or a computed key, and a `@this` tag naming the class
+   rather than a typedef of its fields, are not seen, and review holds those; the classes it
    generates, one per view (the macro writes them) and one per typed event (`assets.rs` writes
    them), are typed by the declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
    was read, and none's value is used as a type it is not; the unstable parser API lets

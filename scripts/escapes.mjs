@@ -53,24 +53,48 @@ function definedTag(node, source) {
   return `<${/** @type {ts.StringLiteral} */ (tag).text}>`;
 }
 
-/** Whether `node` is `object.name`, read from its nodes so comments and spacing do not matter. @param {ts.Node} node @param {string} object @param {string} name */
+/**
+ * Whether `node` is `object.name` or `object["name"]`, in any parentheses, read from its nodes so
+ * comments and spacing do not matter. A local binding named `object` is taken for the global.
+ * @param {ts.Node} node @param {string} object @param {string} name
+ */
 function member(node, object, name) {
-  if (node.kind !== ts.SyntaxKind.PropertyAccessExpression) return false;
-  const access = /** @type {ts.PropertyAccessExpression} */ (node);
-  return access.expression.kind === ts.SyntaxKind.Identifier && /** @type {ts.Identifier} */ (access.expression).text === object && access.name.text === name;
+  while (node.kind === ts.SyntaxKind.ParenthesizedExpression) node = /** @type {ts.ParenthesizedExpression} */ (node).expression;
+  /** @type {ts.Node | undefined} */
+  let key;
+  if (node.kind === ts.SyntaxKind.PropertyAccessExpression) key = /** @type {ts.PropertyAccessExpression} */ (node).name;
+  else if (node.kind === ts.SyntaxKind.ElementAccessExpression) key = /** @type {ts.ElementAccessExpression} */ (node).argumentExpression;
+  else return false;
+  const target = /** @type {ts.PropertyAccessExpression} */ (node).expression;
+  const keyText = key.kind === ts.SyntaxKind.Identifier || key.kind === ts.SyntaxKind.StringLiteral ? /** @type {ts.Identifier} */ (key).text : null;
+  return target.kind === ts.SyntaxKind.Identifier && /** @type {ts.Identifier} */ (target).text === object && keyText === name;
 }
 
-// Calls that write the properties of their first argument.
+// Calls that write the properties their first argument has by keys no type of it checks.
 const WRITERS = [["Object", "assign"], ["Object", "defineProperty"], ["Object", "defineProperties"], ["Reflect", "set"], ["Reflect", "defineProperty"], ["Reflect", "deleteProperty"]];
 
-/** Whether `node`, a function-like, has a `@this` tag, which types its `this`. @param {ts.Node} node */
+/**
+ * Whether `node`, a method or accessor, has its `this` typed by a `@this` tag in the JSDoc
+ * block TypeScript reads, the last before it. The scan cannot tell that the type is a typedef of
+ * the fields and not the class itself; docs/design.md#choice-handlers-checked-where-called asks for the typedef.
+ * @param {ts.Node} node
+ */
 function typedThis(node) {
-  return (node.jsDoc ?? []).some((doc) => (doc.tags ?? []).some((tag) => tag.kind === ts.SyntaxKind.JSDocThisTag));
+  const docs = node.jsDoc ?? [];
+  return (docs.at(-1)?.tags ?? []).some((tag) => tag.kind === ts.SyntaxKind.JSDocThisTag);
 }
 
 /** Whether `node` is `this`, bare or in parentheses, with no cast giving it a type. @param {ts.Node} node */
 function plainThis(node) {
   while (node.kind === ts.SyntaxKind.ParenthesizedExpression) node = /** @type {ts.ParenthesizedExpression} */ (node).expression;
+  return node.kind === ts.SyntaxKind.ThisKeyword;
+}
+
+/** Whether `node` is `this`, in any parentheses and casts. @param {ts.Node} node */
+function anyThis(node) {
+  while (node.kind === ts.SyntaxKind.ParenthesizedExpression || node.kind === ts.SyntaxKind.AsExpression || node.kind === ts.SyntaxKind.TypeAssertionExpression || node.kind === ts.SyntaxKind.SatisfiesExpression || node.kind === ts.SyntaxKind.NonNullExpression) {
+    node = /** @type {ts.ParenthesizedExpression} */ (node).expression;
+  }
   return node.kind === ts.SyntaxKind.ThisKeyword;
 }
 
@@ -89,9 +113,12 @@ function written(target, out) {
  * Each write to a field of a hand-written class through a `this` no cast types, by line: checked
  * JavaScript takes a field such a write sets first as declared, so a misspelling there is no error.
  * A write is an assignment of any operator, `++`, `--`, `delete`, a `for .. of` or `for .. in`
- * target, through any destructuring, or `this` handed to `Object.assign` and the like. A function,
- * and an object literal's method or accessor, has a `this` of its own and is not looked in; an
- * arrow function is, and a method with a `@this` tag has its `this` typed.
+ * target, through any destructuring. A `#private` field is not one: `tsc` checks its name. Apart,
+ * `this`, typed or not, handed first to one of `WRITERS` named directly (`Object.assign`,
+ * `Object["assign"]`) is refused, as no type of it checks the keys those write; a writer reached
+ * another way (an alias, a computed key) is not seen. A function, and an object literal's method or
+ * accessor, has a `this` of its own and is not looked in; an arrow function is, a class's
+ * `extends` has the `this` around the class, and a method a `@this` tag types is not looked in.
  * @param {string} file @param {ts.SourceFile} source
  */
 function plainWritesIn(file, source) {
@@ -103,8 +130,11 @@ function plainWritesIn(file, source) {
   /** @param {ts.Node} node @param {boolean} inClass */
   const visit = (node, inClass) => {
     const kind = node.kind;
-    if (kind === ts.SyntaxKind.ClassDeclaration || kind === ts.SyntaxKind.ClassExpression) inClass = true;
-    else if (kind === ts.SyntaxKind.FunctionDeclaration || kind === ts.SyntaxKind.FunctionExpression) inClass = false;
+    if (kind === ts.SyntaxKind.ClassDeclaration || kind === ts.SyntaxKind.ClassExpression) {
+      // Its `extends` is read with the `this` around the class; its members with the class's.
+      node.forEachChild((child) => { visit(child, child.kind === ts.SyntaxKind.HeritageClause ? inClass : true); });
+      return;
+    } else if (kind === ts.SyntaxKind.FunctionDeclaration || kind === ts.SyntaxKind.FunctionExpression) inClass = false;
     else if (kind === ts.SyntaxKind.MethodDeclaration || kind === ts.SyntaxKind.GetAccessor || kind === ts.SyntaxKind.SetAccessor) {
       // A computed name is read with the enclosing `this`; the body has the method's own.
       const { name, body } = /** @type {ts.MethodDeclaration} */ (node);
@@ -127,14 +157,16 @@ function plainWritesIn(file, source) {
       else if (kind === ts.SyntaxKind.ForOfStatement || kind === ts.SyntaxKind.ForInStatement) targets = written(/** @type {ts.ForOfStatement} */ (node).initializer, []);
       else if (kind === ts.SyntaxKind.CallExpression) {
         const { expression, arguments: args } = /** @type {ts.CallExpression} */ (node);
-        if (args[0] && plainThis(args[0]) && WRITERS.some(([object, name]) => member(expression, object, name))) {
-          found.push(`${at(node)}: a class's fields are written by handing it a \`this\` with no type, so a misspelled name is taken as a new field; write each through a typedef of its fields, \`/** @type {Fields} */ (this).name = ..\` (docs/design.md#choice-handlers-checked-where-called)`);
+        if (args[0] && anyThis(args[0]) && WRITERS.some(([object, name]) => member(expression, object, name))) {
+          found.push(`${at(node)}: a class's fields are written by handing its \`this\` to a call no type of it checks the keys of, so a misspelled name is taken as a new field; write each through a typedef of its fields, \`/** @type {Fields} */ (this).name = ..\` (docs/design.md#choice-handlers-checked-where-called)`);
         }
       }
       for (const target of targets) {
         if (seen.has(target.pos)) continue;
         seen.add(target.pos);
-        if (plainThis(/** @type {ts.PropertyAccessExpression} */ (target).expression)) found.push(`${at(target)}: a class's field is written through a \`this\` with no type, so a misspelled name is taken as a new field; write it through a typedef of its fields, \`/** @type {Fields} */ (this).name = ..\` (docs/design.md#choice-handlers-checked-where-called)`);
+        const access = /** @type {ts.PropertyAccessExpression} */ (target);
+        if (access.name?.kind === ts.SyntaxKind.PrivateIdentifier) continue;
+        if (plainThis(access.expression)) found.push(`${at(target)}: a class's field is written through a \`this\` with no type, so a misspelled name is taken as a new field; write it through a typedef of its fields, \`/** @type {Fields} */ (this).name = ..\` (docs/design.md#choice-handlers-checked-where-called)`);
       }
     }
     node.forEachChild((child) => { visit(child, inClass); });

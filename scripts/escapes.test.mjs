@@ -95,6 +95,14 @@ test("a class's field written through a this no cast types is found, however it 
   assert.equal(writes("Object.assign(this, { a: 1 });"), 1);
   assert.equal(writes("Object.defineProperty((this), \"a\", { value: 1 });"), 1);
   assert.equal(writes("Reflect.set(this, \"a\", 1);"), 1);
+  // A writer's keys are checked by no type of its target, so a typed this is refused too.
+  assert.equal(writes('Object["assign"](this, { a: 1 });'), 1);
+  assert.equal(writes("(Object.assign)(this, { a: 1 });"), 1);
+  assert.equal(writes("Object.assign(/** @type {F} */ (this), { a: 1 });"), 1);
+  // In a class nested in an object's method, the class's own body is still the class's.
+  assert.equal(js("const s = { go() { return class B { b = 0; m() { this.b = 1; } }; } };"), 1);
+  // A @this tag in a block TypeScript does not read (not the last before the method) types nothing.
+  assert.equal(js("/** @typedef {{ a: number }} F */\nclass A {\n  a = 0;\n  /** @this {F} */\n  /** Describe it. */\n  m() { this.a = 1; }\n}"), 1);
   assert.equal(js("class A { a = 0; get b() { this.a = 1; return 1; } set b(v) { this.a = v; } }"), 2);
   // A computed method name is read with the class's this.
   assert.equal(js("class A { a = 0; m() { const o = { [this.a = 1]() {} }; return o; } }"), 1);
@@ -110,6 +118,11 @@ test("a class's field written through a this no cast types is found, however it 
   assert.equal(js("/** @typedef {{ a: number }} F */\nclass A {\n  a = 0;\n  /** @this {F} */\n  m() { this.a++; this.a = 1; }\n}"), 0);
   assert.equal(js("/** @typedef {{ a: number }} F */\nclass A {\n  a = 0;\n  /** A method. */\n  m() { this.a = 1; }\n}"), 1);
   assert.equal(writes("for (const x of [1]) x; for (const k in {}) k; Object.assign({}, this); other.assign(this, {});"), 0);
+  assert.equal(js("/** @typedef {{ a: number }} F */\nclass A {\n  a = 0;\n  /** Describe it. */\n  /** @this {F} */\n  m() { this.a = 1; }\n}"), 0);
+  // tsc checks a #private name itself.
+  assert.equal(js("class A { #count = 0; run() { this.#count++; this.#count = 2; return this.#count; } }"), 0);
+  // A class's extends has the this around the class: here the object's.
+  assert.equal(js("export const s = { count: 0, go() { return class B extends ((this.count = 1), Object) {}; } };"), 0);
 });
 
 test("the classes found are held to the list, counting repeats", () => {
