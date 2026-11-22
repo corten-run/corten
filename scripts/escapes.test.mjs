@@ -98,6 +98,9 @@ test("a class's field written through a this no cast types is found, however it 
   // A writer's keys are checked by no type of its target, so a typed this is refused too.
   assert.equal(writes('Object["assign"](this, { a: 1 });'), 1);
   assert.equal(writes("(Object.assign)(this, { a: 1 });"), 1);
+  assert.equal(writes("Object[`assign`](this, { a: 1 });"), 1);
+  // A method a @this tag types has its field writes checked by tsc, but not a writer call's keys.
+  assert.equal(js("/** @typedef {{ a: number }} F */\nclass A {\n  a = 0;\n  /** @this {F} */\n  m() { Object.assign(this, { b: 1 }); }\n}"), 1);
   assert.equal(writes("Object.assign(/** @type {F} */ (this), { a: 1 });"), 1);
   // In a class nested in an object's method, the class's own body is still the class's.
   assert.equal(js("const s = { go() { return class B { b = 0; m() { this.b = 1; } }; } };"), 1);
@@ -118,6 +121,8 @@ test("a class's field written through a this no cast types is found, however it 
   assert.equal(js("/** @typedef {{ a: number }} F */\nclass A {\n  a = 0;\n  /** @this {F} */\n  m() { this.a++; this.a = 1; }\n}"), 0);
   assert.equal(js("/** @typedef {{ a: number }} F */\nclass A {\n  a = 0;\n  /** A method. */\n  m() { this.a = 1; }\n}"), 1);
   assert.equal(writes("for (const x of [1]) x; for (const k in {}) k; Object.assign({}, this); other.assign(this, {});"), 0);
+  // A computed key names a variable, not the writer: here a read.
+  assert.equal(writes('const assign = "keys"; Object[assign](this);'), 0);
   assert.equal(js("/** @typedef {{ a: number }} F */\nclass A {\n  a = 0;\n  /** Describe it. */\n  /** @this {F} */\n  m() { this.a = 1; }\n}"), 0);
   // tsc checks a #private name itself.
   assert.equal(js("class A { #count = 0; run() { this.#count++; this.#count = 2; return this.#count; } }"), 0);

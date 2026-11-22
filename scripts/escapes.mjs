@@ -66,7 +66,10 @@ function member(node, object, name) {
   else if (node.kind === ts.SyntaxKind.ElementAccessExpression) key = /** @type {ts.ElementAccessExpression} */ (node).argumentExpression;
   else return false;
   const target = /** @type {ts.PropertyAccessExpression} */ (node).expression;
-  const keyText = key.kind === ts.SyntaxKind.Identifier || key.kind === ts.SyntaxKind.StringLiteral ? /** @type {ts.Identifier} */ (key).text : null;
+  // `Object.assign`'s name is an identifier; `Object[assign]`'s is a variable, and only a string
+  // literal there is the key itself.
+  const literal = node.kind === ts.SyntaxKind.PropertyAccessExpression ? key.kind === ts.SyntaxKind.Identifier : key.kind === ts.SyntaxKind.StringLiteral || key.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral;
+  const keyText = literal ? /** @type {ts.Identifier} */ (key).text : null;
   return target.kind === ts.SyntaxKind.Identifier && /** @type {ts.Identifier} */ (target).text === object && keyText === name;
 }
 
@@ -127,24 +130,27 @@ function plainWritesIn(file, source) {
   // A destructuring default (`[this.a = 1] = []`) is reached as its pattern and as an assignment.
   const seen = new Set();
   const at = (/** @type {ts.Node} */ node) => `${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`;
-  /** @param {ts.Node} node @param {boolean} inClass */
-  const visit = (node, inClass) => {
+  // What `this` is where the visit is: no class's, a class's with no type, or a class's a `@this`
+  // tag types (its field writes tsc checks, but not the keys a writer call sets).
+  /** @param {ts.Node} node @param {"none" | "plain" | "typed"} self */
+  const visit = (node, self) => {
     const kind = node.kind;
     if (kind === ts.SyntaxKind.ClassDeclaration || kind === ts.SyntaxKind.ClassExpression) {
       // Its `extends` is read with the `this` around the class; its members with the class's.
-      node.forEachChild((child) => { visit(child, child.kind === ts.SyntaxKind.HeritageClause ? inClass : true); });
+      node.forEachChild((child) => { visit(child, child.kind === ts.SyntaxKind.HeritageClause ? self : "plain"); });
       return;
-    } else if (kind === ts.SyntaxKind.FunctionDeclaration || kind === ts.SyntaxKind.FunctionExpression) inClass = false;
+    } else if (kind === ts.SyntaxKind.FunctionDeclaration || kind === ts.SyntaxKind.FunctionExpression) self = "none";
     else if (kind === ts.SyntaxKind.MethodDeclaration || kind === ts.SyntaxKind.GetAccessor || kind === ts.SyntaxKind.SetAccessor) {
       // A computed name is read with the enclosing `this`; the body has the method's own.
       const { name, body } = /** @type {ts.MethodDeclaration} */ (node);
-      if (name) visit(name, inClass);
-      const own = inClass && node.parent?.kind !== ts.SyntaxKind.ObjectLiteralExpression && !typedThis(node);
+      if (name) visit(name, self);
+      /** @type {"none" | "plain" | "typed"} */
+      const own = self === "none" || node.parent?.kind === ts.SyntaxKind.ObjectLiteralExpression ? "none" : typedThis(node) ? "typed" : "plain";
       node.forEachChild((child) => { if (child !== name && child !== body) visit(child, own); });
       if (body) visit(body, own);
       return;
     }
-    if (inClass) {
+    if (self !== "none") {
       /** @type {ts.Node[]} */
       let targets = [];
       if (kind === ts.SyntaxKind.BinaryExpression) {
@@ -161,7 +167,7 @@ function plainWritesIn(file, source) {
           found.push(`${at(node)}: a class's fields are written by handing its \`this\` to a call no type of it checks the keys of, so a misspelled name is taken as a new field; write each through a typedef of its fields, \`/** @type {Fields} */ (this).name = ..\` (docs/design.md#choice-handlers-checked-where-called)`);
         }
       }
-      for (const target of targets) {
+      for (const target of self === "plain" ? targets : []) {
         if (seen.has(target.pos)) continue;
         seen.add(target.pos);
         const access = /** @type {ts.PropertyAccessExpression} */ (target);
@@ -169,9 +175,9 @@ function plainWritesIn(file, source) {
         if (plainThis(access.expression)) found.push(`${at(target)}: a class's field is written through a \`this\` with no type, so a misspelled name is taken as a new field; write it through a typedef of its fields, \`/** @type {Fields} */ (this).name = ..\` (docs/design.md#choice-handlers-checked-where-called)`);
       }
     }
-    node.forEachChild((child) => { visit(child, inClass); });
+    node.forEachChild((child) => { visit(child, self); });
   };
-  visit(source, false);
+  visit(source, "none");
   return found;
 }
 
