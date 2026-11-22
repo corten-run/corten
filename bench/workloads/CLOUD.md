@@ -491,9 +491,15 @@ node bench/workloads/fleet.mjs NEW_ROUND --continuation-root ABSOLUTE_ROOT --gro
 
 The first command is read-only and providerless (`0` all groups verified, `1`
 incomplete, `2` invalid). Its `eligibleToRun` is a local selection, not provider
-availability or authorization. The remaining commands are the normal official
-prepare, exact preview and approved launch for one complete group. Prepare reads
-provider placement but does not allocate. The selected group runs the normal
+availability or authorization. You do not have to run the full report before
+starting the next group. Prepare, preview and launch check whether the **selected
+group** can run and whether any existing host conflicts with that launch. A
+saved result keeps its group off the launch list; it does not certify the
+result for publication. For example, starting marketplace does not require
+reopening the catalog page's results archive. Run the full report before
+publishing: it checks each group's evidence at the commit it actually measured.
+
+Prepare reads provider placement but does not allocate. The selected group runs the normal
 staged first-host checks, native phases and terminal monitor. For JSON that
 includes its prepare and timing phases and the independently reviewed audit
 between them. There is no extra setup host and no `--admit-remaining` action.
