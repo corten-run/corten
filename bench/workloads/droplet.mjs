@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertFleetCensus, bootstrapWorkspaceScript, fleetCatalogCommand, fleetRegion, ownedDroplet, reservation, rootManagerDrainSeconds, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
+import { assertFleetCensus, bootstrapWorkspaceScript, fleetCatalogCommand, fleetRegion, installBenchmarkUnit, ownedDroplet, reservation, rootManagerDrainSeconds, stagedFleet, tags, terminalUnit, validateLaunchFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash, withVerifiedArchive } from "./cloud-local.mjs";
 import { campaignOutcome, controllerFailure, controllerState, fleetCatalogResult, full, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
@@ -766,11 +766,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             durable(join(local, name), content); await scp(join(local, name), `root@${state.ip}:/bench/${name}`);
             await ssh(`printf '%s  %s\\n' '${digest(content)}' '/bench/${name}' | sha256sum --check --status`);
           }
-          await ssh(`bash -n /bench/job.sh && bash -n /bench/pack.sh && install -m 644 /bench/${state.unit} /etc/systemd/system/${state.unit} && systemd-analyze verify /etc/systemd/system/${state.unit} && systemctl daemon-reload`);
+          await ssh(installBenchmarkUnit(state));
+          // The acknowledged install has already loaded the drop-in. Let the
+          // existing manager drain without opening any more root sessions.
+          if (state.quietBootstrap) {
+            for (let second = 0; second < rootManagerDrainSeconds; second++) {
+              check();
+              await sleep(1000);
+            }
+          }
           state.status = "starting"; save(); await ssh(`systemctl start ${state.unit}`);
-          // The detached job drains the manager before cloud-init and package work.
-          // Do not open another root session during its initial drain window.
-          if (state.quietBootstrap) await sleep(rootManagerDrainSeconds * 1000);
           await requireActiveStartup("group ended before running admission; collect its evidence");
           state.status = "running"; save();
           try { await commonBootstrap(); }

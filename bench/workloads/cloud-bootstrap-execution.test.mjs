@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { bootstrapWorkspaceScript, fleetPlan, remoteFiles, reservation } from "./cloud-contract.mjs";
+import { bootstrapWorkspaceScript, fleetPlan, installBenchmarkUnit, remoteFiles, reservation } from "./cloud-contract.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { digest } from "./cloud-local.mjs";
 import { remoteFiles as productionFiles } from "./cloud-remote.mjs";
@@ -256,11 +256,11 @@ function rootManagerStages(script, quiet = false) {
     return { offset: stages[index].index, shell: script.slice(stages[index].index, stages[index + 1].index) };
   }
   return quiet
-    ? [section("root-manager-policy", "root-manager-idle"), section("root-manager-idle", "cloud-init")]
+    ? [section("root-manager-idle", "cloud-init"), section("root-manager-verification", "ssh-ingress-verification")]
     : [section("root-manager-policy", "firmware-mask"), section("root-manager-idle", "native-entry")];
 }
 
-function executeRootManager(t, script, { mode = "drain", marker = true, prior, quiet = false } = {}) {
+function executeRootManager(t, script, { mode = "drain", marker = true, prior, quiet } = {}) {
   const root = mkdtempSync(join(tmpdir(), "corten-root-manager-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const bin = join(root, "bin"), path = join(root, dropin.slice(1));
@@ -276,6 +276,7 @@ function executeRootManager(t, script, { mode = "drain", marker = true, prior, q
   }
   symlinkSync("/bin/bash", join(bin, "bash"));
   symlinkSync("/usr/bin/mkdir", join(bin, "mkdir"));
+  symlinkSync("/usr/bin/cmp", join(bin, "cmp"));
   writeFileSync(join(bin, "systemctl"), `#!/bin/sh
 set -eu
 printf '%s\\n' "$*" >> trace
@@ -303,7 +304,7 @@ esac
   // The first poll interval ends either in natural drain or the simulated deadline.
   writeFileSync(join(bin, "timeout"), `#!/bin/bash
 set -eu
-test "$1" = 120 && test "$2" = bash || exit 92
+{ test "$1" = 120 || test "$1" = 15; } && test "$2" = bash || exit 92
 printf 'timeout %s\\n' "$1" >> trace
 shift
 sleep() {
@@ -314,9 +315,13 @@ sleep() {
 export -f sleep
 exec "$@"
 `, { mode: 0o700 });
-  const shell = rootManagerStages(script, quiet).map((stage) => stage.shell).join("");
-  // Only the two extracted stages run. Redirect their paths into the fixture,
-  // except the literal condition written into the drop-in.
+  const stages = rootManagerStages(script, !!quiet).map((stage) => stage.shell);
+  const install = quiet ? installBenchmarkUnit(quiet).split("\n").slice(1).join("\n") + "\n" : "";
+  const shell = quiet ? install + (mode === "drain" ? ": > drained\n" : "") + stages[0]
+    + (mode === "late-busy" ? "export MODE=busy\n" : mode === "late-tampered" ? "echo replaced > \"$DROPIN\"\n" : "") + stages[1]
+    : stages.join("");
+  // Run only the extracted root-manager stages and policy installation.
+  // Redirect their paths into the fixture except the literal condition.
   assert.doesNotMatch(shell, /\/(?:usr\/)?(?:s?bin|etc)\//);
   const result = spawnSync("/bin/bash", ["-c", "set -Eeuo pipefail\n" +
     shell.replace(/(?<!!)\/run\//g, "./run/") + "printf 'NATIVE_ENTRY_REACHED\\n'\n"], {
@@ -327,7 +332,7 @@ exec "$@"
   assert.equal(result.signal, null);
   const trace = join(root, "trace");
   const calls = existsSync(trace) ? readFileSync(trace, "utf8").trimEnd().split("\n") : [];
-  assert.ok(calls.every((call) => /^(daemon-reload|timeout 120|sleep 1|show user@0\.service --property=(ActiveState|MainPID) --value)$/.test(call)), calls.join("\n"));
+  assert.ok(calls.every((call) => /^(daemon-reload|timeout (120|15)|sleep 1|show user@0\.service --property=(ActiveState|MainPID) --value)$/.test(call)), calls.join("\n"));
   return { ...result, calls, contents: existsSync(path) ? readFileSync(path, "utf8") : null };
 }
 
@@ -361,11 +366,12 @@ for (const [name, generate] of [["contract", remoteFiles], ["production", produc
   });
 }
 
-test("new dedicated reservations drain before cloud-init without changing marker or native command", () => {
+test("new dedicated reservations check the manager before cloud-init and native entry", () => {
   const saved = ingressState();
   const original = productionFiles(saved)["job.sh"];
   const quiet = productionFiles({ ...saved, quietBootstrap: true })["job.sh"];
   rootManagerStages(quiet, true);
+  assert.doesNotMatch(quiet, /^bootstrap_stage=root-manager-policy$/m);
   assert.equal(quiet.slice(quiet.indexOf("bootstrap_stage=ssh-ingress-verification")),
     original.slice(original.indexOf("bootstrap_stage=ssh-ingress-verification")));
   for (const plain of [state, { ...state, control }, dedicated, { ...dedicated, control: ledger }])
@@ -373,18 +379,24 @@ test("new dedicated reservations drain before cloud-init without changing marker
   assert.throws(() => productionFiles({ ...saved, quietBootstrap: false }), /quiet bootstrap requires a supervised group/);
 });
 
-test("new dedicated setup proceeds after natural drain but not with a busy manager", {
+test("new dedicated setup requires an intact handoff and idle manager at both gates", {
   skip: process.platform !== "linux",
 }, (t) => {
-  const quiet = true, script = productionFiles({ ...ingressState(), quietBootstrap: quiet })["job.sh"];
+  const quiet = { ...ingressState(), quietBootstrap: true }, script = productionFiles(quiet)["job.sh"];
   const drained = executeRootManager(t, script, { quiet });
   assert.equal(drained.status, 0, drained.stderr);
   assert.equal(drained.stdout, "NATIVE_ENTRY_REACHED\n");
   assert.equal(drained.contents, policy);
-  const busy = executeRootManager(t, script, { quiet, mode: "busy" });
-  assert.equal(busy.status, 124, busy.stderr);
-  assert.equal(busy.stdout, "");
-  assert.match(busy.stderr, /ActiveState=active MainPID=42/);
+  const probes = ["show user@0.service --property=ActiveState --value", "show user@0.service --property=MainPID --value"];
+  assert.deepEqual(drained.calls, ["daemon-reload", "timeout 15", ...probes, "timeout 15", ...probes]);
+  for (const mode of ["busy", "late-busy", "late-tampered"]) {
+    const failed = executeRootManager(t, script, { quiet, mode });
+    assert.equal(failed.status, 1, failed.stderr);
+    assert.equal(failed.stdout, "");
+    if (mode !== "late-tampered") assert.match(failed.stderr, /ActiveState=active MainPID=42/);
+    assert.deepEqual(failed.calls, ["daemon-reload", "timeout 15", ...probes,
+      ...(mode === "busy" ? [] : ["timeout 15", ...(mode === "late-busy" ? probes : [])])]);
+  }
 });
 
 test("root-manager preparation fails closed without overwriting policy or stopping busy services", {

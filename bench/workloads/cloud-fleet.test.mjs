@@ -457,7 +457,7 @@ test("first official group waits for the bound common bootstrap marker, not nati
 });
 
 test("dedicated startup leaves an SSH-free manager drain window before polling or registering", async (t) => {
-  for (const mode of ["quiet", "busy", "cancelled"]) {
+  for (const mode of ["quiet", "busy", "cancelled", "install-failed"]) {
     const h = harness(t, { active: true }), group = "recoverable-live";
     const values = input(); values.provider = { accountId, context }; values.tokens = { [group]: values.tokens[group] };
     const fleet = join(h.temp, "fleet.json");
@@ -465,41 +465,62 @@ test("dedicated startup leaves an SSH-free manager drain window before polling o
       stagedPlacement: true, single: { group, indexSha256: "1".repeat(64), checkout: h.repo },
     })));
     const options = { collect: undefined, detach: true, commit, sshKey: "42", accountId, context, group, fleet };
-    const events = [];
-    let started = false, quiet = false;
-    h.flags.hook = (binary, args) => {
-      if (binary !== "ssh" && binary !== "scp") return;
-      if (args.at(-1).startsWith("systemctl start")) {
-        started = true;
-        events.push("start");
-      } else if (started) {
-        assert.ok(quiet, "controller opened a root session before the quiet handoff");
-        events.push("observe");
+    const installSent = Promise.withResolvers(), ack = Promise.withResolvers();
+    let installed = false, started = false, elapsed = 0;
+    const run = async (binary, args, ...rest) => {
+      if (binary === "ssh" || binary === "scp") {
+        const script = args.at(-1);
+        if (binary === "ssh" && script.includes("90-corten-benchmark.conf")) {
+          assert.ok(script.endsWith("systemctl daemon-reload"));
+          installSent.resolve();
+          await ack.promise;
+          const result = h.run(binary, args, ...rest);
+          if (mode === "install-failed") return { ...result, status: 1 };
+          installed = true;
+          return result;
+        }
+        if (binary === "ssh" && script.startsWith("systemctl start")) {
+          assert.ok(installed, "unit started before policy installation acknowledged");
+          assert.equal(elapsed, 120_000, "unit started before the SSH-free window elapsed");
+          started = true;
+          if (mode === "busy") h.flags.active = false;
+        } else if (installed) {
+          assert.ok(started, "controller opened a root session before the quiet handoff");
+        }
       }
+      return h.run(binary, args, ...rest);
     };
-    const task = h.task({ checkFleetAdmission: () => [], sleep: async (ms) => {
-      assert.equal(ms, 120_000);
-      assert.deepEqual(events, ["start"]);
+    const task = h.task({ run, checkFleetAdmission: () => [], sleep: async (ms) => {
+      assert.equal(ms, 1000);
+      assert.ok(installed && !started);
       assert.equal(h.saved().control.ledger.at(-1).localTerminal, true);
-      quiet = true;
-      events.push("quiet");
-      if (mode === "busy") h.flags.active = false;
+      elapsed += ms;
       if (mode === "cancelled") h.flags.cancelled = true;
     } }, options);
+    const launch = task.launch();
+    try {
+      await Promise.race([installSent.promise, launch]);
+      assert.equal(elapsed, 0, "quiet clock started before the remote install acknowledged");
+      assert.equal(started, false);
+    } finally { ack.resolve(); }
     if (mode === "quiet") {
-      await task.launch();
+      await launch;
       assert.ok(h.saved().bootstrapReady);
       assert.equal(h.saved().control.monitor.phase, "closed");
       assert.match(h.saved().control.monitor.registrationSha256, /^[a-f0-9]{64}$/);
       assert.deepEqual(h.saved().control.sealed, ["bootstrap"]);
     } else {
-      await assert.rejects(task.launch(), mode === "busy" ? /ended before running admission/ : /controller cancelled/);
+      await assert.rejects(launch, { busy: /ended before running admission/, cancelled: /controller cancelled/,
+        "install-failed": /control process failed/ }[mode]);
       assert.equal(h.saved().bootstrapReady, undefined);
       assert.equal(h.saved().control.monitor.phase, "pending");
       assert.equal(!!h.saved().preBootstrapTerminal, mode === "busy");
     }
-    assert.deepEqual(events.slice(0, 2), ["start", "quiet"]);
-    if (mode === "cancelled") assert.deepEqual(events, ["start", "quiet"]);
+    assert.equal(started, mode === "quiet" || mode === "busy");
+    if (!started) {
+      assert.equal(h.saved().status, "preparing");
+      assert.equal(elapsed, mode === "cancelled" ? 1000 : 0);
+    }
     assert.equal(h.creates, 1);
     assert.equal(h.deletes, 0);
   }

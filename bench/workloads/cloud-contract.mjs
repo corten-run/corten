@@ -270,6 +270,7 @@ export function validateState(s, round, options) {
   }
   // Hosts launched since the bench package existed install it. Absent means the original job bytes.
   if (s.benchPackage !== undefined) assert.equal(s.benchPackage, true, "bench package marker");
+  // Saved reservations without this marker must regenerate the original job.
   if (s.quietBootstrap !== undefined)
     assert.ok(s.quietBootstrap === true && dedicated && s.control?.monitor, "quiet bootstrap requires a supervised group");
   date(s.createdAt);
@@ -569,30 +570,18 @@ ${listSshIngress} | cmp -s -- '${sshIngressSnapshot}' -`;
 
 export const rootManagerDrainSeconds = 120;
 
-// Fixed source-bound entry point. No caller-provided command or adapter filtering.
-export function remoteFiles(s) {
-  validateState(s, s.round);
-  const loadLayout = savedLoadLayout(s);
-  const placement = savedPlacement(s);
-  const sshIngress = bootstrapWorkspaceScript(s) === dedicatedWorkspace;
-  // Dedicated group runners are system services. Their root SSH sessions need
-  // logind scopes, not a user service manager. Leave any existing session alone.
-  const marker = s.group && s.control?.monitor ? `/run/corten-bench-control-${s.token}/binding.json` : null;
-  const loginPolicy = marker ? `bootstrap_stage=root-manager-policy
-test -f '${marker}'
+const rootManagerDropIn = "/run/systemd/system/user@0.service.d/90-corten-benchmark.conf";
+const rootManagerBinding = (s) => s.group && s.control?.monitor ? `/run/corten-bench-control-${s.token}/binding.json` : null;
+const rootManagerPolicy = (marker) => `test -f '${marker}'
 test ! -L '${marker}'
-dropin=/run/systemd/system/user@0.service.d/90-corten-benchmark.conf
+dropin=${rootManagerDropIn}
 test ! -L /run/systemd/system/user@0.service.d
 mkdir -p -- /run/systemd/system/user@0.service.d
 test ! -e "$dropin"
 test ! -L "$dropin"
 ( set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${marker}' > "$dropin" )
-systemctl daemon-reload
-` : "";
-  const waitForIdleUserManager = marker ? `bootstrap_stage=root-manager-idle
-timeout ${rootManagerDrainSeconds} bash -ec '
-  while :; do
-    echo "root-manager: querying ActiveState" >&2
+`;
+const observeRootManager = `    echo "root-manager: querying ActiveState" >&2
     state=$(systemctl show user@0.service --property=ActiveState --value)
     case "$state" in
       active|activating|deactivating|reloading|inactive|failed) ;;
@@ -601,7 +590,31 @@ timeout ${rootManagerDrainSeconds} bash -ec '
     echo "root-manager: ActiveState=$state; querying MainPID" >&2
     main_pid=$(systemctl show user@0.service --property=MainPID --value)
     [[ "$main_pid" =~ ^[0-9]{1,10}$ ]] || { echo "root-manager: invalid MainPID" >&2; exit 1; }
-    echo "root-manager: ActiveState=$state MainPID=$main_pid" >&2
+    echo "root-manager: ActiveState=$state MainPID=$main_pid" >&2`;
+
+export function installBenchmarkUnit(s) {
+  const install = `bash -n /bench/job.sh && bash -n /bench/pack.sh && install -m 644 /bench/${s.unit} /etc/systemd/system/${s.unit} && systemd-analyze verify /etc/systemd/system/${s.unit}`;
+  return s.quietBootstrap
+    ? `${install} || exit 1\n${rootManagerPolicy(rootManagerBinding(s))}systemctl daemon-reload`
+    : `${install} && systemctl daemon-reload`;
+}
+
+// Fixed source-bound entry point. No caller-provided command or adapter filtering.
+export function remoteFiles(s) {
+  validateState(s, s.round);
+  const loadLayout = savedLoadLayout(s);
+  const placement = savedPlacement(s);
+  const sshIngress = bootstrapWorkspaceScript(s) === dedicatedWorkspace;
+  // Dedicated group runners are system services. Their root SSH sessions need
+  // logind scopes, not a user service manager. Leave any existing session alone.
+  const marker = rootManagerBinding(s);
+  const loginPolicy = marker ? `bootstrap_stage=root-manager-policy
+${rootManagerPolicy(marker)}systemctl daemon-reload
+` : "";
+  const waitForIdleUserManager = marker ? `bootstrap_stage=root-manager-idle
+timeout ${rootManagerDrainSeconds} bash -ec '
+  while :; do
+${observeRootManager}
     case "$state" in
       inactive) test "$main_pid" = 0; break ;;
       failed) exit 1 ;;
@@ -609,6 +622,15 @@ timeout ${rootManagerDrainSeconds} bash -ec '
     esac
   done'
 ` : "";
+  const requireIdleUserManager = (stage) => `bootstrap_stage=${stage}
+timeout 15 bash -ec '
+    test -f "$1" && test ! -L "$1" || exit 1
+    test -f "$2" && test ! -L "$2" || exit 1
+    cmp -s -- "$2" <(printf "%s\\n" "[Unit]" "$3")
+${observeRootManager}
+    test "$state" = inactive && test "$main_pid" = 0
+' root-manager '${marker}' '${rootManagerDropIn}' 'ConditionPathExists=!${marker}'
+`;
   const pack = `#!/bin/bash
 set -euo pipefail
 cd /bench
@@ -628,7 +650,7 @@ bootstrap_stage=supervisor
 bootstrap_error() { local code=$?; trap - ERR; printf 'benchmark job failed: stage=%s line=%s exit=%s\\n' "$bootstrap_stage" "$1" "$code" >&2; return "$code"; }
 trap 'bootstrap_error "$LINENO"' ERR
 ${supervisorBootstrap(s.unit)}
-${s.quietBootstrap ? loginPolicy + waitForIdleUserManager : ""}bootstrap_stage=cloud-init
+${s.quietBootstrap ? requireIdleUserManager("root-manager-idle") : ""}bootstrap_stage=cloud-init
 timeout 900 cloud-init status --wait
 ${s.quietBootstrap ? "" : loginPolicy}# Fresh disposable hosts only: prevent timer and D-Bus firmware activation before baseline.
 bootstrap_stage=firmware-mask
@@ -718,7 +740,7 @@ done
 # The entry derives all nine groups and their native settings from this measured source.
 # Popular/performance views reuse the same evidence; no second workload execution.
 unset BENCH_APPS BENCH_TIER BENCH_EDGE PROFILE
-${s.quietBootstrap ? "" : waitForIdleUserManager}${sshIngress ? `bootstrap_stage=ssh-ingress-verification
+${s.quietBootstrap ? requireIdleUserManager("root-manager-verification") : waitForIdleUserManager}${sshIngress ? `bootstrap_stage=ssh-ingress-verification
 ${verifySshIngress}
 ` : ""}bootstrap_stage=native-entry
 node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign${s.group === undefined ? "" : ` --group ${s.group}`}${loadLayout ? ` --load-layout ${loadLayout}` : ""}${placement ? ` --placement ${placement}` : ""}
