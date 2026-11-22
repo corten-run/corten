@@ -195,12 +195,13 @@ test("historical child PID reuse preserves strict retired replay and never settl
   assert.ok(retainedInvalidOwner(local, state));
   assert.throws(() => verifyFailedNativeRetirement(local, state), /original monitor owner/);
 
+  const destroyedAt = state.destroyedAt;
   delete state.destroyedAt; save();
   assert.equal((await verify(deps)).groups[0].outcome, "busy", "pending cleanup cannot use the reporting exception");
-  state.destroyedAt = new Date().toISOString(); save();
+  state.destroyedAt = destroyedAt; save();
   const recovery = join(local, "stream-recovery.lock");
   writeFileSync(recovery, JSON.stringify({ pid: process.pid }));
-  assert.throws(() => successor.recheck());
+  assert.throws(() => successor.recheck(), /historical child locks changed/);
   await assert.rejects(admit(deps), /unresolved custody/);
   assert.equal((await verify(deps)).groups[0].outcome, "busy", "a recovery collector still blocks replay");
   unlinkSync(recovery);
@@ -208,7 +209,7 @@ test("historical child PID reuse preserves strict retired replay and never settl
   appendFileSync(launch, "\n");
   await wait(20);
   assert.throws(() => checks[0](), /historical child locks changed/);
-  assert.throws(() => successor.recheck());
+  assert.throws(() => successor.recheck(), /historical child locks changed/);
   assert.equal((await verify(deps)).groups[0].outcome, "busy", "a child lock written after confirmed retirement is not historical");
   state.destroyedAt = new Date().toISOString(); save();
   appendFileSync(join(local, "failed-native-host.json"), "\n");
