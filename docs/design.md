@@ -7542,7 +7542,9 @@ rules something out.
     the held value's forms are made. The held value so arrives before the encoding begins and
     waits for all of the job, the worst case for one job. At 32,768 and 32,767 bytes the job took
     1.7 to 1.9 ms at the median of 105 (1.4 to 21.5 ms), with room for its bytes and with none,
-    of which what follows the lock (the check, the room, the bytes put in) about 5 µs; a held
+    of which about 5 µs from the probe's hook after the second check, which runs once the job
+    holds the lock and has found the page standing, to the job's end (the room, the bytes put in);
+    the probe did not time the lock's taking or that check; a held
     4 KB value's forms were made 6.2 to 9.0 ms after its second read (4.8 to 35.1) against 4.1
     to 6.2 ms (2.9 to 36.1) on main in the same setups, where nothing is in its way, and a 79 KB
     value's 46.5 to 48.6 ms against 43.3 to 46.3. The store's write lock is taken by a page kept
@@ -7571,21 +7573,30 @@ rules something out.
     desktop that ran other builds throughout, on synthetic pages (a table of records from a
     48-word vocabulary) and a JSON array of items: a busy desktop's times, good for their sizes
     and ratios, not a cost per request. CONTRIBUTING.md asks for waiting to be timed on a quiet
-    Linux host, so the fourth run below times it there too, with the same probe on this change
-    merged with main's `7a275ef15` against that main, built with the release profile and run with
-    jemalloc preloaded on four of the host's CPUs: a body of 32,768 bytes, held JSON of 4,021 and
-    78,967 bytes, the four setups (no job, room, no room, and the 4 MiB insertion), 20 processes
-    of each build alternated, of 21 repetitions each, a repetition paired with the other build's
-    in the same round and place. Its bounds were set before it runs, on the 4 KB value, whose
-    wait matters most against its own cost: the one-sided 95% upper bound on the median added time
-    in a pair is under H, the base's median of that value's own forms on the host in the same
-    pass, with room and with none (the size of the bound was chosen so one encoding costs less than
-    those forms, above), and under H plus the base's median insertion call where the 4 MiB page is
-    kept (a job can wait for one such writer by design). The setup with no job, the same in both
-    builds, must read under +0.5 ms, every job with room must put its bytes in and every one
-    without must find none, or the pass cannot be used. A bound at or over its limit, or a pass
-    that cannot be used, blocks the merge as the cycles' margin does; the 79 KB value is reported
-    with no bound. Until it runs, the wait on a quiet host is not measured.
+    Linux host, so a run of its own times it there, with the same probe on this change merged with
+    main's `7a275ef15` against that main, built with the release profile and run with jemalloc
+    preloaded on four of the host's CPUs: a body of 32,768 bytes, held JSON of 4,021 and 78,967
+    bytes, the four setups (no job, room, no room, and the 4 MiB insertion), 40 processes of each
+    build alternated, of 21 repetitions each. It replaces the fourth run's third pass (below),
+    which is not read as the gate: that pass started the insertion at a time that did not make the
+    job wait for it, and its bound treated the 21 repetitions in one process as independent. Now,
+    where the 4 MiB page is kept, the writer takes the store's lock before the held value is read
+    and, in this change's build, keeps it until the job has asked for it, then runs its eviction;
+    a test-only hook in `Entry::make_brotli` (`LOCKING`) records when the job asked and whether
+    the lock was held then, and every such sample must show the job asked while the writer held
+    the lock, or the pass cannot be used. Its bounds were set before it runs, on the 4 KB value,
+    whose wait matters most against its own cost. Each process pair gives one added time, the
+    change's median less main's; the one-sided 95% upper bound on the median of the 40 is the
+    26th smallest (a sign test over the pairs, not over the repetitions), and it is under H, the
+    base's median of that value's own forms on the host in the same pass, with room and with none
+    (the size of the bound was chosen so one encoding costs less than those forms, above), and
+    under H plus the base's median insertion call where the 4 MiB page is kept (a job can wait for
+    one such writer by design). These are budgets for the typical added wait at that size, not
+    ceilings on any one wait. The setup with no job, the same in both builds, must read under +0.5
+    ms, every job with room must put its bytes in and every one without must find none, and every
+    declared sample of both builds must be there once, or the pass cannot be used. A bound at or
+    over its limit, or a pass that cannot be used, blocks the merge as the cycles' margin does; the
+    79 KB value is reported with no bound. Until it runs, the wait on a quiet host is not measured.
 
     Before the bound, an earlier probe (`cde42e710` against main's `a0eeeacca`, the same machine,
     five alternated runs of 11 and three runs of 15 for the sizes between) timed a job's encoding
@@ -7870,9 +7881,10 @@ rules something out.
     cycles a request on each; a bound at or above it, or a workload that fails or cannot be used,
     blocks the merge. Its fence also fails on any panic in the probe's process before the port
     opens, one the compression thread caught included, and so does a start whose log prints one;
-    its second pass counts user first-level instruction-cache misses as the third's did, and its
-    third pass times the held value's wait (above). That run is prepared and has not run; until it
-    clears its bounds this change does not merge. The first two runs on a quiet host did not count
+    its second pass counts user first-level instruction-cache misses as the third's did. Its third
+    pass timed the held value's wait, and is replaced by the run of the wait alone (above), which
+    is not pooled with it. The fourth run was under way when this was written; until its first
+    pass and the wait's run clear their bounds this change does not merge. The first two runs on a quiet host did not count
     user first-level instruction-cache misses, which CONTRIBUTING.md asks for as a diagnostic when
     code is added or moved: each turn counted `cycles:u`, `cycles:k` and `instructions:u` alone,
     so that no turn's counters were multiplexed and perf ran all three for the whole of every turn;
