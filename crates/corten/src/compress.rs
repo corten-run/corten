@@ -196,7 +196,7 @@ pub(crate) enum Level {
     /// card-market's item pages (4,013 bytes on average) 1,293 where zstd 1 gives 1,564; it takes
     /// 1.01 and 1.25 million instructions once (callgrind), where zstd 1 takes 0.12 and 0.16
     /// million. brotli 9 gives
-    /// the same bytes for 1.47 and 1.89 million instructions but 14 to 18 times the time (it
+    /// about the same size for 1.47 and 1.89 million instructions but 14 to 18 times the time (it
     /// clears larger tables), and brotli 11 gives 761 and 1,170 bytes for 84 and 56 million: too
     /// much for a page made again each time its lifetime ends, on a thread held values share.
     Kept,

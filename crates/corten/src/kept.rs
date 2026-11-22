@@ -669,10 +669,12 @@ impl Entry {
     /// counts it, while it is kept and stands: asked before the work, and again when the bytes
     /// are put with it under the store's lock, which an entry is taken out under. So the brotli
     /// of a page written to, past its lifetime, replaced or dropped before then is not given or
-    /// counted. A page does without it, so it takes only the room the bound has left and no page
-    /// is dropped for it: a write or the end of a lifetime that lands once the page was found
-    /// kept costs no other page. The room is asked for once the bytes are made and their size is
-    /// known, so a page whose brotli does not fit then drops what was made.
+    /// counted. A page does without it, so it takes only the room the bound has left and nothing
+    /// is dropped to make room for it when it is put in: a write or the end of a lifetime that
+    /// lands once the page was found kept does not make it drop another page. Once in, its bytes
+    /// count against what is kept later or at the same moment, which makes room as before. The
+    /// room is asked for once the bytes are made and their size is known, so a page whose brotli
+    /// does not fit then drops what was made.
     #[cfg(feature = "compress")]
     fn make_brotli(&self) {
         let Some(store) = self.place.store.upgrade() else { return };

@@ -7446,10 +7446,13 @@ rules something out.
     only gzip, gets the per-request form as before, and until it is made so does everyone. It
     counts toward the bound, and each compressed form now counts the 24-byte record its bytes
     are shared by as well, but it is a form the page does without, so it takes only the room the
-    bound has left and never runs the clock: no page is dropped for it, so a write or the end of
-    a lifetime that lands once the thread found the page kept costs no other page (the writes'
-    counts take no lock, so no check can rule that out while a promotion may drop a page), and in
-    a store at its bound a page keeps it only if it fits without dropping another. The bound
+    bound has left and never runs the clock itself: nothing is dropped to make room for it when it
+    is put in, so a write or the end of a lifetime that lands once the thread found the page kept
+    does not make it drop another page (the writes' counts take no lock, so no check can rule that
+    out while a promotion may drop a page), and in a store at its bound a page keeps it only if it
+    fits in the room left then. Once in, its bytes count as any form's do: a page or form kept
+    later, or counted at the same moment, that takes the store past its bound runs the clock as
+    before, and may drop a page it would not have dropped without the brotli. The bound
     limits what is kept, not what is encoded: the thread encodes it before it asks for the room,
     as only then is its size known, so a page that finds none has cost the thread that encoding
     and keeps nothing of it. In
@@ -7498,7 +7501,7 @@ rules something out.
     set on the ones it refuses, each of which left a page stale in a case a review found; a
     kept page's higher level made on the request that makes the copy, which a visitor would wait
     for, or at brotli 9 to 11, or with brotli's window sized to the page, which took longer for the
-    same bytes; making room for it as for the page's other forms, by dropping the pages the clock
+    about the same size; making room for it as for the page's other forms, by dropping the pages the clock
     finds, which let a write that landed while the thread put it in drop a page that stood for one
     that no longer did; its job in the queue held values wait in, where a burst of kept pages kept
     a held value out or made it wait behind all of them; a turn for a kept page after so many held
@@ -7606,8 +7609,9 @@ rules something out.
     bytes of brotli 5 against 1,818 of zstd 1; one-sided 95% bound -0.94%), -0.99% for it in gzip
     alone (bound -0.80%), +1.00% where its brotli found no room (bound +1.14%) and +2.84% for the
     kept JSON body given to a data client with a browser's codings (280 bytes of brotli 5 against
-    328 of zstd 1; bound +3.05%; user cycles +4.95%, kernel +0.84%; 66,567 requests a second
-    against 68,255), with user instructions within 0.04% in each. That run is historical, a
+    328 of zstd 1; bound +3.05%; user cycles +4.95%, kernel +0.84%; 65,914 requests a second
+    against 67,712, the medians of wrk's own rates), with user instructions within 0.04% in each.
+    That run is historical, a
     result for those two commits only: the commits from `5d72a9315` to `50105442c` change
     production code as well (`kept.rs`, `compress.rs`, `signal.rs`, `app.rs` and seven other
     files, among them when a write is counted and the merge of the rule for a kept file), so it
@@ -7665,17 +7669,36 @@ rules something out.
     Fresh-start result (`50105442c` against `a0eeeacca`, 2026-11-22, 100 pairs a workload, each
     turn on a newly started build, by the method above on a second quiet host of the same size, a
     DigitalOcean c-8 in sfo3 with a Xeon Platinum 8358 where the first run's had an 8280, Linux
-    6.12.117 and rustc 1.100.0): the gate is cleared. The median change within a pair in user plus
-    kernel cycles a request, its one-sided 95% bound and range: `json-browser` -0.63% (bound
+    6.12.117 and rustc 1.100.0): the declared numerical gate is met on all four. The median change
+    within a pair in user plus kernel cycles a request, its one-sided 95% bound and range:
+    `json-browser` -0.63% (bound
     +0.04%, -9.08% to +7.13%), `refused` -0.13% (bound +0.29%, -7.84% to +7.00%), `browser`
     -0.58% (bound -0.18%, -8.54% to +8.33%) and `gzip` -0.86% (bound -0.59%, -14.45% to
     +8.61%), with user instructions -0.03% to +0.04% on all four. Both builds' answers were checked
     before each workload (the same, or the head's brotli 5 smaller where it was to be given, and
-    zstd 1 from both where it found no room), and perf counted every turn for all of it. The first
-    run's bounds on the two, +3.05% and +1.14% with one start a build, did not recur; this run
-    differed from that one in its starts and in its host, so it does not say which, if either,
-    accounts for them. As declared, it clears the gate and shows neither a lower cost nor that
-    layout was the cause.
+    zstd 1 from both where it found no room), and perf counted every turn for all of it. What the
+    run verifies of `refused`'s setup is narrower than its name: at the bound calibrated on the
+    head (64,672 bytes, with seven other pages kept first), each of the head's 102 starts for it
+    (the answers' comparison, the warm-up pair and the 100 timed turns) gave the last request of
+    its warm-up a kept 1,818-byte zstd 1, as the base did. That answer is the same before the
+    thread has made the page's brotli as after the bound refused it, and the probe waited a fixed
+    300 ms after its warm-up requests rather than for the thread, so whether the job had run and
+    been refused before each timed turn began was not checked, and a turn that began first could
+    include the rest of that encoding. Showing it takes a completion fence on the same queue
+    before the turn, then a check that the page is still given its kept zstd 1, as
+    `tests/kept_memory.rs` does with its `/mark` page. The first run's bounds on the two, +3.05%
+    and +1.14% with one start a build, did not recur; this run differed from that one in its
+    starts, its host and the commits on both sides, so it does not say which, if any, accounts for
+    them. As declared, a bound under +1% on all four clears the gate, with `refused`'s setup
+    verified only as far as above; it shows neither a lower cost nor that layout was the cause.
+    Neither run on a quiet host counted user first-level instruction-cache misses, which
+    CONTRIBUTING.md asks for as a diagnostic when code is added or moved and makes no exception
+    for; this is recorded as one. Each turn counted `cycles:u`, `cycles:k` and `instructions:u`
+    alone, so that no turn's counters were multiplexed and perf ran all three for the whole of
+    every turn; the simulated instruction misses above (callgrind's, 1,811 against 1,798 an
+    answer) are another measure and do not stand in for them. Each workload's 100 per-pair changes
+    in both runs are listed in the description of
+    [#1846 Send a kept page in brotli 5, made off the request after its second answer](https://github.com/corten-run/corten/pull/1846).
     The levels'
     bytes and instructions above are a probe's that compresses as `compress::encode` does, whose
     level-1 bytes matched the app's answers, on the catalog benchmark's ten record pages and

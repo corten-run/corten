@@ -1539,7 +1539,9 @@ that take brotli alone can give its brotli to a browser that ties zstd with it, 
 have been smaller.
 It is not made for a page written to or past its lifetime by the time the thread comes to it. It
 counts toward the bound like the page's other forms, but takes only the room the bound has left:
-no page is dropped for it, so a page keeps it only if it fits without dropping another. The
+nothing is dropped to make room for it when it is put in, so a page keeps it only if it fits in
+the room left then. Once in, its bytes count as the other forms' do: a page or form kept later,
+or at the same moment, that takes the store past its bound drops pages to make room as before. The
 thread encodes it before it asks for that room, so in a store at its bound a page can cost the
 thread the encoding and still not keep the bytes, and a page whose brotli did not fit is not
 tried again. So the smaller form is best effort, never a promise: the thread comes to a kept
