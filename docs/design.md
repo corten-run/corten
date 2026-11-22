@@ -8162,32 +8162,37 @@ rules something out.
     Platinum 8358 (the exact model, not the family) with one thread a core; Linux 6.12.117 (Debian's
     `6.12.117+deb13-amd64`); jemalloc 5.3.0 by `LD_PRELOAD=libjemalloc.so.2` with
     `MALLOC_CONF=background_thread:true,tcache_max:65536` exactly; the server pinned to one CPU, the
-    load on two others and the driver and `perf` on a fourth, all four distinct; rustc 1.100.0, LLD
-    23.1.5 and the repository's release profile; and `wrk` 4.1.0 with `-t2 -c64` and 3 s turns,
+    load on two others and the driver and `perf` on a fourth, all four distinct; rustc 1.100.0 and LLD
+    23.1.5, with the probe built as the receipt's `build.sh` builds it (the release profile, features
+    `json` and `compress`, main's `Cargo.lock`, zstd linked to the system's `libzstd`); and `wrk` 4.1.0 with `-t2 -c64` and 3 s turns,
     every turn, warm-up included, on a freshly started build, the builds' order turned every pair,
     100 recorded pairs after one that is not and the bound the 59th of the 100 sorted per-pair
     changes. Any VM counts if it matches. A difference in any item, such as another CPU model or each
     build started once, means no recorded floor. Any other negative control, and `plain` on any other
     setup, gets a floor only from its own A/A layout control in the same run, under the run's
     protocol and measured on each negative control whose miss it would waive; one without a
-    qualifying A/A in that run is held to +1%. That control fixes its pads, pairs and statistic in
-    the plan before the run, and gives a workload a floor of its larger layout bound there only if
-    that bound is at or below +2%. A larger bound above +2% gives no floor, and is not read as a floor
+    qualifying A/A in that run is held to +1%. That control repeats this calibration on each such
+    workload: main built twice and the receipt's same two pads, 100 recorded pairs each, read with
+    the candidate's statistic, the 59th of the 100 sorted changes; a comparison with fewer than 100
+    valid pairs gives no bound and the control no floor. It gives a workload a floor of its larger
+    pad bound there only if that bound is at or below +2%. A larger bound above +2% gives no floor, and is not read as a floor
     of +2%: that run holds every workload to +1%. The +2% limit leaves room above the +1.62% measured
     here for a host whose placement costs a little more, and stops a noisy or unlucky layout control
     from making the gate whatever it measured.
 
     A layout control, the recorded one or a same-run one, gives a floor only if the run records that
     it passes every check: each comparison's two builds answer the workload's request with
-    byte-identical status, headers (but `Date`) and body; main built twice is byte-identical and
+    byte-identical status, headers but `Date`, and body, compared with only `Date` removed; main built twice is byte-identical and
     meets +1% on that workload; the pad is in the padded binary and moved code (the count of function
     symbols in both binaries whose addresses changed is above zero); every counter ran 100% of every
     turn and the load tool reported no error in any turn; and each pad comparison passes the
     user-instruction screen above, as a candidate must. If any check fails, the control gives no
     floor and the run holds every workload to +1%: a pad whose answers or instruction count moved
     measures more than placement, and a floor from it would waive a cost it cannot attribute. The
-    recorded calibration passes each. All three comparisons' answers to `/private` (7,098 bytes as
-    compared: status, headers but `Date`, and body) were byte-identical. The two builds of main were
+    recorded calibration passes each, with one qualification: its comparison also removed carriage
+    returns and masked `Age` and `ETag` values, so what it proved is equality after that
+    normalization. All three comparisons' answers to `/private` (7,098 bytes as compared: status,
+    headers but `Date`, and body; no `Age` or `ETag` was present) were identical. The two builds of main were
     byte-identical and met +1% at +0.59%. Each pad build held its one added function, which neither
     main build has, and all 3,402 function symbols it shares with main moved (none in main built
     twice). All 1,818 counter readings in pass 1's 606 turns, warm-up pairs included, and all 496 in
@@ -8205,10 +8210,9 @@ rules something out.
     visibly moved, and passing it does not show the instruction stream or its CPU cost unchanged,
     or make a touched workload a control.
 
-    A layout floor never applies to the benefit side. A cycle reduction on a workload whose user
-    instructions pass the screen is reported as "measured reduction, placement not ruled out", never
-    as a CPU-cost win: placement alone can lower cycles as well as raise them, and no run here
-    measured how far. The CPU-win rule in Pull requests is otherwise unchanged.
+    A layout floor never applies to the benefit side: these runs measured how far placement raised
+    cycles on one route, not how far it can lower them, so a floor cannot establish a CPU-cost win.
+    The CPU-win rule in Pull requests decides wins as before.
 
     The runs: one host with nothing else running (Debian 13, Linux 6.12.117, rustc 1.100.0 with LLD
     23.1.5 and the repository's release profile, jemalloc 5.3.0 preloaded), every binary built there

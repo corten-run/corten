@@ -434,17 +434,25 @@ establish a general ranking.
          `MALLOC_CONF=background_thread:true,tcache_max:65536` exactly.
       4. Pinning: the server on one CPU, the load on two others and the driver and `perf` on a
          fourth, all four distinct.
-      5. Toolchain: rustc 1.100.0, LLD 23.1.5 and the repository's release profile.
+      5. Build: rustc 1.100.0 and LLD 23.1.5; the probe built as the receipt's `build.sh` builds it,
+         with the repository's release profile (`opt-level = 3`, thin LTO, one codegen unit),
+         features `json` and `compress`, third-party versions from main's `Cargo.lock`, and zstd
+         linked to the system's `libzstd` (`ZSTD_SYS_USE_PKG_CONFIG=1`).
       6. Load: `wrk` 4.1.0 with `-t2 -c64` and 3 s turns; every turn, warm-up included, on a
          freshly started build; the two builds' order turned every pair; 100 recorded pairs after
          one that is not; the bound the 59th of the 100 sorted per-pair changes.
 
       Any other negative control, and `plain` on any other setup, gets a floor only from its own
       A/A layout control in the same run, under the run's protocol and measured on each negative
-      control whose miss it would waive: main against main built twice, and main against main with
-      one never-called function added as the Choice describes, with its pads, pairs and statistic
-      fixed in the plan before the run. If that control qualifies, the larger of its layout bounds
-      on a workload is that workload's floor if it is at or below +2%. A layout bound above +2%
+      control whose miss it would waive. On each such workload it makes three comparisons: main
+      against main built twice, and main against main with each of the receipt's two pads (one
+      never-called function of 40 bytes, and one of 3,100 bytes, `variants/pad40.diff` and
+      `pad3100.diff`). Each is 100 recorded pairs after one that is not, read with the
+      candidate's statistic: the one-sided 95% upper bound on the median per-pair change in user
+      plus kernel cycles per request, the 59th of the 100 sorted changes. A comparison with fewer
+      than 100 valid pairs gives no bound, and the control gives no floor. If the control
+      qualifies, the larger of its two pad bounds on a workload is that workload's floor if it is
+      at or below +2%. A layout bound above +2%
       gives no floor, not a floor of +2%: that run holds every workload to +1%. A negative control
       without its own qualifying A/A in that run is held to +1%.
 
@@ -453,7 +461,7 @@ establish a general ranking.
       holds every workload to +1%.
 
       1. Each comparison's two builds answer the workload's request with byte-identical status,
-         headers (but `Date`) and body.
+         headers but `Date`, and body, compared with only the `Date` header removed.
       2. Main built twice is byte-identical and meets +1% on that workload.
       3. The pad is present in the padded binary and moved code: the count of function symbols in
          both binaries whose addresses changed is above zero.
@@ -461,9 +469,8 @@ establish a general ranking.
       5. Each pad comparison passes the user-instruction screen above, as a candidate must: its
          median between -0.02% and +0.02% and its bound at or below +0.02%.
 
-      A layout floor never applies to the benefit side. A reduction in cycles on a workload whose
-      user instructions pass the screen above is reported as "measured reduction, placement not
-      ruled out", never as a CPU-cost win.
+      A layout floor never applies to the benefit side: it cannot establish a CPU-cost win, which
+      the rule above decides as before.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,
