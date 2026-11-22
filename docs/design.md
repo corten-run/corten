@@ -7410,13 +7410,13 @@ rules something out.
     inner answer: a private answer that could have been shared, never the other way round; the
     inner request's own answer is marked through its own signal. Measured on 2026-11-22 with
     `tests::cache::what_settling_a_page_costs` under callgrind (Last checked), instructions a
-    request before and after: a `Public` page given from the store 16,948 and 16,960 (+0.07%);
+    request before and after: a `Public` page given from the store 16,948 and 16,961 (+0.08%);
     one made for each request (`kept_answers(0)`) 19,581 and 19,627 (+0.23%), the watch and the
     signal the route holds; a `Public` JSON body given 16,012 and 16,019, made for each 54,343
     and 54,320; a private page 16,800 and 16,796; a `Public` text body from an unstaged route
     7,807 and 7,829 (+0.28%); text from an unstaged route that is not `Public` 6,446 and 6,439;
-    and a `Public` page with a keyed form, the one case that draws a key, 22,182 and 22,359
-    (+0.80%), from marking the request too. These are instruction counts, not cycles. A first
+    and a `Public` page with a keyed form, the one case that draws a key, 22,182 and 22,358
+    (+0.79%), from marking the request too. These are instruction counts, not cycles. A first
     version, a router endpoint around the handler, cost the page made for each request 149 more
     and the private page 24, from a second copy of the answer and a second form of every route's
     call. A render that reads
@@ -7819,17 +7819,18 @@ rules something out.
     app's own answer type, which is always watched, is found on a hot path where the watch's
     cost shows, so such a type should be able to say it is never `Public`.
 
-    Last checked: 2026-11-22 for the watch for a submit key, `0ced821d8` against its merge base
-    with main, `250e4b81c`, each with the same `tests::cache::what_settling_a_page_costs` (the
-    function, its doc and its two unstaged routes as at `0ced821d8`, 4,172 bytes, SHA-256
+    Last checked: 2026-11-22 for the watch for a submit key, `f4a4472a3` (this change merged
+    with main) against its merge base with main, `a0eeeacca`, each with the same
+    `tests::cache::what_settling_a_page_costs` (the function, its doc and its two unstaged routes
+    as at `0ced821d8`, 4,172 bytes, SHA-256
     `a1e48f7272d3a4cce21df616f5733ce0deef6d7f471dd6e3d5e31f60b9d63870`, copied into
-    `250e4b81c` unchanged), built with rustc 1.100.0 in
+    `a0eeeacca` unchanged), built with rustc 1.100.0 in
     release with all features and counted under callgrind (valgrind 3.24.0, Debian's
     `libjemalloc2`), each count the difference of a run of 1,200 requests and one of 200, eight
-    cases in three rounds alternating which build ran first, every round within one instruction
-    of the others, with this branch's commits after `0ced821d8` changing comments and documents
-    only until the merge of main's `a0eeeacca` (kept files), which was not measured here, and no
-    cycles under load measured for it; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
+    cases in three rounds alternating which build ran first, every round within two
+    instructions of the others, the same rounds of `0ced821d8` against `250e4b81c`, before main
+    was merged, giving the same counts within two instructions, and no cycles under load
+    measured for it; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
     benchmark) and `05ead69a7` (this change's `8db0885c7` with them), kept under the tag
     `evidence/kept-file-1794`; 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
     request-cost harness's write cases and two routes in the catalog benchmark) for the counts,
