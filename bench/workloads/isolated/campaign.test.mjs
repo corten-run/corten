@@ -1159,7 +1159,6 @@ for (const [group, scenario] of [
       .map((name) => JSON.parse(readFileSync(join(handle.directory, name))).kind);
     assert.deepEqual(events.slice(-3), ["group-finished", "stream-sealed", "finished"]);
     assert.ok(!events.includes("review-needed") && existsSync(join(handle.directory, "control-stream-seal.json")));
-    return;
   }
   assert.deepEqual(status.outcomes[0].cleanup.settledUdevWorkers, [{ pid: 62274, startTicks: settleWorkerTicks }]);
   const drain = { schema: "benchmark-control-stream-drain/v1", id: admittedApparatus.id, registrationSha256: streamHash(admittedApparatus),
@@ -1169,6 +1168,12 @@ for (const [group, scenario] of [
   writeFileSync(join(handle.directory, "collection-manifest.json"), JSON.stringify(s.campaign.collect(handle)));
   const inspected = await validateSavedCampaign(request);
   assert.notEqual(inspected.status, "invalid");
+  if (settleNativeFails) {
+    assert.equal(inspected.status, "failed");
+    assert.equal(inspected.collectionIntegrity, "manifest-verified");
+    assert.equal(inspected.commandLifecycle, "observed-terminal");
+    assert.deepEqual(inspected.uncollectedNativeRoots, []);
+  }
   assert.deepEqual(inspected.supervisedTerminal, { registrationSha256: streamHash(admittedApparatus),
     sealSha256: evidence.digest(readFileSync(join(handle.directory, "control-stream-seal.json"))) });
   const receipt = join(phase, "host-after-settled.json");
