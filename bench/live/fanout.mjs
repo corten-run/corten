@@ -142,7 +142,7 @@ export function verifyFanout(a, { app, group, provenance, qualification, setting
   return summary;
 }
 
-export async function fanoutJourney(browser, base, settings, clients, port, kernelCounters, recordRenderer) {
+export async function fanoutJourney(browser, base, settings, clients, { wire }, kernelCounters, recordRenderer) {
   const workload = createLiveWorkload(fanoutProfile), contexts = [], readers = [];
   const host = { timeOrigin: performance.timeOrigin, base, requests: [] }, resourceObservations = {};
   const deadline = setTimeout(() => { for (const c of contexts) c.close().catch(() => {}); }, fanoutProfile.deadlineMs);
