@@ -274,7 +274,11 @@ exit 2 permits custody only. The collector keeps both archives, leaves the host
 in place and returns 3. It does not create a retirement intent.
 
 Use the per-child command above if an invalid monitor left locks behind. The
-original operation and launch locks remain unchanged. Collection requires
+foreground controller writes the invalid status without reusing an interrupted
+state write's temporary file. If the bootstrap seal completed just before that
+write failed, it recognizes the acknowledgement from the saved invocation
+ledger, not from the temporary file. Neither fact proves the remote job ended.
+The original operation and launch locks remain unchanged. Collection requires
 local stream closure, lease expiry and an absent original owner PID. It uses
 the separate stream recovery lock and checks the registered boot and exact
 started unit. Read-only fleet inspection can verify a saved retirement behind
