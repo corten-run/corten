@@ -542,7 +542,8 @@ impl ToJson for Raw {
     }
 
     // Where the build compresses, this holds its compressed forms itself, a mark a kept answer
-    // does not replay: its route is its handler's, in every build.
+    // does not replay: its route is its handler's, in every build. Where the build does not, it
+    // holds none and is left out all the same (docs/design.md#choice-kept-pages).
     const __KEPT: crate::answer::sealed::Whole = crate::answer::sealed::Whole(false);
 
     /// `Raw::new` parsed it.

@@ -7348,7 +7348,8 @@ rules something out.
     PNG of 1 MiB 47.7% fewer; one of 1,024 bytes, the least kept, took the same (below).
     Once kept, a body is given to a request that accepts
     no coding too, which gets no tag and so saves nothing by it where its handler makes
-    nothing: that request pays for asking the store, 1.5% to 5.0% more cycles in the four
+    nothing: that request pays for asking the store, and for something more that grows with the
+    body and was not found: 1.5% to 5.0% more cycles in the four
     cases run, over the 3% set before the run in two of them (below). A body's size is known only once it is made, so a route whose bodies are
     all too small would ask the store and have each refused: after 64 answers in a row of
     which none was kept, with none between given from the store, the route's requests are its
@@ -7397,8 +7398,12 @@ rules something out.
     is made, by the rule for any body and nothing of a file's own: one sent as a stream
     (`Media::stream`) has no size and carries a mark the store does not replay; a picture of a
     type no build compresses (a PNG, a JPEG) is kept from the same size as any body, as it
-    is, and the app then holds its bytes a second time for its lifetime, within the bound,
-    so one larger than an eighth of the bound is not kept, as a page that large is not;
+    is, and the app then holds its bytes a second time while it is kept (past its lifetime too,
+    until its room is needed), within the bound,
+    so one larger than an eighth of the bound is not kept, as a page that large is not.
+    Eight files near that size fill the default bound and turn pages out, and each query
+    string asked for is a copy of its own: no bound apart from the pages' is set for files,
+    which is accepted with the rule and named below as a reason to revisit it;
     and a file at a URL that names its content (`Public::immutable`) says no
     lifetime for the app, as before this, and is left to the caches that keep it for a year.
     A route of streams or of such files leaves the store out after its first 64 answers, as a route of small
@@ -7408,7 +7413,7 @@ rules something out.
     before this: a file of a known size from a route that says it answers a page or a file
     (`PageOr`), and an answer type of the app's own that says it is a page. So a file is kept
     by its route's rule: from a route of files from 1,024 bytes, and from a page
-    route whatever its size, as the page at that URL is. A small file typed
+    route also under that, as the page at that URL is. A small file typed
     `PageOr` is therefore kept where the same file from a route of files is not, and a
     request for data is kept for a route of files and not for a page route, which
     this leaves as it was.
@@ -7430,7 +7435,8 @@ rules something out.
     seen, and such an answer is kept with it, as every cache in front already
     keeps it for the lifetime its route wrote. `Json` of bytes the app holds (`json::Raw`) is
     left out by its type: it keeps its compressed forms itself, so the store would refuse
-    every one. An API's `Access-Control-Allow-Origin` is
+    every one. In a build without `compress` it holds none and is left out all the same, so
+    outside an API its tag is hashed for each request there, as before this. An API's `Access-Control-Allow-Origin` is
     written from the request's `Origin` by the stage after the handler, so it is no part of a
     kept answer and no site is sent another's. Outside an API the stages send a request that
     asks for JSON first for the browser alone (`private`), as one form of a page's URL; the app
@@ -7794,14 +7800,29 @@ rules something out.
     met. Two were not: the PNG of 8,000 bytes with no coding, 5.0% more, and the CSV with no
     coding in a build without `compress`, 3.8% more. So the price of a kept body to a
     request that names no coding, where its handler makes nothing, is not shown to be under
-    3%: it was 1.5% to 5.0% in these four cases and 2.3% in the run before. The rule stands
+    3%: it was 1.5% to 5.0% in these four cases and 2.3% in the run before. Not resolved: with
+    no coding a kept body took 927 to 1,095 more user instructions a request under load
+    whatever its size (24,667 against 23,725 for the PNG of 8,000 bytes and 24,670 against
+    23,743 for the 1,024; 24,033 against 22,980 and 24,037 against 22,942 without `compress`)
+    and 98 to 226 more user instruction-cache misses (2,529 against 2,303, 2,539 against
+    2,354, 2,403 against 2,305, 2,473 against 2,374), but 945 more cycles at 1,024 bytes
+    (user 20,466 against 19,684, kernel 25,619 against 25,471) and 2,637 more at 8,000, of
+    which 1,141 are the kernel's on 229 more of its instructions. Nothing in the change's
+    code accounts for the kernel's part, and it was not looked for further, so the price is
+    more than the asking and what the rest is stands open. The other splits: the 1,024 bytes
+    with four codings, user 23,550 against 23,655 and kernel 26,159 against 26,084; the CSV
+    kept before, user 25,785 against 26,090 and kernel 27,711 against 27,847; the PNG of
+    8,000 bytes with no coding without `compress`, user 19,694 against 18,665 and kernel
+    29,367 against 28,797. The rule stands
     at that price, on the bet below that clients naming a coding are most of what asks for
     an app's `Public` bodies. The app's resident memory, about 10 MB, was at most 352 kB more
     with a body kept, and 1,270 kB more with the 1 MiB file kept, its second copy.
     Not measured: a file kept for a handler that reads it from a disk, a database or a store
     of objects, where the read is what a kept file saves; a body between 1,024 and 8,000
     bytes, under 1,024 or over 1 MiB; a store that kept pictures or downloads fill, where
-    pages are turned out for them; a picture asked for with `gzip` alone; a new URL for every request for a
+    pages are turned out for them; a picture asked for with `gzip` alone; a request with a
+    cookie for a body route in a build without `compress`, which now passes the stage that
+    asks; what the kernel's part of the price with no coding is; a new URL for every request for a
     file, which takes the path a body's does above; a body kept for a handler that waits on a database or another service,
     where the wait and not the compression is what a kept body saves (the benchmark's handler
     reads memory, and the rule for bodies is drawn from it); a route of a few large bodies
@@ -7826,8 +7847,10 @@ rules something out.
     for first, which is in its key too; the stages after the handler read the request and the
     answer and nothing the handler held, so they treat a kept answer as its own); bet (an app that
     marks a page `Public` means the lifetime it wrote also with no CDN in front, an app's
-    `Public` files are asked for mostly by clients that name a coding, as browsers do, and
-    are worth a second copy in memory for their lifetime, and the hour
+    `Public` bodies are asked for mostly by clients that name a coding and carry no cookie
+    but the time zone's (a browser with a session, consent or analytics cookie is its
+    handler's, as for a page, and gains nothing by this), and
+    are worth a second copy in memory while kept, and the hour
     `seo` writes for a sitemap or `robots.txt` where it wrote none, and does in its
     handler nothing that must happen for every request; markup with a form's new submit key is rendered by the handler itself on the thread that
     runs it, not by a task it spawned, one it handed a render to, or a thread of its own; no app finishes work again and again on the
@@ -7845,7 +7868,9 @@ rules something out.
     out of its store, or hold more memory than its handler's own copy of them is worth, so
     files should have a bound or a rule of their own; most requests for an app's kept files
     name no coding (a CDN or a client that asks for none), which pay for asking the store
-    and gain no tag by it, so the rule should read how a route's files are asked for; an app's page route answers pictures or small files
+    and gain no tag by it, so the rule should read how a route's files are asked for; most
+    of an app's visitors carry a cookie, so its kept files are given to few of them and the
+    second copy is held for little; an app's page route answers pictures or small files
     in its page's place (`PageOr`) often enough that keeping them, which the page's rule does
     whatever their type, costs more than their handler saves, so a file there should be kept
     by the rule for a file; apps report a sitemap or `robots.txt` an hour behind their data
@@ -8386,9 +8411,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
     every other client, since its `304` saves the whole body. Its `Vary` does not name `Accept-Encoding`, though
     whether it carries a tag depends on it, so a shared cache whose fetch of a public file accepted
     no compression and named no tag keeps a copy it cannot revalidate: a whole fetch, never a wrong
-    answer. A `Public` file of 1,024 bytes or more from a route of files is kept by the app and hashed
-    once for its lifetime ([Choice 70](#choice-kept-pages)). Any other file (a private one, one
-    over an eighth of what the app keeps, one from an unstaged route) is hashed on each such request, about 2.5 instructions a byte (a 1 MiB PNG
+    answer. A `Public` file of 1,024 bytes or more from a route of files is kept by the app, and its tag
+    is made once for as long as it is kept, for the requests the kept copy is given to
+    ([Choice 70](#choice-kept-pages)): a `GET` with no cookie but the time zone's and no
+    `Authorization`. Any other is hashed on each such request (a private file, one over an
+    eighth of what the app keeps, one from an unstaged route, a kept one asked for with a
+    cookie or by `HEAD`, one whose route left the store out or whose URL is new to a full
+    store), about 2.5 instructions a byte (a 1 MiB PNG
     `Media` took 2,645,906 instructions a request on `f56bef59` where it took 20,824 on `cdce43c7`,
     callgrind, release build, five runs, ranges under 0.01%), so a large file whose URL can name its
     content is better sent `Public::immutable`, which is never tagged. Other headers of the app's

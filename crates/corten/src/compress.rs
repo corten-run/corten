@@ -48,7 +48,7 @@ use http_body::Body as HttpBody;
 use crate::{body::Body, response::Response};
 
 /// Bodies smaller than this are sent as they are: compression would not save a packet.
-const MIN_SIZE: u64 = 1024;
+pub(crate) const MIN_SIZE: u64 = 1024;
 const ZSTD_LEVEL: i32 = 1;
 const BROTLI_LEVEL: u32 = 1;
 const GZIP_LEVEL: u32 = 1;

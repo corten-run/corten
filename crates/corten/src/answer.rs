@@ -1537,11 +1537,11 @@ impl Answer for Relay {
 /// as `Public` text is, with its headers, and given again in the handler's place to a request
 /// that shows nothing about who asks, until its lifetime ends
 /// ([`App::kept_answers`](crate::App::kept_answers)): the app then holds a second copy of its
-/// bytes for that long, and makes its `ETag` once and not for each request. Any other from such
+/// bytes while it is kept, and makes its `ETag` once and not for each such request. Any other from such
 /// a route is the handler's for every request: a smaller one, a stream, an immutable one, one
 /// larger than an eighth of what the app keeps, and any from an unstaged route. One a page
-/// route answers in its page's place ([`PageOr`]) is kept as that page would be, whatever its
-/// size.
+/// route answers in its page's place ([`PageOr`]) is kept as that page would be, also under
+/// 1,024 bytes.
 ///
 /// ```
 /// use corten::{prelude::*, Media};

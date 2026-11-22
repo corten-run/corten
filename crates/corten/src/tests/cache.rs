@@ -2875,7 +2875,7 @@ async fn a_file_is_kept_from_1024_bytes() {
         let file = crate::Media::new("text/csv", csv());
         async move { Public::new(minute, file).header::<ETag>(HeaderValue::from_static("\"v1\"")) }
     };
-    // A `robots.txt` large enough to compress.
+    // A `robots.txt` large enough to keep.
     let crawlers = move || {
         crawlers.ran();
         async move { seo::robots(&["/account/"; 120], None) }
@@ -2983,8 +2983,14 @@ async fn a_file_is_kept_from_1024_bytes() {
     let (_, picture, _) = fetch(&router, "GET", "/picture.png", &[("accept-encoding", "gzip")]).await;
     assert!(picture.contains_key(header::AGE) && !picture.contains_key(header::CONTENT_ENCODING), "{picture:?}");
     let named = [("accept-encoding", "gzip"), ("if-none-match", picture[header::ETAG].to_str().unwrap())];
-    let (status, _, none) = fetch(&router, "GET", "/picture.png", &named).await;
+    let (status, unchanged, none) = fetch(&router, "GET", "/picture.png", &named).await;
     assert_eq!((status, none.len(), runs.count() - before), (StatusCode::NOT_MODIFIED, 0, 0));
+    // No coding makes a picture smaller, so neither answer varies on the codings asked for.
+    for headers in [&picture, &unchanged] {
+        let named =
+            headers.get_all(header::VARY).iter().any(|value| value.as_bytes().windows(15).any(|w| w == b"accept-encoding"));
+        assert!(!named, "{headers:?}");
+    }
     // A file's key is its URL with its query, and a request with a cookie is its handler's.
     let before = runs.count();
     let (_, other, _) = fetch(&router, "GET", "/cards.csv?page=2", &[]).await;
@@ -3006,11 +3012,11 @@ async fn a_file_is_kept_from_1024_bytes() {
     assert_eq!(mark[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
     assert_eq!(mark[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
     // A file larger than an eighth of what the app keeps is its handler's, as a page that large
-    // is: a picture of 16,384 bytes where the app keeps 64 KiB, beside one of 1,024 that is kept
-    // (its headers count toward its size too).
+    // is: a picture of 8,192 bytes where the app keeps 64 KiB (its headers count toward its size
+    // too, so it is over the eighth and under a quarter), beside one of 4,096 that is kept.
     let sized = |length: usize| move || async move { Public::new(minute, crate::Media::new("image/png", vec![0x89; length])) };
     let bounded =
-        Table::new().route("/large.png", crate::route::get(sized(16384)).0).route("/small.png", crate::route::get(sized(1024)).0);
+        Table::new().route("/large.png", crate::route::get(sized(8192)).0).route("/small.png", crate::route::get(sized(4096)).0);
     let bounded = App::new(Routes::from(bounded)).kept_answers(64 * 1024).router();
     for (path, kept) in [("/large.png", false), ("/small.png", true)] {
         fetch(&bounded, "GET", path, &[]).await;

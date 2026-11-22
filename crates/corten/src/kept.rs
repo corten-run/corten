@@ -44,8 +44,9 @@
 //! shows nothing about who is asking ([`Shape::Body`]). A kept body saves its handler, its
 //! writing, its compression where the app compresses it, and the hash of its tag, which a
 //! request that names a coding pays for whether or not the body is compressed. A smaller body
-//! saves too little of these, where the handler reads only memory, to pay for asking the
-//! store, and a route whose bodies are all too small stops
+//! is left to its handler: the hash grows with the body and the instructions asking the store
+//! costs do not (by their counts a body named with a coding gains from about 350 bytes; no
+//! size under 1,024 was run). A route whose bodies are all too small stops
 //! asking ([`Unkept`]). Once kept, a body is given to a request that accepts no coding as well.
 //! Which answers are whole bodies is known from the
 //! route's type when the app compiles ([`crate::answer::Answer::WHOLE`], which an answer type of
@@ -318,10 +319,14 @@ impl Drop for Told {
 /// The least bytes of a whole body the app keeps. Kept, a body saves its handler, its writing,
 /// its compression where the app compresses it, and the hash of its tag, which is made for every
 /// request that names a coding, as a browser's does, whether or not the body is compressed
-/// (docs/design.md#limit-etag). The hash grows with the body and what asking the store costs
-/// does not, so a small body is left to its handler (docs/design.md#choice-kept-pages has what
-/// was measured at this size). It is also the size the app compresses from.
+/// (docs/design.md#limit-etag). The hash grows with the body and the instructions asking the store
+/// costs do not, so a small body is left to its handler (docs/design.md#choice-kept-pages has
+/// what was measured at this size). It is also the size the app compresses from.
 const BODY_FROM: u64 = 1024;
+
+// One size in the guide for both: a build in which they differ does not compile.
+#[cfg(feature = "compress")]
+const _: () = assert!(BODY_FROM == crate::compress::MIN_SIZE);
 
 /// How many words of marks ([`Store::asked`]) a store of `bound` bytes has, made when it first
 /// fills: a mark is one bit, and there is one for every 32 bytes of the bound, rounded up to a

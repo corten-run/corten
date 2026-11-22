@@ -957,7 +957,7 @@ impl<M: Middleware> App<M> {
     /// request, and what it reads may be that old when it is seen, as it already may be behind a
     /// CDN. An answer whose handler takes an extractor of the app's own is not kept: it may read
     /// a header the key does not cover. Neither is a relay, a stream or a feed, a file sent as
-    /// a stream, a file of a type the app does not compress (a PNG, a JPEG) or one at a URL
+    /// a stream or one at a URL
     /// that names its content (`Public::immutable`); a file of a known size that a page route
     /// answers in its page's place (`PageOr`) is kept as that page would be.
     ///
@@ -969,7 +969,7 @@ impl<M: Middleware> App<M> {
     /// kept there, whatever it is answered, and so does one that redirects to it; a
     /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
     /// under `corten dev`, and an app with no `Public` route of a kind it keeps (a page, or JSON,
-    /// text or a file in a build with `compress`) keeps none and counts no writes, whatever the bound. The bytes counted are each page's key, its headers, its body and each
+    /// text or a file) keeps none and counts no writes, whatever the bound. The bytes counted are each page's key, its headers, its body and each
     /// compressed form made of it.
     pub fn kept_answers(mut self, bytes: usize) -> Self {
         self.kept = bytes;
