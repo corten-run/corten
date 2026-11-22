@@ -1560,7 +1560,7 @@ not say, so a `405` for a method the path has no handler for counts too. Work th
 request (`signal.finish`) drops the page again when it ends. So any client can have a kept page
 made again by sending a write to its path, and one such request drops every copy kept there, for
 every query, host and language. Each is made again when it is next asked for, which costs what
-the page cost before the app kept pages and the keeping of it. Only a write that does not
+the page cost before the app kept pages and the copy into the store. Only a write that does not
 reach the app's middleware is not counted: one another site sent, one for a host the app does
 not answer, or one a layer in front (`App::layer`) answered itself. A write
 that went through also drops the page at the place on the site its answer

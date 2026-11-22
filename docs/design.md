@@ -7245,12 +7245,12 @@ rules something out.
     full (the bytes kept within an eighth of the bound, which is the largest answer that is
     kept), keeping an answer may drop another page, and an answer is kept then only when its
     URL (host, path and query) was asked for before, as far back as the marks below go. A URL
-    asked for once paid for holding its body, a copy of its head and its key and a turn under the
+    asked for once paid for a copy of its body, its head and its key and a turn under the
     store's lock, and took the room of a page that may be asked for again: a crawler walking
     more URLs than the bound has room for, or searches no one repeats, turned the store over
     for pages no one is given. So in a full store a request no kept answer stands for leaves
     a mark for its URL, and its answer is kept when the mark was there already; otherwise the
-    answer is the handler's and is not kept. With room nothing is asked of the marks and
+    answer is the handler's and is not copied. With room nothing is asked of the marks and
     none are made: an app whose kept pages stay under seven eighths of the bound, those past
     their lifetime counted, keeps them as it did. It is the doorkeeper of TinyLFU (Einziger,
     Friedman and Manes, "TinyLFU: A Highly Efficient Cache Admission Policy", ACM
@@ -7303,7 +7303,7 @@ rules something out.
     them out by a mark the router set was tried and left a page stale in that case. The price is
     that any client can have a kept page made again: one write to a path drops every copy kept
     there (each query, host and language), and each is made again by the next request for it.
-    Each costs what the page cost before the app kept pages and the keeping of it. Only
+    Each costs what the page cost before the app kept pages and the copy into the store. Only
     a write that does not reach the app's middleware is not counted: one another site sent, one
     for a host the app does not answer, or one a layer in front (`App::layer`) answered
     itself. A write that went through also drops the place on

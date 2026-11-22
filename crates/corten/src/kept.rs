@@ -43,7 +43,7 @@
 //! first, and a status does not say. Work that outlives its request
 //! ([`crate::Signal::finish`]) counts again when it ends. So a client can have a kept page made
 //! again by sending a write to its path: each copy is made when it is next asked for, at what the
-//! page cost before the app kept pages and the keeping of it. A write that does not reach
+//! page cost before the app kept pages and the copy into the store. A write that does not reach
 //! the app's middleware (another site's, one for another host) is not counted.
 //! A write that went through also drops what is kept at the place on this site its
 //! answer names (`Location`, `Content-Location`; RFC 9111 section 4.4). A page whose handler
@@ -51,9 +51,8 @@
 //! lifetime ends: the lifetime is how stale the app said the page may be. Off under `corten dev`,
 //! and in an app with no route that keeps a page, whose writes are then not counted. The
 //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
-//! the compressed forms made for it, with an allowance for what holds them; the body (in the
-//! buffer its handler made, cut to its length), the key and each compressed form are held in
-//! allocations of their own size
+//! the compressed forms made for it, with an allowance for what holds them; the body, the key
+//! and each compressed form are held in allocations of their own size
 //! (`tests/kept_memory.rs` holds the count to what the allocator is asked for).
 //!
 //! A write is counted when it is answered or dropped, so what it changes must be there for a
@@ -871,7 +870,12 @@ impl Missed {
             // A body of an exact size that could not be read: not a page to send as it is.
             return crate::response::IntoResponse::into_response(StatusCode::INTERNAL_SERVER_ERROR);
         };
-        let body = own(body);
+        // A copy of its own length: a page's buffer is sized for the last page rendered and an
+        // eighth more, and the bytes made from it would hold all of that for as long as they are
+        // kept. Asking the allocator to shrink the buffer instead moves it under jemalloc, the
+        // template's allocator, whenever the page is in a smaller size class than its buffer,
+        // which is a copy with more work around it (`docs/design.md#choice-kept-pages`).
+        let body = Bytes::copy_from_slice(&body);
         let key = Key::new(self.at.as_str(), self.host.as_ref(), sent);
         let Missed { hash, asked: made, written, .. } = self;
         let entry = answers.keep(|place| Entry {
@@ -896,20 +900,6 @@ impl Missed {
         parts.extensions.insert(Kept(entry));
         Response::from_parts(parts, Body::from(body))
     }
-}
-
-/// A kept answer's body in an allocation the length of its bytes: a page's render buffer is sized
-/// for the last page rendered and an eighth more, and kept whole it would hold all of that. The
-/// buffer the handler made, the answer's alone here, is asked to shrink to the body's length, which
-/// leaves the bytes where they are when the allocator can shrink it in place and moves them when it
-/// cannot (jemalloc, from one of its size classes to a smaller one). A body whose bytes are shared
-/// (one made from a static, a middleware's, one cut from a larger buffer) is copied or moved to the
-/// start of its buffer before that. What the shrink gives back goes to the allocator, which may
-/// keep it from the system.
-fn own(body: Bytes) -> Bytes {
-    let mut body = Vec::from(body);
-    body.shrink_to_fit();
-    Bytes::from(body)
 }
 
 /// Whether an answer with these headers varies on `Accept-Language`; `None` when it varies on
@@ -1349,28 +1339,6 @@ mod tests {
         assert_eq!(answers.find("/p", None, Some(&fr)).expect("the one that stands").0.body.len(), 20);
         assert!(answers.find("/p", None, Some(&en)).is_none());
         assert_eq!(answers.bytes(), 20 + OVERHEAD, "the one past its lifetime went when the URL was kept again");
-    }
-
-    /// A kept body is held in an allocation of its length, whatever buffer it was made in: one
-    /// sized for a larger page, a part of one, or bytes another holds as well.
-    #[test]
-    fn a_kept_body_is_held_in_an_allocation_of_its_length() {
-        let page = |length: usize| (0..length).map(|n| (n % 251) as u8).collect::<Vec<u8>>();
-        let mut larger = Vec::with_capacity(64 << 10);
-        larger.extend_from_slice(&page(5_000));
-        let shared = Bytes::from(page(5_000));
-        let other = shared.clone();
-        for (body, made) in [
-            (Bytes::from(larger), "in a buffer sized for a larger page"),
-            (Bytes::from(page(70_000)).slice(..5_000), "cut from a larger buffer"),
-            (shared, "held by another as well"),
-        ] {
-            let held = own(body);
-            assert_eq!(held, page(5_000), "{made}");
-            // A `Bytes` held alone gives back its buffer whole, so this is what the body holds.
-            assert_eq!(Vec::from(held).capacity(), 5_000, "{made}");
-        }
-        assert_eq!(other, page(5_000));
     }
 
     /// Two URLs with the same hash share a place in the table and are told apart by the URL each
