@@ -46,6 +46,16 @@ pub(crate) type Answering = Pin<Box<dyn Future<Output = Response> + Send>>;
 pub(crate) trait Endpoint: Send + Sync + 'static {
     fn call(&self, req: Request) -> Answering;
 
+    /// [`Endpoint::call`] from an app's stages, which hold the request's signal (`signal`, the one
+    /// its error page and cache rule read) and give it here past the app's middleware, which never
+    /// sees it: a middleware that passes on a request rebuilt without the one it had cannot take
+    /// it away, and one that answers without running the route never reaches here.
+    #[inline]
+    fn answer(&self, req: Request, signal: &crate::Signal) -> Answering {
+        let _ = signal;
+        self.call(req)
+    }
+
     fn action_patches(&self) -> bool {
         false
     }
@@ -72,14 +82,20 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
     }
 }
 
-/// An answer that is a status alone: the router's `404` and `405`. The request is marked as the
-/// router's own ([`unrouted`]), so the error page in its place is never shared.
+/// An answer that is a status alone: the router's `404` and `405`. In an app's stages the request
+/// is marked as the router's own on the signal they hold ([`crate::Signal::mark_unrouted`]), so
+/// the error page in its place is never shared; a mark in the answer's extensions would allocate
+/// the bare `404` a map. A router outside an app has no error page to mark it for.
 struct Status(StatusCode);
 
 impl Endpoint for Status {
-    fn call(&self, req: Request) -> Answering {
-        unrouted(&req);
+    fn call(&self, _: Request) -> Answering {
         Box::pin(std::future::ready(self.0.into_response()))
+    }
+
+    fn answer(&self, req: Request, signal: &crate::Signal) -> Answering {
+        signal.mark_unrouted();
+        self.call(req)
     }
 }
 
@@ -90,20 +106,16 @@ struct Unimplemented;
 
 impl Endpoint for Unimplemented {
     #[cold]
-    fn call(&self, req: Request) -> Answering {
-        unrouted(&req);
+    fn call(&self, _: Request) -> Answering {
         let mut res = StatusCode::NOT_IMPLEMENTED.into_response();
         res.extensions_mut().insert(crate::page::Cause::UnknownMethod);
         Box::pin(std::future::ready(res))
     }
-}
 
-/// Marks `req` as one the router answers itself, no route's handler ([`crate::Signal::mark_unrouted`]):
-/// on the request's signal, which an app's request has, so the router's bare `404` allocates no
-/// extensions of its own for a mark. A router outside an app has no error page to mark it for.
-fn unrouted(req: &Request) {
-    if let Some(signal) = req.extensions().get::<crate::Signal>() {
+    #[cold]
+    fn answer(&self, req: Request, signal: &crate::Signal) -> Answering {
         signal.mark_unrouted();
+        self.call(req)
     }
 }
 

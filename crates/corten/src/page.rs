@@ -741,18 +741,35 @@ pub(crate) enum Cause {
 /// Marks a failure no handler answered: an extractor refused the request before the handler ran,
 /// or the deadline passed while it waited for the request's body. The error page in its place is
 /// never shared ([`page_or_error`]), as for a panic or a timeout ([`Cause`]), and nor is the
-/// refusal in any other form it goes out in, whatever its status (a redirect, a relayed failure,
-/// a sign-in, the failure as it is or as JSON: [`unanswered_settled`]): it may be about who is
-/// asking. The router's own answer is marked on the request's signal instead
-/// ([`crate::Signal::mark_unrouted`]).
+/// refusal in any other form it goes out in, whatever its status (a `200` an extractor's
+/// rejection chose, a redirect, a relayed failure, a sign-in, the failure as it is or as JSON:
+/// [`unanswered_settled`]): it may be about who is asking. The router's own answer is marked on
+/// the request's signal instead ([`crate::Signal::mark_unrouted`]).
 #[derive(Clone, Copy)]
 pub(crate) struct Unanswered;
 
 /// `res`, an extractor's refusal, marked [`Unanswered`].
 #[cold]
 pub(crate) fn unanswered(mut res: Response) -> Response {
+    refusing();
     res.extensions_mut().insert(Unanswered);
     res
+}
+
+thread_local! {
+    /// Set where a refusal's mark is made ([`unanswered`], a typed [`crate::Refused`]): read and
+    /// cleared after each poll of the request's stages ([`run`]), which puts it on the request's
+    /// signal ([`crate::Signal::mark_refusal`]). The code that makes a refusal (an extractor, a
+    /// handler, a middleware) holds no signal of the framework's, and a middleware may have given
+    /// the handler a request without the one it had, so the mark goes by the thread the poll runs
+    /// on, as a drawn submit key's does (`crate::form::watched`).
+    static REFUSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A refusal's mark is being made on this thread ([`REFUSING`]).
+#[cold]
+pub(crate) fn refusing() {
+    REFUSING.set(true);
 }
 
 /// A typed refusal ([`crate::Refused`], from an extractor, a handler or a middleware: a sign-in, a
@@ -763,16 +780,32 @@ fn refused(res: &Response) -> bool {
         || res.extensions().get::<crate::caller::SignIn>().is_some()
 }
 
-/// `res`, an answer that goes out without the error page (as it was made, or as JSON): one an
-/// extractor refused before its handler ran ([`Unanswered`], whatever its status) and a refusal
-/// ([`refused`]) are never shared, whatever a middleware wrote on them. The router's own empty
-/// failure is not among them: sent as it is or as JSON, it shows no one.
-fn unanswered_settled(mut res: Response) -> Response {
+/// `res`, an answer that goes out without the error page (as it was made, or as JSON). One an
+/// extractor refused before its handler ran ([`Unanswered`]) and a refusal ([`refused`]) are never
+/// shared, whatever status they go out with and whatever a middleware wrote on them: the marks are
+/// on the answer, so a middleware that changed its status (a refusal it made a redirect) still
+/// sends it, while one that answered with a response of its own sends that. Nor is the router's own
+/// failure, sent as it is or as JSON, whatever a middleware made of its body; an answer that is not
+/// a failure in its place (a redirect, a page) was made by a middleware, as the router makes none.
+#[cold]
+fn unanswered_settled(mut res: Response, signal: &crate::Signal) -> Response {
     let failed = res.status().is_client_error() || res.status().is_server_error();
-    if res.extensions().get::<Unanswered>().is_some() || (failed && refused(&res)) {
+    if (failed && signal.is_unrouted()) || res.extensions().get::<Unanswered>().is_some() || refused(&res) {
         crate::cache::settle_refused(&mut res);
     }
     res
+}
+
+/// `res` as it goes out without the error page, settled as [`unanswered_settled`] says. An answer
+/// that is not a failure is looked at only when a refusal was made while the stages ran
+/// ([`crate::Signal::made_refusal`]): the page every request gets reads one byte of its signal.
+#[inline]
+fn as_sent(res: Response, signal: &crate::Signal) -> Response {
+    let failed = res.status().is_client_error() || res.status().is_server_error();
+    if !failed && !signal.made_refusal() {
+        return res;
+    }
+    unanswered_settled(res, signal)
 }
 
 /// The error page of an app that gives none ([`crate::App::error_page`]): a plain document. An app
@@ -3620,9 +3653,8 @@ async fn errors_rendered<S: crate::app::Steps>(
     if json {
         let shape = api.and_then(|mount| mount.errors.as_ref());
         let res = crate::api::json_failure(run(pending, dispatch, deadline, signal).await, shared.dev, shape).await;
-        // An extractor's refusal may be a redirect, which `json_failure` leaves as it is. A `2xx`
-        // is an answer, and costs no lookup.
-        return if res.status().is_success() { res } else { unanswered_settled(res) };
+        // An extractor's refusal may be a redirect or a `200`, which `json_failure` leaves as it is.
+        return as_sent(res, signal);
     }
     if shared.layout_reads.is_empty() || mode.swaps() {
         return page_or_error(shared, pending, dispatch, deadline, signal, page).await;
@@ -3701,16 +3733,15 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     let status = res.status();
     let error = status.is_client_error() || status.is_server_error();
     if !error || res.extensions().get::<crate::answer::Relayed>().is_some() || res.extensions().get::<AsIs>().is_some() {
-        // An extractor's refusal goes out as it was made (a redirect, a relayed failure), and is
-        // still never shared. A `2xx` is an answer, whoever made it, as one a handler builds by
-        // hand is: the page every request gets pays no lookup for the mark.
-        return if status.is_success() { res } else { unanswered_settled(res) };
+        // A refusal goes out as it was made (a `200` an extractor's rejection chose, a redirect, a
+        // relayed failure), and is still never shared.
+        return as_sent(res, signal);
     }
     // A JSON route answers every failure as JSON, a path that did not parse included.
     if res.extensions().get::<crate::answer::Answered>().is_some() {
         // Not kept across the await, so the request's future stays as small as it was.
         drop(asked);
-        return unanswered_settled(crate::api::json_failure(res, shared.dev, None).await);
+        return unanswered_settled(crate::api::json_failure(res, shared.dev, None).await, signal);
     }
     // A `NoStore` answer: the page that replaces it is one too.
     let no_store = crate::cache::Typed::is_no_store(&res);
@@ -3753,12 +3784,9 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     // under it in dev mode; any other client (probes, webhooks) still gets the text.
     let rejection = failed.is_none() && cause.is_none() && browser && crate::api::is_plain_text(res.headers());
     if failed.is_none() && cause.is_none() && !empty_error && !rejection {
-        // A refusal sent as it is: to a client that does not ask for HTML, or with a body that is
-        // not plain text. Neither a typed refusal nor a sign-in reaches here.
-        if res.extensions().get::<Unanswered>().is_some() {
-            crate::cache::settle_refused(&mut res);
-        }
-        return res;
+        // A failure sent as it is: to a client that does not ask for HTML, or with a body that is
+        // not plain text (the router's own, whose body a middleware wrote, included).
+        return unanswered_settled(res, signal);
     }
     // No handler answered it: a refusal before the handler ran, a panic, the deadline, the router's
     // own failure. The error page can read the request's `Cookie` and `Authorization` without
@@ -3935,11 +3963,21 @@ async fn run<'r, F: Future<Output = Result<Response, Late>>>(
     // and answering a timeout, stays inside the panic catch.
     let mut fut = pin!(dispatch(pending));
     let outcome = std::future::poll_fn(|cx| {
-        match std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let polled = std::panic::catch_unwind(AssertUnwindSafe(|| {
             fut.as_mut()
                 .poll(cx)
                 .map(|result| result.unwrap_or_else(|late| deadline_failure(late, deadline, signal, (&method, &uri))))
-        })) {
+        }));
+        // A refusal made in this poll, on this thread: its mark goes on the request's signal. One
+        // made on another thread (a task the handler spawned) is not seen here; its failure is
+        // still looked at as it goes out, an answer that is not a failure only when one was seen.
+        // A mark left on this thread by a refusal made outside a request's stages only makes the
+        // next request polled here look at its answer: the marks it settles by are on the answer.
+        if REFUSING.get() {
+            REFUSING.set(false);
+            signal.mark_refusal();
+        }
+        match polled {
             Ok(Poll::Ready(res)) => Poll::Ready(Ok(res)),
             Ok(Poll::Pending) => Poll::Pending,
             Err(panic) => Poll::Ready(Err(panic)),

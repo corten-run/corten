@@ -1399,6 +1399,93 @@ async fn the_router_s_own_failure_page_is_not_shared() {
     assert!(wrong.is_empty(), "the router's own failure page, open to a CDN: {wrong:#?}");
 }
 
+/// Staged middleware that passes the request on rebuilt from its method, URI, version, headers and
+/// body, with extensions of its own: none (`Fresh`), or a signal of its own in place of the one
+/// the request had (`Replaced`). `Next::run` takes any request.
+#[derive(Clone, Copy, Debug)]
+enum Rebuilds {
+    Fresh,
+    Replaced,
+}
+
+impl crate::Middleware for Rebuilds {
+    async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        let (parts, body) = req.into_parts();
+        let mut rebuilt = Request::new(body);
+        *rebuilt.method_mut() = parts.method;
+        *rebuilt.uri_mut() = parts.uri;
+        *rebuilt.version_mut() = parts.version;
+        *rebuilt.headers_mut() = parts.headers;
+        if matches!(self, Rebuilds::Replaced) {
+            rebuilt.extensions_mut().insert(crate::Signal::default());
+        }
+        next.run(rebuilt).await
+    }
+}
+
+/// Staged middleware that answers `/short` itself with an empty `404`, never running the route.
+struct AnswersShort;
+
+impl crate::Middleware for AnswersShort {
+    async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        if req.uri().path() == "/short" {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        next.run(req).await
+    }
+}
+
+/// The router's own answer stays the router's when a staged middleware passes on a request rebuilt
+/// without the extensions it had, or with a signal of its own: the stages give the route the
+/// request's signal themselves, past the middleware, so the error page in its place is never
+/// shared, as [`the_router_s_own_failure_page_is_not_shared`] has it. A handler's own `404` is
+/// still its answer, and so is a middleware's own that never ran the route: both keep what the
+/// middleware wrote.
+#[tokio::test]
+async fn the_router_s_own_failure_page_is_not_shared_when_a_middleware_rebuilds_the_request() {
+    let routes = || {
+        Table::new()
+            .route("/", get(|| async { "home" }))
+            .route("/form", crate::router::post(|| async { "saved" }))
+            .route("/gone", get(|| async { StatusCode::NOT_FOUND }))
+    };
+    let mut wrong = Vec::new();
+    for how in [Rebuilds::Fresh, Rebuilds::Replaced] {
+        for (cache, sent, own) in [
+            (None, "private, no-cache", "private, no-cache"),
+            (Some("public, max-age=60"), "private, no-cache", "private, no-cache"),
+            (Some("no-store"), "private, no-store", "no-store"),
+        ] {
+            let pwa = crate::pwa::Pwa::new(crate::pwa::Manifest::new("A", "A"));
+            let steps = (CdnRecaches(cache), AnswersShort, how);
+            let router =
+                App::new(Routes::from(routes())).middleware(steps).error_page(greeting_error_page, ()).pwa(pwa).router();
+            for (method, uri, status) in [
+                ("GET", "/nowhere", StatusCode::NOT_FOUND),
+                ("GET", "/form", StatusCode::METHOD_NOT_ALLOWED),
+                ("PATCH", "/", StatusCode::NOT_IMPLEMENTED),
+                ("GET", "/offline", StatusCode::OK),
+            ] {
+                let (got, headers, body) = from_ann(&router, method, uri, &[("accept", "text/html")]).await;
+                assert_eq!(got, status, "{how:?} {method} {uri} {cache:?}");
+                assert!(body.contains("Sorry, ann."), "{how:?} {method} {uri} {cache:?}: {body}");
+                for what in kept_from_cdns(&headers, sent) {
+                    wrong.push(format!("{how:?} {method} {uri}, {cache:?}: {what}"));
+                }
+            }
+            for uri in ["/gone", "/short"] {
+                let (status, headers) = asked_for(&router, uri, &[("accept", "text/html")]).await;
+                assert_eq!(status, StatusCode::NOT_FOUND, "{how:?} {uri} {cache:?}");
+                assert_eq!(headers[header::CACHE_CONTROL], own, "{how:?} {uri} {cache:?}: not the router's 404");
+                for name in CDN_OVERRIDES {
+                    assert_eq!(headers[name], "public, max-age=60", "{how:?} {uri} {cache:?}: not the router's 404 keeps {name}");
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "the router's own failure page behind a rebuilt request, open to a CDN: {wrong:#?}");
+}
+
 /// An extractor of the app's own that refuses Ann by her cookie, reading no caller: with no body at
 /// `/refused`, with the reason as plain text at `/refused/text`.
 struct RefusedByCookie;
@@ -1521,6 +1608,50 @@ async fn a_refusal_before_the_handler_is_not_shared_however_it_answers() {
     assert!(wrong.is_empty(), "a refusal before the handler, open to a CDN: {wrong:#?}");
 }
 
+/// An extractor of the app's own whose rejection is a `200` greeting Ann by her cookie, reading no
+/// caller: a rejection need only be an answer, whatever its status.
+struct GreetsInstead;
+
+impl<S: Send + Sync> crate::extract::FromRequestParts<S> for GreetsInstead {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut http::request::Parts, _: &S) -> std::result::Result<Self, Response> {
+        let cookie = parts.headers.get(header::COOKIE).and_then(|cookie| cookie.to_str().ok()).unwrap_or("");
+        let name = cookie.strip_prefix("name=").unwrap_or("stranger");
+        Err((StatusCode::OK, format!("Hello, {name}.")).into_response())
+    }
+}
+
+/// A request an extractor refused with a `200` is still refused before its handler ran: the answer
+/// goes out as it was made (its status and body) to a browser and to a data client, but never
+/// shared, whatever a staged middleware wrote on it. A `200` no refusal made (the handler's) keeps
+/// what the middleware wrote.
+#[tokio::test]
+async fn a_refusal_before_the_handler_that_answers_200_is_not_shared() {
+    let routes = || {
+        Table::new().route("/greet", get(|_: GreetsInstead| async { "never" })).route("/", get(|| async { "home" }))
+    };
+    let mut wrong = Vec::new();
+    for (cache, sent) in
+        [(None, "private, no-cache"), (Some("public, max-age=60"), "private, no-cache"), (Some("no-store"), "private, no-store")]
+    {
+        let router = App::new(Routes::from(routes())).middleware(CdnRecaches(cache)).router();
+        for asked in [[("accept", "text/html")], [("accept", "application/json")]] {
+            let (status, headers, body) = from_ann(&router, "GET", "/greet", &asked).await;
+            assert!(status == StatusCode::OK && body == "Hello, ann.", "{asked:?} {cache:?}: {status} {body}");
+            for what in kept_from_cdns(&headers, sent) {
+                wrong.push(format!("{asked:?}, {cache:?}: {what}"));
+            }
+            let (status, headers, body) = from_ann(&router, "GET", "/", &asked).await;
+            assert!(status == StatusCode::OK && body == "home", "{asked:?} {cache:?}: {status} {body}");
+            for name in CDN_OVERRIDES {
+                assert_eq!(headers[name], "public, max-age=60", "{asked:?} {cache:?}: the handler's 200 keeps {name}");
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "a refusal that answers 200, open to a CDN: {wrong:#?}");
+}
+
 /// Staged middleware that turns Ann away by her cookie with the typed refusal middleware is given
 /// ([`crate::Refused`]), reading no caller: too many attempts, with what she is told.
 struct RefusesByCookie;
@@ -1561,6 +1692,145 @@ async fn a_middleware_s_refusal_is_not_shared_in_any_form() {
     assert!(wrong.is_empty(), "a middleware's refusal, open to a CDN: {wrong:#?}");
 }
 
+/// Staged middleware that changes a failure from inside it: by default its status to a redirect to
+/// a page that says why (`303`, `Location: /slow-down`), with `x-turn: ok` its status to `200`,
+/// and with `x-turn: own` an answer of its own in its place (the same redirect, made anew).
+struct TurnsFailures;
+
+impl crate::Middleware for TurnsFailures {
+    async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        let turn = req.headers().get("x-turn").cloned();
+        let mut res = next.run(req).await;
+        if !res.status().is_client_error() {
+            return res;
+        }
+        match turn.as_ref().map(HeaderValue::as_bytes) {
+            Some(b"ok") => *res.status_mut() = StatusCode::OK,
+            Some(b"own") => return (StatusCode::SEE_OTHER, [(header::LOCATION, "/slow-down")]).into_response(),
+            _ => {
+                *res.status_mut() = StatusCode::SEE_OTHER;
+                res.headers_mut().insert(header::LOCATION, HeaderValue::from_static("/slow-down"));
+            }
+        }
+        res
+    }
+}
+
+/// A middleware's typed refusal stays one whatever status another middleware gives it: turned into a
+/// redirect or a `200`, it goes out with that status (and its `Location` and `Retry-After`), in
+/// every form a client asks for, but never shared, whatever the outer middleware wrote. An answer
+/// the middleware makes in its place is its own, and keeps what it wrote.
+#[tokio::test]
+async fn a_refusal_whose_status_a_middleware_changes_is_still_not_shared() {
+    let routes = || Table::new().route("/", get(|| async { "never" }));
+    let mut wrong = Vec::new();
+    for (cache, sent) in
+        [(None, "private, no-cache"), (Some("public, max-age=60"), "private, no-cache"), (Some("no-store"), "private, no-store")]
+    {
+        let router = App::new(Routes::from(routes()))
+            .middleware((CdnRecaches(cache), TurnsFailures, RefusesByCookie))
+            .error_page(greeting_error_page, ())
+            .router();
+        for accept in ["text/html", "application/json"] {
+            let (status, headers, _) = from_ann(&router, "GET", "/", &[("accept", accept)]).await;
+            assert_eq!(status, StatusCode::SEE_OTHER, "redirect {accept} {cache:?}");
+            assert_eq!(headers[header::LOCATION], "/slow-down", "redirect {accept} {cache:?}");
+            assert_eq!(headers[header::RETRY_AFTER], "30", "redirect {accept} {cache:?}");
+            for what in kept_from_cdns(&headers, sent) {
+                wrong.push(format!("redirect {accept}, {cache:?}: {what}"));
+            }
+            let (status, headers, _) = from_ann(&router, "GET", "/", &[("accept", accept), ("x-turn", "ok")]).await;
+            assert_eq!(status, StatusCode::OK, "200 {accept} {cache:?}");
+            for what in kept_from_cdns(&headers, sent) {
+                wrong.push(format!("200 {accept}, {cache:?}: {what}"));
+            }
+            let (status, headers, _) = from_ann(&router, "GET", "/", &[("accept", accept), ("x-turn", "own")]).await;
+            assert_eq!(status, StatusCode::SEE_OTHER, "own {accept} {cache:?}");
+            for name in CDN_OVERRIDES {
+                assert_eq!(headers[name], "public, max-age=60", "own {accept} {cache:?}: the middleware's own answer keeps {name}");
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "a refusal another middleware turned, open to a CDN: {wrong:#?}");
+}
+
+/// Staged middleware that writes who is asking, by the request's cookie, as plain text on a failure
+/// that has no body, reading no caller.
+struct NamesTheFailure;
+
+impl crate::Middleware for NamesTheFailure {
+    async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        let cookie = req.headers().get(header::COOKIE).and_then(|cookie| cookie.to_str().ok()).unwrap_or("");
+        let name = cookie.strip_prefix("name=").unwrap_or("stranger").to_string();
+        let mut res = next.run(req).await;
+        let failed = res.status().is_client_error() || res.status().is_server_error();
+        if failed && http_body::Body::size_hint(res.body()).exact() == Some(0) {
+            res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"));
+            *res.body_mut() = Body::from(format!("Nothing here for {name}."));
+        }
+        res
+    }
+}
+
+#[cfg(feature = "json")]
+#[derive(crate::Route)]
+#[route("/{*rest}")]
+struct AnywhereRest<'a> {
+    rest: &'a str,
+}
+
+/// The router's own failure is never shared as JSON either, also when a staged middleware wrote who
+/// is asking into it: a data client's `404`, `405` and `501` from the router, and an API's `404`
+/// for a path under its prefix that a route outside it matched, go out with what the middleware
+/// wrote as their detail (a `4xx`'s), but `private` (`private, no-store` where it named `no-store`), with
+/// none of the caching headers a CDN reads first. A handler's own `404` is its answer, under the
+/// usual rules, whatever a middleware wrote on it.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn the_router_s_own_failure_as_json_is_not_shared_whatever_a_middleware_writes_on_it() {
+    let routes = || {
+        Table::new()
+            .route("/", get(|| async { "home" }))
+            .route("/form", crate::router::post(|| async { "saved" }))
+            .route("/gone", get(|| async { StatusCode::NOT_FOUND }))
+    };
+    let mut wrong = Vec::new();
+    for (cache, sent, own) in [
+        (None, "private, no-cache", "private, no-cache"),
+        (Some("public, max-age=60"), "private, no-cache", "public, max-age=60"),
+        (Some("no-store"), "private, no-store", "no-store"),
+    ] {
+        let steps = || (CdnRecaches(cache), NamesTheFailure);
+        let router = App::new(Routes::from(routes())).middleware(steps()).router();
+        let api = App::new(Routes::new().__route::<AnywhereRest>(crate::Methods::reads(get(|| async { "page" }))))
+            .api::<ApiItems>(|items| items.route::<ApiItem>(crate::Methods::reads(get(|| async { "item" }))))
+            .middleware(steps())
+            .router();
+        for (router, method, uri, status) in [
+            (&router, "GET", "/nowhere", StatusCode::NOT_FOUND),
+            (&router, "GET", "/form", StatusCode::METHOD_NOT_ALLOWED),
+            (&router, "PATCH", "/", StatusCode::NOT_IMPLEMENTED),
+            (&api, "GET", "/api/items/7/more", StatusCode::NOT_FOUND),
+        ] {
+            let (got, headers, body) = from_ann(router, method, uri, &[("accept", "application/json")]).await;
+            assert_eq!(got, status, "{method} {uri} {cache:?}: {body}");
+            // A 5xx's detail stays in the log.
+            assert_eq!(body.contains("Nothing here for ann."), status.is_client_error(), "{method} {uri} {cache:?}: {body}");
+            assert_eq!(headers[header::CONTENT_TYPE], "application/problem+json", "{method} {uri} {cache:?}");
+            for what in kept_from_cdns(&headers, sent) {
+                wrong.push(format!("{method} {uri}, {cache:?}: {what}"));
+            }
+        }
+        let (status, headers, body) = from_ann(&router, "GET", "/gone", &[("accept", "application/json")]).await;
+        assert!(status == StatusCode::NOT_FOUND && body.contains("Nothing here for ann."), "{cache:?}: {status} {body}");
+        assert_eq!(headers[header::CACHE_CONTROL], own, "{cache:?}: a handler's own 404");
+        for name in CDN_OVERRIDES {
+            assert_eq!(headers[name], "public, max-age=60", "{cache:?}: a handler's own 404 keeps {name}");
+        }
+    }
+    assert!(wrong.is_empty(), "the router's own failure as JSON, open to a CDN: {wrong:#?}");
+}
+
 #[cfg(all(feature = "json", feature = "compress"))]
 #[crate::routes]
 mod kept_refused_url {
@@ -1590,8 +1860,8 @@ async fn kept_text(crate::Params(at): crate::Params<kept_refused_url::Text>) -> 
 
 /// A route whose `Public` JSON or text the app keeps answers a request its extractor refused, and
 /// the router a method the route lacks (501), as for any route: never kept, and never shared,
-/// whatever a staged middleware wrote, in any form but the router's empty JSON failure. Asked without a cookie, as a request the
-/// kept answer could take the place of is.
+/// whatever a staged middleware wrote, in any form, the router's JSON failure included. Asked
+/// without a cookie, as a request the kept answer could take the place of is.
 #[cfg(all(feature = "json", feature = "compress"))]
 #[tokio::test]
 async fn a_route_whose_body_is_kept_never_shares_a_refusal() {
@@ -1627,11 +1897,6 @@ async fn a_route_whose_body_is_kept_never_shares_a_refusal() {
                     assert_eq!(res.status(), status, "{method} {uri} {asked:?} {cache:?}");
                     if res.headers().contains_key(header::AGE) {
                         wrong.push(format!("{method} {uri} {asked:?}, {cache:?}: kept"));
-                    }
-                    // The router's empty failure as JSON shows no one (`Signal::mark_unrouted`): it goes
-                    // out with what the middleware wrote, as it does on any route.
-                    if method == "POST" && asked[0].1 == "application/json" {
-                        continue;
                     }
                     for what in kept_from_cdns(res.headers(), sent) {
                         wrong.push(format!("{method} {uri} {asked:?}, {cache:?}: {what}"));
@@ -4323,7 +4588,8 @@ async fn a_json_answer_that_failed_or_is_one_request_s_alone_is_not_kept() {
 /// `private, no-cache`); `data`, the plain page asked for as JSON; `missing`, an unknown URL in the
 /// plain page's app (the router's `404` and the error page in its place); `custom`, the same in an
 /// app with an error page of its own ([`settle_error_page`]); `refused`, a staged middleware's
-/// typed refusal ([`crate::Refused`]) asked for as JSON. `unstaged` is an unstaged
+/// typed refusal ([`crate::Refused`]) asked for as JSON; `rejected`, an extractor's refusal that
+/// answers `200` ([`GreetsInstead`]). `unstaged` is an unstaged
 /// route's JSON (`Media`), and `control` the same JSON from a service of no framework (tower's
 /// `service_fn`), the control `docs/design.md`'s Choice counts an unstaged route against. With
 /// `SETTLE_CDN` set, a staged middleware writes the six caching headers
@@ -4401,6 +4667,8 @@ fn what_settling_a_page_costs() {
     let form = move || html! { <form method="post">if keyed { {crate::SubmitKey::field(KeyedWrite::FIELDS.submit)} }</form> };
     let routes = if ["private", "plain", "caller", "data", "missing", "custom", "refused"].contains(&case.as_str()) {
         Table::new().route("/", get(move |req: Req| async move { req.test_page("Form", form()) }))
+    } else if case == "rejected" {
+        Table::new().route("/", get(|_: GreetsInstead| async { "never" }))
     } else if case == "cookie" {
         Table::new().route(
             "/",
@@ -4449,6 +4717,7 @@ fn what_settling_a_page_costs() {
                     assert!(parts.status == StatusCode::FORBIDDEN && body.contains("Not for you."), "{}: {body}", parts.status)
                 }
                 "data" => assert_eq!(parts.status, StatusCode::OK, "{body}"),
+                "rejected" => assert!(parts.status == StatusCode::OK && body == "Hello, stranger.", "{}: {body}", parts.status),
                 _ => {
                     assert!(parts.status == StatusCode::OK && body.contains("<form method=\"post\">"), "{}: {body}", parts.status)
                 }

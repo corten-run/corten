@@ -596,6 +596,9 @@ impl<S: Send + Sync, T: Identify<S>> FromRequestParts<S> for Caller<T> {
 /// API or a data client, with `WWW-Authenticate` on a 401 and `Retry-After` on a 429.
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
+        // Its mark is on the answer, whatever status a middleware gives it later; the thread's mark
+        // says one was made, so a refusal turned into a `200` is looked at too (`crate::page`).
+        crate::page::refusing();
         match self.0 {
             Why::SignIn(to, message) => {
                 let mut res = StatusCode::UNAUTHORIZED.into_response();

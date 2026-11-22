@@ -745,7 +745,10 @@ pub(crate) fn mentions_no_store(line: &[u8]) -> bool {
     memchr::memchr2_iter(b'n', b'N', line).any(|at| line.get(at..at + 8).is_some_and(|w| w.eq_ignore_ascii_case(b"no-store")))
 }
 
-/// `Cache-Control: no-store`, as `NoStore` writes it.
+/// A bare `Cache-Control: no-store`: what a hand-written header that names `no-store` goes out as
+/// where a reader could take it another way (a quoted value, a byte that is not text), and what the
+/// error page in place of a handler's own failure that said `no-store` carries. `NoStore` writes
+/// [`PRIVATE_NO_STORE`], as a personal answer that names `no-store` goes out.
 pub(crate) const NO_STORE: HeaderValue = HeaderValue::from_static("no-store");
 
 /// Whether a `Cache-Control` line says `no-store` and `private`, each as a directive without a
