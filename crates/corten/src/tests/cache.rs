@@ -3383,53 +3383,50 @@ async fn a_page_kept_after_one_that_was_not_is_waited_for_when_it_is_made_again(
     assert_eq!(held.runs.count(), 3);
 }
 
-/// A page kept for every language (its `Vary` does not name `Accept-Language`) is kept for the
-/// requests in each, so it ends what is remembered of the page not kept in another language,
-/// whether that page failed while it was kept or before: once the copy's lifetime ends, the
-/// requests in that language that miss it together wait for one handler again.
+/// A page remembered as not kept is remembered for the copy asked for (its URL, `Host` and
+/// `Accept-Language` as sent). A copy kept for a request in another language that stands for
+/// every language (its `Vary` does not name `Accept-Language`) is given in its place while it
+/// stands, but does not end that memory: once the copy's lifetime ends, within the minute, the
+/// requests in the first language that miss it together each run the handler. One of them keeping
+/// its page ends it, and once that copy's lifetime ends they wait for one handler again.
 #[tokio::test]
-async fn a_page_kept_for_every_language_ends_its_not_kept_in_another() {
-    use std::sync::atomic::Ordering::Relaxed;
+async fn a_page_not_kept_in_one_language_is_remembered_after_a_copy_kept_in_another() {
     const FR: &[(&str, &str)] = &[("accept-language", "fr")];
     const EN: &[(&str, &str)] = &[("accept-language", "en")];
     let (held, watch) = (Held::default(), Watch::default());
     let router = App::new(Routes::from(held_routes(&held))).middleware(watch.clone()).router();
-    for meanwhile in [true, false] {
-        held.fails.store(true, Relaxed);
-        let french = if meanwhile {
-            held.hold.next(1);
-            let runs = held.runs.count();
-            let french = sent(&router, "GET", "/brief", FR);
-            ran(&held.runs, runs + 1).await;
-            Some(french)
-        } else {
-            assert_eq!(fetch(&router, "GET", "/brief", FR).await.0, StatusCode::NOT_FOUND, "the French page fails");
-            None
-        };
-        let (status, headers, _) = fetch(&router, "GET", "/brief", EN).await;
-        assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{meanwhile}: {headers:?}");
-        assert!(fetch(&router, "GET", "/brief", FR).await.1.contains_key(header::AGE), "{meanwhile}: kept for French too");
-        if let Some(french) = french {
-            held.hold.release(1);
-            assert_eq!(french.await.unwrap().0, StatusCode::NOT_FOUND, "the French page fails meanwhile");
-        }
-        // Its lifetime of a second ends.
-        tokio::time::sleep(Duration::from_millis(1_100)).await;
-        let (runs, joined) = (held.runs.count(), watch.joined());
-        held.hold.next(1);
-        let first = sent(&router, "GET", "/brief", FR);
-        ran(&held.runs, runs + 1).await;
-        let other = sent(&router, "GET", "/brief", FR);
-        watch.admitted(joined + 1).await;
-        assert_eq!(held.runs.count(), runs + 1, "{meanwhile}: the other waits");
-        held.hold.release(1);
-        let (status, headers, body) = first.await.unwrap();
-        assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{meanwhile}: {headers:?}");
-        let (status, headers, same) = other.await.unwrap();
-        assert!(status == StatusCode::OK && headers.contains_key(header::AGE) && same == body, "{meanwhile}: {headers:?}");
-        // And that copy's lifetime ends before the next round.
-        tokio::time::sleep(Duration::from_millis(1_100)).await;
-    }
+    held.fails.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(fetch(&router, "GET", "/brief", FR).await.0, StatusCode::NOT_FOUND, "the French page fails");
+    let (status, headers, _) = fetch(&router, "GET", "/brief", EN).await;
+    assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{headers:?}");
+    assert!(fetch(&router, "GET", "/brief", FR).await.1.contains_key(header::AGE), "given for French while it stands");
+    // Its lifetime of a second ends; the French page is still remembered as not kept.
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    let (runs, joined) = (held.runs.count(), watch.joined());
+    held.hold.next(1);
+    let first = sent(&router, "GET", "/brief", FR);
+    ran(&held.runs, runs + 1).await;
+    let other = sent(&router, "GET", "/brief", FR);
+    ran(&held.runs, runs + 2).await;
+    let (status, headers, _) = other.await.unwrap();
+    assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "its own handler's page: {headers:?}");
+    assert_eq!(watch.joined(), joined, "the other does not wait");
+    held.hold.release(1);
+    assert_eq!(first.await.unwrap().0, StatusCode::OK);
+    // Kept for a French request now: once that copy's lifetime ends, they wait for one handler.
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    let (runs, joined) = (held.runs.count(), watch.joined());
+    held.hold.next(1);
+    let first = sent(&router, "GET", "/brief", FR);
+    ran(&held.runs, runs + 1).await;
+    let other = sent(&router, "GET", "/brief", FR);
+    watch.admitted(joined + 1).await;
+    assert_eq!(held.runs.count(), runs + 1, "the other waits");
+    held.hold.release(1);
+    let (status, headers, body) = first.await.unwrap();
+    assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{headers:?}");
+    let (status, headers, same) = other.await.unwrap();
+    assert!(status == StatusCode::OK && headers.contains_key(header::AGE) && same == body, "{headers:?}");
 }
 
 /// What settling a page's caching costs a request: `SETTLE_REQUESTS` (200) full-document `GET`s

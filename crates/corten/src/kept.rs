@@ -74,12 +74,13 @@
 //! panics, each runs its own handler then, and none waits again. At most [`MAKING`] pages are
 //! made at once that others wait for; past that a request makes its page as it would with
 //! nothing kept. A page answered and not kept is remembered as not kept for [`FORGOT`], until a
-//! write to its path or until it is kept (by that request or another meanwhile, in its language or
-//! for every language), so the requests that meet in that time each run the handler at once, as
-//! they would with nothing kept; that is best effort, as only the latest [`NOT_KEPT`] are
-//! remembered, and a copy kept for every language at another path that shares its count ends it
-//! early. A request waits no longer than
-//! its own deadline, which drops its wait as it would its handler. In a full store the first
+//! write to its path or until it is kept (by that request or another meanwhile), so the requests
+//! that meet in that time each run the handler at once, as they would with nothing kept; that is
+//! best effort, as only the latest [`NOT_KEPT`] are remembered. It is remembered for the copy
+//! asked for (its URL, `Host` and `Accept-Language` as sent), so a copy kept for a request in
+//! another language, even one that stands for every language, does not end it before its time.
+//! A request waits no longer than its own deadline, which drops its wait as it would its handler.
+//! In a full store the first
 //! request for a URL not asked for before is the handler's as with nothing kept: it leaves its
 //! mark and nothing more, and no other request waits for it. Those that come while it is made
 //! find the mark, so they are the URL's second request: the first of them makes the page and the
@@ -88,7 +89,7 @@
 
 use std::collections::{hash_map, HashMap, VecDeque};
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher, RandomState};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
@@ -190,11 +191,6 @@ struct Store {
     /// whatever its query, and a page whose handler was reading while the write was made is not
     /// kept, without a lock or a search.
     written: OnceLock<Box<[AtomicU32]>>,
-    /// The copies kept for every language (whose `Vary` does not name `Accept-Language`),
-    /// counted by path as the writes are, a byte each (64 KiB, made with the first page that
-    /// misses): a page remembered as not kept in one language is forgotten once a copy that
-    /// stands for every language is kept at its path ([`Flight::NotKept`]).
-    for_all: OnceLock<Box<[AtomicU8]>>,
     /// One bit for each mark of a URL asked for since the store filled ([`Store::asked`]).
     marks: OnceLock<Box<[AtomicU64]>>,
     /// How many of the marks are set.
@@ -414,12 +410,10 @@ enum Flight {
     /// `kept` once another request, which made the page with none waiting, kept it meanwhile:
     /// then the page is not remembered as not kept when this one's is not.
     Making { waiting: Option<Arc<Semaphore>>, kept: bool },
-    /// Made and not kept, until `until`: the requests for it each run the handler at once, while
-    /// the count of copies kept for every language at its path is still `for_all`, the one the
-    /// request that made it found ([`Store::for_all`]). A copy kept for every language stands for
-    /// this one's language too, whatever language it was asked in, and whether it was kept
-    /// before this page was answered or after.
-    NotKept { until: Instant, for_all: u8 },
+    /// Made and not kept, until then: the requests for it each run the handler at once. Only a
+    /// copy kept for this key ends it sooner ([`Table::kept`]): one kept for a request in another
+    /// language is another key's, whether or not it stands for this one's language too.
+    NotKept(Instant),
 }
 
 /// What a request that missed is to do with the page it asked for ([`Table::admit`]).
@@ -434,16 +428,15 @@ enum Admitted {
 }
 
 impl Table {
-    /// What a request that missed the page `key` names is to do, `now`, with the count of copies
-    /// kept for every language at its path at `for_all`.
-    fn admit(&mut self, key: u64, now: Instant, for_all: u8) -> Admitted {
+    /// What a request that missed the page `key` names is to do, `now`.
+    fn admit(&mut self, key: u64, now: Instant) -> Admitted {
         let room = self.making < MAKING;
         match self.at.entry(key) {
             hash_map::Entry::Occupied(flight) => match flight.into_mut() {
                 Flight::Making { waiting, .. } => {
                     return Admitted::Joins(waiting.get_or_insert_with(|| Arc::new(Semaphore::new(0))).clone());
                 }
-                Flight::NotKept { until, for_all: was } if *until > now && *was == for_all => return Admitted::Alone,
+                Flight::NotKept(until) if *until > now => return Admitted::Alone,
                 flight if room => *flight = Flight::Making { waiting: None, kept: false },
                 _ => return Admitted::Alone,
             },
@@ -458,16 +451,15 @@ impl Table {
 
     /// The page `key` names, which a request was admitted to make, was answered or dropped: what
     /// waits for it, to be woken. A page answered and not kept is remembered as such until
-    /// [`FORGOT`] after the time `not_kept` gives, with the count of copies kept for every language
-    /// that request found, the one remembered first forgotten to make room; unless another
+    /// [`FORGOT`] after `not_kept`, the one remembered first forgotten to make room; unless another
     /// request kept it meanwhile ([`Table::kept`]).
-    fn ended(&mut self, key: u64, not_kept: Option<(Instant, u8)>) -> Option<Arc<Semaphore>> {
+    fn ended(&mut self, key: u64, not_kept: Option<Instant>) -> Option<Arc<Semaphore>> {
         let (waiting, kept) = match self.at.remove(&key) {
             Some(Flight::Making { waiting, kept }) => (waiting, kept),
             _ => (None, false),
         };
         self.making -= 1;
-        if let Some((now, for_all)) = not_kept.filter(|_| !kept) {
+        if let Some(now) = not_kept.filter(|_| !kept) {
             while let Some(&(first, until)) = self.remembered.front() {
                 if until > now && self.remembered.len() < NOT_KEPT {
                     break;
@@ -478,12 +470,12 @@ impl Table {
                     self.scanned += 1;
                 }
                 // Unless it was made again since, or remembered again.
-                if matches!(self.at.get(&first), Some(Flight::NotKept { until: at, .. }) if *at == until) {
+                if matches!(self.at.get(&first), Some(Flight::NotKept(at)) if *at == until) {
                     self.at.remove(&first);
                 }
             }
             let until = now + FORGOT;
-            self.at.insert(key, Flight::NotKept { until, for_all });
+            self.at.insert(key, Flight::NotKept(until));
             self.remembered.push_back((key, until));
         }
         waiting
@@ -494,7 +486,7 @@ impl Table {
     /// not kept. Those waiting for that one still wait for it.
     fn kept(&mut self, key: u64) {
         match self.at.get_mut(&key) {
-            Some(Flight::NotKept { .. }) => {
+            Some(Flight::NotKept(_)) => {
                 self.at.remove(&key);
             }
             Some(Flight::Making { kept, .. }) => *kept = true,
@@ -682,11 +674,6 @@ impl Store {
         self.bytes.load(Ordering::Relaxed) > self.bound - self.bound / SHARE
     }
 
-    /// The count of copies kept for every language at the path `count` is for, as it is now.
-    fn for_all(&self, count: usize) -> u8 {
-        self.for_all.get_or_init(|| (0..WRITES).map(|_| AtomicU8::new(0)).collect())[count].load(Ordering::Acquire)
-    }
-
     /// Whether the URL `at` (a path and query), asked for with `host` in any language, was asked
     /// for before by a request no kept answer stood for, in a full store, since the marks were
     /// last cleared; and marks it.
@@ -770,7 +757,6 @@ impl Answers {
                 bound,
                 bytes: AtomicUsize::new(0),
                 written: OnceLock::new(),
-                for_all: OnceLock::new(),
                 marks: OnceLock::new(),
                 marked: AtomicUsize::new(0),
                 inner: RwLock::default(),
@@ -1031,9 +1017,8 @@ impl<'a> Asked<'a> {
         }
         let asked = Instant::now();
         let written = Written::of(store, self.at);
-        let for_all = store.for_all(written.count);
         let key = store.flights.key(self.at, self.host, self.language, written.was);
-        let admitted = store.flights.table().admit(key, asked, for_all);
+        let admitted = store.flights.table().admit(key, asked);
         // Each looks again once it holds or has joined the page being made: one kept between its
         // first look and then (by the request it would wait for, or for every language by
         // another) is given at once, and the page is not made again.
@@ -1047,7 +1032,7 @@ impl<'a> Asked<'a> {
                 store.joined.fetch_add(1, Ordering::AcqRel);
                 return Miss::Wait(Making(waiting));
             }
-            Admitted::Leads => Leading { store: store.clone(), key, written, for_all, answered: false },
+            Admitted::Leads => Leading { store: store.clone(), key, written, answered: false },
         };
         if let Some(kept) = self.find() {
             // The requests that came to wait for this one look again, and are given it too.
@@ -1115,8 +1100,6 @@ struct Leading {
     store: Arc<Store>,
     key: u64,
     written: Written,
-    /// The count of copies kept for every language at its path when it was admitted.
-    for_all: u8,
     /// Answered with a page that is not kept (one that failed, or was drawn for this request).
     answered: bool,
 }
@@ -1125,7 +1108,7 @@ impl Drop for Leading {
     /// Answered or dropped: the requests waiting for it look again. A page answered and not kept,
     /// with no write to its path since its handler read, is remembered as not kept.
     fn drop(&mut self) {
-        let not_kept = (self.answered && self.written.stands(&self.store)).then(|| (Instant::now(), self.for_all));
+        let not_kept = (self.answered && self.written.stands(&self.store)).then(Instant::now);
         let waiting = self.store.flights.table().ended(self.key, not_kept);
         if let Some(waiting) = waiting {
             waiting.close();
@@ -1233,7 +1216,6 @@ impl Missed {
         // bytes made from it hold all of that for as long as they are kept.
         let body = Bytes::copy_from_slice(&body);
         let Missed { at, host, language: asked, written, mut leading, alone, .. } = self;
-        let count = written.count;
         let mut head = parts.headers.clone();
         // Each answer given in its place is dated when it is sent, as any other is, with its age.
         if dated {
@@ -1261,12 +1243,6 @@ impl Missed {
         });
         // A write since its handler read, seen once the copies were in hand: not kept.
         let Some(entry) = entry else { return Response::from_parts(parts, Body::from(body)) };
-        // Kept for every language: it ends what is remembered of the page not kept in another.
-        if !language {
-            if let Some(for_all) = answers.0.for_all.get() {
-                for_all[count].fetch_add(1, Ordering::Release);
-            }
-        }
         // Kept: the requests waiting for it are given it, and it is not remembered as not kept.
         if let Some(leading) = &mut leading {
             leading.answered = false;
@@ -1772,22 +1748,22 @@ mod tests {
         let (mut table, now) = (Table::default(), Instant::now());
         let keys = (MAKING * 3) as u64;
         for key in 0..keys {
-            let admitted = table.admit(key, now, 0);
+            let admitted = table.admit(key, now);
             assert_eq!(matches!(admitted, Admitted::Leads), key < MAKING as u64, "{key}");
         }
         assert_eq!((table.making, table.at.len()), (MAKING, MAKING));
-        assert!(matches!(table.admit(0, now, 0), Admitted::Joins(_)), "one being made is waited for");
+        assert!(matches!(table.admit(0, now), Admitted::Joins(_)), "one being made is waited for");
         // A page made again and again, and not kept: it is remembered once at a time.
         for key in 1..MAKING as u64 {
-            table.ended(key, Some((now, 0)));
-            assert!(matches!(table.admit(key, now, 0), Admitted::Alone), "{key}: remembered");
+            table.ended(key, Some(now));
+            assert!(matches!(table.admit(key, now), Admitted::Alone), "{key}: remembered");
         }
         for round in 0..3 {
             let first = keys + round * NOT_KEPT as u64;
             for key in first..first + NOT_KEPT as u64 {
-                assert!(matches!(table.admit(key, now, 0), Admitted::Leads), "{round} {key}");
+                assert!(matches!(table.admit(key, now), Admitted::Leads), "{round} {key}");
                 let scanned = table.scanned;
-                table.ended(key, Some((now, 0)));
+                table.ended(key, Some(now));
                 assert!(table.scanned - scanned <= 1, "{round} {key}: one forgotten at most");
                 assert!(table.at.len() <= 1 + NOT_KEPT && table.remembered.len() <= NOT_KEPT, "{round} {key}");
             }
@@ -1798,32 +1774,25 @@ mod tests {
     }
 
     /// A page remembered as not kept is made alone until [`FORGOT`] has passed, then waited for
-    /// again; one kept by a request that made it alone is forgotten at once, and so is one whose
-    /// path has had a copy kept for every language since its request was admitted.
+    /// again; one kept by a request that made it alone is forgotten at once.
     #[test]
     fn a_page_not_kept_is_waited_for_again_once_its_time_is_up_or_it_is_kept() {
         let (mut table, now) = (Table::default(), Instant::now());
-        assert!(matches!(table.admit(1, now, 0), Admitted::Leads));
-        table.ended(1, Some((now, 0)));
-        assert!(matches!(table.admit(1, now + FORGOT - Duration::from_millis(1), 0), Admitted::Alone));
-        assert!(matches!(table.admit(1, now + FORGOT, 0), Admitted::Leads), "its time is up");
-        table.ended(1, Some((now + FORGOT, 0)));
-        assert!(matches!(table.admit(1, now + FORGOT, 0), Admitted::Alone));
+        assert!(matches!(table.admit(1, now), Admitted::Leads));
+        table.ended(1, Some(now));
+        assert!(matches!(table.admit(1, now + FORGOT - Duration::from_millis(1)), Admitted::Alone));
+        assert!(matches!(table.admit(1, now + FORGOT), Admitted::Leads), "its time is up");
+        table.ended(1, Some(now + FORGOT));
+        assert!(matches!(table.admit(1, now + FORGOT), Admitted::Alone));
         table.kept(1);
-        assert!(matches!(table.admit(1, now + FORGOT, 0), Admitted::Leads), "kept since");
+        assert!(matches!(table.admit(1, now + FORGOT), Admitted::Leads), "kept since");
         // Kept by a request that made it alone, while another makes it: that one stays.
         table.kept(1);
-        assert!(matches!(table.admit(1, now + FORGOT, 0), Admitted::Joins(_)));
+        assert!(matches!(table.admit(1, now + FORGOT), Admitted::Joins(_)));
         // And when that one ends not kept (its handler failed), the page is not remembered as not
         // kept: it was kept meanwhile.
-        assert!(table.ended(1, Some((now + FORGOT, 0))).is_some(), "the request waiting is woken");
-        assert!(matches!(table.admit(1, now + FORGOT, 0), Admitted::Leads), "kept since it was made");
-        // A copy kept for every language at its path, while it was made or after.
-        table.ended(1, Some((now + FORGOT, 0)));
-        assert!(matches!(table.admit(1, now + FORGOT, 0), Admitted::Alone));
-        assert!(matches!(table.admit(1, now + FORGOT, 1), Admitted::Leads), "a copy kept for every language since");
-        table.ended(1, Some((now + FORGOT, 1)));
-        assert!(matches!(table.admit(1, now + FORGOT, 1), Admitted::Alone), "remembered again, with the count it found");
+        assert!(table.ended(1, Some(now + FORGOT)).is_some(), "the request waiting is woken");
+        assert!(matches!(table.admit(1, now + FORGOT), Admitted::Leads), "kept since it was made");
     }
 
     #[test]
