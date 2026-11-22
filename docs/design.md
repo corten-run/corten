@@ -8245,10 +8245,10 @@ rules something out.
     alone, two pads in one place); how far a placement can lower cycles; a protocol with each build
     started once; and latency, since these are cycles under load.
 
-    The receipt is on
-    [#1923 Control workloads with flat instructions miss the +1% cycle margin by up to 2.8% of user cycles, so the gate blocks changes it cannot attribute](https://github.com/corten-run/corten/issues/1923):
-    a comment there gives the aggregate tables above, and the raw CSVs and the host record are
-    attached to that issue.
+    The receipt is commit `24c0d897`: the kit (its plan, scripts, probe and pads) and every result
+    file of the run (`results-b7`: `floor.md`, `host.txt`, `margin.md`, the CSVs and the logs), with
+    the aggregate tables also on
+    [#1923 Control workloads with flat instructions miss the +1% cycle margin by up to 2.8% of user cycles, so the gate blocks changes it cannot attribute](https://github.com/corten-run/corten/issues/1923).
 
     Not chosen: the exception for any workload whose instructions are flat (this Choice as first
     proposed), which would pass a real cost on a workload the change touches, such as data laid out
