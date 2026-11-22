@@ -506,9 +506,9 @@ between them. There is no extra setup host and no `--admit-remaining` action.
 The continuation does not grant approval; the existing exact merged-source,
 native readiness, independent review and operator approval requirements apply.
 
-If independent detach refuses before writing intent, `fleet-operation-failed`
-can name the failing stage: `continuation-replay` (including custody and
-eligibility), `initial-plan` or `locked-plan` (including exact approval checks),
+If prepare or detach refuses before writing intent, `fleet-operation-failed`
+can name the failing stage: `continuation-admission` (including custody and
+eligibility), `prepare-reservation`, `initial-plan` or `locked-plan` (including exact approval checks),
 or `final-pre-intent-recheck`. These labels identify the check, not its cause or
 whether locks were released. Placement keeps its separate
 `fleet-placement-preflight-failed` diagnostic. Inspect saved intent and custody
