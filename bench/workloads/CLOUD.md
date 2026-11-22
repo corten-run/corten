@@ -1448,7 +1448,7 @@ campaign is:
 | localized-marketplace | 512 MiB cumulative reads, 32 MiB/read, 25,000 physical entries; not a whole-tree byte ceiling (`marketplace/saved-files.mjs`) | 0.5 GiB |
 | mixed-production | 1 GiB total, 256 MiB/file, 100,000 entries (`mixed-production/verify.mjs`) | 1 GiB |
 | fullstack-browser | 1 GiB total, 256 MiB/file, 50,100 nodes (`fullstack-browser/verify.mjs`) | 1 GiB |
-| client-heavy | 2 GiB total, 80,000 entries, 128 MiB ordinary files, one admitted browser blob up to 512 MiB, 1 GiB unique blobs (`client-heavy/verify-v2.mjs`) | 2 GiB |
+| client-heavy | 2 GiB total, 80,000 entries, 128 MiB ordinary files, admitted executables up to 192 MiB for Node and 512 MiB for the browser, 1 GiB unique blobs (`client-heavy/verify-v2.mjs`) | 2 GiB |
 | live-delivery | No whole-tree byte/count ceiling; individual gzip replay limits are not whole-tree limits (`isolated/adapters/live-delivery.mjs`) | 1 GiB |
 | recoverable-live | Uses the same live saved reader | 1 GiB |
 | hardening | 1 GiB total, 256 MiB/file, 100,000 entries (`isolated/adapters/hardening.mjs`) | 1 GiB |
