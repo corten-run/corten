@@ -410,7 +410,9 @@ test("continuation schedules around pinned catalog and retired JSON without repl
     fs.writeFileSync(p.hosts, JSON.stringify([{ id: Number(saved.id), name: saved.name, tags: [] }]));
     assert.equal(await detached(pending, approval.approvalSha256), 2);
     const trace = p.events().slice(beforeCensus).filter(({ boundary }) => boundary === "provider");
-    assert.deepEqual(trace.map(({ method, path }) => [method, path]), [["GET", "/v2/account"], ["GET", "/v2/droplets?page=1&per_page=200"]]);
+    assert.deepEqual(trace.map(({ method, path }) => [method, path]), [
+      ["GET", "/v2/account"], ["GET", "/v2/droplets?page=1&per_page=200"], ["GET", "/v2/account"],
+    ]);
     assert.equal(p.saved(path.join(pending, pending)).createIntentAt, undefined);
   } finally { fs.writeFileSync(historical, original); fs.writeFileSync(p.hosts, "[]"); }
   const fork = path.join(p.h.temp, "incomplete-reindex"); fs.mkdirSync(fork);
