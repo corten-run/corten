@@ -1601,7 +1601,10 @@ the bits were last cleared and has since passed its lifetime or been dropped. A 
 its room until another needs it. Nothing is kept under `corten dev`,
 so a change shows on the next load. An app with no `Public` page, and no `Public` JSON or text route in a build with `compress`, keeps nothing whatever the
 bound, and its writes are not counted, so it pays nothing for pages it cannot keep; one whose `Public` JSON or text
-is all too small to keep still holds a store there, since a body's size is known only when it is made. An app's tests keep pages as a deploy does (`App::test`,
+is all too small to keep still holds a store there, since a body's size is known only when it is made, and
+pays one add for a write: writes are counted by path from the first answer the app may keep,
+and until then all together, so a write that was under way when that first answer was made drops
+every answer kept by the time it ends, once. An app's tests keep pages as a deploy does (`App::test`,
 `App::router`): a test that changes what a `Public` page shows other than by a write through the
 app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page
