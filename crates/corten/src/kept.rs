@@ -443,13 +443,13 @@ impl Kept {
 
 impl Entry {
     /// Makes its body's brotli at [`Level::Kept`], gives it to the answers from then on and
-    /// counts it, while it is kept and stands and the bound has room for it: asked before the
-    /// work, and again when the bytes are put with it under the store's lock, which an entry is
-    /// taken out under. So the brotli of a page written to, past its lifetime, replaced or
-    /// dropped before then is not given or counted. A page does without it, so it takes only the
-    /// room the bound has left and no page is dropped for it: a write or the end of a lifetime
-    /// that lands once the page was found kept costs no other page, and in a store at its bound
-    /// a page has it only when there was room for it then.
+    /// counts it, while it is kept and stands: asked before the work, and again when the bytes
+    /// are put with it under the store's lock, which an entry is taken out under. So the brotli
+    /// of a page written to, past its lifetime, replaced or dropped before then is not given or
+    /// counted. A page does without it, so it takes only the room the bound has left and no page
+    /// is dropped for it: a write or the end of a lifetime that lands once the page was found
+    /// kept costs no other page. The room is asked for once the bytes are made and their size is
+    /// known, so a page whose brotli does not fit then drops what was made.
     #[cfg(feature = "compress")]
     fn make_brotli(&self) {
         let Some(store) = self.place.store.upgrade() else { return };
@@ -1534,6 +1534,23 @@ mod tests {
         heard
     }
 
+    /// Has the queue of the compression thread answer the jobs asked of it on this thread, in
+    /// turn, as `answers` says: false refuses one as a full queue does, true gives it to the
+    /// queue. Counts the jobs asked for, which may be no more than `answers` has, until
+    /// `crate::compress::QUEUEING` is taken.
+    #[cfg(feature = "compress")]
+    fn the_queue_answers(answers: &'static [bool]) -> std::rc::Rc<std::cell::Cell<usize>> {
+        let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+        let count = asked.clone();
+        crate::compress::QUEUEING.set(Some(Box::new(move |turn| {
+            assert_eq!(turn, Turn::Kept);
+            let n = count.get();
+            count.set(n + 1);
+            *answers.get(n).unwrap_or_else(|| panic!("job {} asked of the queue, where {} were expected", n + 1, answers.len()))
+        })));
+        asked
+    }
+
     /// A page's body that brotli makes much smaller, numbered so two are not the same.
     #[cfg(feature = "compress")]
     fn a_page(n: u32) -> Bytes {
@@ -1593,9 +1610,12 @@ mod tests {
             done.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
             assert!(stale.coded.brotli.get().is_none(), "{ended}: not made");
             assert_eq!(answers.bytes(), before, "{ended}: nor counted");
-            // Nor queued again: a later answer finds it was, and writes nothing.
+            // Nor queued again: a later answer finds it was, asks nothing of the queue, and
+            // writes nothing.
+            let asked = the_queue_answers(&[]);
             Kept::coded(&extensions, &stale.body, accepts("br"), Coding::Brotli, || unreachable!("{ended}: made already"));
-            assert_eq!(stale.coded.promotion.load(Ordering::Acquire), QUEUED, "{ended}");
+            crate::compress::QUEUEING.take();
+            assert_eq!((asked.get(), stale.coded.promotion.load(Ordering::Acquire)), (0, QUEUED), "{ended}");
             assert!(answers.find("/c", None, None).is_some(), "{ended}: the page that stands is kept");
             // The page kept in its place, of other bytes, is made and given its own brotli, in
             // room the other page leaves.
@@ -1642,6 +1662,89 @@ mod tests {
             assert!(page.coded.brotli.get().is_none(), "racing {racing}: there is no room for the brotli");
             assert_eq!(answers.bytes(), before, "racing {racing}");
         }
+    }
+
+    /// A page's brotli the queue refused, as a full queue does, is queued by the very next answer
+    /// that could use it, and once: the answer it was refused on puts the count back, and none
+    /// after the one the queue took asks the queue again, while the job waits or once it is done.
+    #[cfg(feature = "compress")]
+    #[test]
+    fn a_kept_answer_s_brotli_a_full_queue_refused_is_queued_by_the_next_answer() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let body = a_page(0);
+        let page = answers.keep(|place| Entry { body: body.clone(), ..entry(&answers, "/a", None, 60, body.len())(place) });
+        let mut extensions = http::Extensions::new();
+        extensions.insert(Kept(page.clone()));
+        // Its fast form larger than brotli at the kept level, so that is what it is given.
+        let hit = || Kept::coded(&extensions, &page.body, accepts("br"), Coding::Brotli, || body.clone());
+        let promotion = || page.coded.promotion.load(Ordering::Acquire);
+        // The thread held, so the job waits for the answers after the one that queued it.
+        let release = hold_the_compression_thread();
+        let asked = the_queue_answers(&[false, true]);
+        hit();
+        assert_eq!((asked.get(), promotion()), (0, 1), "the first answer asks nothing of the queue");
+        hit();
+        assert_eq!((asked.get(), promotion()), (1, QUEUED - 1), "the second is refused, and puts the count back");
+        hit();
+        assert_eq!((asked.get(), promotion()), (2, QUEUED), "the next asks again, and the queue takes it");
+        for _ in 0..3 {
+            assert_eq!(hit(), (body.clone(), Coding::Brotli), "the fast form while the job waits");
+        }
+        crate::compress::QUEUEING.take();
+        assert_eq!(asked.get(), 2, "no answer asks again while the job waits");
+        let done = queued_before_done();
+        drop(release);
+        done.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
+        let brotli = page.coded.brotli.get().expect("made").clone();
+        assert_eq!(brotli, crate::compress::encode(Coding::Brotli, &body, Level::Kept));
+        let asked = the_queue_answers(&[]);
+        assert_eq!(hit(), (brotli, Coding::Brotli));
+        crate::compress::QUEUEING.take();
+        assert_eq!((asked.get(), promotion()), (0, QUEUED), "nor once it is made");
+    }
+
+    /// A page's brotli that the thread made and found no room for in the bound, while the page
+    /// still stands, is not queued again: once room is free, later answers that could use it ask
+    /// nothing of the queue, and nothing is made, put with the page or counted after.
+    #[cfg(feature = "compress")]
+    #[test]
+    fn a_kept_answer_s_brotli_that_found_no_room_is_not_queued_again() {
+        let bound = 64 << 10;
+        let answers = Answers::new(bound).expect("a bound");
+        let body = a_page(0);
+        let page = answers.keep(|place| Entry { body: body.clone(), ..entry(&answers, "/a", None, 60, body.len())(place) });
+        let mut extensions = http::Extensions::new();
+        extensions.insert(Kept(page.clone()));
+        let fast = Bytes::from_static(b"fast");
+        let hit = || Kept::coded(&extensions, &page.body, accepts("br"), Coding::Brotli, || fast.clone());
+        let promotion = || page.coded.promotion.load(Ordering::Acquire);
+        let asked = the_queue_answers(&[true]);
+        // The first answer makes and counts the fast form; then a page that stands, with less
+        // room left beside them than the brotli would take.
+        hit();
+        let standing = answers.keep(entry(&answers, "/c", None, 60, bound - answers.bytes() - OVERHEAD - 16));
+        let before = answers.bytes();
+        hit();
+        crate::compress::QUEUEING.take();
+        assert_eq!((asked.get(), promotion()), (1, QUEUED), "the second answer queued it");
+        queued_before_done().recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
+        assert!(page.stands(&answers.0, Instant::now()), "the page still stands");
+        assert!(answers.find("/c", None, None).is_some(), "the other page is kept");
+        assert!(page.coded.brotli.get().is_none(), "there was no room for the brotli");
+        assert_eq!(answers.bytes(), before);
+        // Room made: later answers still get the fast form, and ask nothing of the queue.
+        answers.0.drop_entry(&mut answers.0.inner.write().unwrap(), &standing);
+        let before = answers.bytes();
+        assert!(bound - before > 4096, "room for the brotli now");
+        let asked = the_queue_answers(&[]);
+        for _ in 0..4 {
+            assert_eq!(hit(), (fast.clone(), Coding::Brotli));
+        }
+        crate::compress::QUEUEING.take();
+        assert_eq!((asked.get(), promotion()), (0, QUEUED), "not queued again");
+        queued_before_done().recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
+        assert!(page.coded.brotli.get().is_none(), "nothing made since");
+        assert_eq!(answers.bytes(), before, "nor counted");
     }
 
     /// A kept answer's brotli at `Level::Kept` is not given in the place of a form already made

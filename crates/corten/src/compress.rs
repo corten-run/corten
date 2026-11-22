@@ -745,9 +745,25 @@ fn worker() -> Option<&'static Worker> {
     WORKER.get_or_init(Worker::start).as_deref()
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Asked by [`later`] on this thread for each job before the queue is: false refuses the job
+    /// as a full queue does, true gives it to the queue. What a test makes the queue do, and how
+    /// it counts the jobs asked for, with no other test's jobs in the way.
+    pub(crate) static QUEUEING: std::cell::Cell<Option<Box<dyn FnMut(Turn) -> bool>>> = const { std::cell::Cell::new(None) };
+}
+
 /// Gives `job` to the thread that compresses held values, in `turn`'s queue. False when it is not
 /// taken: that queue is full, or there is no thread to be had.
 pub(crate) fn later(turn: Turn, job: Job) -> bool {
+    #[cfg(test)]
+    if let Some(mut queueing) = QUEUEING.take() {
+        let give = queueing(turn);
+        QUEUEING.set(Some(queueing));
+        if !give {
+            return false;
+        }
+    }
     worker().is_some_and(|worker| worker.give(turn, job))
 }
 

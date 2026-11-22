@@ -7335,8 +7335,8 @@ rules something out.
     still stands, asked again under the store's lock when the bytes are put with it; a full queue
     leaves it to the next such answer, and once queued no answer writes to the page's count again.
     So it is best effort: held values compressed without a pause keep it waiting for as long as
-    that lasts, past the page's lifetime, and a job that finds no room is not tried again for that
-    page. From then on a client that ranks brotli as high as any
+    that lasts, past the page's lifetime, and a job whose bytes find no room is not tried again
+    for that page. From then on a client that ranks brotli as high as any
     coding, as a browser that also takes zstd does, gets it in the place of zstd 1, unless the form
     already made for the coding it would get otherwise is no larger: the levels' and codings' sizes
     are not in the same order on every page (a review's probe with Node's brotli 1.2.0 and zstd
@@ -7349,7 +7349,10 @@ rules something out.
     bound has left and never runs the clock: no page is dropped for it, so a write or the end of
     a lifetime that lands once the thread found the page kept costs no other page (the writes'
     counts take no lock, so no check can rule that out while a promotion may drop a page), and in
-    a store at its bound a page has it only when there was room for it then. In
+    a store at its bound a page keeps it only if it fits without dropping another. The bound
+    limits what is kept, not what is encoded: the thread encodes it before it asks for the room,
+    as only then is its size known, so a page that finds none has cost the thread that encoding
+    and keeps nothing of it. In
     `tests/kept_memory.rs`, whose store is at its bound, 201 of the 227 and 231 of the 232 newest
     pages kept had it in two runs.
     Level 5 is where the bytes stop falling until brotli's slowest levels:

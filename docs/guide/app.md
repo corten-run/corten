@@ -1536,11 +1536,12 @@ benchmark's page 882 bytes where zstd sends 1,078) unless the form made for the 
 otherwise is no larger, as on a page that repeats long runs of text, where zstd can be the smaller.
 It is not made for a page written to or past its lifetime by the time the thread comes to it. It
 counts toward the bound like the page's other forms, but takes only the room the bound has left:
-no page is dropped for it, so in a store at its bound a page has it only when there was room for
-it then, and a page it found no room for is not tried again. So the smaller form is best effort,
-never a promise: the thread comes to a kept page's job only when no held JSON waits, so held JSON
-compressed without a pause can keep it waiting for as long as that lasts, past the page's
-lifetime, and a store at its bound makes it only when room is free
+no page is dropped for it, so a page keeps it only if it fits without dropping another. The
+thread encodes it before it asks for that room, so in a store at its bound a page can cost the
+thread the encoding and still not keep the bytes, and a page whose brotli did not fit is not
+tried again. So the smaller form is best effort, never a promise: the thread comes to a kept
+page's job only when no held JSON waits, so held JSON compressed without a pause can keep it
+waiting for as long as that lasts, past the page's lifetime
 ([design Choice 70](../design.md#choice-kept-pages) has the levels measured). On the catalog benchmark's page, marked
 `Public` for a minute, a kept page took 14.5% fewer CPU cycles a request where nothing is compressed
 and 46.3% fewer where each answer is, at the medians of 12 paired rounds
