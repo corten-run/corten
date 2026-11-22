@@ -2592,7 +2592,7 @@ thread_local! {
 
 /// A render that reads for itself whether it drew a submit key: the thread's mark is cleared as
 /// it starts and, as it ends, left set where it was before or a key was drawn since. So a watch
-/// around the handler ([`watched`]) still sees a key the handler drew before this render (one
+/// around the handler ([`KeyWatch`]) still sees a key the handler drew before this render (one
 /// rendered to a string and placed in a page as markup), also when the render fails or panics.
 #[must_use = "the mark is put back where this is dropped"]
 pub(crate) struct Drawing {
@@ -2621,39 +2621,37 @@ impl Drop for Drawing {
     }
 }
 
-/// `work` run to its end, and whether a submit key was drawn in any of its polls. A handler may
-/// move between threads where it waits, and one poll runs on one thread from start to end, so
-/// the mark is cleared before each poll and read after it, also when the poll panics, and then
-/// left set where it was before or a key was drawn: a watch around this one sees that key too,
-/// and a mark another request left on the thread counts for no one, since every reader clears
-/// it first. A key drawn outside the polls of `work`, or on another thread during one (by a task
-/// the handler spawned, a render it handed to a blocking task, a thread of its own), is not seen.
-/// It holds `work` in place, so watching a handler adds no allocation to its request.
-pub(crate) fn watched<F: std::future::Future>(work: F) -> Watched<F> {
-    Watched { work, drew: false }
-}
+/// Whether a submit key was drawn in any poll of the work it polls. A handler may move between
+/// threads where it waits, and one poll runs on one thread from start to end, so the mark is
+/// cleared before each poll and read after it, also when the poll panics, and then left set where
+/// it was before or a key was drawn: a watch around this one sees that key too, and a mark another
+/// request left on the thread counts for no one, since every reader clears it first. A key drawn
+/// outside the polls it makes, or on another thread during one (by a task the handler spawned, a
+/// render it handed to a blocking task, a thread of its own), is not seen. It is held beside the
+/// work rather than around it, so the work is not moved again and its output is not carried
+/// beside what was seen.
+#[derive(Default)]
+pub(crate) struct KeyWatch(bool);
 
-pin_project_lite::pin_project! {
-    /// [`watched`]'s work: its output, and whether a submit key was drawn in any of its polls.
-    pub(crate) struct Watched<F> {
-        #[pin]
-        work: F,
-        drew: bool,
-    }
-}
-
-impl<F: std::future::Future> std::future::Future for Watched<F> {
-    type Output = (F::Output, bool);
-
+impl KeyWatch {
+    /// One poll of `work`, noting a key drawn in it.
     #[inline]
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
-        let this = self.project();
+    pub(crate) fn poll<F: std::future::Future>(
+        &mut self,
+        work: std::pin::Pin<&mut F>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<F::Output> {
         // Dropped as the poll unwinds too, which puts back the mark the thread had before.
         let drawing = Drawing::start();
-        let polled = this.work.poll(cx);
-        *this.drew |= drawing.drew();
-        drop(drawing);
-        polled.map(|out| (out, *this.drew))
+        let polled = work.poll(cx);
+        self.0 |= drawing.drew();
+        polled
+    }
+
+    /// Whether a key was drawn in any poll so far.
+    #[inline]
+    pub(crate) fn drew(&self) -> bool {
+        self.0
     }
 }
 
@@ -3009,6 +3007,29 @@ mod tests {
     #[derive(Debug, serde::Deserialize)]
     struct MaybeKeyed {
         submit: Option<SubmitKey>,
+    }
+
+    /// `work` run to its end, and whether a submit key was drawn in any of its polls, as a
+    /// route's watch ([`KeyWatch`]) sees it.
+    fn watched<F: std::future::Future>(work: F) -> Watched<F> {
+        Watched { work, watch: KeyWatch::default() }
+    }
+
+    pin_project_lite::pin_project! {
+        struct Watched<F> {
+            #[pin]
+            work: F,
+            watch: KeyWatch,
+        }
+    }
+
+    impl<F: std::future::Future> std::future::Future for Watched<F> {
+        type Output = (F::Output, bool);
+
+        fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+            let this = self.project();
+            this.watch.poll(this.work, cx).map(|out| (out, this.watch.drew()))
+        }
     }
 
     /// Watching work for a submit key sees one drawn in any of its polls and no other: what the

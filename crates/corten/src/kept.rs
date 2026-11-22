@@ -54,7 +54,7 @@
 //! `Vary: origin`) is written after the handler for each request, and is no part of what is
 //! kept. An answer with markup its handler rendered that holds a form's new submit key is that
 //! request's alone: a page's render marks one, and every `Public` route's handler is watched for
-//! one drawn any other way, on the thread that runs it (`form::watched`), which marks the answer
+//! one drawn any other way, on the thread that runs it (`form::KeyWatch`), which marks the answer
 //! too (`cache::Unrepeatable`), so no cache in front shares it either. JSON the app holds as bytes
 //! (`json::Raw`) carries its own compressed forms in a build that compresses, a mark this does
 //! not replay, so it is its handler's for every request, which costs it no writing and no

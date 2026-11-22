@@ -242,6 +242,11 @@ pub trait Handler<T, S>: Clone + Send + Sync + Sized + 'static {
     /// The typed route's answer is a patch in action mode.
     const ACTION_PATCHES: bool = false;
 
+    /// The typed route's answer is one that is the same for everyone (`Public`), whatever it is:
+    /// its handler is watched for a form's new submit key, which makes the answer the request's
+    /// alone ([`crate::cache::Unrepeatable`]).
+    const SHARED: bool = false;
+
     /// The typed route's answer is one that is the same for everyone (`Public`), a page or a
     /// whole body (JSON, text) in a build that compresses, which the app keeps and gives again
     /// in the handler's place ([`crate::kept`]).
@@ -249,12 +254,6 @@ pub trait Handler<T, S>: Clone + Send + Sync + Sized + 'static {
         None
     }
 
-    /// The typed route's answer is one that is the same for everyone (`Public`), whatever it is:
-    /// its handler is watched for a form's new submit key, which makes the answer the request's
-    /// alone ([`crate::cache::Unrepeatable`]).
-    fn shared(&self) -> bool {
-        false
-    }
 
     /// The answer to `req`.
     fn call(self, req: Request, state: S) -> impl Future<Output = Response> + Send + 'static;

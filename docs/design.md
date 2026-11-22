@@ -7348,11 +7348,11 @@ rules something out.
     drawn, and the watch marks the answer (`cache::Unrepeatable`) as a page's render does. It
     cannot tell a key placed in the answer from one drawn and dropped, so either makes the answer
     private.
-    It wraps a route whose answer type is `Public`, known when the route is made, in every
-    build and whatever the store does (none kept, `corten dev`, a body route that leaves the
-    store out, a build without `compress`); no other route pays for it. Holding the handler's
-    work in place, it adds no allocation, only a read and a reset of a thread's mark around each
-    poll (measured below). A render that reads
+    It wraps a route whose answer type is `Public`, known from the route's types when the crate
+    compiles, in every build and whatever the store does (none kept, `corten dev`, a body
+    route that leaves the store out, a build without `compress`); no other route has a watched
+    form built at all. Held beside the handler's work in the one allocation the route already
+    makes, it adds a read and a reset of a thread's mark around each poll (measured below). A render that reads
     the mark for itself (a page's, a patch's, one made with `req.rendered`) leaves a key drawn
     before it for the watch, also when it fails: a field rendered to a string and placed in a
     page as markup. A key drawn outside the handler's polls, or on another thread during one

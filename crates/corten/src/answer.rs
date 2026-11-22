@@ -2555,17 +2555,29 @@ impl Unstaged for Uri {}
 pub trait AllUnstaged {}
 impl AllUnstaged for () {}
 
-/// Whether an answer's [`Answer::Inputs`] allows the handler's arguments.
+/// Whether an answer's [`Answer::Inputs`] are those of one that is the same for everyone, whatever
+/// its handler reads: known from the answer's type alone, so a route's watch for a submit key
+/// (`router::Watching`) is chosen with no value at hand.
 #[doc(hidden)]
-pub trait Accepts<Args> {
+pub trait Shares {
     /// The answer is the same for everyone ([`Public`], the only one with [`AnonymousInputs`]).
     const SHARED: bool = false;
+}
+impl Shares for AnyInputs {}
+impl Shares for AnonymousInputs {
+    const SHARED: bool = true;
+}
+
+/// Whether an answer's [`Answer::Inputs`] allows the handler's arguments.
+#[doc(hidden)]
+pub trait Accepts<Args>: Shares {
+    /// The answer is the same for everyone ([`Shares`]).
+    const SHARED: bool = <Self as Shares>::SHARED;
     /// And all its handler reads of a page's request is what the app keeps the page by.
     const KEYED: bool = false;
 }
 impl<A> Accepts<A> for AnyInputs {}
 impl<A: AllAnonymous> Accepts<A> for AnonymousInputs {
-    const SHARED: bool = true;
     const KEYED: bool = A::KEYED;
 }
 
@@ -2700,10 +2712,12 @@ impl<H, T, S, O> Handler<T, S> for Endpoint<H, O>
 where
     H: Handler<T, S>,
     O: Answer + 'static,
+    O::Inputs: Shares,
     S: Send + 'static,
     T: 'static,
 {
     const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
+    const SHARED: bool = <O::Inputs as Shares>::SHARED;
 
     fn keeps(&self) -> Option<crate::kept::Shape> {
         if !(self.shared && self.keyed) {
@@ -2715,10 +2729,6 @@ where
             // A whole body is kept where the app compresses it: none in a build that does not.
             (O::WHOLE.0 && cfg!(feature = "compress")).then_some(crate::kept::Shape::Body)
         }
-    }
-
-    fn shared(&self) -> bool {
-        self.shared
     }
 
     #[inline]
