@@ -319,7 +319,8 @@ export async function fleetMain(args, deps = {}) {
     assert.ok(!continuation.report.groups.some((r) => r.unresolved), "continuation has unresolved custody or invalid evidence");
     const slot = continuation.slots.get(options.group);
     if (options.prepare) {
-      assert.ok(row.outcome === "missing" || row.retryable, "group already reserved; never allocate again");
+      const superseding = continuation.unlaunched.has(slot?.root) && options.commit !== slot.manifest.commit;
+      assert.ok(row.outcome === "missing" || row.retryable || superseding, "group already reserved; never allocate again");
       if (slot) {
         assert.ok(Number(options.round.slice(1)) > Number(slot.manifest.round.slice(1)), "use a new, higher round for this group");
         attemptRoot = join(root, `${options.group}--${options.round}`);
@@ -394,7 +395,10 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       await controlCheckpoint(interrupted); // Provider close is asynchronous.
       physical(root); assert.equal(regular(lock, 1024).toString(), owner, "fleet-lock-changed");
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
-      if (single) assert.equal(continuationIndexSha256(continuation.root), single.indexSha256, "continuation index changed");
+      if (single) {
+        assert.equal(continuationIndexSha256(continuation.root), single.indexSha256, "continuation index changed");
+        continuation.recheckUnlaunched(single.group);
+      }
       durable(join(root, `fleet-${options.round}.json`), json(manifest));
       assert.deepEqual(readFleet(root, options.round).manifest, manifest);
       write(JSON.stringify({ schema: "benchmark-group-fleet-preparation/v1", round: options.round, outcome: "prepared", groups: manifest.jobs.map(({ group }) => group), fullGroupQualified: false }));
