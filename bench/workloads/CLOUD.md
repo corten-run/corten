@@ -274,7 +274,11 @@ exit 2 permits custody only. The collector keeps both archives, leaves the host
 in place and returns 3. It does not create a retirement intent.
 
 Use the per-child command above if an invalid monitor left locks behind. The
-original operation and launch locks remain unchanged. Collection requires
+foreground controller writes the invalid status without reusing an interrupted
+state write's temporary file. If the bootstrap seal completed just before that
+write failed, it recognizes the acknowledgement from the saved invocation
+ledger, not from the temporary file. Neither fact proves the remote job ended.
+The original operation and launch locks remain unchanged. Collection requires
 local stream closure, lease expiry and an absent original owner PID. It uses
 the separate stream recovery lock and checks the registered boot and exact
 started unit. Read-only fleet inspection can verify a saved retirement behind
@@ -486,6 +490,15 @@ between them. There is no extra setup host and no `--admit-remaining` action.
 The continuation does not grant approval; the existing exact merged-source,
 native readiness, independent review and operator approval requirements apply.
 
+If independent detach refuses before writing intent, `fleet-operation-failed`
+can name the failing stage: `continuation-replay` (including custody and
+eligibility), `initial-plan` or `locked-plan` (including exact approval checks),
+or `final-pre-intent-recheck`. These labels identify the check, not its cause or
+whether locks were released. Placement keeps its separate
+`fleet-placement-preflight-failed` diagnostic. Inspect saved intent and custody
+before deciding what to do next; an unlabeled failure does not establish that
+intent was never written.
+
 Different groups can run concurrently in the same continuation root. Prepare
 and allocation are serialized through a shared lock. As soon as the launched
 host has sealed bootstrap, entered the native campaign and renewed its
@@ -514,6 +527,14 @@ prepared sibling. Do not move attempts to a new index or root. An ambiguous or
 active attempt is refused; leave its evidence and locks in place and use the
 existing recovery procedure. Run the report after collection to select another
 missing group.
+
+If a standalone group was prepared but never launched, use the same prepare
+command in the same continuation root with an explicitly higher round and a
+different measured commit. This works only when the previous slot physically
+contains its one original manifest and nothing else: no intent, lock, child
+state, receipts or other files. Prepare only reads provider placement and leaves
+the old bytes and verified groups intact. Once the new attempt is prepared,
+only its round can be previewed or launched; an older approval cannot dispatch.
 
 The report is an index of independently publishable group results, with each
 group's actual round, commit, dates, archive, attempts and `baseEffectiveOptions`.
@@ -1448,7 +1469,7 @@ campaign is:
 | localized-marketplace | 512 MiB cumulative reads, 32 MiB/read, 25,000 physical entries; not a whole-tree byte ceiling (`marketplace/saved-files.mjs`) | 0.5 GiB |
 | mixed-production | 1 GiB total, 256 MiB/file, 100,000 entries (`mixed-production/verify.mjs`) | 1 GiB |
 | fullstack-browser | 1 GiB total, 256 MiB/file, 50,100 nodes (`fullstack-browser/verify.mjs`) | 1 GiB |
-| client-heavy | 2 GiB total, 80,000 entries, 128 MiB ordinary files, one admitted browser blob up to 512 MiB, 1 GiB unique blobs (`client-heavy/verify-v2.mjs`) | 2 GiB |
+| client-heavy | 2 GiB total, 80,000 entries, 128 MiB ordinary files, admitted executables up to 192 MiB for Node and 512 MiB for the browser, 1 GiB unique blobs (`client-heavy/verify-v2.mjs`) | 2 GiB |
 | live-delivery | No whole-tree byte/count ceiling; individual gzip replay limits are not whole-tree limits (`isolated/adapters/live-delivery.mjs`) | 1 GiB |
 | recoverable-live | Uses the same live saved reader | 1 GiB |
 | hardening | 1 GiB total, 256 MiB/file, 100,000 entries (`isolated/adapters/hardening.mjs`) | 1 GiB |

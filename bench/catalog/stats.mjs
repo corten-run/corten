@@ -9,10 +9,11 @@ export function memoryMiB(value) {
   const units = { B: 1 / 2 ** 20, KiB: 1 / 1024, KB: 1 / 1024, MiB: 1, MB: 1, GiB: 1024, GB: 1024, TiB: 2 ** 20, TB: 2 ** 20 };
   return Number(m[1]) * units[m[2]];
 }
+export const steadySampleWindow = (count) => [Math.floor(count * 0.15), Math.ceil(count * 0.95)];
 export function summarizeSamples(samples) {
   if (!samples.length) throw new Error("docker stats produced no samples");
   for (const s of samples) if (!Number.isFinite(s.mem) || !Number.isFinite(s.cpu)) throw new Error("invalid docker stats sample");
-  const steady = samples.slice(Math.floor(samples.length * 0.15), Math.ceil(samples.length * 0.95));
+  const steady = samples.slice(...steadySampleWindow(samples.length));
   const avg = (key) => steady.reduce((sum, s) => sum + s[key], 0) / steady.length;
   return { samples: samples.length, cpuAvgPct: avg("cpu"), cpuMaxPct: Math.max(...samples.map((s) => s.cpu)), memAvgMiB: avg("mem"), memMaxMiB: Math.max(...samples.map((s) => s.mem)) };
 }

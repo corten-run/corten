@@ -1506,8 +1506,8 @@ mistake, the runtime loads the URL as a whole page instead of swapping it in.
 
 ### The pages the app keeps
 
-The app is the first shared cache of its own `Public` pages, and of its `Public` JSON and
-text where it compresses them (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
+The app is the first shared cache of its own `Public` pages, and of its `Public` JSON,
+text and files where it compresses them (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
 such request in the handler's place until the answer's shared lifetime ends: `s-maxage` where
 the answer has `.shared(..)`, else `max_age`. So a `Public` page's handler does not run for
 every request, and what it read may be that old when a visitor sees it, as it already may be
@@ -1578,7 +1578,8 @@ wait for, a database whose readers lag its writer) can leave the page as it was 
 lifetime ends.
 
 Nothing else is meant to drop a page before its lifetime ends (a write to another path does
-once in 65,536 times, where two paths share a count). A write to another path does not drop the
+once in 65,536 times, where two paths share a count, and so does one that began before the app
+had made any answer it may keep, below). A write to another path does not drop the
 list, and neither does a change made outside a request to the app (a task, a script, another
 instance): the page shows it when its lifetime ends, which is what the lifetime says. Purging a
 CDN in front does not purge the app, which gives the CDN the kept page again with its `Age`.
@@ -1601,7 +1602,11 @@ the bits were last cleared and has since passed its lifetime or been dropped. A 
 its room until another needs it. Nothing is kept under `corten dev`,
 so a change shows on the next load. An app with no `Public` page, and no `Public` JSON, text or file route in a build with `compress`, keeps nothing whatever the
 bound, and its writes are not counted, so it pays nothing for pages it cannot keep; one whose `Public` JSON, text and files
-are all too small to keep, or of a type it does not compress, still holds a store there, since a body's size and type are known only when it is made. An app's tests keep pages as a deploy does (`App::test`,
+are all too small to keep, or of a type it does not compress (a picture, a stream, a file at a URL that names its content), still holds a store there, since a body's size and type are known only when it is made, and
+pays for no count by path: writes are counted by path from the first answer the app may keep,
+and until then all together, so a write that was under way when that first answer was made drops
+every answer kept by the time it ends, and so does work it left (`signal.finish`) each time
+some ends. An app's tests keep pages as a deploy does (`App::test`,
 `App::router`): a test that changes what a `Public` page shows other than by a write through the
 app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page

@@ -111,6 +111,12 @@ Campaign rN maps to catalog cN, JSON prepare j(2N), JSON timing j(2N+1), marketp
 mixed/browser/client/hardening wN and live/recoverable rN. N is 17..1000000000. Existing
 native output for any reserved round prevents launch; there is no semantic retry.
 
+Both live runners write to their fixed native result roots. Once the command's terminal
+lifetime is proved, the campaign transfers only that round's result tree into the external
+phase archive and seals its manifest before rechecking the complete source checkout. The
+same intake retains failed-app output. Other tracked or untracked changes still block
+finalization. Historical result paths, standalone commands and the archive layout are unchanged.
+
 `campaign-contract.mjs` retains the complete registry and hashes the actual nine source
 procedure files alongside all measured sources. The production map uses native defaults
 except the existing marketplace-short-window, explicit native-feed-measure for both live
@@ -175,11 +181,14 @@ For example, native client v2 intentionally exits 2 after a positive diagnostic 
 that exact source-defined exit is distinguished from cancellation, a fixture error or an
 unknown nonzero exit. No validator injection or selected-app filtering is permitted.
 
-Status includes uncollectedNativeRoots. A terminal command's entire native tree is copied
-even when subsequent host cleanup/source observations fail. If terminal ownership or safe
-copy cannot be established, the original root remains explicitly uncollected: the parent
-must retain the host for inspection/terminal-safe collection, not delete it merely because
-the campaign logs or partial archive were saved.
+Status includes uncollectedNativeRoots. A terminal command's entire native tree is collected
+even when subsequent host cleanup/source observations fail. The live reservation records both
+the checkout-relative original and the campaign-relative transferDestination before any move.
+Both remain pending until the durable phase seal; an interrupted transfer may have bytes at
+either path but cannot qualify. A staged seal left by a write failure is not a journal event.
+If terminal ownership or safe collection cannot be established,
+the parent must retain the host for inspection/terminal-safe collection, not delete it merely
+because the campaign logs or partial archive were saved.
 
 Host observations retain boot/host, CPU/memory/pressure/cgroup information, PID start
 identities and Docker container/network boundaries before/after each group. A new persistent
@@ -206,9 +215,11 @@ processes' own effective sets, including child cgroups. It does not claim a trac
 of every short-lived process. Mixed production shares the throughput roles for its
 measured stage only; its separate functional capture has no pinning proof.
 
-Hardening is blocked before create pending an isolated adapter for its existing
-benign service and dependency-recovery actors. This also blocks a bundled launch
-that includes the unsupported group. Connection-flood resistance: not measured.
+The fixed hardening adapter replays the bounded native service and dependency-recovery
+results. The isolated recipe requires the bound CPU gate and its declared budgets and
+CPU sets. A complete result still requires the native matrix, exact build archives,
+effective CPU and process receipts, and clean terminal boundaries. Passing replay does
+not authorize launch or establish a throughput ranking. Connection-flood resistance: not measured.
 
 ## Kernel lifetime observations
 
@@ -409,12 +420,10 @@ Native dispatcher imports are fixed: catalog verify.mjs validateSaved, JSON stri
 inspectJson/inspectEvidence, marketplace validate.mjs validateSaved (returns the replayed
 summary, not a status envelope), and the six fixed isolated adapters' inspectSaved. No
 caller supplies a verifier. Native assertions/diagnostics are reduced to fixed public codes.
-The current imported browser/client and live/recovery adapters still report genuine producer
-gaps. Mixed/hardening adapters and reviewed native proofs must be routed by their owners;
-their absence is not silently replaced by a summary-only pass. Full actual all-nine
-execution, renewed source/build audits and dependency proofs have not been performed by
-this checkpoint. The local delegated-Linux fixture exercises actual collector lifetimes,
-not a complete campaign or provider ownership.
+Missing or incomplete producer proof remains blocked; a summary alone is not a substitute
+for native replay. Full actual all-nine execution, renewed source/build audits and
+dependency proofs have not been performed by this checkpoint. The local delegated-Linux
+fixture exercises actual collector lifetimes, not a complete campaign or provider ownership.
 
 ## JSON build, audit wait, then timing
 

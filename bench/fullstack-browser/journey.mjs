@@ -5,6 +5,7 @@ import { settings, alertsFromReadback, nativeFailures, sha256 } from "./contract
 import { architecture, classifyDisabledPreloads, nativeDOM, nativeForm, observeNetwork, responseDocument, sanitizeNative, visibleDOM, observedContext, closeObservedContext } from "./observe.mjs";
 import { UpstreamAudit, reconcileUpstream, upstreamReadFailures } from "./upstream.mjs";
 import { reconcileRequests } from "./ledger.mjs";
+import { cleanupObserved, replayDocumentNavigation, replayJSReplacement } from "./document-navigation.mjs";
 import { comparePage } from "../marketplace/check.mjs";
 import { labels } from "../marketplace/records.mjs";
 import { navigationDestination, writeDestination } from "./navigation.mjs";
@@ -102,7 +103,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
   if (observation) evidence.context = observation.byContext.get(context).id;
   await context.addInitScript(installResourceObserver);
   context.setDefaultTimeout(settings.actionTimeoutMs); context.setDefaultNavigationTimeout(settings.actionTimeoutMs);
-  let network, lifecycle, bindings;
+  let network, lifecycle, resources, bindings;
   const runtimeErrors = [];
   const started = performance.now();
   evidence.clock = { origin: "node.performance.now", startedAt: started, ...(observation ? { timeOrigin: performance.timeOrigin } : {}) };
@@ -121,7 +122,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     }
     lifecycle = new PlatformLifecycle(cdp, await browser.newBrowserCDPSession(), { javaScriptEnabled: profile.js }); await lifecycle.enable();
     network.attachCDP(cdp, lifecycle);
-    const resources = new ResourceAudit(page, cdp, profile.js, lifecycle);
+    resources = new ResourceAudit(page, cdp, profile.js, lifecycle);
     await lifecycle.enableDomains(); await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
     if (environment.network) await cdp.send("Network.emulateNetworkConditions", environment.network);
     await cdp.send("Emulation.setCPUThrottlingRate", { rate: environment.cpu });
@@ -229,7 +230,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
         row.platformRetirement = { realm: previousResources.realm, retiredAt: at };
         row.platformRetirementProbe = await lifecycle.probeRealm(previousResources.realm);
       }
-      if (row.retired?.owned === null) evidence.gaps.push(row.retired.reason);
+      if (row.retired?.owned === null && !row.platformRetirement) evidence.gaps.push(row.retired.reason);
       if (row.retired?.owned && Object.values(row.retired.owned).some(Boolean)) row.lifecycleFailures.push("Retired native page still owns browser resources");
       if (Object.values(row.resources.unattributed).some(Boolean)) evidence.gaps.push("Native resources without provable marketplace ownership remain in the document-start ledger");
       if (row.resources.unsupported.length) evidence.gaps.push(...row.resources.unsupported);
@@ -272,16 +273,22 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     const cleanupPhase = await upstream.begin("cleanup");
     evidence.nativeCleanup = await resources.cleanup({ timeoutMs: settings.maxCleanupMs, observationMs: settings.observationMs, network, runtimeErrors });
     evidence.nativeCleanup.upstream = await upstream.end(cleanupPhase);
+    const documentLanding = evidence.nativeCleanup.outcome === "unsupported" && evidence.nativeCleanup.retired?.owned === null
+      && evidence.nativeCleanup.before?.realm !== evidence.nativeCleanup.after?.realm;
     if (evidence.nativeCleanup.after) try {
       const terminalResources = await resources.checkpoint();
-      lifecycle.recordDocument({ observer: randomUUID(), scope: terminalResources.scope, url: { path: new URL(page.url()).pathname },
+      if (documentLanding) evidence.nativeCleanup.landingResources = terminalResources;
+      lifecycle.recordDocument({ observer: documentLanding ? terminalResources.observer : randomUUID(), scope: terminalResources.scope, url: { path: new URL(page.url()).pathname },
         native: await page.evaluate(nativeDOM) }, terminalResources);
     } catch (error) { evidence.gaps.push(`Terminal parser observation unavailable: ${error.message}`); }
-    if (evidence.nativeCleanup.outcome !== "observed") evidence.gaps.push(...evidence.nativeCleanup.failures);
+    if (!documentLanding && evidence.nativeCleanup.outcome !== "observed") evidence.gaps.push(...evidence.nativeCleanup.failures);
     if (evidence.nativeCleanup.outcome === "failed") evidence.failures.push(...evidence.nativeCleanup.failures);
   } catch (e) { evidence.failures.push(e.message); }
   finally {
-    if (lifecycle) try { await lifecycle.finishObservation({ observationMs: settings.observationMs, realms: [...lifecycle.realms.keys()] }); }
+    if (lifecycle) try {
+      await lifecycle.finishObservation({ observationMs: settings.observationMs, realms: [...lifecycle.realms.keys()] });
+      if (evidence.nativeCleanup?.landingResources) evidence.nativeCleanup.terminalResources = await resources.checkpoint();
+    }
     catch (error) { evidence.failures.push(`Platform terminal observation: ${error.message}`); }
     evidence.platformLifecycle = lifecycle?.snapshot() ?? null;
     if (app === "nextjs" && profile.js) for (const row of evidence.steps.filter((r) => r.action.input)) {
@@ -312,7 +319,21 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       evidence.networkFailures = structuredClone(network.failures); evidence.runtimeErrors = structuredClone(runtimeErrors);
       evidence.requestLedgerEndedAt = performance.now();
     }
-    evidence.requestReconciliation = reconcileRequests(evidence);
+    if (profile.js && (evidence.steps.some((row) => row.platformRetirement) || evidence.nativeCleanup?.landingResources)) {
+      const proof = evidence.jsDocumentNavigationProof = replayJSReplacement(evidence, profile, settings);
+      if (proof.outcome !== "proved") {
+        for (const row of evidence.steps) if (row.retired?.owned === null && row.platformRetirement) evidence.gaps.push(row.retired.reason);
+        if (evidence.nativeCleanup?.outcome === "unsupported") evidence.gaps.push(...evidence.nativeCleanup.failures);
+        evidence.gaps.push(proof.reason);
+      }
+    }
+    if (!profile.js && evidence.nativeCleanup?.landingResources) evidence.documentNavigationProof = replayDocumentNavigation(evidence, profile, settings);
+    if (!profile.js && evidence.documentNavigationProof?.outcome !== "proved") {
+      for (const row of evidence.steps) if (row.retired?.owned === null && row.platformRetirement) evidence.gaps.push(row.retired.reason);
+      if (evidence.nativeCleanup?.landingResources) evidence.gaps.push(...evidence.nativeCleanup.failures, evidence.documentNavigationProof.reason);
+      else if (evidence.nativeCleanup?.outcome === "unsupported") evidence.gaps.push(...evidence.nativeCleanup.failures);
+    }
+    evidence.requestReconciliation = reconcileRequests(evidence, evidence.documentNavigationProof, evidence.jsDocumentNavigationProof);
     if (evidence.requestReconciliation.outcome !== "reconciled") evidence.gaps.push(...evidence.requestReconciliation.reasons);
     const beforeClose = performance.now();
     if (bindings) try { await bindings.close(); } catch (error) { evidence.failures.push(`Binding observer detach: ${error.message}`); }
@@ -326,7 +347,8 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     if (lifecycle) try { await lifecycle.close(); } catch (error) { evidence.failures.push(`Platform observer detach: ${error.message}`); }
   }
   evidence.gaps = [...new Set(evidence.gaps)];
-  result.qualificationPassed = !evidence.failures.length && !evidence.gaps.length && evidence.nativeCleanup?.outcome === "observed";
+  result.qualificationPassed = !evidence.failures.length && !evidence.gaps.length
+    && cleanupObserved(evidence);
   result.outcome = evidence.failures.length ? "failed" : result.qualificationPassed ? "captured" : "unsupported";
   evidence.domChecksPassed = evidence.steps.length === profile.steps.length && evidence.steps.every((s) => s.domPassed);
   result.reason = evidence.failures[0] ?? evidence.gaps[0];

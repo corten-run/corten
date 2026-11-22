@@ -345,6 +345,14 @@ must match the native invocation. Stopped profiles use the existing stop/event r
 measurements. Missing or malformed receipts (including deleted raw files) are invalid, not
 an absent-proof fallback. No capability requirement or nightly capacity policy is relaxed.
 
+The native memory mean uses the sampled steady window, while the peak uses every sample.
+Floating-point summation can put the mean slightly above the peak even for a constant
+decimal reading. The v5 summary check (including merged split summaries) bounds that case
+by summing a history with every reading at the saved peak and the same sample count.
+An overshoot must also be a possible rounded quotient for that steady-window length.
+Native replay still requires both saved means to match the exact calculation from the
+retained Docker readings; it does not round or rewrite evidence.
+
 API phases require at least one observed upstream record answer for each successful k6
 request (`http_reqs.count - failed`), rather than merely a nonzero read count. Failed or
 timed-out requests may also read upstream, so reads need not equal successful traffic.

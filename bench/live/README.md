@@ -138,6 +138,17 @@ not standalone production latency/efficiency numbers. Each app container has one
 has a 45-second hard deadline (180 seconds for the larger explicit native-feed fixture),
 individual waits are bounded, startup is bounded, and owned containers are removed
 in `finally`. The local browser runs outside that app budget and is explicitly inventoried.
+Chromium is owned by one adapter at a time: it starts after the app is ready and closes before
+the next adapter. A disconnect remains a case failure with its browser stage, not an app crash
+or a retried success. Cooperative cancellation stops the run instead of opening another
+browser. The runner saves the attempted scenario and fan-out prefixes in the usual manifests,
+including failures; replay lists the remaining cases as unattempted and never qualifies a
+cancelled round. This does not recover writes interrupted by an abrupt process or host loss.
+
+The lifecycle test in `browser-lifetime.test.mjs` drives the production adapter loop with
+bundled Chromium and the ASP.NET and Express clients on loopback. It deliberately closes the
+first browser, replays the retained failure, and verifies that the next adapter completes its
+normal journey. Cancellation tests exercise the same loop without starting app images or timing fan-out.
 
 Each final detach closes the real EventSource and waits for the native subscription, writer
 task and queue to reach zero. The independent post-detach write is acknowledged, followed
@@ -199,6 +210,8 @@ Browser process costs are separately retained, outside the server's one-CPU/1-Gi
 Per-level `native-live-fanout/v1` gzip artifacts reference the hashed successful native
 qualification artifacts and retain all browser/application/raw-wire traces, frame samples,
 publication schedule, native resource counts, kernel counters and source/image identity.
+`fanoutJourney` uses the selected adapter's wire binding to capture HTTP and HTML, including
+the same Livewire redaction as correctness journeys. Capture failures remain failed levels.
 `verify.mjs` reopens both qualification and measurements and reconstructs every aggregate.
 Failed or missing qualification never starts measurement. Completed bounded measurement is
 recorded as such, not permanently `not-run`; it does not by itself qualify missing candidates

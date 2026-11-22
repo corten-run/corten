@@ -31,14 +31,14 @@ jobs:
   rust:
     needs: [rust-checks, rust-release]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - run: |
           echo "rust-checks: ${{ needs.rust-checks.result }}, rust-release: ${{ needs.rust-release.result }}"
           test "${{ needs.rust-checks.result }}" = success && test "${{ needs.rust-release.result }}" = success
 
   rust-checks:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       # The CLI's profile-build tests merge a profile with the toolchain's llvm-profdata (llvm-tools).
@@ -90,7 +90,7 @@ jobs:
   # smokes (#947), and not after the checks above, where they made the job a release build longer
   # (#1086); `rust` above still requires them.
   rust-release:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       # The CLI integration tests run `corten check` (Clippy and rustfmt) and a profile build
@@ -100,7 +100,7 @@ jobs:
       - run: cargo test --release --workspace --all-features
 
   msrv:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       # Keep in step with workspace.package.rust-version in Cargo.toml.
@@ -116,7 +116,7 @@ jobs:
   browser:
     needs: smoke
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -147,9 +147,8 @@ jobs:
   # before; the watchlist's checks that use no browser run in each of its three groups.
   smoke:
     name: smoke (${{ matrix.group }})
-    runs-on: ubuntu-24.04
-    # A passing group takes 7 to 8.5 minutes (measured, one run of the three); a hung one would
-    # hold the runner for six hours (#317).
+    runs-on: ubuntu-26.04
+    # Bound each group independently so a hung check cannot hold the runner for six hours.
     timeout-minutes: 30
     strategy:
       # Every group reports, so one failure does not hide another.
@@ -158,8 +157,10 @@ jobs:
         # `parts`: the steps the group runs, each named in its step's condition (`PARTS` below), in
         # lowercase letters and hyphens, which is all the check in `browser` reads as a part.
         include:
+          - group: benchmark-checks
+            parts: npm-check
           - group: chromium-examples
-            parts: npm-check watchlist-chromium card-market seller-desk deck-builder
+            parts: watchlist-chromium card-market seller-desk deck-builder
           - group: firefox-feeds
             parts: watchlist-firefox auction-room listings-feed
           # watchlist-dev runs the image the watchlist step builds, so it stays in its group.

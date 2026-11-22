@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { browserCaptureSchema, validateBrowserCapture } from "../workloads/browser.mjs";
-import { candidates, sha256 } from "./contract.mjs";
+import { candidates, settings as nativeSettings, sha256 } from "./contract.mjs";
 import { navigationDestination, writeDestination } from "./navigation.mjs";
 import { reconcileRequests } from "./ledger.mjs";
+import { replayDocumentNavigation, replayJSReplacement } from "./document-navigation.mjs";
 import { reconcileUpstream } from "./upstream.mjs";
 import { replayActionBinding } from "./binding-window.mjs";
 import { validateBindingArtifact } from "./binding-artifact.mjs";
@@ -46,7 +47,29 @@ export function projectCase(cell, profile, app, settings, bindingArtifact = null
     for (const row of e.steps.filter((r) => r.action.input))
       assert.ok(replayActionBinding(row.formBefore?.enhancement, bindingArtifact, e, row, profile.key), "Native Next binding effects do not replay from emitted bytes/action-bound native links");
   }
-  const requests = reconcileRequests(e ?? {});
+  const navigation = e?.documentNavigationProof === undefined ? null : replayDocumentNavigation(e, profile, {
+    observationMs: settings.cleanupObservationMs, maxCleanupMs: settings.maxCleanupMs,
+  });
+  if (navigation) {
+    assert.deepEqual(navigation, e.documentNavigationProof, "Stored document navigation proof differs from native receipts");
+    assert.equal(navigation.outcome, "proved", navigation.reason);
+  }
+  const jsNavigation = e?.jsDocumentNavigationProof === undefined ? null : replayJSReplacement(e, profile, {
+    observationMs: settings.cleanupObservationMs, maxCleanupMs: settings.maxCleanupMs, actionTimeoutMs: nativeSettings.actionTimeoutMs,
+  });
+  if (jsNavigation) {
+    assert.deepEqual(jsNavigation, e.jsDocumentNavigationProof, "Stored JS document replacement proof differs from native receipts");
+    assert.equal(jsNavigation.outcome, "proved", jsNavigation.reason);
+  }
+  const classes = new Map(navigation?.requests.map((r) => [r.request, r.classification]));
+  const request = (r, env) => {
+    const classification = classes.get(r.id);
+    if (!navigation || classification === "document") return projectRequest(r, env);
+    assert.ok(classification === "parser-asset" || classification === "intentionally-disabled-preload", "Unclassified native request");
+    return { id: r.id, method: r.method, path: r.path, status: r.status, transport: classification, input: r.input,
+      components: structuredClone(r.components), failure: r.failure };
+  };
+  const requests = reconcileRequests(e ?? {}, navigation, jsNavigation);
   assert.equal(requests.outcome, "reconciled", requests.reasons.join("; "));
   const upstream = reconcileUpstream(e.upstreamLedger, { source: profile.source, actions: profile.steps.map((s) => s.id),
     steps: profile.steps.map((action) => ({ action, requests: e.steps.find((s) => s.action.id === action.id)?.requests ?? [] })), observationMs: settings.cleanupObservationMs });
@@ -58,7 +81,7 @@ export function projectCase(cell, profile, app, settings, bindingArtifact = null
   assert.ok(e && e.functionalChecksPassed && Array.isArray(e.failures) && !e.failures.length && Array.isArray(e.gaps) && !e.gaps.length, "Native failures or unresolved evidence gaps remain");
   assert.ok(e.clock?.origin === "node.performance.now" && Number.isFinite(e.clock.startedAt), "Native timestamp origin missing");
   assert.ok(e.provenance?.stillSameProcess, "Native process continuity not observed");
-  assert.ok(e.nativeCleanup?.outcome === "observed", "Retired native cleanup/probe not observed");
+  assert.ok(navigation || jsNavigation?.cleanup || e.nativeCleanup?.outcome === "observed", "Retired native cleanup/probe not observed");
   const baseline = owned(e.resourceBaseline.unattributed);
   assert.ok(e.resourceBaseline.scopes.length, "Empty baseline ledger is not a resource observation");
   for (const scope of e.resourceBaseline.scopes) { const counts = owned(scope.owned); for (const key of keys) baseline[key] += counts[key]; }
@@ -69,20 +92,30 @@ export function projectCase(cell, profile, app, settings, bindingArtifact = null
     empty(row.resources.unattributed); assert.deepEqual(row.resources.unsupported, []);
     const env = { app, architecture: e.architecture, js: profile.js, form: row.formBefore };
     let retired = [];
-    if (row.retired) { assert.ok(row.retired.probeAvailable, row.retired.reason ?? "Retirement not observed in the same realm"); retired = [{ scope: row.retired.scope, owned: empty(row.retired.owned) }]; }
+    if (row.retired) {
+      if (navigation || jsNavigation?.actions.includes(row.action.id)) retired = [{ scope: row.retired.scope, owned: null, basis: "platform-destruction" }];
+      else {
+        assert.ok(row.retired.probeAvailable, row.retired.reason ?? "Retirement not observed in the same realm");
+        retired = [{ scope: row.retired.scope, owned: empty(row.retired.owned) }];
+      }
+    }
     const status = row.requests.find((r) => r.path === row.action.path && r.method === "GET" && r.resource === "document")?.status ?? null;
-    return { at: e.clock.startedAt + row.at, action: structuredClone(row.action), requests: row.requests.map((r) => projectRequest(r, env)), dom: dom(row.dom, status),
+    return { at: e.clock.startedAt + row.at, action: structuredClone(row.action), requests: row.requests.map((r) => request(r, env)), dom: dom(row.dom, status),
       document: row.document ? dom(row.document, row.document.status) : null,
       readback: row.readback ? { id: row.readback.observer, via: row.readback.via, alerts: structuredClone(row.readback.alerts) } : null,
       retired, upstream: Object.fromEntries(["started", "completed", "cancelled", "pending"].map((key) => [key, row.upstream[key]])), errors: structuredClone(row.errors) };
   });
   const cleanup = e.nativeCleanup, d = cleanup.dom;
+  const capture = { case: cell.case, outcome: "captured", reason: null, architecture: e.architecture,
+    environment: { ...structuredClone(settings.profiles[profile.device]), js: profile.js, device: profile.device }, baseline, steps };
+  if (navigation || jsNavigation?.cleanup) return { ...capture, cleanup: { kind: "platform-destruction", scope: cleanup.before.scope, navigationAt: cleanup.navigation.at,
+    replacementAt: cleanup.after.at, observationStartedAt: e.platformLifecycle.boundaries.terminalStartedAt, afterAt: e.platformLifecycle.boundaries.endedAt,
+    detached: null, afterProbe: null, probe: null, dom: null, network: cleanup.requests.map((r) => request(r, { app, js: profile.js })), errors: [] } };
   assert.ok(d && !d.enhancementUnavailable, cleanup.domError ?? "Fresh retired DOM/native binding unavailable");
   const detached = empty(cleanup.retired.owned), afterProbe = empty(cleanup.probe.afterResources);
   assert.equal(cleanup.probe.beforeSha256, cleanup.probe.immediateSha256); assert.equal(cleanup.probe.beforeSha256, cleanup.probe.afterSha256);
   assert.deepEqual(cleanup.probe.requests, []); assert.deepEqual(cleanup.probe.errors, []);
-  return { case: cell.case, outcome: "captured", reason: null, architecture: e.architecture,
-    environment: { ...structuredClone(settings.profiles[profile.device]), js: profile.js, device: profile.device }, baseline, steps,
+  return { ...capture,
     cleanup: { detachedAt: cleanup.detachedAt, releasedAt: cleanup.released.at, probeAt: cleanup.probe.at, afterAt: cleanup.probe.afterAt,
       detached, afterProbe, probe: { scope: cleanup.probe.scope, kind: "retired-page-event" },
       dom: { id: d.observer, scope: d.scope, path: d.path, page: structuredClone(d.page), error: d.error, form: structuredClone(d.form), components: structuredClone(d.components) },
@@ -96,7 +129,7 @@ export function exportBrowserCaptures(summary, records, readCell = (cell) => cel
   for (const app of candidates) {
     const raw = summary.cells[app]; assert.ok(Array.isArray(raw) && raw.length === plan.cases.length, "Raw profile matrix incomplete");
     const capture = { schema: browserCaptureSchema, app, effectivePlan: structuredClone(plan), cases: plan.cases.map((profile) => unavailable({ case: profile.key }, "not-run", "Native profile not executed")) };
-    const diagnostics = [], digest = createHash("sha256").update("["), seen = new Set();
+    const diagnostics = [], digest = createHash("sha256").update("["), seen = new Set(), verifiedDocuments = new Set(), verifiedJS = new Map();
     for (const [rawIndex, saved] of raw.entries()) {
       const cell = readCell(saved, app), profile = plan.cases.find((p) => p.key === cell.case);
       assert.ok(profile && !seen.has(cell.case), "Missing/duplicate raw case"); seen.add(cell.case);
@@ -113,15 +146,17 @@ export function exportBrowserCaptures(summary, records, readCell = (cell) => cel
           assert.equal(summary.bindingArtifacts[app].sourceCommit, summary.code.commit, "Binding artifact is from another source commit");
         }
         capture.cases[index] = projectCase(cell, profile, app, settings, summary.bindingArtifacts?.[app]);
+        if (profile.js && cell.evidence.jsDocumentNavigationProof) verifiedJS.set(profile.key, cell.evidence.jsDocumentNavigationProof);
+        if (!profile.js && capture.cases[index].cleanup.kind === "platform-destruction") verifiedDocuments.add(profile.key);
       } catch (error) {
         capture.cases[index] = unavailable(cell, "unsupported", error.message); diagnostics.push({ case: cell.case, stage: "projection", error: error.message }); continue;
       }
-      try { validateBrowserCapture(plan, capture, records, settings); }
+      try { validateBrowserCapture(plan, capture, records, settings, undefined, verifiedDocuments, verifiedJS); }
       catch (error) {
         capture.cases[index] = unavailable(cell, "failed", error.message); diagnostics.push({ case: cell.case, stage: "oracle", error: error.message });
       }
     }
-    const validation = validateBrowserCapture(plan, capture, records, settings);
+    const validation = validateBrowserCapture(plan, capture, records, settings, undefined, verifiedDocuments, verifiedJS);
     captures[app] = capture; reports[app] = { validation, diagnostics, rawCasesSha256: digest.update("]").digest("hex"), captureSha256: sha256(JSON.stringify(capture)) };
   }
   return { captures, manifest: { schema: "native-browser-strict-export/v1", settings, reports, code: structuredClone(summary.code), images: structuredClone(summary.images), browser: structuredClone(summary.browser),

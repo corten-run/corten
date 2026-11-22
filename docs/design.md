@@ -213,7 +213,10 @@ rules something out.
    class declares its fields, so a misspelled write is
    flagged only when `this` is retyped to a typedef that repeats the fields (`@this` on a method, a
    cast in the constructor), and a read of the misspelled name only when a method other than the
-   constructor set it and `undefined` is not accepted; TypeScript 5.8 added `erasableSyntaxOnly`.
+   constructor set it and `undefined` is not accepted, and a field declared with no value that the
+   constructor writes only through such a typedef is refused under `strict` by 7.0.2 (TS2564) and
+   accepted in JavaScript by 6.0.3, so it is declared with a first value; TypeScript 5.8 added
+   `erasableSyntaxOnly`.
    TypeScript 7.0.2 exports no stable parsing entry point: its root exports only `version` and
    `versionMajorMinor`, and its parser and AST entry points are all under `typescript/unstable/`.
    The repository's AST checks import `typescript/unstable/sync`, `typescript/unstable/fs` and
@@ -224,10 +227,21 @@ rules something out.
    `bench/fullstack-browser` and `bench/workloads` have their own package, `bench/package.json`,
    pinned exactly to TypeScript 6.0.3, the newest release with that API);
    reasoned (with the check at the call, no declarations sit between markup and script to go stale;
-   component behavior is exported functions, not classes; the runtime's one hand-written class,
-   `<corten-live>`, sets only the fields it declares, and the classes it generates, one per view
-   (the macro writes them) and one per typed event (`assets.rs` writes them), are typed by the
-   declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
+   component behavior is exported functions, not classes; the runtime has two hand-written
+   classes, `<corten-live>` (its fields `source` and `applied`) and `corten/read`'s `ReadError`
+   (`status` and `redirected`; its `name` is a field's first value), and each declares its fields
+   and writes them only through a typedef of them (`LiveFields`, `ReadErrorFields`), so `tsc`
+   refuses a misspelled write in either; `scripts/escapes.mjs` lists the two, keyed by the tag
+   `customElements.define` gives `<corten-live>`, fails when the runtime, kit, template or example
+   scripts gain a class or lose one, and refuses a class's public field written through a `this`
+   that no cast or `@this` tag types (by assignment, `++`, `delete`, a `for` target or
+   destructuring), which `tsc` accepts, and a `this`, typed or not, handed first to
+   `Object.assign`, `Object.defineProperty`, `Object.defineProperties`, `Reflect.set`,
+   `Reflect.defineProperty` or `Reflect.deleteProperty` named directly, whose keys no type
+   checks; a writer reached through an alias or a computed key, and a `@this` tag naming the class
+   rather than a typedef of its fields, are not seen, and review holds those; the classes it
+   generates, one per view (the macro writes them) and one per typed event (`assets.rs` writes
+   them), are typed by the declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
    was read, and none's value is used as a type it is not; the unstable parser API lets
    `scripts/escapes.mjs` inspect JSDoc and `scripts/events.mjs` compare the compiler's DOM event
    maps with `crates/corten-macros/src/dom.rs` without a separate parser dependency.
@@ -251,10 +265,11 @@ rules something out.
    JavaScript gains type syntax of its own (TC39's type annotations proposal), which a script
    could carry in place of JSDoc; or a script needs a check `checkJs` cannot give with a JSDoc type
    (an object built up a property at a time that cannot be written as a literal or a typed value);
-   or a component or the runtime has a hand-written class, or a function called with `new`, that
-   sets properties it does not declare, or a function that reads `arguments`; or TypeScript stops
-   reading a JSDoc form the scripts use (7.0 dropped several, among them `@enum`, `@class`, Closure
-   function types, a bare `?` or postfix `!`, and a value written where a type belongs, none of
+   or a component or the runtime has a hand-written class beyond the two that
+   `scripts/escapes.mjs` lists, or one of those writes a field other than through its typedef, or a
+   function called with `new` sets properties it does not declare, or a function reads
+   `arguments`; or TypeScript stops reading a JSDoc form the scripts use (7.0 dropped several,
+   among them `@enum`, `@class`, Closure function types, a bare `?` or postfix `!`, and a value written where a type belongs, none of
    which they use); or a TypeScript release changes what the probes behind the measured premise
    show; or TypeScript ships a stable parsing API for these AST checks; or a TypeScript 7.x
    update changes the unstable sync, filesystem or AST APIs they use; or benchmark tooling moves
@@ -350,7 +365,20 @@ rules something out.
    their closures, free names, form handler discovery and URL resolution), and the 12,526 calls
    the browser evidence tests made to the extractor's exported functions. Of those calls' inputs,
    2,593 were seen under both compilers, all with the same output. Another 338 per run carry
-   per-run random values, so they never recur across runs and were not compared.
+   per-run random values, so they never recur across runs and were not compared;
+   2026-11-22, at `06d7a766a` and the change, with TypeScript 6.0.3 and 7.0.2 on `jsconfig.json`:
+   the scripts it checks, searched for a class with 7.0.2's parser (`scripts/escapes.mjs`), have
+   `<corten-live>` and `ReadError`, besides the typing fixture's two and the declarations of
+   generated classes. As written there, a misspelled `status` in `ReadError`'s constructor
+   failed only at the fixture's typed read of it (TS2551), and a misspelled `redirected`, or
+   either of `<corten-live>`'s two writes misspelled, passed on both. Written through a typedef,
+   each of the four misspellings is refused at the write (TS2551) on both, a misspelled field
+   declaration at each cast (TS2352), and a plain `this.` write is still accepted by `tsc`, so
+   `scripts/escapes.mjs` refuses one (its test writes it each of those ways, and restoring either
+   class's plain write fails the scan at that line). `tsc` also accepted
+   `Object.assign(this, { redirecetd: redirected })` in `ReadError`'s constructor, after which a
+   redirect's error had `redirected` false, and the scan refuses that form too. 7.0.2 refused the fields declared with no value
+   (TS2564), 6.0.3 accepted them.
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in
@@ -2823,7 +2851,10 @@ rules something out.
     does it and terser goes; or terser's output fails a smoke test in a supported engine that
     esbuild's alone passes.
 
-    Last checked: 2026-11-20, terser 5.51.3 with esbuild 0.28.2 on `3efd3266d` builds all eight
+    Last checked: 2026-11-22, terser 5.51.4 with esbuild 0.28.2 on `a0eeeacca` builds every file in
+    `crates/corten/js/dist/` byte for byte as 5.51.3 does there (`git status` clean after
+    `npm run build:js`), the release dropping only source maps from terser's own package;
+    2026-11-20, terser 5.51.3 with esbuild 0.28.2 on `3efd3266d` builds all eight
     files byte for byte as 5.51.2 does there (the same SHA-256 each), so the move changes no
     shipped byte, and the build gives terser no input source map, so 5.51.3's source-map change
     does not apply; 2026-11-10, sizes on `21f9fab3` with esbuild 0.28.2
@@ -5508,7 +5539,7 @@ rules something out.
     that imports it, each page's import map names it
     (`,"corten/read":"/assets/<version>/scripts/corten-read.js"`, 60 bytes, 4 to 9 once the page
     is compressed), and the pages whose scripts import it preload it (a 77-byte
-    `<link rel="modulepreload">`). The module is 749 bytes, 486 with gzip and 409 with brotli,
+    `<link rel="modulepreload">`). The module is 767 bytes, 493 with gzip and 413 with brotli,
     which the users of an app that reads download once a release. The server's work is
     unchanged: a `req.screen` page costs 37,950 instructions a request as HTML and 41,211 as a
     data client's JSON on `dea1788d2` and on `4eb3d62d1`, within 0.2 of each other in every run
@@ -5536,7 +5567,8 @@ rules something out.
     at level 6 and brotli at quality 11, on `dea1788d2` and `4eb3d62d1`, once each, and the
     module's again on `c74c4fa83`, once it cancels a refused answer's body, gives a malformed
     success a `cause` and lets an abort win over a failed answer, 666, 438 and 367, and on
-    `7664551c8`, once it tells a redirect apart (`redirected`), 749, 486 and 409; a
+    `7664551c8`, once it tells a redirect apart (`redirected`), 749, 486 and 409, and on
+    `06d7a766a` and the change, once `ReadError` declares its fields, 767, 493 and 413; a
     `req.screen` page's instructions a request under callgrind, 1,200 requests through the
     router in process less 200, over 1,000, in both modes, three alternated runs of each build,
     release, in `rust:1-bookworm`: HTML 37,949.68 to 37,949.73 on `dea1788d2` and 37,949.64 to
@@ -5584,7 +5616,9 @@ rules something out.
     `7664551c8`, the read checks in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2
     (Playwright 1.64.1); 2026-11-16, the hand mount's check when the crate compiles
     (`Route::Data` and `DataMatches`, its `compile_fail` doctests and message test) on
-    `f109794c6`.
+    `f109794c6`; 2026-11-22, the module's size and the smoke's read checks on `06d7a766a` and the
+    change, once `ReadError` declares its fields, the read checks in Chromium 159.0.8154.6, Firefox
+    159.0 and WebKit 27.2 (Playwright 1.65.1).
 
 56. <a id="choice-network-only-preload"></a>**The generated service worker answers a navigation
     under a `network_only` prefix with the request navigation preload already sent, rather than
@@ -7217,10 +7251,11 @@ rules something out.
     [the request path](guide/app.md#your-own-middleware) says it does, and the security headers,
     `Cache-Control`, the tag and the compression treat a kept page as the handler's answer, so no
     rule about what may be shared is written twice. Only a route typed `Public` whose answer is
-    a page, or JSON or text in a build that compresses, asks the store at all, which is known when the route is made, so no
+    a page, or JSON, text or a file in a build that compresses, asks the store at all, which is known when the route is made, so no
     other route's `GET` pays for it. A write pays a hash of its path and a count, and only in an
-    app with such a route: whether one has any is known when the router is made, and an app
-    with none makes no store and counts no writes.
+    app with such a route that has made an answer it may keep: whether an app has such a route
+    is known when the router is made, and an app with none makes no store and counts no writes;
+    one that has such a route and has made no such answer pays for no count by path (below).
 
     "Cannot tell who asks" is less than a key needs: an extractor of the app's own may be
     `Anonymous` and read the browser's `User-Agent` or a country header a proxy set. So a page
@@ -7293,8 +7328,8 @@ rules something out.
     which no round here shows; the simulation below gives it for some spreads, and the one
     where the rule loses.
 
-    A route whose answer is JSON or text is kept the same way where the app compresses the
-    answer
+    A route whose answer is JSON, text or a file (`Media`, or a sitemap or `robots.txt` of
+    `seo`) is kept the same way where the app compresses the answer
     ([#1794 `Public` text, JSON and files are not kept](https://github.com/corten-run/corten/issues/1794)):
     its whole body, by a page's key and under a page's rules, in a build with the `compress`
     feature, when it is one the app would compress (1,024 bytes or more, of a type it
@@ -7325,16 +7360,50 @@ rules something out.
     and gives up what those would have saved. While a route leaves the store out, a body it
     kept earlier stays, and may be given after a newer one its handler made, within the
     lifetime the route wrote, as two instances may answer. An app whose only `Public` routes
-    answer JSON or text has a store in a build that compresses, and its writes are counted,
-    also when every body turns out too small, which is known only as each is made.
+    answer JSON, text or files has a store in a build that compresses,
+    also when every body turns out too small or of a type the app does not compress, which is
+    known only as each is made: an app whose one `Public` route is its `robots.txt`, or a
+    picture at a URL that names its content, has one and keeps nothing in it.
+    Its writes are counted by path once it has made an answer it may keep, and not before
+    ([#1874 A write is counted for the app's store before anything is kept: an app whose `Public` routes keep nothing pays about 1,080 instructions a write](https://github.com/corten-run/corten/issues/1874)):
+    a store can stay empty for as long as the app runs, and its writes then paid for counts
+    nothing read. The counts by path are made by the first answer that may be kept, where the
+    first request that asked made them before. Until they are there a write reads nothing of
+    its path and adds one to a count of all such writes when it is answered or dropped, as work
+    it left does when it ends, and an answer stands only while that count is as its request
+    found it. So a write that began before the counts and ends after drops every answer kept
+    by then, where a count by path drops its own path's: only a write under way when the
+    first such answer is made can, and what it drops was made while it ran. Work such a write
+    left (`Signal::finish`) drops them again each time some ends, since nothing of its path was
+    read to count by: a task that keeps that write's `Signal` and finishes work on it again and
+    again empties the store each time, for as long as it does. None is known, and the count by
+    path it would need is the hash of the path, 486 of the 979 instructions this saves a write
+    at the harness's path of 13 bytes (below). That first answer
+    makes the counts whether or not it is then kept (a write may have gone through while its
+    handler read), so an app whose writes never pause still comes to keep its pages. A page
+    route's writes are counted the same way until its first page is made.
     Which answers are whole bodies is known
     when the route is made (`Answer::WHOLE`, of a type an app cannot name, as `KEYED` is), so the
-    route of a file, a relay, a stream, a feed or an answer type of the app's own asks the store
-    nothing. What a page route answers in a page's place is kept as the page would be, as it was
+    route of a relay, a live stream, a feed or an answer type of the app's own asks the store
+    nothing. A file is a whole body by its type, and which files are kept is settled as each
+    is made, by the rule for any body and nothing of a file's own: one sent as a stream
+    (`Media::stream`) has no size and carries a mark the store does not replay; a picture of a
+    type the app does not compress (a PNG, a JPEG) is left out with every body it does not
+    compress; and a file at a URL that names its content (`Public::immutable`) says no
+    lifetime for the app, as before this, and is left to the caches that keep it for a year.
+    A route of such files leaves the store out after its first 64 answers, as a route of small
+    bodies does. A kept file is sent with the headers its handler gave it, its
+    `Content-Disposition` among them, and an unstaged route's file is never kept: its handler is routed
+    bare, with no stage to ask the store, and counts for nothing in whether the app has one. What a page route answers in a page's place is kept as the page would be, as it was
     before this: a file of a known size from a route that says it answers a page or a file
-    (`PageOr`), and an answer type of the app's own that says it is a page.
+    (`PageOr`), and an answer type of the app's own that says it is a page. So a file is kept
+    by its route's rule: from a route of files where the app compresses it, and from a page
+    route whatever its type and its build, as the page at that URL is. A picture typed
+    `PageOr` is therefore kept where the same picture from a route of files is not, and a
+    request for data is kept for a route of files and not for a page route, which
+    this leaves as it was.
     One thing differs from a page. A page route has three answers at its URL (the document, its
-    swap and its data) and only the document is kept; a JSON or text route has one, so a request
+    swap and its data) and only the document is kept; a JSON, text or file route has one, so a request
     that asks for JSON first is kept too. A handler that takes `Req` can read which of the two
     asked (`req.mode`), and whether it does is not in its type, so the two are kept apart and a
     route asked both ways holds its body twice. It can read the request's language too
@@ -7342,8 +7411,8 @@ rules something out.
     in `Vary`, as a page is. With both, a URL's eight copies are shared by the ways of asking
     times the languages asked in. An answer may hold markup its handler rendered, and one with a form's new submit key is
     not kept; it is still sent `public`, a fault this does not mend
-    ([#1863 A `Public` answer with a submit key its handler rendered to a string is sent to shared caches as one any visitor may be given](https://github.com/corten-run/corten/issues/1863)). A page's render marks the key it drew; markup rendered any other way (into JSON
-    or text, or into a file a page route answers) carries no mark, so the route watches the handler's own polls for one being drawn, and a render that reads
+    ([#1863 A `Public` answer with a submit key its handler rendered to a string is sent to shared caches as one any visitor may be given](https://github.com/corten-run/corten/issues/1863)). A page's render marks the key it drew; markup rendered any other way (into JSON,
+    text or a file) carries no mark, so the route watches the handler's own polls for one being drawn, and a render that reads
     the mark for itself (a page's, a patch's, one made with `req.rendered`) leaves a key drawn
     before it for the watch, also when it fails: a field rendered to a string and placed in a
     page as markup. A key drawn outside the handler's polls, or on another thread during one
@@ -7377,10 +7446,11 @@ rules something out.
     Writes are counted by a hash of the path with its escapes decoded, and a kept page stands
     only while the count is the one its request found before its handler ran: a write takes no
     lock and searches nothing, and a page whose handler was reading while the write went
-    through is not kept. There are 65,536 counts (256 KiB, made when the first answer the app may keep is
-    asked for, so an app with no route that asks the store holds none), and a write to another path drops a
+    through is not kept. There are 65,536 counts (256 KiB, made with the first answer the app may keep,
+    so an app that makes none holds none), and a write to another path drops a
     given kept page early once in 65,536 times, which costs that page a render. Nothing else
-    drops a page before its lifetime ends: not a change made by a task
+    drops a page before its lifetime ends, but a write from before the counts were made
+    (below): not a change made by a task
     or another instance, a purge at a CDN in front (which is given the kept page again with
     its `Age`), or a request's `Cache-Control: no-cache`. How long a page stands is the app's
     to say, and a reload is not a reason to render it.
@@ -7408,9 +7478,7 @@ rules something out.
     removes pages as their lifetimes end, since a page that no longer stands is replaced when it
     is next asked for and goes when room is made; and, left for changes of their own, a call
     that drops a page for a change no write to its path made, a way for an extractor of the
-    app's own to say it reads only the URL, `Public` files (a `Media` may be a stream, which
-    has no size to keep, or bytes the app already holds, which cost no render, and what keeping
-    one saves is not measured), every `Public` body kept whatever its size and its build
+    app's own to say it reads only the URL, a `Public` file of a type the app does not compress kept for the hash of its tag (which is 20,347 of the 61,024 instructions the PNG's request costs below with a coding named, by callgrind's count for the hash's function in `73f38661f`, at the price of a second copy of bytes the app may hold; [#1877 The tag's hash is a third of a request for a file the app does not compress: about 2.5 instructions a byte, made again for every answer that is not kept](https://github.com/corten-run/corten/issues/1877) has the ways to make the hash cheaper for every answer), every `Public` body kept whatever its size and its build
     (what this first did, for the 3.9% and at the price of the 13.8% below), a size of the store's own apart
     from the compressor's (no round supports one), a way for a route to say its bodies are
     worth keeping (a second way to say what `Public` says, until an app shows the handler it
@@ -7537,6 +7605,50 @@ rules something out.
     workstation, with other builds running, gave +1.5% (bound +2.8%) and is set aside as noise. Historical, a parent and child from
     before main changed the reading of a request's mode that a write runs: 16,292.0 a write at
     `30b39d455` against 15,210.8 at `45489ced9`, and with a `Public` page 16,308.7 against 16,310.7.
+    What a write pays before the counts by path are made, under callgrind (valgrind 3.19.0,
+    rustc 1.99.1, release with line tables, every feature) with the request-cost harness's
+    write cases (`crates/corten/tests/router_cost.rs`: a `POST` sent in process as a form of
+    the same origin sends one, as (instructions at 1,200 requests less those at 200) over
+    1,000, the median of three rounds that agree to within 2.3), `aa34d8d78` (this change)
+    against `1091ae766` (main's `e7e89add8` with the harness's cases): in an app whose one
+    `Public` route answers text too small to keep, 15,446.1 a write against 16,425.1, 979.0
+    fewer (6.0%), and 15,221.1 against 16,205.0 once that text had been asked for; with a
+    `Public` page not yet asked for, 15,221.9 against 16,201.1; with no `Public` route,
+    15,357.1 against 15,357.0. Of the 979, the hash of the path (`count_of`, with what it
+    calls) is 486, by callgrind's count for the function in `1091ae766` at that path of 13
+    bytes. Where the counts are there the change costs a little: a write
+    with a page kept took 16,734.1 against 16,714.1, 20.0 more (0.12%) to find the counts
+    made, and a kept page given again 17,971.5 against 17,966.5, 5.0 more (0.03%) for the
+    second count it reads. What the store still costs a write that finds no counts is not
+    resolved: with the store turned off in the same app (`kept_answers(0)`) a write took
+    15,357.0 in the app with the text route and 15,359.1 in the one with the page, against
+    the 15,446.1 and 15,221.9 above, 89 more and 137 fewer.
+    The counts differ between apps and between warm-ups by more than what is compared within
+    one, which this does not explain: a write is about 220 cheaper once the text route had been
+    asked for, in both builds, and the app with no `Public` route costs more than the one with
+    a page not yet asked for. Each figure above is a pair in one app. Under load on a quiet
+    cloud host (Xeon Platinum 8280, Linux 6.12.117), with the catalog benchmark app given a
+    `POST` route and a `Public` text route too small to keep (`48ef77477`, this change's first
+    commit `3f86d3992` with those routes, against `3d23cf64f`, main's `e7e89add8` with them;
+    the commits after `3f86d3992` change tests and text), `wrk` 4.1.0 sending the write on 64
+    connections from two threads on two cores of their own, the app on one, `perf stat` on the
+    app's process, six starts of both builds and eight pairs of 3 s turns in each with the
+    order turned about: 42,961 cycles a write against 43,832, 1.7% fewer at the median of the
+    48 pairs (-6.8% to +5.3% by pair, +0.6% to -3.1% by start, fewer in 34): user cycles
+    18,249 against 18,920 and kernel cycles 24,756 against 24,886, with 22,694 user
+    instructions a write against 23,345. That is 651 instructions fewer where the harness
+    counts 979, at a path of 5 bytes (`/save`) where the harness's has 13; the hash reads the
+    path a byte at a time, and whether its length is all of that difference is not checked.
+    Both builds' answers were checked before the run and no request failed in its 96 turns.
+    The same build against itself gave +0.2% (-1.8% to +2.0% by start), and
+    the two trees built without compression, where neither has a store and a write does the
+    same work in both, +0.2% (-5.8% to +4.8% by start, 20,687 user instructions against
+    20,704). Two builds differ from one start to the next by more than this saves, no
+    smallest worthwhile reduction was declared before the run, and perf's running percentage
+    and the user instruction-cache misses were not recorded, so this claims no fewer cycles: the cycles went the way of the
+    instructions saved, and do not show the saving on their own. What a
+    write with a page kept and a kept page given again pay in cycles for their 20.0 and 5.0
+    instructions is not measured, being far under what that run can tell apart.
     A kept body, with the catalog benchmark's JSON route marked `Public` for a minute and two
     routes beside it that make nothing, of 2 bytes and of 2,000 (`69c8fb1bf` with this
     change's code against `c26cbdb5a` on main's `564034b86`), counted under callgrind with a
@@ -7584,7 +7696,47 @@ rules something out.
     A body took about 5.3 KB of resident memory there (185 MB more at the end of each turn
     of about 35,000 requests), so the default bound has room for about six thousand such
     before it is full and the rule for a full store applies.
-    Not measured: a body kept for a handler that waits on a database or another service,
+    A kept file, with three file routes added to the catalog benchmark (`05ead69a7`, this
+    change's `8db0885c7` with them, against `73f38661f`, main's `e7e89add8` with them): a
+    sitemap of 500 URLs (44,497 bytes) its handler writes for each request, a CSV of 6,820
+    bytes the app holds and its handler hands over, and a PNG of 8,000 bytes it holds, which is
+    not kept. Under callgrind (valgrind 3.19.0, rustc 1.99.1, release with line tables) with a
+    browser's request headers, as (instructions at 1,300 requests less those at 300) over
+    1,000: the sitemap took 46,438 instructions a request against 897,238 with a browser's four
+    codings, 45,834 against 1,436,298 with `gzip` alone and 41,732 against 577,195 with no
+    coding; the CSV 45,158 against 324,632, 44,684 against 905,697 and, with no coding, 40,348
+    against 39,349, more, as a kept body the handler made nothing for is above; the PNG 61,497
+    against 61,566, 60,910 against 61,024 and 37,493 against 37,712, the same within what two
+    builds differ by; each is one run at each count, with every answer's status, size and type
+    read. Under load on a quiet cloud host (Xeon Platinum 8280, Linux 6.12.117,
+    `wrk` 4.1.0 with 64 connections from two threads on two cores of their own, the app on one,
+    `perf stat` on the app's process; six starts of both builds, eight pairs of 3 s turns in
+    each with the order turned about), cycles a request, each build's at its median turn and
+    the change at the median of the 48 changes within a pair: the sitemap with four codings
+    53,074 against 346,018, 84.7% fewer (84.1% to 86.2% by pair, 84.5% to 84.8% by start; user
+    cycles 26,440 against 314,057, kernel 26,620 against 31,836), and with no coding 74,374
+    against 247,734, 70.0% fewer (67.8% to 73.0% by pair, 69.4% to 70.9% by start; user 23,470
+    against 194,555, kernel 51,114 against 53,081); the CSV with four codings 53,896 against
+    151,793, 64.5% fewer (60.5% to 68.7% by pair, 64.1% to 65.1% by start; user 26,059 against
+    121,217, kernel 27,708 against 30,545), each fewer in all 48 pairs; the CSV with no coding
+    52,600 against 51,332, 2.9% more (3.5% fewer to 18.2% more by pair, 0.0% to 4.3% by start,
+    more in 38 of 48; user 22,619 against 21,491, kernel 29,912 against 29,994), the price of a
+    kept answer where its handler makes nothing and nothing is compressed; the PNG 60,928
+    against 61,011 with four codings (+0.2%; -15.6% to +4.0% by pair, -2.1% to +1.2% by start)
+    and 49,172 against 48,783 with none (+0.5%; -8.3% to +11.8% by pair, -3.4% to +3.4% by
+    start), where the same build against itself gave +0.5% (-1.5% to +2.2% by start), so no
+    cost to a file that is not kept is shown. No request failed in the 672 turns. No smallest
+    worthwhile reduction was declared for a file before this run: the 20% set before the body's
+    run above is what a kept answer the app compresses was held to, and the least of the 144
+    changes within a pair in the three cases that gained is 60.5%. Perf's running percentage
+    and the user instruction-cache misses were not recorded, and `gzip` alone was counted and
+    not run under load. The app's
+    resident memory, about 10 MB, differed by at most 124 kB either way. A kept file is held as a copy
+    of its own, so bytes the app holds are held twice while the copy is kept, with each coded
+    form made of them.
+    Not measured: a file kept for a handler that reads it from a disk, a database or a store
+    of objects, where the read is what a kept file saves; a new URL for every request for a
+    file, which takes the path a body's does above; a body kept for a handler that waits on a database or another service,
     where the wait and not the compression is what a kept body saves (the benchmark's handler
     reads memory, and the rule for bodies is drawn from it); a route of a few large bodies
     among many small, in cycles (how often it leaves the store out is reasoned from the run's
@@ -7607,18 +7759,26 @@ rules something out.
     `Accept-Language`, which is the key, and of a body's `GET` those and whether JSON was asked
     for first, which is in its key too; the stages after the handler read the request and the
     answer and nothing the handler held, so they treat a kept answer as its own); bet (an app that
-    marks a page `Public` means the lifetime it wrote also with no CDN in front, and does in its
+    marks a page `Public` means the lifetime it wrote also with no CDN in front, and the hour
+    `seo` writes for a sitemap or `robots.txt` where it wrote none, and does in its
     handler nothing that must happen for every request; markup with a form's new submit key is rendered by the handler itself on the thread that
-    runs it, not by a task it spawned, one it handed a render to, or a thread of its own); value (fast and proven fast; standards
+    runs it, not by a task it spawned, one it handed a render to, or a thread of its own; no app finishes work again and again on the
+    `Signal` of a write from before its first answer that may be kept); value (fast and proven fast; standards
     first, the app being a shared cache as RFC 9111 describes one; mistakes fail at compile time,
-    what may be kept being known from the route's types; good defaults, easy overrides, with one
+    what may be kept being known from the route's types, and which of a body route's answers
+    are, as each is made; good defaults, easy overrides, with one
     setting for the bound, README Values).
 
     Revisit when: apps report pages shown past what they meant, so the default should be off
     or the lifetime the app's to set apart from `s-maxage`; an app's handler for bodies the
-    app does not compress (small ones, or any in a build without `compress`) waits on a
+    app does not compress (small ones, ones of a type it leaves as it is, as a feed's
+    `application/rss+xml`, a PDF or a picture is, or any in a build without `compress`) waits on a
     database or another service, so keeping them would save more than asking costs and the
-    rule should be the route's to widen; a route's profile shows its few large bodies made
+    rule should be the route's to widen; an app's page route answers pictures or small files
+    in its page's place (`PageOr`) often enough that keeping them, which the page's rule does
+    whatever their type, costs more than their handler saves, so a file there should be kept
+    by the rule for a file; apps report a sitemap or `robots.txt` an hour behind their data
+    with no CDN in front, so `seo`'s hour should not be the app's too; a route's profile shows its few large bodies made
     for each request among many small ones, so a run is the wrong measure; an app's profile shows the copies
     for URLs asked for once in a store with room, so the rule should start before the store
     is full; an app's pages are made twice in a full store at a cost above the copies saved
@@ -7629,11 +7789,19 @@ rules something out.
     become most of a kept page's cost on a measured app, so a place further out is worth its
     rules; a multi-core measurement shows requests waiting on the store's lock; writes no
     handler takes (a scanner's `POST /`) make kept pages again often enough to show, so the
-    router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; or an app
+    router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; an app
+    is found finishing work again and again on the `Signal` of a write from before its first
+    answer that may be kept, which empties its store each time, so such a write should keep
+    its path to count by; or an app
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-21 for a kept body, `c26cbdb5a` (main's `564034b86` with the catalog
+    Last checked: 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
+    benchmark) and `05ead69a7` (this change's `8db0885c7` with them), kept under the tag
+    `evidence/kept-file-1794`; 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
+    request-cost harness's write cases and two routes in the catalog benchmark) for the counts,
+    and for the run under load its parent `3d23cf64f` and `48ef77477` (this change's
+    `3f86d3992` with those routes), kept under the tag `evidence/early-writes-1874`; 2026-11-21 for a kept body, `c26cbdb5a` (main's `564034b86` with the catalog
     benchmark's JSON route marked `Public` for a minute and two routes that make nothing, of 2
     bytes and of 2,000) against `69c8fb1bf` (the same on this change), built with rustc 1.99.1
     with the app's default features, and without them for the build that does not compress:

@@ -19,6 +19,12 @@ mod routes {
     #[route("/files/picture.png", get = picture)]
     pub struct Picture;
 
+    #[route("/files/small.png", get = small)]
+    pub struct Small;
+
+    #[route("/files/large.png", get = large)]
+    pub struct Large;
+
     #[route("/catalog/{id}", get = show)]
     pub struct Catalog<'a> {
         pub id: &'a str,
@@ -75,9 +81,10 @@ async fn export() -> corten::Public<corten::Media> {
     corten::Public::new(std::time::Duration::from_secs(60), corten::Media::new("text/csv", CSV.clone()))
 }
 
-static PNG: std::sync::LazyLock<corten::http::Bytes> = std::sync::LazyLock::new(|| {
+/// Bytes that do not compress, as a picture's do not.
+fn noise(length: usize) -> corten::http::Bytes {
     let mut state = 0x9E37_79B9u32;
-    let bytes: Vec<u8> = (0..8000)
+    let bytes: Vec<u8> = (0..length)
         .map(|_| {
             state ^= state << 13;
             state ^= state >> 17;
@@ -86,11 +93,25 @@ static PNG: std::sync::LazyLock<corten::http::Bytes> = std::sync::LazyLock::new(
         })
         .collect();
     corten::http::Bytes::from(bytes)
-});
+}
+
+static PNG: std::sync::LazyLock<corten::http::Bytes> = std::sync::LazyLock::new(|| noise(8000));
+static SMALL: std::sync::LazyLock<corten::http::Bytes> = std::sync::LazyLock::new(|| noise(1024));
+static LARGE: std::sync::LazyLock<corten::http::Bytes> = std::sync::LazyLock::new(|| noise(1 << 20));
 
 /// A picture the app holds, of a type no build compresses.
 async fn picture() -> corten::Public<corten::Media> {
     corten::Public::new(std::time::Duration::from_secs(60), corten::Media::new("image/png", PNG.clone()))
+}
+
+/// The same of 1,024 bytes.
+async fn small() -> corten::Public<corten::Media> {
+    corten::Public::new(std::time::Duration::from_secs(60), corten::Media::new("image/png", SMALL.clone()))
+}
+
+/// The same of 1 MiB.
+async fn large() -> corten::Public<corten::Media> {
+    corten::Public::new(std::time::Duration::from_secs(60), corten::Media::new("image/png", LARGE.clone()))
 }
 
 async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>) -> JsonResult<Arc<Record>> {
