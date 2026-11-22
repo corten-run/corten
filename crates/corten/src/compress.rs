@@ -190,7 +190,8 @@ pub(crate) enum Level {
     Held,
     /// Once per page the app keeps ([`crate::kept`]), after its second answer that could use it,
     /// on the thread that compresses held values, after them: brotli 5, which a client that ranks
-    /// brotli as high as any coding gets in the place of zstd 1 when it is smaller. On the catalog
+    /// brotli as high as any coding gets in the place of zstd 1, unless a zstd 1 already made is no
+    /// larger (none is made only to compare). On the catalog
     /// benchmark's record page (4,424 bytes) it gives 882 bytes where zstd 1 gives 1,078, and on
     /// card-market's item pages (4,013 bytes on average) 1,293 where zstd 1 gives 1,564; it takes
     /// 1.01 and 1.25 million instructions once (callgrind), where zstd 1 takes 0.12 and 0.16
