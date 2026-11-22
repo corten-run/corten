@@ -1033,16 +1033,6 @@ mod tests {
     #[test]
     fn only_a_held_header_alone_is_not_read() {
         let numbers = |n: u64| Cache::public(Duration::from_secs(4_000_000 + n));
-        let alone = |lines: &[HeaderValue]| {
-            let mut headers = HeaderMap::new();
-            for line in lines {
-                headers.append(header::CACHE_CONTROL, line.clone());
-            }
-            match headers.entry(header::CACHE_CONTROL) {
-                header::Entry::Occupied(entry) => held_alone(&entry),
-                header::Entry::Vacant(_) => unreachable!("a line was added"),
-            }
-        };
         let held = numbers(0).held_header();
         assert!(alone(std::slice::from_ref(&held)), "the held header, alone");
         assert!(!alone(&[numbers(0).header()]), "the same text, made apart");
@@ -1053,6 +1043,66 @@ mod tests {
             numbers(n).held_header();
         }
         assert!(!alone(&[held]), "no longer held, though still alive");
+    }
+
+    /// Whether `settle` would skip its read of these `Cache-Control` lines on this thread.
+    fn alone(lines: &[HeaderValue]) -> bool {
+        let mut headers = HeaderMap::new();
+        for line in lines {
+            headers.append(header::CACHE_CONTROL, line.clone());
+        }
+        match headers.entry(header::CACHE_CONTROL) {
+            header::Entry::Occupied(entry) => held_alone(&entry),
+            header::Entry::Vacant(_) => unreachable!("a line was added"),
+        }
+    }
+
+    /// A header another thread made and still holds is read on this one, though this thread holds
+    /// a header of the same text for the same numbers: a kept answer given on a worker other than
+    /// the one that made it. Each thread knows only its own.
+    #[test]
+    fn a_header_another_thread_holds_is_read() {
+        let numbers = Cache::public(Duration::from_secs(5_000_000)).stale_if_error(Duration::from_secs(11));
+        let (made, foreign) = std::sync::mpsc::channel();
+        let (checked, done) = std::sync::mpsc::channel::<()>();
+        let producer = std::thread::spawn(move || {
+            let header = numbers.held_header();
+            assert!(held(numbers) && alone(std::slice::from_ref(&header)), "the producer's own, alone");
+            made.send(header).unwrap();
+            // Held until this thread has looked, so both threads hold their own bytes meanwhile.
+            done.recv().unwrap();
+            assert!(held(numbers), "still the producer's");
+        });
+        let foreign = foreign.recv().unwrap();
+        let own = numbers.held_header();
+        assert_eq!(foreign, own, "the same text");
+        assert!(!std::ptr::eq(foreign.as_bytes(), own.as_bytes()), "each thread made its own");
+        assert!(alone(std::slice::from_ref(&own)), "this thread's own, alone");
+        assert!(!alone(std::slice::from_ref(&foreign)), "another thread's, while it holds it");
+        checked.send(()).unwrap();
+        producer.join().unwrap();
+        assert!(!alone(&[foreign]), "another thread's, after it has gone");
+    }
+
+    /// `immutable`'s and `no_store`'s headers are constants no thread holds: each is read
+    /// however often it is sent, and sending it puts none of the thread's held headers out.
+    #[test]
+    fn an_immutable_or_no_store_header_is_read() {
+        let numbers = |n: u64| Cache::public(Duration::from_secs(6_000_000 + n));
+        let made: Vec<_> = (0..HELD as u64).map(|n| numbers(n).held_header()).collect();
+        assert!(alone(std::slice::from_ref(&made[0])), "a held one, alone");
+        for cache in [Cache::immutable(), Cache::no_store()] {
+            for _ in 0..=HELD {
+                let value = cache.value();
+                assert!(!alone(std::slice::from_ref(&value)), "{cache:?}: {value:?}");
+            }
+            assert!(!held(cache), "{cache:?}");
+        }
+        assert_eq!(Cache::immutable().value(), "public, max-age=31536000, immutable");
+        assert_eq!(Cache::no_store().value(), "no-store");
+        for (n, value) in made.iter().enumerate() {
+            assert!(held(numbers(n as u64)) && alone(std::slice::from_ref(value)), "{n} still held");
+        }
     }
 
     #[test]

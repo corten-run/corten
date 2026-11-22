@@ -1548,6 +1548,74 @@ async fn a_cache_control_a_middleware_wrote_on_a_public_page_counts() {
     assert_eq!(runs.count(), 8, "one render kept, seven for the app that keeps none");
 }
 
+/// A kept page given on a thread that does not hold its `Cache-Control` is read as main reads it,
+/// and goes out as one given where the header is held: with its age, its header and
+/// `Vary: cookie`. Twice: the page kept on another worker, and kept on this one with its header
+/// put out since by four others the thread made.
+#[tokio::test]
+async fn a_kept_page_whose_header_the_thread_does_not_hold_is_read() {
+    // A lifetime no other test asks for, so this thread holds no header for it whatever ran here.
+    let age = Duration::from_secs(7_000_000);
+    let cache = crate::cache::Cache::public(age);
+    let routes = |runs: &Runs| {
+        let runs = runs.clone();
+        let page = move |req: Req| {
+            runs.ran();
+            async move { Public::new(age, req.test_page_for("Kept", html! { <p>{"kept ".repeat(400)}</p> })) }
+        };
+        let mut table = Table::new().route("/", crate::route::get(page).0);
+        for (n, path) in ["/a", "/b", "/c", "/d"].into_iter().enumerate() {
+            let other = age + Duration::from_secs(1 + n as u64);
+            table = table.route(path, crate::route::get(move || async move { Public::new(other, "other") }).0);
+        }
+        Routes::from(table)
+    };
+    let given = |headers: &HeaderMap, how: &str| {
+        assert!(headers.contains_key(header::AGE), "{how}: kept: {headers:?}");
+        assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=7000000", "{how}");
+        assert!(vary_names(headers).contains(&"cookie".to_string()), "{how}: {headers:?}");
+    };
+
+    // Kept on another worker, which holds the header while this one is given the page.
+    let runs = Runs::default();
+    let router = App::new(routes(&runs)).router();
+    let (kept, given_here) = (std::sync::mpsc::channel(), std::sync::mpsc::channel::<()>());
+    let worker = {
+        let router = router.clone();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let (status, headers, _) = runtime.block_on(fetch(&router, "GET", "/", &[]));
+            assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{headers:?}");
+            assert!(crate::cache::held(cache), "the worker that made it holds it");
+            kept.0.send(()).unwrap();
+            given_here.1.recv().unwrap();
+        })
+    };
+    kept.1.recv().unwrap();
+    assert!(!crate::cache::held(cache), "this thread never made it");
+    let (status, headers, _) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!((status, runs.count()), (StatusCode::OK, 1), "the kept page");
+    given(&headers, "kept on another worker");
+    assert!(!crate::cache::held(cache), "giving it holds nothing");
+    given_here.0.send(()).unwrap();
+    worker.join().unwrap();
+
+    // Kept here, then put out by four other headers made here.
+    let runs = Runs::default();
+    let router = App::new(routes(&runs)).router();
+    let (status, headers, _) = fetch(&router, "GET", "/", &[]).await;
+    assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{headers:?}");
+    assert!(crate::cache::held(cache), "made here");
+    for path in ["/a", "/b", "/c", "/d"] {
+        assert_eq!(fetch(&router, "GET", path, &[]).await.0, StatusCode::OK, "{path}");
+    }
+    assert!(!crate::cache::held(cache), "put out by the four");
+    let (status, headers, _) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!((status, runs.count()), (StatusCode::OK, 1), "the kept page");
+    given(&headers, "put out on this thread");
+    assert!(!crate::cache::held(cache), "giving it holds nothing");
+}
+
 /// A kept page's tag and its bytes in every coding are those the handler's own answer has in an
 /// app that keeps none: only who makes them, and how often, differs.
 #[tokio::test]
