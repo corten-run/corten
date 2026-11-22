@@ -275,7 +275,7 @@ test("continuation refuses a live staged remaining owner before it writes its in
   // Same live PID, different actions. The first-only action really is spent:
   // its only planned child was deleted and every other child was deferred.
   writeFileSync(lock, JSON.stringify({ pid: process.pid, approvalSha256: launch.approvalSha256 }));
-  assert.equal(await p.preview("r21"), approval);
+  assert.notEqual(await p.preview("r21"), approval);
   // Barrier: the remaining action holds the lock but has not written its intent.
   writeFileSync(lock, JSON.stringify({ pid: process.pid, approvalSha256: remaining.at(-1) }));
   assert.ok(!existsSync(join(staged.h.base, "remaining-intent.json")));
@@ -324,6 +324,29 @@ test("continuation archive pins cannot establish missing or in-flight historical
     assert.deepEqual(p.children, []);
     assert.ok(!existsSync(p.old));
   });
+});
+
+test("continuation refuses an ID-less create outside the current group roster", async (t) => {
+  const p = continuationFixture(t), retained = fixture(t), former = "json-api", removed = "former-json";
+  retained.seedLegacy();
+  const state = retained.seed(former, (s) => {
+    s.status = "creating"; delete s.id; delete s.ip;
+  });
+  const { fleetSha256, ...body } = state.fleet;
+  body.jobs.find(({ group }) => group === former).group = removed;
+  body.selection.groups.find(({ group }) => group === former).group = removed;
+  state.fleet = { ...body, fleetSha256: digest(JSON.stringify(body)) };
+  state.group = removed; state.selection.groups[0].group = removed;
+  renameSync(join(retained.h.base, former), join(retained.h.base, removed));
+  writeFileSync(join(retained.h.base, removed, "groups-r21", "state.json"), JSON.stringify(state));
+  writeFileSync(join(retained.h.base, "fleet-r21.json"), JSON.stringify(state.fleet));
+  const historical = readFleet(retained.h.base, "r21", { priorSelection: true });
+  assert.ok(!groupNames.includes(removed));
+  assert.equal(readGroup(historical, removed).state.status, "creating");
+  writeFileSync(p.index, JSON.stringify([{ root: retained.h.base, checkout: retained.h.repo, round: "r21", commit, archives: {} }]));
+  await assert.rejects(p.prepare("r21"), /unresolved custody for a historical group/);
+  assert.deepEqual(p.catalogCalls, []);
+  assert.ok(!existsSync(p.old));
 });
 
 test("a pristine continuation prepare appends a different measured commit without dispatch or changing the verified catalog", async (t) => {

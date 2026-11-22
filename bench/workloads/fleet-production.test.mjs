@@ -433,6 +433,56 @@ test("continuation schedules around pinned catalog and retired JSON without repl
   assert.equal(treeHash(retained), oldTree, "historical bytes untouched");
 });
 
+test("continuation child refuses a historical staged lock acquired after parent intent", { timeout: 60000 }, async (t) => {
+  const p = fixture(t), retained = path.join(p.h.temp, "retained"), [first, group] = groupNames;
+  const historical = ["r20", "--fleet-root", retained];
+  const source = ["--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
+  assert.equal(await fleetMain([...historical, "--prepare", ...source], p.deps), 3);
+  assert.equal(await fleetMain([...historical, "--detach", "--print-approval"], p.deps), 3);
+  const oldApproval = p.output.at(-1).approvalSha256;
+  assert.equal(await fleetMain([...historical, "--detach", "--approve-reviewed-merged-ready", oldApproval],
+    { ...p.deps, main: async () => 2 }), 2);
+  const fleet = readFleet(retained, "r20").manifest, token = fleet.jobs[0].token, at = new Date().toISOString();
+  const local = path.join(retained, first, "groups-r20");
+  const archiveSha256 = "a".repeat(64);
+  fs.mkdirSync(local, { recursive: true });
+  fs.writeFileSync(path.join(local, "state.json"), JSON.stringify({
+    ...reservation({ round: fleet.round, commit, token, fleet, group: first }, at),
+    provider: fleet.provider, fullGroupQualified: false, status: "collected", id: "900", ip: "192.0.2.200",
+    createIntentAt: at, collectedAt: at, deletionIntentAt: at, destroyedAt: at, archiveSha256, evidenceSha256: "b".repeat(64),
+    evidence: "evidence-Synthetic", extractionAttempts: ["evidence-Synthetic"], evidenceOutcome: "validated", exitCode: 0,
+    validation: { status: "verified", campaign: `r20-${token}`, collectionIntegrity: "manifest-verified" },
+  }));
+  fs.writeFileSync(path.join(p.h.base, "index.json"), JSON.stringify([{ root: retained, checkout: path.join(p.h.temp, "no-measured-checkout"),
+    round: fleet.round, commit, archives: { [first]: archiveSha256 } }]));
+  const independent = ["r21", "--continuation-root", p.h.base, "--group", group];
+  assert.equal(await fleetMain([...independent, "--prepare", ...source], p.deps), 3);
+  assert.equal(await fleetMain([...independent, "--detach", "--print-approval"], p.deps), 3);
+  const { approvalSha256, subject } = p.output.at(-1), oldLock = path.join(retained, ".fleet-operation.lock");
+  assert.deepEqual(subject.continuation.indexedCustody, [{ root: fs.realpathSync(retained),
+    manifestSha256: fileHash(path.join(retained, "fleet-r20.json")), lock: null,
+    launch: fileHash(path.join(retained, "launch-intent.json")) }]);
+  assert.ok(!fs.existsSync(oldLock));
+  let barrierReached = false;
+  p.deps.WorkerClass = class extends p.deps.WorkerClass {
+    constructor(entry, options) {
+      assert.ok(fs.existsSync(path.join(p.h.base, group, "launch-intent.json")));
+      assert.ok(!fs.existsSync(path.join(retained, "remaining-intent.json")));
+      // Model a live remaining owner acquiring its lock before consuming intent.
+      fs.writeFileSync(oldLock, JSON.stringify({ pid: process.pid, approvalSha256: digest("remaining action") }), { flag: "wx" });
+      barrierReached = true;
+      super(entry, options);
+    }
+  };
+  assert.equal(await fleetMain([...independent, "--detach", "--approve-reviewed-merged-ready", approvalSha256], p.deps),
+    2, JSON.stringify(p.output.at(-1)));
+  assert.ok(barrierReached);
+  const trace = p.events().filter(({ boundary }) => boundary === "provider");
+  assert.ok(trace.some(({ method, path }) => method === "GET" && path.startsWith("/v2/droplets?")), "child reached its fresh census");
+  assert.ok(trace.every(({ method }) => method === "GET"), "no provider mutation");
+  assert.equal(p.saved(path.join(group, group)).createIntentAt, undefined);
+});
+
 test("independent continuation admits two remote-active hosts and collects a failed terminal host without waiting for its peer", { timeout: 90000 }, async (t) => {
   const p = fixture(t, "independent-overlap"), first = "json-api", second = "localized-marketplace", denied = "catalog-page";
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
