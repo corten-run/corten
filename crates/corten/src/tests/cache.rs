@@ -2903,17 +2903,19 @@ async fn when_the_first_request_is_dropped_or_panics_the_others_make_their_own()
 }
 
 /// The body of [`HeldPage`]: of a known size, held at its first read until its handler's
-/// [`Hold`] lets it through, or a panic there when `panics` is set. `read` says it was read.
+/// [`Hold`] lets it through, or a panic there when `panics` is set, or an error when `fails` is.
+/// `read` says it was read.
 struct HeldBody {
     hold: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>>,
     page: Option<bytes::Bytes>,
     read: Once,
     panics: bool,
+    fails: bool,
 }
 
 impl http_body::Body for HeldBody {
     type Data = bytes::Bytes;
-    type Error = std::convert::Infallible;
+    type Error = std::io::Error;
 
     fn poll_frame(
         mut self: std::pin::Pin<&mut Self>,
@@ -2925,6 +2927,10 @@ impl http_body::Body for HeldBody {
         if let Some(hold) = &mut body.hold {
             std::task::ready!(hold.as_mut().poll(cx));
             body.hold = None;
+        }
+        if body.fails {
+            body.page = None;
+            return std::task::Poll::Ready(Some(Err(std::io::Error::other("a body that could not be read"))));
         }
         std::task::Poll::Ready(body.page.take().map(|page| Ok(http_body::Frame::data(page))))
     }
@@ -2987,6 +2993,7 @@ async fn a_request_ended_while_its_body_is_read_leaves_the_page_waited_for() {
                 page: Some(bytes::Bytes::from_static(b"<!doctype html><p>held</p>")),
                 read: read.clone(),
                 panics: panics.swap(false, Relaxed),
+                fails: false,
             };
             async move { Public::new(Duration::from_secs(60), HeldPage(body)) }
         }
@@ -3036,6 +3043,48 @@ async fn a_request_ended_while_its_body_is_read_leaves_the_page_waited_for() {
     assert_eq!(fetch(&router, "GET", "/", &[]).await.0, StatusCode::INTERNAL_SERVER_ERROR);
     read_once().await;
     together(3).await;
+}
+
+/// A request whose answer's body could not be read was answered, an error: its page is
+/// remembered as not kept, so the next requests that miss it together each run their own handler
+/// rather than wait for the first of them.
+#[tokio::test]
+async fn a_body_that_could_not_be_read_is_remembered_as_not_kept() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let (runs, hold, fails, watch) = (Runs::default(), Hold::default(), Once::default(), Watch::default());
+    let page = {
+        let (runs, hold, fails) = (runs.clone(), hold.clone(), fails.clone());
+        move || {
+            runs.ran();
+            let body = HeldBody {
+                hold: Some(Box::pin(hold.pass())),
+                page: Some(bytes::Bytes::from_static(b"<!doctype html><p>held</p>")),
+                read: Once::default(),
+                panics: false,
+                fails: fails.swap(false, Relaxed),
+            };
+            async move { Public::new(Duration::from_secs(60), HeldPage(body)) }
+        }
+    };
+    let routes = Table::new().route("/", crate::route::get(page).0.post(|| async { StatusCode::NO_CONTENT }));
+    let router = App::new(Routes::from(routes)).middleware(watch.clone()).router();
+
+    fails.store(true, Relaxed);
+    assert_eq!(fetch(&router, "GET", "/", &[]).await.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(runs.count(), 1);
+    // With no write and no page kept since, two that miss together: both are held where their
+    // bodies are read until both have run their handlers, so neither ends the record before the
+    // other looks.
+    hold.next(2);
+    let together = [sent(&router, "GET", "/", &[]), sent(&router, "GET", "/", &[])];
+    ran(&runs, 3).await;
+    assert_eq!(watch.joined(), 0, "neither waited for the other");
+    hold.release(2);
+    for request in together {
+        let (status, headers, _) = request.await.unwrap();
+        assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "its own page: {headers:?}");
+    }
+    assert_eq!(runs.count(), 3);
 }
 
 /// A request waiting for another's page waits no longer than its own deadline.

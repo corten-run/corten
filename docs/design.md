@@ -7506,10 +7506,13 @@ rules something out.
     hold: they ask for one copy (the table's key, above: the URL, `Host` and `Accept-Language` as
     sent, whether a data client asked and the count of writes to the path each found, so
     requests for different copies, or on either side of a write, do not join); the second run's
-    answer is kept and still stands for the requests that waited when they look (when it fails
+    answer is kept and still stands when they look, for the requests that waited and for any that
+    missed while it was made and reach their second look without waiting (when it fails
     or cannot be kept, as a page drawn for one request, a submit key the watch sees or a body
-    too small cannot, or is kept and then passes its lifetime or is dropped for room before a
-    request that waited looks, each such request then runs its own handler); the table admits them (past 1,024 pages being made, and while the copy is
+    too small cannot, or is kept and then passes its lifetime or is dropped for room before such a
+    request looks, each such request then runs its own handler: one that missed its first look
+    while the second run was made and was delayed before the table admitted it leads once that
+    copy is gone, misses its second look, and runs a third); the table admits them (past 1,024 pages being made, and while the copy is
     remembered as not kept, each request makes its own); and the URL's mark stays while they
     come. The marks are cleared once an eighth of them are set, all but the mark of the URL whose
     request clears them, which is set in the same pass, so a request for that URL meanwhile finds
