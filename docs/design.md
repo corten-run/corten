@@ -7310,7 +7310,12 @@ rules something out.
     which none was kept, with none between given from the store, the route's requests are its
     handler's as before, but for about one in 256, drawn on each thread, which asks and so
     finds out a route whose bodies grew. An answer left out for another reason (a failure, a
-    submit key) counts as one too small does, since asking for it gained as little. The
+    submit key) counts as one too small does, since asking for it gained as little, so 64
+    failures in a row from a route with bodies kept make it leave too, until the request that
+    asks is one for a body kept or worth keeping. A request for a URL not asked for before in
+    a full store is not counted: what was refused there is the URL, and a walk over new URLs
+    would otherwise make a route leave that has bodies kept, so a route of small bodies asked
+    for ever new URLs in a full store asks for each. The
     request that asks is drawn and not counted: a count of a thread's requests comes round in
     step with clients that ask in a pattern, and one route of two would never be the one to
     ask. A route that answers some of each keeps asking while an answer kept or given comes

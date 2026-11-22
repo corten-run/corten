@@ -2666,7 +2666,8 @@ async fn a_whole_body_is_kept_from_the_size_the_app_compresses() {
 /// is its handler's as it was before the app kept bodies, but for about one request in 256,
 /// which asks as before: so a route whose bodies grew is found out, and kept again. A
 /// body large enough ends a run and so does one given from the store, so a route that answers
-/// both sizes keeps asking, also once its large bodies are all kept and only the small are made.
+/// both sizes keeps asking while one of those comes within each 64, also once its large bodies
+/// are all kept and only the small are made.
 #[cfg(feature = "compress")]
 #[tokio::test]
 async fn a_route_of_small_bodies_leaves_the_store_out_until_one_is_large_enough() {
@@ -2903,7 +2904,11 @@ fn a_submit_key_is_seen_wherever_the_handler_s_poll_ran() {
         }
     };
     let plain = || async { Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json("plain".repeat(300)))) };
-    let routes = Table::new().route("/keyed", crate::route::get(keyed).0).route("/plain", crate::route::get(plain).0);
+    // Four routes for the keyed bodies, 40 requests each: a route that made 64 answers in a row
+    // with none kept would leave the store out, and its handler would no longer be watched.
+    let routes = (0..4).fold(Table::new().route("/plain", crate::route::get(plain).0), |routes, n| {
+        routes.route(["/keyed/0", "/keyed/1", "/keyed/2", "/keyed/3"][n], crate::route::get(keyed.clone()).0)
+    });
     let router = App::new(Routes::from(routes)).router();
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
     runtime.block_on(async {
@@ -2912,7 +2917,8 @@ fn a_submit_key_is_seen_wherever_the_handler_s_poll_ran() {
             let asked: Vec<_> = (0..8)
                 .map(|n| {
                     let router = router.clone();
-                    tokio::spawn(async move { fetch(&router, "GET", if n % 2 == 0 { "/keyed" } else { "/plain" }, &[]).await })
+                    let path = ["/keyed/0", "/plain", "/keyed/1", "/plain", "/keyed/2", "/plain", "/keyed/3", "/plain"][n];
+                    tokio::spawn(async move { fetch(&router, "GET", path, &[]).await })
                 })
                 .collect();
             for (n, asked) in asked.into_iter().enumerate() {

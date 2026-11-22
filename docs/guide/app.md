@@ -1618,8 +1618,9 @@ request that accepts no coding as well. A smaller body, and any body in a build 
 memory, keeping one cost more than making it
 ([design Choice 70](../design.md#choice-kept-pages)). A route whose bodies are all under the size
 stops asking the store after 64 answers in a row of which none was kept (one left out for another
-reason, a failure or a form's submit key, counts too), but for about one request in 256, so it
-costs a count more than it did before bodies were kept and is found out if its bodies grow; a route
+reason, a failure or a form's submit key, counts too, so 64 failures in a row from a route with
+bodies kept make it leave as well), but for about one request in 256, so it
+costs a load and a draw more than it did before bodies were kept and is found out if its bodies grow; a route
 where fewer than about one request in twelve is for a body large enough leaves the store out more
 often than not. While it does, a body it kept earlier is made again for each request, and the kept
 one may be given after a newer one, within its lifetime. Such a route has one answer at its URL, where a page route has the
