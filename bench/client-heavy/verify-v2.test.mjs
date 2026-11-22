@@ -165,12 +165,13 @@ test("v4 replays each block and recomputes summaries for native and policy passe
   assert.equal(r.schema, "client-heavy-saved-verification/v4");
   assert.equal(r.status, "failed", JSON.stringify(r.errors));
   assert.equal(r.intrinsic.complete, true); assert.equal(r.rankingEligible, false);
-  assert.deepEqual(r.cells.react.comparison, { samples: 3, actions: f.plan.workload.operations.map(({ id, kind }, i) =>
+  const attemptedOrder = f.plan.measurementOrder.map((block) => block.filter((app) => app !== "solid"));
+  assert.deepEqual(r.cells.react.comparison, { samples: 3, attemptedOrder, actions: f.plan.workload.operations.map(({ id, kind }, i) =>
     ({ operation: id, kind, medianMs: i === 0 ? 0.5 : 0.25, minMs: 0.25, maxMs: i === 0 ? 0.75 : 0.25 })) });
   assert.equal(r.cells.remix.replayPassed, true); assert.equal(r.cells.remix.comparison, undefined);
   assert.equal(r.cells.solid.outcome, "unsupported"); assert.deepEqual(r.cells.solid.measurements, []);
   assert.deepEqual(r.processWindows.filter((w) => w.phase === "measurement").map((w) => w.app),
-    f.plan.measurementOrder.flat().filter((app) => app !== "solid"));
+    attemptedOrder.flat());
 });
 
 test("v4 refuses resealed missing, reused or tampered sample receipts", async (t) => {

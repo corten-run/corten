@@ -159,26 +159,25 @@ export async function journey(browser, url, app, workload, settings, timeoutMs, 
     clearTimeout(timer); lifecycle.deadline.cancelledAt = clock();
     if (context) lifecycle.close = await closeContext();
   }
-  if (!pass.oracle.functionalPassed || !closedPass({ lifecycle })) { pass.readyMs = null; pass.actions = null; }
+  if (!passReady({ oracle: pass.oracle, lifecycle })) { pass.readyMs = null; pass.actions = null; }
   for (const receipt of http) if (receipt.endedAt === null) {
     receipt.endedAt = clock(); receipt.failure = { name: "RequestIncomplete", diagnosticSha256: sha256("context-closed-before-response") };
   }
   return { ...pass, timing, lifecycle, requests: http };
 }
 
-export const closedPass = (pass) => pass.lifecycle?.close?.returned === true && pass.lifecycle.close.observed === true
-  && pass.lifecycle.deadline?.firedAt === null;
+const contextCloseObserved = (life) => life?.close?.returned === true && life.close.observed === true && life.close.failure == null;
+const passReady = ({ oracle, lifecycle }) => oracle.functionalPassed === true && contextCloseObserved(lifecycle) && lifecycle.deadline?.firedAt === null;
 
 export async function qualifyAndMeasure(capture) {
   const qualification = await capture("qualification");
-  if (!qualification.oracle.functionalPassed || !closedPass(qualification)) return { qualification, measurement: null, readyForMeasurement: false };
+  if (!passReady(qualification)) return { qualification, measurement: null, readyForMeasurement: false };
   const measurement = await capture("measurement");
-  return { qualification, measurement, readyForMeasurement: !!measurement.oracle.functionalPassed && closedPass(measurement) };
+  return { qualification, measurement, readyForMeasurement: passReady(measurement) };
 }
 
-const passReady = (pass) => pass.oracle.functionalPassed === true && closedPass(pass);
 const stopOnUnclosedContext = (pass) => assert.ok(pass.lifecycle.contextCreatedAt === null
-  || (pass.lifecycle.close?.returned === true && pass.lifecycle.close.observed === true), "native-context-not-closed");
+  || contextCloseObserved(pass.lifecycle), "native-context-not-closed");
 
 export async function captureComparison(output, order, capture, checkActive) {
   for (const app of output.selectedApps) {

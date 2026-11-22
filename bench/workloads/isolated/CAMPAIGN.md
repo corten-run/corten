@@ -415,9 +415,11 @@ observed-terminal, empty uncollectedNativeRoots and blockers, archiveTreeSha256 
 reservationSha256. Each group has group/outcome native-validated/bindingSha256/
 nativeManifestSha256 plus ordered appOutcomes entries {app,outcome,comparisonEligible}.
 For a verified dedicated client-heavy comparison only, eligible rows also
-carry a `comparison` with sample count and per-action median/min/max milliseconds.
-The native replay ties all three measured blocks to the fixed recipe and host
-process windows; no per-candidate summary is exposed on an unverified attempt.
+carry a `comparison` with sample count, actual attempted order for each block,
+and per-action median/min/max milliseconds. Skips can leave order effects; the
+range is not a winner claim. Native replay ties all three measured blocks to
+the fixed recipe and host process windows. An unverified campaign exposes only
+dispositions, even if a group's comparison was sealed before the halt.
 Failed/unsupported apps remain comparison-ineligible. It has no qualified/controllerReady/
 deletion approval claim. The live controller separately establishes operator authorization,
 approved merged source, provider/unit ownership and exact unchanged archive-tree binding.

@@ -12,7 +12,8 @@ const comparisonSizes = Object.freeze({ rows: 100, large: 1000, append: 100, car
 export const comparisonBlocks = 3;
 export function measurementOrder() {
   const apps = selectedApps("client-heavy");
-  assert.equal(apps.length % comparisonBlocks, 0, "comparison needs equal roster rotations");
+  // The planned roster rotates evenly; skips need not preserve actual positions.
+  assert.equal(apps.length % comparisonBlocks, 0, "comparison needs equal planned rotation steps");
   return Array.from({ length: comparisonBlocks }, (_, block) => {
     const offset = block * apps.length / comparisonBlocks;
     return [...apps.slice(offset), ...apps.slice(0, offset)];

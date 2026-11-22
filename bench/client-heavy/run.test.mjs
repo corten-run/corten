@@ -90,8 +90,8 @@ test("comparison completes qualification first, rotates the full roster and neve
     cells: { solid: { outcome: "unsupported", measurements: [] } } }, calls = [];
   await captureComparison(output, measurementOrder, async (app, phase) => {
     calls.push({ app, phase });
-    return { oracle: { functionalPassed: !(app === "vue" && phase === "qualification") && !(app === "react" && calls.length === 7) },
-      lifecycle: { ...lifecycle(), contextCreatedAt: calls.length } };
+    return { oracle: { functionalPassed: !(app === "vue" && phase === "qualification") },
+      lifecycle: { ...lifecycle(), contextCreatedAt: calls.length, deadline: { firedAt: app === "react" && calls.length === 7 ? 1 : null } } };
   }, () => {});
   assert.deepEqual(calls, [
     ...apps.filter((app) => app !== "solid").map((app) => ({ app, phase: "qualification" })),

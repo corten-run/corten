@@ -119,6 +119,21 @@ test("v4 adapter accepts only the fixed binding and never claims OS proof", asyn
   const native = await inspectSaved(f.binding, f.folder);
   assert.equal(native.status, "failed"); assert.equal(native.attemptComplete, true);
   assert.equal(native.resources, "blocked"); assert.deepEqual(native.comparisonEligibleApps, ["react"]);
+  // A timeout with a replayed close disqualifies only that cell; an unproven
+  // close still blocks all comparison admission.
+  report.cells.corten.comparison = report.cells.react.comparison;
+  delete report.cells.react.comparison;
+  Object.assign(f.output.cells.react, { outcome: "failed" });
+  f.output.cells.react.measurements[0].lifecycle.deadline = { firedAt: 100 };
+  Object.assign(report.cells.react, { outcome: "failed", replayPassed: false });
+  Object.assign(report.cells.react.measurements[0], { passed: false, closurePassed: true });
+  f.save();
+  const timedOut = await inspectSaved(f.binding, f.folder);
+  assert.equal(timedOut.attemptComplete, true); assert.equal(timedOut.cleanupComplete, true);
+  assert.deepEqual(timedOut.comparisonEligibleApps, ["corten"]);
+  report.cells.react.measurements[0].closurePassed = false;
+  const missingClose = await inspectSaved(f.binding, f.folder);
+  assert.equal(missingClose.cleanupComplete, false); assert.deepEqual(missingClose.comparisonEligibleApps, []);
   f.plan.measurementOrder = [...measurementOrder].reverse();
   f.save();
   assert.equal((await inspectSaved(f.binding, f.folder)).status, "invalid");

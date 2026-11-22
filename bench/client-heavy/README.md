@@ -148,11 +148,18 @@ keeps its row and has no samples. A native Remix pass still does not waive its
 version-policy blocker.
 
 Replay derives per-action median, minimum and maximum from all three admitted
-samples. Only an eligible cell whose entire attempt also passes isolated host
-proof and custody can carry that summary into the official result. The native
-artifact still cannot grant ranking eligibility by itself. Use the values only
-as within-host observations with their ranges; the recipe does not declare a
-winner, resolve small differences, or replace the historical baseline.
+samples and reports the attempted order per block alongside the ranges. With
+only Solid skipped, the orders are Corten/React/Vue/Svelte/Remix,
+Vue/Svelte/Remix/Corten/React, and Svelte/Remix/Corten/React/Vue. Skips can leave
+positions uneven; fresh contexts do not reset the browser process or host caches.
+This rotation does not establish balance or remove carryover between attempts.
+
+Only an eligible cell whose entire attempt also passes isolated host proof and
+custody can carry that summary into the official result. A timed-out sample
+cannot count toward its cell even when closure is proved; a missing close
+observation blocks the attempt. The native artifact cannot grant ranking
+eligibility by itself. Treat the ranges as within-host observations, not as a
+winner, a way to resolve small differences, or a replacement for the baseline.
 
 Integration left to the parent: add `node --test bench/client-heavy/*.test.mjs`
 to the check command and route the client-heavy group's native execution to

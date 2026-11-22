@@ -416,6 +416,10 @@ export async function validateV2(request) {
     const { endedAt, windows } = replayContextOrder(output.cells, apps, plan.measurementOrder, allBuildEnd);
     lastContextEnd = endedAt;
     contextWindows = windows;
+    if (comparison) {
+      const attemptedOrder = plan.measurementOrder.map((block, index) => block.filter((app) => output.cells[app].measurements[index]));
+      for (const cell of Object.values(report.cells)) if (cell.comparison) cell.comparison.attemptedOrder = attemptedOrder;
+    }
   });
   if (output.builds.corten.outcome === "built") await check("compiler-input-closure", () => {
     const c = json("evidence/compiler-inputs.json");
