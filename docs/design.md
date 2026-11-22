@@ -7406,7 +7406,13 @@ rules something out.
     honoring a request's `no-cache`; removing a written path's pages by a search of the store or
     a second index by path, which a write would pay for under the store's lock; a sweep that
     removes pages as their lifetimes end, since a page that no longer stands is replaced when it
-    is next asked for and goes when room is made; and, left for changes of their own, a call
+    is next asked for and goes when room is made; one mark on a `Public` answer in place of
+    `SameForAll` and the cache mark, the cache mark saying too that the answer is the same for
+    everyone (`75414d4e6`), which saved about 112 instructions a request and let whatever
+    replaces or merges the cache mark (`no_store` on its route, `NoStore` around an answer of
+    the app's own that chose `Public`, or a `NoStore` answer's headers and marks given to a
+    `Public` page as its parts) take that word with it, so that the page drew its visitor's
+    layout values, where the separate mark stays whatever is put over the cache mark; and, left for changes of their own, a call
     that drops a page for a change no write to its path made, a way for an extractor of the
     app's own to say it reads only the URL, `Public` files (a `Media` may be a stream, which
     has no size to keep, or bytes the app already holds, which cost no render, and what keeping
@@ -7539,26 +7545,29 @@ rules something out.
     `30b39d455` against 15,210.8 at `45489ced9`, and with a `Public` page 16,308.7 against 16,310.7.
     What marking a page `Public` costs before anything is kept
     ([#1825 A `Public` page costs 3,300 instructions more than the same page for one visitor, before anything is kept](https://github.com/corten-run/corten/issues/1825)),
-    counted in process (`tests::cache::what_a_page_s_caching_costs`, a browser's request headers,
-    glibc's allocator) at `4827fa33b` against main's `564034b86`: the page for one visitor took
-    40,920 instructions against 40,908, the page marked `Public` in an app that keeps none
-    (`kept_answers(0)`) 43,259 against 44,420, and a kept page 42,054 against 42,694. Of the 1,161
-    fewer, 669 are `cache::settle` no longer reading the `Cache-Control` that `Cache` wrote while
-    it is still the answer's only line, known by the address of its bytes, which the cache mark
-    holds so that no other value has them (`a81cf9108`; a line a middleware wrote in its place or
-    beside it is read as before); 112 are one mark on a `Public` answer in place of two
-    (`75414d4e6`); and 380 are its header made once on a thread for each set of numbers while
-    they are among the last four that thread made one for (a fifth puts the oldest out, whose
-    header is made again when it is asked for), in place of an allocation for each answer
-    (`7e65e1da7`), which left a kept page 68 more, all in glibc's allocator. The probe's page
-    asks for one set of numbers, so each count is of a header held. With jemalloc the three took
-    the `Public` page from 37,682 to 36,851 and a kept page from 35,009 to 34,539, and the page
-    for one visitor from 34,898 to 34,913.
-    Counted again at `caefab143`, where a `no-store` that replaces a `Public` answer's policy
-    keeps its word that the answer is the same for everyone, against main's `92a745a63` (the
-    framework's sources as at `564034b86`), with glibc: the page for one visitor 40,908 against
-    40,908, the `Public` page 43,253 against 44,420 (1,167 fewer), and a kept page 42,048 against
-    42,695 (647 fewer).
+    counted in process (`tests::cache::what_a_page_s_caching_costs`, a browser's request
+    headers) at `9cfb17038` against main's `e7e89add8`, with glibc's allocator: the page for
+    one visitor took 40,175 instructions against 40,169, the page marked `Public` in an app
+    that keeps none (`kept_answers(0)`) 42,680 against 43,729 (1,049 fewer), a kept page
+    41,443 against 41,819 (376 fewer), and that `Public` page with five policies in turn, a
+    different one each request, so that each header is made again, 44,819 against 46,698
+    (1,878 fewer) where each header is 96 bytes long and 43,443 against 44,146 (703 fewer)
+    where each is `public, max-age=60` to `64`. With jemalloc the five took 34,094 against
+    34,091, 36,107 against 36,856, 33,710 against 34,211, 38,050 against 40,152 and 36,891
+    against 37,292. The saving is `cache::settle` no longer reading the `Cache-Control` that
+    `Cache` wrote while it is still the answer's only line, known by the address of its bytes,
+    which the cache mark holds so that no other value has them (a line a middleware wrote in
+    its place or beside it is read as before; a kept answer, page or body, is given that line
+    and that mark again), 2,310 and 576 fewer in `settle` in the two cases with five policies;
+    and the header made once on a thread for each set of numbers while they are among the last
+    four that thread made one for (a fifth puts the oldest out, whose header is made again when
+    it is asked for), in place of one made for each answer. A header is made, new or again,
+    with its text and the count of its references in one allocation. Made from a `Vec`, as
+    main makes it, `Bytes` allocates that count beside the text, or at its first clone when
+    the text fills the `Vec` (96 bytes), so a header the thread and the mark both hold would
+    have allocated once more than main's for each one made again. Earlier, at `4827fa33b`
+    against `564034b86` with one set of numbers, the skip was 669 of the `Public` page's
+    1,161 fewer and the held header 380.
     A kept body, with the catalog benchmark's JSON route marked `Public` for a minute and two
     routes beside it that make nothing, of 2 bytes and of 2,000 (`69c8fb1bf` with this
     change's code against `c26cbdb5a` on main's `564034b86`), counted under callgrind with a
@@ -7617,9 +7626,9 @@ rules something out.
     more from one start to the next; a miss kept with room in memory the store has used
     before (room made by a write or by a page's lifetime ending), in cycles; a store read
     from more
-    than one core; what those 1,161 fewer instructions for a `Public` page are in cycles, and how
+    than one core; what the fewer instructions for a `Public` answer are in cycles, and how
     often a thread's answers go through more than four sets of numbers, whose headers it makes
-    again; and the
+    again (each such answer counted above took fewer than main's); and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
@@ -7657,11 +7666,12 @@ rules something out.
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-21, what a `Public` mark costs before anything is kept, with rustc
-    1.99.1: each count the difference of a run of 1,200 requests and one of 200 under callgrind,
-    in process, a release build of each tree, three rounds with glibc's allocator and two with
-    jemalloc (three with glibc at `caefab143`), the builds' order turned about from each round to
-    the next, every count within three instructions of the others of its build;
+    Last checked: 2026-11-21, what a `Public` mark costs before anything is kept, `9cfb17038`
+    against `e7e89add8` with the probe added, with rustc 1.99.1: each count the difference of a
+    run of 1,200 requests and one of 200 under callgrind, in process, a release build of each
+    tree, three rounds with glibc's allocator and three with jemalloc, the builds' order turned
+    about from each round to the next, every count within three instructions of the others of
+    its build, and the functions of the two cases with five policies counted once with glibc's;
     2026-11-21 for a kept body, `c26cbdb5a` (main's `564034b86` with the catalog
     benchmark's JSON route marked `Public` for a minute and two routes that make nothing, of 2
     bytes and of 2,000) against `69c8fb1bf` (the same on this change), built with rustc 1.99.1
