@@ -84,10 +84,11 @@ const sealStage = (h, path) => path.startsWith(h.statePath + ".bootstrap-");
 for (const failure of ["cancelled", "deadline", "rename"]) {
   test("terminal monitor survives a bootstrap publication failure: " + failure, async (t) => {
     const h = harness(t, { active: true, monitorHold: true });
-    let clock = Date.now(), settled = false, attempts = 0, cancelWhileLive = 0;
+    let clock = Date.now(), elapsed = 0, settled = false, attempts = 0, cancelWhileLive = 0;
     let stage, staged, receipt;
     await assert.rejects(h.launch({
       now: () => clock,
+      monotonicNow: () => elapsed,
       run(...args) {
         const result = h.run(...args);
         if (result.monitor) {
@@ -96,7 +97,8 @@ for (const failure of ["cancelled", "deadline", "rename"]) {
         }
         return result;
       },
-      async sleep() {
+      async sleep(ms) {
+        elapsed += ms;
         h.flags.completeMonitor();
         receipt = readFileSync(join(h.local, "monitor-terminal.json"));
         settled = true;
@@ -133,10 +135,11 @@ for (const failure of ["cancelled", "deadline", "rename"]) {
 
 test("Windows bootstrap publication retries the same staged seal without repeating SSH", async (t) => {
   const h = harness(t, { active: true, monitorHold: true });
-  let stage, staged, preimage, attempts = 0;
+  let stage, staged, preimage, attempts = 0, elapsed = 0;
   const waits = [];
   await h.launch({
-    async sleep(ms) { waits.push(ms); },
+    monotonicNow: () => elapsed,
+    async sleep(ms) { waits.push(ms); elapsed += ms; },
     renameBootstrapSeal(from, to) {
       assert.ok(sealStage(h, from)); assert.equal(to, h.statePath);
       if (++attempts === 1) {
@@ -163,19 +166,21 @@ test("Windows bootstrap publication retries the same staged seal without repeati
 });
 
 for (const fault of ["state", "stage bytes", "stage identity", "operation owner", "launch owner", "revocation",
-  "cancellation", "deadline", "nonsharing error", "other syscall", "persistent denial", "unacknowledged SSH"]) {
+  "cancellation", "deadline", "retry budget overrun", "nonsharing error", "other syscall", "persistent denial", "unacknowledged SSH"]) {
   test("Windows bootstrap publication stops on " + fault, async (t) => {
     const h = harness(t, { active: true, monitorHold: true });
-    let clock = Date.now(), attempts = 0;
+    let clock = Date.now(), elapsed = 0, attempts = 0;
     const waits = []; let staging, stagedSeal;
     await assert.rejects(h.launch({
       now: () => clock,
+      monotonicNow: () => elapsed,
       run(...args) {
         const result = h.run(...args);
         return fault === "unacknowledged SSH" && args[0] === "ssh" && args[1].at(-1) === ":" ? { ...result, status: 1 } : result;
       },
       async sleep(ms) {
         waits.push(ms);
+        elapsed += fault === "retry budget overrun" ? 251 : ms;
         if (fault === "state") writeFileSync(h.statePath, readFileSync(h.statePath, "utf8") + "\n");
         if (fault === "stage bytes") writeFileSync(staging, "changed staging");
         if (fault === "stage identity") {
@@ -200,8 +205,8 @@ for (const fault of ["state", "stage bytes", "stage identity", "operation owner"
     }).launch(), (error) => error.controlTreeUncertain === true);
     assert.equal(bootstrapSealCalls(h), 1);
     if (fault === "persistent denial") {
-      assert.ok(attempts >= 1 && attempts <= 4);
-      assert.deepEqual(waits, [25, 50, 100].slice(0, waits.length));
+      assert.equal(attempts, 4);
+      assert.deepEqual(waits, [25, 50, 100]);
     } else if (fault === "unacknowledged SSH") {
       assert.equal(attempts, 0); assert.deepEqual(waits, []);
       assert.ok(!readdirSync(h.local).some((name) => name.startsWith("state.json.bootstrap-")));
@@ -221,8 +226,10 @@ for (const fault of ["state", "stage bytes", "stage identity", "operation owner"
 test("Windows bootstrap and revoked replacements can both fail without spending custody", async (t) => {
   const h = harness(t, { active: true, monitorHold: true }), stages = new Map();
   const locks = [join(h.local, "operation.lock"), join(h.base, ".groups-launch.lock")];
-  let canonical, ownerBytes, callsAtDenial, fallbackAttempts = 0;
+  let canonical, ownerBytes, callsAtDenial, fallbackAttempts = 0, elapsed = 0;
   await assert.rejects(h.launch({
+    monotonicNow: () => elapsed,
+    async sleep(ms) { elapsed += ms; },
     renameBootstrapSeal(from, to) {
       assert.equal(to, h.statePath);
       canonical ??= readFileSync(to);

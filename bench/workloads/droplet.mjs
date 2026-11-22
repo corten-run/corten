@@ -31,7 +31,7 @@ const outside = (root, path) => { const r = relative(root, path); return isAbsol
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit,
   unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission,
-  renameBootstrapSeal = process.platform === "win32" ? renameSync : undefined } = {}) {
+  renameBootstrapSeal = process.platform === "win32" ? renameSync : undefined, monotonicNow = () => performance.now() } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
   if (mergedHead !== "origin/main") full(mergedHead, /[a-f0-9]{40}/, "exact observed main commit required");
   const fleetBytes = options.group === undefined ? undefined : regular(options.fleet, 1024 * 1024);
@@ -330,14 +330,14 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       remaining();
       verifyBootstrapPublication();
       remaining();
-      assert.ok(retryUntil === undefined || performance.now() < retryUntil, "bootstrap seal rename retry expired");
+      assert.ok(retryUntil === undefined || monotonicNow() < retryUntil, "bootstrap seal rename retry expired");
       try { renameBootstrapSeal(staging, statePath); verifyBootstrapPublication = undefined; break; }
       catch (error) {
         // Windows can report a delete-sharing denial as EPERM, also used for permanent denials.
         const delay = delays[attempt];
         if (error.code !== "EPERM" || error.syscall !== "rename" || delay === undefined) throw error;
-        retryUntil ??= performance.now() + 250;
-        if (delay >= remaining() || performance.now() + delay >= retryUntil) throw error;
+        retryUntil ??= monotonicNow() + 250;
+        if (delay >= remaining() || monotonicNow() + delay >= retryUntil) throw error;
         await sleep(delay);
       }
     }
