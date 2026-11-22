@@ -560,6 +560,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     // An acknowledged refusal is not a missing result. Do not append more
     // controls on restart or treat the refusal as permission to retire.
     const rows = state.control.ledger, last = rows.at(-1);
+    if (last?.setupProofRejected) refuseSetup("setup-host-proof-refused");
     if (last?.localTerminal && last.code > 0 && last.code < 255 && last.request.epoch === "collection"
       && last.request.invocation.channel === "ssh"
       && last.request.invocation.requestSha256 === digest(`set -euo pipefail\n${terminalSetupScript(state, exit, rows.length - 1)}\n`))
@@ -572,7 +573,15 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const script = terminalSetupScript(state, exit), startedAtMs = Date.now();
     const result = await ssh(script, 30000, beforeEntry), finishedAtMs = Date.now();
     if (result.status !== 0 || result.error) refuseSetup("setup-host-proof-refused");
-    const evidence = setupEvidence(result.stdout, state, script, exit, startedAtMs, finishedAtMs, local);
+    let evidence;
+    try { evidence = setupEvidence(result.stdout, state, script, exit, startedAtMs, finishedAtMs, local); }
+    catch (error) {
+      if (!beforeEntry) throw error;
+      // The command exited zero; its response did not prove safe retirement.
+      state.control.ledger.at(-1).setupProofRejected = true;
+      try { save(); } catch (writeError) { preserveOperationLock = true; throw writeError; }
+      refuseSetup("setup-host-proof-refused");
+    }
     return retire("setup-failed", evidence, finishedAtMs);
   };
   async function retireNativeFailure(controllerCommit, grouped) {

@@ -690,8 +690,9 @@ custody paths above. No retirement path can delete a running benchmark.
 
 For failure before monitor registration, `setup-watcher-proof-missing` means
 the preserved archive already records a watcher failure. `setup-host-proof-refused`
-means the registered terminal host query returned a nonzero exit with its result
-acknowledged. Neither is a retirement receipt. Do not repeat collection to try
+means the registered terminal host query had an acknowledged nonzero exit, or
+exited zero but returned unusable proof. In the latter case the ledger retains
+code zero and records the proof rejection separately. Neither is a retirement receipt. Do not repeat collection to try
 to replace the missing proof. A missing transport acknowledgement remains
 uncertain; do not clear the locks or fill in a ledger result.
 

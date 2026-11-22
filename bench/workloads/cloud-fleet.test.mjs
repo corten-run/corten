@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as contract from "./cloud-contract.mjs";
 import { host as catalogHost } from "../catalog/droplet-contract.mjs";
@@ -365,7 +365,7 @@ test("ingress verification failure stays outside admission and retires only with
 });
 
 test("failed pre-registration cleanup preserves the archive and stops on missing proof, including on restart", async (t) => {
-  for (const mode of ["refused", "lost-result", "archived-watcher"]) {
+  for (const mode of ["invalid-proof", "refused", "lost-result", "archived-watcher"]) {
     const { h, options } = configured(t);
     h.flags.hook = (bin, a) => { if (bin === "ssh" && a.at(-1).startsWith("systemctl show") && h.units === 1) h.flags.active = false; };
     await assert.rejects(h.task({}, options).launch(), /ended before common bootstrap/);
@@ -378,21 +378,26 @@ test("failed pre-registration cleanup preserves the archive and stops on missing
       if (bin !== "ssh" || !args.at(-1).includes("<<'CORTEN_FAILED_SETUP_HOST'")) return h.run(bin, args, timeout, allowFail, expiry, control);
       queries++;
       const id = control.request.invocation.id, ack = `CORTEN_CONTROL ${id} ${"a".repeat(64)}\n`;
-      return shellTransport({ repo: h.repo, spawn: () => ({ status: 1, stdout: "not evidence", stderr: ack
-        + (mode === "lost-result" ? "" : `CORTEN_RESULT ${id} 1\n`) }) })(bin, args, timeout, allowFail, expiry, control);
+      const status = mode === "invalid-proof" ? 0 : 1;
+      return shellTransport({ repo: h.repo, spawn: () => ({ status, stdout: '{"setupFailed":false}', stderr: ack
+        + (mode === "lost-result" ? "" : `CORTEN_RESULT ${id} ${status}\n`) }) })(bin, args, timeout, allowFail, expiry, control);
     };
     const refusal = mode === "archived-watcher" ? "setup-watcher-proof-missing" : "setup-host-proof-refused";
     await assert.rejects(h.task({ run }).collect(), mode === "lost-result" ? /remote control completion uncertain/ : { controllerStage: refusal });
-    const saved = h.saved(), last = saved.control.ledger.at(-1);
+    const saved = h.saved(), last = saved.control.ledger.at(-1), lock = join(h.local, "operation.lock");
+    assert.equal(existsSync(lock), mode === "lost-result");
     assert.equal(queries, mode === "archived-watcher" ? 0 : 1);
     if (mode !== "archived-watcher") {
-      assert.equal(last.localTerminal, mode === "refused"); assert.equal(last.code, mode === "refused" ? 1 : undefined);
+      assert.equal(last.localTerminal, mode !== "lost-result");
+      assert.equal(last.code, mode === "invalid-proof" ? 0 : mode === "refused" ? 1 : undefined);
+      assert.equal(last.setupProofRejected, mode === "invalid-proof" ? true : undefined);
     }
     assert.equal(saved.archiveSha256, digest(bytes)); assert.ok(saved.evidenceSha256);
     assert.equal(saved.status, "starting"); assert.equal(saved.retirement, undefined); assert.equal(saved.deletionIntentAt, undefined);
     const calls = h.calls.length, count = queries;
     await assert.rejects(h.task({ run }).collect(), mode === "lost-result" ? /ambiguous pre-bootstrap custody/ : { controllerStage: refusal });
     assert.equal(queries, count); assert.equal(h.calls.length, calls); assert.deepEqual(h.saved(), saved);
+    assert.equal(existsSync(lock), mode === "lost-result");
     assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
   }
 });
