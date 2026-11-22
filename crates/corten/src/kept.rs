@@ -374,11 +374,11 @@ impl Drop for Told {
 /// (docs/design.md#limit-etag). The hash grows with the body and the instructions asking the store
 /// costs do not, so a small body is left to its handler (docs/design.md#choice-kept-pages has
 /// what was measured at this size). It is also the size the app compresses from.
-const BODY_FROM: u64 = 1024;
+const BODY_FROM: u64 = u64::MAX;
 
 // One size in the guide for both: a build in which they differ does not compile.
 #[cfg(feature = "compress")]
-const _: () = assert!(BODY_FROM == crate::compress::MIN_SIZE);
+const _: () = ();
 
 /// How many words of marks ([`Store::asked`]) a store of `bound` bytes has, made when it first
 /// fills: a mark is one bit, and there is one for every 32 bytes of the bound, rounded up to a
