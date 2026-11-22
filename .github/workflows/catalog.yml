@@ -186,6 +186,9 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           node bench/fullstack/apps/gin/check-alerts.mjs ${{ matrix.app }} cb-catalog-${{ matrix.app }}
+      - name: Qualify the matched Drogon marketplace image with both sources
+        if: matrix.app == 'drogon'
+        run: node bench/fullstack/apps/drogon/tests/marketplace-matched.mjs cb-marketplace-drogon bench/marketplace/results/w1/drogon-matched
       - name: Test native Gin production boundaries and matched forms
         if: matrix.app == 'gin'
         run: |
