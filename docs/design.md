@@ -7385,14 +7385,19 @@ rules something out.
     own polls) for one being drawn, and the watch marks the answer (`cache::Unrepeatable`) as a
     page's render does. It cannot tell a key placed in the answer from one drawn and dropped, so
     either makes the answer private.
-    Which answers may be `Public` is a constant of the answer's type, `IntoResponse::MAY_SHARE`,
-    known when the crate compiles: `Public` says yes; each of Corten's other answers says no, and
+    Which answers may be `Public` is known from the answer's type when the crate compiles, by a
+    hidden function of `IntoResponse` with no arguments, `may_share`, whose body a release build
+    folds where it is read: `Public` says yes; each of Corten's other answers says no, and
     one that holds another (`Result`, `NoStore`, a status or headers before it, `SwitchOr`) says
     what that one does, a tuple what each part's refusal does too, since a part that refuses
     answers in the body's place (`NoStore` is not a no: a `no-store` leaves a CDN's own caching
     header where it was, so the watch must still see a `Public` answer under it); a type of the app's own always says yes, since Corten cannot see what its
-    `into_response` makes (an enum with a `Public` variant beside a private one), and its type
-    for the constant is one an app cannot name, so it cannot say no (a `compile_fail` doctest).
+    `into_response` makes (an enum with a `Public` variant beside a private one), and the type
+    it returns is one an app cannot name, so it cannot say no, nor return what one of Corten's
+    does (`compile_fail` doctests). It is a function that needs `Self: Sized`, not an associated
+    constant: a constant would make `dyn IntoResponse` fail to compile, and with it an app's own
+    trait over `IntoResponse` that answers from a box (`self: Box<Self>`), both of which compiled
+    before the watch (a doctest); such a box is a type of the app's own, so it is watched.
     A raw `Response`, a `Relay` and headers alone say no: the caching their headers say is the
     app's or the upstream's, as it was. The watch wraps such a route in every build and whatever
     the store does (none kept, `corten dev`, a body route that leaves the store out, a build
@@ -7421,17 +7426,20 @@ rules something out.
     inner answer: a private answer that could have been shared, never the other way round; the
     inner request's own answer is marked through its own signal. Measured on 2026-11-22 with
     `tests::cache::what_settling_a_page_costs` under callgrind (Last checked), instructions a
-    request before and after: a `Public` page given from the store 16,948 and 16,981 (+0.19%);
-    one made for each request (`kept_answers(0)`) 19,581 and 19,647 (+0.34%), the watch and the
+    request before and after: a `Public` page given from the store 16,948 and 16,987 (+0.23%);
+    one made for each request (`kept_answers(0)`) 19,581 and 19,653 (+0.37%), the watch and the
     signal the route holds; a `Public` JSON body given 16,012 and 16,045 (+0.21%), made for each
-    54,343 and 54,346; a private page 16,800 and 16,790; a `Public` text body from an unstaged
+    54,343 and 54,346; a private page 16,800 and 16,797; a `Public` text body from an unstaged
     route 7,807 and 7,829 (+0.28%); text from an unstaged route that is not `Public` 6,446 and
     6,439; and a `Public` page with a keyed form, the one case that draws a key, 22,182 and
-    22,471 (+1.30%), from marking the request and dropping a tag it may have been given. Before
-    `NoStore`, a tuple's refusing part and a given tag were covered, the three staged `Public`
-    cases with no key counted 16,961, 19,627 and 16,019 and the others the same: those cases
-    take none of the branches that changed, and the 13 to 26 more are not traced to a line. These
-    are instruction counts, not cycles. A first
+    22,477 (+1.33%), from marking the request and dropping a tag it may have been given. Before
+    `NoStore`, a tuple's refusing part and a given tag were covered, the four staged `Public`
+    cases with no key counted 16,961, 19,627, 16,019 and 54,320, 19 to 26 fewer: those cases
+    take none of the branches that changed, and the difference is not traced to a line. Saying
+    whether an answer may be `Public` by a function rather than a constant then added 6 or 7 to
+    each staged page and none to JSON or an unstaged route; no `may_share` is left in the
+    release build's symbols, so it is not a call, and the 6 or 7 are not traced to a line
+    either. These are instruction counts, not cycles. A first
     version, a router endpoint around the handler, cost the page made for each request 149 more
     and the private page 24, from a second copy of the answer and a second form of every route's
     call. A render that reads
@@ -7834,9 +7842,10 @@ rules something out.
     app's own answer type, which is always watched, is found on a hot path where the watch's
     cost shows, so such a type should be able to say it is never `Public`.
 
-    Last checked: 2026-11-22 for the watch for a submit key, `d3e1b4efb` (this change merged
-    with main) against its merge base with main, `361724c85`, and before that `f4a4472a3`
-    against `a0eeeacca` (whose crates are the same as `361724c85`'s), each with the same
+    Last checked: 2026-11-22 for the watch for a submit key, `1a36081dd` (this change, with
+    main merged at `d3e1b4efb`) against its merge base with main, `361724c85`, and before that
+    `d3e1b4efb` against `361724c85` and `f4a4472a3` against `a0eeeacca` (whose crates are the
+    same as `361724c85`'s), each with the same
     `tests::cache::what_settling_a_page_costs` (the function, its doc and its two unstaged routes
     as at `0ced821d8`, 4,172 bytes, SHA-256
     `a1e48f7272d3a4cce21df616f5733ce0deef6d7f471dd6e3d5e31f60b9d63870`, copied into
