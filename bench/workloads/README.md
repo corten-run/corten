@@ -56,6 +56,10 @@ Removing or retargeting it refuses remaining admission, even via the physical pa
 invocation's requested spelling still requires its own exact approval; consumed intents are
 never rewritten to repair path identity.
 
+For a partial round, use [independent group continuation](CLOUD.md#independent-group-continuation)
+to reference already verified group results and run only missing groups. Each
+result keeps its measured revision and evidence; the index is not a new fleet.
+
 The [client-heavy runner](../client-heavy/README.md) builds all selected native
 applications, observes their actual DOM and resources, and gates a separate
 measured journey on correctness. Its defaults are bounded local verification,

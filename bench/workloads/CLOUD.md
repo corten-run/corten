@@ -168,7 +168,8 @@ independent state directory, operation lock, private credential worker and remot
 systemd unit.
 Every group in the roster uses the same commit. Merge the repairs needed by
 the entire round before preparing it: the first group's results cannot be
-carried into a new reservation for a different commit.
+carried into a new fleet reservation for a different commit. Use an
+[independent continuation](#independent-group-continuation) instead.
 
 Admission is staged, not a simultaneous fleet allocation. The first `--detach`
 approval launches only the first complete registry group. Untouched groups remain
@@ -429,6 +430,82 @@ region and public-IP checks. Only an explicit HTTP 404 establishes absence;
 authorization, rate-limit, network, timeout and malformed-response errors never do.
 Account/context checks still surround provider commands. Initial allocation and
 unbound recovery require a complete census.
+
+## Independent Group Continuation
+
+For an incomplete round, retain the original fleet and use a separate physical
+continuation root outside the checkout. Its `index.json` is an array of original
+fleet references. Each reference names an absolute fleet root, the original
+round and commit, a clean checkout at that commit with its original npm installs,
+and the reviewed SHA-256 of `results.tgz` for every verified replayed group in
+that fleet. Use `[]` when starting without retained evidence. For example:
+
+```json
+[{"root":"/bench-state/original","checkout":"/src/measured","round":"r24","commit":"MEASURED_SHA","archives":{"catalog-page":"REVIEWED_ARCHIVE_SHA256"}}]
+```
+
+Use an unmodified index and the same continuation root for the entire set. The
+report replays each original attempt, checks the successful archives, the
+extracted trees against the pinned archive bytes and confirmed deletion, and
+verifies each group against its original contract and roster. It does not use a
+cached report as evidence. A changed current contract does not invalidate the
+original result or make it eligible to rerun in this root. The report shows the
+measured contract and roster, with `matchesCurrentContract: false` when they
+differ from today's matchup. The measured
+commits must be ancestors of the report checkout, but groups need not have the
+same commit, date, framework versions or host. Preserve target failures (including
+comparison-ineligibility) in verified group results; a failed or incomplete
+apparatus is not a result. An old bound host without confirmed cleanup is shown
+as such. Continuation then requires the same provider account and still refuses
+create if the existing pre-create census finds any foreign benchmark host.
+
+When the launcher checkout advances or a measured checkout moves, use the
+optional sibling directory `ABSOLUTE_ROOT-checkouts/MEASURED_SHA` for that
+commit's clean worktree. Here `MEASURED_SHA` is the full 40-character Git commit.
+The replay first uses that path when present, otherwise the saved checkout
+(`checkout` for an indexed fleet, the launch checkout for a new group). Install
+the measured checkout's pinned root and bench dependencies there. Replay checks
+HEAD and the original dependency pins and bytes; it does not rewrite a reservation
+or measure the group again.
+
+```sh
+node bench/workloads/group-continuation.mjs --continuation-root ABSOLUTE_ROOT
+node bench/workloads/fleet.mjs NEW_ROUND --continuation-root ABSOLUTE_ROOT --group json-api --prepare --commit MERGED_SHA --ssh-key KEY --account-id ACCOUNT --context CONTEXT
+node bench/workloads/fleet.mjs NEW_ROUND --continuation-root ABSOLUTE_ROOT --group json-api --detach --print-approval
+node bench/workloads/fleet.mjs NEW_ROUND --continuation-root ABSOLUTE_ROOT --group json-api --detach --approve-reviewed-merged-ready REVIEWED_EXACT_HASH
+```
+
+The first command is read-only and providerless (`0` all groups verified, `1`
+incomplete, `2` invalid). Its `eligibleToRun` is a local selection, not provider
+availability or authorization. The remaining commands are the normal official
+prepare, exact preview and approved launch for one complete group. Prepare reads
+provider placement but does not allocate. The selected group runs the normal
+staged first-host checks, native phases and terminal monitor. For JSON that
+includes its prepare and timing phases and the independently reviewed audit
+between them. There is no extra setup host and no `--admit-remaining` action.
+The continuation does not grant approval; the existing exact merged-source,
+native readiness, independent review and operator approval requirements apply.
+
+For collection or audit delivery use the ordinary per-host commands at the
+measured checkout. For the first attempt use state root
+`ABSOLUTE_ROOT/json-api/json-api`. For a retry use the reported `attemptRoot`
+plus the group name, for example `ABSOLUTE_ROOT/json-api--r26/json-api`.
+There is no automatic retry. After a proven `not-created` attempt or confirmed
+retirement without a verified result, the report marks that group `retryable`.
+Repeat the same prepare, preview and approved detach commands in the **same
+root** with a higher round for that group. This appends a reservation without
+reusing a consumed intent, rewriting old attempt bytes or changing any
+prepared sibling. Do not move attempts to a new index or root. An ambiguous or
+active attempt is refused; leave its evidence and locks in place and use the
+existing recovery procedure. Run the report after collection to select another
+missing group.
+
+The report is an index of independently publishable group results, with each
+group's actual round, commit, dates, archive, attempts and `baseEffectiveOptions`.
+Those options describe the base binding; for JSON, actual prepare and timing
+options are in the verified per-phase campaign artifacts. Link
+each group to its original measurement. It is not a single-revision baseline or
+evidence for a speed comparison across groups or revisions.
 
 ## Failed Allocation Retirement
 

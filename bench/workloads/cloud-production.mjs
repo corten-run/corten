@@ -15,7 +15,7 @@ import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellati
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
-import { readFleet, readGroup, readLaunchIntent, readRemainingIntent } from "./fleet-verify.mjs";
+import { continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent, recheckContinuationProofs } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -209,6 +209,13 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     const intent = stagedSibling ? readRemainingIntent(fleet) : readLaunchIntent(fleet);
     const lock = JSON.parse(regular(join(fleet.root, ".fleet-operation.lock"), 1024));
     assert.deepEqual(lock, { pid: process.pid, approvalSha256: intent.approvalSha256 }, "fleet launch requires the active batch lock");
+    if (manifest.single) {
+      const root = dirname(fleet.root), { indexSha256, group } = manifest.single;
+      assert.equal(intent.subject.continuation?.indexSha256, indexSha256, "continuation approval required");
+      assert.equal(continuationIndexSha256(root), indexSha256, "continuation index changed");
+      assert.deepEqual(JSON.parse(regular(join(root, ".continuation-operation.lock"), 1024)), { pid: process.pid, group },
+        "group launch requires the active continuation lock");
+    }
     if (stagedSibling) {
       const first = readGroup(fleet, intent.placement.firstGroup.group);
       assert.equal(first.outcome, "available");
@@ -231,12 +238,13 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   }
   stage = "exact-approval";
   assert.equal(approval, plan.approvalSha256, "explicit operator-approved exact action required");
-  const checkFleetAdmission = admission && (() => {
+  const checkFleetAdmission = admission && ((beforeCreate = false) => {
     const current = readAdmission(), job = current.subject.jobs.find(({ group }) => group === options.group);
     assert.equal(current.sha256, admission.sha256, "fleet admission changed");
     assert.equal(current.subject.manifestSha256, plan.subject.fleetSha256);
     assert.equal(job.approvalSha256, approval, "child approval differs from consumed fleet admission");
     assert.deepEqual(job.subject, plan.subject);
+    if (beforeCreate && manifest.single) recheckContinuationProofs(current.subject.continuation.verified);
   });
   checkFleetAdmission?.();
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");

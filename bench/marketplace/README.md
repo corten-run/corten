@@ -133,8 +133,13 @@ committed checkout, with durable state outside that checkout:
 
 ```sh
 node bench/marketplace/droplet.mjs r17 --ssh-key <id> --state-dir <outside-checkout>/marketplace-r17 --detach
-node bench/marketplace/droplet.mjs r17 --state-dir <outside-checkout>/marketplace-r17 --collect
+node bench/marketplace/droplet.mjs r17 --state-dir <outside-checkout>/marketplace-r17 --collect --context <saved-context>
 ```
+
+Use the saved doctl context for the account that launched the round. Deletion requires
+durable publication of the intent (fixed local NTFS on Windows, directory sync on POSIX),
+which launch checks before allocating;
+see [State and Collection](nightly.md#state-and-collection).
 
 Use a fresh official `rN` with N >= 17 for each nightly round. The dedicated c-8 runs three
 passes with `--duration 15 --warmup 10 --rate 150`, pinned to app CPU 1, upstream CPUs 2-3
@@ -150,7 +155,7 @@ droplets started together
 ```sh
 node bench/marketplace/droplet.mjs r17 --droplets 3 --ssh-key <id> --state-dir <outside-checkout>/marketplace-r17 --plan
 node bench/marketplace/droplet.mjs r17 --droplets 3 --ssh-key <id> --state-dir <outside-checkout>/marketplace-r17 --detach
-node bench/marketplace/droplet.mjs r17 --state-dir <outside-checkout>/marketplace-r17 --collect
+node bench/marketplace/droplet.mjs r17 --state-dir <outside-checkout>/marketplace-r17 --collect --context <saved-context>
 ```
 
 `--plan` prints the split, each droplet's remote files and every command, calling neither
@@ -199,13 +204,16 @@ a loaded unit does not prove the round ran, and collects it like any other.
 droplet does not keep a finished one billed. The round is finished only when every droplet has
 been: exit 3 while any runs, 2 for a collection error on any droplet (a failed delete
 included) or for a leftover droplet named `corten-marketplace-rN-d*` that no live part owns,
-which is reported with its delete command, never deleted. A droplet whose launch stopped before
+which is reported for ownership review, never deleted. A droplet whose launch stopped before
 `systemctl start` (state `creating` or `preparing`) never ran its round: `starting` is saved
 just before that command and the unit has no `[Install]` section, so nothing else starts it.
 Collect finds it by id, or by name and run tag when its create returned no id (where the
 stopped launch said to look for a droplet with that name and tag), checks its name and ownership
-tags as for any delete, prints its `doctl` delete command and exits 2 until it is gone. A `starting` droplet is collected like any other, refusing a missing or unloaded unit;
-if its droplet is gone, it may have run and is missing. Whenever a droplet never started, is
+tags as for any delete, prints its `doctl` delete command and exits 2 until an exact GET
+confirms absence in its saved account. A `starting` droplet is collected like any other,
+refusing a missing or unloaded unit; if absence cannot be proved, the part remains
+unconfirmed. An account list can report extra IDs but cannot confirm or overturn absence
+of a reserved ID. Whenever a droplet never started, is
 partial or is missing, the round cannot merge, so collect prints the `ssh` command that stops
 each droplet still running, whatever the exit code. Exit 1 means a droplet did not finish its
 part, or the parts do not merge; 0 means every droplet finished and was deleted, and the parts
