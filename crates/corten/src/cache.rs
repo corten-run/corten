@@ -378,6 +378,9 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     let (mut no_store, mut is_private, mut must_understand) = (false, false, false);
     let (mut lines, mut quoted, mut text) = (0, false, true);
     let typed = res.extensions().get::<Typed>().copied();
+    // For a partial (below), whether any reader could find a `no-store` in its header
+    // (`no-store=1`, beside `must-understand`), read with the rest rather than looked up again.
+    let mut mentioned = false;
     match res.headers_mut().entry(header::CACHE_CONTROL) {
         header::Entry::Vacant(entry) => {
             entry.insert(PRIVATE);
@@ -393,6 +396,12 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
             }
             (is_private, lines) = (true, 1);
         }
+        // Corten's own default alone on an answer with no [`Cache`] mark, as the error page for a
+        // failure no handler answered already has it: a plain `private`, without reading its
+        // directives.
+        header::Entry::Occupied(entry) if typed.is_none() && entry.get() == PRIVATE && entry.iter().nth(1).is_none() => {
+            (is_private, lines) = (true, 1);
+        }
         header::Entry::Occupied(entry) => {
             for line in entry.iter() {
                 let says = says(line.as_bytes());
@@ -402,6 +411,9 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
                 lines += 1;
                 quoted |= line.as_bytes().contains(&b'"');
                 text &= line.to_str().is_ok();
+                if seen.partial {
+                    mentioned |= mentions_no_store(line.as_bytes());
+                }
             }
         }
     }
@@ -459,8 +471,11 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     // alone does not keep the browser out.
     if is_private
         && plain
-        && !((must_understand || partial)
-            && headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes())))
+        && !(if partial {
+            mentioned
+        } else {
+            must_understand && headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes()))
+        })
     {
         return;
     }
@@ -481,13 +496,15 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     if seen.partial {
         // A `no-store` any reader could find (`no-store=1`, beside `must-understand`) is kept,
         // with `private` for a CDN that ignores a bare one; otherwise the same lifetime.
-        let lines = headers.get_all(header::CACHE_CONTROL);
-        if lines.iter().any(|line| mentions_no_store(line.as_bytes())) {
+        if mentioned {
             headers.insert(header::CACHE_CONTROL, PRIVATE_NO_STORE);
             return;
         }
-        let browser = private(lines.iter().next().and_then(|v| v.to_str().ok()).unwrap_or(""));
-        headers.insert(header::CACHE_CONTROL, browser);
+        // The first line's lifetime, in place of every line, through one lookup.
+        if let header::Entry::Occupied(mut entry) = headers.entry(header::CACHE_CONTROL) {
+            let browser = private(entry.get().to_str().unwrap_or(""));
+            entry.insert(browser);
+        }
     }
     if !typed.named {
         headers.append(header::VARY, HeaderValue::from_static("cookie"));
@@ -694,7 +711,8 @@ pub(crate) fn names(line: &[u8], opaque: &[u8]) -> bool {
 /// Whether a `Cache-Control` line has `no-store` anywhere in it, as a reader that matches text
 /// would find it (case aside).
 pub(crate) fn mentions_no_store(line: &[u8]) -> bool {
-    line.windows(8).any(|w| w.eq_ignore_ascii_case(b"no-store"))
+    // Only where an `n` is: most lines have few.
+    memchr::memchr2_iter(b'n', b'N', line).any(|at| line.get(at..at + 8).is_some_and(|w| w.eq_ignore_ascii_case(b"no-store")))
 }
 
 /// `Cache-Control: no-store`, as `NoStore` writes it.
@@ -783,6 +801,25 @@ mod tests {
 
     fn seen() -> Seen {
         Seen { credentials: false, caller: false, partial: false, nonce: false, dev: false }
+    }
+
+    #[test]
+    fn the_quick_no_store_search_agrees_with_the_plain_one() {
+        for line in [
+            "no-store",
+            "No-Store",
+            "private, no-store=1",
+            "private, NO-STOREx",
+            "nnno-store",
+            "private, no-cache",
+            "no-stor",
+            "n",
+            "",
+            "public, max-age=60, no-cache=\"no-store\"",
+        ] {
+            let plain = line.as_bytes().windows(8).any(|w| w.eq_ignore_ascii_case(b"no-store"));
+            assert_eq!(mentions_no_store(line.as_bytes()), plain, "{line}");
+        }
     }
 
     #[test]
