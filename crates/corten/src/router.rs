@@ -409,7 +409,7 @@ pub(crate) struct MethodSet<S = ()> {
     /// The page's named posts (`post(hold) = ..`), each chosen by the `do` of the post's
     /// address ([`Chooser`]).
     actions: Vec<(&'static str, Slot<S>)>,
-    /// One of its handlers answers with a page the app keeps (`Public`, [`Keeping`]).
+    /// One of its handlers answers with a page or a body the app keeps (`Public`, [`Keeping`]).
     keeps: bool,
 }
 
@@ -658,8 +658,9 @@ impl<S: Clone + Send + Sync + 'static> Table<S> {
         self
     }
 
-    /// Whether a route's answer is a page the app keeps (`Public`): an app with none has no page
-    /// a write could drop, so it counts no writes ([`crate::kept`]).
+    /// Whether a route's answer is one the app keeps (`Public`: a page, or a whole body in a
+    /// build that compresses): an app with none has nothing a write could drop, so it counts no
+    /// writes ([`crate::kept`]).
     pub(crate) fn keeps(&self) -> bool {
         self.routes.iter().any(|placed| placed.methods.keeps)
     }

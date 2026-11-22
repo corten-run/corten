@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
+import { steadySampleWindow, summarizeSamples } from "../catalog/stats.mjs";
 import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupApps } from "./groups.mjs";
 import { admitted, boundedFeatureProfile, boundedQualificationSettings, featureProfile, qualificationSettings, validateActiveQualification, validateQualification } from "./feature-contract.mjs";
-import { aggregateCold, cpuSettings, loadPhases, parsePart, phases, readableSchemas, roundIdentity, sources, splitApps, splitSubject, stageAggregate, timedProfiles, v3Schema } from "./run-contract.mjs";
+import { aggregateCold, cpuSettings, loadPhases, parsePart, phases, readableSchemas, resultSchema, roundIdentity, sources, splitApps, splitSubject, stageAggregate, timedProfiles, v3Schema } from "./run-contract.mjs";
 import { betweenDroplets, cleanOutcome, differText, outcomeFields, subjectMetrics } from "./split.mjs";
+import { maxStatsSamples } from "./raw-contract.mjs";
 const finite = (n, min = 0) => assert.ok(Number.isFinite(n) && n >= min, "missing/invalid measurement");
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "missing/invalid timestamp"); return n; };
 function loadEvidence(p) {
@@ -44,10 +46,29 @@ const stopText = (s) => `its container ${s.oomKilled ? `was OOM-killed (${s.exit
 // spread takes the lower value in each column on its own (req/s and p95 may come from different
 // passes), and one pass has no range.
 const stoppedMark = (n, asked) => n >= asked ? "" : ` (stopped: ${n} of ${asked} passes${n === 2 ? "; the lower of two values per column, not a median" : n === 1 ? "; one pass, no range" : ""})`;
-function statsEvidence(p) {
+function roundedQuotient(mean, count) {
+  const product = mean * count, quotient = product / count;
+  if (quotient === mean) return true;
+  // If the nearest binary64 product rounds back past the mean, only the
+  // adjacent positive float on the other side can still divide to the mean.
+  const float = new Float64Array([product]), bits = new BigUint64Array(float.buffer);
+  bits[0] += quotient > mean ? -1n : 1n;
+  return float[0] / count === mean;
+}
+function statsEvidence(p, allowRoundedMemory) {
   finite(p.cpuAvgPct); finite(p.cpuMaxPct); assert.ok(p.cpuMaxPct >= p.cpuAvgPct);
-  finite(p.memAvgMiB, Number.MIN_VALUE); finite(p.memMaxMiB, p.memAvgMiB);
+  finite(p.memAvgMiB, Number.MIN_VALUE); finite(p.memMaxMiB, Number.MIN_VALUE);
   assert.ok(Number.isSafeInteger(p.samples) && p.samples > 0);
+  if (p.memAvgMiB > p.memMaxMiB) {
+    assert.ok(allowRoundedMemory && p.samples <= maxStatsSamples, "missing/invalid measurement");
+    // Floating-point addition and division are monotone here. No sequence with
+    // this sample count and peak can yield a larger mean than an all-peak history.
+    // Native replay still requires exact agreement with the actual Docker samples.
+    const upper = summarizeSamples(Array(p.samples).fill({ cpu: 0, mem: p.memMaxMiB })).memAvgMiB;
+    assert.ok(Number.isFinite(upper) && p.memAvgMiB <= upper, "missing/invalid measurement");
+    const [start, end] = steadySampleWindow(p.samples);
+    assert.ok(roundedQuotient(p.memAvgMiB, end - start), "missing/invalid measurement");
+  }
   assert.ok(Number.isSafeInteger(p.cpuUsec) && p.cpuUsec > 0);
 }
 function hostEvidence(host, tools) {
@@ -101,6 +122,8 @@ function splitEvidence(s, v3, start, end, validateQualificationRecord) {
   return windows;
 }
 function validateApp(s, a, start, end, v3, validateQualificationRecord) {
+  // A merged v5 summary carries the parts' measurements but not their raw-receipt version.
+  const allowRoundedMemory = s.schema === resultSchema;
   assert.match(a.imageId, /^sha256:[a-f0-9]{64}$/);
   assert.equal(a.builtCommit, s.commit);
   assert.equal(a.builtDirty, false);
@@ -144,9 +167,9 @@ function validateApp(s, a, start, end, v3, validateQualificationRecord) {
         if (!run.stopped) assert.deepEqual(Object.keys(run.phases).sort(), [...phases].sort(), "unexpected/missing run phases");
         for (const phase of phases.filter((p) => run.phases[p])) {
           const p = run.phases[phase];
-          loadEvidence(p); statsEvidence(p); finite(p.perCpuSecond, Number.MIN_VALUE);
+          loadEvidence(p); statsEvidence(p, allowRoundedMemory); finite(p.perCpuSecond, Number.MIN_VALUE);
           assert.ok(Math.abs(p.perCpuSecond - p.requests / (p.cpuUsec / 1e6)) < 1e-6, "CPU efficiency contradicts raw counter");
-          if (source === "api") { statsEvidence(p.upstream); assert.equal(p.upstream.highCpu, p.upstream.cpuAvgPct >= 80); }
+          if (source === "api") { statsEvidence(p.upstream, allowRoundedMemory); assert.equal(p.upstream.highCpu, p.upstream.cpuAvgPct >= 80); }
           else assert.equal(p.upstream, null);
         }
       }
