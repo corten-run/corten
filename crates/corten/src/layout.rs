@@ -371,15 +371,9 @@ pub(crate) fn strip(page: &mut String, places: &Places) {
     *page = splice(page, places.token, &places.slots, |_, _, _| {});
 }
 
-/// On a [`crate::Public`] answer without a cache mark (one that failed): the same for everyone, so
-/// no layout read's value is drawn in it. One with the mark says so there ([`same_for_all`]).
+/// On a [`crate::Public`] answer: the same for everyone, so no layout read's value is drawn in it.
 #[derive(Clone, Copy)]
 pub(crate) struct SameForAll;
-
-/// Whether `res` is a [`crate::Public`] answer: by its cache mark, or [`SameForAll`] without one.
-pub(crate) fn same_for_all(res: &Response) -> bool {
-    crate::cache::Typed::for_all(res) || res.extensions().get::<SameForAll>().is_some()
-}
 
 /// A page with places for values, which [`StartHere::fill`] draws.
 #[derive(Clone)]
@@ -814,7 +808,7 @@ impl StartHere {
         };
         // An answer for everyone (`Public`) draws no one's value, whatever started the reads (a
         // route of Corten's own that took `Req`).
-        let for_all = same_for_all(&res);
+        let for_all = res.extensions().get::<SameForAll>().is_some();
         let (shared, refused, error_waits) = {
             let mut here = self.lock();
             // A write that draws a page starts the reads it draws now. The error page started those

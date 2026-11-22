@@ -1378,8 +1378,10 @@ async fn a_kept_page_still_passes_every_middleware() {
 /// each with a browser's headers and no cookie. `PAGE_CASE` is the page: `visitor` (the default),
 /// the page for one visitor (`private, no-cache`); `public`, the same page marked `Public` in an
 /// app that keeps none (`App::kept_answers(0)`); `kept`, that page in an app that keeps it, so
-/// every request after the first is given the kept one. Counting it under callgrind at two numbers
-/// of requests gives the instructions per request. Run in release:
+/// every request after the first is given the kept one; `rotating`, the `public` page with five
+/// policies in turn, a different one each request, each header 96 bytes long; `rotating-short`, the
+/// same with five shorter ones (`public, max-age=60` to `64`). Counting it under callgrind at two
+/// numbers of requests gives the instructions per request. Run in release:
 /// `cargo test --release -p corten-run --all-features --lib --no-run`, then
 /// `PAGE_REQUESTS=1200 valgrind --tool=callgrind <that binary> --ignored --exact tests::cache::what_a_page_s_caching_costs`
 /// and again at 200.
@@ -1398,17 +1400,60 @@ fn what_a_page_s_caching_costs() {
             </ul>
         }
     };
+    // The policy of the `n`th request: the `max-age` of the first is 60 (2,592,000 for `rotating`),
+    // and each of the next four one more.
+    let long = case == "rotating";
+    let policy = move |n: u64| {
+        let turn = Duration::from_secs(n % 5);
+        if long {
+            let month = Duration::from_secs(2_592_000);
+            (month + turn, Some(month), Duration::from_secs(1_036_800), Duration::from_secs(604_800))
+        } else {
+            (minute + turn, None, Duration::ZERO, Duration::ZERO)
+        }
+    };
     let routes = match case.as_str() {
         "visitor" => Table::new().route("/", crate::route::get(move |req: Req| async move { req.test_page("Page", main()) }).0),
         "public" | "kept" => Table::new().route(
             "/",
             crate::route::get(move |req: Req| async move { Public::new(minute, req.test_page_for("Page", main())) }).0,
         ),
-        other => panic!("PAGE_CASE is visitor, public or kept, not {other:?}"),
+        "rotating" | "rotating-short" => {
+            let turns = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            Table::new().route(
+                "/",
+                crate::route::get(move |req: Req| {
+                    let (max_age, shared, stale, if_error) = policy(turns.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+                    async move {
+                        let public = Public::new(max_age, req.test_page_for("Page", main()));
+                        let public = public.stale_while_revalidate(stale).stale_if_error(if_error);
+                        match shared {
+                            Some(shared) => public.shared(shared),
+                            None => public,
+                        }
+                    }
+                })
+                .0,
+            )
+        }
+        other => panic!("PAGE_CASE is visitor, public, kept, rotating or rotating-short, not {other:?}"),
     };
     let app = App::new(Routes::from(routes));
-    let router = if case == "public" { app.kept_answers(0).router() } else { app.router() };
-    let expected = if case == "visitor" { "private, no-cache" } else { "public, max-age=60" };
+    let router = if case == "kept" { app.router() } else { app.kept_answers(0).router() };
+    let expected = |n: u64| match case.as_str() {
+        "visitor" => "private, no-cache".to_string(),
+        "public" | "kept" => "public, max-age=60".to_string(),
+        _ => match policy(n) {
+            (max_age, Some(shared), stale, if_error) => format!(
+                "public, max-age={}, s-maxage={}, stale-while-revalidate={}, stale-if-error={}",
+                max_age.as_secs(),
+                shared.as_secs(),
+                stale.as_secs(),
+                if_error.as_secs()
+            ),
+            (max_age, ..) => format!("public, max-age={}", max_age.as_secs()),
+        },
+    };
     let browser = [
         ("host", "localhost"),
         ("user-agent", "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"),
@@ -1431,7 +1476,7 @@ fn what_a_page_s_caching_costs() {
             let (parts, body) = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap().into_parts();
             let body = body.collect().await.unwrap().to_bytes();
             assert!(parts.status == StatusCode::OK && body.windows(14).any(|w| w == b"<li>three</li>"), "{}", parts.status);
-            assert_eq!(parts.headers[header::CACHE_CONTROL], expected);
+            assert_eq!(parts.headers[header::CACHE_CONTROL], expected(n as u64), "{n}");
             assert_eq!(parts.headers.contains_key(header::AGE), case == "kept" && n > 0, "{n}");
         }
     });

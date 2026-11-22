@@ -194,12 +194,15 @@ impl Made {
     }
 }
 
-/// A `public` header with these numbers, made anew.
+/// A `public` header with these numbers, made anew: its text and the count of its references in
+/// one allocation, so holding it in [`MADE`] and in the mark allocates nothing more. (Made from a
+/// `Vec`, `Bytes` allocates that count beside the text, or on the first clone when the text fills
+/// the `Vec`.)
 fn public(max_age: u64, shared: Option<u64>, stale: u64, if_error: u64) -> HeaderValue {
-    let mut text = Vec::with_capacity(96);
+    let mut text = Text { len: 0, bytes: [0; Text::LONGEST] };
     let mut push = |name: &str, n: u64| {
-        text.extend_from_slice(name.as_bytes());
-        text.extend_from_slice(crate::ascii::digits(n, &mut [0; 20]));
+        text.push(name.as_bytes());
+        text.push(crate::ascii::digits(n, &mut [0; 20]));
     };
     push("public, max-age=", max_age);
     if let Some(shared) = shared {
@@ -211,37 +214,46 @@ fn public(max_age: u64, shared: Option<u64>, stale: u64, if_error: u64) -> Heade
     if if_error > 0 {
         push(", stale-if-error=", if_error);
     }
-    HeaderValue::from_maybe_shared(bytes::Bytes::from(text)).expect("digits are a valid header")
+    HeaderValue::from_maybe_shared(bytes::Bytes::from_owner(text)).expect("digits are a valid header")
+}
+
+/// A `public` header's text ([`public`]).
+struct Text {
+    len: usize,
+    bytes: [u8; Text::LONGEST],
+}
+
+impl Text {
+    /// Every directive [`public`] writes, each with a `u64`'s 20 digits.
+    const LONGEST: usize =
+        "public, max-age=".len() + ", s-maxage=".len() + ", stale-while-revalidate=".len() + ", stale-if-error=".len() + 4 * 20;
+
+    fn push(&mut self, part: &[u8]) {
+        self.bytes[self.len..self.len + part.len()].copy_from_slice(part);
+        self.len += part.len();
+    }
+}
+
+impl AsRef<[u8]> for Text {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
 }
 
 impl Cache {
-    /// Sets the response's `Cache-Control` to this, as [`settle`] reads it. In place of a
-    /// [`crate::Public`] answer's own ([`crate::NoStore`] around an answer that chose to be one, or
-    /// `no_store` on its route), it changes how long caches keep the answer, not who it is for: it
-    /// is still the same for everyone, so no one's layout values are drawn in it.
+    /// Sets the response's `Cache-Control` to this, as [`settle`] reads it.
     pub(crate) fn apply(self, res: &mut Response) {
-        let for_all = Typed::for_all(res);
-        self.apply_marked(res, for_all);
-    }
-
-    /// [`Cache::apply`] on a [`crate::Public`] answer: its one mark says too that the answer is
-    /// the same for everyone, as [`crate::layout::SameForAll`] does on one without it.
-    pub(crate) fn apply_for_all(self, res: &mut Response) {
-        self.apply_marked(res, true);
-    }
-
-    fn apply_marked(self, res: &mut Response, for_all: bool) {
-        let (value, typed) = self.typed(self.kind == Kind::Immutable, for_all);
+        let (value, typed) = self.typed(self.kind == Kind::Immutable);
         res.headers_mut().insert(header::CACHE_CONTROL, value);
         res.extensions_mut().insert(typed);
     }
 
     /// The header and the mark [`settle`] reads it by. A `public` one says none of what [`settle`]
     /// reads a line for, so the mark holds it to know it while it stands as written.
-    fn typed(self, named: bool, for_all: bool) -> (HeaderValue, Typed) {
+    fn typed(self, named: bool) -> (HeaderValue, Typed) {
         let value = self.header();
         let wrote = matches!(self.kind, Kind::Public { .. } | Kind::Immutable).then(|| value.clone());
-        (value, Typed { named, for_all, lifetime: self.lifetime(), wrote })
+        (value, Typed { named, lifetime: self.lifetime(), wrote })
     }
 }
 
@@ -249,7 +261,7 @@ impl IntoResponseParts for Cache {
     type Error = std::convert::Infallible;
 
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
-        let (value, typed) = self.typed(false, false);
+        let (value, typed) = self.typed(false);
         res.headers_mut().insert(header::CACHE_CONTROL, value);
         res.extensions_mut().insert(typed);
         Ok(res)
@@ -262,9 +274,6 @@ impl IntoResponseParts for Cache {
 pub(crate) struct Typed {
     /// A [`Cache::immutable`] answer: its URL names it, so the request's cookies do not change it.
     named: bool,
-    /// A [`crate::Public`] answer, the same for everyone ([`crate::layout::same_for_all`]), still
-    /// when [`Cache::apply`] replaced its policy.
-    for_all: bool,
     /// [`Cache::lifetime`], for the app's own keeping of the answer ([`crate::kept`]).
     lifetime: u64,
     /// The `public` header [`Cache`] wrote, held so no other value has its bytes.
@@ -272,16 +281,11 @@ pub(crate) struct Typed {
 }
 
 impl Typed {
-    /// `res`'s mark and its lifetime in seconds, when it is a [`crate::Public`] answer a shared
-    /// cache may keep for one: what the app itself keeps ([`crate::kept`]).
+    /// `res`'s mark and its lifetime in seconds, when it is an answer a shared cache may keep for
+    /// one: what the app itself keeps ([`crate::kept`]).
     pub(crate) fn shared(res: &Response) -> Option<(Typed, u64)> {
         let typed = res.extensions().get::<Typed>()?;
-        (typed.for_all && !typed.named && typed.lifetime > 0).then(|| (typed.clone(), typed.lifetime))
-    }
-
-    /// Whether `res` has the mark of a [`crate::Public`] answer.
-    pub(crate) fn for_all(res: &Response) -> bool {
-        res.extensions().get::<Typed>().is_some_and(|typed| typed.for_all)
+        (!typed.named && typed.lifetime > 0).then(|| (typed.clone(), typed.lifetime))
     }
 
     /// Whether `lines` are the header [`Cache`] wrote and nothing else: one line with its very
@@ -294,7 +298,7 @@ impl Typed {
 
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
-        Typed { named: false, for_all: true, lifetime: 60, wrote: None }
+        Typed { named: false, lifetime: 60, wrote: None }
     }
 }
 

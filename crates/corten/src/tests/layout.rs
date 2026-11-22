@@ -1922,9 +1922,12 @@ mod layout_reads {
     }
 
     /// An answer type of the app's own that is a page, and `Public` or not as the handler decides.
+    /// `Merged` is a `Public` one that takes the head of a `NoStore` answer as its parts: the
+    /// tuple makes the page first, then puts the head's headers and marks over its own.
     enum PublicOrNot {
         Public(Public<HtmlResult>),
         One(HtmlResult),
+        Merged(Public<HtmlResult>),
     }
 
     impl crate::response::IntoResponse for PublicOrNot {
@@ -1932,6 +1935,10 @@ mod layout_reads {
             match self {
                 PublicOrNot::Public(answer) => answer.into_response(),
                 PublicOrNot::One(answer) => answer.into_response(),
+                PublicOrNot::Merged(answer) => {
+                    let (head, _) = crate::NoStore(()).into_response().into_parts();
+                    (head.headers, head.extensions, answer).into_response()
+                }
             }
         }
     }
@@ -1948,6 +1955,8 @@ mod layout_reads {
         let chosen = html! { <p>"chosen"</p> };
         if req.path().ends_with("-one") {
             PublicOrNot::One(req.page(Layout { req: &req, children: chosen }))
+        } else if req.path().starts_with("/merged") {
+            PublicOrNot::Merged(Public::new(Duration::from_secs(60), req.page(Layout { req: &req, children: chosen })))
         } else {
             PublicOrNot::Public(Public::new(Duration::from_secs(60), req.page(Layout { req: &req, children: chosen })))
         }
@@ -1967,6 +1976,9 @@ mod layout_reads {
 
         #[route("/wrapped-no-store", get = public_or_not_kept_by_none)]
         pub struct WrappedNoStore;
+
+        #[route("/merged-no-store", get = public_or_not)]
+        pub struct MergedNoStore;
     }
 
     /// A `Public` answer stays the same for everyone when what wraps it says nothing may keep it
@@ -1992,6 +2004,25 @@ mod layout_reads {
         let (_, headers, body) = call_with(router, "GET", "/route-no-store-one", None, None).await;
         assert_eq!(headers[http::header::CACHE_CONTROL], "no-store");
         assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{body}");
+    }
+
+    /// A `Public` page that takes a `NoStore` answer's headers and marks as its parts says
+    /// `no-store`, and is still the same for everyone: the parts replace its cache mark, not that
+    /// it draws no one's values.
+    #[tokio::test]
+    async fn a_public_page_given_no_store_parts_still_draws_no_one_s_values() {
+        let router = App::new(public_or_not_url::router())
+            .layout_read(CartCount::default())
+            .layout_read(SignedIn)
+            .middleware(AsViewer(Some("ada")))
+            .router();
+        for _ in 0..2 {
+            let (status, headers, body) = call_with(router.clone(), "GET", "/merged-no-store", None, None).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(headers[http::header::CACHE_CONTROL], "no-store");
+            assert!(body.contains("<header>Cart </header>") && !body.contains("corten-later"), "{body}");
+            assert!(!headers.contains_key(http::header::AGE), "not kept");
+        }
     }
 
     #[tokio::test]

@@ -2283,18 +2283,16 @@ const fn shared_header(name: &str) -> bool {
 impl<A: Shareable> IntoResponse for Public<A> {
     fn into_response(self) -> Response {
         let mut res = self.answer.into_response();
-        // No layout read's value is drawn in it, however the reads were started: its cache mark
-        // says so where it has one.
+        // No layout read's value is drawn in it, however the reads were started.
+        res.extensions_mut().insert(crate::layout::SameForAll);
         if res.status().is_success() || res.status().is_redirection() {
-            self.cache.apply_for_all(&mut res);
+            self.cache.apply(&mut res);
             if let Some(added) = self.headers {
                 let headers = res.headers_mut();
                 for (name, value) in *added {
                     headers.append(name, value);
                 }
             }
-        } else {
-            res.extensions_mut().insert(crate::layout::SameForAll);
         }
         res
     }
