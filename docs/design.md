@@ -7817,6 +7817,42 @@ rules something out.
     again 19,517 against 19,520 and a page for one visitor 18,183 against 18,183, each build's
     rounds within 35 instructions of each other, and each median within 9 of the same build's at
     `0ac0b52bf`. The fixture's routes are pages, so no kept file or body is counted here.
+    Under load on a quiet host (`f017dc37f`, whose crates are `950bbcdce`'s, against
+    `a0eeeacca`, on a cloud host with eight dedicated CPUs, Xeon Platinum 8358 with one thread a
+    core, that ran nothing else; the app on jemalloc as the template's Dockerfile runs it, on one
+    CPU, loaded in turn for three seconds a turn by `wrk` with 64 connections on two others, the
+    order turned every pair, `perf stat` over each turn divided by the requests answered, each
+    build started once a workload and its answers compared first; 90 pairs, the workloads and
+    the margin set before the run), user and kernel cycles a request changed at the median of the
+    pairs by +2.81% for a new URL in a full 32 MiB store (one-sided 95% bound +3.33%, user
+    instructions +0.25%; both builds filled it at 3,786 pages), +3.82% for a page made and kept
+    with room, each turn on a fresh start so the store never fills (bound +4.10%, instructions
+    +3.25%), and +4.75% for a write and the page made again (bound +5.21%, instructions +2.50%;
+    all but about 3 in 100,000 of its `GET`s made the page in each build), more on all three as
+    expected, where no margin was set. A kept page given again took +0.77% (bound +1.13%,
+    instructions +0.00%) and a page for one visitor +1.23% (bound +1.57%, instructions -0.00%),
+    where the margin set was cycles not worse, the bound under +1%: neither met it, on
+    instructions that did not move. Another change measured on such a host with one start a
+    build missed the same margin on flat instructions
+    ([#1866 Hash a kept page's URL once and build its key only when it is kept](https://github.com/corten-run/corten/pull/1866):
+    a kept page +1.80%, bound +2.02%, and a page for one visitor +1.51%, bound +1.67%) and met
+    it when every turn started its build afresh (+0.31%, bound +0.90%, and +0.54%, bound
+    +0.86%), so a run of these two with every turn on a fresh start (100 pairs, the margin
+    unchanged) decides whether this change merges; until it is run, no cost to a kept page or a
+    page for one visitor is shown or ruled out. Timed on the same host (80 pairs of waves a case,
+    each wave 64 requests sent at once to one build as its copy's lifetime of a second ran out,
+    for a handler that sleeps 20 ms; medians over the waves, of the slowest answer's 99th
+    percentile and of the median answer): for a page and for a JSON body that is kept, the
+    handler ran once a wave where it ran 64 times, the slowest at 22.9 ms where it was 23.2 and
+    the median answer 22.4 and 22.3 ms against 22.5; with the source answering 4 reads at a
+    time, once against 64 times and 22.9 ms against 340.1 (median answer 22.4 against 191.2). A
+    page that sets a cookie and one that fails, never kept, ran 64 times a wave in both builds;
+    this change's first wave after a start, and its wave once the minute a page not kept is
+    remembered had passed (the 46th), took about 43 ms at the median answer (43.0 to 44.0)
+    against main's 22, the others waiting for the first one's answer and then running their
+    own, and every other wave matched main's (23.2 ms against 23.1). A body too small to keep did
+    the same on its first wave (44.3 ms) and matched main's after it, its route having stopped
+    asking the store. All 960 waves answered all 64 requests.
     What a write pays for its count, under callgrind (valgrind 3.24.0, rustc 1.99.1, release with
     debuginfo) on an app with one route whose `GET` and `POST` each answer text, sent
     `POST /items/7/edit` in process with `oneshot`, as (instructions at 1,200 writes less those at
@@ -7974,10 +8010,10 @@ rules something out.
     spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
     kept page in those rounds is the rule, two builds of the same code having differed by
     more from one start to the next; a store read from more than one core; the cycles of a
-    miss, among them one kept with room in memory the store has used before (room made by a
-    write or by a page's lifetime ending), and the time of requests that miss together against
-    main's, on a quiet host or with a real source; this change merged with main's counts by
-    path made late (`250e4b81c`) and its later mains, counted in instructions and not in cycles; how often an app's first
+    miss kept with room a page's lifetime ending made, and the time of requests that miss
+    together against main's with a real source (the waves above sleep); whether this change
+    costs a kept page or a page for one visitor any cycles, which the run with one start a
+    build left open (above); how often an app's first
     requests for a URL in a full store meet
     another, and what the second run of its handler costs a source then; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
@@ -8053,6 +8089,9 @@ rules something out.
     `0ac0b52bf` counted the same way.
     2026-11-22, merged with main at `a0eeeacca`, rustc 1.100.0, release builds of `950bbcdce` and
     `a0eeeacca` counted the same way.
+    2026-11-22, the cycles and waves on a quiet host, rustc 1.100.0, release builds of `f017dc37f`
+    and `a0eeeacca` built on that host, each started once a workload (a page made with room on
+    a fresh start each turn).
     2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
     benchmark) and `05ead69a7` (this change's `8db0885c7` with them), kept under the tag
     `evidence/kept-file-1794`; 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
