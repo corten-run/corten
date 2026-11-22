@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, fork } from "node:child_process";
 import * as fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
@@ -11,13 +12,15 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
-import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
+import { fleetCli, fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, reservation, savedLoadLayout, savedPlacement, verifySshIngress } from "./cloud-contract.mjs";
-import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { readFleet, recheckSetupSibling, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { unitQuery } from "./cloud-options.mjs";
+import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
 import { inspectContinuation } from "./group-continuation.mjs";
 import { groupNames } from "./registry.mjs";
@@ -433,6 +436,86 @@ test("continuation schedules around pinned catalog and retired JSON without repl
   assert.equal(treeHash(retained), oldTree, "historical bytes untouched");
 });
 
+for (const change of ["none", "cleanup lock", "late account lock", "reservation bytes", "renamed host"]) test(`stopped sibling, after intent: ${change}`, { timeout: 60000 }, async (t) => {
+  const p = fixture(t, "ssh-late"), group = "fullstack-browser", other = "hardening", old = path.join(p.h.base, group);
+  fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
+  const args = (g, round) => [round, "--continuation-root", p.h.base, "--group", g];
+  const prepare = (g, round) => fleetMain([...args(g, round), "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps);
+  const approve = async (g, round) => {
+    assert.equal(await fleetMain([...args(g, round), "--detach", "--print-approval"], p.deps), 3);
+    return [...args(g, round), "--detach", "--approve-reviewed-merged-ready", p.output.at(-1).approvalSha256];
+  };
+  assert.equal(await prepare(group, "r21"), 3);
+  assert.equal(await fleetMain(await approve(group, "r21"), { ...p.deps, main: async () => 2 }), 2);
+  const fleet = readFleet(old, "r21").manifest;
+  const state = reservation({ round: "r21", commit, token: fleet.jobs[0].token, group, fleet });
+  const local = path.join(old, group, "groups-r21");
+  fs.mkdirSync(local, { recursive: true });
+  Object.assign(state, { status: "starting", provider: fleet.provider, fullGroupQualified: false, id: "701", ip: "192.0.2.1",
+    createIntentAt: state.createdAt, control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256,
+      ledger: [], sealed: [], monitor: { schema: "benchmark-supervised-control/v1", id: "1".repeat(32), phase: "pending" } } });
+  for (const command of [`systemctl start ${state.unit}`, unitQuery(state)])
+    state.control.ledger.push({ request: controlRequest(state, "ssh", [command], 60000, "bootstrap"), localTerminal: true, code: 0 });
+  const save = () => fs.writeFileSync(path.join(local, "state.json"), JSON.stringify(state));
+  save();
+  await assert.rejects(prepare(other, "r22"), /unresolved custody/);
+  const evidence = path.join(local, "evidence-Synthetic"), tar = path.join(local, "results.tgz");
+  fs.mkdirSync(evidence); fs.writeFileSync(path.join(evidence, "exit-code"), "124\n");
+  const bytes = archive([{ name: "exit-code", body: "124\n" }]);
+  Object.assign(state, { preBootstrapTerminal: { hostId: state.id, ip: state.ip, monitorId: state.control.monitor.id,
+    invocation: state.control.ledger.at(-1).request.invocation.id, stdout: `Id=${state.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${state.unit}\nActiveState=failed\nRestart=no\nMainPID=0\nExecMainCode=1\nExecMainStartTimestamp=Fri 2026-11-13 01:00:00 UTC\n` },
+    evidence: "evidence-Synthetic", extractionAttempts: ["evidence-Synthetic"], archiveSha256: digest(bytes), evidenceSha256: treeHash(evidence) });
+  save();
+  await assert.rejects(prepare(group, "r22"), /unresolved custody/);
+  await assert.rejects(prepare(other, "r22"), /ENOENT/);
+  fs.writeFileSync(tar, "replaced"); await assert.rejects(prepare(other, "r22"), assert.AssertionError);
+  fs.writeFileSync(tar, bytes);
+  const original = treeHash(old);
+  assert.equal(await prepare(other, "r21"), 3);
+  const approved = await approve(other, "r21");
+  const census = p.output.at(-1).subject.continuation.unconfirmed;
+  assert.deepEqual(census, [{ group, round: "r21", accountId, manifestSha256: fileHash(path.join(old, "fleet-r21.json")),
+    stateSha256: fileHash(path.join(local, "state.json")), id: state.id, root: old, launch: fileHash(path.join(old, "launch-intent.json")) }]);
+  const lock = path.join(local, "operation.lock");
+  if (change === "late account lock") fs.writeFileSync(p.hosts + ".late-lock", lock);
+  if (change === "cleanup lock") {
+    const open = fs.openSync;
+    const mock = t.mock.method(fs.default, "openSync", (file, ...args) => {
+      const fd = open(file, ...args);
+      if (file === tar) fs.writeFileSync(lock, "hash in progress", { flag: "wx" });
+      return fd;
+    });
+    syncBuiltinESMExports();
+    try { assert.throws(() => recheckSetupSibling(p.h.base, other, census[0]), /setup sibling recovery started/); }
+    finally { mock.mock.restore(); syncBuiltinESMExports(); }
+    fs.unlinkSync(lock);
+  }
+  let reached = false;
+  p.deps.WorkerClass = class extends p.deps.WorkerClass {
+    constructor(entry, options) {
+      assert.ok(fs.existsSync(path.join(p.h.base, other, "launch-intent.json")));
+      if (change === "cleanup lock") fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }), { flag: "wx" });
+      if (change === "reservation bytes") fs.appendFileSync(path.join(local, "state.json"), "\n");
+      if (change === "renamed host") fs.writeFileSync(p.hosts, JSON.stringify([{ id: 701, name: "renamed", tags: [] }]));
+      reached = true;
+      super(entry, options);
+    }
+  };
+  assert.equal(await fleetMain(approved, p.deps), change === "none" ? 3 : 2);
+  assert.ok(reached);
+  const trace = p.events().filter(({ boundary }) => boundary === "provider");
+  assert.ok(trace.some(({ method, path }) => method === "GET" && path.startsWith("/v2/droplets?")));
+  if (change === "none") assert.deepEqual(trace.filter(({ method }) => method === "POST").map(({ group }) => group), [other]);
+  else {
+    assert.ok(trace.every(({ method }) => method === "GET"), "no provider mutation after handoff");
+    assert.equal(p.saved(path.join(other, other)).createIntentAt, undefined);
+  }
+  if (change === "cleanup lock" || change === "late account lock") fs.unlinkSync(lock);
+  if (change === "reservation bytes") save();
+  assert.equal(treeHash(old), original);
+});
+
 test("continuation child refuses a historical staged lock acquired after parent intent", { timeout: 60000 }, async (t) => {
   const p = fixture(t), retained = path.join(p.h.temp, "retained"), [first, group] = groupNames;
   const historical = ["r20", "--fleet-root", retained];
@@ -808,6 +891,28 @@ const catalogFailure = (diagnostic) => (error) => {
   if (diagnostic) assert.deepEqual(error.providerDiagnostic, diagnostic);
   return true;
 };
+
+test("prepare CLI distinguishes provider startup, catalog validation and disconnect during the catalog read", { timeout: 15000 }, async (t) => {
+  for (const [mode, diagnostic] of [
+    ["startup-refusal", "first-account-read-or-worker-start; transport-close-failed; custody-uncertain"],
+    ["catalog-shape", "catalog-validation; catalog-response"],
+    ["catalog-disconnect", "catalog-read; transport-close-failed; custody-uncertain"],
+  ]) await t.test(mode, async (t) => {
+    const p = fixture(t), exitCode = realCatalog(p, mode), errors = [];
+    const disconnected = mode !== "catalog-shape";
+    assert.equal(await fleetCli(p.prepareArgs, { ...p.deps, writeError: (line) => errors.push(line) }), 2);
+    assert.deepEqual(errors, [`fleet-placement-preflight-failed: ${diagnostic}`]);
+    assert.equal(exitCode(), disconnected ? 2 : 0);
+    assert.deepEqual(fs.readdirSync(p.h.base), disconnected ? [".fleet-operation.lock"] : []);
+    assert.deepEqual(p.events().filter((row) => row.boundary === "provider").map((row) => [row.method, row.path]),
+      mode === "startup-refusal" ? [] : [["GET", "/v2/account"], ["GET", "/v2/sizes?page=1&per_page=200"]]);
+    if (mode === "startup-refusal") {
+      assert.ok(p.events().some((row) => row.boundary === "before-provider-boot"));
+      assert.ok(!p.events().some((row) => row.boundary === "synthetic-credential"));
+    }
+    assert.equal(p.workers.length, 0);
+  });
+});
 
 test("prepare can retry a settled invalid listing, but retains the lock on disconnect", { timeout: 15000 }, async (t) => {
   for (const [mode, diagnostic] of [["catalog-shape", refusedCatalog], ["catalog-disconnect", null]]) await t.test(mode, async (t) => {

@@ -72,7 +72,7 @@ function stillSame(first, last) {
   return first.sha256 === last.sha256 && first.stamp.every((v, i) => v === last.stamp[i]);
 }
 
-// This proof is only for reports, never for acquiring or releasing custody.
+// Read historical evidence only. Never acquire or release this owner's custody.
 function reportOwner(pid, locks, processStart, recordedAt = 0) {
   try { process.kill(pid, 0); }
   catch (error) { return error.code === "ESRCH" ? "absent" : "busy"; }
@@ -121,6 +121,17 @@ function sameChildLocks(local, locks) {
   try {
     return !present(join(local, "stream-recovery.lock")) && locks.every((lock) => stillSame(lock, lockEvidence(lock.path)));
   } catch { return false; }
+}
+
+// A report or a distinct new attempt can read a destroyed allocation. Neither
+// may take over its locks. Return a check to repeat before using that evidence.
+export function historicalChildLocks(job, processStart = windowsProcessStart) {
+  const { local, state } = job;
+  if (job.outcome !== "busy" || state?.status !== "retired" || !state.destroyedAt ||
+      state.retirement?.kind !== "native-failed" || state.control?.monitor?.phase !== "invalid" ||
+      !state.launchHostKeySha256 || present(join(local, "stream-recovery.lock"))) return;
+  const locks = reportChild(local, state, processStart);
+  if (locks) return () => sameChildLocks(local, locks);
 }
 
 export function readFleet(root, round, { priorSelection = false } = {}) {
@@ -298,6 +309,29 @@ function evidenceSnapshot(job) {
   return { stateSha256: job.stateSha256, archiveSha256: s.archiveSha256, evidenceSha256: s.evidenceSha256 };
 }
 
+// Absence of an old ID in the provider account is necessary but not sufficient:
+// the terminal attempt named in the approval must still be idle and unchanged.
+export function recheckSetupSibling(root, selectedGroup, row) {
+  assert.equal(dirname(row.root), root, "setup sibling belongs to another continuation");
+  const idleAttempt = () => {
+    const fleet = readFleet(row.root, row.round, { priorSelection: true });
+    assert.ok(fleet.manifest.single?.group === row.group && row.group !== selectedGroup);
+    assert.equal(fleet.manifest.provider.accountId, row.accountId);
+    assert.equal(fleet.manifestSha256, row.manifestSha256);
+    assert.equal(readLaunchIntent(fleet).sha256, row.launch);
+    const saved = readGroup(fleet, row.group);
+    assert.equal(saved.stateSha256, row.stateSha256, "setup sibling reservation changed");
+    assert.ok(saved.state?.preBootstrapTerminal && saved.state.status === "starting" && saved.state.id === row.id);
+    assert.ok(saved.outcome === "available" && !present(join(fleet.root, ".fleet-operation.lock"))
+      && !present(join(saved.stateRoot, ".groups-launch.lock")) && !present(join(saved.local, "stream-recovery.lock")),
+    "setup sibling recovery started");
+    return saved;
+  };
+  evidenceSnapshot(idleAttempt());
+  idleAttempt(); // Hashing the archive/tree may overlap the start of collection.
+  return idleAttempt;
+}
+
 // Read-only per-group replay, shared by final inspection and staged admission.
 // It does not inspect/ignore a root operation lock: its caller owns that policy.
 export function recheckCollectedGroup(fleet, snapshot) {
@@ -364,7 +398,8 @@ export async function verifyCollectedGroup(fleet, group, { inspect, start, detai
     timeScope: "reservation-and-collection-not-provider-billing-or-benchmark-elapsed", ...hashes,
     campaignSha256: report.campaignSha256, sourceSha256: report.sourceSha256,
     ...(details ? { campaignCreatedAt: reservation.createdAt, baseEffectiveOptions: plan.bindings?.[0]?.execution?.effectiveOptions } : {}),
-    ...(report.status === "verified" ? { appOutcomes: report.groups[0].appOutcomes.map(({ app, outcome, comparisonEligible }) => ({ app, outcome, comparisonEligible })) } : {}) };
+    ...(report.status === "verified" ? { appOutcomes: report.groups[0].appOutcomes.map(({ app, outcome, comparisonEligible, comparison }) =>
+      ({ app, outcome, comparisonEligible, ...(comparisonEligible && comparison ? { comparison } : {}) })) } : {}) };
   return { evidenceMode: inspect ? "synthetic-inspection" : "native-replay", row, snapshot };
 }
 
@@ -418,14 +453,14 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
       const noRecovery = () => !present(join(job.local, "stream-recovery.lock"));
       const retainedCandidate = job.outcome === "busy" && s.status === "retired" && s.retirement.kind === "native-failed"
         && s.control?.monitor?.phase === "invalid" && s.launchHostKeySha256 !== undefined && noRecovery();
-      const historicalLocks = retainedCandidate && s.destroyedAt ? reportChild(job.local, s, processStart) : undefined;
+      const historicalLocks = historicalChildLocks(job, processStart);
       const retained = retainedCandidate && (s.destroyedAt ? !!historicalLocks : !retainedInvalidOwner(job.local, s));
       if (job.outcome !== "available" && !retained) { add({ group, outcome: job.outcome }); continue; }
       if (s.status === "retired") {
         if (s.retirement.kind === "native-failed") {
           if (present(join(job.local, "stream-recovery.lock"))) { add({ group, outcome: "busy" }); continue; }
           const historicalCheck = historicalLocks && (() => {
-            assert.ok(sameChildLocks(job.local, historicalLocks), "historical child locks changed");
+            assert.ok(historicalLocks(), "historical child locks changed");
           });
           if (historicalCheck) verifyHistoricalFailedNativeRetirement(job.local, s, historicalCheck);
           else verifyFailedNativeRetirement(job.local, s);
@@ -474,7 +509,7 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
       const job = readGroup(fleet, group);
       if (present(join(job.local, "stream-recovery.lock"))
           || (job.outcome === "busy" && (!retained || (historicalLocks
-            ? !sameChildLocks(job.local, historicalLocks) : retainedInvalidOwner(job.local, job.state))))) {
+            ? !historicalLocks() : retainedInvalidOwner(job.local, job.state))))) {
         result.groups[index] = { group, outcome: "busy" }; continue;
       }
       assert.equal(job.outcome, retained ? "busy" : "available");

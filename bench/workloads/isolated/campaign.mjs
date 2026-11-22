@@ -19,6 +19,7 @@ import { composePhase } from "./composition.mjs";
 import { prepareMixedAudit, replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { nativeControlPartition, verifyStreamAudit } from "./control-stream.mjs";
 import { liveGroup } from "./native-roles.mjs";
+import { reserveCompilerTarget } from "../../client-heavy/compiler.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url)).replace(/[\\/]$/, "");
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -92,7 +93,7 @@ export function createCampaign({ authorize }) {
       throw error;
     } finally { c.busy = false; }
   }
-  async function command(c, binding, invocation, directory, signal, retainTerminalClock) {
+  async function command(c, binding, invocation, directory, signal, retainTerminalClock, compilerTarget) {
     c.stream?.check();
     own(c.handle); verifyWorkingSources(c.plan.bindings[0]);
     const observerStop = new AbortController();
@@ -101,9 +102,10 @@ export function createCampaign({ authorize }) {
     let result, observer, hostManifestSha256, pid;
     try {
       event(c, "command-intent", { group: binding.request.group, invocation });
+      if (compilerTarget) compilerTarget.settled = false;
       result = await supervise({ ...invocation, shell: false }, { cwd: repo,
         env: { PATH: "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: os.homedir(), LANG: "C.UTF-8", TZ: "UTC",
-          GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", ...binding.resources.requestedCpuEnv }, signal: commandSignal,
+          GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", ...binding.resources.requestedCpuEnv, ...compilerTarget?.env }, signal: commandSignal,
         log(bytes) { let offset = 0; while (offset < bytes.length) { const n = writeSync(fd, bytes, offset, bytes.length - offset); assert.ok(n > 0); offset += n; } },
         async onStart(value, startupSignal) {
           pid = value; event(c, "command-started", { pid });
@@ -121,11 +123,12 @@ export function createCampaign({ authorize }) {
       });
     } finally { try { fsyncSync(fd); } finally { closeSync(fd); } }
     c.files.push({ path, sha256: digest(readRegular(join(c.directory, path))) });
+    const settled = compilerTarget ? () => { compilerTarget.settled = true; } : undefined;
     if (observer) {
-      const manifest = await observer.finish(result, retainTerminalClock); hostManifestSha256 = manifest.sha256;
+      const manifest = await observer.finish(result, retainTerminalClock, settled); hostManifestSha256 = manifest.sha256;
       for (const file of manifest.entries.filter((e) => e.type === "file")) c.files.push({
         path: `${directory}/command-${number}-host/${file.path}`, sha256: file.sha256 });
-    }
+    } else if (result.terminal) settled?.(); // The gate never admitted this child.
     event(c, "command-exited", { ...result, ...(hostManifestSha256 ? { hostManifestSha256 } : {}) });
     assert.equal(result.terminal, true, "native process is not observed terminal");
     const lifetime = hostManifestSha256 ? inspectLifetime(binding, invocation,
@@ -161,8 +164,23 @@ export function createCampaign({ authorize }) {
     const commands = [];
     for (const invocation of [...binding.preparation.fixtures, binding.execution.invocation]) {
       if (signal?.aborted) throw new Error("campaign cancelled");
-      if (invocation === binding.execution.invocation) fresh(original);
-      const result = await command(c, binding, invocation, relative, signal, retainUdev && invocation === binding.execution.invocation);
+      const native = invocation === binding.execution.invocation;
+      if (native) fresh(original);
+      let compilerTarget, result, problem;
+      if (native && binding.request.group === "client-heavy") {
+        const target = `${original}.compiler`;
+        mkdirSync(dirname(target), { recursive: true }); physical(dirname(target));
+        compilerTarget = { ...reserveCompilerTarget(target), settled: true };
+      }
+      try { result = await command(c, binding, invocation, relative, signal, retainUdev && native, compilerTarget); }
+      catch (error) { problem = error; throw error; }
+      finally {
+        try { if (compilerTarget) await compilerTarget.close(compilerTarget.settled); }
+        catch (error) {
+          if (!problem) throw error;
+          throw new Error(`${problem.message}; compiler target cleanup failed`, { cause: problem });
+        }
+      }
       commands.push(result);
       if (!result.success) break;
     }

@@ -31,7 +31,8 @@ for (const [path, { group, name }] of seams) mock.module(urls.get(path), { expor
     outcomes: selectedApps(group).map((app) => ({ app, outcome: "passed" })), comparisonEligibleApps: selectedApps(group) } };
   if (group === "localized-marketplace") return JSON.parse(readFileSync(join(input.folder, "summary.json")));
   if (group === "client-api") return { schema: action === "client-v3" ? "client-heavy-saved-verification/v3"
-    : action === "client-unknown" ? "client-heavy-saved-verification/v4" : "client-heavy-saved-verification/v2" };
+    : action === "client-v4" ? "client-heavy-saved-verification/v4"
+      : action === "client-unknown" ? "client-heavy-saved-verification/v5" : "client-heavy-saved-verification/v2" };
   if (action === "mutate") appendFileSync(join(folder, "raw.log"), "changed");
   if (action === "malformed") return { status: "SYNTHETIC_PRIVATE_SENTINEL" };
   return { status: "verified", attemptComplete: true, cleanupComplete: true, resources: "verified",
@@ -114,9 +115,9 @@ test("catalog worker source receipts must match the bound commit even after full
   assert.equal((await inspectNative(f.binding, f.folder)).status, "blocked");
 });
 
-test("client registered replay uses the same saved verifier for exact historical v2 and candidate v3, never unknown schemas", async (t) => {
+test("client registered replay uses the same saved verifier for v2, v3 and v4, never unknown schemas", async (t) => {
   const f = fixture(t, "client-heavy");
-  for (const [mode, valid] of [["normal", true], ["client-v3", true], ["client-unknown", false]]) {
+  for (const [mode, valid] of [["normal", true], ["client-v3", true], ["client-v4", true], ["client-unknown", false]]) {
     action = mode; calls = [];
     const result = await inspectNative(f.binding, f.folder);
     assert.equal(result.status, valid ? "verified" : "invalid", JSON.stringify(result));

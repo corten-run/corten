@@ -2,10 +2,9 @@ import { createRequire } from "node:module";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdir, rm } from "node:fs/promises";
 import { selectedApps } from "../workloads/registry.mjs";
 import { Evidence, sha256, json, clock } from "./evidence.mjs";
-import { collectCompiler } from "./compiler.mjs";
+import { collectCompiler, withCompilerTarget } from "./compiler.mjs";
 import { buildOptions as fixedBuildOptions, documentMarkup } from "./contract.mjs";
 export { vendorConfiguration } from "./build-replay.mjs";
 import { vendorConfiguration } from "./build-replay.mjs";
@@ -63,24 +62,23 @@ export async function buildApps(workload, directory, cargo = "cargo", evidence =
         await evidence.save("evidence/cargo-lock-before.json", lockBefore);
         const vendorConfig = join(evidence.out, "evidence/cargo-vendor.toml");
         writeFileSync(vendorConfig, vendorConfiguration);
-        // A new, invocation-owned target prevents silently claiming a cache hit as
-        // a fresh source build. It is removed after saving compiler input bytes.
+        // A new, invocation-owned target prevents silently claiming a cache hit
+        // as a fresh build. The isolated campaign retains it through host proof.
         const target = resolve(evidence.out + ".compiler");
         if (dirname(target) !== dirname(evidence.out)) throw new Error("unsafe-compiler-target");
-        await mkdir(target, { recursive: false });
         const targetArg = relative(root, target).replaceAll("\\", "/");
-        const metadata = await evidence.tool(cargo, ["metadata", "--locked", "--offline", "--format-version", "1",
-          "--config", relative(root, vendorConfig).replaceAll("\\", "/"), "--manifest-path", "bench/browser/gen/Cargo.toml"], "cargo-metadata");
         const args = ["run", "--locked", "--offline", "--release", "--verbose", "--message-format=json", "--target-dir", targetArg,
           "--config", relative(root, vendorConfig).replaceAll("\\", "/"),
           "--manifest-path", "bench/browser/gen/Cargo.toml", "--bin", "client", "--", ...input];
         // A build launcher may wait in a machine queue. Do not kill just its shell and
         // leave the actual build orphaned. Native browser journeys have their own bound.
-        let result;
-        try {
-          result = await evidence.tool(cargo, args, "cargo-run");
-          await collectCompiler(evidence, target, metadata, result.stdout);
-        } finally { await rm(target, { recursive: true }); }
+        const result = await withCompilerTarget(target, async () => {
+          const metadata = await evidence.tool(cargo, ["metadata", "--locked", "--offline", "--format-version", "1",
+            "--config", relative(root, vendorConfig).replaceAll("\\", "/"), "--manifest-path", "bench/browser/gen/Cargo.toml"], "cargo-metadata");
+          const built = await evidence.tool(cargo, args, "cargo-run");
+          await collectCompiler(evidence, target, metadata, built.stdout);
+          return built;
+        });
         writeFileSync(join(dir, "build.log"), Buffer.concat([result.stdout, result.stderr]));
         const dependenciesAfter = await evidence.tree(join(root, vendor), "cargo-dependencies", "after");
         const lockAfter = await evidence.file(root, "bench/browser/gen/Cargo.lock");

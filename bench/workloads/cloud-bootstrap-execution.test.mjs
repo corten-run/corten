@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { bootstrapWorkspaceScript, fleetPlan, remoteFiles, reservation } from "./cloud-contract.mjs";
+import { bootstrapWorkspaceScript, fleetPlan, installBenchmarkUnit, remoteFiles, reservation } from "./cloud-contract.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { digest } from "./cloud-local.mjs";
 import { remoteFiles as productionFiles } from "./cloud-remote.mjs";
@@ -246,7 +246,7 @@ mock_nft() {
   }
 });
 
-function rootManagerStages(script) {
+function rootManagerStages(script, quiet = false) {
   const stages = [...script.matchAll(/^bootstrap_stage=([a-z-]+)$/gm)];
   function section(name, next) {
     const index = stages.findIndex((stage) => stage[1] === name);
@@ -255,10 +255,12 @@ function rootManagerStages(script) {
     assert.equal(stages[index + 1][1], next);
     return { offset: stages[index].index, shell: script.slice(stages[index].index, stages[index + 1].index) };
   }
-  return [section("root-manager-policy", "firmware-mask"), section("root-manager-idle", "native-entry")];
+  return quiet
+    ? [section("root-manager-idle", "cloud-init"), section("root-manager-verification", "ssh-ingress-verification")]
+    : [section("root-manager-policy", "firmware-mask"), section("root-manager-idle", "native-entry")];
 }
 
-function executeRootManager(t, script, { mode = "drain", marker = true, prior } = {}) {
+function executeRootManager(t, script, { mode = "drain", marker = true, prior, quiet } = {}) {
   const root = mkdtempSync(join(tmpdir(), "corten-root-manager-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const bin = join(root, "bin"), path = join(root, dropin.slice(1));
@@ -274,6 +276,15 @@ function executeRootManager(t, script, { mode = "drain", marker = true, prior } 
   }
   symlinkSync("/bin/bash", join(bin, "bash"));
   symlinkSync("/usr/bin/mkdir", join(bin, "mkdir"));
+  symlinkSync("/usr/bin/cmp", join(bin, "cmp"));
+  symlinkSync("/usr/bin/python3", join(bin, "python3"));
+  writeFileSync(join(bin, "busctl"), `#!/bin/sh
+set -eu
+test "$*" = "--json=short get-property org.freedesktop.systemd1 /org/freedesktop/systemd1/unit/user_400_2eservice org.freedesktop.systemd1.Unit Conditions"
+echo Conditions >> trace
+if test "$MODE" = shadowed; then trigger=true; else trigger=false; fi
+printf '{"type":"a(sbbsi)","data":[["ConditionPathExists",%s,true,"%s",0]]}\\n' "$trigger" "$BINDING"
+`, { mode: 0o700 });
   writeFileSync(join(bin, "systemctl"), `#!/bin/sh
 set -eu
 printf '%s\\n' "$*" >> trace
@@ -301,7 +312,7 @@ esac
   // The first poll interval ends either in natural drain or the simulated deadline.
   writeFileSync(join(bin, "timeout"), `#!/bin/bash
 set -eu
-test "$1" = 120 && test "$2" = bash || exit 92
+{ test "$1" = 120 || test "$1" = 15; } && test "$2" = bash || exit 92
 printf 'timeout %s\\n' "$1" >> trace
 shift
 sleep() {
@@ -312,20 +323,25 @@ sleep() {
 export -f sleep
 exec "$@"
 `, { mode: 0o700 });
-  const shell = rootManagerStages(script).map((stage) => stage.shell).join("");
-  // Only the two extracted stages run. Redirect their paths into the fixture,
-  // except the literal condition written into the drop-in.
+  const stages = rootManagerStages(script, !!quiet).map((stage) => stage.shell);
+  const install = quiet ? installBenchmarkUnit(quiet).split("\n").slice(1).join("\n") + "\n" : "";
+  const late = { "late-busy": "export MODE=busy\n", "late-tampered": "echo replaced > \"$DROPIN\"\n",
+    "late-shadowed": "export MODE=shadowed\n" };
+  const shell = quiet ? install + (mode === "drain" ? ": > drained\n" : "") + stages[0] + (late[mode] ?? "") + stages[1]
+    : stages.join("");
+  // Run only the extracted root-manager stages and policy installation.
+  // Redirect their paths into the fixture except the literal condition.
   assert.doesNotMatch(shell, /\/(?:usr\/)?(?:s?bin|etc)\//);
   const result = spawnSync("/bin/bash", ["-c", "set -Eeuo pipefail\n" +
     shell.replace(/(?<!!)\/run\//g, "./run/") + "printf 'NATIVE_ENTRY_REACHED\\n'\n"], {
-    cwd: root, env: { PATH: bin, LANG: "C", MODE: mode, DROPIN: "." + dropin },
+    cwd: root, env: { PATH: bin, LANG: "C", MODE: mode, DROPIN: "." + dropin, BINDING: binding },
     encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024,
   });
   assert.equal(result.error, undefined);
   assert.equal(result.signal, null);
   const trace = join(root, "trace");
   const calls = existsSync(trace) ? readFileSync(trace, "utf8").trimEnd().split("\n") : [];
-  assert.ok(calls.every((call) => /^(daemon-reload|timeout 120|sleep 1|show user@0\.service --property=(ActiveState|MainPID) --value)$/.test(call)), calls.join("\n"));
+  assert.ok(calls.every((call) => /^(daemon-reload|timeout (120|15)|Conditions|sleep 1|show user@0\.service --property=(ActiveState|MainPID) --value)$/.test(call)), calls.join("\n"));
   return { ...result, calls, contents: existsSync(path) ? readFileSync(path, "utf8") : null };
 }
 
@@ -358,6 +374,43 @@ for (const [name, generate] of [["contract", remoteFiles], ["production", produc
       "show user@0.service --property=MainPID --value"]);
   });
 }
+
+test("new dedicated reservations check the manager before cloud-init and native entry", () => {
+  const saved = ingressState();
+  const original = productionFiles(saved)["job.sh"];
+  // This unmarked, ingress-bound fixture's job as generated by the pre-fix controller.
+  assert.equal(digest(original), "1c1ea65ff651f99a2742309c295e5f52b486d769a176af3f553b74aa3ef88290");
+  const quiet = productionFiles({ ...saved, quietBootstrap: true })["job.sh"];
+  rootManagerStages(quiet, true);
+  assert.doesNotMatch(quiet, /^bootstrap_stage=root-manager-policy$/m);
+  assert.equal(quiet.slice(quiet.indexOf("bootstrap_stage=ssh-ingress-verification")),
+    original.slice(original.indexOf("bootstrap_stage=ssh-ingress-verification")));
+  for (const plain of [state, { ...state, control }, dedicated, { ...dedicated, control: ledger }])
+    assert.throws(() => productionFiles({ ...plain, quietBootstrap: true }), /quiet bootstrap requires a supervised group/);
+  assert.throws(() => productionFiles({ ...saved, quietBootstrap: false }), /quiet bootstrap requires a supervised group/);
+});
+
+test("new dedicated setup requires an intact handoff and idle manager at both gates", {
+  skip: process.platform !== "linux",
+}, (t) => {
+  const quiet = { ...ingressState(), quietBootstrap: true }, script = productionFiles(quiet)["job.sh"];
+  const drained = executeRootManager(t, script, { quiet });
+  assert.equal(drained.status, 0, drained.stderr);
+  assert.equal(drained.stdout, "NATIVE_ENTRY_REACHED\n");
+  assert.equal(drained.contents, policy);
+  const probes = ["Conditions", "show user@0.service --property=ActiveState --value", "show user@0.service --property=MainPID --value"];
+  assert.deepEqual(drained.calls, ["daemon-reload", "timeout 15", ...probes, "timeout 15", ...probes]);
+  for (const mode of ["busy", "late-busy", "late-tampered", "late-shadowed"]) {
+    const failed = executeRootManager(t, script, { quiet, mode });
+    assert.equal(failed.status, 1, failed.stderr);
+    assert.equal(failed.stdout, "");
+    if (mode.endsWith("busy")) assert.match(failed.stderr, /ActiveState=active MainPID=42/);
+    if (mode === "late-shadowed") assert.match(failed.stderr, /effective binding condition missing/);
+    const afterEarlyGate = { busy: [], "late-busy": ["timeout 15", ...probes],
+      "late-tampered": ["timeout 15"], "late-shadowed": ["timeout 15", "Conditions"] };
+    assert.deepEqual(failed.calls, ["daemon-reload", "timeout 15", ...probes, ...afterEarlyGate[mode]]);
+  }
+});
 
 test("root-manager preparation fails closed without overwriting policy or stopping busy services", {
   skip: process.platform !== "linux",

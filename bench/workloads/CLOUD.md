@@ -158,9 +158,15 @@ before consuming its intent and before the first create. Remaining admission
 and its children recheck only the exact `c-8` placement bound into the reviewed
 remaining approval. Those checks refuse a missing pair; they never substitute
 another region after approval.
-`fleet-placement-preflight-failed` means the saved account
-or placement could not be verified; inspect both listings rather than editing the
-manifest. An acknowledged catalog HTTP denial or a fully received but invalid
+`fleet-placement-preflight-failed: STAGE` identifies the failed placement check:
+transport construction or close, either account read or identity check, catalog read or
+validation, the checkpoint before region selection, or region selection itself.
+The first account read also starts the worker and waits for its handshake:
+`first-account-read-or-worker-start` does not mean a request was sent. Only a safe
+provider code and HTTP status may follow the stage, with fixed flags if transport
+close also failed or custody is uncertain. No account data or response body is
+printed. Inspect the failed check rather than editing any manifest. An
+acknowledged catalog HTTP denial or a fully received but invalid
 listing stops without a create and releases settled locks. A truncated response,
 timeout or disconnected worker does not establish settlement; the lock stays.
 An already recorded launch intent still cannot be replayed. Each child has an
@@ -476,6 +482,17 @@ apparatus is not a result. An old bound host without confirmed cleanup is shown
 as such. Continuation then requires the same provider account and still refuses
 create if the existing pre-create census finds any foreign benchmark host.
 
+If a standalone group failed before native entry and its collector recorded the
+archive but not deletion, an unrelated group can use that same census. Its
+launch approval includes the stopped host's original ID: even a renamed or
+retagged host still present in the account prevents creation. An active cleanup
+blocks admission. This does not retire the failed group, retry it, or publish a result.
+
+When retrying a group on a new host, a proved Windows PID reuse on a destroyed
+host does not make its old monitor active again. Preparation reads the original
+retirement evidence and rechecks the unchanged locks; it never removes them or
+authorizes collection or deletion on the old host.
+
 When the launcher checkout advances or a measured checkout moves, use the
 optional sibling directory `ABSOLUTE_ROOT-checkouts/MEASURED_SHA` for that
 commit's clean worktree. Here `MEASURED_SHA` is the full 40-character Git commit.
@@ -514,7 +531,7 @@ can name the failing stage: `continuation-admission` (including custody and
 eligibility), `prepare-reservation`, `initial-plan` or `locked-plan` (including exact approval checks),
 or `final-pre-intent-recheck`. These labels identify the check, not its cause or
 whether locks were released. Placement keeps its separate
-`fleet-placement-preflight-failed` diagnostic. Inspect saved intent and custody
+`fleet-placement-preflight-failed: STAGE` diagnostic. Inspect saved intent and custody
 before deciding what to do next; an unlabeled failure does not establish that
 intent was never written.
 
@@ -1401,10 +1418,16 @@ other user process from native cleanup evidence.
 
 On dedicated group hosts, the benchmark and Docker run as system services.
 Root SSH still needs a normal logind session, but not a separate user manager.
-During provisioning, a runtime systemd drop-in skips new starts of
-`user@0.service` while the host's control binding exists. It does not stop
-the current manager or change SSH or PAM. Before publishing the bootstrap
-marker, the job waits up to two minutes for the manager to exit naturally.
+For new dedicated reservations, the controller installs a runtime systemd
+drop-in with the job unit and waits for systemd to reload it. The drop-in skips
+new starts of `user@0.service` while the host's control binding exists. It does not stop
+the current manager or change SSH or PAM. After installation is acknowledged,
+the controller opens no SSH connections for two minutes to let the manager
+exit naturally. Only then does it start the job. The job checks the installed
+and effective policy and requires an inactive manager with no main PID before
+waiting for cloud-init and again before native entry. Saved reservations without
+`quietBootstrap` still regenerate their original job, with the drain check near
+native entry.
 The run log records which property it is querying and the observed state and
 main PID, so a busy manager can be distinguished from a stalled query.
 If it stays busy the group fails setup, without terminating anyone's work.
