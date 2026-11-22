@@ -491,26 +491,26 @@ pub(crate) fn accepts_a_coding(headers: &HeaderMap) -> bool {
     })
 }
 
-/// The bytes of a body read for one sum ([`sums`]), and so the bytes of the key they are read
-/// with: 1,024 took 0.75 instructions a byte where 256 took 1.0 and the standard library's
-/// SipHash 2.5 (docs/design.md, Limit 21).
+/// The bytes of a body read for one pair of sums ([`sums`]), and half the bytes of the key they
+/// are read with (docs/design.md#limit-etag has what a byte costs).
 const TAG_BLOCK: usize = 1024;
 
 /// The key a page's tag is made with ([`tag`]): random for each process, so nobody outside it can
 /// make two bodies share a tag. A body is read with `words` ([`sums`]), and its length, the sums
-/// and the headers that count go through `state`'s keyed hash, whose 64 bits are the tag: what is
-/// sent says nothing of `words`.
+/// and the headers that count go through `state`'s keyed hash, whose 64 bits are the tag. A tag
+/// tells of what went into it only whether it was the same, so of `words` only whether two bodies
+/// had every sum the same, which is what two keys are for.
 struct TagKey {
     state: std::hash::RandomState,
-    words: [[u64; 2]; TAG_BLOCK / 16],
+    words: [[u64; 4]; TAG_BLOCK / 16],
 }
 
 static TAG_KEY: std::sync::LazyLock<TagKey> = std::sync::LazyLock::new(|| {
-    let mut bytes = [0; TAG_BLOCK];
+    let mut bytes = [0; 2 * TAG_BLOCK];
     getrandom::fill(&mut bytes).expect("the OS random source is available");
-    let mut words = [[0; 2]; TAG_BLOCK / 16];
-    for (word, pair) in words.iter_mut().zip(bytes.as_chunks::<16>().0) {
-        *word = halves(pair);
+    let mut words = [[0; 4]; TAG_BLOCK / 16];
+    for (word, four) in words.iter_mut().zip(bytes.as_chunks::<8>().0.as_chunks::<4>().0) {
+        *word = four.map(u64::from_le_bytes);
     }
     TagKey { state: std::hash::RandomState::new(), words }
 });
@@ -522,7 +522,10 @@ impl TagKey {
         use std::hash::{BuildHasher, Hasher};
         let mut hasher = self.state.build_hasher();
         hasher.write_usize(body.len());
-        sums(&self.words, body, &mut hasher);
+        sums(&self.words, body, |[first, second]| {
+            hasher.write_u128(first);
+            hasher.write_u128(second);
+        });
         hasher
     }
 }
@@ -533,35 +536,46 @@ fn halves(pair: &[u8; 16]) -> [u64; 2] {
     [both as u64, (both >> 64) as u64]
 }
 
-/// `body` in blocks of 16 bytes for each pair of `words`, a sum to `out` for each block: the
-/// universal hash NH of UMAC (RFC 4418) over 64-bit words. Each 16 bytes are two words; each is
-/// added to its word of the key modulo 2^64, the two are multiplied to 128 bits, and the
-/// products are added modulo 2^128. The last 16 bytes of a body are filled with zeros, so the
-/// caller gives `out` the length first. Two different blocks of one length have the same sum for
-/// at most one key in 2^64, whoever chose them, as long as the key was not known in choosing:
-/// so `out` must be a keyed hash that tells nothing of what it was given, as the tag's is. A
-/// multiply reads 16 bytes where SipHash's round reads 8 and the products do not wait for each
-/// other, which is what this is for.
-fn sums(words: &[[u64; 2]], body: &[u8], out: &mut impl std::hash::Hasher) {
+/// `body` in blocks of 16 bytes for each four `words`, two sums to `out` for each block: the
+/// universal hash NH (Black, Halevi, Krawczyk, Krovetz and Rogaway, "UMAC: Fast and Secure
+/// Message Authentication", CRYPTO 1999; the one RFC 4418 and VMAC build on) over 64-bit words,
+/// under two keys. Each 16 bytes are two words; each is added to its word of a key modulo 2^64,
+/// the two are multiplied to 128 bits, and a block's products are added modulo 2^128: once with
+/// a four's first two words and once with its last two. The last 16 bytes of a body are filled
+/// with zeros, so the caller gives the length first. Two different blocks of one length have
+/// the same sum for at most one key in 2^64 (the paper's Theorem 1), so both sums for at most
+/// one pair of keys in 2^128, whoever chose the blocks without knowing the keys.
+///
+/// One key would not do. A tag tells whether two bodies had the same sums, and under one key
+/// bodies can be chosen to find that out: with each of a pair's two words where the other was,
+/// moved by the difference of the key's two words, the product is the same, and about 2^33
+/// bodies tagged by one process are sure to hold such a pair. The pair gives the difference, and
+/// then any body has another with its tag. Under two keys the same pair would have to fit both
+/// differences, and finding bodies that share both sums takes about 2^64 of them.
+///
+/// A multiply reads 16 bytes where SipHash's round reads 8, and the products do not wait for
+/// each other, which is what this is for.
+fn sums(words: &[[u64; 4]], body: &[u8], mut out: impl FnMut([u128; 2])) {
     for block in body.chunks(words.len() * 16) {
         let (pairs, rest) = block.as_chunks::<16>();
-        let term = |pair: &[u8; 16], key: &[u64; 2]| {
+        let mut sum = [0_u128; 2];
+        let mut add = |pair: &[u8; 16], key: &[u64; 4]| {
             let [a, b] = halves(pair);
-            u128::from(a.wrapping_add(key[0])) * u128::from(b.wrapping_add(key[1]))
+            sum[0] = sum[0].wrapping_add(u128::from(a.wrapping_add(key[0])) * u128::from(b.wrapping_add(key[1])));
+            sum[1] = sum[1].wrapping_add(u128::from(a.wrapping_add(key[2])) * u128::from(b.wrapping_add(key[3])));
         };
-        let mut sum = 0_u128;
         for (pair, key) in pairs.iter().zip(words) {
-            sum = sum.wrapping_add(term(pair, key));
+            add(pair, key);
         }
-        // A block has a pair of the key for each 16 bytes, begun or whole.
+        // A block has four words of the key for each 16 bytes, begun or whole.
         if let Some(key) = words.get(pairs.len()).filter(|_| !rest.is_empty()) {
             let mut last = [0; 16];
             for (to, from) in last.iter_mut().zip(rest) {
                 *to = *from;
             }
-            sum = sum.wrapping_add(term(&last, key));
+            add(&last, key);
         }
-        out.write_u128(sum);
+        out(sum);
     }
 }
 
@@ -649,16 +663,16 @@ impl http_body::Body for Unsized {
     }
 }
 
-/// `W/"..."`: 64 bits of the hash of the body (with its length), its `Content-Type` (a `304` leaves the stored one)
-/// and the `corten-*` headers (each name and value, with their lengths) under [`TAG_KEY`], in hex.
+/// `W/"..."`: 64 bits of the hash of the body's length and sums ([`TagKey::read`]), its `Content-Type` (a `304`
+/// leaves the stored one) and the `corten-*` headers (each name and value, with their lengths) under [`TAG_KEY`], in hex.
 #[cfg(test)]
 fn weak_tag(body: &[u8], headers: &HeaderMap) -> [u8; 20] {
     let body = bytes::Bytes::copy_from_slice(body);
     tagged(crate::kept::Kept::hashed(&http::Extensions::new(), &body, |body| TAG_KEY.read(body)), headers)
 }
 
-/// The tag from `hasher`, which has read the body with its length
-/// ([`crate::kept::Kept::hashed`]), and the headers that count.
+/// The tag from `hasher`, which has read the body with its length ([`TagKey::read`], kept for a
+/// kept answer by [`crate::kept::Kept::hashed`]), and the headers that count.
 fn tagged(mut hasher: std::hash::DefaultHasher, headers: &HeaderMap) -> [u8; 20] {
     use std::hash::Hasher;
     for (name, value) in headers {
@@ -837,24 +851,10 @@ mod tests {
         assert_ne!(with(&[("corten-page", "1")]), with(&[("corten-patch", "1")]));
     }
 
-    /// Keeps the sums it is given, to read [`sums`] by.
-    #[derive(Default)]
-    struct Given(Vec<u128>);
-
-    impl std::hash::Hasher for Given {
-        fn finish(&self) -> u64 {
-            0
-        }
-
-        fn write(&mut self, bytes: &[u8]) {
-            self.0.push(u128::from_ne_bytes(bytes.try_into().expect("a sum")));
-        }
-    }
-
-    fn given(words: &[[u64; 2]], body: &[u8]) -> Vec<u128> {
-        let mut out = Given::default();
-        sums(words, body, &mut out);
-        out.0
+    fn given(words: &[[u64; 4]], body: &[u8]) -> Vec<[u128; 2]> {
+        let mut out = Vec::new();
+        sums(words, body, |sum| out.push(sum));
+        out
     }
 
     /// Bytes for the words given, least byte first.
@@ -863,54 +863,78 @@ mod tests {
     }
 
     /// A body's sums are what the definition says, worked by hand: each word is added to its word
-    /// of the key modulo 2^64, a pair is multiplied to 128 bits, a block's products are added
-    /// modulo 2^128, each block is read with the key from its start, and the last 16 bytes are
-    /// filled with zeros.
+    /// of a key modulo 2^64, a pair is multiplied to 128 bits, a block's products are added
+    /// modulo 2^128, once for each key, each block is read with the keys from their start, and
+    /// the last 16 bytes are filled with zeros.
     #[test]
     fn a_body_s_sums_are_as_worked_by_hand() {
-        assert_eq!(given(&[[1, 2]], &bytes(&[3, 4])), [(3 + 1) * (4 + 2)]);
+        assert_eq!(given(&[[1, 2, 5, 6]], &bytes(&[3, 4])), [[(3 + 1) * (4 + 2), (3 + 5) * (4 + 6)]]);
         // A word and its key wrap at 2^64, and a product is all 128 bits.
-        assert_eq!(given(&[[2, 5]], &bytes(&[u64::MAX, 0])), [5]);
-        assert_eq!(given(&[[0, 2]], &bytes(&[1 << 63, 2])), [1 << 65]);
+        assert_eq!(given(&[[2, 5, 1, 9]], &bytes(&[u64::MAX, 0])), [[5, 0]]);
+        assert_eq!(given(&[[0, 2, 0, 6]], &bytes(&[1 << 63, 2])), [[1 << 65, 1 << 66]]);
         // Two products of a block, each near 2^128, wrap in their sum.
         let square = u128::from(u64::MAX) * u128::from(u64::MAX);
-        let both = given(&[[0, 0], [0, 0]], &bytes(&[u64::MAX; 4]));
-        assert_eq!(both, [square.wrapping_add(square)]);
-        assert!(both[0] < square, "wrapped");
-        assert_eq!(given(&[[1, 2], [3, 4]], &bytes(&[1, 1, 1, 1])), [(1 + 1) * (1 + 2) + (1 + 3) * (1 + 4)]);
+        let both = given(&[[0; 4], [0; 4]], &bytes(&[u64::MAX; 4]));
+        assert_eq!(both, [[square.wrapping_add(square); 2]]);
+        assert!(both[0][0] < square, "wrapped");
+        let two = given(&[[1, 2, 0, 0], [3, 4, 1, 1]], &bytes(&[1, 1, 1, 1]));
+        assert_eq!(two, [[(1 + 1) * (1 + 2) + (1 + 3) * (1 + 4), 1 + (1 + 1) * (1 + 1)]]);
         // A block for each run of the key's length, each read with the key from its start.
-        assert_eq!(given(&[[1, 2]], &bytes(&[3, 4, 5, 6])), [(3 + 1) * (4 + 2), (5 + 1) * (6 + 2)]);
+        let blocks = given(&[[1, 2, 3, 4]], &bytes(&[3, 4, 5, 6]));
+        assert_eq!(blocks, [[(3 + 1) * (4 + 2), (3 + 3) * (4 + 4)], [(5 + 1) * (6 + 2), (5 + 3) * (6 + 4)]]);
         // The last 16 bytes are filled with zeros, in the block they begin.
-        assert_eq!(given(&[[1, 2]], &[5]), [(5 + 1) * 2]);
-        assert_eq!(given(&[[1, 2]], &bytes(&[3])), [(3 + 1) * 2]);
+        assert_eq!(given(&[[1, 2, 3, 4]], &[5]), [[(5 + 1) * 2, (5 + 3) * 4]]);
+        assert_eq!(given(&[[1, 2, 3, 4]], &bytes(&[3])), [[(3 + 1) * 2, (3 + 3) * 4]]);
         let mut seventeen = bytes(&[3, 4]);
         seventeen.push(7);
-        assert_eq!(given(&[[1, 2], [3, 4]], &seventeen), [(3 + 1) * (4 + 2) + (7 + 3) * 4]);
-        assert_eq!(given(&[[1, 2]], &seventeen), [(3 + 1) * (4 + 2), (7 + 1) * 2]);
-        assert_eq!(given(&[[1, 2]], &[]), [] as [u128; 0]);
+        let one = given(&[[1, 2, 0, 1], [3, 4, 5, 6]], &seventeen);
+        assert_eq!(one, [[(3 + 1) * (4 + 2) + (7 + 3) * 4, 3 * (4 + 1) + (7 + 5) * 6]]);
+        assert_eq!(given(&[[1, 2, 3, 4]], &seventeen), [[(3 + 1) * (4 + 2), (3 + 3) * (4 + 4)], [(7 + 1) * 2, (7 + 3) * 4]]);
+        assert_eq!(given(&[[1, 2, 3, 4]], &[]), [] as [[u128; 2]; 0]);
+    }
+
+    /// Two bodies made to share the sum under one key do not share the sum under the other: each
+    /// has the other's word in each place, moved by the difference of the first key's two words
+    /// (3 less 10), which is how one key is found out from tags
+    /// (docs/design.md#limit-etag).
+    #[test]
+    fn bodies_made_to_share_one_sum_do_not_share_the_other() {
+        let key = [[10, 3, 1, 2]];
+        let (one, other) = (given(&key, &bytes(&[5, 9])), given(&key, &bytes(&[2, 12])));
+        assert_eq!((one[0][0], other[0][0]), ((5 + 10) * (9 + 3), (2 + 10) * (12 + 3)));
+        assert_eq!(one[0][0], other[0][0]);
+        assert_ne!(one[0][1], other[0][1]);
+        // And under the key the app has, for whichever of its two keys the bodies were made.
+        use std::hash::Hasher;
+        for first in [0, 2] {
+            let key = TAG_KEY.words[0];
+            let moved = key[first + 1].wrapping_sub(key[first]);
+            let (a, b) = (5_u64, 9_u64);
+            let (one, other) = (bytes(&[a, b]), bytes(&[b.wrapping_add(moved), a.wrapping_sub(moved)]));
+            assert_eq!(given(&TAG_KEY.words, &one)[0][first / 2], given(&TAG_KEY.words, &other)[0][first / 2]);
+            assert_ne!(TAG_KEY.read(&one).finish(), TAG_KEY.read(&other).finish());
+        }
     }
 
     /// The sums by another way, a word at a time by its place, for a body of every length to
     /// past two blocks: where a block ends and where the last 16 bytes do.
     #[test]
     fn a_body_s_sums_are_the_same_read_a_word_at_a_time() {
-        fn slowly(words: &[[u64; 2]], body: &[u8]) -> Vec<u128> {
+        fn slowly(words: &[[u64; 4]], body: &[u8]) -> Vec<[u128; 2]> {
             let mut filled = body.to_vec();
             filled.resize(body.len().div_ceil(16) * 16, 0);
             let word = |at: usize| u64::from_le_bytes(filled[at..at + 8].try_into().expect("8 bytes"));
             let block = words.len() * 16;
-            (0..filled.len())
-                .step_by(block)
-                .map(|start| {
-                    (start..filled.len().min(start + block)).step_by(16).zip(words).fold(0_u128, |sum, (at, key)| {
-                        let (a, b) = (word(at).wrapping_add(key[0]), word(at + 8).wrapping_add(key[1]));
-                        sum.wrapping_add(u128::from(a) * u128::from(b))
-                    })
+            let sum = |start: usize, first: usize| {
+                (start..filled.len().min(start + block)).step_by(16).zip(words).fold(0_u128, |sum, (at, key)| {
+                    let (a, b) = (word(at).wrapping_add(key[first]), word(at + 8).wrapping_add(key[first + 1]));
+                    sum.wrapping_add(u128::from(a) * u128::from(b))
                 })
-                .collect()
+            };
+            (0..filled.len()).step_by(block).map(|start| [sum(start, 0), sum(start, 2)]).collect()
         }
         let body: Vec<u8> = (0..2 * TAG_BLOCK + 70).map(|n| (n * 131 % 251) as u8).collect();
-        let short = [[11, u64::MAX - 3], [1 << 40, 7], [u64::MAX, u64::MAX]];
+        let short = [[11, u64::MAX - 3, 5, 1 << 63], [1 << 40, 7, u64::MAX, 2], [u64::MAX, u64::MAX, 0, 0]];
         for length in 0..=body.len() {
             let body = &body[..length];
             assert_eq!(given(&TAG_KEY.words, body), slowly(&TAG_KEY.words, body), "{length}");
@@ -919,14 +943,33 @@ mod tests {
         }
     }
 
+    /// Every word of the key is drawn (none is zero, none is there twice), and the tag's read of
+    /// a body is its length, then its sums under that key, through the keyed hash.
+    #[test]
+    fn the_tag_s_read_is_the_length_then_the_sums_under_its_key() {
+        use std::hash::{BuildHasher, Hasher};
+        let words: Vec<u64> = TAG_KEY.words.iter().flatten().copied().collect();
+        assert_eq!(words.len(), TAG_BLOCK / 4);
+        assert!(words.iter().all(|word| *word != 0));
+        assert_eq!(words.iter().collect::<std::collections::HashSet<_>>().len(), words.len());
+        for length in [0, 1, 16, 1024, 4475] {
+            let body: Vec<u8> = (0..length).map(|n| (n * 31 % 251) as u8).collect();
+            let mut by_hand = TAG_KEY.state.build_hasher();
+            by_hand.write_usize(length);
+            for [first, second] in given(&TAG_KEY.words, &body) {
+                by_hand.write_u128(first);
+                by_hand.write_u128(second);
+            }
+            assert_eq!(TAG_KEY.read(&body).finish(), by_hand.finish(), "{length}");
+        }
+    }
+
     /// The tag's read of a body tells apart bodies that differ in one byte anywhere, a body
-    /// from the same with a zero more or less at its end, and blocks in another order; and
-    /// the key it reads with is not one word over and over.
+    /// from the same with a zero more or less at its end, and blocks in another order.
     #[test]
     fn the_tag_s_read_tells_bodies_apart() {
         use std::hash::Hasher;
         let read = |body: &[u8]| TAG_KEY.read(body).finish();
-        assert!(TAG_KEY.words.iter().flatten().any(|word| *word != TAG_KEY.words[0][0]));
         for length in [1, 15, 16, 17, 1023, 1024, 1025, 2048, 2049, 4475] {
             let mut body: Vec<u8> = (0..length).map(|n| (n * 31 % 251) as u8).collect();
             let was = read(&body);
