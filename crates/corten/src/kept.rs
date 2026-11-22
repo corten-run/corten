@@ -161,7 +161,7 @@ static LAST_EVENT_ID: header::HeaderName = header::HeaderName::from_static("last
 static NOTICE: header::HeaderName = crate::page::NOTICE_HEADER;
 
 /// The ages, in seconds, whose `Age` is written without an allocation: those of up to four
-/// digits, two hours and three quarters.
+/// digits, two hours and three quarters, which takes in a lifetime of an hour.
 const AGES: u64 = 10_000;
 
 /// Every whole number under [`AGES`] in decimal, one after another (`0123456789101112`, on to
@@ -185,6 +185,9 @@ static DIGITS: &str = {
             }
             number += 1;
         }
+        // A length that is not the digits' fails the build: too short is an index past the
+        // end above, too long is this.
+        assert!(at == LENGTH);
         bytes
     };
     match std::str::from_utf8(&BYTES) {
@@ -1016,7 +1019,7 @@ impl<'a> Sent<'a> {
     fn read(headers: &'a HeaderMap, shape: Shape) -> Option<Self> {
         // By their names and first, since they are what most requests a page is not kept for
         // carry: a session's cookie, and the runtime's header on a navigation inside the app.
-        // Each is a lookup of about 120 instructions that the pass below could make in its
+        // Each is a lookup of about 100 instructions that the pass below could make in its
         // stride, and is not: found there, after a browser's other headers, an `Authorization`
         // cost its request 611 more to spare every other one that lookup
         // (docs/design.md#choice-kept-pages).

@@ -1625,8 +1625,9 @@ an API (whose answers are not tagged), the tag's hash made once, and each coding
 app compresses it. What it saves is the handler with what it
 reads, the writing of the JSON, the hash and the compression, and once kept it is given to a
 request that accepts no coding as well. That request gets no tag, so where its handler makes
-nothing a kept body costs it more than the handler would: 1.3% more cycles for a file of 8,000
-bytes and 3.0% more for one of 1,024 in the cases measured. A smaller body is its handler's for every request: the hash a kept body saves grows
+nothing a kept body costs it more than the handler would: in a build with `compress`, 1.3% more
+cycles for a file of 8,000 bytes and 3.0% more for one of 1,024 at the mean of ten builds of the
+same code, and up to 7.8% more in one of them. A smaller body is its handler's for every request: the hash a kept body saves grows
 with its size, and the instructions asking for it costs do not
 ([design Choice 70](../design.md#choice-kept-pages)). A route whose bodies are all under the size
 stops asking the store after 64 answers in a row of which none was kept (one left out for another
