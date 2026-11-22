@@ -191,9 +191,10 @@ const octal = (field) => {
 
 // Every byte, including body padding and both trailer blocks, contributes to the
 // spool receipt. File bodies are drained, not retained in the validated index.
-function scanTar(file, limits, destination, extract = false) {
+function scanTar(file, limits, destination, extract = false, compare = false) {
   const paths = extract ? null : archivePaths({ nodes: limits.nodes, nameBytes: limits.nameBytes, memberBytes: limits.memberBytes });
   const hash = createHash("sha256"), buffer = Buffer.alloc(ioBytes);
+  const savedBytes = compare ? Buffer.alloc(ioBytes) : null;
   let offset = 0, content = 0, longName = null, ended = false, headers = 0;
   const consume = (size, use = () => {}) => {
     assert.ok(offset + size <= file.size, "truncated tar body");
@@ -239,6 +240,21 @@ function scanTar(file, limits, destination, extract = false) {
         try { consume(size, (bytes) => writeAll(fd, bytes)); fsyncSync(fd); } finally { closeSync(fd); }
         syncDirectory(parent);
       }
+    } else if (compare) {
+      const target = join(destination, name.replace(/\/$/, ""));
+      assert.equal(realpathSync(target), target, "archive member path differs from saved extraction");
+      if (directory) physical(target);
+      else {
+        const saved = opened(target, size); let at = 0;
+        try {
+          assert.equal(saved.size, size, "archive member size differs from saved extraction");
+          consume(size, (part) => {
+            const expected = savedBytes.subarray(0, part.length); readAt(saved.fd, expected, at); at += part.length;
+            assert.ok(expected.equals(part), "archive member differs from saved extraction");
+          });
+          saved.unchanged();
+        } finally { closeSync(saved.fd); }
+      }
     } else consume(size);
     consume(padding, zero);
   }
@@ -246,13 +262,13 @@ function scanTar(file, limits, destination, extract = false) {
   file.unchanged(); return { ...paths?.finish(), bytes: content, sha256: hash.digest("hex") };
 }
 
-async function spooled(input, expected, lowered, destination, extract) {
+async function spooled(input, expected, lowered, destination, extract, compare = false) {
   const limits = bounds(lowered), source = typeof input === "string" ? opened(input, limits.compressed) : null;
   let scratch, scratchIdentity, spoolParent, fd;
   try {
     // Buffer input is retained only for small local fixtures. Production uses a physical file.
     if (!source) assert.ok(Buffer.isBuffer(input) && input.length <= Math.min(limits.compressed, smallLimit), "compressed archive size limit");
-    spoolParent = source ? dirname(input) : realpathSync(tmpdir()); physical(spoolParent);
+    spoolParent = source && !compare ? dirname(input) : realpathSync(tmpdir()); physical(spoolParent);
     scratch = mkdtempSync(join(spoolParent, ".cloud-spool-")); physical(scratch); scratchIdentity = lstatSync(scratch, { bigint: true });
     const path = join(scratch, "archive.tar"); fd = openSync(path, "wx+", 0o600);
     const compressedHash = createHash("sha256"), tarHash = createHash("sha256"); let compressed = 0, expanded = 0;
@@ -278,8 +294,9 @@ async function spooled(input, expected, lowered, destination, extract) {
     const file = { fd, size: expanded, unchanged() {
       physical(scratch); assert.ok(same(before, fstatSync(fd, { bigint: true })) && same(before, lstatSync(path, { bigint: true })), "spool changed while reading");
     } };
-    const receipt = tarHash.digest("hex"), preflight = scanTar(file, limits, destination);
+    const receipt = tarHash.digest("hex"), preflight = scanTar(file, limits, destination, false, compare);
     assert.equal(preflight.sha256, receipt, "spool differs from decoded archive");
+    if (compare) assert.equal(walkTree(destination, limits, null, false).nodes, preflight.nodes, "saved extraction contains extra archive members");
     if (extract) {
       physical(destination); assert.deepEqual(readdirSync(destination), [], "fresh extraction required"); file.unchanged();
       assert.equal(scanTar(file, limits, destination, true).sha256, receipt, "extracted spool differs");
@@ -299,6 +316,10 @@ async function spooled(input, expected, lowered, destination, extract) {
   }
 }
 export async function archiveMembers(input, expected, lowered = {}) { return spooled(input, expected, lowered); }
+export async function verifyArchiveTree(input, destination, expected) {
+  physical(destination);
+  await spooled(input, expected, {}, destination, false, true);
+}
 export async function extractArchive(input, destination, expected, lowered = {}) {
   physical(destination); assert.deepEqual(readdirSync(destination), [], "fresh extraction required");
   return spooled(input, expected, lowered, destination, true);

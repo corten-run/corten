@@ -6,16 +6,19 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
-import { accountId, archive, commit, context, harness, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
+import { accountId, archive, commit, context, harness, metadata, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
-import { bootstrapWorkspaceScript, captureSshOwner, installSshIngress, savedLoadLayout, verifySshIngress } from "./cloud-contract.mjs";
+import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, reservation, savedLoadLayout, savedPlacement, verifySshIngress } from "./cloud-contract.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
+import { inspectContinuation } from "./group-continuation.mjs";
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
@@ -211,7 +214,304 @@ test("captured production composition ignores arbitrary hints, binds POST identi
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
 });
 
-test("remaining approval moves from sfo2 to lon1 through captured workers and dispatches once", { timeout: 60000 }, async (t) => {
+test("continuation replays catalog, creates only the next whole group, and does not reallocate it after collection", { timeout: 60000 }, async (t) => {
+  const p = fixture(t), before = new Map(), catalog = "catalog-page", json = "json-api", next = "localized-marketplace";
+  const retained = path.join(p.h.temp, "retained"), index = path.join(p.h.base, "index.json");
+  const history = fleetPlan({ round: "r20", commit: "b".repeat(40), token: "f".repeat(16), sshKey: "42", provider: { accountId, context },
+    tokens: Object.fromEntries(groupNames.map((group, i) => [group, String(i + 1).repeat(16)])) });
+  const { fleetSha256, ...oldBody } = structuredClone(history);
+  oldBody.selection.groups.find(({ group }) => group === json).contractSha256 = "0".repeat(64);
+  const oldCatalog = oldBody.selection.groups.find(({ group }) => group === catalog);
+  oldCatalog.contractSha256 = "1".repeat(64);
+  const oldFleet = { ...oldBody, fleetSha256: digest(JSON.stringify(oldBody)) };
+  fs.mkdirSync(retained); fs.writeFileSync(path.join(retained, "fleet-r20.json"), JSON.stringify(oldFleet));
+  function collected(root, fleet, group, state, date) {
+    const local = path.join(root, group, `groups-${fleet.round}`), evidence = path.join(local, "evidence-Synthetic");
+    const folder = path.join(evidence, "campaign"), campaign = `${fleet.round}-${state.token}`;
+    fs.mkdirSync(path.join(folder, campaign), { recursive: true });
+    const report = syntheticInspection("verified");
+    Object.assign(report, { schema: "benchmark-isolated-group-campaign-inspection/v1", round: fleet.round, commit: fleet.commit, campaign,
+      selection: state.selection, groups: report.groups.filter((entry) => entry.group === group) });
+    if (savedLoadLayout(state)) report.loadLayout = savedLoadLayout(state);
+    if (group === catalog) Object.assign(report.groups[0].appOutcomes.find((app) => app.app === "express"), { outcome: "failed", comparisonEligible: false });
+    if (state.control?.monitor) {
+      const terminal = JSON.parse(fs.readFileSync(path.join(local, "monitor-terminal.json")));
+      report.supervisedTerminal = { registrationSha256: state.control.monitor.registrationSha256, sealSha256: terminal.sealSha256 };
+    }
+    const marker = path.join(folder, ".host-attempt.json"), file = path.join(local, "results.tgz");
+    const markerBytes = JSON.stringify({ commit: fleet.commit, id: campaign, campaignSha256: report.campaignSha256, createdAt: date });
+    fs.writeFileSync(marker, markerBytes);
+    report.reservationSha256 = fileHash(marker);
+    const plan = JSON.stringify({ round: fleet.round, commit: fleet.commit,
+      campaignSha256: report.campaignSha256, sourceSha256: report.sourceSha256,
+      bindings: [{ execution: { effectiveOptions: { fixture: group } } }] });
+    const entries = [{ name: `campaign/${campaign}/plan.json`, body: plan }, { name: "campaign/.host-attempt.json", body: markerBytes },
+      { name: "exit-code", body: "0\n" }, { name: "host.txt", body: "synthetic\n" }, { name: "run.log", body: "synthetic\n" }];
+    for (const { name, body } of entries) fs.writeFileSync(path.join(evidence, name), body);
+    fs.writeFileSync(file, archive(entries));
+    Object.assign(state, { status: "collected", collectedAt: date, deletionIntentAt: date, destroyedAt: date,
+      evidence: "evidence-Synthetic", extractionAttempts: ["evidence-Synthetic"], evidenceSha256: treeHash(evidence),
+      archiveSha256: fileHash(file), evidenceOutcome: "validated", exitCode: 0,
+      validation: { status: "verified", campaign, collectionIntegrity: "manifest-verified" } });
+    fs.writeFileSync(path.join(local, "state.json"), JSON.stringify(state)); before.set(folder, report);
+    return file;
+  }
+  const at = "2026-11-19T00:00:00.000Z";
+  const saved = { ...reservation({ round: history.round, commit: history.commit, token: history.jobs[0].token, fleet: history, group: catalog }, at),
+    fleet: oldFleet, selection: { ...history.selection, groups: [oldCatalog] },
+    provider: history.provider, fullGroupQualified: false, createIntentAt: at, id: "900", ip: "192.0.2.200" };
+  const oldArchive = collected(retained, oldFleet, catalog, saved, at), oldBytes = fs.readFileSync(oldArchive), oldTree = treeHash(retained);
+  fs.writeFileSync(index, JSON.stringify([{ root: retained, checkout: p.h.repo, round: history.round, commit: history.commit,
+    archives: { [catalog]: saved.archiveSha256 } }]));
+  p.deps.inspect = async ({ folder, round, commit }) => {
+    const report = before.get(folder); assert.equal(report?.round, round); assert.equal(report?.commit, commit); return report;
+  };
+  const args = (group) => ["r21", "--continuation-root", p.h.base, "--group", group];
+  const prepare = (group) => [...args(group), "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
+  const preview = (group) => fleetMain([...args(group), "--detach", "--print-approval"], p.deps);
+  const detached = (group, hash) => fleetMain([...args(group), "--detach", "--approve-reviewed-merged-ready", hash], p.deps);
+  const initial = (await inspectContinuation(p.h.base, p.deps)).report;
+  assert.equal(initial.groups.filter((row) => row.result).length, 1);
+  assert.equal(initial.eligibleToRun.length, groupNames.length - 1);
+  assert.ok(!initial.eligibleToRun.includes(catalog));
+  await assert.rejects(fleetMain(prepare(catalog), p.deps), /already verified/);
+  assert.deepEqual(p.events(), []);
+  const onlyC8 = syntheticPlacement(["sfo3"]); onlyC8.sizes.pop(); onlyC8.regions[0].sizes = [];
+  p.deps.catalogProvider = syntheticCatalogProvider(onlyC8);
+  assert.equal(await fleetMain(prepare(json), p.deps), 3);
+  await assert.rejects(fleetMain(["r21", "--fleet-root", path.join(p.h.base, json), "--detach", "--print-approval"], p.deps), /use continuation detach/);
+  assert.equal(await preview(json), 3);
+  const { approvalSha256, subject } = p.output.at(-1);
+  assert.deepEqual(subject.jobs.map((job) => job.group), [json]);
+  assert.deepEqual(subject.fleet.selection.groups, [history.selection.groups.find(({ group }) => group === json)]);
+  fs.appendFileSync(oldArchive, "changed");
+  await assert.rejects(detached(json, approvalSha256), /retained catalog-page/);
+  assert.equal(p.events().filter((row) => row.method === "POST").length, 0);
+  fs.writeFileSync(oldArchive, oldBytes);
+  const statePath = path.join(retained, catalog, "groups-r20/state.json");
+  const originalState = fs.readFileSync(statePath);
+  fs.writeFileSync(statePath, JSON.stringify({ ...saved, destroyedAt: undefined }));
+  await assert.rejects(detached(json, approvalSha256), /retained catalog-page/);
+  const extracted = path.join(retained, catalog, "groups-r20", saved.evidence), host = path.join(extracted, "host.txt");
+  fs.writeFileSync(host, "changed!!\n");
+  fs.writeFileSync(statePath, JSON.stringify({ ...saved, evidenceSha256: treeHash(extracted) }));
+  assert.equal(fileHash(oldArchive), saved.archiveSha256);
+  await assert.rejects(detached(json, approvalSha256), /retained catalog-page/);
+  fs.writeFileSync(host, "synthetic\n");
+  fs.writeFileSync(statePath, originalState);
+  assert.equal(await detached(json, approvalSha256), 3, JSON.stringify(p.output.at(-1)));
+  await assert.rejects(detached(json, approvalSha256), /unresolved custody|already attempted/);
+  const job = path.join(p.h.base, json), fleet = readFleet(job, "r21").manifest;
+  const jsonState = JSON.parse(fs.readFileSync(path.join(job, json, "groups-r21/state.json")));
+  const at2 = "2026-11-21T00:00:00.000Z";
+  collected(job, fleet, json, jsonState, at2); fs.writeFileSync(p.hosts, "[]");
+  const report = (await inspectContinuation(p.h.base, { repo: p.h.repo, inspect: p.deps.inspect })).report;
+  assert.equal(report.status, "incomplete"); assert.equal(report.publishableBaseline, false);
+  assert.deepEqual(report.groups.map(({ group }) => group), groupNames);
+  for (const [i, [round, measuredCommit, date, group]] of [["r20", history.commit, at, catalog], ["r21", commit, at2, json]].entries()) {
+    assert.equal(report.groups[i].outcome, "verified", JSON.stringify(report.groups[i]));
+    const result = report.groups[i].result;
+    assert.deepEqual([result.round, result.commit, result.campaignCreatedAt, result.baseEffectiveOptions], [round, measuredCommit, date, { fixture: group }]);
+  }
+  assert.equal(report.groups[0].result.matchesCurrentContract, false);
+  assert.deepEqual(report.groups[0].result.selection, oldCatalog);
+  assert.equal(report.groups[0].result.archiveSha256, saved.archiveSha256);
+  assert.equal(report.groups[1].result.matchesCurrentContract, true);
+  assert.equal(report.groups[0].result.appOutcomes.find((app) => app.app === "express").comparisonEligible, false);
+  await assert.rejects(fleetMain(prepare(json), p.deps), /already verified/);
+  assert.equal(await fleetMain(prepare(next), p.deps), 3); assert.equal(await preview(next), 3);
+  assert.equal(await detached(next, p.output.at(-1).approvalSha256), 3, JSON.stringify(p.output.at(-1)));
+  assert.deepEqual(p.events().filter((row) => row.method === "POST").map(({ group, body }) => [group, body.size]), [[json, "c-8"], [next, "c-8"]]);
+  const fork = path.join(p.h.temp, "incomplete-reindex"); fs.mkdirSync(fork);
+  fs.writeFileSync(path.join(fork, "index.json"), JSON.stringify([{ root: job, checkout: p.h.repo, round: fleet.round, commit,
+    archives: { [json]: report.groups[1].result.archiveSha256 } }]));
+  await assert.rejects(inspectContinuation(fork, { repo: p.h.repo, inspect: p.deps.inspect }), /stay in their original continuation root/);
+  assert.equal(treeHash(retained), oldTree, "historical bytes untouched");
+});
+
+test("independent continuation admits two remote-active hosts and collects a failed terminal host without waiting for its peer", { timeout: 90000 }, async (t) => {
+  const p = fixture(t, "independent-overlap"), first = "json-api", second = "localized-marketplace", denied = "catalog-page";
+  fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
+  p.deps.inspect = () => assert.fail("no collected results yet");
+  const args = (group) => ["r21", "--continuation-root", p.h.base, "--group", group];
+  const prepare = (group) => fleetMain([...args(group), "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps);
+  const approve = async (group) => {
+    assert.equal(await fleetMain([...args(group), "--detach", "--print-approval"], p.deps), 3);
+    return [...args(group), "--detach", "--approve-reviewed-merged-ready", p.output.at(-1).approvalSha256];
+  };
+  const wait = async (ready) => {
+    const deadline = Date.now() + 30000;
+    while (!ready()) { assert.ok(Date.now() < deadline, "synthetic readiness deadline"); await delay(50); }
+  };
+  const active = (group) => p.events().some((row) => row.group === group && row.boundary === "remote-active");
+  const handoff = () => !fs.existsSync(path.join(p.h.base, ".continuation-operation.lock"));
+  const finish = (group) => fs.writeFileSync(path.join(p.h.temp, "finish-" + group), "");
+  const running = [];
+  const launch = (approved) => {
+    const promise = fleetMain(approved, p.deps); promise.catch(() => {}); running.push(promise); return promise;
+  };
+  try {
+    assert.equal(await prepare(first), 3);
+    const approved = await approve(first);
+    const firstRun = launch(approved);
+    await wait(() => active(first) && handoff());
+    await assert.rejects(fleetMain(approved, p.deps), /already attempted/);
+    const firstRoot = path.join(p.h.base, first, first), local = path.join(firstRoot, "groups-r21");
+    const registrationPath = path.join(local, "monitor-registration.json"), temporarilyMissing = registrationPath + ".fixture-hold";
+    fs.renameSync(registrationPath, temporarilyMissing);
+    try { await assert.rejects(prepare(second), (e) => e.code === "ENOENT"); }
+    finally { fs.renameSync(temporarilyMissing, registrationPath); }
+    assert.equal(fs.existsSync(path.join(p.h.base, second)), false);
+
+    assert.equal(await prepare(denied), 3);
+    const deniedApproval = await approve(denied);
+    const limit = p.hosts + ".limit";
+    fs.writeFileSync(limit, "1");
+    try { assert.equal(await fleetMain(deniedApproval, p.deps), 2); }
+    finally { fs.unlinkSync(limit); }
+    const refused = p.saved(path.join(denied, denied));
+    assert.equal(refused.status, "reserved"); assert.equal(refused.createIntentAt, undefined);
+    assert.deepEqual(p.events().filter((row) => row.method === "POST").map(({ group }) => group), [first]);
+
+    assert.equal(await prepare(second), 3);
+    const secondApproval = await approve(second);
+    assert.deepEqual(p.output.at(-1).subject.continuation.peers.map(({ id }) => id), ["101"]);
+    launch(secondApproval);
+    await wait(() => active(second) && handoff());
+    const events = p.events();
+    assert.deepEqual(events.filter((row) => row.method === "POST").map(({ group }) => group), [first, second]);
+    assert.deepEqual(events.filter((row) => row.boundary === "remote-active").map(({ group, id }) => [group, id]), [[first, "101"], [second, "102"]]);
+    assert.ok(!events.some((row) => row.boundary === "monitor-terminal"));
+    const inFlight = (await inspectContinuation(p.h.base, p.deps)).report.groups.filter((g) => g.outcome === "running");
+    assert.deepEqual(inFlight.map((g) => [g.group, g.attempts[0].commit, g.attempts[0].host.size]), [[first, commit, "c-8"], [second, commit, "c-8"]]);
+
+    finish(first);
+    assert.equal(await firstRun, 3);
+    // Advance only the fixture's post-close timestamp beyond the existing lease embargo.
+    const closedPath = path.join(local, "monitor-local-closed.json"), closed = JSON.parse(fs.readFileSync(closedPath));
+    const leaseWindow = closed.recoverAfterMs - closed.closedAtMs;
+    closed.closedAtMs = Date.now() - leaseWindow - 1; closed.recoverAfterMs = closed.closedAtMs + leaseWindow;
+    fs.writeFileSync(closedPath, JSON.stringify(closed));
+    const s = p.saved(path.join(first, first)), terminal = JSON.parse(fs.readFileSync(path.join(local, "monitor-terminal.json")));
+    const collect = harness(t, { stateRoot: firstRoot, hostId: s.id });
+    const report = Object.assign(syntheticInspection("failed"), { schema: "benchmark-isolated-group-campaign-inspection/v1",
+      campaign: terminal.campaign, selection: s.selection, placement: savedPlacement(s),
+      supervisedTerminal: { registrationSha256: s.control.monitor.registrationSha256, sealSha256: terminal.sealSha256 } });
+    collect.setArchive(archive(metadata()));
+    assert.equal(await collect.task({ inspect: async () => report, run(...argv) {
+      const [binary, args] = argv, droplets = JSON.parse(fs.readFileSync(p.hosts));
+      collect.hosts(droplets);
+      const result = collect.run(...argv);
+      if (binary === "doctl" && args[2] === "delete") {
+        assert.equal(args[3], "101");
+        assert.ok(!p.events().some((row) => row.group === second && row.boundary === "monitor-terminal"));
+        fs.writeFileSync(p.hosts, JSON.stringify(droplets.filter(({ id }) => String(id) !== args[3])));
+      }
+      return result;
+    } }).collect(), 1);
+    assert.equal(collect.deletes, 1);
+    assert.ok(collect.saved().destroyedAt && fs.existsSync(path.join(local, "results.tgz")));
+    assert.equal(collect.saved().validation.status, "failed");
+    assert.deepEqual(JSON.parse(fs.readFileSync(p.hosts)).map(({ id }) => id), [102]);
+  } finally {
+    finish(first); finish(second);
+    await Promise.all(running);
+  }
+});
+
+test("a settled continuation placement refusal leaves the unallocated slot available", async (t) => {
+  const p = fixture(t), group = "json-api";
+  fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
+  const args = ["r21", "--continuation-root", p.h.base, "--group", group, "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context];
+  const available = p.deps.catalogProvider;
+  p.deps.catalogProvider = syntheticCatalogProvider(syntheticPlacement([]));
+  await assert.rejects(fleetMain(args, p.deps), /no supported c-8/);
+  assert.deepEqual(fs.readdirSync(path.join(p.h.base, group)), []);
+  p.deps.catalogProvider = available;
+  assert.equal(await fleetMain(args, p.deps), 3);
+  assert.deepEqual(p.events(), []);
+});
+
+test("continuation appends authorized retries after no-create and retirement while keeping a prepared sibling", { timeout: 60000 }, async (t) => {
+  const p = fixture(t), group = "json-api", other = "localized-marketplace";
+  const index = path.join(p.h.base, "index.json"), oldSlot = path.join(p.h.base, group), sibling = path.join(p.h.base, other);
+  fs.writeFileSync(index, "[]");
+  p.deps.inspect = () => { assert.fail("there is no collected evidence to replay"); };
+  p.deps.main = async () => 2; // A settled child refusal before its state directory exists.
+  const args = (round, group) => [round, "--continuation-root", p.h.base, "--group", group];
+  const prepare = (round, group) => fleetMain([...args(round, group), "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps);
+  const preview = async (round, group) => {
+    assert.equal(await fleetMain([...args(round, group), "--detach", "--print-approval"], p.deps), 3);
+    return p.output.at(-1).approvalSha256;
+  };
+  const detach = (round, group, hash) => fleetMain([...args(round, group), "--detach", "--approve-reviewed-merged-ready", hash], p.deps);
+  assert.equal(await prepare("r19", group), 3);
+  assert.equal(await prepare("r21", other), 3);
+  const siblingTree = treeHash(sibling), siblingApproval = await preview("r21", other);
+  const oldApproval = await preview("r19", group);
+  assert.equal(await detach("r19", group, oldApproval), 2);
+  await assert.rejects(detach("r19", group, oldApproval), /already attempted/);
+  let { report } = await inspectContinuation(p.h.base, p.deps);
+  assert.equal(report.groups.find((r) => r.group === group).outcome, "not-created");
+  assert.ok(report.eligibleToRun.includes(other) && report.eligibleToRun.includes(group));
+  await assert.rejects(prepare("r19", group), /higher round/);
+
+  const local = path.join(oldSlot, group, "groups-r19"), statePath = path.join(local, "state.json"), fleet = readFleet(oldSlot, "r19").manifest;
+  fs.mkdirSync(local, { recursive: true });
+  const saved = (fleet) => ({ ...reservation({ round: fleet.round, commit, token: fleet.jobs[0].token, group, fleet }),
+    provider: fleet.provider, fullGroupQualified: false });
+  for (const status of ["creating", "reserved"]) {
+    fs.writeFileSync(statePath, JSON.stringify({ ...saved(fleet), status, createIntentAt: new Date().toISOString() }));
+    await assert.rejects(prepare("r20", group), status === "creating" ? /unresolved custody/ : /reserved host already has create intent/);
+  }
+  fs.writeFileSync(statePath, JSON.stringify(saved(fleet)));
+  const oldTree = treeHash(oldSlot);
+  assert.equal(await prepare("r20", group), 3);
+  const retrySlot = path.join(p.h.base, `${group}--r20`), retryFleet = readFleet(retrySlot, "r20").manifest;
+  assert.notEqual(retryFleet.jobs[0].token, fleet.jobs[0].token);
+  await assert.rejects(prepare("r21", group), /already reserved/);
+  await assert.rejects(detach("r19", group, oldApproval), /already attempted/);
+  const retryApproval = await preview("r20", group);
+  await assert.rejects(detach("r20", group, oldApproval), /exact-approval-required/);
+
+  const proofDir = path.join(retrySlot, group, "groups-r20"), proofPath = path.join(proofDir, "unused-host.json");
+  const ms = Date.now(), at = new Date(ms).toISOString();
+  const retired = { ...saved(retryFleet), status: "retired", createIntentAt: at, deletionIntentAt: at, destroyedAt: at,
+    id: "997", ip: "192.0.2.10", retirement: { kind: "unused", evidenceSha256: "a".repeat(64) } };
+  const observation = JSON.stringify({ schema: "benchmark-unused-host/v1", hostId: retired.id, unit: retired.unit, observedAtMs: ms, unused: true });
+  const proof = JSON.stringify(unusedEvidence(observation, retired, unusedHostScript(retired), ms, ms));
+  p.deps.main = async () => {
+    fs.mkdirSync(proofDir, { recursive: true });
+    fs.writeFileSync(proofPath, "false proof");
+    fs.writeFileSync(path.join(proofDir, "state.json"), JSON.stringify({ ...retired,
+      retirement: { kind: "unused", evidenceSha256: digest(proof) } }));
+    return 2;
+  };
+  assert.equal(await detach("r20", group, retryApproval), 2);
+  await assert.rejects(prepare("r21", group), /unresolved custody/);
+  fs.writeFileSync(proofPath, proof);
+  const retiredTree = treeHash(retrySlot);
+  assert.equal(await prepare("r21", group), 3);
+  ({ report } = await inspectContinuation(p.h.base, p.deps));
+  assert.deepEqual(report.groups.find((r) => r.group === group).attempts.map((r) => [r.round, r.outcome, r.attemptRoot]),
+    [["r19", "not-created", oldSlot], ["r20", "unused-retired", retrySlot], ["r21", "prepared", path.join(p.h.base, `${group}--r21`)]]);
+  assert.equal(await preview("r21", other), siblingApproval, "prepared sibling's original exact approval is still usable");
+  assert.equal(treeHash(sibling), siblingTree);
+  assert.deepEqual(p.events(), []);
+  delete p.deps.main;
+  const newApproval = await preview("r21", group);
+  assert.equal(await detach("r21", group, newApproval), 3, JSON.stringify(p.output.at(-1)));
+  await assert.rejects(detach("r21", group, newApproval), /unresolved custody|already attempted/);
+  assert.deepEqual(p.events().filter((row) => row.method === "POST").map(({ group }) => group), ["json-api"]);
+  assert.equal(treeHash(oldSlot), oldTree);
+  assert.equal(treeHash(retrySlot), retiredTree);
+  assert.equal(fs.readFileSync(index, "utf8"), "[]");
+});
+
+test("remaining approval moves from sfo2 to lon1 through captured workers and dispatches once", { timeout: 120000 }, async (t) => {
   const p = fixture(t, "overlap");
   assert.equal(await fleetMain(await p.prepare(), p.deps), 3);
   const state = p.saved(), group = groupNames[0], campaign = `r21-${state.token}`;
