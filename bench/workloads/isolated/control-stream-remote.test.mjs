@@ -288,13 +288,16 @@ test("local EOF and expired drain deadline cannot replace an actual terminal app
 });
 
 test("post-terminal drain logs only the failed check, never raw probe output", async (t) => {
-  for (const [fault, reason] of [["invalid", "control invalid"], ["refused", "probe refused"],
+  for (const [fault, reason] of [["invalid", "control invalid"], ["final-wait-abort", "control invalid"], ["refused", "probe refused"],
     ["malformed", "invalid proof"], ["wrong-identity", "invalid proof"]]) await t.test(fault, async (t) => {
     const raw = "SYNTHETIC_PRIVATE_DETAIL";
     let calls = 0;
     const f = await fixture(t, { probe() {
       calls++;
       if (fault === "invalid") { f.put("stream-invalid.json", ""); return { status: 3 }; }
+      if (fault === "final-wait-abort") {
+        f.tick(9900000000n); queueMicrotask(() => f.abort.abort()); return { status: 3 };
+      }
       return { status: fault === "refused" ? 254 : 0, stderr: raw,
         stdout: fault === "wrong-identity" ? JSON.stringify({ ...f.drain(), id: raw }) : raw };
     } });

@@ -156,9 +156,11 @@ export async function superviseControlStream(binding, admission, abort, runtime 
       const deadline = now() + 10000000000n;
       let stage = "campaign drain";
       try {
-        for (let attempts = 0; attempts < 100 && now() < deadline; attempts++) {
+        for (let attempts = 0; ; attempts++) {
           stage = "campaign drain control invalid";
           assert.ok(!abort.signal.aborted && !existsSync(join(root, "stream-invalid.json")));
+          stage = "campaign drain deadline";
+          assert.ok(attempts < 100 && now() < deadline);
           stage = "campaign drain probe refused";
           const result = probe();
           assert.ok(!result.error && !result.signal && [0, 3].includes(result.status), "apparatus drain uncertain");
@@ -169,8 +171,6 @@ export async function superviseControlStream(binding, admission, abort, runtime 
           stage = "campaign drain";
           await sleep(100);
         }
-        stage = "campaign drain deadline";
-        assert.fail("apparatus disappearance deadline expired");
       } catch { invalidate(stage); throw new Error(stage); }
     },
     async dispose() { if (!ended && !revoked) invalidate("campaign disposed before drain"); await stopWatchdog(); },
