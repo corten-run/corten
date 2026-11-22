@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { validateCampaign, freeze, jsonPhase, mixedPhase } from "./campaign-contract.mjs";
 import { verifyWorkingSources } from "./worker.mjs";
-import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, readRegular, syncDirectory, tree } from "./evidence.mjs";
+import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, publishDurable, readRegular, syncDirectory, transferEvidence, tree } from "./evidence.mjs";
 import { supervise } from "./process.mjs";
 import { observeHost, udevSettleCandidates, udevSettleMs, udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
@@ -18,6 +18,7 @@ import { beginLifetime, composeHostProof, inspectLifetime } from "./host-lifetim
 import { composePhase } from "./composition.mjs";
 import { prepareMixedAudit, replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { nativeControlPartition, verifyStreamAudit } from "./control-stream.mjs";
+import { liveGroup } from "./native-roles.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url)).replace(/[\\/]$/, "");
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -39,21 +40,23 @@ export function createCampaign({ authorize }) {
     for (const file of c.files) assert.equal(digest(readRegular(join(c.directory, file.path))), file.sha256, "campaign record/log mutated");
     return c;
   }
-  function save(c, path, value) {
-    own(c.handle); const bytes = json(value); durable(join(c.directory, path), bytes);
+  function save(c, path, value, write = durable) {
+    own(c.handle); const bytes = json(value); write(join(c.directory, path), bytes);
     c.files.push({ path, sha256: digest(bytes) });
   }
   function event(c, kind, data = {}) {
-    const value = { schema: "benchmark-isolated-campaign-event/v1", sequence: c.sequence++, campaign: c.handle.id,
+    const value = { schema: "benchmark-isolated-campaign-event/v1", sequence: c.sequence, campaign: c.handle.id,
       round: c.plan.round, campaignSha256: c.plan.campaignSha256, at: new Date().toISOString(), kind, ...data, status: status(c) };
-    save(c, `${String(value.sequence).padStart(5, "0")}-${kind}.json`, value);
+    save(c, `${String(value.sequence).padStart(5, "0")}-${kind}.json`, value,
+      kind === "phase-sealed" && data.transferDestination ? publishDurable : durable);
+    c.sequence++;
   }
   function verifyPhases(c) {
     own(c.handle);
     for (const p of c.phases) {
       assert.ok(isDeepStrictEqual(tree(p.native), p.manifest), "sealed native evidence mutated");
-      if (p.present) assert.ok(isDeepStrictEqual(tree(p.original), p.manifest), "original native evidence mutated");
-      else assert.equal(lstatSync(p.original, { throwIfNoEntry: false }), undefined, "native output appeared after failure");
+      if (p.retainsOriginal) assert.ok(isDeepStrictEqual(tree(p.original), p.manifest), "original native evidence mutated");
+      else assert.equal(lstatSync(p.original, { throwIfNoEntry: false }), undefined, "native output appeared after collection or failure");
     }
     if (c.audit) assert.ok(isDeepStrictEqual(tree(c.audit.sourceRoot), c.audit.subject.sourcesManifest.snapshot), "sealed source snapshot mutated");
     if (c.mixedAudit) assert.ok(isDeepStrictEqual(tree(c.mixedAudit.sourceRoot), c.mixedAudit.subject.sourcesManifest.snapshot), "sealed mixed source/context snapshot mutated");
@@ -142,7 +145,9 @@ export function createCampaign({ authorize }) {
     const relative = `${String(c.index).padStart(2, "0")}-${binding.request.group}-${phaseName}`;
     const directory = join(c.directory, relative); mkdirSync(directory, { mode: 0o700 }); syncDirectory(c.directory);
     c.attempted.add(binding.request.group);
-    const pending = { group: binding.request.group, phase: phaseName, artifactRoot: binding.validation.artifactRoot };
+    const transfer = liveGroup(binding.request.group);
+    const pending = { group: binding.request.group, phase: phaseName, artifactRoot: binding.validation.artifactRoot,
+      ...(transfer ? { transferDestination: `${relative}/native` } : {}) };
     c.pendingNative.push(pending); event(c, "native-output-reserved", pending);
     if (c.stream) {
       const { cpus, roles } = nativeControlPartition(binding);
@@ -164,7 +169,8 @@ export function createCampaign({ authorize }) {
     let after, settled, boundaryError;
     const terminalClock = commands.at(-1)?.terminalClock;
     try {
-      verifyWorkingSources(c.plan.bindings[0]); after = observeHost(c.stream?.registration, retainUdev);
+      if (!transfer) verifyWorkingSources(c.plan.bindings[0]);
+      after = observeHost(c.stream?.registration, retainUdev);
       if (terminalClock) after.terminalClock = terminalClock;
       save(c, `${relative}/host-after.json`, after);
       if (retainUdev && terminalClock && !signal?.aborted && udevSettleCandidates(before, after, terminalClock, settlePolicy)) {
@@ -177,14 +183,18 @@ export function createCampaign({ authorize }) {
     } catch (error) { boundaryError = error; }
     const native = join(directory, "native"), present = !!lstatSync(original, { throwIfNoEntry: false });
     let manifest;
-    if (present) manifest = copyEvidence(original, native);
+    if (present) manifest = transfer ? transferEvidence(original, native) : copyEvidence(original, native);
     else { assert.ok(commands.some((r) => !r.success), "native output missing"); mkdirSync(native, { mode: 0o700 }); manifest = tree(native); }
-    const p = { relative, native, original, manifest, present, commands, cleanup: null };
-    c.phases.push(p); save(c, `${relative}/native-manifest.json`, manifest);
-    c.pendingNative.splice(c.pendingNative.indexOf(pending), 1);
+    const p = { relative, native, original, manifest, retainsOriginal: present && !transfer, commands, cleanup: null };
+    save(c, `${relative}/native-manifest.json`, manifest);
     event(c, "phase-sealed", { ...pending, nativeManifestSha256: manifest.sha256,
       phaseManifestSha256: phaseSnapshot(directory, binding.request.group === "json-api" && phaseName === "prepare").sha256 });
+    c.phases.push(p);
+    c.pendingNative.splice(c.pendingNative.indexOf(pending), 1);
     if (boundaryError) throw boundaryError;
+    // The live runners write Git-visible result trees. Recheck every source
+    // only after the exact reserved tree is in external phase custody.
+    if (transfer) verifyWorkingSources(c.plan.bindings[0]);
     closeControlWindow?.();
     c.stream?.close();
     p.cleanup = settled ? verifySettledHostBoundary(before, after, settled, terminalClock, settlePolicy) : verifyHostBoundary(before, after);
