@@ -213,7 +213,10 @@ rules something out.
    class declares its fields, so a misspelled write is
    flagged only when `this` is retyped to a typedef that repeats the fields (`@this` on a method, a
    cast in the constructor), and a read of the misspelled name only when a method other than the
-   constructor set it and `undefined` is not accepted; TypeScript 5.8 added `erasableSyntaxOnly`.
+   constructor set it and `undefined` is not accepted, and a field declared with no value that the
+   constructor writes only through such a typedef is refused under `strict` by 7.0.2 (TS2564) and
+   accepted in JavaScript by 6.0.3, so it is declared with a first value; TypeScript 5.8 added
+   `erasableSyntaxOnly`.
    TypeScript 7.0.2 exports no stable parsing entry point: its root exports only `version` and
    `versionMajorMinor`, and its parser and AST entry points are all under `typescript/unstable/`.
    The repository's AST checks import `typescript/unstable/sync`, `typescript/unstable/fs` and
@@ -224,10 +227,21 @@ rules something out.
    `bench/fullstack-browser` and `bench/workloads` have their own package, `bench/package.json`,
    pinned exactly to TypeScript 6.0.3, the newest release with that API);
    reasoned (with the check at the call, no declarations sit between markup and script to go stale;
-   component behavior is exported functions, not classes; the runtime's one hand-written class,
-   `<corten-live>`, sets only the fields it declares, and the classes it generates, one per view
-   (the macro writes them) and one per typed event (`assets.rs` writes them), are typed by the
-   declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
+   component behavior is exported functions, not classes; the runtime has two hand-written
+   classes, `<corten-live>` (its fields `source` and `applied`) and `corten/read`'s `ReadError`
+   (`status` and `redirected`; its `name` is a field's first value), and each declares its fields
+   and writes them only through a typedef of them (`LiveFields`, `ReadErrorFields`), so `tsc`
+   refuses a misspelled write in either; `scripts/escapes.mjs` lists the two, keyed by the tag
+   `customElements.define` gives `<corten-live>`, fails when the runtime, kit, template or example
+   scripts gain a class or lose one, and refuses a class's public field written through a `this`
+   that no cast or `@this` tag types (by assignment, `++`, `delete`, a `for` target or
+   destructuring), which `tsc` accepts, and a `this`, typed or not, handed first to
+   `Object.assign`, `Object.defineProperty`, `Object.defineProperties`, `Reflect.set`,
+   `Reflect.defineProperty` or `Reflect.deleteProperty` named directly, whose keys no type
+   checks; a writer reached through an alias or a computed key, and a `@this` tag naming the class
+   rather than a typedef of its fields, are not seen, and review holds those; the classes it
+   generates, one per view (the macro writes them) and one per typed event (`assets.rs` writes
+   them), are typed by the declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
    was read, and none's value is used as a type it is not; the unstable parser API lets
    `scripts/escapes.mjs` inspect JSDoc and `scripts/events.mjs` compare the compiler's DOM event
    maps with `crates/corten-macros/src/dom.rs` without a separate parser dependency.
@@ -251,10 +265,11 @@ rules something out.
    JavaScript gains type syntax of its own (TC39's type annotations proposal), which a script
    could carry in place of JSDoc; or a script needs a check `checkJs` cannot give with a JSDoc type
    (an object built up a property at a time that cannot be written as a literal or a typed value);
-   or a component or the runtime has a hand-written class, or a function called with `new`, that
-   sets properties it does not declare, or a function that reads `arguments`; or TypeScript stops
-   reading a JSDoc form the scripts use (7.0 dropped several, among them `@enum`, `@class`, Closure
-   function types, a bare `?` or postfix `!`, and a value written where a type belongs, none of
+   or a component or the runtime has a hand-written class beyond the two that
+   `scripts/escapes.mjs` lists, or one of those writes a field other than through its typedef, or a
+   function called with `new` sets properties it does not declare, or a function reads
+   `arguments`; or TypeScript stops reading a JSDoc form the scripts use (7.0 dropped several,
+   among them `@enum`, `@class`, Closure function types, a bare `?` or postfix `!`, and a value written where a type belongs, none of
    which they use); or a TypeScript release changes what the probes behind the measured premise
    show; or TypeScript ships a stable parsing API for these AST checks; or a TypeScript 7.x
    update changes the unstable sync, filesystem or AST APIs they use; or benchmark tooling moves
@@ -350,7 +365,20 @@ rules something out.
    their closures, free names, form handler discovery and URL resolution), and the 12,526 calls
    the browser evidence tests made to the extractor's exported functions. Of those calls' inputs,
    2,593 were seen under both compilers, all with the same output. Another 338 per run carry
-   per-run random values, so they never recur across runs and were not compared.
+   per-run random values, so they never recur across runs and were not compared;
+   2026-11-22, at `06d7a766a` and the change, with TypeScript 6.0.3 and 7.0.2 on `jsconfig.json`:
+   the scripts it checks, searched for a class with 7.0.2's parser (`scripts/escapes.mjs`), have
+   `<corten-live>` and `ReadError`, besides the typing fixture's two and the declarations of
+   generated classes. As written there, a misspelled `status` in `ReadError`'s constructor
+   failed only at the fixture's typed read of it (TS2551), and a misspelled `redirected`, or
+   either of `<corten-live>`'s two writes misspelled, passed on both. Written through a typedef,
+   each of the four misspellings is refused at the write (TS2551) on both, a misspelled field
+   declaration at each cast (TS2352), and a plain `this.` write is still accepted by `tsc`, so
+   `scripts/escapes.mjs` refuses one (its test writes it each of those ways, and restoring either
+   class's plain write fails the scan at that line). `tsc` also accepted
+   `Object.assign(this, { redirecetd: redirected })` in `ReadError`'s constructor, after which a
+   redirect's error had `redirected` false, and the scan refuses that form too. 7.0.2 refused the fields declared with no value
+   (TS2564), 6.0.3 accepted them.
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in
@@ -2823,7 +2851,10 @@ rules something out.
     does it and terser goes; or terser's output fails a smoke test in a supported engine that
     esbuild's alone passes.
 
-    Last checked: 2026-11-20, terser 5.51.3 with esbuild 0.28.2 on `3efd3266d` builds all eight
+    Last checked: 2026-11-22, terser 5.51.4 with esbuild 0.28.2 on `a0eeeacca` builds every file in
+    `crates/corten/js/dist/` byte for byte as 5.51.3 does there (`git status` clean after
+    `npm run build:js`), the release dropping only source maps from terser's own package;
+    2026-11-20, terser 5.51.3 with esbuild 0.28.2 on `3efd3266d` builds all eight
     files byte for byte as 5.51.2 does there (the same SHA-256 each), so the move changes no
     shipped byte, and the build gives terser no input source map, so 5.51.3's source-map change
     does not apply; 2026-11-10, sizes on `21f9fab3` with esbuild 0.28.2
@@ -5508,7 +5539,7 @@ rules something out.
     that imports it, each page's import map names it
     (`,"corten/read":"/assets/<version>/scripts/corten-read.js"`, 60 bytes, 4 to 9 once the page
     is compressed), and the pages whose scripts import it preload it (a 77-byte
-    `<link rel="modulepreload">`). The module is 749 bytes, 486 with gzip and 409 with brotli,
+    `<link rel="modulepreload">`). The module is 767 bytes, 493 with gzip and 413 with brotli,
     which the users of an app that reads download once a release. The server's work is
     unchanged: a `req.screen` page costs 37,950 instructions a request as HTML and 41,211 as a
     data client's JSON on `dea1788d2` and on `4eb3d62d1`, within 0.2 of each other in every run
@@ -5536,7 +5567,8 @@ rules something out.
     at level 6 and brotli at quality 11, on `dea1788d2` and `4eb3d62d1`, once each, and the
     module's again on `c74c4fa83`, once it cancels a refused answer's body, gives a malformed
     success a `cause` and lets an abort win over a failed answer, 666, 438 and 367, and on
-    `7664551c8`, once it tells a redirect apart (`redirected`), 749, 486 and 409; a
+    `7664551c8`, once it tells a redirect apart (`redirected`), 749, 486 and 409, and on
+    `06d7a766a` and the change, once `ReadError` declares its fields, 767, 493 and 413; a
     `req.screen` page's instructions a request under callgrind, 1,200 requests through the
     router in process less 200, over 1,000, in both modes, three alternated runs of each build,
     release, in `rust:1-bookworm`: HTML 37,949.68 to 37,949.73 on `dea1788d2` and 37,949.64 to
@@ -5584,7 +5616,9 @@ rules something out.
     `7664551c8`, the read checks in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2
     (Playwright 1.64.1); 2026-11-16, the hand mount's check when the crate compiles
     (`Route::Data` and `DataMatches`, its `compile_fail` doctests and message test) on
-    `f109794c6`.
+    `f109794c6`; 2026-11-22, the module's size and the smoke's read checks on `06d7a766a` and the
+    change, once `ReadError` declares its fields, the read checks in Chromium 159.0.8154.6, Firefox
+    159.0 and WebKit 27.2 (Playwright 1.65.1).
 
 56. <a id="choice-network-only-preload"></a>**The generated service worker answers a navigation
     under a `network_only` prefix with the request navigation preload already sent, rather than
@@ -7422,8 +7456,10 @@ rules something out.
     to say, and a reload is not a reason to render it.
 
     Not chosen: in front of the middleware, for the reasons above, though it would save the
-    stages too; asking the marks whether or not the store has room, which spares the copy
-    for every URL asked for once and makes the second visitor of every page wait for its
+    stages too; holding a page's whole render buffer, which is an eighth larger than the page
+    and as large as the last page rendered, or asking the allocator to shrink it to the page,
+    which jemalloc does by moving the page for most lengths (above); asking the marks whether
+    or not the store has room, which spares the copy for every URL asked for once and makes the second visitor of every page wait for its
     handler in an app whose pages all fit; a mark that holds part of a hash of its URL, which
     another URL takes, so that the rule fails toward an answer that is not kept and a store
     with more pages than marks forgets them; a mark that ages (an answer kept only when its
@@ -7535,6 +7571,143 @@ rules something out.
     store 0.03 at most (counted by `perf stat` on a machine that ran other work, which a
     count of faults does not depend on), and a full store spends 31,863 cycles in the
     kernel.
+    What a page made and kept with room asks of the process was then cut, under callgrind
+    (valgrind 3.24.0, rustc 1.100.0, a probe app serving a `Public` page of 5,208 bytes over one
+    keep-alive connection with a browser's fifteen headers, `Accept-Language` among them, a new
+    URL each request and a bound of 1 GiB that no run fills, the count for 1,300 requests less
+    that for 300 over 1,000, three rounds alternating the builds, given as the median of the
+    three and their range), under glibc 2.41 and under the template's allocator, Debian's
+    libjemalloc2 5.3.0 put in with `LD_PRELOAD`. The table's key is the hash of the path and
+    query, taken once by keys of the store's own for the lookup and the keeping (`1f248f657`;
+    the count of writes and a full store's mark hash it on their own), and a kept copy's URL,
+    `Host` and, for an answer that varies on it, `Accept-Language` are held in one allocation
+    made from the request's bytes when the answer is kept (`eb20c55bb`). A miss that is not kept
+    never builds that key: until then it holds the request's URL and header values by handles
+    that copy none of their bytes, though the first clone of a header a middleware made for
+    itself may allocate the count of its holders. A kept body is found and keyed the same way,
+    with the way it was asked for compared beside its key. The bound counts a copy's URL once,
+    where it counted it twice (by the entry and by the table's key), so under the same bound an
+    answer with a long URL near its share is kept where it was not, and the store reaches the
+    point where it is full a little later; which answers may be kept is otherwise the same. On
+    main's `a0eeeacca` (which counts a write by path only once an answer may be kept, and keeps
+    files) a page made and kept ran 104,989 instructions under glibc (104,986 to 104,991) and
+    98,549 under jemalloc (98,548 to 98,552), against 91,762 and 85,994 with the store off; with
+    this change merged with it (`63ec8bd65`) 103,343 (103,340 to 103,348) and 97,520 (97,518 to
+    97,525), 1.6% and 1.0% fewer, and fewer in each pair by 1,643 to 1,649 and 1,027 to 1,031.
+    For a page of 7,635 bytes it ran 116,629 against 118,258 and 113,131 against 114,257, fewer
+    by 1,625 to 1,632 and 1,119 to 1,175; for a JSON body made and kept (the page's words as one
+    string, in a build with `compress`, sent to the browser's codings in 2,191 bytes) 204,581
+    against 206,254 and 198,357 against 199,543, fewer by 1,668 to 1,676 and 1,185 to 1,191.
+    Counted the round before the merge (`b573520d1` against `04c209fca`), the allocator was
+    called 49 times a request against 52 under both, `memcpy` 86 times against 88, and the minor
+    page faults fell from 1.641 to 1.618 a request under glibc and from 1.884 to 1.877 under
+    jemalloc. A kept page took 60,650 instructions (60,649 to 60,653) against 60,646 (60,645 to
+    60,647) under glibc, 2 to 8 more in each pair, and under jemalloc 54,681 (54,679 to 54,688)
+    against 54,643 (54,641 to 54,644), 38 to 44 more. In the round before (`b573520d1` against
+    `04c209fca`) main's runs differed by more than the two builds under both allocators, and
+    that cost was not resolved there. For the larger page it took 61,020 (61,017 to 61,021)
+    against 61,033 (61,028 to 61,039) under glibc, 11 to 19 fewer in each pair, and under
+    jemalloc 54,874 in each round against 54,836 (54,836 to 54,838), 36 to 39 more; in an
+    earlier round (`eb20c55bb` against `92a745a63`) that page's runs under jemalloc ranged from
+    54,809 to 54,861, more than the 40 between the builds, and its cost was not resolved there.
+    A kept JSON body took 59,198 (59,193 to 59,198) against 59,077 (59,076 to 59,085) under
+    glibc, 113 to 120 more in each pair, of which the store's own lookup (`Asked::of` and
+    `Asked::find`) was 36 by function at `b573520d1` and the rest glibc's `_int_malloc` and the
+    chunks it unlinks under `Extensions::insert`, with the heap laid out otherwise; and 53,679
+    against 53,639 under jemalloc, 37 to 44 more. The store off, a page not `Public` and a write
+    differed by 7 or less at the medians under both.
+    The steps between, under jemalloc at 5,208 bytes and on main's `92a745a63`:
+    hashing once took 809 off; the key in one allocation made for the miss (`3278beb10`) 553
+    more off, but it held and counted an `Accept-Language` the page did not vary on, so a page
+    near its share of the bound was not kept for a client that sent a long one; making it only
+    when the page is kept (`09170f7ec`) put 336 of those back, in moving the request's URL and
+    header values, whose bytes it shares until then, with the answer's future; and copying the
+    page again, where those steps had shrunk its buffer, put back 190 more (below). At `df1856704` such a request ran 10,601
+    instructions more than with the store off under glibc, of which, by function, about 4,500
+    are the allocator's
+    (ten more allocations and a `realloc`, among them the entry, its key, the URL's list in the
+    table, a copy of the head for the answer sent and the mark on it, in a heap the store
+    grows, `_int_malloc` alone 1,592), about 2,300 the store reading the request and the answer
+    (the headers it is asked with, `Vary`, what an answer must not carry, the head's size), 900
+    putting the entry in its place under the lock, 500 `memcpy` and the rest the URL's hashes.
+    Holding the handler's whole buffer and counting its capacity was tried first (on
+    `6c8c27b55`): a page's buffer is sized for the last page rendered and an eighth more, so a
+    uniform page holds an eighth it does not use, and its faults rose from 1.65 to 1.81 a
+    request. Asking the allocator to shrink the buffer to the page's length instead of copying
+    the page (at `bfb957ebb`) saved 220 to 648 instructions under glibc, which shrinks a chunk
+    where it is, for pages of 5,208 to 7,979 bytes; under jemalloc it saved 162 and 223 where
+    the page and its buffer are in one size class (5,208 and 6,247 bytes), where jemalloc leaves
+    the buffer as it is, and cost 497 to 665 more for the seven other lengths tried, from 5,555
+    to 7,979 bytes, where jemalloc moves the page to an allocation of the smaller class: the
+    copy again, with the lookups of a `realloc` around it. With jemalloc's classes a seventh to
+    a quarter apart, a buffer an eighth larger than its page is in the next class for more than
+    half of all lengths, so the page is copied, as before. Hashing a path for its count of
+    writes by the table's keyed hash too, so that a lookup and a write share one hash, cost a
+    kept page 125 to 156 instructions more, and was left out.
+    In cycles, on a quiet cloud host (a dedicated 8-CPU DigitalOcean c-8 in sfo3, Xeon Platinum
+    8280, one thread a core, Debian 13 with Linux 6.12.117, rustc 1.100.0), `30ff52ca0` (this
+    change before it merged main's [#1883 Count a write by path only once an answer may be kept](https://github.com/corten-run/corten/pull/1883),
+    its code outside tests that of `11824d580`) against main's `e7e89add8`, in a probe app on
+    jemalloc as the template runs it, with the `json` feature: a record page of 6,124 bytes and a
+    JSON body of 1,999 bytes, asked for with no coding. Both builds were pinned to the same CPU, one whose core had no
+    other work, each started once (afresh for each turn where every request is for a new URL, so each turn begins with
+    an empty store that keeps room) and loaded in turn for 3 s by `wrk` with 64 connections on
+    two other CPUs, the order turned about each pair, 100 pairs a case after one not recorded,
+    the app's user and kernel cycles and user instructions counted by `perf stat` and divided by
+    the requests answered. The margin set before the run was the one-sided 95% upper bound on
+    the median change within a pair in cycles a request under +1%, in every case. A new URL
+    each request took 76,458 cycles against 77,205 at the medians, 1.28% fewer at the median of
+    the pairs with a bound of 0.59% fewer (user 2.27% fewer, kernel 0.13% fewer with a bound of
+    0.31% more), on 2.02% fewer user instructions (51,687 against 52,755); a new URL for the
+    JSON body 68,424 against 69,324, 1.37% fewer with a bound of 0.92% fewer (user 2.48% fewer,
+    kernel 0.07% more), on 1.83% fewer instructions (57,081 against 58,146). Kernel cycles, where
+    the faults of memory the store touches first are counted, were about flat; this run did not
+    count the faults themselves again. A kept page took
+    0.51% fewer (bound 0.39% fewer) on 0.19% more instructions (24,244 against 24,198), a kept
+    JSON body 0.01% fewer (bound 0.08% more) on 0.18% more, and the store off 0.58% fewer (bound
+    0.45% fewer) on the same instructions. A page not `Public`, whose code this change does not
+    touch, took 1.07% more, with a bound of 1.18% more, so the margin was not met there, on the
+    same instructions (39,454 against 39,449; user cycles 2.68% more, kernel 0.45% fewer). In
+    the same run on the same host a page not `Public` that another change leaves as it is
+    ([#1865 Send a Public answer's Cache-Control without reading it again or making it per answer](https://github.com/corten-run/corten/pull/1865))
+    took 1.27% more on 0.03% more instructions. So two builds that run the same instructions
+    differed on this host by up to about a hundredth of their cycles, from 0.6% fewer to 1.3%
+    more: the 1.07% is not shown to be a cost of this change, whose instructions there are flat,
+    and is not ruled out as one. The new URLs' 1.3% and 1.4% fewer are about that size, and are
+    claimed only as cycles that went the way of the instructions saved, as their user cycles
+    did. Both builds' answers were compared before each case and were the same once a kept
+    copy's `Age` was masked, and no turn failed. The merge with main after the run (`63ec8bd65`)
+    was counted again by callgrind (above) and, on 2026-11-22, in cycles by the same method on a
+    second quiet host of the same size (Xeon Platinum 8358), `4e87017b9`, whose code is the
+    merge's, against main's `a0eeeacca`, 100 pairs a case, with perf counting every turn for all
+    of it: a new URL took 1.51% fewer cycles at the median of the pairs (bound 1.05% fewer) on
+    1.97% fewer user instructions (51,687 against 52,724), a new URL for the JSON body 2.64% fewer
+    (bound 2.11% fewer) on 1.80% fewer (57,087 against 58,131), a kept JSON body 0.59% fewer (bound
+    0.36% fewer) on 0.18% more, and the store off 0.27% more (bound 0.51% more) on 0.01% more,
+    each within the margin; a kept page, each build started once, took 1.80% more with a bound of
+    2.02% more (from 5.37% fewer to 5.25% more; user 2.56% more, kernel 0.92% more) on 0.19% more
+    instructions (24,247 against 24,202), and the page not `Public` 1.51% more with a bound of
+    1.67% more on 0.02% more, which missed it. So the first run met the margin on four of the six
+    cases; the two new URLs already started a build afresh each turn, and of the four started
+    once a build, two met it and two missed it. Those two were run again on that host with every turn on a newly
+    started build, 100 pairs each, and met it: a kept page took 0.31% more with a bound of 0.90%
+    more (from 8.08% fewer to 10.63% more; user 1.06% more, kernel 0.47% fewer) on 0.19% more
+    instructions (24,235 against 24,190), and the page not `Public` 0.54% more with a bound of
+    0.86% more (from 10.13% fewer to 6.34% more) on 0.01% more. The rerun is another protocol, not
+    a repeat, and does not clear the first run's misses. As a judgment, not a result of either
+    run, the fresh-start run is taken as the merge gate for these two: one start is one
+    process of each build, while a hundred starts sample a hundred under the same probe, so the
+    result leans less on one pair of starts (that the code's placement in memory differs from
+    start to start is a plausible reason for the one-start differences, not one these runs show); and the page not
+    `Public`, whose code this change does not touch, missed by a like amount. Whether a long-lived
+    process of this build is slower on a kept page neither run resolves, and neither shows a gain
+    there, where 0.19% more instructions stand. With the change a new URL took 30,522 user and
+    30,180 kernel cycles at the medians, against 21,165 and 24,579 for the store off in its own
+    turns (main: 31,198 and 30,383, against 20,801 and 24,795), so what a page asked for once still
+    costs over the store off is in user cycles as well as the kernel's. The faults counted earlier
+    (1.6 a request where the store off takes none, above) make first touches of memory a likely
+    part of it, not a measured one: these runs counted neither page faults nor first-level
+    instruction-cache misses, so that no turn's counters were multiplexed.
     By simulation from these counts (`bench/catalog/sim-kept-store.mjs` at `16f2f5480`: the
     store's clock with and without the rule, 5,461 pages of 6 KiB in 32 MiB, four million
     requests of which the second two million are counted, drawn from a Zipf law over the
@@ -7879,7 +8052,11 @@ rules something out.
     spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
     kept page in those rounds is the rule, two builds of the same code having differed by
     more from one start to the next; a miss kept with room in memory the store has used
-    before (room made by a write or by a page's lifetime ending), in cycles; a store read
+    before (room made by a write or by a page's lifetime ending), in cycles; the cuts of
+    `1f248f657` and `eb20c55bb` in cycles under glibc;
+    pages of more than 8 KiB, whose copy callgrind counts a byte at a time (glibc's `memcpy` uses
+    `rep movsb` there), and from 16 KiB, where
+    jemalloc's classes are whole pages and a shrink need not move the page; a store read
     from more
     than one core; what a change of the binary's layout alone costs these answers in cycles on
     that host (main's source built under another name was counted only under callgrind), so
@@ -7926,7 +8103,9 @@ rules something out.
     repeated walks turn an app's store over, so a mark should age; an app must drop a page for a
     change made by a task, another instance or a purge; the stages around the handler
     become most of a kept page's cost on a measured app, so a place further out is worth its
-    rules; a multi-core measurement shows requests waiting on the store's lock; writes no
+    rules; a multi-core measurement shows requests waiting on the store's lock; a count of
+    cycles under jemalloc shows shrinking a page's buffer beating the copy for the page lengths
+    apps send, those over 16 KiB above all; writes no
     handler takes (a scanner's `POST /`) make kept pages again often enough to show, so the
     router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; an app
     is found finishing work again and again on the `Signal` of a write from before its first
@@ -7981,7 +8160,18 @@ rules something out.
     on a dedicated 8-CPU cloud host (Xeon Platinum 8358, one thread a core) with nothing else
     running, started once on one CPU, loaded in turn for three seconds each by `wrk` with 64
     connections on two other CPUs, the order of the two turned about from each pair to the next,
-    the app's cycles counted by `perf stat` over each turn and divided by the requests answered; 2026-11-21, the
+    the app's cycles counted by `perf stat` over each turn and divided by the requests answered; 2026-11-21, a
+    page made and kept with room at `df1856704` under glibc, and at `92a745a63`, `bfb957ebb`, `1f248f657`, `3278beb10`, `09170f7ec` and `eb20c55bb` under
+    glibc and under jemalloc, for pages of 5,208 to 7,979 bytes, under callgrind as above in
+    `rust:1-trixie`, with the faults counted from `/proc/self/stat` over 5,000 requests and the
+    calls to the allocator from callgrind's call counts; 2026-11-21, a page and a JSON body made
+    and kept with room at `b573520d1` against `04c209fca` under glibc and under jemalloc, as
+    above, the JSON in a build with the `json` and `compress` features; 2026-11-22, the same at
+    `63ec8bd65` against `a0eeeacca`; 2026-11-22, the cycles of a page and a JSON body at `30ff52ca0`
+    against `e7e89add8` on the quiet host above, with Debian's libjemalloc2 5.3.0 preloaded; 2026-11-22,
+    the cycles of the same at `4e87017b9` against `a0eeeacca` on a second such host (Xeon
+    Platinum 8358, Linux 6.12.117, rustc 1.100.0), once with each build started once and once,
+    for a kept page and a page not `Public`, with every turn on a newly started build; 2026-11-21, the
     historical pair `30b39d455` and `45489ced9`, by callgrind alone; 2026-11-21, the rule for a full store with rustc 1.100.0: each count the
     difference of a run of 1,300 requests and one of 300 under callgrind, a new URL each, of
     which the first 28 or so fill a bound of 256 KiB, and for the second request the

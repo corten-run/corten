@@ -9,7 +9,7 @@ import { need, keys, finite, digest, span, diagnostic, closure, replayV2 } from 
 import { depInputs, compilerSourcePath, compilerWorkingDirectory, cargoMetadata } from "./compiler.mjs";
 import { npmClosure, compilerGraph, vendorConfiguration } from "./build-replay.mjs";
 import { installLayout } from "./install-layout.mjs";
-import { launchOptions } from "./launch.mjs";
+import { executableBytes, launchOptions } from "./launch.mjs";
 import { evaluateLatestStable, latestStableSources, candidateLatestStableSchema, unsupportedSolidReason } from "../workloads/latest-stable.mjs";
 
 const apps = selectedApps("client-heavy"), hash = (b) => createHash("sha256").update(b).digest("hex");
@@ -47,6 +47,16 @@ export function replayCandidateDisposition(policy, app, cell, build, filePaths) 
       && ![...filePaths].some((path) => path.startsWith(`native/${app}/`)), "unsupported-client-has-build-or-capture");
   } else if (cell.outcome === "unsupported" && cell.qualification === null) need(false, "unsupported-client-without-policy-or-capture");
 }
+function checkBlobRef(ref, maxBytes) {
+  keys(ref, ["bytes", "sha256", "blob"]);
+  need(digest(ref.sha256) && ref.blob === `evidence/blobs/${ref.sha256}` && Number.isSafeInteger(ref.bytes) && ref.bytes >= 0
+    && ref.bytes <= maxBytes, "invalid-blob-reference");
+}
+function blobBytes(files, ref) {
+  const bytes = files.get(ref.blob);
+  need(bytes?.length === ref.bytes && hash(bytes) === ref.sha256, "missing-or-mismatched-blob");
+  return bytes;
+}
 function toolIdentity(identity, name) {
   keys(identity, ["version", "requestedExecutable", "executablePath", "executable"], name === "browser" ? ["launch"] : []);
   if (identity.launch !== undefined) {
@@ -55,18 +65,27 @@ function toolIdentity(identity, name) {
       && Number.isSafeInteger(identity.launch.pid) && identity.launch.pid > 0, "invalid-browser-launch-observation");
   }
   need([identity.version, identity.requestedExecutable, identity.executablePath].every((s) => typeof s === "string" && s.length > 0), "invalid-tool-identity");
-  const ref = identity.executable;
-  keys(ref, ["bytes", "sha256", "blob"]);
-  need(digest(ref.sha256) && ref.blob === `evidence/blobs/${ref.sha256}` && Number.isSafeInteger(ref.bytes) && ref.bytes >= 0
-    && ref.bytes <= (name === "browser" ? 512 : 128) * 1024 ** 2, "invalid-blob-reference");
+  checkBlobRef(identity.executable, executableBytes[name]);
+}
+const executableRoles = ["node", "browser"];
+const readToolIdentity = (files, name) => {
+  const raw = files.get(`evidence/${name}.json`);
+  return raw === undefined ? undefined : JSON.parse(raw.toString());
+};
+export function replayToolIdentity(files, name) {
+  const identity = readToolIdentity(files, name);
+  if (identity === undefined) return undefined;
+  toolIdentity(identity, name);
+  blobBytes(files, identity.executable);
+  return identity;
 }
 export const artifactProfile = Object.freeze({ versionedVendorPaths: true, blobTotalBytes: 1024 ** 3,
-  oversized: Object.freeze({ fileBytes: 512 * 1024 ** 2, accepts: (path, bytes, files) => {
-    const raw = files.get("evidence/browser.json");
-    if (!raw) return false;
-    const identity = JSON.parse(raw.toString()); toolIdentity(identity, "browser");
-    return path === identity.executable.blob && bytes === identity.executable.bytes;
-  } }),
+  oversized: Object.freeze({ fileBytes: executableBytes.browser, accepts: (path, bytes, files) => executableRoles.some((name) => {
+    const identity = readToolIdentity(files, name);
+    if (path !== identity?.executable?.blob) return false;
+    toolIdentity(identity, name);
+    return bytes === identity.executable.bytes;
+  }) }),
   limits: Object.freeze({ files: 80000, depth: 32, fileBytes: 128 * 1024 ** 2, totalBytes: 2 * 1024 ** 3 }),
   directory: (p) => p === "evidence" || p.startsWith("evidence/") || p === "native" || apps.some((app) => p === `native/${app}`) });
 
@@ -85,12 +104,9 @@ export async function validateV2(request) {
   if (!files) return report;
   report.files = [...files].map(([path, bytes]) => ({ path, bytes: bytes.length, sha256: hash(bytes) }));
   const json = (path) => { need(files.has(path), "missing-required-file"); return JSON.parse(files.get(path).toString()); };
-  const blob = (ref, fileBytes = 128 * 1024 ** 2) => {
-    keys(ref, ["bytes", "sha256", "blob"]);
-    need(digest(ref.sha256) && ref.blob === `evidence/blobs/${ref.sha256}` && Number.isSafeInteger(ref.bytes) && ref.bytes >= 0 && ref.bytes <= fileBytes,
-      "invalid-blob-reference");
-    const bytes = files.get(ref.blob);
-    need(bytes && bytes.length === ref.bytes && hash(bytes) === ref.sha256, "missing-or-mismatched-blob"); return bytes;
+  const blob = (ref) => {
+    checkBlobRef(ref, artifactProfile.limits.fileBytes);
+    return blobBytes(files, ref);
   };
   const entries = (values) => {
     need(Array.isArray(values), "missing-input-inventory"); const result = new Map(), seen = new Set();
@@ -254,11 +270,9 @@ export async function validateV2(request) {
   for (const [label, deps, path] of [["node", nodeDependencies, "package-lock.json"], ["browser", browserDependencies, "bench/browser/package-lock.json"]])
     if (apps.some((a) => output.builds[a].outcome === "built")) await check(`${label}:locked-dependencies`, () => npmClosure(deps, JSON.parse(blob(sourceMap.get(path))), blob, dependencyComplete.get(`${label}-dependencies`) === true));
   const allBuildEnd = await check("build-clock-inventory", () => Math.max(0, ...apps.map((app) => output.builds[app].outcome === "built" ? json(`native/${app}/build-receipt.json`).endedAt : 0))) ?? 0;
-  for (const name of ["node", "browser"]) await check(`evidence/${name}.json`, () => {
-    if (!files.has(`evidence/${name}.json`)) { if (name !== "browser" || output.provenance.browser !== null) block(`missing-${name}-identity`); return; }
-    const identity = json(`evidence/${name}.json`);
-    toolIdentity(identity, name);
-    blob(identity.executable, name === "browser" ? 512 * 1024 ** 2 : 128 * 1024 ** 2);
+  for (const name of executableRoles) await check(`evidence/${name}.json`, () => {
+    const identity = replayToolIdentity(files, name);
+    if (!identity) { if (name !== "browser" || output.provenance.browser !== null) block(`missing-${name}-identity`); return; }
     report.toolIdentities ??= {}; report.toolIdentities[name] = identity.executable.sha256;
     need(identity.version === output.provenance[name === "node" ? "node" : "browser"], "tool-version-differs-from-provenance");
   });

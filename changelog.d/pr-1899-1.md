@@ -1,0 +1,1 @@
+- The matched Drogon marketplace adapter now serves strict response headers, honors configured hosts, and answers liveness without consulting the record source. Failed upstream page reads return HTML instead of an empty response ([#1300 Benchmark parity: Drogon in approved workload groups](https://github.com/corten-run/corten/issues/1300)).

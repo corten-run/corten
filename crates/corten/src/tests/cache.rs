@@ -2394,6 +2394,87 @@ async fn a_kept_page_is_for_the_host_and_the_language_it_was_asked_in() {
     }
 }
 
+/// An `Accept-Language` a page does not vary on is neither held with it nor counted against its
+/// share of the bound, however long: with the least bound whose share holds the page asked for
+/// with none, it is kept when asked for with a long one too. A page that varies on the header is
+/// kept for it, and there the header counts: the long one takes it over that share.
+#[tokio::test]
+async fn an_accept_language_a_page_does_not_vary_on_does_not_count_against_it() {
+    crate::i18n::messages! { struct LongMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    /// Whether the page at `/` is kept, asked for twice with `language` (none when empty).
+    async fn kept(router: Router, language: &str) -> bool {
+        let asked: &[(&'static str, &str)] = if language.is_empty() { &[] } else { &[("accept-language", language)] };
+        fetch(&router, "GET", "/", asked).await;
+        fetch(&router, "GET", "/", asked).await.1.contains_key(header::AGE)
+    }
+    /// The least bound whose share (an eighth) holds the page asked for with no `Accept-Language`.
+    async fn least(app: impl Fn(usize) -> Router) -> usize {
+        let (mut low, mut high) = (0, 1 << 16);
+        assert!(kept(app(high * 8), "").await, "kept under a bound of {}", high * 8);
+        while low + 1 < high {
+            let mid = (low + high) / 2;
+            if kept(app(mid * 8), "").await {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        high * 8
+    }
+    // A browser's list is short; one this long is what a client can send.
+    let long = format!("en, {}", (0..80).map(|n| format!("x-{n:02};q=0.1")).collect::<Vec<_>>().join(", "));
+    let one = |bound| App::new(Routes::from(kept_routes(&Runs::default()))).kept_answers(bound).router();
+    let bound = least(one).await;
+    assert!(kept(one(bound), &long).await, "a page that does not vary on the header, under a bound of {bound}");
+
+    let page = |req: Req| async move {
+        let lang = req.lang();
+        Public::new(Duration::from_secs(60), req.test_page_for("Lang", html! { <p>"in "{lang}</p> }))
+    };
+    let two = |bound| {
+        App::new(Routes::from(Table::new().route("/", crate::route::get(page).0)))
+            .messages::<LongMsg>()
+            .kept_answers(bound)
+            .router()
+    };
+    let bound = least(two).await;
+    assert!(!kept(two(bound), &long).await, "a page that varies on the header is kept with it, and it counts");
+    assert!(kept(two(bound + long.len() * 8), &long).await, "and kept with the room for it");
+}
+
+/// A kept copy's URL counts once against its share of the bound: for the same page asked for at
+/// two URLs whose queries differ by `n` bytes, the least bound that keeps it differs by `n` bytes
+/// of its share (an eighth), `8 * n`. A URL counted twice, by the entry and by the table, would
+/// make it `16 * n`.
+#[tokio::test]
+async fn a_kept_url_counts_once_against_its_share_of_the_bound() {
+    /// Whether the page at `at` is kept under `bound`, asked for twice.
+    async fn kept(bound: usize, at: &str) -> bool {
+        let router = App::new(Routes::from(kept_routes(&Runs::default()))).kept_answers(bound).router();
+        fetch(&router, "GET", at, &[]).await;
+        fetch(&router, "GET", at, &[]).await.1.contains_key(header::AGE)
+    }
+    /// The least bound, a multiple of its share's eight, that keeps the page at `at`.
+    async fn least(at: &str) -> usize {
+        let (mut low, mut high) = (0, 1 << 16);
+        assert!(kept(high * 8, at).await, "kept at {at} under a bound of {}", high * 8);
+        while low + 1 < high {
+            let mid = (low + high) / 2;
+            if kept(mid * 8, at).await {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        high * 8
+    }
+    let short = least("/?q=a").await;
+    for n in [1, 37, 300] {
+        let at = format!("/?q=a{}", "b".repeat(n));
+        assert_eq!(least(&at).await - short, 8 * n, "a query {n} bytes longer");
+    }
+}
+
 /// Messages read with no `App::messages` are in the language `Accept-Language` asks for, so the
 /// answer's `Vary` names the header, for a cache in front as for the app's own: in the document
 /// and in a navigation's swap, and on the kept copy. A page of the same app that reads none does

@@ -169,7 +169,8 @@ export async function validateCampaign(input) {
         if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.ok(isDeepStrictEqual(status.outcomes[index].cleanup, boundary), "cleanup boundary differs"); }
       }
       const manifestEntry = subtree.entries.find((e) => e.path === `${entry.path}/native-manifest.json`);
-      if (!manifestEntry) {
+      // A move or manifest write alone does not advance an interrupted transfer.
+      if (!manifestEntry || (recorded.transferDestination && !recorded.sealed)) {
         assert.ok(!replay.completed.has(group) && replay.pending.some((p) => p.group === group && p.phase === phase), "completed native phase lacks sealed evidence");
         blockers.push(`${group}/${phase}: safe native collection incomplete`); continue;
       }

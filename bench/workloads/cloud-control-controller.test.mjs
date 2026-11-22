@@ -1,18 +1,19 @@
 // Real controller with fake argv transport/provider responses. No host operations.
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { archive, harness, metadata } from "./cloud-fixtures.mjs";
-import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
+import { acknowledgedBootstrapSeal, controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 import { reservation, validateState } from "./cloud-contract.mjs";
 import { digest } from "./cloud-local.mjs";
 
 async function liveMonitor(h) {
   const pending = h.launch().launch();
-  for (let i = 0; i < 100 && (!existsSync(h.statePath) || h.saved().control?.monitor?.phase !== "live"); i++)
+  for (let i = 0; i < 100 && (!existsSync(h.statePath) || !h.saved().control?.sealed.includes("bootstrap")); i++)
     await new Promise(setImmediate);
+  assert.deepEqual(h.saved().control.sealed, ["bootstrap"]);
   assert.equal(h.saved().control.monitor.phase, "live"); return { pending };
 }
 
@@ -35,6 +36,233 @@ test("foreground timeout permanently marks the monitor invalid without releasing
   assert.equal(h.saved().control.monitor.phase, "invalid");
   assert.ok(existsSync(join(h.local, "operation.lock"))); assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
   assert.equal(h.deletes, 0); assert.equal(await h.task().collect(), 3);
+});
+
+test("failed seal-state replacement preserves the staging file and records revoked monitoring", async (t) => {
+  const h = harness(t, { active: true, monitorHold: true });
+  const staging = h.statePath + ".tmp";
+  let injected = false;
+  const pending = h.launch({ renameBootstrapSeal: renameSync, interrupted() {
+    if (!injected && existsSync(h.statePath)) {
+      const saved = h.saved(), last = saved.control?.ledger.at(-1);
+      if (last?.request.seal && last.code === 0 && last.localTerminal && !saved.control.sealed.length) {
+        injected = true;
+        writeFileSync(staging, "not a reservation", { flag: "wx" });
+      }
+    }
+    return false;
+  } }).launch();
+  const rejected = assert.rejects(pending, (error) => error.controlTreeUncertain === true);
+  rejected.catch(() => {});
+  for (let i = 0; !injected && i < 100; i++) await new Promise(setImmediate);
+  if (!injected) h.flags.completeMonitor?.(false);
+  await rejected;
+  assert.ok(injected, "the fault occurred after the acknowledged bootstrap seal");
+  assert.equal(h.saved().control.monitor.phase, "invalid");
+  assert.deepEqual(h.saved().control.sealed, ["bootstrap"]);
+  const ledger = h.saved().control.ledger;
+  assert.ok(acknowledgedBootstrapSeal(ledger));
+  for (const alter of [
+    (rows) => { rows.at(-1).code = 1; },
+    (rows) => { rows[0].localTerminal = false; },
+    (rows) => { rows.at(-1).request.seal.reverse(); },
+    (rows) => { rows[0].request.invocation.purpose = "collection"; },
+    (rows) => { rows.at(-1).request.seal = undefined; },
+  ]) {
+    const changed = structuredClone(ledger); alter(changed); assert.equal(acknowledgedBootstrapSeal(changed), false);
+  }
+  assert.equal(readFileSync(staging, "utf8"), "not a reservation");
+  assert.ok(existsSync(join(h.local, "operation.lock")));
+  assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
+  assert.equal(h.deletes, 0);
+});
+
+const renameError = (code = "EPERM", syscall = "rename") => Object.assign(new Error("synthetic filesystem denial"), { code, syscall });
+const bootstrapSealCalls = (h) => h.calls.filter((call) => call[0] === "ssh" && call.at(-1) === ":").length;
+const sealStage = (h, path) => path.startsWith(h.statePath + ".bootstrap-");
+
+for (const failure of ["cancelled", "deadline", "rename"]) {
+  test("terminal monitor survives a bootstrap publication failure: " + failure, async (t) => {
+    const h = harness(t, { active: true, monitorHold: true });
+    let clock = Date.now(), elapsed = 0, settled = false, attempts = 0, cancelWhileLive = 0;
+    let stage, staged, receipt;
+    await assert.rejects(h.launch({
+      now: () => clock,
+      monotonicNow: () => elapsed,
+      run(...args) {
+        const result = h.run(...args);
+        if (result.monitor) {
+          const cancel = result.monitor.cancel;
+          result.monitor.cancel = () => { if (!settled) { cancelWhileLive++; cancel(); } };
+        }
+        return result;
+      },
+      async sleep(ms) {
+        elapsed += ms;
+        h.flags.completeMonitor();
+        receipt = readFileSync(join(h.local, "monitor-terminal.json"));
+        settled = true;
+        if (failure === "cancelled") h.flags.cancelled = true;
+        if (failure === "deadline") clock += 45 * 60000;
+      },
+      renameBootstrapSeal(from, to) {
+        if (!sealStage(h, from)) {
+          assert.ok(from.startsWith(h.statePath + ".closed-"));
+          return renameSync(from, to);
+        }
+        stage ??= from; staged ??= readFileSync(from);
+        throw renameError(++attempts === 1 ? "EPERM" : "EACCES");
+      },
+    }).launch(), /terminal monitor recorded/);
+    assert.equal(attempts, failure === "rename" ? 2 : 1);
+    assert.equal(cancelWhileLive, 0);
+    assert.equal(h.saved().control.monitor.phase, "closed");
+    assert.deepEqual(h.saved().control.sealed, ["bootstrap"]);
+    assert.deepEqual(readFileSync(stage), staged);
+    assert.deepEqual(readFileSync(join(h.local, "monitor-terminal.json")), receipt);
+    assert.ok(!existsSync(join(h.local, "monitor-invalid.json")));
+    assert.ok(!existsSync(join(h.local, "operation.lock"))); assert.ok(!existsSync(join(h.base, ".groups-launch.lock")));
+    assert.equal(bootstrapSealCalls(h), 1); assert.equal(h.deletes, 0);
+    const task = h.task({ interrupted: () => false }), calls = h.calls.length, units = h.units;
+    assert.equal(await task.collect(), 3); assert.equal(h.calls.length, calls, "lease embargo still applies");
+    const closure = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(closure));
+    closed.closedAtMs = Date.now() - 30001; closed.recoverAfterMs = closed.closedAtMs + 30000;
+    writeFileSync(closure, JSON.stringify(closed));
+    assert.equal(await task.collect(), 3); assert.equal(h.units, units + 1, "one guarded unit observation");
+    assert.equal(bootstrapSealCalls(h), 1); assert.equal(h.deletes, 0);
+  });
+}
+
+test("Windows bootstrap publication retries the same staged seal without repeating SSH", async (t) => {
+  const h = harness(t, { active: true, monitorHold: true });
+  let stage, staged, preimage, attempts = 0, elapsed = 0;
+  const waits = [];
+  await h.launch({
+    monotonicNow: () => elapsed,
+    async sleep(ms) { waits.push(ms); elapsed += ms; },
+    renameBootstrapSeal(from, to) {
+      assert.ok(sealStage(h, from)); assert.equal(to, h.statePath);
+      if (++attempts === 1) {
+        stage = from;
+        staged = readFileSync(from); preimage = readFileSync(to);
+        const prior = JSON.parse(preimage);
+        assert.ok(acknowledgedBootstrapSeal(prior.control.ledger));
+        assert.deepEqual(prior.control.sealed, []);
+        prior.control.sealed.push("bootstrap");
+        assert.deepEqual(JSON.parse(staged), prior);
+        throw renameError();
+      }
+      assert.equal(from, stage);
+      assert.deepEqual(readFileSync(from), staged); assert.deepEqual(readFileSync(to), preimage);
+      renameSync(from, to);
+      assert.deepEqual(readFileSync(to), staged);
+      h.flags.completeMonitor();
+    },
+  }).launch();
+  assert.equal(attempts, 2); assert.deepEqual(waits, [25]); assert.equal(bootstrapSealCalls(h), 1);
+  assert.deepEqual(h.saved().control.sealed, ["bootstrap"]);
+  assert.equal(h.saved().control.monitor.phase, "closed");
+  assert.ok(!existsSync(stage)); assert.equal(h.deletes, 0);
+});
+
+for (const fault of ["state", "stage bytes", "stage identity", "operation owner", "launch owner", "revocation",
+  "cancellation", "deadline", "retry budget overrun", "nonsharing error", "other syscall", "persistent denial", "unacknowledged SSH"]) {
+  test("Windows bootstrap publication stops on " + fault, async (t) => {
+    const h = harness(t, { active: true, monitorHold: true });
+    let clock = Date.now(), elapsed = 0, attempts = 0;
+    const waits = []; let staging, stagedSeal;
+    await assert.rejects(h.launch({
+      now: () => clock,
+      monotonicNow: () => elapsed,
+      run(...args) {
+        const result = h.run(...args);
+        return fault === "unacknowledged SSH" && args[0] === "ssh" && args[1].at(-1) === ":" ? { ...result, status: 1 } : result;
+      },
+      async sleep(ms) {
+        waits.push(ms);
+        elapsed += fault === "retry budget overrun" ? 251 : ms;
+        if (fault === "state") writeFileSync(h.statePath, readFileSync(h.statePath, "utf8") + "\n");
+        if (fault === "stage bytes") writeFileSync(staging, "changed staging");
+        if (fault === "stage identity") {
+          const other = staging + ".other";
+          writeFileSync(other, readFileSync(staging), { flag: "wx" }); renameSync(other, staging);
+        }
+        if (fault === "operation owner") writeFileSync(join(h.local, "operation.lock"), "{}");
+        if (fault === "launch owner") writeFileSync(join(h.base, ".groups-launch.lock"), "{}");
+        if (fault === "revocation") h.flags.completeMonitor(false);
+        if (fault === "cancellation") h.flags.cancelled = true;
+        if (fault === "deadline") clock += 45 * 60000;
+      },
+      renameBootstrapSeal(from, to) {
+        if (!sealStage(h, from)) return renameSync(from, to);
+        staging ??= from;
+        stagedSeal ??= readFileSync(from);
+        attempts++;
+        if (fault === "nonsharing error") throw renameError("EACCES");
+        if (fault === "other syscall") throw renameError("EPERM", "open");
+        throw renameError();
+      },
+    }).launch(), (error) => error.controlTreeUncertain === true);
+    assert.equal(bootstrapSealCalls(h), 1);
+    if (fault === "persistent denial") {
+      assert.equal(attempts, 4);
+      assert.deepEqual(waits, [25, 50, 100]);
+    } else if (fault === "unacknowledged SSH") {
+      assert.equal(attempts, 0); assert.deepEqual(waits, []);
+      assert.ok(!readdirSync(h.local).some((name) => name.startsWith("state.json.bootstrap-")));
+    } else {
+      assert.equal(attempts, 1);
+      assert.deepEqual(waits, ["nonsharing error", "other syscall"].includes(fault) ? [] : [25]);
+    }
+    if (fault === "stage bytes") assert.equal(readFileSync(staging, "utf8"), "changed staging");
+    else if (stagedSeal) assert.deepEqual(readFileSync(staging), stagedSeal);
+    assert.deepEqual(h.saved().control.sealed, fault === "unacknowledged SSH" ? [] : ["bootstrap"]);
+    assert.equal(h.saved().control.monitor.phase, "invalid");
+    assert.ok(existsSync(join(h.local, "operation.lock"))); assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
+    assert.equal(h.deletes, 0);
+  });
+}
+
+test("Windows bootstrap and revoked replacements can both fail without spending custody", async (t) => {
+  const h = harness(t, { active: true, monitorHold: true }), stages = new Map();
+  const locks = [join(h.local, "operation.lock"), join(h.base, ".groups-launch.lock")];
+  let canonical, ownerBytes, callsAtDenial, fallbackAttempts = 0, elapsed = 0;
+  await assert.rejects(h.launch({
+    monotonicNow: () => elapsed,
+    async sleep(ms) { elapsed += ms; },
+    renameBootstrapSeal(from, to) {
+      assert.equal(to, h.statePath);
+      canonical ??= readFileSync(to);
+      ownerBytes ??= locks.map((path) => readFileSync(path));
+      callsAtDenial ??= h.calls.length;
+      const bytes = readFileSync(from);
+      if (stages.has(from)) assert.deepEqual(bytes, stages.get(from));
+      stages.set(from, bytes);
+      if (!sealStage(h, from)) fallbackAttempts++;
+      throw renameError();
+    },
+  }).launch(), (error) => error.controlTreeUncertain === true);
+  assert.equal(stages.size, 2); assert.equal(fallbackAttempts, 1);
+  const [[bootstrap, seal], [revoked, fallback]] = stages;
+  assert.ok(sealStage(h, bootstrap)); assert.ok(revoked.startsWith(h.statePath + ".revoked-"));
+  assert.deepEqual(readFileSync(bootstrap), seal); assert.deepEqual(readFileSync(revoked), fallback);
+  assert.deepEqual(JSON.parse(seal).control.sealed, ["bootstrap"]);
+  assert.equal(JSON.parse(fallback).control.monitor.phase, "invalid");
+  assert.deepEqual(readFileSync(h.statePath), canonical);
+  assert.equal(h.saved().control.monitor.phase, "live"); assert.deepEqual(h.saved().control.sealed, []);
+  assert.ok(acknowledgedBootstrapSeal(h.saved().control.ledger));
+  const invalid = JSON.parse(readFileSync(join(h.local, "monitor-invalid.json")));
+  assert.equal(invalid.publicationRevoked, true); assert.equal(invalid.remoteTerminal, false);
+  assert.deepEqual(locks.map((path) => readFileSync(path)), ownerBytes);
+  assert.equal(h.saved().deletionIntentAt, undefined);
+  assert.equal(bootstrapSealCalls(h), 1); assert.equal(h.deletes, 0);
+  const closure = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(closure));
+  assert.equal(closed.code, 255); assert.equal(closed.id, invalid.id);
+  closed.closedAtMs = Date.now() - 30001; closed.recoverAfterMs = closed.closedAtMs + 30000;
+  writeFileSync(closure, JSON.stringify(closed));
+  await assert.rejects(h.task().collect(), /foreground monitor has not settled/);
+  assert.equal(h.calls.length, callsAtDenial, "neither the failure nor collection may dispatch another command");
+  assert.equal(h.deletes, 0);
 });
 
 test("routine live collection reads the existing monitor journal without provider calls, SSH or new channels", async (t) => {

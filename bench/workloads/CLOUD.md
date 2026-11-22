@@ -273,8 +273,22 @@ If native validation finished but sealing or later collection failed, raw
 exit 2 permits custody only. The collector keeps both archives, leaves the host
 in place and returns 3. It does not create a retirement intent.
 
+On Windows, after SSH acknowledges the bootstrap seal, the controller can
+briefly retry a local rename that reports `EPERM`. It rechecks the same staged
+file, canonical state and owner locks before retrying. It never repeats SSH or
+uses an abandoned temporary file, and stops on cancellation or deadline.
+If the monitor already settled with a terminal receipt, the controller can
+record it from the unchanged canonical ledger. A later collection still
+requires the normal closure, lease and remote checks. If the filesystem also
+refuses the final state replacement, the staged files and owner locks stay in
+place and ordinary collection can still refuse. Do not promote either stage.
+
 Use the per-child command above if an invalid monitor left locks behind. The
-original operation and launch locks remain unchanged. Collection requires
+foreground controller writes the invalid status without reusing an interrupted
+state write's temporary file. If the bootstrap seal completed just before that
+write failed, it recognizes the acknowledgement from the saved invocation
+ledger, not from the temporary file. Neither fact proves the remote job ended.
+The original operation and launch locks remain unchanged. Collection requires
 local stream closure, lease expiry and an absent original owner PID. It uses
 the separate stream recovery lock and checks the registered boot and exact
 started unit. Read-only fleet inspection can verify a saved retirement behind
@@ -694,6 +708,23 @@ commit must descend from that source and pass the existing fresh merged-main
 proof. Preview and exact approval bind both source identities, exact reservation
 bytes, original evidence hashes, physical state root and fixed custody roots.
 This exception does not permit a source override for collection, audit or launch.
+
+An independent group can also fail after the wrapper invokes native entry but
+before it saves a campaign plan. In this case ordinary collection preserves the
+wrapper archive; it cannot produce a benchmark result. Use a separate
+`--retire-failed-native --print-approval` from a clean, merged descendant. The
+preview must bind the consumed launch intent, reservation, launch key, registered
+boot, original archive and extraction, and the output roots for the measured
+group. The measured registry and remote-job definitions must still match.
+
+This path requires a revoked monitor with a settled local owner, wrapper exit
+2, an empty archived campaign directory, and the final failure line from the
+measured job's native-entry command. An empty directory **alone** is not proof
+that the application wrote nothing. Before retiring the exact host, the
+controller checks the unit is idle, saves the campaign and native output roots
+(including evidence of absence), verifies the local copies, and checks the
+host and roots again. A changed or live host is retained. Neither the wrapper
+archive nor the later capture qualifies the group or supplies timing results.
 
 The shared `cloud-retirement.mjs:failedNativePolicy` allowlist also admits only the
 exact `catalog-page` attempt measured at
@@ -1465,7 +1496,7 @@ campaign is:
 | localized-marketplace | 512 MiB cumulative reads, 32 MiB/read, 25,000 physical entries; not a whole-tree byte ceiling (`marketplace/saved-files.mjs`) | 0.5 GiB |
 | mixed-production | 1 GiB total, 256 MiB/file, 100,000 entries (`mixed-production/verify.mjs`) | 1 GiB |
 | fullstack-browser | 1 GiB total, 256 MiB/file, 50,100 nodes (`fullstack-browser/verify.mjs`) | 1 GiB |
-| client-heavy | 2 GiB total, 80,000 entries, 128 MiB ordinary files, one admitted browser blob up to 512 MiB, 1 GiB unique blobs (`client-heavy/verify-v2.mjs`) | 2 GiB |
+| client-heavy | 2 GiB total, 80,000 entries, 128 MiB ordinary files, admitted executables up to 192 MiB for Node and 512 MiB for the browser, 1 GiB unique blobs (`client-heavy/verify-v2.mjs`) | 2 GiB |
 | live-delivery | No whole-tree byte/count ceiling; individual gzip replay limits are not whole-tree limits (`isolated/adapters/live-delivery.mjs`) | 1 GiB |
 | recoverable-live | Uses the same live saved reader | 1 GiB |
 | hardening | 1 GiB total, 256 MiB/file, 100,000 entries (`isolated/adapters/hardening.mjs`) | 1 GiB |
