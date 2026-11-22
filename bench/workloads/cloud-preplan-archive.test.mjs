@@ -11,7 +11,8 @@ import { digest, extractArchive } from "./cloud-local.mjs";
 import { remoteFiles } from "./cloud-remote.mjs";
 import { failedNativeArchive, failedNativeScript, groupedFailure, groupedPreplanFailure, verifyFailedNativeCustody,
   retainedInvalidOwner, verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
-import { verifyFleet } from "./fleet-verify.mjs";
+import { fleetChildOptions, readFleet, verifyFleet } from "./fleet-verify.mjs";
+import { continuationAdmission } from "./group-continuation.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 import { streamLimits } from "./isolated/control-stream.mjs";
 
@@ -37,7 +38,7 @@ async function setup(t, { changeLog = (line) => line, exit = "2\n", campaign = [
   const fleet = fleetPlan({ round, commit, token, provider, sshKey: "42",
     tokens: single ? { [group]: "0".repeat(16) } : Object.fromEntries(reservation({ round, commit, token }).selection.groups.map(({ group }, i) =>
       [group, i.toString(16).padStart(16, "0")])) }, at, "sfo3", {
-    stagedPlacement: single, ...(single ? { single: { group, indexSha256: "c".repeat(64), checkout: base } } : {}),
+    stagedPlacement: single, ...(single ? { single: { group, indexSha256: digest("[]"), checkout: base } } : {}),
   });
   const selected = fleet.jobs.find((job) => job.group === group);
   const key = "synthetic known host\n";
@@ -96,7 +97,19 @@ for (const [label, options, error] of [
 const fileFrame = (name, bytes) => Buffer.concat([Buffer.from(`f\0${name}\0${bytes.length}\0`), bytes]);
 async function custody(t, { present = [true, true], hiddenRoot, reportedRoots = roots, campaignData = false, report = false } = {}) {
   const { base, local, state, metadata, wrapper } = await setup(t, { report });
-  const intent = JSON.stringify({ subject: "synthetic original launch intent" }), intentPath = join(base, "launch-intent.json");
+  let intent = JSON.stringify({ subject: "synthetic original launch intent" });
+  if (report) {
+    put(dirname(base), "index.json", "[]");
+    putJson(base, `fleet-${round}.json`, state.fleet);
+    const fleet = readFleet(base, round), options = fleetChildOptions(fleet, group, "detach");
+    const child = { action: "detach", options, controllerCommit: commit, stateRoot: options.stateDir, fleetSha256: fleet.manifestSha256 };
+    const subject = { schema: "benchmark-group-fleet-staged-approval/v1", action: "detach", controllerCommit: commit,
+      stateRoot: base, requestedRoot: base, round, manifestSha256: fleet.manifestSha256, fleet: state.fleet, records: {},
+      admission: { mode: "first-group-only", firstGroup: group, gate: "collected-verified-deleted", nativeReadiness: false },
+      jobs: [{ group, outcome: "planned", missing: [], options, subject: child, approvalSha256: digest(JSON.stringify(child)) }] };
+    intent = JSON.stringify({ schema: "benchmark-group-fleet-staged-launch-intent/v1", subject, approvalSha256: digest(JSON.stringify(subject)) });
+  }
+  const intentPath = join(base, "launch-intent.json");
   put(base, "launch-intent.json", intent);
   const grouped = groupedPreplanFailure(local, state), entries = [...metadata, { name: "campaign/" }];
   const nativeRoots = reportedRoots.map((path, i) => {
@@ -157,7 +170,7 @@ test("historical child PID reuse preserves strict retired replay and never settl
   const save = () => writeFileSync(join(local, "state.json"), JSON.stringify(state));
   const verify = (deps) => verifyFleet({ root: base, round, commit },
     { inspect: () => assert.fail("failed retirement is not timing evidence"), ...deps });
-  putJson(base, `fleet-${round}.json`, state.fleet);
+  const admit = (deps) => continuationAdmission(dirname(base), group, deps);
   state.destroyedAt = new Date().toISOString(); save();
   const dead = await verify({ processStart: () => assert.fail("absent PID") });
   assert.equal(dead.groups[0].outcome, "native-failed-retired");
@@ -174,6 +187,10 @@ test("historical child PID reuse preserves strict retired replay and never settl
   const checks = [];
   assert.deepEqual(await verify({ ...deps, retainCheck: (check) => checks.push(check) }), dead);
   assert.equal(checks.length, 1); checks[0]();
+  await assert.rejects(admit({ processStart: () => undefined }), /unresolved custody/);
+  const successor = await admit(deps);
+  assert.equal(successor.rows.find((r) => r.group === group).retryable, true);
+  successor.recheck();
   assert.deepEqual([operation, launch, join(local, "failed-native-host.json")].map((path) => digest(readFileSync(path))), before);
   assert.ok(retainedInvalidOwner(local, state));
   assert.throws(() => verifyFailedNativeRetirement(local, state), /original monitor owner/);
@@ -183,12 +200,15 @@ test("historical child PID reuse preserves strict retired replay and never settl
   state.destroyedAt = new Date().toISOString(); save();
   const recovery = join(local, "stream-recovery.lock");
   writeFileSync(recovery, JSON.stringify({ pid: process.pid }));
+  assert.throws(() => successor.recheck());
+  await assert.rejects(admit(deps), /unresolved custody/);
   assert.equal((await verify(deps)).groups[0].outcome, "busy", "a recovery collector still blocks replay");
   unlinkSync(recovery);
   await wait(20);
   appendFileSync(launch, "\n");
   await wait(20);
   assert.throws(() => checks[0](), /historical child locks changed/);
+  assert.throws(() => successor.recheck());
   assert.equal((await verify(deps)).groups[0].outcome, "busy", "a child lock written after confirmed retirement is not historical");
   state.destroyedAt = new Date().toISOString(); save();
   appendFileSync(join(local, "failed-native-host.json"), "\n");
