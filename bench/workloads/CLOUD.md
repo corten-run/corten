@@ -482,6 +482,11 @@ launch approval includes the stopped host's original ID: even a renamed or
 retagged host still present in the account prevents creation. An active cleanup
 blocks admission. This does not retire the failed group, retry it, or publish a result.
 
+When retrying a group on a new host, a proved Windows PID reuse on a destroyed
+host does not make its old monitor active again. Preparation reads the original
+retirement evidence and rechecks the unchanged locks; it never removes them or
+authorizes collection or deletion on the old host.
+
 When the launcher checkout advances or a measured checkout moves, use the
 optional sibling directory `ABSOLUTE_ROOT-checkouts/MEASURED_SHA` for that
 commit's clean worktree. Here `MEASURED_SHA` is the full 40-character Git commit.
