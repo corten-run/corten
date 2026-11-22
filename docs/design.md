@@ -7705,9 +7705,33 @@ rules something out.
     page, the page with five policies behind a middleware, and the unstaged route with five
     policies and with one. It passes when the one-sided 95% upper bound of the paired change in
     user plus kernel cycles a request is under +1% for every one of the six.
-    **Result of that run: not yet measured.** (Record here, for each of the six: the bound and
-    median, best and range by pair, the user and kernel split, perf's running percentages, user
-    instruction-cache misses, the answers checked and any failed request.)
+    **Result of that run: the margin was not met on two of the six, and this change does not
+    merge as it is** (2026-11-22, a DigitalOcean c-8 in sfo3 with eight dedicated CPUs, Xeon
+    Platinum 8280, Linux 6.12.117, rustc 1.100.0, `wrk` 4.1.0, jemalloc as the template's image
+    runs an app; 100 recorded pairs a workload after one not recorded; each figure the median
+    change within a pair, its one-sided 95% bound, then its range). The page for one visitor took
+    0.92% more cycles a request, bound 1.27% (9.58% fewer to 13.53% more), user cycles 2.16% more
+    (bound 2.96%) and kernel 0.47% fewer, on 0.03% more user instructions (39,455.0 against
+    39,442.8), 59,798 requests a second against 60,267; the unstaged route with five policies
+    0.67% more, bound 1.01% (7.17% fewer to 7.78% more), user 1.50% more and kernel 0.18% more,
+    on 0.41% fewer instructions (12,769.5 against 12,822.5). The four that met it: the `Public`
+    page in an app that keeps none 0.04% fewer, bound 0.25% more (14.36% fewer to 7.06% more;
+    user 0.20% fewer, kernel 0.21% fewer) on 2.15% fewer instructions (41,667.3 against
+    42,583.6); a kept page 1.05% fewer, bound 0.58% fewer (22.95% fewer to 10.56% more; user
+    0.92% fewer, kernel 0.91% fewer) on 2.48% fewer (23,606.8 against 24,207.3); the page with
+    five policies behind a middleware 1.06% fewer, bound 0.53% fewer (8.09% fewer to 7.70% more;
+    user 2.55% fewer, kernel 0.15% more) on 4.83% fewer (43,448.5 against 45,655.5); and the
+    unstaged route with one policy 0.48% more, bound 0.77% (17.68% fewer to 4.41% more; user
+    0.68% more, kernel 0.01% more) on 0.41% fewer (12,762.5 against 12,815.6). Perf counted each
+    turn's three events at 100% running; user instruction-cache misses were not counted. No
+    request failed in the 1,212 turns, and before each workload's first turn the two builds'
+    answers were the same after the mask (one request each, five for the five policies, and the
+    kept page's warm-up checked kept in both). For scale only, another change's run of the same
+    kind on a host of the same kind
+    ([#1866 Hash a kept page's URL once and build its key only when it is kept](https://github.com/corten-run/corten/pull/1866))
+    read the page for one visitor, its control, 0.54% more, bound 0.86%, on 0.01% more
+    instructions; that does not pass the page here. The run makes this Choice's condition to
+    revisit for it true, and the Choice is reopened in this change.
     Set aside, counted the same way on the unstaged route with
     five policies and with one, each against main: a thread that stops looking in its four
     after eight misses in a row, but for one call in 64, 10 more instructions and 517 fewer, with
@@ -7815,8 +7839,8 @@ rules something out.
     more from one start to the next; a miss kept with room in memory the store has used
     before (room made by a write or by a page's lifetime ending), in cycles; a store read
     from more
-    than one core; any of these answers in cycles since an unstaged route's header is made as
-    main makes it (counted only under callgrind; the quiet-host run declared above is pending),
+    than one core; why the page for one visitor and the unstaged route with five policies took
+    more cycles in the run declared above on about as many or fewer instructions,
     and how often a thread's staged answers go
     through more than four sets of numbers, whose headers it makes again (both rotating
     workloads counted above averaged fewer a request than main's); and the
@@ -7869,7 +7893,9 @@ rules something out.
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-22, a `Public` mark in cycles, `699f6436f` against `e7e89add8` on a
+    Last checked: 2026-11-22, the run declared above, `7dd30d739` against `a0eeeacca`, every
+    turn on a freshly started build, on a DigitalOcean c-8 (sfo3); 2026-11-22, a `Public` mark
+    in cycles, `699f6436f` against `e7e89add8` on a
     quiet cloud host with eight dedicated CPUs (Xeon Platinum 8280, Linux 6.12.117, `wrk` 4.1.0,
     rustc 1.100.0), 100 pairs of 3 s turns, and under callgrind with cache and branch simulation
     (valgrind 3.19.0, rustc 1.99.1) `fbe9af660` and `a5577a2eb` against `a0eeeacca`, against
