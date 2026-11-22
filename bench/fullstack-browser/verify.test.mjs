@@ -1,4 +1,4 @@
-// Synthetic unavailable diagnostics and actual HTTP receipts, never qualification captures.
+// Synthetic unavailable diagnostics and loopback browser receipts, never whole-run qualification.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -14,6 +14,8 @@ import { fileURLToPath } from "node:url";
 import { validateSaved } from "./verify.mjs";
 import { candidates, emptyCells, retainedFamilies, schema, settings, sha256 } from "./contract.mjs";
 import { records as fixtureRecords } from "../marketplace/fixtures.mjs";
+import { labels } from "../marketplace/records.mjs";
+import { referenceHtml } from "../marketplace/reference.mjs";
 import { createBrowserPlan } from "../workloads/browser.mjs";
 import { exportBrowserCaptures } from "./capture.mjs";
 import { createUpstream, UpstreamAudit, reconcileUpstream } from "./upstream.mjs";
@@ -22,6 +24,7 @@ import { classifyNoJSRequests, validatePlatformRetirement } from "./lifecycle.mj
 import { PlatformLifecycle } from "./lifecycle.mjs";
 import { installResourceObserver, ResourceAudit } from "./resources.mjs";
 import { beginBindingWindow, finishBindingWindow } from "./binding-window.mjs";
+import { runJourney } from "./journey.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../.."), script = join(repo, "bench/fullstack-browser/verify.mjs");
 const commit = "a".repeat(40), records = fixtureRecords(), plan = createBrowserPlan({ records });
@@ -79,6 +82,101 @@ test("native v2 malformed namespace is awaitable invalid evidence, never an obse
   const saved = JSON.parse(cli.stdout); assert.equal(saved.schema, result.schema); assert.equal(saved.status, "invalid"); assert.equal(saved.expectedExitCode, 1);
   assert.deepEqual(treeHashes(f.folder), before);
 });
+
+test("complete native no-JS document journey survives strict export and independent saved replay", { timeout: 60000 }, async (t) => {
+  const app = "react-router", profile = plan.cases.find((p) => p.key === "fixture-en-US-desktop-no-js");
+  const upstream = createUpstream({}), sessions = new Map(), locale = labels[profile.locale];
+  const assets = '<link rel="stylesheet" href="/fixture.css"><link rel="modulepreload" href="/disabled.mjs"><script>window.__reactRouter = {};</script>';
+  let base;
+  // Loopback conformance apparatus, not a contender or an authenticated image.
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url, base), itemId = url.pathname.split("/").at(-1), record = records[itemId];
+    const send = (status, type, body) => { res.writeHead(status, { "content-type": type }); res.end(body); };
+    if (url.pathname === "/fixture.css") return send(200, "text/css", "body{color:black}");
+    if (url.pathname === "/disabled.mjs") return send(200, "text/javascript", "throw new Error('must not run')");
+    const cookie = /(?:^|; )session=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
+    let session = sessions.get(cookie);
+    if (url.pathname === "/api/alerts") return send(200, "application/json", JSON.stringify(session?.alerts ?? []));
+    if (!record) return send(url.pathname === "/" ? 200 : 404, "text/html", `<!doctype html><head>${assets}</head><body><h1>${url.pathname === "/" ? "Landing" : "Not found"}</h1></body>`);
+    if (!session) {
+      const id = randomUUID();
+      sessions.set(id, session = { alerts: [], flash: "" });
+      res.setHeader("set-cookie", `session=${id}; HttpOnly; SameSite=Lax; Path=/`);
+    }
+    let message = session.flash, status = 200;
+    session.flash = "";
+    if (req.method === "POST") {
+      if (req.headers.origin !== base || req.headers["sec-fetch-site"] === "cross-site") return send(403, "text/plain", "Rejected");
+      let body = "";
+      for await (const part of req) body += part;
+      const fields = new URLSearchParams(body), email = fields.get("email");
+      if (!email?.includes("@")) { status = 422; message = locale.invalid_email; }
+      else if (fields.get("target_price") !== "1.25") { status = 422; message = locale.invalid_price; }
+      else {
+        session.alerts.push({ item_id: itemId, email, target_minor: 125 });
+        const values = { email, title: record.title, price: "$1.25" };
+        session.flash = locale.alert_set.replace(/\{(email|title|price)\}/g, (_, key) => values[key]);
+        res.writeHead(303, { location: url.pathname }); res.end(); return;
+      }
+    }
+    const query = url.searchParams;
+    const html = referenceHtml(record, profile.locale, { seller: query.get("seller") ?? "", sort: query.get("sort") ?? "asc",
+      all: query.get("offers") === "all", message });
+    send(status, "text/html", html.replace(/<base [^>]+>/, assets).replace("<body>", '<body><header><a href="/">Away</a></header>'));
+  });
+  const listen = async (server) => { server.listen(0, "127.0.0.1"); await once(server, "listening"); return `http://127.0.0.1:${server.address().port}`; };
+  let browser;
+  try {
+    base = await listen(server);
+    const source = await listen(upstream);
+    browser = await chromium.launch({ headless: true });
+    const cell = await runJourney({ browser, app, base, profile, records, readback: { path: "/api/alerts" },
+      counters: async () => (await fetch(source + "/__browser/counters")).json() });
+    const e = cell.evidence;
+    assert.equal(cell.outcome, "captured", [...e.failures, ...e.gaps].join("; "));
+    assert.equal(cell.qualificationPassed, true);
+    assert.equal(e.documentNavigationProof.outcome, "proved");
+    const summary = unavailable();
+    summary.options.apps = [app]; summary.options.cases = [profile.key];
+    summary.images[app] = { id: "sha256:" + "b".repeat(64), repoDigests: [], created: summary.startedAt, architecture: "amd64", os: "linux",
+      builtCommit: commit, builtDirty: "false", imageSourceVerified: true, sourceTreeSha256: "c".repeat(64) };
+    e.provenance = { containerId: "d".repeat(64), imageId: summary.images[app].id, startedAt: summary.startedAt, source: profile.source, stillSameProcess: true,
+      configuration: { cpus: 1, memoryBytes: 2 ** 30, marketplaceSource: profile.source, fixtureSha256: summary.fixtureSha256 } };
+    summary.cells[app][plan.cases.indexOf(profile)] = cell;
+    const f = fixture(t, summary);
+    const projected = JSON.parse(readFileSync(join(f.folder, "captures", `${app}.json`))).cases.find((c) => c.case === profile.key);
+    const report = JSON.parse(readFileSync(join(f.folder, "captures", "manifest.json"))).reports[app];
+    assert.deepEqual(report.diagnostics, []);
+    assert.deepEqual(report.validation.cases.find((r) => r.case === profile.key), { case: profile.key, outcome: "captured",
+      functionalPassed: true, observedSteps: profile.steps.length });
+    const accepted = projected.steps.find((r) => r.action.kind === "accepted-write");
+    assert.deepEqual(accepted.requests.filter((r) => r.transport === "document").map((r) => [r.method, r.status]), [["POST", 303], ["GET", 200]]);
+    assert.ok(accepted.requests.some((r) => r.path === "/fixture.css" && r.transport === "parser-asset" && r.status === 200));
+    assert.ok(accepted.requests.some((r) => r.path === "/disabled.mjs" && r.transport === "intentionally-disabled-preload" && r.failure === "csp"));
+    assert.deepEqual(accepted.retired.map((r) => [r.basis, r.owned]), [["platform-destruction", null]]);
+    assert.equal(projected.cleanup.kind, "platform-destruction");
+    for (const key of ["dom", "detached", "afterProbe", "probe"]) assert.equal(projected.cleanup[key], null, key);
+    const before = treeHashes(f.folder), result = await f.check();
+    assert.deepEqual(result.invalid, []);
+    assert.equal(result.outcome, "blocked", "One loopback cell cannot supply native run/container proof");
+    const replayed = result.cells.find((c) => c.app === app && c.case === profile.key);
+    assert.equal(replayed.outcome, "captured");
+    assert.deepEqual(replayed.derived, { requestOutcome: "reconciled", upstreamOutcome: "reconciled",
+      retirement: profile.steps.slice(1).map((step) => ({ action: step.id, outcome: "proved" })), noJS: "classified" });
+    assert.deepEqual(treeHashes(f.folder), before);
+    delete e.nativeCleanup.landingSettledAt;
+    f.save(false); // Leave the successful projection; the raw clock receipt no longer supports it.
+    const tampered = await f.check();
+    assert.equal(tampered.outcome, "invalid");
+    assert.match(tampered.invalid.join("; "), /document navigation proof differs/i);
+  } finally {
+    if (browser) await browser.close();
+    await Promise.all([server, upstream].filter((s) => s.listening).map((s) => {
+      s.closeAllConnections(); return new Promise((r) => s.close(r));
+    }));
+  }
+});
+
 function failedRaw(summary, profile = plan.cases.find((p) => p.source === "api"), app = "nuxt") {
   const cell = summary.cells[app].find((c) => c.case === profile.key);
   Object.assign(cell, { outcome: "failed", reason: "Native apparatus deliberately unavailable", qualificationPassed: false, evidence: {

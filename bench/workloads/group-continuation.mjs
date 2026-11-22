@@ -57,6 +57,8 @@ async function measuredReplay(repo, checkout, commit) {
 const retryable = (row) => ["not-created", "native-failed-retired", "setup-failed-retired", "unused-retired"].includes(row.outcome)
   || ["failed", "blocked"].includes(row.outcome) && !!row.destroyedAt;
 const acceptable = (row) => ["missing", "prepared", "verified", "running"].includes(row.outcome) || retryable(row);
+const manifestOnly = (fleet, entries = readdirSync(fleet.root)) =>
+  entries.length === 1 && entries[0] === `fleet-${fleet.manifest.round}.json`;
 
 function notCreated(fleet, saved, lock) {
   if (!fleet.manifest.single || lock !== null || !present(join(fleet.root, "launch-intent.json"))) return false;
@@ -88,7 +90,7 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
       "continuation root members differ");
     return { name, group, round };
   });
-  const attempts = new Map(names.map((group) => [group, []])), slots = new Map(), ids = new Set();
+  const attempts = new Map(names.map((group) => [group, []])), slots = new Map(), unlaunched = new Map(), ids = new Set();
   const proofs = [], retryEvidence = [], manifests = [], states = [], peers = [], needsCensus = new Set(), liveIps = new Set();
   const claim = (id) => { assert.ok(!ids.has(id), "duplicate continuation host identity"); ids.add(id); };
   const matchesCurrentContract = (selected) => groups.groups.some((s) => s.group === selected.group
@@ -176,13 +178,15 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
     if (round) {
       assert.equal(fleet.manifest.round, round, "attempt directory round differs");
       const previous = slots.get(group);
+      const replacesUnlaunched = unlaunched.has(previous?.root) && previous.manifest.commit !== fleet.manifest.commit;
       assert.ok(previous && Number(previous.manifest.round.slice(1)) < Number(round.slice(1))
-        && retryable(attempts.get(group).at(-1)), "earlier group attempt is not settled; never retry");
+        && (retryable(attempts.get(group).at(-1)) || replacesUnlaunched), "earlier group attempt is not settled; never retry");
     }
     slots.set(group, fleet);
     await read(fleet, fleet.manifest.single.checkout);
     const row = attempts.get(group).at(-1);
     if (row.outcome === "missing") row.outcome = present(join(slot, "launch-intent.json")) ? "attempt-consumed" : "prepared";
+    if (row.outcome === "prepared" && manifestOnly(fleet, entries)) unlaunched.set(slot, fleet);
   }
   const rows = names.map((group) => {
     const history = attempts.get(group), verified = history.filter((row) => row.outcome === "verified");
@@ -204,7 +208,10 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
     for (const { root, manifest, manifestSha256, lock, launch } of manifests) {
       const current = readFleet(root, manifest.round, { priorSelection: true });
       assert.equal(current.manifestSha256, manifestSha256);
-      if (root !== operatingRoot) assert.equal(fleetLockSnapshot(root), lock, "continuation source lock changed");
+      if (root !== operatingRoot) {
+        assert.equal(fleetLockSnapshot(root), lock, "continuation source lock changed");
+        if (unlaunched.has(root)) assert.ok(manifestOnly(current), "unlaunched attempt changed");
+      }
       if (launch) assert.equal(readLaunchIntent(current).sha256, launch, "group launch intent changed");
     }
     for (const { fleet, group, stateSha256, outcome, noCreate, retirementFile } of states) {
@@ -218,6 +225,12 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
     for (const { fleet, snapshot } of proofs) recheckCollectedGroup(fleet, snapshot);
     for (const { fleet, snapshot } of retryEvidence) recheckCollectedGroup(fleet, snapshot);
   };
+  const recheckUnlaunched = (group) => {
+    for (const fleet of unlaunched.values()) if (fleet.manifest.single.group === group) {
+      const current = readFleet(fleet.root, fleet.manifest.round, { priorSelection: true });
+      assert.ok(current.manifestSha256 === fleet.manifestSha256 && manifestOnly(current), "unlaunched attempt changed");
+    }
+  };
   recheck();
   const subject = { indexSha256, verified: proofs.map(({ fleet, snapshot }) => ({ root: fleet.root, round: fleet.manifest.round,
     manifestSha256: fleet.manifestSha256, ...snapshot })),
@@ -225,7 +238,7 @@ export async function inspectContinuation(root, { repo, interrupted, inspect } =
   for (const { fleet } of peers) needsCensus.add(fleet.manifest.provider.accountId);
   const eligibleToRun = rows.some((row) => row.unresolved) ? []
     : rows.filter((row) => ["missing", "prepared"].includes(row.outcome) || row.retryable).map((row) => row.group);
-  return { root, indexSha256, slots, needsCensus, recheck, subject,
+  return { root, indexSha256, slots, unlaunched, needsCensus, recheck, recheckUnlaunched, subject,
     report: { status: rows.every((row) => row.outcome === "verified") ? "complete" : "incomplete",
       evidenceMode: inspect ? "synthetic-inspection" : "native-replay", comparisonScope: "within-group-host-only",
       publishableBaseline: false, eligibleToRun, groups: rows } };

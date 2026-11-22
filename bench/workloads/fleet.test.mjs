@@ -10,11 +10,12 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, syntheticCatalogProvider, syntheticInspection, syntheticPlacement } from "./cloud-fixtures.mjs";
-import { fleetMain, fleetWorkerPaths, parseFleetArgs, productionChild, stagedChildIntent, watchSupervisedHost } from "./fleet.mjs";
+import { fleetCli, fleetMain, fleetWorkerPaths, parseFleetArgs, productionChild, stagedChildIntent, watchSupervisedHost } from "./fleet.mjs";
 import { fleetPlan, reservation, savedLoadLayout, savedPlacement, stagedFleet, tags } from "./cloud-contract.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
 import { readFleet, readGroup, readRemainingIntent, verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
+import { inspectContinuation } from "./group-continuation.mjs";
 import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { groupNames } from "./registry.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
@@ -34,6 +35,7 @@ function fixture(t, flags = {}) {
     calls.push([binary, argv]); assert.equal(binary, "git", "synthetic local boundary only");
     if (argv[0] === "show") return { status: 0, stdout: flags.wrongSource ? "wrong" : committedSources.get(argv[1].slice(41)) };
     if (argv[0] === "status" && flags.dirty) return { status: 0, stdout: " M synthetic" };
+    if (flags.head && argv[0] === "rev-parse" && argv[1] === "HEAD") return { status: 0, stdout: flags.head };
     return h.run(binary, argv, 60000);
   };
   const deps = { repo: h.repo, spawn, plan: (options, deps) => productionPlan(options, { ...deps, roleCheck: () => [] }),
@@ -120,6 +122,227 @@ function fixture(t, flags = {}) {
   return { h, flags, args, prepare, deps, output, calls, children, completions, catalogCalls, manifest, seed, seedLegacy, approve, finishFirst, finishGroup, remaining,
     get first() { return firstJob; } };
 }
+
+function stubPreflight(p) {
+  p.deps.plan = (options, deps) => productionPlan(options, { ...deps, compiler: () => true, roleCheck: () => [] });
+}
+
+async function independentDetach(t) {
+  const p = fixture(t), group = "mixed-production";
+  const root = join(p.h.base, group), index = join(p.h.base, "index.json");
+  const args = ["r21", "--continuation-root", p.h.base, "--group", group];
+  const errors = [];
+  writeFileSync(index, "[]");
+  stubPreflight(p);
+  p.deps.inspect = () => assert.fail("fixture has no evidence to replay");
+  assert.equal(await fleetMain([...args, "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps), 3);
+  const detach = [...args, "--detach"];
+  assert.equal(await fleetMain([...detach, "--print-approval"], p.deps), 3);
+  const approved = [...detach, "--approve-reviewed-merged-ready", p.output.at(-1).approvalSha256];
+  const cli = (argv = approved) => fleetCli(argv, { ...p.deps, writeError: (line) => errors.push(line) });
+  const notDispatched = (locked = false) => {
+    assert.deepEqual(p.children, []);
+    assert.deepEqual(readdirSync(root).sort(), locked ? [".fleet-operation.lock", "fleet-r21.json"] : ["fleet-r21.json"]);
+    assert.equal(existsSync(join(p.h.base, ".continuation-operation.lock")), locked);
+  };
+  return { p, root, index, approved, errors, cli, notDispatched };
+}
+
+test("independent detach names invalid replay without leaking the exception", async (t) => {
+  const f = await independentDetach(t);
+  writeFileSync(f.index, "SYNTHETIC_PRIVATE_INDEX");
+  assert.equal(await f.cli(), 2);
+  assert.deepEqual(f.errors, ["fleet-operation-failed: continuation-replay"]);
+  f.notDispatched();
+});
+
+test("independent detach names the pre-intent stage and preserves placement diagnostics", async (t) => {
+  for (const [kind, expected] of [
+    ["initial", "fleet-operation-failed: initial-plan"],
+    ["locked", "fleet-operation-failed: locked-plan"],
+    ["recheck", "fleet-operation-failed: final-pre-intent-recheck"],
+    ["placement", "fleet-placement-preflight-failed: catalog-http (HTTP 403)"],
+  ]) await t.test(kind, async (t) => {
+    const f = await independentDetach(t);
+    let argv = f.approved;
+    if (kind === "initial") argv = [...argv.slice(0, -1), "0".repeat(64)];
+    if (kind === "locked") {
+      const { plan } = f.p.deps;
+      let calls = 0;
+      f.p.deps.plan = async (...args) => {
+        const result = await plan(...args);
+        if (++calls === 2) result.missing.push("SYNTHETIC_PRIVATE_PATH");
+        return result;
+      };
+    }
+    if (kind === "recheck") f.p.flags.placement = () => {
+      writeFileSync(f.index, "[]\n");
+      return syntheticPlacement();
+    };
+    if (kind === "placement") {
+      const { catalogProvider } = f.p.deps;
+      f.p.deps.catalogProvider = (options) => {
+        const run = catalogProvider(options);
+        return Object.assign((args) => args[0] === "compute"
+          ? { status: 1, stderr: "SYNTHETIC_PRIVATE_PROVIDER_BODY", providerDiagnostic: { code: "catalog-http", httpStatus: 403 } }
+          : run(args), { close: run.close });
+      };
+    }
+    assert.equal(await f.cli(argv), 2);
+    assert.deepEqual(f.errors, [expected]);
+    f.notDispatched();
+  });
+});
+
+test("independent locked-plan error keeps identity, uncertainty and lock custody", async (t) => {
+  const f = await independentDetach(t), { plan } = f.p.deps, stages = new Map();
+  const error = Object.freeze(Object.assign(new Error("SYNTHETIC_PRIVATE_LOCKED_PLAN"), { controlUncertain: true }));
+  f.p.deps.plan = (...args) => {
+    if (existsSync(join(f.root, ".fleet-operation.lock"))) throw error;
+    return plan(...args);
+  };
+  await assert.rejects(fleetMain(f.approved, f.p.deps, stages), (actual) => actual === error && actual.controlUncertain === true);
+  assert.equal(stages.get(error), "locked-plan");
+  f.notDispatched(true);
+});
+
+test("independent detach does not label a failure after intent as a pre-intent refusal", async (t) => {
+  const f = await independentDetach(t);
+  f.p.deps.main = async () => { assert.ok(existsSync(join(f.root, "launch-intent.json"))); return 2; };
+  f.p.deps.write = () => { throw new Error("SYNTHETIC_PRIVATE_RECEIPT_FAILURE"); };
+  assert.equal(await f.cli(), 2);
+  assert.deepEqual(f.errors, ["fleet-operation-failed"]);
+  assert.ok(existsSync(join(f.root, "launch-intent.json")));
+});
+
+test("ordinary fleet CLI keeps its generic refusal and successful detach", async (t) => {
+  const p = fixture(t), errors = [];
+  stubPreflight(p);
+  await fleetMain(p.prepare(), p.deps);
+  const approved = await p.approve("--detach"), deps = { ...p.deps, writeError: (line) => errors.push(line) };
+  assert.equal(await fleetCli([...approved.slice(0, -1), "0".repeat(64)], deps), 2);
+  assert.deepEqual(errors, ["fleet-operation-failed"]);
+  assert.deepEqual(readdirSync(p.h.base), ["fleet-r21.json"]);
+  assert.equal(await fleetCli(approved, deps), 3);
+  assert.deepEqual(errors, ["fleet-operation-failed"]);
+  assert.deepEqual(p.children, [groupNames[0]]);
+  assert.ok(existsSync(join(p.h.base, "launch-intent.json")));
+});
+
+function continuationFixture(t) {
+  const p = fixture(t), group = "fullstack-browser", index = join(p.h.base, "index.json");
+  const old = join(p.h.base, group), next = join(p.h.base, `${group}--r22`), manifest = join(old, "fleet-r21.json");
+  const args = (round, selected = group) => [round, "--continuation-root", p.h.base, "--group", selected];
+  const prepare = (round, measured = p.flags.head ?? commit, selected = group) => fleetMain([...args(round, selected),
+    "--prepare", "--commit", measured, "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps);
+  const preview = async (round) => {
+    assert.equal(await fleetMain([...args(round), "--detach", "--print-approval"], p.deps), 3);
+    return p.output.at(-1).approvalSha256;
+  };
+  const detach = (round, approval) => fleetMain([...args(round), "--detach", "--approve-reviewed-merged-ready", approval], p.deps);
+  const history = () => inspectContinuation(p.h.base, p.deps);
+  p.deps.inspect = () => assert.fail("no collected results expected");
+  p.deps.plan = async ({ commit, stateDir }) => {
+    const subject = { controllerCommit: commit, stateRoot: stateDir };
+    return { subject, approvalSha256: digest(JSON.stringify(subject)), missing: [] };
+  };
+  writeFileSync(index, "[]");
+  return { ...p, group, old, next, manifest, index, prepare, preview, detach, history };
+}
+
+test("a pristine continuation prepare appends a different measured commit without dispatch or changing the verified catalog", async (t) => {
+  const p = continuationFixture(t), retained = fixture(t), catalog = "catalog-page";
+  retained.seedLegacy();
+  const result = retained.finishFirst(), archivePath = join(result.local, "results.tgz");
+  writeFileSync(join(result.evidence, "run.log"), "synthetic\n");
+  const files = ["run.log", "exit-code", "host.txt", "campaign/.host-attempt.json", `campaign/${result.report.campaign}/plan.json`];
+  writeFileSync(archivePath, archive(files.map((name) => ({ name, body: readFileSync(join(result.evidence, name)) }))));
+  result.state.archiveSha256 = fileHash(archivePath); result.rehash();
+  p.deps.inspect = async ({ folder }) => { assert.equal(folder, result.folder); return result.report; };
+  await verifyCollectedGroup(readFleet(retained.h.base, "r21"), catalog, { inspect: p.deps.inspect, bindArchive: true });
+  writeFileSync(p.index, JSON.stringify([{ root: retained.h.base, checkout: retained.h.repo, round: "r21", commit,
+    archives: { [catalog]: result.state.archiveSha256 } }]));
+  const kept = treeHash(retained.h.base), index = readFileSync(p.index);
+  assert.equal(await p.prepare("r21"), 3);
+  const original = readFileSync(p.manifest), oldApproval = await p.preview("r21");
+  await assert.rejects(p.prepare("r22"), /already reserved/);
+  p.flags.head = "b".repeat(40);
+  assert.equal(await p.prepare("r22"), 3);
+  await assert.rejects(p.prepare("r22", "c".repeat(40)), /higher round/);
+  await assert.rejects(p.prepare("r21", "c".repeat(40)), /higher round/);
+  const afterPrepare = p.catalogCalls.length;
+  await assert.rejects(p.detach("r21", oldApproval), /round not prepared/);
+  assert.equal(p.catalogCalls.length, afterPrepare, "stale approval does not reach placement");
+  await assert.rejects(p.detach("r22", oldApproval), /exact-approval-required/);
+  const newApproval = await p.preview("r22");
+  assert.notEqual(newApproval, oldApproval);
+  const { report } = await p.history();
+  assert.deepEqual(report.groups.find((r) => r.group === p.group).attempts.map((r) => [r.round, r.commit, r.outcome, r.attemptRoot]),
+    [["r21", commit, "missing", undefined], ["r21", commit, "prepared", p.old], ["r22", p.flags.head, "prepared", p.next]]);
+  assert.equal(report.groups.find((r) => r.group === catalog).result.archiveSha256, result.state.archiveSha256);
+  await assert.rejects(p.prepare("r22", p.flags.head, catalog), /already verified/);
+  assert.deepEqual(readdirSync(p.old), ["fleet-r21.json"]);
+  assert.deepEqual(readFileSync(p.manifest), original);
+  assert.deepEqual(readFileSync(p.index), index);
+  assert.equal(treeHash(retained.h.base), kept);
+  assert.deepEqual(p.children, []);
+  const path = join(p.next, "fleet-r22.json"), next = readFleet(p.next, "r22").manifest, nextBytes = readFileSync(path);
+  const sameCommit = fleetPlan({ round: next.round, commit, token: next.token, tokens: { [p.group]: next.jobs[0].token },
+    provider: next.provider, sshKey: next.sshKey }, next.createdAt, next.host.region, { stagedPlacement: true, single: next.single });
+  writeFileSync(path, JSON.stringify(sameCommit));
+  await assert.rejects(p.history(), /earlier group attempt is not settled/);
+  writeFileSync(path, nextBytes);
+  mkdirSync(join(p.old, "receipts"));
+  await assert.rejects(p.history(), /earlier group attempt is not settled/);
+});
+
+test("continuation prepare cannot supersede physical signs of an attempt", async (t) => {
+  for (const [name, mark, refused] of [
+    ["fleet lock", (p) => writeFileSync(join(p.old, ".fleet-operation.lock"), "{}"), { code: "ENOENT" }],
+    ["continuation lock", (p) => writeFileSync(join(p.h.base, ".continuation-operation.lock"), "{}"), { code: "EEXIST" }],
+    ["launch intent", (p) => writeFileSync(join(p.old, "launch-intent.json"), "{}"), /approvalSha256/],
+    ["receipts", (p) => mkdirSync(join(p.old, "receipts")), /already reserved/],
+    ["child", (p) => mkdirSync(join(p.old, p.group)), /unresolved custody/],
+    ...["creating", "running"].map((status) => [status, (p) => {
+      const fleet = readFleet(p.old, "r21").manifest, local = join(p.old, p.group, "groups-r21");
+      const at = "2026-11-20T12:00:00.000Z";
+      mkdirSync(local, { recursive: true });
+      writeFileSync(join(local, "state.json"), JSON.stringify({
+        ...reservation({ round: fleet.round, commit, token: fleet.jobs[0].token, group: p.group, fleet }, at),
+        provider: fleet.provider, fullGroupQualified: false, status, createIntentAt: at,
+        ...(status === "running" ? { id: "123", ip: "192.0.2.10" } : {}),
+      }));
+    }, /unresolved custody/]),
+    ["unknown file", (p) => writeFileSync(join(p.old, "unexpected"), "x"), /fleet-root-members/],
+    ["manifest hardlink", (p) => linkSync(p.manifest, join(p.h.temp, "linked-manifest")), /regular unlinked/],
+  ]) await t.test(name, async (t) => {
+    const p = continuationFixture(t);
+    await p.prepare("r21"); mark(p);
+    const calls = p.catalogCalls.length;
+    p.flags.head = "b".repeat(40);
+    await assert.rejects(p.prepare("r22"), refused);
+    assert.equal(p.catalogCalls.length, calls);
+    assert.equal(existsSync(p.next), false);
+    assert.deepEqual(p.children, []);
+  });
+});
+
+test("a previously pristine attempt that gains a receipt during placement cannot be superseded", async (t) => {
+  const p = continuationFixture(t), receipts = join(p.old, "receipts");
+  await p.prepare("r21");
+  const original = readFileSync(p.manifest);
+  p.flags.head = "b".repeat(40);
+  p.flags.placement = () => {
+    assert.ok(existsSync(join(p.h.base, ".continuation-operation.lock")));
+    assert.ok(existsSync(join(p.next, ".fleet-operation.lock")));
+    mkdirSync(receipts); return syntheticPlacement();
+  };
+  await assert.rejects(p.prepare("r22"), /unlaunched.*changed/i);
+  assert.ok(existsSync(receipts));
+  assert.equal(existsSync(join(p.next, "fleet-r22.json")), false);
+  assert.deepEqual(readFileSync(p.manifest), original);
+  assert.deepEqual(p.children, []);
+});
 
 test("prepare reserves cryptorandom complete fleet once, using local Git and read-only scoped catalogs", async (t) => {
   const p = fixture(t);

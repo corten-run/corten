@@ -13,6 +13,7 @@ import { createBrowserPlan } from "../workloads/browser.mjs";
 import { runJourney } from "./journey.mjs";
 import { nativeBuildArgs } from "./build.mjs";
 import { exportBrowserCaptures } from "./capture.mjs";
+import { cleanupObserved } from "./document-navigation.mjs";
 import { recordSchema, retainCell, saveSummary } from "./cell-records.mjs";
 import { bindingArtifactFromImage } from "./binding-image.mjs";
 import { EvidenceStore } from "./native-evidence.mjs";
@@ -231,7 +232,7 @@ export function groupQualificationPassed(summary, reports, readCell = (cell) => 
       const cell = readCell(matches[0], app), e = cell.evidence;
       return cell.outcome === "captured" && cell.qualificationPassed === true
         && e?.functionalChecksPassed === true && e.domChecksPassed === true && empty(e.failures) && empty(e.gaps)
-        && e.nativeCleanup?.outcome === "observed" && e.cleanup?.contextClosed === true && e.provenance?.stillSameProcess === true
+        && cleanupObserved(e) && e.cleanup?.contextClosed === true && e.provenance?.stillSameProcess === true
         && checked[0].outcome === "captured" && checked[0].functionalPassed === true;
     });
   });

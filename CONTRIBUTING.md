@@ -234,11 +234,10 @@ browser smokes in three groups, one engine of the watchlist's smoke in each. The
 `rust` and `browser` pass only when every job under them ran and passed, and `msrv` checks the
 supported Rust floor. A new smoke step names
 its part in its condition and in exactly one group's `parts`, or `browser` fails.
-All three browser groups pull the pinned Playwright image. Only `chromium-examples`, which
-runs the `npm-check` part and the native workload group apparatus, builds the Git-capable
-test-tools image from it. `firefox-feeds` and `webkit-gallery` use the base image directly,
-so they do not depend on Launchpad's Git PPA. The apparatus still runs as the checkout owner
-with the test-tools image's fingerprint-checked Git and immutable-source checks.
+The three example groups use the pinned Playwright image directly. A fourth group,
+`benchmark-checks`, runs the `npm-check` part, the marketplace browser oracle and the native
+workload group apparatus on its own runner. Only that group builds the Git-capable test-tools
+image. The apparatus runs as the checkout owner with fingerprint-checked Git and immutable-source checks.
 
 Add new watchlist runtime checks to the matching area in [`scripts/smoke/`](scripts/smoke/),
 and new gallery checks to the matching widget or area in [`examples/ui-gallery/smoke/`](examples/ui-gallery/smoke/).
