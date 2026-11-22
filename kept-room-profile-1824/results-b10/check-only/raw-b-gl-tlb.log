@@ -1,0 +1,38 @@
+## pair w1 base
+# started on Sun Nov 22 22:45:24 2026
+
+1551283921,,cycles:k,1001687602,100.00,,
+773090872,,instructions:k,1001687602,100.00,0.50,insn per cycle
+311923,,dTLB-load-misses,1001687602,100.00,,
+174828,,dTLB-store-misses,1001687602,100.00,,
+1238649,,iTLB-load-misses,1001687602,100.00,,
+62319,,page-faults,1001687602,100.00,,
+24,,context-switches,1001687602,100.00,,
+Running 1s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.95ms  115.22us   3.39ms   89.49%
+    Req/Sec    16.47k   174.54    16.86k    65.00%
+  32797 requests in 1.03s, 224.14MB read
+Requests/sec:  31945.24
+Transfer/sec:    218.31MB
+RESULT 32797 0 0 0 0 0
+## pair w1 head
+# started on Sun Nov 22 22:45:25 2026
+
+1438204217,,cycles:k,1001069229,100.00,,
+771366262,,instructions:k,1001069229,100.00,0.54,insn per cycle
+238512,,dTLB-load-misses,1001069229,100.00,,
+70556,,dTLB-store-misses,1001069229,100.00,,
+1748476,,iTLB-load-misses,1001069229,100.00,,
+239,,page-faults,1001069229,100.00,,
+28,,context-switches,1001069229,100.00,,
+Running 1s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.35ms   63.78us   1.75ms   76.96%
+    Req/Sec    23.78k   302.40    24.18k    60.00%
+  47255 requests in 1.02s, 322.94MB read
+Requests/sec:  46405.91
+Transfer/sec:    317.14MB
+RESULT 47255 0 0 0 0 0

@@ -1,0 +1,8 @@
+ 1000003    | 1          |jemalloc_bg_thd|libjemalloc.so.2 
+ 1000003    | 1          |kworker/u35:3-f|[kernel.kallsyms]
+ 4687014061 | 4687       |main           |[kernel.kallsyms]
+ 77000231   | 77         |main           |[vdso]           
+ 654001962  | 654        |main           |libc.so.6        
+ 474001422  | 474        |main           |libjemalloc.so.2 
+ 3412010236 | 3412       |main           |main             
+ 1000003    | 1          |swapper        |[kernel.kallsyms]

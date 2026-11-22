@@ -1,0 +1,243 @@
+Sun Nov 22 22:44:37 UTC 2026
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           40 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  8
+On-line CPU(s) list:                     0-7
+Vendor ID:                               GenuineIntel
+Model name:                              Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz
+CPU family:                              6
+Model:                                   85
+Thread(s) per core:                      1
+Core(s) per socket:                      8
+Socket(s):                               1
+Stepping:                                7
+BogoMIPS:                                5387.34
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch cpuid_fault ssbd ibrs ibpb ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap clflushopt clwb avx512cd avx512bw avx512vl xsaveopt xsavec xgetbv1 arat vnmi pku ospke avx512_vnni arch_capabilities
+Virtualization:                          VT-x
+Hypervisor vendor:                       KVM
+Virtualization type:                     full
+L1d cache:                               256 KiB (8 instances)
+L1i cache:                               256 KiB (8 instances)
+L2 cache:                                32 MiB (8 instances)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-7
+Vulnerability Gather data sampling:      Unknown: Dependent on hypervisor status
+Vulnerability Indirect target selection: Mitigation; Aligned branch/return thunks
+Vulnerability Itlb multihit:             KVM: Mitigation: Split huge pages
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Vulnerable: Clear CPU buffers attempted, no microcode; SMT Host state unknown
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Mitigation; Enhanced IBRS
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI SW loop, KVM SW loop
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+
+/sys/devices/system/cpu/cpu0/topology/thread_siblings_list:0
+/sys/devices/system/cpu/cpu1/topology/thread_siblings_list:1
+/sys/devices/system/cpu/cpu2/topology/thread_siblings_list:2
+/sys/devices/system/cpu/cpu3/topology/thread_siblings_list:3
+/sys/devices/system/cpu/cpu4/topology/thread_siblings_list:4
+/sys/devices/system/cpu/cpu5/topology/thread_siblings_list:5
+/sys/devices/system/cpu/cpu6/topology/thread_siblings_list:6
+/sys/devices/system/cpu/cpu7/topology/thread_siblings_list:7
+
+perf_event_paranoid -1 kptr_restrict 0 nmi_watchdog 0 perf_event_max_sample_rate 100000 perf_cpu_time_max_percent 0 (runs as root)
+Linux corten-cycles-b10 6.12.117+deb13-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.117-1 (2026-11-12) x86_64 GNU/Linux
+cmdline: BOOT_IMAGE=/boot/vmlinuz-6.12.117+deb13-amd64 root=PARTUUID=e5b360c3-4138-4035-a368-ffead1d5b2df ro console=tty0 console=ttyS0,115200 earlyprintk=ttyS0,115200 consoleblank=0 net.ifnames=0 biosdevname=0
+transparent huge pages:
+hugepages-32kB/enabled:always inherit madvise [never]
+hugepages-32kB/stats/shmem_alloc:0
+hugepages-32kB/stats/anon_fault_fallback:0
+hugepages-32kB/stats/shmem_fallback:0
+hugepages-32kB/stats/swpout:0
+hugepages-32kB/stats/split_failed:0
+hugepages-32kB/stats/split_deferred:0
+hugepages-32kB/stats/anon_fault_fallback_charge:0
+hugepages-32kB/stats/anon_fault_alloc:0
+hugepages-32kB/stats/nr_anon_partially_mapped:0
+hugepages-32kB/stats/shmem_fallback_charge:0
+hugepages-32kB/stats/swpout_fallback:0
+hugepages-32kB/stats/nr_anon:0
+hugepages-32kB/stats/split:0
+hugepages-32kB/shmem_enabled:always inherit within_size advise [never]
+hugepages-512kB/enabled:always inherit madvise [never]
+hugepages-512kB/stats/shmem_alloc:0
+hugepages-512kB/stats/anon_fault_fallback:0
+hugepages-512kB/stats/shmem_fallback:0
+hugepages-512kB/stats/swpout:0
+hugepages-512kB/stats/split_failed:0
+hugepages-512kB/stats/split_deferred:0
+hugepages-512kB/stats/anon_fault_fallback_charge:0
+hugepages-512kB/stats/anon_fault_alloc:0
+hugepages-512kB/stats/nr_anon_partially_mapped:0
+hugepages-512kB/stats/shmem_fallback_charge:0
+hugepages-512kB/stats/swpout_fallback:0
+hugepages-512kB/stats/nr_anon:0
+hugepages-512kB/stats/split:0
+hugepages-512kB/shmem_enabled:always inherit within_size advise [never]
+defrag:always defer defer+madvise [madvise] never
+khugepaged/defrag:1
+khugepaged/max_ptes_shared:256
+khugepaged/scan_sleep_millisecs:10000
+khugepaged/max_ptes_none:511
+khugepaged/pages_to_scan:4096
+khugepaged/max_ptes_swap:64
+khugepaged/alloc_sleep_millisecs:60000
+khugepaged/pages_collapsed:35
+khugepaged/full_scans:1
+enabled:[always] madvise never
+hugepages-2048kB/enabled:always [inherit] madvise never
+hugepages-2048kB/stats/shmem_alloc:0
+hugepages-2048kB/stats/anon_fault_fallback:0
+hugepages-2048kB/stats/shmem_fallback:0
+hugepages-2048kB/stats/swpout:0
+hugepages-2048kB/stats/split_failed:0
+hugepages-2048kB/stats/split_deferred:1977
+hugepages-2048kB/stats/anon_fault_fallback_charge:0
+hugepages-2048kB/stats/anon_fault_alloc:4460
+hugepages-2048kB/stats/nr_anon_partially_mapped:0
+hugepages-2048kB/stats/shmem_fallback_charge:0
+hugepages-2048kB/stats/swpout_fallback:0
+hugepages-2048kB/stats/nr_anon:5
+hugepages-2048kB/stats/split:0
+hugepages-2048kB/shmem_enabled:always [inherit] within_size advise never
+hugepages-1024kB/enabled:always inherit madvise [never]
+hugepages-1024kB/stats/shmem_alloc:0
+hugepages-1024kB/stats/anon_fault_fallback:0
+hugepages-1024kB/stats/shmem_fallback:0
+hugepages-1024kB/stats/swpout:0
+hugepages-1024kB/stats/split_failed:0
+hugepages-1024kB/stats/split_deferred:0
+hugepages-1024kB/stats/anon_fault_fallback_charge:0
+hugepages-1024kB/stats/anon_fault_alloc:0
+hugepages-1024kB/stats/nr_anon_partially_mapped:0
+hugepages-1024kB/stats/shmem_fallback_charge:0
+hugepages-1024kB/stats/swpout_fallback:0
+hugepages-1024kB/stats/nr_anon:0
+hugepages-1024kB/stats/split:0
+hugepages-1024kB/shmem_enabled:always inherit within_size advise [never]
+hugepages-64kB/enabled:always inherit madvise [never]
+hugepages-64kB/stats/shmem_alloc:0
+hugepages-64kB/stats/anon_fault_fallback:0
+hugepages-64kB/stats/shmem_fallback:0
+hugepages-64kB/stats/swpout:0
+hugepages-64kB/stats/split_failed:0
+hugepages-64kB/stats/split_deferred:0
+hugepages-64kB/stats/anon_fault_fallback_charge:0
+hugepages-64kB/stats/anon_fault_alloc:0
+hugepages-64kB/stats/nr_anon_partially_mapped:0
+hugepages-64kB/stats/shmem_fallback_charge:0
+hugepages-64kB/stats/swpout_fallback:0
+hugepages-64kB/stats/nr_anon:0
+hugepages-64kB/stats/split:0
+hugepages-64kB/shmem_enabled:always inherit within_size advise [never]
+hugepages-16kB/enabled:always inherit madvise [never]
+hugepages-16kB/stats/shmem_alloc:0
+hugepages-16kB/stats/anon_fault_fallback:0
+hugepages-16kB/stats/shmem_fallback:0
+hugepages-16kB/stats/swpout:0
+hugepages-16kB/stats/split_failed:0
+hugepages-16kB/stats/split_deferred:0
+hugepages-16kB/stats/anon_fault_fallback_charge:0
+hugepages-16kB/stats/anon_fault_alloc:0
+hugepages-16kB/stats/nr_anon_partially_mapped:0
+hugepages-16kB/stats/shmem_fallback_charge:0
+hugepages-16kB/stats/swpout_fallback:0
+hugepages-16kB/stats/nr_anon:0
+hugepages-16kB/stats/split:0
+hugepages-16kB/shmem_enabled:always inherit within_size advise [never]
+shrink_underused:1
+use_zero_page:1
+hugepages-8kB/stats/shmem_alloc:0
+hugepages-8kB/stats/shmem_fallback:0
+hugepages-8kB/stats/swpout:0
+hugepages-8kB/stats/split_failed:0
+hugepages-8kB/stats/shmem_fallback_charge:0
+hugepages-8kB/stats/swpout_fallback:0
+hugepages-8kB/stats/split:0
+hugepages-8kB/shmem_enabled:always inherit within_size advise [never]
+shmem_enabled:always within_size advise [never] deny force
+hugepages-256kB/enabled:always inherit madvise [never]
+hugepages-256kB/stats/shmem_alloc:0
+hugepages-256kB/stats/anon_fault_fallback:0
+hugepages-256kB/stats/shmem_fallback:0
+hugepages-256kB/stats/swpout:0
+hugepages-256kB/stats/split_failed:0
+hugepages-256kB/stats/split_deferred:0
+hugepages-256kB/stats/anon_fault_fallback_charge:0
+hugepages-256kB/stats/anon_fault_alloc:0
+hugepages-256kB/stats/nr_anon_partially_mapped:0
+hugepages-256kB/stats/shmem_fallback_charge:0
+hugepages-256kB/stats/swpout_fallback:0
+hugepages-256kB/stats/nr_anon:0
+hugepages-256kB/stats/split:0
+hugepages-256kB/shmem_enabled:always inherit within_size advise [never]
+hpage_pmd_size:2097152
+hugepages-128kB/enabled:always inherit madvise [never]
+hugepages-128kB/stats/shmem_alloc:0
+hugepages-128kB/stats/anon_fault_fallback:0
+hugepages-128kB/stats/shmem_fallback:0
+hugepages-128kB/stats/swpout:0
+hugepages-128kB/stats/split_failed:0
+hugepages-128kB/stats/split_deferred:0
+hugepages-128kB/stats/anon_fault_fallback_charge:0
+hugepages-128kB/stats/anon_fault_alloc:0
+hugepages-128kB/stats/nr_anon_partially_mapped:0
+hugepages-128kB/stats/shmem_fallback_charge:0
+hugepages-128kB/stats/swpout_fallback:0
+hugepages-128kB/stats/nr_anon:0
+hugepages-128kB/stats/split:0
+hugepages-128kB/shmem_enabled:always inherit within_size advise [never]
+vm.overcommit_memory 0
+vm.compaction_proactiveness 20
+vm.extfrag_threshold 500
+vm.watermark_scale_factor 10
+vm.zone_reclaim_mode 0
+vm.min_free_kbytes 67584
+vm.max_map_count 1048576
+cgroup: 0::/user.slice/user-0.slice/session-3.scope
+memory.max max
+memory.high max
+memory.current 2032906240
+MemTotal:       16382180 kB
+MemAvailable:   15830508 kB
+AnonHugePages:     10240 kB
+HugePages_Total:       0
+Hugepagesize:       2048 kB
+ldd (Debian GLIBC 2.41-12+deb13u5) 2.41
+perf version 6.12.118
+wrk debian/4.1.0-4+b1 [epoll] Copyright (C) 2012 Will Glozer
+v20.19.2
+main 7a275ef1534efb3a1e1130a4bac5de2322ad380f
+Package: libjemalloc2
+Version: 5.3.0-3
+Package: libzstd1
+Version: 1.5.7+dfsg-1
+Package: libc6
+Version: 2.41-12+deb13u5
+Package: wrk
+Version: 4.1.0-4+b1
+Package: linux-perf
+Version: 6.12.118-1
+binaries (name, sha256, size):
+main c44243d5cebe3053b290bb85279c27cf58a864eb3836256a4f3ac569061dffd1 4425608 bytes
+faultcost bb091efe5cc2247ecaa794dbc31ff715ad43c971bcb4d6de901ffaa6a3d49345 499136 bytes
+jemalloc as the image: MALLOC_CONF=background_thread:true,tcache_max:65536; glibc: none set
+pass A: perf record -C 2 -e cycles -c 1000003 -P, flat and -g --kernel-callchains; 5 pairs a comparison; profile 1
+pass B sets:
+core: cycles:u,cycles:k,instructions:u,instructions:k,page-faults,minor-faults,major-faults,context-switches,cpu-migrations
+tlb: cycles:k,instructions:k,dTLB-load-misses:k,dTLB-store-misses:k,iTLB-load-misses:k,page-faults,context-switches
+cache: cycles:k,instructions:k,cache-misses:k,cache-references:k,L1-icache-load-misses:k,L1-icache-load-misses:u,page-faults,context-switches
+pass A: CPU 2's cycles:u and cycles:k counted at 100% beside the sampling
+preflight sampling: cycles every 1000003, 733 samples; call graphs: -g --kernel-callchains; kernel functions named 33, by address only 0
+every turn on a fresh start; server CPU 2, wrk CPUs 4,5, driver and perf CPU 7; B_PAIRS 30; passes A B
+perf_event_max_sample_rate after pass A: 100000

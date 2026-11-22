@@ -1,0 +1,18 @@
+
+Aggregated stats:
+               TOTAL events:      10133
+                MMAP events:         80  ( 0.8%)
+                COMM events:        196  ( 1.9%)
+                EXIT events:          6  ( 0.1%)
+                FORK events:        195  ( 1.9%)
+              SAMPLE events:       8985  (88.7%)
+               MMAP2 events:        637  ( 6.3%)
+             KSYMBOL events:         15  ( 0.1%)
+           BPF_EVENT events:         13  ( 0.1%)
+      FINISHED_ROUND events:          2  ( 0.0%)
+            ID_INDEX events:          1  ( 0.0%)
+          THREAD_MAP events:          1  ( 0.0%)
+             CPU_MAP events:          1  ( 0.0%)
+       FINISHED_INIT events:          1  ( 0.0%)
+cycles stats:
+              SAMPLE events:       8985

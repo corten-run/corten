@@ -1,0 +1,5 @@
+core: cycles:u,cycles:k,instructions:u,instructions:k,page-faults,minor-faults,major-faults,context-switches,cpu-migrations
+tlb: cycles:k,instructions:k,dTLB-load-misses:k,dTLB-store-misses:k,iTLB-load-misses:k,page-faults,context-switches
+cache: cycles:k,instructions:k,cache-misses:k,cache-references:k,L1-icache-load-misses:k,L1-icache-load-misses:u,page-faults,context-switches
+pass A: CPU 2's cycles:u and cycles:k counted at 100% beside the sampling
+preflight sampling: cycles every 1000003, 733 samples; call graphs: -g --kernel-callchains; kernel functions named 33, by address only 0

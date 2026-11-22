@@ -1,0 +1,70 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 9K of event 'cycles'
+# Event count (approx.): 9196027588
+#
+# Overhead  Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
+# ........  ................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+    11.55%  [k] clear_page_erms
+            |          
+            |--9.78%--prep_new_page
+            |          get_page_from_freelist
+            |          __alloc_pages_noprof
+            |          alloc_pages_mpol_noprof
+            |          |          
+            |          |--6.88%--vma_alloc_folio_noprof
+            |          |          |          
+            |          |           --6.85%--do_huge_pmd_anonymous_page
+            |          |                     __handle_mm_fault
+            |          |                     handle_mm_fault
+            |          |                     do_user_addr_fault
+            |          |                     exc_page_fault
+            |          |                     asm_exc_page_fault
+            |          |          
+            |           --2.87%--skb_page_frag_refill
+            |                     sk_page_frag_refill
+            |                     tcp_sendmsg_locked
+            |                     tcp_sendmsg
+            |                     sock_write_iter
+            |                     do_iter_readv_writev
+            |                     vfs_writev
+            |                     do_writev
+            |                     do_syscall_64
+            |                     entry_SYSCALL_64_after_hwframe
+            |          
+             --1.77%--folio_zero_user
+                       do_huge_pmd_anonymous_page
+                       __handle_mm_fault
+                       handle_mm_fault
+                       do_user_addr_fault
+                       exc_page_fault
+                       asm_exc_page_fault
+
+     3.36%  [.] _RNvNtCs2Sdwwla2uzU_6corten4view11escape_into
+     2.36%  [.] _RNCNvXs2_NtCs2Sdwwla2uzU_6corten6routerNtB7_7KeepingNtB7_8Endpoint4calls_0CskjsZcOxyxTu_5probe
+     1.98%  [.] _RNvXsu_NtCs2Sdwwla2uzU_6corten4pageINtB5_6PartedINtNtB7_4view7DocHtmlNCNvCskjsZcOxyxTu_5probe8document0EENtBN_6Render6renderB19_
+     1.79%  [k] rep_movs_alternative
+            |          
+             --1.51%--_copy_from_iter
+                       tcp_sendmsg_locked
+                       tcp_sendmsg
+                       sock_write_iter
+                       do_iter_readv_writev
+                       vfs_writev
+                       do_writev
+                       do_syscall_64
+                       entry_SYSCALL_64_after_hwframe
+
+     1.24%  [.] _RNCNvXsd_NtCs2Sdwwla2uzU_6corten3appINtB7_2AtINtB7_5PlainuEENtNtB9_6router6Stages3run0CskjsZcOxyxTu_5probe
+     1.24%  [.] malloc
+     1.04%  [.] free
+     1.02%  [.] _RINvNtNtCsdztPvThAM6J_4http6header3map15hash_elem_usingNtNtB4_4name10HeaderNameECs2Sdwwla2uzU_6corten
+
+
+#
+# (Tip: See assembly instructions with percentage: perf annotate <symbol>)
+#

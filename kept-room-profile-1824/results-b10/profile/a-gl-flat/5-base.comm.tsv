@@ -1,0 +1,6 @@
+ 6000018    | 6          |kworker/2:2-eve|[kernel.kallsyms]
+ 4633013899 | 4633       |main           |[kernel.kallsyms]
+ 49000147   | 49         |main           |[vdso]           
+ 1021003063 | 1021       |main           |libc.so.6        
+ 3232009696 | 3232       |main           |main             
+ 2000006    | 2          |swapper        |[kernel.kallsyms]

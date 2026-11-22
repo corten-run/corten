@@ -1,0 +1,42 @@
+## pair w1 base
+# started on Sun Nov 22 22:45:15 2026
+
+1612833451,,cycles:u,1058551488,100.00,,
+1557150782,,cycles:k,1058551488,100.00,,
+1998259149,,instructions:u,1058551488,100.00,1.24,insn per cycle
+653729377,,instructions:k,1058551488,100.00,0.42,insn per cycle
+2575,,page-faults,1058551488,100.00,,
+2575,,minor-faults,1058551488,100.00,,
+0,,major-faults,1058551488,100.00,,
+31,,context-switches,1058551488,100.00,,
+0,,cpu-migrations,1058551488,100.00,,
+Running 1s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     2.13ms    3.38ms  43.67ms   97.89%
+    Req/Sec    18.50k     3.86k   31.08k    85.71%
+  38602 requests in 1.10s, 263.81MB read
+Requests/sec:  35097.90
+Transfer/sec:    239.86MB
+RESULT 38602 0 0 0 0 0
+## pair w1 head
+# started on Sun Nov 22 22:45:16 2026
+
+1353148200,,cycles:u,1000981532,100.00,,
+1455915274,,cycles:k,1000981532,100.00,,
+2055792876,,instructions:u,1000981532,100.00,1.52,insn per cycle
+783034524,,instructions:k,1000981532,100.00,0.54,insn per cycle
+43,,page-faults,1000981532,100.00,,
+43,,minor-faults,1000981532,100.00,,
+0,,major-faults,1000981532,100.00,,
+26,,context-switches,1000981532,100.00,,
+0,,cpu-migrations,1000981532,100.00,,
+Running 1s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.33ms   71.35us   1.88ms   70.28%
+    Req/Sec    24.12k   481.08    24.93k    65.00%
+  47980 requests in 1.01s, 327.90MB read
+Requests/sec:  47285.98
+Transfer/sec:    323.15MB
+RESULT 47980 0 0 0 0 0

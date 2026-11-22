@@ -1,0 +1,6 @@
+ 4722014166 | 4722       |main   |[kernel.kallsyms]
+ 71000213   | 71         |main   |[vdso]           
+ 977002931  | 977        |main   |libc.so.6        
+ 3063009189 | 3063       |main   |main             
+ 1000003    | 1          |perf   |[kernel.kallsyms]
+ 1000003    | 1          |swapper|[kernel.kallsyms]

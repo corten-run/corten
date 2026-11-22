@@ -1,0 +1,87 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 724  of event 'cycles'
+# Event count (approx.): 724002172
+#
+# Overhead  Symbol                                   
+# ........  .........................................
+#
+    30.66%  [k] rep_stos_alternative
+     9.53%  [k] clear_bhb_loop
+     8.15%  [k] entry_SYSCALL_64
+     4.01%  [k] do_syscall_64
+     3.59%  [k] vfs_read
+     3.59%  [.] 0x000000000008f3a7
+     3.18%  [k] __fsnotify_parent
+     3.04%  [k] arch_exit_to_user_mode_prepare.isra.0
+     3.04%  [k] vfs_write
+     2.90%  [k] fdget_pos
+     2.07%  [k] entry_SYSCALL_64_after_hwframe
+     2.07%  [.] 0x000000000008f3a8
+     1.93%  [k] read_zero
+     1.66%  [k] x64_sys_call
+     1.52%  [k] apparmor_file_permission
+     1.38%  [k] rw_verify_area
+     1.24%  [k] aa_file_perm
+     1.10%  [k] syscall_exit_to_user_mode
+     1.10%  [k] syscall_return_via_sysret
+     0.97%  [k] ksys_read
+     0.83%  [k] entry_SYSCALL_64_safe_stack
+     0.83%  [k] its_return_thunk
+     0.69%  [.] write
+     0.55%  [k] __rcu_read_lock
+     0.55%  [.] read
+     0.41%  [k] __rcu_read_unlock
+     0.41%  [k] __x64_sys_write
+     0.41%  [k] fpregs_assert_state_consistent
+     0.41%  [k] ksys_write
+     0.41%  [k] security_file_permission
+     0.41%  [k] write_null
+     0.41%  [.] 0x0000000000005a5c
+     0.41%  [.] 0x0000000000005f61
+     0.28%  [k] __cond_resched
+     0.28%  [k] syscall_exit_to_user_mode_prepare
+     0.28%  [.] 0x00000000000035fa
+     0.28%  [.] 0x0000000000004268
+     0.28%  [.] 0x0000000000005ccf
+     0.28%  [.] 0x0000000000005d3d
+     0.28%  [.] 0x0000000000005d48
+     0.28%  [.] 0x0000000000005ea4
+     0.28%  [.] 0x000000000008f3cd
+     0.14%  [k] asm_exc_page_fault
+     0.14%  [k] entry_SYSRETQ_unsafe_stack
+     0.14%  [k] next_uptodate_folio
+     0.14%  [k] set_mm_exe_file
+     0.14%  [.] 0x00000000000035cd
+     0.14%  [.] 0x000000000000360e
+     0.14%  [.] 0x0000000000003679
+     0.14%  [.] 0x0000000000003760
+     0.14%  [.] 0x000000000000388d
+     0.14%  [.] 0x000000000000389f
+     0.14%  [.] 0x00000000000038a4
+     0.14%  [.] 0x00000000000038ab
+     0.14%  [.] 0x0000000000005a40
+     0.14%  [.] 0x0000000000005a54
+     0.14%  [.] 0x0000000000005a76
+     0.14%  [.] 0x0000000000005ad9
+     0.14%  [.] 0x0000000000005cd7
+     0.14%  [.] 0x0000000000005d35
+     0.14%  [.] 0x0000000000005d39
+     0.14%  [.] 0x0000000000005db0
+     0.14%  [.] 0x0000000000005f4b
+     0.14%  [.] 0x0000000000042077
+     0.14%  [.] 0x000000000008f344
+     0.14%  [.] 0x000000000008f34d
+     0.14%  [.] 0x000000000008f3a5
+     0.14%  [.] 0x000000000008f3c0
+     0.14%  [.] 0x000000000008f3c8
+     0.14%  [.] 0x000000000008f3ce
+     0.14%  [.] 0x000000000008f3db
+
+
+#
+# (Tip: To show assembler sample context control flow use perf record -b / perf report --samples 10 and then browse context)
+#

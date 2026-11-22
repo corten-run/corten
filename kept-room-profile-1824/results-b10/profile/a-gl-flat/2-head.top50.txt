@@ -1,0 +1,61 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 8K of event 'cycles'
+# Event count (approx.): 8909026727
+#
+# Overhead  Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
+# ........  ..................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+     5.05%  [.] _RNvNtCs2Sdwwla2uzU_6corten4view11escape_into
+     4.68%  [k] clear_page_erms
+     2.54%  [.] _RNvXsu_NtCs2Sdwwla2uzU_6corten4pageINtB5_6PartedINtNtB7_4view7DocHtmlNCNvCskjsZcOxyxTu_5probe8document0EENtBN_6Render6renderB19_
+     2.24%  [k] rep_movs_alternative
+     1.49%  [.] _RINvNtNtCsdztPvThAM6J_4http6header3map15hash_elem_usingNtNtB4_4name10HeaderNameECs2Sdwwla2uzU_6corten
+     1.41%  [.] malloc
+     1.35%  [k] tcp_sendmsg_locked
+     1.29%  [k] tcp_ack
+     1.27%  [.] _RNvXNtNtNtCsb8FoRbCRZGR_5hyper5proto2h14roleNtB2_6ServerNtB4_16Http1Transaction6encode
+     1.25%  [k] _raw_spin_lock_irqsave
+     1.09%  [.] _RNCNvXsd_NtCs2Sdwwla2uzU_6corten3appINtB7_2AtINtB7_5PlainuEENtNtB9_6router6Stages3run0CskjsZcOxyxTu_5probe
+     1.09%  [.] _RNvMs_NtNtNtCsb8FoRbCRZGR_5hyper5proto2h12ioINtB4_8BufferedINtNtNtCs4pbSw37EEB1_10hyper_util2rt5tokio7TokioIoINtNtCs2Sdwwla2uzU_6corten5watch7WatchedNtNtNtNtCs3v7n8iqQsbi_5tokio3net3tcp6stream9TcpStreamEEINtNtB6_6encode10EncodedBufNtNtCs6sv2pxdbPD2_5bytes5bytes5BytesEE10poll_flushCskjsZcOxyxTu_5probe
+     1.02%  [.] _RINvMs0_NtNtCsdztPvThAM6J_4http6header3mapNtB6_9HeaderMap11try_insert2NtNtB8_4name10HeaderNameECs2Sdwwla2uzU_6corten.llvm.8612054359066671192
+     0.99%  [.] _RNvNtCs2Sdwwla2uzU_6corten5cache6settle
+     0.99%  [.] cfree
+     0.95%  [k] skb_release_data
+     0.90%  [.] _RNvXs_NtNtCs8uuN1nrGffB_4core6future6futureINtNtB8_3pin3PinQINtNtNtNtCsb8FoRbCRZGR_5hyper6server4conn5http121UpgradeableConnectionINtNtNtCs4pbSw37EEB1_10hyper_util2rt5tokio7TokioIoINtNtCs2Sdwwla2uzU_6corten5watch7WatchedNtNtNtNtCs3v7n8iqQsbi_5tokio3net3tcp6stream9TcpStreamEEINtNtNtB2b_7service4glue19TowerToHyperServiceNtNtB2X_3app10ConnectionEEENtB4_6Future4pollCskjsZcOxyxTu_5probe
+     0.85%  [k] __tcp_transmit_skb
+     0.82%  [k] _raw_spin_lock_bh
+     0.79%  [.] _RNvNtCs6sv2pxdbPD2_5bytes5bytes11shared_drop.llvm.8302685113893385452
+     0.74%  [k] net_rx_action
+     0.72%  [.] _RNvMNtNtNtCsb8FoRbCRZGR_5hyper5proto2h18dispatchINtB2_10DispatcherINtB2_6ServerINtNtNtCs4pbSw37EEB1_10hyper_util7service4glue19TowerToHyperServiceNtNtCs2Sdwwla2uzU_6corten3app10ConnectionENtNtNtB8_4body8incoming8IncomingENtNtB2o_5watch8AnsweredINtNtNtB1m_2rt5tokio7TokioIoINtB3z_7WatchedNtNtNtNtCs3v7n8iqQsbi_5tokio3net3tcp6stream9TcpStreamEENtNtB4_4role6ServerE10poll_writeCskjsZcOxyxTu_5probe
+     0.71%  [k] native_write_msr
+     0.70%  [k] __dev_queue_xmit
+     0.70%  [k] __mod_memcg_state
+     0.68%  [k] pvclock_clocksource_read_nowd
+     0.66%  [k] vfs_writev
+     0.65%  [k] __inet_lookup_established
+     0.65%  [k] _raw_spin_lock
+     0.65%  [k] clear_bhb_loop
+     0.62%  [.] _RINvMs0_NtNtCsdztPvThAM6J_4http6header3mapNtB6_9HeaderMap3getNtNtB8_4name10HeaderNameECs2Sdwwla2uzU_6corten.llvm.8612054359066671192
+     0.61%  [.] _RNvXNtNtNtCsb8FoRbCRZGR_5hyper5proto2h14roleNtB2_6ServerNtB4_16Http1Transaction5parse
+     0.54%  [.] _RINvNtNtNtCs3v7n8iqQsbi_5tokio7runtime4task3raw4pollNCNCINvNtCs2Sdwwla2uzU_6corten3app14serve_listenerNtCskjsZcOxyxTu_5probe5GatedINvBV_5plainNtNtNtNtB8_3net3tcp6stream9TcpStreamEINtNtNtCs8uuN1nrGffB_4core6future5ready5ReadyINtNtB2Y_6result6ResultTB2g_uEzEEB2g_zuE0s_0INtNtCs3BN1jqgSbDf_5alloc4sync3ArcNtNtNtB6_9scheduler14current_thread6HandleEEB1E_
+     0.54%  [k] memset_orig
+     0.53%  [.] _RNvNtCs6sv2pxdbPD2_5bytes9bytes_mut13shared_v_drop
+     0.52%  [.] _RNCINvNtCs2Sdwwla2uzU_6corten4page3runNCINvB4_15within_deadlineINtNtB6_3app5PlainuEE0NCNCINvB4_15errors_renderedBZ_E0s_0E0CskjsZcOxyxTu_5probe
+     0.51%  [k] kmem_cache_alloc_node_noprof
+     0.49%  [.] _RNvNtNtCs8uuN1nrGffB_4core3str8converts9from_utf8
+     0.49%  [k] fdget
+     0.49%  [k] tcp_recvmsg_locked
+     0.48%  [k] ep_poll_callback
+     0.47%  [k] aa_sk_perm
+     0.47%  [k] sk_filter_trim_cap
+     0.43%  [.] _RNvMse_NtCs2Sdwwla2uzU_6corten8securityNtB5_7Applied7headers
+     0.43%  [k] tcp_rcv_established
+     0.42%  [.] _RNvXsc_NtNtCs4q2MSqxezRi_12futures_util6future6futureINtB5_3MapNCNvXsj_NtCs2Sdwwla2uzU_6corten7handlerNvCskjsZcOxyxTu_5probe6recordINtB17_7HandlerTNtNtB17_7private8ViaPartsNtNtB19_4page3ReqEuE4call0INvNtB19_6answer6markedINtB3d_6PublicINtNtCs8uuN1nrGffB_4core6result6ResultNtB3d_12HtmlResponseNtB19_5ErrorEEEENtNtNtB3Q_6future6future6Future4pollB1E_
+     0.42%  [k] __wake_up_common
+     0.42%  [k] ttwu_queue_wakelist
+     0.40%  [k] __ip_queue_xmit
+     0.39%  [.] _RNvMsi_NtCs2Sdwwla2uzU_6corten6routerNtB5_6Router6answer

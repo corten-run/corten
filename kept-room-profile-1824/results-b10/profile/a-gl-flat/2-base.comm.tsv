@@ -1,0 +1,6 @@
+ 1000003    | 1          |ksoftirqd/2|[kernel.kallsyms]
+ 4721014163 | 4721       |main       |[kernel.kallsyms]
+ 58000174   | 58         |main       |[vdso]           
+ 1004003012 | 1004       |main       |libc.so.6        
+ 3103009309 | 3103       |main       |main             
+ 1000003    | 1          |swapper    |[kernel.kallsyms]

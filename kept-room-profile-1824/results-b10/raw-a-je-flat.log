@@ -1,0 +1,144 @@
+## pair w1 base
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.614 MB /dev/shm/1824c-turn.data (9013 samples) ]
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.57ms  313.89us   7.12ms   74.56%
+    Req/Sec    20.48k   760.83    22.81k    83.33%
+  122180 requests in 3.03s, 834.98MB read
+Requests/sec:  40315.83
+Transfer/sec:    275.52MB
+RESULT 122180 0 0 0 0 0
+## pair w1 head
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.632 MB /dev/shm/1824c-turn.data (9338 samples) ]
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.15ms    1.48ms  35.19ms   99.42%
+    Req/Sec    30.39k     3.02k   51.26k    96.72%
+  184444 requests in 3.10s, 1.23GB read
+Requests/sec:  59509.03
+Transfer/sec:    406.69MB
+RESULT 184444 0 0 0 0 0
+## pair 1 base
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.606 MB /dev/shm/1824c-turn.data (8860 samples) ]
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.58ms  320.84us   6.92ms   75.39%
+    Req/Sec    20.33k     1.15k   21.63k    91.67%
+  121258 requests in 3.02s, 828.68MB read
+Requests/sec:  40171.98
+Transfer/sec:    274.54MB
+RESULT 121258 0 0 0 0 0
+## pair 1 head
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.616 MB /dev/shm/1824c-turn.data (9039 samples) ]
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.13ms  793.78us  23.39ms   99.64%
+    Req/Sec    29.41k     2.79k   49.63k    96.72%
+  178421 requests in 3.10s, 1.19GB read
+Requests/sec:  57559.19
+Transfer/sec:    393.36MB
+RESULT 178421 0 0 0 0 0
+## pair 2 head
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.626 MB /dev/shm/1824c-turn.data (9231 samples) ]
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.10ms  595.98us  19.42ms   99.52%
+    Req/Sec    29.74k     3.16k   53.24k    96.72%
+  180390 requests in 3.10s, 1.20GB read
+Requests/sec:  58195.62
+Transfer/sec:    397.71MB
+RESULT 180390 0 0 0 0 0
+## pair 2 base
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.617 MB /dev/shm/1824c-turn.data (9056 samples) ]
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.55ms  300.51us   6.82ms   76.08%
+    Req/Sec    20.72k   514.20    22.33k    81.67%
+  123581 requests in 3.01s, 844.56MB read
+Requests/sec:  40990.15
+Transfer/sec:    280.13MB
+RESULT 123581 0 0 0 0 0
+## pair 3 base
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.599 MB /dev/shm/1824c-turn.data (8719 samples) ]
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.59ms  647.57us  18.99ms   98.30%
+    Req/Sec    20.48k     0.92k   23.56k    83.33%
+  122192 requests in 3.02s, 835.06MB read
+Requests/sec:  40480.46
+Transfer/sec:    276.64MB
+RESULT 122192 0 0 0 0 0
+## pair 3 head
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.613 MB /dev/shm/1824c-turn.data (8992 samples) ]
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.11ms  101.31us   5.24ms   95.38%
+    Req/Sec    29.00k   510.23    29.87k    70.00%
+  173029 requests in 3.01s, 1.15GB read
+Requests/sec:  57393.44
+Transfer/sec:    392.23MB
+RESULT 173029 0 0 0 0 0
+## pair 4 head
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.615 MB /dev/shm/1824c-turn.data (9027 samples) ]
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.11ms   56.94us   1.63ms   72.76%
+    Req/Sec    29.00k   780.22    31.96k    80.00%
+  173036 requests in 3.03s, 1.15GB read
+Requests/sec:  57168.14
+Transfer/sec:    390.69MB
+RESULT 173036 0 0 0 0 0
+## pair 4 base
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.630 MB /dev/shm/1824c-turn.data (9307 samples) ]
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.64ms  690.87us  19.73ms   94.87%
+    Req/Sec    19.94k     2.63k   35.62k    86.89%
+  120931 requests in 3.10s, 826.45MB read
+Requests/sec:  39017.00
+Transfer/sec:    266.64MB
+RESULT 120931 0 0 0 0 0
+## pair 5 base
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.613 MB /dev/shm/1824c-turn.data (8977 samples) ]
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.65ms  679.70us  18.84ms   96.25%
+    Req/Sec    19.74k     2.03k   22.16k    83.33%
+  117878 requests in 3.02s, 805.58MB read
+Requests/sec:  38999.86
+Transfer/sec:    266.53MB
+RESULT 117878 0 0 0 0 0
+## pair 5 head
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.606 MB /dev/shm/1824c-turn.data (8850 samples) ]
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.09ms   55.89us   1.79ms   76.72%
+    Req/Sec    29.35k   848.62    32.77k    85.00%
+  175019 requests in 3.02s, 1.17GB read
+Requests/sec:  57978.27
+Transfer/sec:    396.23MB
+RESULT 175019 0 0 0 0 0

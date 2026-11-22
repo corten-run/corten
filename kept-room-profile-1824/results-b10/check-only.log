@@ -1,0 +1,20 @@
+checked 1 requests: A twice and B the same; 6124 bytes
+a-je-flat: done, /m/1824c/results/check-only/turns-a-je-flat.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+a-je-graph: done, /m/1824c/results/check-only/turns-a-je-graph.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+a-gl-flat: done, /m/1824c/results/check-only/turns-a-gl-flat.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+a-gl-graph: done, /m/1824c/results/check-only/turns-a-gl-graph.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+b-je-core: done, /m/1824c/results/check-only/pairs-b-je-core.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+b-gl-core: done, /m/1824c/results/check-only/pairs-b-gl-core.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+b-je-tlb: done, /m/1824c/results/check-only/pairs-b-je-tlb.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+b-gl-tlb: done, /m/1824c/results/check-only/pairs-b-gl-tlb.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+b-je-cache: done, /m/1824c/results/check-only/pairs-b-je-cache.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+b-gl-cache: done, /m/1824c/results/check-only/pairs-b-gl-cache.csv

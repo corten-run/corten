@@ -1,0 +1,982 @@
+Get:1 file:/etc/apt/mirrors/debian.list Mirrorlist [39 B]
+Get:2 file:/etc/apt/mirrors/debian-security.list Mirrorlist [27 B]
+Get:3 http://mirrors.digitalocean.com/debian trixie InRelease [140 kB]
+Get:6 http://security.debian.org trixie-security InRelease [43.4 kB]
+Get:4 http://mirrors.digitalocean.com/debian trixie-updates InRelease [47.3 kB]
+Get:5 http://mirrors.digitalocean.com/debian trixie-backports InRelease [54.0 kB]
+Get:7 http://mirrors.digitalocean.com/debian trixie/main Sources [10.5 MB]
+Get:10 http://security.debian.org trixie-security/main Sources [272 kB]
+Hit:13 https://repos-droplet.digitalocean.com/apt/droplet-agent main InRelease
+Get:11 http://security.debian.org trixie-security/main amd64 Packages [309 kB]
+Get:12 http://security.debian.org trixie-security/main Translation-en [187 kB]
+Get:14 http://mirrors.digitalocean.com/debian trixie-backports/main Sources.diff/Index [63.3 kB]
+Get:15 http://mirrors.digitalocean.com/debian trixie-backports/main amd64 Packages.diff/Index [63.3 kB]
+Get:16 http://mirrors.digitalocean.com/debian trixie-backports/main Translation-en.diff/Index [63.3 kB]
+Get:17 http://mirrors.digitalocean.com/debian trixie-backports/main Sources T-2026-11-22-1402.26-F-2026-11-19-1414.20.pdiff [7514 B]
+Get:18 http://mirrors.digitalocean.com/debian trixie-backports/main amd64 Packages T-2026-11-22-1402.26-F-2026-11-18-0804.39.pdiff [14.2 kB]
+Get:17 http://mirrors.digitalocean.com/debian trixie-backports/main Sources T-2026-11-22-1402.26-F-2026-11-19-1414.20.pdiff [7514 B]
+Get:18 http://mirrors.digitalocean.com/debian trixie-backports/main amd64 Packages T-2026-11-22-1402.26-F-2026-11-18-0804.39.pdiff [14.2 kB]
+Get:19 http://mirrors.digitalocean.com/debian trixie-backports/main Translation-en T-2026-11-21-1401.39-F-2026-11-18-0804.39.pdiff [7242 B]
+Get:19 http://mirrors.digitalocean.com/debian trixie-backports/main Translation-en T-2026-11-21-1401.39-F-2026-11-18-0804.39.pdiff [7242 B]
+Get:8 http://mirrors.digitalocean.com/debian trixie/main amd64 Packages [9679 kB]
+Get:9 http://mirrors.digitalocean.com/debian trixie/main Translation-en [6486 kB]
+Fetched 28.0 MB in 2s (13.3 MB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+curl is already the newest version (8.14.1-2+deb13u7).
+libjemalloc2 is already the newest version (5.3.0-3).
+libjemalloc2 set to manually installed.
+ca-certificates is already the newest version (20250419+deb13u1).
+util-linux is already the newest version (2.41.5-0+deb13u1).
+procps is already the newest version (2:4.0.4-9).
+procps set to manually installed.
+zstd is already the newest version (1.5.7+dfsg-1).
+The following additional packages will be installed:
+  binutils binutils-common binutils-x86-64-linux-gnu bzip2 cpp cpp-14
+  cpp-14-x86-64-linux-gnu cpp-x86-64-linux-gnu dpkg-dev fakeroot g++ g++-14
+  g++-14-x86-64-linux-gnu g++-x86-64-linux-gnu gcc gcc-14
+  gcc-14-x86-64-linux-gnu gcc-x86-64-linux-gnu libalgorithm-diff-perl
+  libalgorithm-diff-xs-perl libalgorithm-merge-perl libasan8 libbabeltrace1
+  libbinutils libc-bin libc-dev-bin libc-l10n libc6 libc6-dev libcares2
+  libcc1-0 libcrypt-dev libctf-nobfd0 libctf0 libcurl3t64-gnutls
+  libdebuginfod-common libdebuginfod1t64 libdpkg-perl libdw1t64 libfakeroot
+  libfile-fcntllock-perl libgcc-14-dev libgdbm-compat4t64 libgomp1 libgprofng0
+  libhwasan0 libicu76 libisl23 libitm1 libjansson4 liblocale-gettext-perl
+  liblsan0 libluajit-5.1-2 libluajit-5.1-common libmpc3 libmpfr6 libngtcp2-16
+  libngtcp2-crypto-gnutls8 libnode115 libopencsd1 libperl5.40 libpkgconf3
+  libpython3.13 libquadmath0 libsframe1 libstdc++-14-dev libtraceevent1
+  libtsan2 libubsan1 libunwind8 linux-libc-dev locales make manpages-dev
+  node-acorn node-balanced-match node-brace-expansion node-cjs-module-lexer
+  node-corepack node-minimatch node-undici node-xtend nodejs-doc perl
+  perl-modules-5.40 pkgconf pkgconf-bin rpcsvc-proto
+Suggested packages:
+  binutils-doc gprofng-gui binutils-gold bzip2-doc cpp-doc gcc-14-locales
+  cpp-14-doc debian-keyring debian-tag2upload-keyring g++-multilib
+  g++-14-multilib gcc-14-doc gcc-multilib autoconf automake libtool flex bison
+  gdb gcc-doc gcc-14-multilib gdb-x86-64-linux-gnu libc-devtools glibc-doc git
+  bzr libstdc++-14-doc linux-doc-6.12 make-doc npm ed diffutils-doc perl-doc
+  libterm-readline-gnu-perl | libterm-readline-perl-perl
+  libtap-harness-archive-perl
+The following NEW packages will be installed:
+  binutils binutils-common binutils-x86-64-linux-gnu build-essential bzip2 cpp
+  cpp-14 cpp-14-x86-64-linux-gnu cpp-x86-64-linux-gnu dpkg-dev fakeroot g++
+  g++-14 g++-14-x86-64-linux-gnu g++-x86-64-linux-gnu gcc gcc-14
+  gcc-14-x86-64-linux-gnu gcc-x86-64-linux-gnu libalgorithm-diff-perl
+  libalgorithm-diff-xs-perl libalgorithm-merge-perl libasan8 libbabeltrace1
+  libbinutils libc-dev-bin libc6-dev libcares2 libcc1-0 libcrypt-dev
+  libctf-nobfd0 libctf0 libcurl3t64-gnutls libdebuginfod-common
+  libdebuginfod1t64 libdpkg-perl libdw1t64 libfakeroot libfile-fcntllock-perl
+  libgcc-14-dev libgdbm-compat4t64 libgomp1 libgprofng0 libhwasan0 libicu76
+  libisl23 libitm1 libjansson4 liblocale-gettext-perl liblsan0 libluajit-5.1-2
+  libluajit-5.1-common libmpc3 libmpfr6 libngtcp2-16 libngtcp2-crypto-gnutls8
+  libnode115 libopencsd1 libperl5.40 libpkgconf3 libpython3.13 libquadmath0
+  libsframe1 libstdc++-14-dev libtraceevent1 libtsan2 libubsan1 libunwind8
+  libzstd-dev linux-libc-dev linux-perf make manpages-dev node-acorn
+  node-balanced-match node-brace-expansion node-cjs-module-lexer node-corepack
+  node-minimatch node-undici node-xtend nodejs nodejs-doc patch perl
+  perl-modules-5.40 pkg-config pkgconf pkgconf-bin rpcsvc-proto wrk
+The following packages will be upgraded:
+  libc-bin libc-l10n libc6 locales
+4 upgraded, 91 newly installed, 0 to remove and 21 not upgraded.
+Need to get 132 MB of archives.
+After this operation, 500 MB of additional disk space will be used.
+Get:1 file:/etc/apt/mirrors/debian.list Mirrorlist [39 B]
+Get:32 file:/etc/apt/mirrors/debian-security.list Mirrorlist [27 B]
+Get:2 http://mirrors.digitalocean.com/debian trixie/main amd64 libc6 amd64 2.41-12+deb13u5 [2850 kB]
+Get:43 http://security.debian.org trixie-security/main amd64 linux-libc-dev all 6.12.118-1 [3102 kB]
+Get:3 http://mirrors.digitalocean.com/debian trixie/main amd64 libc-bin amd64 2.41-12+deb13u5 [639 kB]
+Get:4 http://mirrors.digitalocean.com/debian trixie/main amd64 libdebuginfod-common all 0.192-4 [23.7 kB]
+Get:5 http://mirrors.digitalocean.com/debian trixie/main amd64 liblocale-gettext-perl amd64 1.07-7+b1 [15.3 kB]
+Get:6 http://mirrors.digitalocean.com/debian trixie/main amd64 bzip2 amd64 1.0.8-6 [40.5 kB]
+Get:7 http://mirrors.digitalocean.com/debian trixie/main amd64 libc-l10n all 2.41-12+deb13u5 [742 kB]
+Get:8 http://mirrors.digitalocean.com/debian trixie/main amd64 locales all 2.41-12+deb13u5 [3930 kB]
+Get:91 http://security.debian.org trixie-security/main amd64 linux-perf amd64 6.12.118-1 [5106 kB]
+Get:9 http://mirrors.digitalocean.com/debian trixie/main amd64 perl-modules-5.40 all 5.40.1-6+deb13u1 [3014 kB]
+Get:10 http://mirrors.digitalocean.com/debian trixie/main amd64 libgdbm-compat4t64 amd64 1.24-2 [50.3 kB]
+Get:11 http://mirrors.digitalocean.com/debian trixie/main amd64 libperl5.40 amd64 5.40.1-6+deb13u1 [4326 kB]
+Get:12 http://mirrors.digitalocean.com/debian trixie/main amd64 perl amd64 5.40.1-6+deb13u1 [268 kB]
+Get:13 http://mirrors.digitalocean.com/debian trixie/main amd64 libsframe1 amd64 2.44-3 [78.4 kB]
+Get:14 http://mirrors.digitalocean.com/debian trixie/main amd64 binutils-common amd64 2.44-3 [2509 kB]
+Get:15 http://mirrors.digitalocean.com/debian trixie/main amd64 libbinutils amd64 2.44-3 [534 kB]
+Get:16 http://mirrors.digitalocean.com/debian trixie/main amd64 libgprofng0 amd64 2.44-3 [808 kB]
+Get:17 http://mirrors.digitalocean.com/debian trixie/main amd64 libctf-nobfd0 amd64 2.44-3 [156 kB]
+Get:18 http://mirrors.digitalocean.com/debian trixie/main amd64 libctf0 amd64 2.44-3 [88.6 kB]
+Get:19 http://mirrors.digitalocean.com/debian trixie/main amd64 libjansson4 amd64 2.14-2+b3 [39.8 kB]
+Get:20 http://mirrors.digitalocean.com/debian trixie/main amd64 binutils-x86-64-linux-gnu amd64 2.44-3 [1014 kB]
+Get:21 http://mirrors.digitalocean.com/debian trixie/main amd64 binutils amd64 2.44-3 [265 kB]
+Get:22 http://mirrors.digitalocean.com/debian trixie/main amd64 libc-dev-bin amd64 2.41-12+deb13u5 [60.5 kB]
+Get:23 http://mirrors.digitalocean.com/debian trixie/main amd64 libcrypt-dev amd64 1:4.4.38-1 [119 kB]
+Get:24 http://mirrors.digitalocean.com/debian trixie/main amd64 rpcsvc-proto amd64 1.4.3-1 [63.3 kB]
+Get:25 http://mirrors.digitalocean.com/debian trixie/main amd64 libc6-dev amd64 2.41-12+deb13u5 [1991 kB]
+Get:26 http://mirrors.digitalocean.com/debian trixie/main amd64 libisl23 amd64 0.27-1 [659 kB]
+Get:27 http://mirrors.digitalocean.com/debian trixie/main amd64 libmpfr6 amd64 4.2.2-1 [729 kB]
+Get:28 http://mirrors.digitalocean.com/debian trixie/main amd64 libmpc3 amd64 1.3.1-1+b3 [52.2 kB]
+Get:29 http://mirrors.digitalocean.com/debian trixie/main amd64 cpp-14-x86-64-linux-gnu amd64 14.2.0-19 [11.0 MB]
+Get:30 http://mirrors.digitalocean.com/debian trixie/main amd64 cpp-14 amd64 14.2.0-19 [1280 B]
+Get:31 http://mirrors.digitalocean.com/debian trixie/main amd64 cpp-x86-64-linux-gnu amd64 4:14.2.0-1 [4840 B]
+Get:33 http://mirrors.digitalocean.com/debian trixie/main amd64 cpp amd64 4:14.2.0-1 [1568 B]
+Get:34 http://mirrors.digitalocean.com/debian trixie/main amd64 libcc1-0 amd64 14.2.0-19 [42.8 kB]
+Get:35 http://mirrors.digitalocean.com/debian trixie/main amd64 libgomp1 amd64 14.2.0-19 [137 kB]
+Get:36 http://mirrors.digitalocean.com/debian trixie/main amd64 libitm1 amd64 14.2.0-19 [26.0 kB]
+Get:37 http://mirrors.digitalocean.com/debian trixie/main amd64 libasan8 amd64 14.2.0-19 [2725 kB]
+Get:38 http://mirrors.digitalocean.com/debian trixie/main amd64 liblsan0 amd64 14.2.0-19 [1204 kB]
+Get:39 http://mirrors.digitalocean.com/debian trixie/main amd64 libtsan2 amd64 14.2.0-19 [2460 kB]
+Get:40 http://mirrors.digitalocean.com/debian trixie/main amd64 libubsan1 amd64 14.2.0-19 [1074 kB]
+Get:41 http://mirrors.digitalocean.com/debian trixie/main amd64 libhwasan0 amd64 14.2.0-19 [1488 kB]
+Get:42 http://mirrors.digitalocean.com/debian trixie/main amd64 libquadmath0 amd64 14.2.0-19 [145 kB]
+Get:44 http://mirrors.digitalocean.com/debian trixie/main amd64 libgcc-14-dev amd64 14.2.0-19 [2672 kB]
+Get:45 http://mirrors.digitalocean.com/debian trixie/main amd64 gcc-14-x86-64-linux-gnu amd64 14.2.0-19 [21.4 MB]
+Get:46 http://mirrors.digitalocean.com/debian trixie/main amd64 gcc-14 amd64 14.2.0-19 [540 kB]
+Get:47 http://mirrors.digitalocean.com/debian trixie/main amd64 gcc-x86-64-linux-gnu amd64 4:14.2.0-1 [1436 B]
+Get:48 http://mirrors.digitalocean.com/debian trixie/main amd64 gcc amd64 4:14.2.0-1 [5136 B]
+Get:49 http://mirrors.digitalocean.com/debian trixie/main amd64 libstdc++-14-dev amd64 14.2.0-19 [2376 kB]
+Get:50 http://mirrors.digitalocean.com/debian trixie/main amd64 g++-14-x86-64-linux-gnu amd64 14.2.0-19 [12.1 MB]
+Get:51 http://mirrors.digitalocean.com/debian trixie/main amd64 g++-14 amd64 14.2.0-19 [22.5 kB]
+Get:52 http://mirrors.digitalocean.com/debian trixie/main amd64 g++-x86-64-linux-gnu amd64 4:14.2.0-1 [1200 B]
+Get:53 http://mirrors.digitalocean.com/debian trixie/main amd64 g++ amd64 4:14.2.0-1 [1344 B]
+Get:54 http://mirrors.digitalocean.com/debian trixie/main amd64 make amd64 4.4.1-2 [463 kB]
+Get:55 http://mirrors.digitalocean.com/debian trixie/main amd64 libdpkg-perl all 1.22.22 [651 kB]
+Get:56 http://mirrors.digitalocean.com/debian trixie/main amd64 patch amd64 2.8-2+deb13u1 [134 kB]
+Get:57 http://mirrors.digitalocean.com/debian trixie/main amd64 dpkg-dev all 1.22.22 [1337 kB]
+Get:58 http://mirrors.digitalocean.com/debian trixie/main amd64 build-essential amd64 12.12 [4624 B]
+Get:59 http://mirrors.digitalocean.com/debian trixie/main amd64 libfakeroot amd64 1.37.1.1-1 [29.6 kB]
+Get:60 http://mirrors.digitalocean.com/debian trixie/main amd64 fakeroot amd64 1.37.1.1-1 [76.0 kB]
+Get:61 http://mirrors.digitalocean.com/debian trixie/main amd64 libalgorithm-diff-perl all 1.201-1 [43.3 kB]
+Get:62 http://mirrors.digitalocean.com/debian trixie/main amd64 libalgorithm-diff-xs-perl amd64 0.04-9 [11.1 kB]
+Get:63 http://mirrors.digitalocean.com/debian trixie/main amd64 libalgorithm-merge-perl all 0.08-5 [11.8 kB]
+Get:64 http://mirrors.digitalocean.com/debian trixie/main amd64 libdw1t64 amd64 0.192-4 [255 kB]
+Get:65 http://mirrors.digitalocean.com/debian trixie/main amd64 libbabeltrace1 amd64 1.5.11-4+b2 [176 kB]
+Get:66 http://mirrors.digitalocean.com/debian trixie/main amd64 libcares2 amd64 1.34.9-1~deb13u1 [103 kB]
+Get:67 http://mirrors.digitalocean.com/debian trixie/main amd64 libngtcp2-16 amd64 1.11.0-1+deb13u1 [132 kB]
+Get:68 http://mirrors.digitalocean.com/debian trixie/main amd64 libngtcp2-crypto-gnutls8 amd64 1.11.0-1+deb13u1 [29.5 kB]
+Get:69 http://mirrors.digitalocean.com/debian trixie/main amd64 libcurl3t64-gnutls amd64 8.14.1-2+deb13u7 [385 kB]
+Get:70 http://mirrors.digitalocean.com/debian trixie/main amd64 libdebuginfod1t64 amd64 0.192-4 [32.4 kB]
+Get:71 http://mirrors.digitalocean.com/debian trixie/main amd64 libfile-fcntllock-perl amd64 0.22-4+b4 [34.6 kB]
+Get:72 http://mirrors.digitalocean.com/debian trixie/main amd64 libicu76 amd64 76.1-4 [9722 kB]
+Get:73 http://mirrors.digitalocean.com/debian trixie/main amd64 libluajit-5.1-common all 2.1.0+openresty20250117-2 [53.3 kB]
+Get:74 http://mirrors.digitalocean.com/debian trixie/main amd64 libluajit-5.1-2 amd64 2.1.0+openresty20250117-2 [265 kB]
+Get:75 http://mirrors.digitalocean.com/debian trixie/main amd64 node-xtend all 4.0.2-3 [3932 B]
+Get:76 http://mirrors.digitalocean.com/debian trixie/main amd64 node-corepack all 0.24.0-5 [712 kB]
+Get:77 http://mirrors.digitalocean.com/debian trixie/main amd64 nodejs amd64 20.19.2+dfsg-1+deb13u3 [355 kB]
+Get:78 http://mirrors.digitalocean.com/debian trixie/main amd64 node-acorn all 8.8.1+ds+~cs25.17.7-2 [128 kB]
+Get:79 http://mirrors.digitalocean.com/debian trixie/main amd64 node-cjs-module-lexer all 1.2.3+dfsg-1 [30.6 kB]
+Get:80 http://mirrors.digitalocean.com/debian trixie/main amd64 node-balanced-match all 2.0.0-1 [4872 B]
+Get:81 http://mirrors.digitalocean.com/debian trixie/main amd64 node-brace-expansion all 2.0.1+~1.1.0-2 [8012 B]
+Get:82 http://mirrors.digitalocean.com/debian trixie/main amd64 node-minimatch all 9.0.3-6 [76.8 kB]
+Get:83 http://mirrors.digitalocean.com/debian trixie/main amd64 node-undici all 7.3.0+dfsg1+~cs24.12.11-1 [333 kB]
+Get:84 http://mirrors.digitalocean.com/debian trixie/main amd64 libnode115 amd64 20.19.2+dfsg-1+deb13u3 [12.1 MB]
+Get:85 http://mirrors.digitalocean.com/debian trixie/main amd64 libopencsd1 amd64 1.5.5-1 [197 kB]
+Get:86 http://mirrors.digitalocean.com/debian trixie/main amd64 libpkgconf3 amd64 1.8.1-4 [36.4 kB]
+Get:87 http://mirrors.digitalocean.com/debian trixie/main amd64 libpython3.13 amd64 3.13.5-2+deb13u5 [2160 kB]
+Get:88 http://mirrors.digitalocean.com/debian trixie/main amd64 libtraceevent1 amd64 1:1.8.4-2 [57.3 kB]
+Get:89 http://mirrors.digitalocean.com/debian trixie/main amd64 libunwind8 amd64 1.8.1-0.1 [56.3 kB]
+Get:90 http://mirrors.digitalocean.com/debian trixie/main amd64 libzstd-dev amd64 1.5.7+dfsg-1 [371 kB]
+Get:92 http://mirrors.digitalocean.com/debian trixie/main amd64 manpages-dev all 6.9.1-1 [2122 kB]
+Get:93 http://mirrors.digitalocean.com/debian trixie/main amd64 nodejs-doc all 20.19.2+dfsg-1+deb13u3 [6088 kB]
+Get:94 http://mirrors.digitalocean.com/debian trixie/main amd64 pkgconf-bin amd64 1.8.1-4 [30.2 kB]
+Get:95 http://mirrors.digitalocean.com/debian trixie/main amd64 pkgconf amd64 1.8.1-4 [26.2 kB]
+Get:96 http://mirrors.digitalocean.com/debian trixie/main amd64 pkg-config amd64 1.8.1-4 [14.0 kB]
+Get:97 http://mirrors.digitalocean.com/debian trixie/main amd64 wrk amd64 4.1.0-4+b1 [43.4 kB]
+apt-listchanges: Reading changelogs...
+Preconfiguring packages ...
+Fetched 132 MB in 2s (70.1 MB/s)
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 24751 files and directories currently installed.)
+Preparing to unpack .../libc6_2.41-12+deb13u5_amd64.deb ...
+Unpacking libc6:amd64 (2.41-12+deb13u5) over (2.41-12+deb13u4) ...
+Setting up libc6:amd64 (2.41-12+deb13u5) ...
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 24751 files and directories currently installed.)
+Preparing to unpack .../libc-bin_2.41-12+deb13u5_amd64.deb ...
+Unpacking libc-bin (2.41-12+deb13u5) over (2.41-12+deb13u4) ...
+Setting up libc-bin (2.41-12+deb13u5) ...
+Selecting previously unselected package libdebuginfod-common.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 24751 files and directories currently installed.)
+Preparing to unpack .../00-libdebuginfod-common_0.192-4_all.deb ...
+Unpacking libdebuginfod-common (0.192-4) ...
+Selecting previously unselected package liblocale-gettext-perl.
+Preparing to unpack .../01-liblocale-gettext-perl_1.07-7+b1_amd64.deb ...
+Unpacking liblocale-gettext-perl (1.07-7+b1) ...
+Selecting previously unselected package bzip2.
+Preparing to unpack .../02-bzip2_1.0.8-6_amd64.deb ...
+Unpacking bzip2 (1.0.8-6) ...
+Preparing to unpack .../03-libc-l10n_2.41-12+deb13u5_all.deb ...
+Unpacking libc-l10n (2.41-12+deb13u5) over (2.41-12+deb13u4) ...
+Preparing to unpack .../04-locales_2.41-12+deb13u5_all.deb ...
+Unpacking locales (2.41-12+deb13u5) over (2.41-12+deb13u4) ...
+Selecting previously unselected package perl-modules-5.40.
+Preparing to unpack .../05-perl-modules-5.40_5.40.1-6+deb13u1_all.deb ...
+Unpacking perl-modules-5.40 (5.40.1-6+deb13u1) ...
+Selecting previously unselected package libgdbm-compat4t64:amd64.
+Preparing to unpack .../06-libgdbm-compat4t64_1.24-2_amd64.deb ...
+Unpacking libgdbm-compat4t64:amd64 (1.24-2) ...
+Selecting previously unselected package libperl5.40:amd64.
+Preparing to unpack .../07-libperl5.40_5.40.1-6+deb13u1_amd64.deb ...
+Unpacking libperl5.40:amd64 (5.40.1-6+deb13u1) ...
+Selecting previously unselected package perl.
+Preparing to unpack .../08-perl_5.40.1-6+deb13u1_amd64.deb ...
+Unpacking perl (5.40.1-6+deb13u1) ...
+Selecting previously unselected package libsframe1:amd64.
+Preparing to unpack .../09-libsframe1_2.44-3_amd64.deb ...
+Unpacking libsframe1:amd64 (2.44-3) ...
+Selecting previously unselected package binutils-common:amd64.
+Preparing to unpack .../10-binutils-common_2.44-3_amd64.deb ...
+Unpacking binutils-common:amd64 (2.44-3) ...
+Selecting previously unselected package libbinutils:amd64.
+Preparing to unpack .../11-libbinutils_2.44-3_amd64.deb ...
+Unpacking libbinutils:amd64 (2.44-3) ...
+Selecting previously unselected package libgprofng0:amd64.
+Preparing to unpack .../12-libgprofng0_2.44-3_amd64.deb ...
+Unpacking libgprofng0:amd64 (2.44-3) ...
+Selecting previously unselected package libctf-nobfd0:amd64.
+Preparing to unpack .../13-libctf-nobfd0_2.44-3_amd64.deb ...
+Unpacking libctf-nobfd0:amd64 (2.44-3) ...
+Selecting previously unselected package libctf0:amd64.
+Preparing to unpack .../14-libctf0_2.44-3_amd64.deb ...
+Unpacking libctf0:amd64 (2.44-3) ...
+Selecting previously unselected package libjansson4:amd64.
+Preparing to unpack .../15-libjansson4_2.14-2+b3_amd64.deb ...
+Unpacking libjansson4:amd64 (2.14-2+b3) ...
+Selecting previously unselected package binutils-x86-64-linux-gnu.
+Preparing to unpack .../16-binutils-x86-64-linux-gnu_2.44-3_amd64.deb ...
+Unpacking binutils-x86-64-linux-gnu (2.44-3) ...
+Selecting previously unselected package binutils.
+Preparing to unpack .../17-binutils_2.44-3_amd64.deb ...
+Unpacking binutils (2.44-3) ...
+Selecting previously unselected package libc-dev-bin.
+Preparing to unpack .../18-libc-dev-bin_2.41-12+deb13u5_amd64.deb ...
+Unpacking libc-dev-bin (2.41-12+deb13u5) ...
+Selecting previously unselected package linux-libc-dev.
+Preparing to unpack .../19-linux-libc-dev_6.12.118-1_all.deb ...
+Unpacking linux-libc-dev (6.12.118-1) ...
+Selecting previously unselected package libcrypt-dev:amd64.
+Preparing to unpack .../20-libcrypt-dev_1%3a4.4.38-1_amd64.deb ...
+Unpacking libcrypt-dev:amd64 (1:4.4.38-1) ...
+Selecting previously unselected package rpcsvc-proto.
+Preparing to unpack .../21-rpcsvc-proto_1.4.3-1_amd64.deb ...
+Unpacking rpcsvc-proto (1.4.3-1) ...
+Selecting previously unselected package libc6-dev:amd64.
+Preparing to unpack .../22-libc6-dev_2.41-12+deb13u5_amd64.deb ...
+Unpacking libc6-dev:amd64 (2.41-12+deb13u5) ...
+Selecting previously unselected package libisl23:amd64.
+Preparing to unpack .../23-libisl23_0.27-1_amd64.deb ...
+Unpacking libisl23:amd64 (0.27-1) ...
+Selecting previously unselected package libmpfr6:amd64.
+Preparing to unpack .../24-libmpfr6_4.2.2-1_amd64.deb ...
+Unpacking libmpfr6:amd64 (4.2.2-1) ...
+Selecting previously unselected package libmpc3:amd64.
+Preparing to unpack .../25-libmpc3_1.3.1-1+b3_amd64.deb ...
+Unpacking libmpc3:amd64 (1.3.1-1+b3) ...
+Selecting previously unselected package cpp-14-x86-64-linux-gnu.
+Preparing to unpack .../26-cpp-14-x86-64-linux-gnu_14.2.0-19_amd64.deb ...
+Unpacking cpp-14-x86-64-linux-gnu (14.2.0-19) ...
+Selecting previously unselected package cpp-14.
+Preparing to unpack .../27-cpp-14_14.2.0-19_amd64.deb ...
+Unpacking cpp-14 (14.2.0-19) ...
+Selecting previously unselected package cpp-x86-64-linux-gnu.
+Preparing to unpack .../28-cpp-x86-64-linux-gnu_4%3a14.2.0-1_amd64.deb ...
+Unpacking cpp-x86-64-linux-gnu (4:14.2.0-1) ...
+Selecting previously unselected package cpp.
+Preparing to unpack .../29-cpp_4%3a14.2.0-1_amd64.deb ...
+Unpacking cpp (4:14.2.0-1) ...
+Selecting previously unselected package libcc1-0:amd64.
+Preparing to unpack .../30-libcc1-0_14.2.0-19_amd64.deb ...
+Unpacking libcc1-0:amd64 (14.2.0-19) ...
+Selecting previously unselected package libgomp1:amd64.
+Preparing to unpack .../31-libgomp1_14.2.0-19_amd64.deb ...
+Unpacking libgomp1:amd64 (14.2.0-19) ...
+Selecting previously unselected package libitm1:amd64.
+Preparing to unpack .../32-libitm1_14.2.0-19_amd64.deb ...
+Unpacking libitm1:amd64 (14.2.0-19) ...
+Selecting previously unselected package libasan8:amd64.
+Preparing to unpack .../33-libasan8_14.2.0-19_amd64.deb ...
+Unpacking libasan8:amd64 (14.2.0-19) ...
+Selecting previously unselected package liblsan0:amd64.
+Preparing to unpack .../34-liblsan0_14.2.0-19_amd64.deb ...
+Unpacking liblsan0:amd64 (14.2.0-19) ...
+Selecting previously unselected package libtsan2:amd64.
+Preparing to unpack .../35-libtsan2_14.2.0-19_amd64.deb ...
+Unpacking libtsan2:amd64 (14.2.0-19) ...
+Selecting previously unselected package libubsan1:amd64.
+Preparing to unpack .../36-libubsan1_14.2.0-19_amd64.deb ...
+Unpacking libubsan1:amd64 (14.2.0-19) ...
+Selecting previously unselected package libhwasan0:amd64.
+Preparing to unpack .../37-libhwasan0_14.2.0-19_amd64.deb ...
+Unpacking libhwasan0:amd64 (14.2.0-19) ...
+Selecting previously unselected package libquadmath0:amd64.
+Preparing to unpack .../38-libquadmath0_14.2.0-19_amd64.deb ...
+Unpacking libquadmath0:amd64 (14.2.0-19) ...
+Selecting previously unselected package libgcc-14-dev:amd64.
+Preparing to unpack .../39-libgcc-14-dev_14.2.0-19_amd64.deb ...
+Unpacking libgcc-14-dev:amd64 (14.2.0-19) ...
+Selecting previously unselected package gcc-14-x86-64-linux-gnu.
+Preparing to unpack .../40-gcc-14-x86-64-linux-gnu_14.2.0-19_amd64.deb ...
+Unpacking gcc-14-x86-64-linux-gnu (14.2.0-19) ...
+Selecting previously unselected package gcc-14.
+Preparing to unpack .../41-gcc-14_14.2.0-19_amd64.deb ...
+Unpacking gcc-14 (14.2.0-19) ...
+Selecting previously unselected package gcc-x86-64-linux-gnu.
+Preparing to unpack .../42-gcc-x86-64-linux-gnu_4%3a14.2.0-1_amd64.deb ...
+Unpacking gcc-x86-64-linux-gnu (4:14.2.0-1) ...
+Selecting previously unselected package gcc.
+Preparing to unpack .../43-gcc_4%3a14.2.0-1_amd64.deb ...
+Unpacking gcc (4:14.2.0-1) ...
+Selecting previously unselected package libstdc++-14-dev:amd64.
+Preparing to unpack .../44-libstdc++-14-dev_14.2.0-19_amd64.deb ...
+Unpacking libstdc++-14-dev:amd64 (14.2.0-19) ...
+Selecting previously unselected package g++-14-x86-64-linux-gnu.
+Preparing to unpack .../45-g++-14-x86-64-linux-gnu_14.2.0-19_amd64.deb ...
+Unpacking g++-14-x86-64-linux-gnu (14.2.0-19) ...
+Selecting previously unselected package g++-14.
+Preparing to unpack .../46-g++-14_14.2.0-19_amd64.deb ...
+Unpacking g++-14 (14.2.0-19) ...
+Selecting previously unselected package g++-x86-64-linux-gnu.
+Preparing to unpack .../47-g++-x86-64-linux-gnu_4%3a14.2.0-1_amd64.deb ...
+Unpacking g++-x86-64-linux-gnu (4:14.2.0-1) ...
+Selecting previously unselected package g++.
+Preparing to unpack .../48-g++_4%3a14.2.0-1_amd64.deb ...
+Unpacking g++ (4:14.2.0-1) ...
+Selecting previously unselected package make.
+Preparing to unpack .../49-make_4.4.1-2_amd64.deb ...
+Unpacking make (4.4.1-2) ...
+Selecting previously unselected package libdpkg-perl.
+Preparing to unpack .../50-libdpkg-perl_1.22.22_all.deb ...
+Unpacking libdpkg-perl (1.22.22) ...
+Selecting previously unselected package patch.
+Preparing to unpack .../51-patch_2.8-2+deb13u1_amd64.deb ...
+Unpacking patch (2.8-2+deb13u1) ...
+Selecting previously unselected package dpkg-dev.
+Preparing to unpack .../52-dpkg-dev_1.22.22_all.deb ...
+Unpacking dpkg-dev (1.22.22) ...
+Selecting previously unselected package build-essential.
+Preparing to unpack .../53-build-essential_12.12_amd64.deb ...
+Unpacking build-essential (12.12) ...
+Selecting previously unselected package libfakeroot:amd64.
+Preparing to unpack .../54-libfakeroot_1.37.1.1-1_amd64.deb ...
+Unpacking libfakeroot:amd64 (1.37.1.1-1) ...
+Selecting previously unselected package fakeroot.
+Preparing to unpack .../55-fakeroot_1.37.1.1-1_amd64.deb ...
+Unpacking fakeroot (1.37.1.1-1) ...
+Selecting previously unselected package libalgorithm-diff-perl.
+Preparing to unpack .../56-libalgorithm-diff-perl_1.201-1_all.deb ...
+Unpacking libalgorithm-diff-perl (1.201-1) ...
+Selecting previously unselected package libalgorithm-diff-xs-perl.
+Preparing to unpack .../57-libalgorithm-diff-xs-perl_0.04-9_amd64.deb ...
+Unpacking libalgorithm-diff-xs-perl (0.04-9) ...
+Selecting previously unselected package libalgorithm-merge-perl.
+Preparing to unpack .../58-libalgorithm-merge-perl_0.08-5_all.deb ...
+Unpacking libalgorithm-merge-perl (0.08-5) ...
+Selecting previously unselected package libdw1t64:amd64.
+Preparing to unpack .../59-libdw1t64_0.192-4_amd64.deb ...
+Unpacking libdw1t64:amd64 (0.192-4) ...
+Selecting previously unselected package libbabeltrace1:amd64.
+Preparing to unpack .../60-libbabeltrace1_1.5.11-4+b2_amd64.deb ...
+Unpacking libbabeltrace1:amd64 (1.5.11-4+b2) ...
+Selecting previously unselected package libcares2:amd64.
+Preparing to unpack .../61-libcares2_1.34.9-1~deb13u1_amd64.deb ...
+Unpacking libcares2:amd64 (1.34.9-1~deb13u1) ...
+Selecting previously unselected package libngtcp2-16:amd64.
+Preparing to unpack .../62-libngtcp2-16_1.11.0-1+deb13u1_amd64.deb ...
+Unpacking libngtcp2-16:amd64 (1.11.0-1+deb13u1) ...
+Selecting previously unselected package libngtcp2-crypto-gnutls8:amd64.
+Preparing to unpack .../63-libngtcp2-crypto-gnutls8_1.11.0-1+deb13u1_amd64.deb ...
+Unpacking libngtcp2-crypto-gnutls8:amd64 (1.11.0-1+deb13u1) ...
+Selecting previously unselected package libcurl3t64-gnutls:amd64.
+Preparing to unpack .../64-libcurl3t64-gnutls_8.14.1-2+deb13u7_amd64.deb ...
+Unpacking libcurl3t64-gnutls:amd64 (8.14.1-2+deb13u7) ...
+Selecting previously unselected package libdebuginfod1t64:amd64.
+Preparing to unpack .../65-libdebuginfod1t64_0.192-4_amd64.deb ...
+Unpacking libdebuginfod1t64:amd64 (0.192-4) ...
+Selecting previously unselected package libfile-fcntllock-perl.
+Preparing to unpack .../66-libfile-fcntllock-perl_0.22-4+b4_amd64.deb ...
+Unpacking libfile-fcntllock-perl (0.22-4+b4) ...
+Selecting previously unselected package libicu76:amd64.
+Preparing to unpack .../67-libicu76_76.1-4_amd64.deb ...
+Unpacking libicu76:amd64 (76.1-4) ...
+Selecting previously unselected package libluajit-5.1-common.
+Preparing to unpack .../68-libluajit-5.1-common_2.1.0+openresty20250117-2_all.deb ...
+Unpacking libluajit-5.1-common (2.1.0+openresty20250117-2) ...
+Selecting previously unselected package libluajit-5.1-2:amd64.
+Preparing to unpack .../69-libluajit-5.1-2_2.1.0+openresty20250117-2_amd64.deb ...
+Unpacking libluajit-5.1-2:amd64 (2.1.0+openresty20250117-2) ...
+Selecting previously unselected package node-xtend.
+Preparing to unpack .../70-node-xtend_4.0.2-3_all.deb ...
+Unpacking node-xtend (4.0.2-3) ...
+Selecting previously unselected package node-corepack.
+Preparing to unpack .../71-node-corepack_0.24.0-5_all.deb ...
+Unpacking node-corepack (0.24.0-5) ...
+Selecting previously unselected package nodejs.
+Preparing to unpack .../72-nodejs_20.19.2+dfsg-1+deb13u3_amd64.deb ...
+Unpacking nodejs (20.19.2+dfsg-1+deb13u3) ...
+Selecting previously unselected package node-acorn.
+Preparing to unpack .../73-node-acorn_8.8.1+ds+~cs25.17.7-2_all.deb ...
+Unpacking node-acorn (8.8.1+ds+~cs25.17.7-2) ...
+Selecting previously unselected package node-cjs-module-lexer.
+Preparing to unpack .../74-node-cjs-module-lexer_1.2.3+dfsg-1_all.deb ...
+Unpacking node-cjs-module-lexer (1.2.3+dfsg-1) ...
+Selecting previously unselected package node-balanced-match.
+Preparing to unpack .../75-node-balanced-match_2.0.0-1_all.deb ...
+Unpacking node-balanced-match (2.0.0-1) ...
+Selecting previously unselected package node-brace-expansion.
+Preparing to unpack .../76-node-brace-expansion_2.0.1+~1.1.0-2_all.deb ...
+Unpacking node-brace-expansion (2.0.1+~1.1.0-2) ...
+Selecting previously unselected package node-minimatch.
+Preparing to unpack .../77-node-minimatch_9.0.3-6_all.deb ...
+Unpacking node-minimatch (9.0.3-6) ...
+Selecting previously unselected package node-undici.
+Preparing to unpack .../78-node-undici_7.3.0+dfsg1+~cs24.12.11-1_all.deb ...
+Unpacking node-undici (7.3.0+dfsg1+~cs24.12.11-1) ...
+Selecting previously unselected package libnode115:amd64.
+Preparing to unpack .../79-libnode115_20.19.2+dfsg-1+deb13u3_amd64.deb ...
+Unpacking libnode115:amd64 (20.19.2+dfsg-1+deb13u3) ...
+Selecting previously unselected package libopencsd1:amd64.
+Preparing to unpack .../80-libopencsd1_1.5.5-1_amd64.deb ...
+Unpacking libopencsd1:amd64 (1.5.5-1) ...
+Selecting previously unselected package libpkgconf3:amd64.
+Preparing to unpack .../81-libpkgconf3_1.8.1-4_amd64.deb ...
+Unpacking libpkgconf3:amd64 (1.8.1-4) ...
+Selecting previously unselected package libpython3.13:amd64.
+Preparing to unpack .../82-libpython3.13_3.13.5-2+deb13u5_amd64.deb ...
+Unpacking libpython3.13:amd64 (3.13.5-2+deb13u5) ...
+Selecting previously unselected package libtraceevent1:amd64.
+Preparing to unpack .../83-libtraceevent1_1%3a1.8.4-2_amd64.deb ...
+Unpacking libtraceevent1:amd64 (1:1.8.4-2) ...
+Selecting previously unselected package libunwind8:amd64.
+Preparing to unpack .../84-libunwind8_1.8.1-0.1_amd64.deb ...
+Unpacking libunwind8:amd64 (1.8.1-0.1) ...
+Selecting previously unselected package libzstd-dev:amd64.
+Preparing to unpack .../85-libzstd-dev_1.5.7+dfsg-1_amd64.deb ...
+Unpacking libzstd-dev:amd64 (1.5.7+dfsg-1) ...
+Selecting previously unselected package linux-perf.
+Preparing to unpack .../86-linux-perf_6.12.118-1_amd64.deb ...
+Adding 'diversion of /usr/bin/perf to /usr/bin/perf.wrapper by linux-perf'
+Adding 'diversion of /usr/share/bash-completion/completions/perf to /usr/share/bash-completion/completions/perf.wrapper by linux-perf'
+Adding 'diversion of /usr/share/man/man1/perf.1.gz to /usr/share/man/man1/perf.wrapper.1.gz by linux-perf'
+Unpacking linux-perf (6.12.118-1) ...
+Selecting previously unselected package manpages-dev.
+Preparing to unpack .../87-manpages-dev_6.9.1-1_all.deb ...
+Unpacking manpages-dev (6.9.1-1) ...
+Selecting previously unselected package nodejs-doc.
+Preparing to unpack .../88-nodejs-doc_20.19.2+dfsg-1+deb13u3_all.deb ...
+Unpacking nodejs-doc (20.19.2+dfsg-1+deb13u3) ...
+Selecting previously unselected package pkgconf-bin.
+Preparing to unpack .../89-pkgconf-bin_1.8.1-4_amd64.deb ...
+Unpacking pkgconf-bin (1.8.1-4) ...
+Selecting previously unselected package pkgconf:amd64.
+Preparing to unpack .../90-pkgconf_1.8.1-4_amd64.deb ...
+Unpacking pkgconf:amd64 (1.8.1-4) ...
+Selecting previously unselected package pkg-config:amd64.
+Preparing to unpack .../91-pkg-config_1.8.1-4_amd64.deb ...
+Unpacking pkg-config:amd64 (1.8.1-4) ...
+Selecting previously unselected package wrk.
+Preparing to unpack .../92-wrk_4.1.0-4+b1_amd64.deb ...
+Unpacking wrk (4.1.0-4+b1) ...
+Setting up libpython3.13:amd64 (3.13.5-2+deb13u5) ...
+Setting up manpages-dev (6.9.1-1) ...
+Setting up libc-l10n (2.41-12+deb13u5) ...
+Setting up libzstd-dev:amd64 (1.5.7+dfsg-1) ...
+Setting up libdebuginfod-common (0.192-4) ...
+Setting up libgdbm-compat4t64:amd64 (1.24-2) ...
+Setting up binutils-common:amd64 (2.44-3) ...
+Setting up linux-libc-dev (6.12.118-1) ...
+Setting up libctf-nobfd0:amd64 (2.44-3) ...
+Setting up node-cjs-module-lexer (1.2.3+dfsg-1) ...
+Setting up libgomp1:amd64 (14.2.0-19) ...
+Setting up bzip2 (1.0.8-6) ...
+Setting up locales (2.41-12+deb13u5) ...
+Generating locales (this might take a while)...
+Generation complete.
+Setting up libunwind8:amd64 (1.8.1-0.1) ...
+Setting up libsframe1:amd64 (2.44-3) ...
+Setting up libfakeroot:amd64 (1.37.1.1-1) ...
+Setting up libjansson4:amd64 (2.14-2+b3) ...
+Setting up libdw1t64:amd64 (0.192-4) ...
+Setting up fakeroot (1.37.1.1-1) ...
+update-alternatives: using /usr/bin/fakeroot-sysv to provide /usr/bin/fakeroot (fakeroot) in auto mode
+Setting up libpkgconf3:amd64 (1.8.1-4) ...
+Setting up rpcsvc-proto (1.4.3-1) ...
+Setting up libopencsd1:amd64 (1.5.5-1) ...
+Setting up make (4.4.1-2) ...
+Setting up libmpfr6:amd64 (4.2.2-1) ...
+Setting up node-balanced-match (2.0.0-1) ...
+Setting up node-brace-expansion (2.0.1+~1.1.0-2) ...
+Setting up libquadmath0:amd64 (14.2.0-19) ...
+Setting up libluajit-5.1-common (2.1.0+openresty20250117-2) ...
+Setting up libcares2:amd64 (1.34.9-1~deb13u1) ...
+Setting up libmpc3:amd64 (1.3.1-1+b3) ...
+Setting up patch (2.8-2+deb13u1) ...
+Setting up pkgconf-bin (1.8.1-4) ...
+Setting up libbabeltrace1:amd64 (1.5.11-4+b2) ...
+Setting up nodejs-doc (20.19.2+dfsg-1+deb13u3) ...
+Setting up libubsan1:amd64 (14.2.0-19) ...
+Setting up node-undici (7.3.0+dfsg1+~cs24.12.11-1) ...
+Setting up perl-modules-5.40 (5.40.1-6+deb13u1) ...
+Setting up libhwasan0:amd64 (14.2.0-19) ...
+Setting up libtraceevent1:amd64 (1:1.8.4-2) ...
+Setting up libcrypt-dev:amd64 (1:4.4.38-1) ...
+Setting up libasan8:amd64 (14.2.0-19) ...
+Setting up libngtcp2-16:amd64 (1.11.0-1+deb13u1) ...
+Setting up libicu76:amd64 (76.1-4) ...
+Setting up node-minimatch (9.0.3-6) ...
+Setting up libtsan2:amd64 (14.2.0-19) ...
+Setting up libbinutils:amd64 (2.44-3) ...
+Setting up node-xtend (4.0.2-3) ...
+Setting up libisl23:amd64 (0.27-1) ...
+Setting up libc-dev-bin (2.41-12+deb13u5) ...
+Setting up libcc1-0:amd64 (14.2.0-19) ...
+Setting up liblocale-gettext-perl (1.07-7+b1) ...
+Setting up liblsan0:amd64 (14.2.0-19) ...
+Setting up libngtcp2-crypto-gnutls8:amd64 (1.11.0-1+deb13u1) ...
+Setting up libitm1:amd64 (14.2.0-19) ...
+Setting up libctf0:amd64 (2.44-3) ...
+Setting up libcurl3t64-gnutls:amd64 (8.14.1-2+deb13u7) ...
+Setting up libluajit-5.1-2:amd64 (2.1.0+openresty20250117-2) ...
+Setting up pkgconf:amd64 (1.8.1-4) ...
+Setting up libperl5.40:amd64 (5.40.1-6+deb13u1) ...
+Setting up perl (5.40.1-6+deb13u1) ...
+Setting up libgprofng0:amd64 (2.44-3) ...
+Setting up pkg-config:amd64 (1.8.1-4) ...
+Setting up cpp-14-x86-64-linux-gnu (14.2.0-19) ...
+Setting up libdpkg-perl (1.22.22) ...
+Setting up cpp-14 (14.2.0-19) ...
+Setting up wrk (4.1.0-4+b1) ...
+Setting up libc6-dev:amd64 (2.41-12+deb13u5) ...
+Setting up libgcc-14-dev:amd64 (14.2.0-19) ...
+Setting up libstdc++-14-dev:amd64 (14.2.0-19) ...
+Setting up binutils-x86-64-linux-gnu (2.44-3) ...
+Setting up cpp-x86-64-linux-gnu (4:14.2.0-1) ...
+Setting up libdebuginfod1t64:amd64 (0.192-4) ...
+Setting up libfile-fcntllock-perl (0.22-4+b4) ...
+Setting up libalgorithm-diff-perl (1.201-1) ...
+Setting up binutils (2.44-3) ...
+Setting up dpkg-dev (1.22.22) ...
+Setting up linux-perf (6.12.118-1) ...
+Setting up cpp (4:14.2.0-1) ...
+Setting up gcc-14-x86-64-linux-gnu (14.2.0-19) ...
+Setting up libalgorithm-diff-xs-perl (0.04-9) ...
+Setting up libalgorithm-merge-perl (0.08-5) ...
+Setting up gcc-x86-64-linux-gnu (4:14.2.0-1) ...
+Setting up gcc-14 (14.2.0-19) ...
+Setting up g++-14-x86-64-linux-gnu (14.2.0-19) ...
+Setting up g++-x86-64-linux-gnu (4:14.2.0-1) ...
+Setting up g++-14 (14.2.0-19) ...
+Setting up gcc (4:14.2.0-1) ...
+Setting up g++ (4:14.2.0-1) ...
+update-alternatives: using /usr/bin/g++ to provide /usr/bin/c++ (c++) in auto mode
+Setting up build-essential (12.12) ...
+Setting up node-acorn (8.8.1+ds+~cs25.17.7-2) ...
+Setting up node-corepack (0.24.0-5) ...
+Setting up libnode115:amd64 (20.19.2+dfsg-1+deb13u3) ...
+Setting up nodejs (20.19.2+dfsg-1+deb13u3) ...
+update-alternatives: using /usr/bin/nodejs to provide /usr/bin/js (js) in auto mode
+Processing triggers for man-db (2.13.1-1) ...
+Processing triggers for libc-bin (2.41-12+deb13u5) ...
+Processing triggers for systemd (257.13-1~deb13u1) ...
+kernel.perf_event_paranoid = -1
+kernel.kptr_restrict = 0
+kernel.nmi_watchdog = 0
+kernel.perf_cpu_time_max_percent = 0
+sysctl: setting key "kernel.perf_event_max_sample_rate": Invalid argument
+setup: could not set the perf sampling limits
+info: downloading installer
+info: profile set to minimal
+info: default host tuple is x86_64-unknown-linux-gnu
+info: syncing channel updates for 1.100.0-x86_64-unknown-linux-gnu
+info: latest update on 2026-11-12 for version 1.100.0 (0ef1bc386 2026-11-09)
+info: downloading 3 components
+info: default toolchain set to 1.100.0-x86_64-unknown-linux-gnu
+
+  1.100.0-x86_64-unknown-linux-gnu installed - rustc 1.100.0 (0ef1bc386 2026-11-09)
+
+
+Rust is installed now. Great!
+
+To get started you may need to restart your current shell.
+This would reload your PATH environment variable to include
+Cargo's bin directory ($HOME/.cargo/bin).
+
+To configure your current shell, you need to source the
+corresponding env file under $HOME/.cargo.
+
+Consider running the right command for your shell (note the leading DOT):
+. "$HOME/.cargo/env" # For sh/ash/dash/pdksh/bash
+cargo:rerun-if-env-changed=CC_x86_64-unknown-linux-gnu
+CC_x86_64-unknown-linux-gnu = None
+cargo:rerun-if-env-changed=CC_x86_64_unknown_linux_gnu
+CC_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=HOST_CC
+HOST_CC = None
+cargo:rerun-if-env-changed=CC
+CC = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+cargo:rerun-if-env-changed=CPATH
+cargo:rerun-if-env-changed=C_INCLUDE_PATH
+cargo:rerun-if-env-changed=CPLUS_INCLUDE_PATH
+cargo:rerun-if-env-changed=OBJC_INCLUDE_PATH
+cargo:rerun-if-env-changed=OBJCPLUS_INCLUDE_PATH
+cargo:rerun-if-env-changed=COMPILER_PATH
+cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH
+cargo:rerun-if-env-changed=GCC_EXEC_PREFIX
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=HOST_CFLAGS
+HOST_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64_unknown_linux_gnu
+CFLAGS_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64-unknown-linux-gnu
+CFLAGS_x86_64-unknown-linux-gnu = None
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+333856,,cycles:u,529204,100.00,,
+993525,,cycles:k,529204,100.00,,
+137469,,instructions:u,529204,100.00,0.41,insn per cycle
+/sys/devices/system/cpu/cpu0/topology/thread_siblings_list:0
+/sys/devices/system/cpu/cpu1/topology/thread_siblings_list:1
+/sys/devices/system/cpu/cpu2/topology/thread_siblings_list:2
+/sys/devices/system/cpu/cpu3/topology/thread_siblings_list:3
+/sys/devices/system/cpu/cpu4/topology/thread_siblings_list:4
+/sys/devices/system/cpu/cpu5/topology/thread_siblings_list:5
+/sys/devices/system/cpu/cpu6/topology/thread_siblings_list:6
+/sys/devices/system/cpu/cpu7/topology/thread_siblings_list:7
+thp enabled: [always] madvise never, defrag: always defer defer+madvise [madvise] never
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+== main: 7a275ef1534efb3a1e1130a4bac5de2322ad380f, full build, 22:43:44
+   Compiling p1824c v0.0.0 (/m/1824c/probe)
+    Finished `release` profile [optimized] target(s) in 46.43s
+main c44243d5cebe3053b290bb85279c27cf58a864eb3836256a4f3ac569061dffd1 4425608 bytes
+main built in 46 s
+== faultcost 22:44:30
+faultcost bb091efe5cc2247ecaa794dbc31ff715ad43c971bcb4d6de901ffaa6a3d49345 499136 bytes
+BUILD-DONE
+SETUP-DONE
+core: cycles:u,cycles:k,instructions:u,instructions:k,page-faults,minor-faults,major-faults,context-switches,cpu-migrations
+tlb: cycles:k,instructions:k,dTLB-load-misses:k,dTLB-store-misses:k,iTLB-load-misses:k,page-faults,context-switches
+cache: cycles:k,instructions:k,cache-misses:k,cache-references:k,L1-icache-load-misses:k,L1-icache-load-misses:u,page-faults,context-switches
+pass A: CPU 2's cycles:u and cycles:k counted at 100% beside the sampling
+preflight sampling: cycles every 1000003, 733 samples; call graphs: -g --kernel-callchains; kernel functions named 33, by address only 0
+== 1824c faultcost 22:44:37
+first FAULTCOST mode=demand mib=4096 pages=1048576 ns_per_page=3591 kcycles_per_page=4772 ucycles_per_page=899 minflt_per_page=1.0000 anon_huge_kb=0
+warmed FAULTCOST mode=demand mib=13229 pages=3386624 ns_per_page=3513 kcycles_per_page=4892 ucycles_per_page=906 minflt_per_page=1.0000 anon_huge_kb=0
+round 1 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1751 kcycles_per_page=5281 ucycles_per_page=851 minflt_per_page=1.0000 anon_huge_kb=0
+round 1 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1296 kcycles_per_page=4575 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 1 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=1031 kcycles_per_page=3556 ucycles_per_page=38 minflt_per_page=0.0020 anon_huge_kb=262144
+round 1 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=40 kcycles_per_page=1 ucycles_per_page=139 minflt_per_page=0.0000 anon_huge_kb=0
+round 2 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1714 kcycles_per_page=5259 ucycles_per_page=856 minflt_per_page=1.0000 anon_huge_kb=0
+round 2 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1315 kcycles_per_page=4596 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 2 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=1020 kcycles_per_page=3643 ucycles_per_page=39 minflt_per_page=0.0020 anon_huge_kb=262144
+round 2 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=41 kcycles_per_page=1 ucycles_per_page=145 minflt_per_page=0.0000 anon_huge_kb=0
+round 3 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1740 kcycles_per_page=5333 ucycles_per_page=849 minflt_per_page=1.0000 anon_huge_kb=0
+round 3 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1280 kcycles_per_page=4592 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 3 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=1019 kcycles_per_page=3626 ucycles_per_page=40 minflt_per_page=0.0020 anon_huge_kb=262144
+round 3 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=40 kcycles_per_page=1 ucycles_per_page=134 minflt_per_page=0.0000 anon_huge_kb=0
+round 4 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1736 kcycles_per_page=5206 ucycles_per_page=855 minflt_per_page=1.0000 anon_huge_kb=0
+round 4 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1289 kcycles_per_page=4613 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 4 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=1030 kcycles_per_page=3563 ucycles_per_page=39 minflt_per_page=0.0020 anon_huge_kb=262144
+round 4 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=40 kcycles_per_page=0 ucycles_per_page=141 minflt_per_page=0.0000 anon_huge_kb=0
+round 5 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1756 kcycles_per_page=5281 ucycles_per_page=851 minflt_per_page=1.0000 anon_huge_kb=0
+round 5 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1281 kcycles_per_page=4648 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 5 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=1031 kcycles_per_page=3644 ucycles_per_page=39 minflt_per_page=0.0020 anon_huge_kb=262144
+round 5 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=40 kcycles_per_page=1 ucycles_per_page=140 minflt_per_page=0.0000 anon_huge_kb=0
+== 1824c check start 22:44:56
+a-je-flat: checked 1 requests: A twice and B the same; 6124 bytes
+a-je-graph: checked 1 requests: A twice and B the same; 6124 bytes
+a-gl-flat: checked 1 requests: A twice and B the same; 6124 bytes
+a-gl-graph: checked 1 requests: A twice and B the same; 6124 bytes
+b-je-core: checked 1 requests: A twice and B the same; 6124 bytes
+b-gl-core: checked 1 requests: A twice and B the same; 6124 bytes
+b-je-tlb: checked 1 requests: A twice and B the same; 6124 bytes
+b-gl-tlb: checked 1 requests: A twice and B the same; 6124 bytes
+b-je-cache: checked 1 requests: A twice and B the same; 6124 bytes
+b-gl-cache: checked 1 requests: A twice and B the same; 6124 bytes
+== 1824c checks ok 22:45:33
+== a-je-flat start 22:45:33
+== a-je-flat ok 22:46:25
+== a-je-graph start 22:46:25
+== a-je-graph ok 22:47:17
+== a-gl-flat start 22:47:17
+== a-gl-flat ok 22:48:09
+== a-gl-graph start 22:48:09
+== a-gl-graph ok 22:49:02
+== profile reports 22:49:02
+raw perf data kept: perf-data.tar.zst, 4416546 bytes
+== b-je-core start 22:50:14
+== b-je-core ok 22:53:52
+== b-gl-core start 22:53:52
+== b-gl-core ok 22:57:35
+== b-je-tlb start 22:57:35
+== b-je-tlb ok 23:01:13
+== b-gl-tlb start 23:01:13
+== b-gl-tlb ok 23:04:56
+== b-je-cache start 23:04:56
+== b-je-cache ok 23:08:34
+== b-gl-cache start 23:08:34
+== b-gl-cache ok 23:12:16
+### b-gl-cache: 30 pairs, 90% interval = differences of rank 11 and 20, failed requests 0
+| a request (unless said) | A (room) median | B (off) median | A - B, median per pair | 90% interval | A / B - 1 |
+| --- | ---: | ---: | ---: | --- | ---: |
+| cycles_k | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 | n/a |
+| instructions_k | 23571 | 16341 | +7240 | +7203 to +7259 | +44.3% |
+| cache_misses_k | 23.34 | 7.64 | +15.61 | +15.29 to +15.90 | +209.1% |
+| cache_references_k | 495 | 258 | +237 | +232 to +241 | +91.8% |
+| L1_icache_load_misses_k | 3935 | 2783 | +1159 | +1146 to +1184 | +41.9% |
+| L1_icache_load_misses_u | 4058 | 2959 | +1096 | +1054 to +1119 | +37.2% |
+| page_faults | 1.88 | 0.00 | +1.88 | +1.88 to +1.88 | +111739.9% |
+| context_switches | 0.0007 | 0.0005 | +0.0002 | +0.0002 to +0.0002 | +33.9% |
+| minflt | 1.88 | 0.00 | +1.88 | +1.88 to +1.88 | +111739.9% |
+| kernel instructions a cycle | n/a | n/a | n/a | n/a to n/a | n/a |
+| resident bytes | 7671 | 7 | +7664 | +7664 to +7664 | +114090.5% |
+| resident KiB before load (per process) | 5060 | 5124 | -50 | -92 to -8 | -1.0% |
+| Anonymous KiB at the end (per process) | 737594 | 1312 | +736344 | +733760 to +739248 | +56443.6% |
+| AnonHugePages KiB at the end (per process) | 2048 | 0 | +2048 | +2048 to +2048 | n/a |
+median requests/s: A 32810, B 47015
+
+### b-gl-core: 30 pairs, 90% interval = differences of rank 11 and 20, failed requests 0
+| a request (unless said) | A (room) median | B (off) median | A - B, median per pair | 90% interval | A / B - 1 |
+| --- | ---: | ---: | ---: | --- | ---: |
+| cycles_u | 43118 | 28810 | +14161 | +13973 to +14491 | +49.6% |
+| cycles_k | 47007 | 30034 | +17000 | +16688 to +17253 | +56.6% |
+| instructions_u | 54508 | 44438 | +10071 | +10063 to +10076 | +22.7% |
+| instructions_k | 23945 | 16329 | +7623 | +7580 to +7644 | +46.7% |
+| page_faults | 1.88 | 0.00 | +1.88 | +1.88 to +1.88 | +115193.5% |
+| minor_faults | 1.88 | 0.00 | +1.88 | +1.88 to +1.88 | +115193.5% |
+| major_faults | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 | n/a |
+| context_switches | 0.0007 | 0.0005 | +0.0002 | +0.0001 to +0.0002 | +30.4% |
+| cpu_migrations | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 | n/a |
+| minflt | 1.88 | 0.00 | +1.88 | +1.88 to +1.88 | +115193.5% |
+| kernel instructions a cycle | 0.5089 | 0.5435 | -0.0332 | -0.0364 to -0.0319 | -6.1% |
+| user instructions a cycle | 1.26 | 1.55 | -0.28 | -0.29 to -0.27 | -18.1% |
+| cycles user+kernel | 90140 | 59152 | +31174 | +30731 to +31498 | +52.9% |
+| resident bytes | 7670 | 7 | +7663 | +7663 to +7664 | +117707.0% |
+| resident KiB before load (per process) | 5070 | 5118 | -40 | -80 to -8 | -0.8% |
+| Anonymous KiB at the end (per process) | 748274 | 1304 | +746966 | +742944 to +754372 | +57198.6% |
+| AnonHugePages KiB at the end (per process) | 2048 | 0 | +2048 | +2048 to +2048 | n/a |
+median requests/s: A 33284, B 48107
+
+### b-gl-tlb: 30 pairs, 90% interval = differences of rank 11 and 20, failed requests 0
+| a request (unless said) | A (room) median | B (off) median | A - B, median per pair | 90% interval | A / B - 1 |
+| --- | ---: | ---: | ---: | --- | ---: |
+| cycles_k | 46755 | 29974 | +16767 | +16589 to +17014 | +55.8% |
+| instructions_k | 23665 | 16354 | +7289 | +7268 to +7351 | +44.6% |
+| dTLB_load_misses_k | 9.10 | 4.28 | +4.36 | +4.01 to +4.94 | +104.1% |
+| dTLB_store_misses_k | 5.40 | 1.29 | +4.11 | +4.09 to +4.15 | +325.2% |
+| iTLB_load_misses_k | 36.43 | 35.53 | +0.88 | -0.04 to +1.84 | +2.5% |
+| page_faults | 1.88 | 0.00 | +1.88 | +1.88 to +1.88 | +114851.3% |
+| context_switches | 0.0007 | 0.0005 | +0.0002 | +0.0001 to +0.0002 | +35.8% |
+| minflt | 1.88 | 0.00 | +1.88 | +1.88 to +1.88 | +114851.3% |
+| kernel instructions a cycle | 0.5059 | 0.5462 | -0.0400 | -0.0411 to -0.0387 | -7.3% |
+| resident bytes | 7670 | 7 | +7663 | +7663 to +7664 | +116414.3% |
+| resident KiB before load (per process) | 5092 | 5094 | +36 | -40 to +60 | +0.7% |
+| Anonymous KiB at the end (per process) | 748398 | 1310 | +747120 | +742604 to +753764 | +57385.3% |
+| AnonHugePages KiB at the end (per process) | 2048 | 0 | +2048 | +2048 to +2048 | n/a |
+median requests/s: A 33294, B 48023
+
+### b-je-cache: 30 pairs, 90% interval = differences of rank 11 and 20, failed requests 0
+| a request (unless said) | A (room) median | B (off) median | A - B, median per pair | 90% interval | A / B - 1 |
+| --- | ---: | ---: | ---: | --- | ---: |
+| cycles_k | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 | n/a |
+| instructions_k | 16716 | 16329 | +377 | +352 to +417 | +2.3% |
+| cache_misses_k | 28.78 | 8.65 | +20.05 | +19.64 to +20.68 | +234.8% |
+| cache_references_k | 359 | 259 | +103 | +101 to +104 | +40.5% |
+| L1_icache_load_misses_k | 3034 | 2735 | +304 | +265 to +345 | +10.9% |
+| L1_icache_load_misses_u | 3738 | 2852 | +880 | +829 to +920 | +30.7% |
+| page_faults | 0.0338 | 0.0003 | +0.0335 | +0.0327 to +0.0368 | +11310.5% |
+| context_switches | 0.0006 | 0.0006 | +0.0001 | +0.0001 to +0.0001 | +17.0% |
+| minflt | 0.0338 | 0.0003 | +0.0335 | +0.0327 to +0.0368 | +11310.5% |
+| kernel instructions a cycle | n/a | n/a | n/a | n/a to n/a | n/a |
+| resident bytes | 7833 | 1 | +7832 | +7826 to +7835 | +642885.5% |
+| resident KiB before load (per process) | 11086 | 11112 | -2 | -20 to +8 | -0.0% |
+| Anonymous KiB at the end (per process) | 840576 | 4718 | +835892 | +825748 to +839656 | +17601.8% |
+| AnonHugePages KiB at the end (per process) | 825344 | 4096 | +821248 | +813056 to +827392 | +20050.0% |
+median requests/s: A 36409, B 47716
+
+### b-je-core: 30 pairs, 90% interval = differences of rank 11 and 20, failed requests 0
+| a request (unless said) | A (room) median | B (off) median | A - B, median per pair | 90% interval | A / B - 1 |
+| --- | ---: | ---: | ---: | --- | ---: |
+| cycles_u | 41228 | 27970 | +13478 | +12847 to +13861 | +48.6% |
+| cycles_k | 39636 | 29991 | +9583 | +9374 to +9764 | +32.0% |
+| instructions_u | 51686 | 42790 | +8896 | +8895 to +8898 | +20.8% |
+| instructions_k | 16665 | 16307 | +358 | +331 to +415 | +2.2% |
+| page_faults | 0.0345 | 0.0003 | +0.0341 | +0.0323 to +0.0368 | +11705.9% |
+| minor_faults | 0.0345 | 0.0003 | +0.0341 | +0.0323 to +0.0368 | +11705.9% |
+| major_faults | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 | n/a |
+| context_switches | 0.0006 | 0.0005 | +0.0001 | +0.0001 to +0.0001 | +18.2% |
+| cpu_migrations | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 | n/a |
+| minflt | 0.0345 | 0.0003 | +0.0341 | +0.0323 to +0.0368 | +11705.9% |
+| kernel instructions a cycle | 0.4217 | 0.5438 | -0.1233 | -0.1261 to -0.1218 | -22.6% |
+| user instructions a cycle | 1.25 | 1.53 | -0.29 | -0.30 to -0.27 | -18.7% |
+| cycles user+kernel | 80686 | 57989 | +22999 | +22132 to +23860 | +39.8% |
+| resident bytes | 7826 | 1 | +7825 | +7822 to +7829 | +665411.4% |
+| resident KiB before load (per process) | 11094 | 11060 | +30 | +16 to +40 | +0.3% |
+| Anonymous KiB at the end (per process) | 854976 | 4720 | +850254 | +842064 to +854456 | +17914.5% |
+| AnonHugePages KiB at the end (per process) | 841728 | 4096 | +837632 | +829440 to +841728 | +20450.0% |
+median requests/s: A 37102, B 48976
+
+### b-je-tlb: 30 pairs, 90% interval = differences of rank 11 and 20, failed requests 0
+| a request (unless said) | A (room) median | B (off) median | A - B, median per pair | 90% interval | A / B - 1 |
+| --- | ---: | ---: | ---: | --- | ---: |
+| cycles_k | 39537 | 29926 | +9517 | +9412 to +9684 | +31.8% |
+| instructions_k | 16672 | 16328 | +341 | +328 to +360 | +2.1% |
+| dTLB_load_misses_k | 11.08 | 5.41 | +5.84 | +5.41 to +6.82 | +110.8% |
+| dTLB_store_misses_k | 3.88 | 1.27 | +2.62 | +2.55 to +2.70 | +209.7% |
+| iTLB_load_misses_k | 37.66 | 36.23 | +1.75 | +0.71 to +2.12 | +5.1% |
+| page_faults | 0.0331 | 0.0003 | +0.0328 | +0.0324 to +0.0343 | +11137.4% |
+| context_switches | 0.0007 | 0.0005 | +0.0001 | +0.0001 to +0.0002 | +21.1% |
+| minflt | 0.0331 | 0.0003 | +0.0328 | +0.0324 to +0.0343 | +11137.4% |
+| kernel instructions a cycle | 0.4223 | 0.5458 | -0.1232 | -0.1248 to -0.1221 | -22.5% |
+| resident bytes | 7833 | 1 | +7832 | +7830 to +7835 | +642761.3% |
+| resident KiB before load (per process) | 11112 | 11072 | +56 | +12 to +72 | +0.5% |
+| Anonymous KiB at the end (per process) | 841598 | 4720 | +836882 | +831752 to +840132 | +17660.9% |
+| AnonHugePages KiB at the end (per process) | 826368 | 4096 | +822272 | +819200 to +827392 | +20075.0% |
+median requests/s: A 36466, B 47936
+
+### vmstat a-gl-flat: 5 pairs, the host's /proc/vmstat delta over a turn, a request (fields zero throughout left out)
+| field | A (room) | B (off) | A - B, median per pair | 90% interval |
+| --- | ---: | ---: | ---: | --- |
+| numa_hit | 2.2827 | 0.3386 | +1.9433 | +1.9313 to +1.9464 |
+| numa_local | 2.2827 | 0.3386 | +1.9433 | +1.9313 to +1.9464 |
+| nr_anon_pages | 1.8719 | 0.0016 | +1.8702 | +1.8696 to +1.8704 |
+| nr_anon_transparent_hugepages | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+| pgalloc_normal | 3.8443 | 1.8903 | +1.9546 | +1.9278 to +1.9619 |
+| pgfree | 1.8179 | 1.7918 | +0.0263 | +0.0087 to +0.0305 |
+| pgfault | 1.9158 | 0.0271 | +1.8881 | +1.8858 to +1.8898 |
+| thp_fault_alloc | 0.0000 | 0.0000 | +0.0000 | -0.0000 to +0.0000 |
+
+### vmstat a-gl-graph: 5 pairs, the host's /proc/vmstat delta over a turn, a request (fields zero throughout left out)
+| field | A (room) | B (off) | A - B, median per pair | 90% interval |
+| --- | ---: | ---: | ---: | --- |
+| numa_hit | 2.2831 | 0.3403 | +1.9431 | +1.9386 to +1.9440 |
+| numa_local | 2.2831 | 0.3403 | +1.9431 | +1.9386 to +1.9440 |
+| nr_anon_pages | 1.8716 | 0.0015 | +1.8700 | +1.8699 to +1.8708 |
+| nr_anon_transparent_hugepages | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+| pgalloc_normal | 3.8489 | 1.8962 | +1.9532 | +1.9443 to +1.9543 |
+| pgfree | 1.8180 | 1.7960 | +0.0236 | +0.0153 to +0.0257 |
+| pgfault | 1.9166 | 0.0280 | +1.8890 | +1.8844 to +1.8891 |
+| thp_fault_alloc | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+
+### vmstat a-je-flat: 5 pairs, the host's /proc/vmstat delta over a turn, a request (fields zero throughout left out)
+| field | A (room) | B (off) | A - B, median per pair | 90% interval |
+| --- | ---: | ---: | ---: | --- |
+| numa_hit | 0.4244 | 0.3351 | +0.0914 | +0.0842 to +0.1003 |
+| numa_local | 0.4244 | 0.3351 | +0.0914 | +0.0842 to +0.1003 |
+| nr_anon_pages | 1.9236 | 0.0005 | +1.9230 | +1.9194 to +1.9252 |
+| nr_anon_transparent_hugepages | 0.0037 | 0.0000 | +0.0037 | +0.0037 to +0.0037 |
+| pgalloc_normal | 3.8810 | 1.8880 | +1.9912 | +1.9855 to +2.0011 |
+| pgfree | 1.8094 | 1.7929 | +0.0165 | +0.0137 to +0.0194 |
+| pgfault | 0.0719 | 0.0248 | +0.0473 | +0.0432 to +0.0534 |
+| thp_fault_alloc | 0.0037 | 0.0000 | +0.0037 | +0.0037 to +0.0037 |
+| thp_deferred_split_page | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+| thp_split_pmd | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+
+### vmstat a-je-graph: 5 pairs, the host's /proc/vmstat delta over a turn, a request (fields zero throughout left out)
+| field | A (room) | B (off) | A - B, median per pair | 90% interval |
+| --- | ---: | ---: | ---: | --- |
+| numa_hit | 0.4286 | 0.3366 | +0.0922 | +0.0852 to +0.0946 |
+| numa_local | 0.4286 | 0.3366 | +0.0922 | +0.0852 to +0.0946 |
+| nr_anon_pages | 1.9222 | 0.0005 | +1.9217 | +1.9201 to +1.9232 |
+| nr_anon_transparent_hugepages | 0.0037 | 0.0000 | +0.0037 | +0.0037 to +0.0037 |
+| pgalloc_normal | 3.8831 | 1.8976 | +1.9855 | +1.9771 to +2.0008 |
+| pgfree | 1.8098 | 1.7993 | +0.0105 | +0.0005 to +0.0283 |
+| pgfault | 0.0746 | 0.0264 | +0.0484 | +0.0468 to +0.0514 |
+| thp_fault_alloc | 0.0037 | 0.0000 | +0.0037 | +0.0037 to +0.0037 |
+| thp_deferred_split_page | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+| thp_split_pmd | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+
+### vmstat b-gl-cache: 30 pairs, the host's /proc/vmstat delta over a turn, a request (fields zero throughout left out)
+| field | A (room) | B (off) | A - B, median per pair | 90% interval |
+| --- | ---: | ---: | ---: | --- |
+| numa_hit | 2.1200 | 0.2357 | +1.8841 | +1.8839 to +1.8845 |
+| numa_local | 2.1200 | 0.2357 | +1.8841 | +1.8839 to +1.8845 |
+| nr_anon_pages | 1.8727 | 0.0017 | +1.8710 | +1.8709 to +1.8712 |
+| nr_anon_transparent_hugepages | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+| pgalloc_normal | 3.6784 | 1.7907 | +1.8897 | +1.8880 to +1.8917 |
+| pgfree | 1.8021 | 1.7891 | +0.0152 | +0.0134 to +0.0172 |
+| pgfault | 1.9012 | 0.0182 | +1.8829 | +1.8823 to +1.8831 |
+| thp_fault_alloc | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+
+### vmstat b-gl-core: 30 pairs, the host's /proc/vmstat delta over a turn, a request (fields zero throughout left out)
+| field | A (room) | B (off) | A - B, median per pair | 90% interval |
+| --- | ---: | ---: | ---: | --- |
+| numa_hit | 2.1201 | 0.2353 | +1.8848 | +1.8833 to +1.8857 |
+| numa_local | 2.1201 | 0.2353 | +1.8848 | +1.8833 to +1.8857 |
+| nr_anon_pages | 1.8725 | 0.0015 | +1.8710 | +1.8708 to +1.8713 |
+| nr_anon_transparent_hugepages | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+| pgalloc_normal | 3.6860 | 1.7922 | +1.8939 | +1.8908 to +1.8982 |
+| pgfree | 1.8102 | 1.7906 | +0.0197 | +0.0168 to +0.0234 |
+| pgfault | 1.9008 | 0.0177 | +1.8828 | +1.8822 to +1.8834 |
+| thp_fault_alloc | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+
+### vmstat b-gl-tlb: 30 pairs, the host's /proc/vmstat delta over a turn, a request (fields zero throughout left out)
+| field | A (room) | B (off) | A - B, median per pair | 90% interval |
+| --- | ---: | ---: | ---: | --- |
+| numa_hit | 2.1207 | 0.2358 | +1.8848 | +1.8843 to +1.8856 |
+| numa_local | 2.1207 | 0.2358 | +1.8848 | +1.8843 to +1.8856 |
+| nr_anon_pages | 1.8725 | 0.0016 | +1.8710 | +1.8708 to +1.8712 |
+| nr_anon_transparent_hugepages | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+| pgalloc_normal | 3.6875 | 1.7940 | +1.8936 | +1.8911 to +1.8953 |
+| pgfree | 1.8115 | 1.7924 | +0.0192 | +0.0165 to +0.0213 |
+| pgfault | 1.9008 | 0.0179 | +1.8829 | +1.8820 to +1.8830 |
+| thp_fault_alloc | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+
+### vmstat b-je-cache: 30 pairs, the host's /proc/vmstat delta over a turn, a request (fields zero throughout left out)
+| field | A (room) | B (off) | A - B, median per pair | 90% interval |
+| --- | ---: | ---: | ---: | --- |
+| numa_hit | 0.2760 | 0.2343 | +0.0412 | +0.0407 to +0.0442 |
+| numa_local | 0.2760 | 0.2343 | +0.0412 | +0.0407 to +0.0442 |
+| nr_anon_pages | 1.9119 | 0.0002 | +1.9117 | +1.9108 to +1.9126 |
+| nr_anon_transparent_hugepages | 0.0037 | 0.0000 | +0.0037 | +0.0037 to +0.0037 |
+| pgalloc_normal | 3.7129 | 1.7914 | +1.9203 | +1.9180 to +1.9225 |
+| pgfree | 1.7978 | 1.7911 | +0.0056 | +0.0030 to +0.0070 |
+| pgfault | 0.0555 | 0.0165 | +0.0391 | +0.0376 to +0.0413 |
+| thp_fault_alloc | 0.0037 | 0.0000 | +0.0037 | +0.0037 to +0.0037 |
+| thp_split_pmd | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+
+### vmstat b-je-core: 30 pairs, the host's /proc/vmstat delta over a turn, a request (fields zero throughout left out)
+| field | A (room) | B (off) | A - B, median per pair | 90% interval |
+| --- | ---: | ---: | ---: | --- |
+| numa_hit | 0.2771 | 0.2337 | +0.0421 | +0.0402 to +0.0439 |
+| numa_local | 0.2771 | 0.2337 | +0.0421 | +0.0402 to +0.0439 |
+| nr_anon_pages | 1.9103 | 0.0002 | +1.9101 | +1.9096 to +1.9114 |
+| nr_anon_transparent_hugepages | 0.0037 | 0.0000 | +0.0037 | +0.0037 to +0.0037 |
+| pgalloc_normal | 3.7077 | 1.7877 | +1.9196 | +1.9167 to +1.9248 |
+| pgfree | 1.7939 | 1.7874 | +0.0047 | +0.0025 to +0.0104 |
+| pgfault | 0.0569 | 0.0161 | +0.0407 | +0.0379 to +0.0416 |
+| thp_fault_alloc | 0.0037 | 0.0000 | +0.0037 | +0.0037 to +0.0037 |
+| thp_split_pmd | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+
+### vmstat b-je-tlb: 30 pairs, the host's /proc/vmstat delta over a turn, a request (fields zero throughout left out)
+| field | A (room) | B (off) | A - B, median per pair | 90% interval |
+| --- | ---: | ---: | ---: | --- |
+| numa_hit | 0.2746 | 0.2342 | +0.0399 | +0.0394 to +0.0406 |
+| numa_local | 0.2746 | 0.2342 | +0.0399 | +0.0394 to +0.0406 |
+| nr_anon_pages | 1.9121 | 0.0002 | +1.9121 | +1.9115 to +1.9130 |
+| nr_anon_transparent_hugepages | 0.0037 | 0.0000 | +0.0037 | +0.0037 to +0.0037 |
+| pgalloc_normal | 3.7122 | 1.7916 | +1.9226 | +1.9182 to +1.9265 |
+| pgfree | 1.7975 | 1.7915 | +0.0063 | +0.0029 to +0.0127 |
+| pgfault | 0.0543 | 0.0165 | +0.0377 | +0.0374 to +0.0383 |
+| thp_fault_alloc | 0.0037 | 0.0000 | +0.0037 | +0.0037 to +0.0037 |
+| thp_split_pmd | 0.0000 | 0.0000 | +0.0000 | +0.0000 to +0.0000 |
+
+### faultcost: kernel cycles a 4 KiB page, median of the rounds after memory was warmed
+demand 5281, populate 4596, thp 3626, touched 1
+
+### readings (results/margin.md)
+je (jemalloc (the image)): kernel A - B +9583 cycles a request by perf stat (Pass B core; 90% +9374 to +9764), +10612 cycles by the flat profile (ratio 1.11: agree)
+je: shares of the flat profile's kernel A - B: new memory (zeroing, page allocator, memcg, fault handling) +68.8%, of it zeroing +62.7%; compaction and khugepaged +0.0%; unmapping and TLB +1.2%; scheduler +1.8%; network, copies, syscall entry, slab, interrupts, locks +24.7%
+je: call graphs: page-fault paths +69.1% of the kernel A - B (huge page fault +66.6%); of A's zeroing, +75.1% under a page fault; page-fault paths +7431 cycles a request against faultcost's first-touch estimate +6927 (resident bytes / 4 KiB x thp): ratio 1.07
+je: vmstat a request A - B: thp_fault_alloc +0.00367, compact_stall + thp_collapse_alloc +0.00000; context switches +0.0001; LLC misses:k +20.1 (90% +19.6 to +20.7); dTLB load misses:k +5.8 (90% +5.4 to +6.8); resident bytes +7825
+gl (glibc): kernel A - B +17000 cycles a request by perf stat (Pass B core; 90% +16688 to +17253), +16584 cycles by the flat profile (ratio 0.98: agree)
+gl: shares of the flat profile's kernel A - B: new memory (zeroing, page allocator, memcg, fault handling) +71.3%, of it zeroing +28.3%; compaction and khugepaged +0.0%; unmapping and TLB +0.8%; scheduler +2.5%; network, copies, syscall entry, slab, interrupts, locks +18.1%
+gl: call graphs: page-fault paths +79.6% of the kernel A - B (huge page fault +0.1%); of A's zeroing, +72.2% under a page fault; page-fault paths +13336 cycles a request against faultcost's first-touch estimate +9907 (minflt x demand): ratio 1.35
+gl: vmstat a request A - B: thp_fault_alloc +0.00001, compact_stall + thp_collapse_alloc +0.00000; context switches +0.0002; LLC misses:k +15.6 (90% +15.3 to +15.9); dTLB load misses:k +4.4 (90% +4.0 to +4.9); resident bytes +7663
+R0 (method: glibc's page-fault paths, inclusive in the call graphs, at least 50% of its kernel A - B there): validated, +79.6%
+R1 (new memory at least 50%: page-fault paths +69.1% in the call graphs, flat categories +68.8%): holds; zeroing mostly at a page fault
+R2 (compaction or khugepaged at least 25%, or compaction/collapse events): does not hold
+R3 (unmapping and TLB at least 25%): does not hold
+R4 (scheduler at least 25%, or 0.05 more context switches a request): does not hold
+R5 (network, copies, syscall entry, slab, interrupts and locks at least 25%, with more LLC or dTLB misses in the kernel): does not hold
+new memory (page-fault paths where there are call graphs, else the flat categories): 0.95 kernel cycles a resident byte with jemalloc, 1.74 with glibc; faultcost: thp 0.89, demand 1.29 kernel cycles a byte
+NEXT: store-side allocation sizing: the kernel's share is the price of new memory and follows the bytes a kept answer makes resident; no jemalloc setting is indicated
+failed or skipped: none
+took 27 minutes after setup
+ALL-DONE

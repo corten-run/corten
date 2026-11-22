@@ -1,0 +1,2 @@
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.189 MB /dev/shm/1824c-pf.data (724 samples) ]

@@ -1,0 +1,101 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 8K of event 'cycles'
+# Event count (approx.): 8930026790
+#
+# Overhead  Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
+# ........  ..................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+     4.90%  [.] _RNvNtCs2Sdwwla2uzU_6corten4view11escape_into
+     3.92%  [k] clear_page_erms
+            |
+            ---prep_new_page
+               get_page_from_freelist
+               __alloc_pages_noprof
+               alloc_pages_mpol_noprof
+               skb_page_frag_refill
+               sk_page_frag_refill
+               tcp_sendmsg_locked
+               tcp_sendmsg
+               sock_write_iter
+               do_iter_readv_writev
+               vfs_writev
+               do_writev
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+
+     2.78%  [.] _RNvXsu_NtCs2Sdwwla2uzU_6corten4pageINtB5_6PartedINtNtB7_4view7DocHtmlNCNvCskjsZcOxyxTu_5probe8document0EENtBN_6Render6renderB19_
+     2.11%  [k] rep_movs_alternative
+            |          
+             --1.76%--_copy_from_iter
+                       tcp_sendmsg_locked
+                       tcp_sendmsg
+                       sock_write_iter
+                       do_iter_readv_writev
+                       vfs_writev
+                       do_writev
+                       do_syscall_64
+                       entry_SYSCALL_64_after_hwframe
+
+     1.77%  [.] malloc
+     1.60%  [.] _RNCNvXsd_NtCs2Sdwwla2uzU_6corten3appINtB7_2AtINtB7_5PlainuEENtNtB9_6router6Stages3run0CskjsZcOxyxTu_5probe
+     1.53%  [k] tcp_sendmsg_locked
+            |
+            ---tcp_sendmsg
+               sock_write_iter
+               do_iter_readv_writev
+               vfs_writev
+               do_writev
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+
+     1.52%  [.] _RNvXNtNtNtCsb8FoRbCRZGR_5hyper5proto2h14roleNtB2_6ServerNtB4_16Http1Transaction6encode
+     1.33%  [.] cfree
+     1.30%  [k] tcp_ack
+            |
+            ---tcp_rcv_established
+               tcp_v4_do_rcv
+               tcp_v4_rcv
+               ip_protocol_deliver_rcu
+               ip_local_deliver_finish
+               ip_local_deliver
+               __netif_receive_skb_one_core
+               process_backlog
+               __napi_poll
+               net_rx_action
+               handle_softirqs
+               do_softirq.part.0
+               __local_bh_enable_ip
+               __dev_queue_xmit
+               ip_finish_output2
+               ip_output
+               __ip_queue_xmit
+               __tcp_transmit_skb
+               tcp_write_xmit
+               __tcp_push_pending_frames
+               tcp_sendmsg_locked
+               tcp_sendmsg
+               sock_write_iter
+               do_iter_readv_writev
+               vfs_writev
+               do_writev
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+
+     1.20%  [k] pvclock_clocksource_read_nowd
+            |          
+             --1.09%--kvm_clock_get_cycles
+
+     1.14%  [.] _RINvNtNtCsdztPvThAM6J_4http6header3map15hash_elem_usingNtNtB4_4name10HeaderNameECs2Sdwwla2uzU_6corten
+     1.12%  [.] _RINvMs0_NtNtCsdztPvThAM6J_4http6header3mapNtB6_9HeaderMap11try_insert2NtNtB8_4name10HeaderNameECs2Sdwwla2uzU_6corten.llvm.8612054359066671192
+     1.12%  [k] _raw_spin_lock_irqsave
+     1.12%  [k] skb_release_data
+     1.05%  [.] _RNvMNtNtNtCsb8FoRbCRZGR_5hyper5proto2h18dispatchINtB2_10DispatcherINtB2_6ServerINtNtNtCs4pbSw37EEB1_10hyper_util7service4glue19TowerToHyperServiceNtNtCs2Sdwwla2uzU_6corten3app10ConnectionENtNtNtB8_4body8incoming8IncomingENtNtB2o_5watch8AnsweredINtNtNtB1m_2rt5tokio7TokioIoINtB3z_7WatchedNtNtNtNtCs3v7n8iqQsbi_5tokio3net3tcp6stream9TcpStreamEENtNtB4_4role6ServerE10poll_writeCskjsZcOxyxTu_5probe
+
+
+#
+# (Tip: To show IPC for sampling periods use perf record -e '{cycles,instructions}:S' and then browse context)
+#

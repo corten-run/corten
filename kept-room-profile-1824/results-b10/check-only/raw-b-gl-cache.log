@@ -1,0 +1,40 @@
+## pair w1 base
+# started on Sun Nov 22 22:45:30 2026
+
+0,,cycles:k,1001546120,100.00,,
+711205286,,instructions:k,1001546120,100.00,,
+816727,,cache-misses:k,1001546120,100.00,5.65,of all cache refs
+14450071,,cache-references:k,1001546120,100.00,,
+120295514,,L1-icache-load-misses,1001546120,100.00,,
+120421667,,L1-icache-load-misses,1001546120,100.00,,
+57336,,page-faults,1001546120,100.00,,
+28,,context-switches,1001546120,100.00,,
+Running 1s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     2.12ms  349.33us   3.47ms   85.04%
+    Req/Sec    15.16k     2.17k   16.93k    80.00%
+  30115 requests in 1.02s, 205.81MB read
+Requests/sec:  29455.55
+Transfer/sec:    201.30MB
+RESULT 30115 0 0 0 0 0
+## pair w1 head
+# started on Sun Nov 22 22:45:32 2026
+
+0,,cycles:k,996723543,100.00,,
+714726761,,instructions:k,996723543,100.00,,
+351672,,cache-misses:k,996723543,100.00,3.07,of all cache refs
+11448359,,cache-references:k,996723543,100.00,,
+126243850,,L1-icache-load-misses,996723543,100.00,,
+135384677,,L1-icache-load-misses,996723543,100.00,,
+240,,page-faults,996723543,100.00,,
+35,,context-switches,996723543,100.00,,
+Running 1s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.68ms    2.19ms  33.90ms   98.51%
+    Req/Sec    21.95k     3.66k   29.16k    80.00%
+  43601 requests in 1.03s, 297.97MB read
+Requests/sec:  42466.84
+Transfer/sec:    290.22MB
+RESULT 43601 0 0 0 0 0

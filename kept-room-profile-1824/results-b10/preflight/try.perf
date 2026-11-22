@@ -1,0 +1,10 @@
+# started on Sun Nov 22 22:44:32 2026
+
+0,,cycles:k,101988916,100.00,,
+475706229,,instructions:k,101988916,100.00,,
+17648,,cache-misses:k,101988916,100.00,20.88,of all cache refs
+84531,,cache-references:k,101988916,100.00,,
+224177,,L1-icache-load-misses,101988916,100.00,,
+36193,,L1-icache-load-misses,101988916,100.00,,
+227,,page-faults,101988916,100.00,,
+6,,context-switches,101988916,100.00,,

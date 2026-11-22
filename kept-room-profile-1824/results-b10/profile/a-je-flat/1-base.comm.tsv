@@ -1,0 +1,9 @@
+ 1000003    | 1          |corten-clock   |[kernel.kallsyms]
+ 1000003    | 1          |ksoftirqd/2    |[kernel.kallsyms]
+ 1000003    | 1          |kworker/u35:3-k|[kernel.kallsyms]
+ 4271012813 | 4271       |main           |[kernel.kallsyms]
+ 58000174   | 58         |main           |[vdso]           
+ 627001881  | 627        |main           |libc.so.6        
+ 457001371  | 457        |main           |libjemalloc.so.2 
+ 3443010329 | 3443       |main           |main             
+ 1000003    | 1          |swapper        |[kernel.kallsyms]

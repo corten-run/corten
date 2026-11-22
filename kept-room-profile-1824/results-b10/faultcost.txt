@@ -1,0 +1,22 @@
+first FAULTCOST mode=demand mib=4096 pages=1048576 ns_per_page=3591 kcycles_per_page=4772 ucycles_per_page=899 minflt_per_page=1.0000 anon_huge_kb=0
+warmed FAULTCOST mode=demand mib=13229 pages=3386624 ns_per_page=3513 kcycles_per_page=4892 ucycles_per_page=906 minflt_per_page=1.0000 anon_huge_kb=0
+round 1 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1751 kcycles_per_page=5281 ucycles_per_page=851 minflt_per_page=1.0000 anon_huge_kb=0
+round 1 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1296 kcycles_per_page=4575 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 1 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=1031 kcycles_per_page=3556 ucycles_per_page=38 minflt_per_page=0.0020 anon_huge_kb=262144
+round 1 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=40 kcycles_per_page=1 ucycles_per_page=139 minflt_per_page=0.0000 anon_huge_kb=0
+round 2 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1714 kcycles_per_page=5259 ucycles_per_page=856 minflt_per_page=1.0000 anon_huge_kb=0
+round 2 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1315 kcycles_per_page=4596 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 2 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=1020 kcycles_per_page=3643 ucycles_per_page=39 minflt_per_page=0.0020 anon_huge_kb=262144
+round 2 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=41 kcycles_per_page=1 ucycles_per_page=145 minflt_per_page=0.0000 anon_huge_kb=0
+round 3 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1740 kcycles_per_page=5333 ucycles_per_page=849 minflt_per_page=1.0000 anon_huge_kb=0
+round 3 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1280 kcycles_per_page=4592 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 3 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=1019 kcycles_per_page=3626 ucycles_per_page=40 minflt_per_page=0.0020 anon_huge_kb=262144
+round 3 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=40 kcycles_per_page=1 ucycles_per_page=134 minflt_per_page=0.0000 anon_huge_kb=0
+round 4 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1736 kcycles_per_page=5206 ucycles_per_page=855 minflt_per_page=1.0000 anon_huge_kb=0
+round 4 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1289 kcycles_per_page=4613 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 4 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=1030 kcycles_per_page=3563 ucycles_per_page=39 minflt_per_page=0.0020 anon_huge_kb=262144
+round 4 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=40 kcycles_per_page=0 ucycles_per_page=141 minflt_per_page=0.0000 anon_huge_kb=0
+round 5 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1756 kcycles_per_page=5281 ucycles_per_page=851 minflt_per_page=1.0000 anon_huge_kb=0
+round 5 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1281 kcycles_per_page=4648 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 5 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=1031 kcycles_per_page=3644 ucycles_per_page=39 minflt_per_page=0.0020 anon_huge_kb=262144
+round 5 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=40 kcycles_per_page=1 ucycles_per_page=140 minflt_per_page=0.0000 anon_huge_kb=0

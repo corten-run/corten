@@ -1,0 +1,24 @@
+## pair w1 base
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.433 MB /dev/shm/1824c-turn.data (2479 samples) ]
+Running 1s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     2.06ms    1.11ms  20.13ms   90.52%
+    Req/Sec    16.09k     4.29k   33.97k    95.24%
+  33563 requests in 1.10s, 229.37MB read
+Requests/sec:  30516.81
+Transfer/sec:    208.55MB
+RESULT 33563 0 0 0 0 0
+## pair w1 head
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.460 MB /dev/shm/1824c-turn.data (2468 samples) ]
+Running 1s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.40ms  306.17us   2.12ms   61.44%
+    Req/Sec    23.00k     4.29k   28.73k    50.00%
+  45648 requests in 1.02s, 311.96MB read
+Requests/sec:  44819.78
+Transfer/sec:    306.30MB
+RESULT 45648 0 0 0 0 0

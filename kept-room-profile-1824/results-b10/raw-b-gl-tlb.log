@@ -1,0 +1,1178 @@
+## pair w1 base
+# started on Sun Nov 22 23:01:13 2026
+
+4678677681,,cycles:k,2999404410,100.00,,
+2382877717,,instructions:k,2999404410,100.00,0.51,insn per cycle
+828360,,dTLB-load-misses,2999404410,100.00,,
+554991,,dTLB-store-misses,2999404410,100.00,,
+3770497,,iTLB-load-misses,2999404410,100.00,,
+188276,,page-faults,2999404410,100.00,,
+71,,context-switches,2999404410,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.93ms  570.40us  19.17ms   98.87%
+    Req/Sec    16.80k   665.94    19.04k    91.67%
+  100276 requests in 3.02s, 685.29MB read
+Requests/sec:  33217.48
+Transfer/sec:    227.01MB
+RESULT 100276 0 0 0 0 0
+## pair w1 head
+# started on Sun Nov 22 23:01:17 2026
+
+4314842918,,cycles:k,2999207869,100.00,,
+2327215174,,instructions:k,2999207869,100.00,0.54,insn per cycle
+704011,,dTLB-load-misses,2999207869,100.00,,
+188033,,dTLB-store-misses,2999207869,100.00,,
+5373342,,iTLB-load-misses,2999207869,100.00,,
+236,,page-faults,2999207869,100.00,,
+76,,context-switches,2999207869,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.34ms  100.18us   2.69ms   92.15%
+    Req/Sec    23.87k   688.13    24.83k    80.00%
+  142471 requests in 3.02s, 0.95GB read
+Requests/sec:  47221.42
+Transfer/sec:    322.71MB
+RESULT 142471 0 0 0 0 0
+## pair 1 base
+# started on Sun Nov 22 23:01:20 2026
+
+4645867448,,cycles:k,2992045863,100.00,,
+2358798273,,instructions:k,2992045863,100.00,0.51,insn per cycle
+809759,,dTLB-load-misses,2992045863,100.00,,
+564605,,dTLB-store-misses,2992045863,100.00,,
+3788875,,iTLB-load-misses,2992045863,100.00,,
+187770,,page-faults,2992045863,100.00,,
+71,,context-switches,2992045863,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.92ms  283.27us  10.70ms   98.74%
+    Req/Sec    16.76k   414.47    17.27k    80.00%
+  100001 requests in 3.02s, 683.41MB read
+Requests/sec:  33127.82
+Transfer/sec:    226.40MB
+RESULT 100001 0 0 0 0 0
+## pair 1 head
+# started on Sun Nov 22 23:01:24 2026
+
+4288606510,,cycles:k,2998897022,100.00,,
+2325537742,,instructions:k,2998897022,100.00,0.54,insn per cycle
+670241,,dTLB-load-misses,2998897022,100.00,,
+185572,,dTLB-store-misses,2998897022,100.00,,
+5160458,,iTLB-load-misses,2998897022,100.00,,
+232,,page-faults,2998897022,100.00,,
+82,,context-switches,2998897022,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.34ms   59.06us   1.95ms   78.56%
+    Req/Sec    23.86k   434.36    24.56k    70.00%
+  142420 requests in 3.03s, 0.95GB read
+Requests/sec:  46973.12
+Transfer/sec:    321.02MB
+RESULT 142420 0 0 0 0 0
+## pair 2 head
+# started on Sun Nov 22 23:01:27 2026
+
+4247984024,,cycles:k,2999316199,100.00,,
+2321589026,,instructions:k,2999316199,100.00,0.55,insn per cycle
+576446,,dTLB-load-misses,2999316199,100.00,,
+181319,,dTLB-store-misses,2999316199,100.00,,
+5199255,,iTLB-load-misses,2999316199,100.00,,
+238,,page-faults,2999316199,100.00,,
+77,,context-switches,2999316199,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.35ms   70.12us   2.22ms   75.37%
+    Req/Sec    23.79k   633.93    24.72k    63.33%
+  141987 requests in 3.02s, 0.95GB read
+Requests/sec:  47017.59
+Transfer/sec:    321.32MB
+RESULT 141987 0 0 0 0 0
+## pair 2 base
+# started on Sun Nov 22 23:01:31 2026
+
+4735560679,,cycles:k,3079157855,100.00,,
+2381211199,,instructions:k,3079157855,100.00,0.50,insn per cycle
+904038,,dTLB-load-misses,3079157855,100.00,,
+560169,,dTLB-store-misses,3079157855,100.00,,
+3561452,,iTLB-load-misses,3079157855,100.00,,
+188633,,page-faults,3079157855,100.00,,
+76,,context-switches,3079157855,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.97ms  742.19us  23.81ms   95.10%
+    Req/Sec    16.56k     2.16k   30.37k    95.08%
+  100466 requests in 3.10s, 686.59MB read
+Requests/sec:  32411.98
+Transfer/sec:    221.50MB
+RESULT 100466 0 0 0 0 0
+## pair 3 base
+# started on Sun Nov 22 23:01:35 2026
+
+4612876878,,cycles:k,2999019024,100.00,,
+2353769340,,instructions:k,2999019024,100.00,0.51,insn per cycle
+966721,,dTLB-load-misses,2999019024,100.00,,
+549193,,dTLB-store-misses,2999019024,100.00,,
+3450697,,iTLB-load-misses,2999019024,100.00,,
+185534,,page-faults,2999019024,100.00,,
+74,,context-switches,2999019024,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.95ms  606.43us  20.62ms   98.94%
+    Req/Sec    16.64k   663.22    19.84k    93.33%
+  99352 requests in 3.02s, 678.97MB read
+Requests/sec:  32916.51
+Transfer/sec:    224.95MB
+RESULT 99352 0 0 0 0 0
+## pair 3 head
+# started on Sun Nov 22 23:01:38 2026
+
+4280414906,,cycles:k,2998930443,100.00,,
+2326000943,,instructions:k,2998930443,100.00,0.54,insn per cycle
+572131,,dTLB-load-misses,2998930443,100.00,,
+185133,,dTLB-store-misses,2998930443,100.00,,
+5242355,,iTLB-load-misses,2998930443,100.00,,
+235,,page-faults,2998930443,100.00,,
+76,,context-switches,2998930443,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.34ms   63.69us   2.42ms   77.98%
+    Req/Sec    23.92k   426.89    24.61k    65.00%
+  142635 requests in 3.02s, 0.95GB read
+Requests/sec:  47279.57
+Transfer/sec:    323.11MB
+RESULT 142635 0 0 0 0 0
+## pair 4 head
+# started on Sun Nov 22 23:01:42 2026
+
+4350864454,,cycles:k,3074949665,100.00,,
+2380980878,,instructions:k,3074949665,100.00,0.55,insn per cycle
+621154,,dTLB-load-misses,3074949665,100.00,,
+185121,,dTLB-store-misses,3074949665,100.00,,
+5230914,,iTLB-load-misses,3074949665,100.00,,
+237,,page-faults,3074949665,100.00,,
+75,,context-switches,3074949665,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.38ms    0.91ms  25.91ms   99.55%
+    Req/Sec    24.04k     2.58k   42.69k    96.72%
+  145794 requests in 3.10s, 0.97GB read
+Requests/sec:  47036.86
+Transfer/sec:    321.45MB
+RESULT 145794 0 0 0 0 0
+## pair 4 base
+# started on Sun Nov 22 23:01:45 2026
+
+4676504554,,cycles:k,3000312814,100.00,,
+2381761890,,instructions:k,3000312814,100.00,0.51,insn per cycle
+758989,,dTLB-load-misses,3000312814,100.00,,
+544110,,dTLB-store-misses,3000312814,100.00,,
+3422860,,iTLB-load-misses,3000312814,100.00,,
+189186,,page-faults,3000312814,100.00,,
+60,,context-switches,3000312814,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.90ms   94.91us   4.03ms   88.48%
+    Req/Sec    16.88k   317.49    17.46k    78.33%
+  100765 requests in 3.02s, 688.63MB read
+Requests/sec:  33324.71
+Transfer/sec:    227.74MB
+RESULT 100765 0 0 0 0 0
+## pair 5 base
+# started on Sun Nov 22 23:01:49 2026
+
+4609820597,,cycles:k,2995702468,100.00,,
+2351197935,,instructions:k,2995702468,100.00,0.51,insn per cycle
+755604,,dTLB-load-misses,2995702468,100.00,,
+538381,,dTLB-store-misses,2995702468,100.00,,
+3547543,,iTLB-load-misses,2995702468,100.00,,
+186633,,page-faults,2995702468,100.00,,
+75,,context-switches,2995702468,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.93ms  158.13us   6.57ms   96.51%
+    Req/Sec    16.66k   413.70    17.32k    73.33%
+  99398 requests in 3.03s, 679.29MB read
+Requests/sec:  32825.81
+Transfer/sec:    224.33MB
+RESULT 99398 0 0 0 0 0
+## pair 5 head
+# started on Sun Nov 22 23:01:53 2026
+
+4300393026,,cycles:k,2999264084,100.00,,
+2359763513,,instructions:k,2999264084,100.00,0.55,insn per cycle
+514247,,dTLB-load-misses,2999264084,100.00,,
+182460,,dTLB-store-misses,2999264084,100.00,,
+5352996,,iTLB-load-misses,2999264084,100.00,,
+233,,page-faults,2999264084,100.00,,
+79,,context-switches,2999264084,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.33ms   63.88us   2.14ms   81.19%
+    Req/Sec    24.20k   459.75    24.82k    63.33%
+  144427 requests in 3.03s, 0.96GB read
+Requests/sec:  47697.33
+Transfer/sec:    325.97MB
+RESULT 144427 0 0 0 0 0
+## pair 6 head
+# started on Sun Nov 22 23:01:56 2026
+
+4296185274,,cycles:k,2999191449,100.00,,
+2351402920,,instructions:k,2999191449,100.00,0.55,insn per cycle
+522977,,dTLB-load-misses,2999191449,100.00,,
+179788,,dTLB-store-misses,2999191449,100.00,,
+5208185,,iTLB-load-misses,2999191449,100.00,,
+237,,page-faults,2999191449,100.00,,
+67,,context-switches,2999191449,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.33ms   79.64us   2.21ms   88.35%
+    Req/Sec    24.08k   464.46    24.87k    65.00%
+  143756 requests in 3.02s, 0.96GB read
+Requests/sec:  47617.17
+Transfer/sec:    325.42MB
+RESULT 143756 0 0 0 0 0
+## pair 6 base
+# started on Sun Nov 22 23:02:00 2026
+
+4583908875,,cycles:k,3001589608,100.00,,
+2294193313,,instructions:k,3001589608,100.00,0.50,insn per cycle
+960450,,dTLB-load-misses,3001589608,100.00,,
+555095,,dTLB-store-misses,3001589608,100.00,,
+3594597,,iTLB-load-misses,3001589608,100.00,,
+182189,,page-faults,3001589608,100.00,,
+52,,context-switches,3001589608,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.97ms  143.10us   3.73ms   92.70%
+    Req/Sec    16.30k   585.11    17.17k    75.00%
+  97276 requests in 3.02s, 664.79MB read
+Requests/sec:  32214.50
+Transfer/sec:    220.15MB
+RESULT 97276 0 0 0 0 0
+## pair 7 base
+# started on Sun Nov 22 23:02:03 2026
+
+4789397234,,cycles:k,3083245794,100.00,,
+2451671097,,instructions:k,3083245794,100.00,0.51,insn per cycle
+833828,,dTLB-load-misses,3083245794,100.00,,
+552205,,dTLB-store-misses,3083245794,100.00,,
+3526061,,iTLB-load-misses,3083245794,100.00,,
+194105,,page-faults,3083245794,100.00,,
+64,,context-switches,3083245794,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.90ms  497.90us  17.59ms   96.85%
+    Req/Sec    17.04k     1.91k   31.13k    96.72%
+  103412 requests in 3.10s, 706.72MB read
+Requests/sec:  33357.64
+Transfer/sec:    227.97MB
+RESULT 103412 0 0 0 0 0
+## pair 7 head
+# started on Sun Nov 22 23:02:07 2026
+
+4273651482,,cycles:k,2992618372,100.00,,
+2316760850,,instructions:k,2992618372,100.00,0.54,insn per cycle
+847925,,dTLB-load-misses,2992618372,100.00,,
+177691,,dTLB-store-misses,2992618372,100.00,,
+5322950,,iTLB-load-misses,2992618372,100.00,,
+243,,page-faults,2992618372,100.00,,
+69,,context-switches,2992618372,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.36ms  272.72us  10.49ms   99.69%
+    Req/Sec    23.74k   561.46    24.47k    75.00%
+  141661 requests in 3.03s, 0.95GB read
+Requests/sec:  46782.56
+Transfer/sec:    319.71MB
+RESULT 141661 0 0 0 0 0
+## pair 8 head
+# started on Sun Nov 22 23:02:11 2026
+
+4382070467,,cycles:k,2991676880,100.00,,
+2421339877,,instructions:k,2991676880,100.00,0.55,insn per cycle
+875021,,dTLB-load-misses,2991676880,100.00,,
+194101,,dTLB-store-misses,2991676880,100.00,,
+5371850,,iTLB-load-misses,2991676880,100.00,,
+237,,page-faults,2991676880,100.00,,
+67,,context-switches,2991676880,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.29ms  272.54us   9.52ms   98.83%
+    Req/Sec    24.97k     1.83k   29.69k    80.00%
+  148953 requests in 3.02s, 0.99GB read
+Requests/sec:  49254.83
+Transfer/sec:    336.61MB
+RESULT 148953 0 0 0 0 0
+## pair 8 base
+# started on Sun Nov 22 23:02:14 2026
+
+4759886376,,cycles:k,3076672795,100.00,,
+2429486012,,instructions:k,3076672795,100.00,0.51,insn per cycle
+887813,,dTLB-load-misses,3076672795,100.00,,
+559193,,dTLB-store-misses,3076672795,100.00,,
+3693143,,iTLB-load-misses,3076672795,100.00,,
+192424,,page-faults,3076672795,100.00,,
+88,,context-switches,3076672795,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.93ms  772.75us  23.68ms   96.87%
+    Req/Sec    16.89k     1.65k   28.69k    96.72%
+  102511 requests in 3.10s, 700.56MB read
+Requests/sec:  33070.32
+Transfer/sec:    226.00MB
+RESULT 102511 0 0 0 0 0
+## pair 9 base
+# started on Sun Nov 22 23:02:18 2026
+
+4777553816,,cycles:k,3086955797,100.00,,
+2427028718,,instructions:k,3086955797,100.00,0.51,insn per cycle
+986504,,dTLB-load-misses,3086955797,100.00,,
+555221,,dTLB-store-misses,3086955797,100.00,,
+3509506,,iTLB-load-misses,3086955797,100.00,,
+192589,,page-faults,3086955797,100.00,,
+84,,context-switches,3086955797,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.91ms  341.41us  12.76ms   96.32%
+    Req/Sec    16.91k     1.89k   31.09k    98.36%
+  102594 requests in 3.10s, 701.13MB read
+Requests/sec:  33097.14
+Transfer/sec:    226.19MB
+RESULT 102594 0 0 0 0 0
+## pair 9 head
+# started on Sun Nov 22 23:02:21 2026
+
+4340962456,,cycles:k,2999310015,100.00,,
+2398787266,,instructions:k,2999310015,100.00,0.55,insn per cycle
+540740,,dTLB-load-misses,2999310015,100.00,,
+181608,,dTLB-store-misses,2999310015,100.00,,
+5140236,,iTLB-load-misses,2999310015,100.00,,
+233,,page-faults,2999310015,100.00,,
+65,,context-switches,2999310015,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.30ms   62.69us   1.90ms   82.49%
+    Req/Sec    24.67k   565.69    26.57k    81.67%
+  147244 requests in 3.02s, 0.98GB read
+Requests/sec:  48766.61
+Transfer/sec:    333.27MB
+RESULT 147244 0 0 0 0 0
+## pair 10 head
+# started on Sun Nov 22 23:02:25 2026
+
+4354617359,,cycles:k,3000536523,100.00,,
+2381246122,,instructions:k,3000536523,100.00,0.55,insn per cycle
+498580,,dTLB-load-misses,3000536523,100.00,,
+178186,,dTLB-store-misses,3000536523,100.00,,
+5053517,,iTLB-load-misses,3000536523,100.00,,
+239,,page-faults,3000536523,100.00,,
+64,,context-switches,3000536523,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.32ms   69.26us   2.32ms   87.83%
+    Req/Sec    24.41k   473.10    25.02k    76.67%
+  145611 requests in 3.02s, 0.97GB read
+Requests/sec:  48276.44
+Transfer/sec:    329.92MB
+RESULT 145611 0 0 0 0 0
+## pair 10 base
+# started on Sun Nov 22 23:02:28 2026
+
+4598753146,,cycles:k,3072089638,100.00,,
+2354825275,,instructions:k,3072089638,100.00,0.51,insn per cycle
+811207,,dTLB-load-misses,3072089638,100.00,,
+540548,,dTLB-store-misses,3072089638,100.00,,
+3594929,,iTLB-load-misses,3072089638,100.00,,
+185899,,page-faults,3072089638,100.00,,
+70,,context-switches,3072089638,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     2.01ms    1.01ms  27.70ms   97.01%
+    Req/Sec    16.36k     1.89k   29.68k    96.72%
+  99270 requests in 3.10s, 678.41MB read
+Requests/sec:  32025.26
+Transfer/sec:    218.86MB
+RESULT 99270 0 0 0 0 0
+## pair 11 base
+# started on Sun Nov 22 23:02:32 2026
+
+4810562580,,cycles:k,3081188121,100.00,,
+2458685909,,instructions:k,3081188121,100.00,0.51,insn per cycle
+797967,,dTLB-load-misses,3081188121,100.00,,
+553806,,dTLB-store-misses,3081188121,100.00,,
+3959523,,iTLB-load-misses,3081188121,100.00,,
+194221,,page-faults,3081188121,100.00,,
+73,,context-switches,3081188121,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.90ms  563.19us  18.85ms   96.98%
+    Req/Sec    17.05k     1.75k   29.94k    96.72%
+  103472 requests in 3.10s, 707.13MB read
+Requests/sec:  33375.79
+Transfer/sec:    228.09MB
+RESULT 103472 0 0 0 0 0
+## pair 11 head
+# started on Sun Nov 22 23:02:36 2026
+
+4341494137,,cycles:k,2999328534,100.00,,
+2390976479,,instructions:k,2999328534,100.00,0.55,insn per cycle
+543628,,dTLB-load-misses,2999328534,100.00,,
+184053,,dTLB-store-misses,2999328534,100.00,,
+5108580,,iTLB-load-misses,2999328534,100.00,,
+230,,page-faults,2999328534,100.00,,
+76,,context-switches,2999328534,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.30ms   67.83us   1.74ms   75.15%
+    Req/Sec    24.61k   814.64    27.70k    80.00%
+  146802 requests in 3.03s, 0.98GB read
+Requests/sec:  48528.93
+Transfer/sec:    331.65MB
+RESULT 146802 0 0 0 0 0
+## pair 12 head
+# started on Sun Nov 22 23:02:39 2026
+
+4296349476,,cycles:k,2998956958,100.00,,
+2362559159,,instructions:k,2998956958,100.00,0.55,insn per cycle
+584283,,dTLB-load-misses,2998956958,100.00,,
+190628,,dTLB-store-misses,2998956958,100.00,,
+5101708,,iTLB-load-misses,2998956958,100.00,,
+234,,page-faults,2998956958,100.00,,
+84,,context-switches,2998956958,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.32ms   63.57us   2.39ms   76.60%
+    Req/Sec    24.23k   467.18    24.97k    71.67%
+  144606 requests in 3.02s, 0.97GB read
+Requests/sec:  47857.06
+Transfer/sec:    327.06MB
+RESULT 144606 0 0 0 0 0
+## pair 12 base
+# started on Sun Nov 22 23:02:43 2026
+
+4703604618,,cycles:k,2999805493,100.00,,
+2394012845,,instructions:k,2999805493,100.00,0.51,insn per cycle
+758008,,dTLB-load-misses,2999805493,100.00,,
+536864,,dTLB-store-misses,2999805493,100.00,,
+3623553,,iTLB-load-misses,2999805493,100.00,,
+190189,,page-faults,2999805493,100.00,,
+77,,context-switches,2999805493,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.89ms   89.13us   3.74ms   88.89%
+    Req/Sec    17.03k   293.53    17.45k    60.00%
+  101590 requests in 3.02s, 694.27MB read
+Requests/sec:  33687.59
+Transfer/sec:    230.22MB
+RESULT 101590 0 0 0 0 0
+## pair 13 base
+# started on Sun Nov 22 23:02:46 2026
+
+4647499305,,cycles:k,3000188870,100.00,,
+2362214111,,instructions:k,3000188870,100.00,0.51,insn per cycle
+835087,,dTLB-load-misses,3000188870,100.00,,
+525827,,dTLB-store-misses,3000188870,100.00,,
+3980311,,iTLB-load-misses,3000188870,100.00,,
+188514,,page-faults,3000188870,100.00,,
+62,,context-switches,3000188870,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.91ms   96.71us   4.08ms   89.67%
+    Req/Sec    16.83k   279.58    17.37k    65.00%
+  100404 requests in 3.02s, 686.16MB read
+Requests/sec:  33254.61
+Transfer/sec:    227.26MB
+RESULT 100404 0 0 0 0 0
+## pair 13 head
+# started on Sun Nov 22 23:02:50 2026
+
+4328323874,,cycles:k,3080815964,100.00,,
+2359823078,,instructions:k,3080815964,100.00,0.55,insn per cycle
+587067,,dTLB-load-misses,3080815964,100.00,,
+188088,,dTLB-store-misses,3080815964,100.00,,
+5141867,,iTLB-load-misses,3080815964,100.00,,
+248,,page-faults,3080815964,100.00,,
+73,,context-switches,3080815964,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.37ms  579.31us  20.03ms   97.13%
+    Req/Sec    23.81k     2.54k   42.56k    96.72%
+  144456 requests in 3.10s, 0.96GB read
+Requests/sec:  46595.30
+Transfer/sec:    318.43MB
+RESULT 144456 0 0 0 0 0
+## pair 14 head
+# started on Sun Nov 22 23:02:54 2026
+
+4234531190,,cycles:k,2999309116,100.00,,
+2307242997,,instructions:k,2999309116,100.00,0.54,insn per cycle
+555280,,dTLB-load-misses,2999309116,100.00,,
+173770,,dTLB-store-misses,2999309116,100.00,,
+5210185,,iTLB-load-misses,2999309116,100.00,,
+234,,page-faults,2999309116,100.00,,
+77,,context-switches,2999309116,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.36ms   72.32us   2.22ms   76.99%
+    Req/Sec    23.67k   618.52    24.57k    63.33%
+  141143 requests in 3.02s, 0.94GB read
+Requests/sec:  46670.09
+Transfer/sec:    318.94MB
+RESULT 141143 0 0 0 0 0
+## pair 14 base
+# started on Sun Nov 22 23:02:57 2026
+
+4741442137,,cycles:k,3080688852,100.00,,
+2399313180,,instructions:k,3080688852,100.00,0.51,insn per cycle
+804393,,dTLB-load-misses,3080688852,100.00,,
+541035,,dTLB-store-misses,3080688852,100.00,,
+3656698,,iTLB-load-misses,3080688852,100.00,,
+189768,,page-faults,3080688852,100.00,,
+64,,context-switches,3080688852,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.95ms  608.01us  19.92ms   96.65%
+    Req/Sec    16.66k     1.66k   28.75k    96.72%
+  101075 requests in 3.10s, 690.75MB read
+Requests/sec:  32610.86
+Transfer/sec:    222.86MB
+RESULT 101075 0 0 0 0 0
+## pair 15 base
+# started on Sun Nov 22 23:03:01 2026
+
+4609759031,,cycles:k,2999710953,100.00,,
+2244039194,,instructions:k,2999710953,100.00,0.49,insn per cycle
+1017801,,dTLB-load-misses,2999710953,100.00,,
+540396,,dTLB-store-misses,2999710953,100.00,,
+3538524,,iTLB-load-misses,2999710953,100.00,,
+178534,,page-faults,2999710953,100.00,,
+64,,context-switches,2999710953,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     2.02ms  279.88us   4.08ms   86.31%
+    Req/Sec    15.91k     1.68k   17.17k    86.67%
+  95047 requests in 3.02s, 649.55MB read
+Requests/sec:  31485.99
+Transfer/sec:    215.18MB
+RESULT 95047 0 0 0 0 0
+## pair 15 head
+# started on Sun Nov 22 23:03:05 2026
+
+4259135940,,cycles:k,3075415874,100.00,,
+2198428879,,instructions:k,3075415874,100.00,0.52,insn per cycle
+926166,,dTLB-load-misses,3075415874,100.00,,
+211215,,dTLB-store-misses,3075415874,100.00,,
+4871400,,iTLB-load-misses,3075415874,100.00,,
+238,,page-faults,3075415874,100.00,,
+79,,context-switches,3075415874,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.49ms  843.53us  23.75ms   99.14%
+    Req/Sec    22.15k     4.23k   42.42k    70.49%
+  134311 requests in 3.10s, 0.90GB read
+Requests/sec:  43322.80
+Transfer/sec:    296.07MB
+RESULT 134311 0 0 0 0 0
+## pair 16 head
+# started on Sun Nov 22 23:03:08 2026
+
+4260397274,,cycles:k,2998601037,100.00,,
+2297982299,,instructions:k,2998601037,100.00,0.54,insn per cycle
+697676,,dTLB-load-misses,2998601037,100.00,,
+185112,,dTLB-store-misses,2998601037,100.00,,
+4928993,,iTLB-load-misses,2998601037,100.00,,
+249,,page-faults,2998601037,100.00,,
+80,,context-switches,2998601037,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.39ms  574.49us  19.25ms   99.12%
+    Req/Sec    23.54k     0.89k   28.06k    90.00%
+  140380 requests in 3.02s, 0.94GB read
+Requests/sec:  46509.89
+Transfer/sec:    317.85MB
+RESULT 140380 0 0 0 0 0
+## pair 16 base
+# started on Sun Nov 22 23:03:11 2026
+
+4765750655,,cycles:k,3076293456,100.00,,
+2403534835,,instructions:k,3076293456,100.00,0.50,insn per cycle
+992236,,dTLB-load-misses,3076293456,100.00,,
+541667,,dTLB-store-misses,3076293456,100.00,,
+3343956,,iTLB-load-misses,3076293456,100.00,,
+190741,,page-faults,3076293456,100.00,,
+66,,context-switches,3076293456,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.95ms  822.32us  24.58ms   97.15%
+    Req/Sec    16.80k     1.53k   28.09k    96.72%
+  101877 requests in 3.10s, 696.23MB read
+Requests/sec:  32863.42
+Transfer/sec:    224.59MB
+RESULT 101877 0 0 0 0 0
+## pair 17 base
+# started on Sun Nov 22 23:03:15 2026
+
+4647238322,,cycles:k,2999122733,100.00,,
+2369999560,,instructions:k,2999122733,100.00,0.51,insn per cycle
+762130,,dTLB-load-misses,2999122733,100.00,,
+525376,,dTLB-store-misses,2999122733,100.00,,
+3448014,,iTLB-load-misses,2999122733,100.00,,
+187434,,page-faults,2999122733,100.00,,
+78,,context-switches,2999122733,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.95ms  802.04us  23.98ms   98.81%
+    Req/Sec    16.72k   697.74    20.39k    96.67%
+  99821 requests in 3.02s, 682.18MB read
+Requests/sec:  33017.06
+Transfer/sec:    225.64MB
+RESULT 99821 0 0 0 0 0
+## pair 17 head
+# started on Sun Nov 22 23:03:19 2026
+
+4337287836,,cycles:k,3068757052,100.00,,
+2353273716,,instructions:k,3068757052,100.00,0.54,insn per cycle
+800275,,dTLB-load-misses,3068757052,100.00,,
+208183,,dTLB-store-misses,3068757052,100.00,,
+5317757,,iTLB-load-misses,3068757052,100.00,,
+237,,page-faults,3068757052,100.00,,
+83,,context-switches,3068757052,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.42ms    1.25ms  33.08ms   99.47%
+    Req/Sec    23.70k     3.04k   41.82k    91.80%
+  143686 requests in 3.10s, 0.96GB read
+Requests/sec:  46351.86
+Transfer/sec:    316.77MB
+RESULT 143686 0 0 0 0 0
+## pair 18 head
+# started on Sun Nov 22 23:03:22 2026
+
+4405294001,,cycles:k,3073426964,100.00,,
+2404610111,,instructions:k,3073426964,100.00,0.55,insn per cycle
+569708,,dTLB-load-misses,3073426964,100.00,,
+185586,,dTLB-store-misses,3073426964,100.00,,
+5103800,,iTLB-load-misses,3073426964,100.00,,
+235,,page-faults,3073426964,100.00,,
+61,,context-switches,3073426964,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.37ms    0.98ms  26.95ms   99.59%
+    Req/Sec    24.20k     2.27k   40.53k    96.72%
+  146909 requests in 3.10s, 0.98GB read
+Requests/sec:  47393.70
+Transfer/sec:    323.89MB
+RESULT 146909 0 0 0 0 0
+## pair 18 base
+# started on Sun Nov 22 23:03:26 2026
+
+4772723525,,cycles:k,3081494845,100.00,,
+2415765890,,instructions:k,3081494845,100.00,0.51,insn per cycle
+1060619,,dTLB-load-misses,3081494845,100.00,,
+541768,,dTLB-store-misses,3081494845,100.00,,
+3763774,,iTLB-load-misses,3081494845,100.00,,
+191730,,page-faults,3081494845,100.00,,
+65,,context-switches,3081494845,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.93ms  627.00us  20.71ms   96.89%
+    Req/Sec    16.82k     1.82k   30.28k    96.72%
+  102132 requests in 3.10s, 697.97MB read
+Requests/sec:  32951.76
+Transfer/sec:    225.19MB
+RESULT 102132 0 0 0 0 0
+## pair 19 base
+# started on Sun Nov 22 23:03:30 2026
+
+4616198584,,cycles:k,2998893486,100.00,,
+2333607595,,instructions:k,2998893486,100.00,0.51,insn per cycle
+760146,,dTLB-load-misses,2998893486,100.00,,
+526139,,dTLB-store-misses,2998893486,100.00,,
+3699523,,iTLB-load-misses,2998893486,100.00,,
+185017,,page-faults,2998893486,100.00,,
+71,,context-switches,2998893486,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.97ms  577.22us  19.42ms   98.94%
+    Req/Sec    16.51k   760.98    19.73k    86.67%
+  98520 requests in 3.02s, 673.29MB read
+Requests/sec:  32641.87
+Transfer/sec:    223.08MB
+RESULT 98520 0 0 0 0 0
+## pair 19 head
+# started on Sun Nov 22 23:03:33 2026
+
+4452822867,,cycles:k,3063039719,100.00,,
+2455848894,,instructions:k,3063039719,100.00,0.55,insn per cycle
+617325,,dTLB-load-misses,3063039719,100.00,,
+183209,,dTLB-store-misses,3063039719,100.00,,
+5302034,,iTLB-load-misses,3063039719,100.00,,
+233,,page-faults,3063039719,100.00,,
+71,,context-switches,3063039719,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.42ms    1.64ms  36.78ms   99.22%
+    Req/Sec    24.64k     2.78k   43.72k    95.08%
+  149531 requests in 3.10s, 1.00GB read
+Requests/sec:  48241.52
+Transfer/sec:    329.68MB
+RESULT 149531 0 0 0 0 0
+## pair 20 head
+# started on Sun Nov 22 23:03:37 2026
+
+4322088824,,cycles:k,3000878986,100.00,,
+2360243150,,instructions:k,3000878986,100.00,0.55,insn per cycle
+566758,,dTLB-load-misses,3000878986,100.00,,
+172354,,dTLB-store-misses,3000878986,100.00,,
+5284164,,iTLB-load-misses,3000878986,100.00,,
+234,,page-faults,3000878986,100.00,,
+62,,context-switches,3000878986,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.33ms   51.66us   1.82ms   75.46%
+    Req/Sec    24.16k   378.77    24.87k    70.00%
+  144196 requests in 3.02s, 0.96GB read
+Requests/sec:  47749.11
+Transfer/sec:    326.32MB
+RESULT 144196 0 0 0 0 0
+## pair 20 base
+# started on Sun Nov 22 23:03:40 2026
+
+4753315489,,cycles:k,3062391780,100.00,,
+2382818655,,instructions:k,3062391780,100.00,0.50,insn per cycle
+924063,,dTLB-load-misses,3062391780,100.00,,
+547703,,dTLB-store-misses,3062391780,100.00,,
+3878497,,iTLB-load-misses,3062391780,100.00,,
+189221,,page-faults,3062391780,100.00,,
+73,,context-switches,3062391780,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     2.03ms    1.68ms  38.62ms   99.32%
+    Req/Sec    16.60k     1.98k   27.29k    90.16%
+  100784 requests in 3.10s, 688.76MB read
+Requests/sec:  32513.04
+Transfer/sec:    222.20MB
+RESULT 100784 0 0 0 0 0
+## pair 21 base
+# started on Sun Nov 22 23:03:44 2026
+
+4679963328,,cycles:k,2998902923,100.00,,
+2352047822,,instructions:k,2998902923,100.00,0.50,insn per cycle
+1100333,,dTLB-load-misses,2998902923,100.00,,
+538269,,dTLB-store-misses,2998902923,100.00,,
+3692698,,iTLB-load-misses,2998902923,100.00,,
+185576,,page-faults,2998902923,100.00,,
+83,,context-switches,2998902923,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.97ms  782.22us  23.25ms   98.68%
+    Req/Sec    16.61k     0.90k   20.42k    86.67%
+  99095 requests in 3.02s, 677.22MB read
+Requests/sec:  32785.78
+Transfer/sec:    224.06MB
+RESULT 99095 0 0 0 0 0
+## pair 21 head
+# started on Sun Nov 22 23:03:48 2026
+
+4448606761,,cycles:k,3081062121,100.00,,
+2444939678,,instructions:k,3081062121,100.00,0.55,insn per cycle
+708956,,dTLB-load-misses,3081062121,100.00,,
+198111,,dTLB-store-misses,3081062121,100.00,,
+4969474,,iTLB-load-misses,3081062121,100.00,,
+239,,page-faults,3081062121,100.00,,
+69,,context-switches,3081062121,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.32ms  554.91us  18.56ms   96.82%
+    Req/Sec    24.70k     2.79k   43.76k    90.16%
+  149885 requests in 3.10s, 1.00GB read
+Requests/sec:  48340.07
+Transfer/sec:    330.36MB
+RESULT 149885 0 0 0 0 0
+## pair 22 head
+# started on Sun Nov 22 23:03:51 2026
+
+4183445361,,cycles:k,2998884642,100.00,,
+2152204657,,instructions:k,2998884642,100.00,0.51,insn per cycle
+851354,,dTLB-load-misses,2998884642,100.00,,
+206285,,dTLB-store-misses,2998884642,100.00,,
+4729048,,iTLB-load-misses,2998884642,100.00,,
+240,,page-faults,2998884642,100.00,,
+78,,context-switches,2998884642,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.49ms  655.58us  20.64ms   98.17%
+    Req/Sec    21.97k     3.26k   28.45k    78.33%
+  131102 requests in 3.02s, 0.87GB read
+Requests/sec:  43428.92
+Transfer/sec:    296.79MB
+RESULT 131102 0 0 0 0 0
+## pair 22 base
+# started on Sun Nov 22 23:03:55 2026
+
+4760548810,,cycles:k,3075124128,100.00,,
+2387244288,,instructions:k,3075124128,100.00,0.50,insn per cycle
+1275356,,dTLB-load-misses,3075124128,100.00,,
+544937,,dTLB-store-misses,3075124128,100.00,,
+3958629,,iTLB-load-misses,3075124128,100.00,,
+189320,,page-faults,3075124128,100.00,,
+73,,context-switches,3075124128,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.97ms    0.89ms  25.92ms   96.88%
+    Req/Sec    16.62k     2.02k   29.91k    91.80%
+  100837 requests in 3.10s, 689.12MB read
+Requests/sec:  32534.49
+Transfer/sec:    222.34MB
+RESULT 100837 0 0 0 0 0
+## pair 23 base
+# started on Sun Nov 22 23:03:58 2026
+
+4629516280,,cycles:k,2999904100,100.00,,
+2335742643,,instructions:k,2999904100,100.00,0.50,insn per cycle
+1347463,,dTLB-load-misses,2999904100,100.00,,
+521832,,dTLB-store-misses,2999904100,100.00,,
+3423253,,iTLB-load-misses,2999904100,100.00,,
+185866,,page-faults,2999904100,100.00,,
+65,,context-switches,2999904100,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.93ms  110.40us   3.85ms   89.45%
+    Req/Sec    16.63k   414.03    17.37k    58.33%
+  99255 requests in 3.02s, 678.31MB read
+Requests/sec:  32907.05
+Transfer/sec:    224.89MB
+RESULT 99255 0 0 0 0 0
+## pair 23 head
+# started on Sun Nov 22 23:04:02 2026
+
+4330816261,,cycles:k,2994632245,100.00,,
+2362613240,,instructions:k,2994632245,100.00,0.55,insn per cycle
+1355366,,dTLB-load-misses,2994632245,100.00,,
+193863,,dTLB-store-misses,2994632245,100.00,,
+4962773,,iTLB-load-misses,2994632245,100.00,,
+235,,page-faults,2994632245,100.00,,
+80,,context-switches,2994632245,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.38ms    0.99ms  26.93ms   99.50%
+    Req/Sec    24.12k     1.76k   29.07k    91.67%
+  143860 requests in 3.02s, 0.96GB read
+Requests/sec:  47601.20
+Transfer/sec:    325.31MB
+RESULT 143860 0 0 0 0 0
+## pair 24 head
+# started on Sun Nov 22 23:04:05 2026
+
+4314576056,,cycles:k,3000728020,100.00,,
+2356796901,,instructions:k,3000728020,100.00,0.55,insn per cycle
+1257809,,dTLB-load-misses,3000728020,100.00,,
+186164,,dTLB-store-misses,3000728020,100.00,,
+5437531,,iTLB-load-misses,3000728020,100.00,,
+232,,page-faults,3000728020,100.00,,
+59,,context-switches,3000728020,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.33ms   77.64us   2.23ms   85.58%
+    Req/Sec    24.12k   332.41    25.13k    68.33%
+  143941 requests in 3.02s, 0.96GB read
+Requests/sec:  47617.50
+Transfer/sec:    325.42MB
+RESULT 143941 0 0 0 0 0
+## pair 24 base
+# started on Sun Nov 22 23:04:09 2026
+
+4691761769,,cycles:k,3073967936,100.00,,
+2330713270,,instructions:k,3073967936,100.00,0.50,insn per cycle
+1164858,,dTLB-load-misses,3073967936,100.00,,
+550624,,dTLB-store-misses,3073967936,100.00,,
+3903866,,iTLB-load-misses,3073967936,100.00,,
+184822,,page-faults,3073967936,100.00,,
+65,,context-switches,3073967936,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     2.03ms    1.01ms  27.97ms   97.37%
+    Req/Sec    16.21k     2.10k   28.68k    86.89%
+  98418 requests in 3.10s, 672.59MB read
+Requests/sec:  31751.74
+Transfer/sec:    216.99MB
+RESULT 98418 0 0 0 0 0
+## pair 25 base
+# started on Sun Nov 22 23:04:13 2026
+
+4648964745,,cycles:k,2997224432,100.00,,
+2354900919,,instructions:k,2997224432,100.00,0.51,insn per cycle
+1100077,,dTLB-load-misses,2997224432,100.00,,
+538577,,dTLB-store-misses,2997224432,100.00,,
+3723494,,iTLB-load-misses,2997224432,100.00,,
+187612,,page-faults,2997224432,100.00,,
+64,,context-switches,2997224432,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.92ms  132.43us   5.98ms   95.57%
+    Req/Sec    16.75k   280.04    17.28k    56.67%
+  99941 requests in 3.02s, 683.00MB read
+Requests/sec:  33040.99
+Transfer/sec:    225.80MB
+RESULT 99941 0 0 0 0 0
+## pair 25 head
+# started on Sun Nov 22 23:04:16 2026
+
+4281894936,,cycles:k,2998937874,100.00,,
+2341457245,,instructions:k,2998937874,100.00,0.55,insn per cycle
+674044,,dTLB-load-misses,2998937874,100.00,,
+182994,,dTLB-store-misses,2998937874,100.00,,
+5058830,,iTLB-load-misses,2998937874,100.00,,
+233,,page-faults,2998937874,100.00,,
+72,,context-switches,2998937874,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.34ms   72.18us   2.29ms   85.06%
+    Req/Sec    24.05k   650.81    24.73k    90.00%
+  143407 requests in 3.02s, 0.96GB read
+Requests/sec:  47523.06
+Transfer/sec:    324.77MB
+RESULT 143407 0 0 0 0 0
+## pair 26 head
+# started on Sun Nov 22 23:04:20 2026
+
+4370351904,,cycles:k,3069587716,100.00,,
+2384899311,,instructions:k,3069587716,100.00,0.55,insn per cycle
+627731,,dTLB-load-misses,3069587716,100.00,,
+191297,,dTLB-store-misses,3069587716,100.00,,
+4988813,,iTLB-load-misses,3069587716,100.00,,
+242,,page-faults,3069587716,100.00,,
+66,,context-switches,3069587716,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.41ms    1.24ms  31.58ms   99.52%
+    Req/Sec    24.02k     2.40k   40.23k    95.08%
+  145666 requests in 3.10s, 0.97GB read
+Requests/sec:  46987.91
+Transfer/sec:    321.12MB
+RESULT 145666 0 0 0 0 0
+## pair 26 base
+# started on Sun Nov 22 23:04:23 2026
+
+4659863156,,cycles:k,3000707427,100.00,,
+2352017942,,instructions:k,3000707427,100.00,0.50,insn per cycle
+869299,,dTLB-load-misses,3000707427,100.00,,
+526912,,dTLB-store-misses,3000707427,100.00,,
+3699747,,iTLB-load-misses,3000707427,100.00,,
+186045,,page-faults,3000707427,100.00,,
+65,,context-switches,3000707427,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.97ms  766.93us  23.33ms   98.85%
+    Req/Sec    16.60k   720.76    20.26k    96.67%
+  99076 requests in 3.02s, 677.09MB read
+Requests/sec:  32781.05
+Transfer/sec:    224.03MB
+RESULT 99076 0 0 0 0 0
+## pair 27 base
+# started on Sun Nov 22 23:04:27 2026
+
+4662004495,,cycles:k,2999117012,100.00,,
+2355190166,,instructions:k,2999117012,100.00,0.51,insn per cycle
+1039707,,dTLB-load-misses,2999117012,100.00,,
+529882,,dTLB-store-misses,2999117012,100.00,,
+3208461,,iTLB-load-misses,2999117012,100.00,,
+186321,,page-faults,2999117012,100.00,,
+76,,context-switches,2999117012,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.97ms  780.62us  23.53ms   98.83%
+    Req/Sec    16.62k   733.85    19.97k    95.00%
+  99221 requests in 3.02s, 678.08MB read
+Requests/sec:  32825.44
+Transfer/sec:    224.33MB
+RESULT 99221 0 0 0 0 0
+## pair 27 head
+# started on Sun Nov 22 23:04:31 2026
+
+4426545484,,cycles:k,3074719896,100.00,,
+2417973138,,instructions:k,3074719896,100.00,0.55,insn per cycle
+615103,,dTLB-load-misses,3074719896,100.00,,
+183526,,dTLB-store-misses,3074719896,100.00,,
+5170827,,iTLB-load-misses,3074719896,100.00,,
+232,,page-faults,3074719896,100.00,,
+78,,context-switches,3074719896,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.36ms  825.60us  24.14ms   99.63%
+    Req/Sec    24.23k     2.40k   41.61k    96.72%
+  147022 requests in 3.10s, 0.98GB read
+Requests/sec:  47436.00
+Transfer/sec:    324.18MB
+RESULT 147022 0 0 0 0 0
+## pair 28 head
+# started on Sun Nov 22 23:04:34 2026
+
+4339460462,,cycles:k,2999320460,100.00,,
+2381107358,,instructions:k,2999320460,100.00,0.55,insn per cycle
+640990,,dTLB-load-misses,2999320460,100.00,,
+185270,,dTLB-store-misses,2999320460,100.00,,
+5112130,,iTLB-load-misses,2999320460,100.00,,
+234,,page-faults,2999320460,100.00,,
+67,,context-switches,2999320460,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.31ms   46.91us   1.72ms   75.19%
+    Req/Sec    24.47k   291.67    25.04k    66.67%
+  146045 requests in 3.03s, 0.97GB read
+Requests/sec:  48253.70
+Transfer/sec:    329.77MB
+RESULT 146045 0 0 0 0 0
+## pair 28 base
+# started on Sun Nov 22 23:04:38 2026
+
+4642798823,,cycles:k,3000067383,100.00,,
+2326552937,,instructions:k,3000067383,100.00,0.50,insn per cycle
+890728,,dTLB-load-misses,3000067383,100.00,,
+532349,,dTLB-store-misses,3000067383,100.00,,
+3674256,,iTLB-load-misses,3000067383,100.00,,
+185347,,page-faults,3000067383,100.00,,
+70,,context-switches,3000067383,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.94ms  129.28us   4.16ms   94.41%
+    Req/Sec    16.53k   406.81    16.98k    80.00%
+  98701 requests in 3.03s, 674.53MB read
+Requests/sec:  32620.63
+Transfer/sec:    222.93MB
+RESULT 98701 0 0 0 0 0
+## pair 29 base
+# started on Sun Nov 22 23:04:41 2026
+
+4552178988,,cycles:k,3000734178,100.00,,
+2302122735,,instructions:k,3000734178,100.00,0.51,insn per cycle
+991861,,dTLB-load-misses,3000734178,100.00,,
+515561,,dTLB-store-misses,3000734178,100.00,,
+3390321,,iTLB-load-misses,3000734178,100.00,,
+182507,,page-faults,3000734178,100.00,,
+61,,context-switches,3000734178,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     2.02ms    0.98ms  27.30ms   98.71%
+    Req/Sec    16.28k   821.87    20.33k    96.67%
+  97170 requests in 3.03s, 664.06MB read
+Requests/sec:  32107.71
+Transfer/sec:    219.43MB
+RESULT 97170 0 0 0 0 0
+## pair 29 head
+# started on Sun Nov 22 23:04:45 2026
+
+4226574974,,cycles:k,3080748868,100.00,,
+2303040926,,instructions:k,3080748868,100.00,0.54,insn per cycle
+1031056,,dTLB-load-misses,3080748868,100.00,,
+185986,,dTLB-store-misses,3080748868,100.00,,
+4784834,,iTLB-load-misses,3080748868,100.00,,
+247,,page-faults,3080748868,100.00,,
+75,,context-switches,3080748868,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.41ms  566.73us  19.00ms   96.47%
+    Req/Sec    23.12k     2.62k   40.99k    90.16%
+  140368 requests in 3.10s, 0.94GB read
+Requests/sec:  45279.88
+Transfer/sec:    309.44MB
+RESULT 140368 0 0 0 0 0
+## pair 30 head
+# started on Sun Nov 22 23:04:49 2026
+
+4272532164,,cycles:k,3080438871,100.00,,
+2295481322,,instructions:k,3080438871,100.00,0.54,insn per cycle
+615934,,dTLB-load-misses,3080438871,100.00,,
+182723,,dTLB-store-misses,3080438871,100.00,,
+4939790,,iTLB-load-misses,3080438871,100.00,,
+240,,page-faults,3080438871,100.00,,
+75,,context-switches,3080438871,100.00,,
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.42ms  674.09us  21.02ms   97.33%
+    Req/Sec    23.12k     2.41k   40.37k    96.72%
+  140299 requests in 3.10s, 0.94GB read
+Requests/sec:  45257.13
+Transfer/sec:    309.29MB
+RESULT 140299 0 0 0 0 0
+## pair 30 base
+# started on Sun Nov 22 23:04:52 2026
+
+4763852895,,cycles:k,3084811028,100.00,,
+2330896046,,instructions:k,3084811028,100.00,0.49,insn per cycle
+1023245,,dTLB-load-misses,3084811028,100.00,,
+538443,,dTLB-store-misses,3084811028,100.00,,
+3612173,,iTLB-load-misses,3084811028,100.00,,
+185089,,page-faults,3084811028,100.00,,
+64,,context-switches,3084811028,100.00,,
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.99ms  575.19us  19.95ms   90.26%
+    Req/Sec    16.24k     2.40k   30.44k    88.52%
+  98559 requests in 3.10s, 673.56MB read
+Requests/sec:  31802.37
+Transfer/sec:    217.34MB
+RESULT 98559 0 0 0 0 0

@@ -1,0 +1,88 @@
+checked 1 requests: A twice and B the same; 6124 bytes
+a-je-flat: the warm-up took about 9 s a pair; 5 pairs should take about 1 minutes
+a-je-flat: done, /m/1824c/results/turns-a-je-flat.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+a-je-graph: the warm-up took about 8 s a pair; 5 pairs should take about 1 minutes
+a-je-graph: done, /m/1824c/results/turns-a-je-graph.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+a-gl-flat: the warm-up took about 8 s a pair; 5 pairs should take about 1 minutes
+a-gl-flat: done, /m/1824c/results/turns-a-gl-flat.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+a-gl-graph: the warm-up took about 9 s a pair; 5 pairs should take about 1 minutes
+a-gl-graph: done, /m/1824c/results/turns-a-gl-graph.csv
+profile.sh: a-gl-flat 1 base: 829 symbols
+profile.sh: a-gl-flat 1 head: 731 symbols
+profile.sh: a-gl-flat 2 head: 649 symbols
+profile.sh: a-gl-flat 2 base: 815 symbols
+profile.sh: a-gl-flat 3 base: 842 symbols
+profile.sh: a-gl-flat 3 head: 634 symbols
+profile.sh: a-gl-flat 4 head: 711 symbols
+profile.sh: a-gl-flat 4 base: 835 symbols
+profile.sh: a-gl-flat 5 base: 824 symbols
+profile.sh: a-gl-flat 5 head: 692 symbols
+profile.sh: a-gl-graph 1 base: 839 symbols
+profile.sh: a-gl-graph 1 head: 658 symbols
+profile.sh: a-gl-graph 2 head: 623 symbols
+profile.sh: a-gl-graph 2 base: 826 symbols
+profile.sh: a-gl-graph 3 base: 833 symbols
+profile.sh: a-gl-graph 3 head: 652 symbols
+profile.sh: a-gl-graph 4 head: 654 symbols
+profile.sh: a-gl-graph 4 base: 795 symbols
+profile.sh: a-gl-graph 5 base: 853 symbols
+profile.sh: a-gl-graph 5 head: 691 symbols
+profile.sh: a-je-flat 1 base: 811 symbols
+profile.sh: a-je-flat 1 head: 639 symbols
+profile.sh: a-je-flat 2 head: 645 symbols
+profile.sh: a-je-flat 2 base: 800 symbols
+profile.sh: a-je-flat 3 base: 810 symbols
+profile.sh: a-je-flat 3 head: 629 symbols
+profile.sh: a-je-flat 4 head: 662 symbols
+profile.sh: a-je-flat 4 base: 859 symbols
+profile.sh: a-je-flat 5 base: 831 symbols
+profile.sh: a-je-flat 5 head: 619 symbols
+profile.sh: a-je-graph 1 base: 831 symbols
+profile.sh: a-je-graph 1 head: 632 symbols
+profile.sh: a-je-graph 2 head: 653 symbols
+profile.sh: a-je-graph 2 base: 836 symbols
+profile.sh: a-je-graph 3 base: 819 symbols
+profile.sh: a-je-graph 3 head: 661 symbols
+profile.sh: a-je-graph 4 head: 650 symbols
+profile.sh: a-je-graph 4 base: 848 symbols
+profile.sh: a-je-graph 5 base: 846 symbols
+profile.sh: a-je-graph 5 head: 642 symbols
+checked 1 requests: A twice and B the same; 6124 bytes
+b-je-core: the warm-up took about 7 s a pair; 30 pairs should take about 4 minutes
+b-je-core: pair 10 of 30 done 22:51:32
+b-je-core: pair 20 of 30 done 22:52:42
+b-je-core: pair 30 of 30 done 22:53:52
+b-je-core: done, /m/1824c/results/pairs-b-je-core.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+b-gl-core: the warm-up took about 8 s a pair; 30 pairs should take about 5 minutes
+b-gl-core: pair 10 of 30 done 22:55:11
+b-gl-core: pair 20 of 30 done 22:56:23
+b-gl-core: pair 30 of 30 done 22:57:35
+b-gl-core: done, /m/1824c/results/pairs-b-gl-core.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+b-je-tlb: the warm-up took about 7 s a pair; 30 pairs should take about 4 minutes
+b-je-tlb: pair 10 of 30 done 22:58:52
+b-je-tlb: pair 20 of 30 done 23:00:03
+b-je-tlb: pair 30 of 30 done 23:01:13
+b-je-tlb: done, /m/1824c/results/pairs-b-je-tlb.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+b-gl-tlb: the warm-up took about 7 s a pair; 30 pairs should take about 4 minutes
+b-gl-tlb: pair 10 of 30 done 23:02:32
+b-gl-tlb: pair 20 of 30 done 23:03:44
+b-gl-tlb: pair 30 of 30 done 23:04:56
+b-gl-tlb: done, /m/1824c/results/pairs-b-gl-tlb.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+b-je-cache: the warm-up took about 7 s a pair; 30 pairs should take about 4 minutes
+b-je-cache: pair 10 of 30 done 23:06:13
+b-je-cache: pair 20 of 30 done 23:07:23
+b-je-cache: pair 30 of 30 done 23:08:34
+b-je-cache: done, /m/1824c/results/pairs-b-je-cache.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+b-gl-cache: the warm-up took about 7 s a pair; 30 pairs should take about 4 minutes
+b-gl-cache: pair 10 of 30 done 23:09:53
+b-gl-cache: pair 20 of 30 done 23:11:04
+b-gl-cache: pair 30 of 30 done 23:12:16
+b-gl-cache: done, /m/1824c/results/pairs-b-gl-cache.csv

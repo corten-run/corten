@@ -1,0 +1,13 @@
+[package]
+name = "faultcost"
+version = "0.0.0"
+edition = "2021"
+
+# The standard library only: nothing to download, the same on every host.
+[dependencies]
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+
+[workspace]

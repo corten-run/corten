@@ -1,0 +1,8 @@
+ 2000006    | 2          |ksoftirqd/2    |[kernel.kallsyms]
+ 4000012    | 4          |kworker/2:2-eve|[kernel.kallsyms]
+ 4835014505 | 4835       |main           |[kernel.kallsyms]
+ 29000087   | 29         |main           |[vdso]           
+ 423001269  | 423        |main           |libc.so.6        
+ 318000954  | 318        |main           |libjemalloc.so.2 
+ 3619010857 | 3619       |main           |main             
+ 1000003    | 1          |swapper        |[kernel.kallsyms]

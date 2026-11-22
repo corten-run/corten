@@ -1,0 +1,7 @@
+ 1000003    | 1          |corten-clock   |[kernel.kallsyms]
+ 3000009    | 3          |kworker/2:2-eve|[kernel.kallsyms]
+ 4714014142 | 4714       |main           |[kernel.kallsyms]
+ 59000177   | 59         |main           |[vdso]           
+ 1021003063 | 1021       |main           |libc.so.6        
+ 3090009270 | 3090       |main           |main             
+ 1000003    | 1          |swapper        |[kernel.kallsyms]
