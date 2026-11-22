@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { phases, readLoad } from "../../catalog/contract.mjs";
-import { readOutcome } from "../../marketplace/run-contract.mjs";
+import { readOutcome, resultSchema } from "../../marketplace/run-contract.mjs";
 import { summarizeSamples } from "../../catalog/stats.mjs";
 import { inside, tree } from "./evidence.mjs";
 import { inspectRawSupport } from "./raw-support.mjs";
@@ -26,7 +26,7 @@ for (const group of ["catalog-page", "localized-marketplace"]) test(`${group}: e
   const check = { checked: "synthetic raw-support unit fixture, not native qualification" };
   const qualification = { eligible: true, synthetic: true };
   const run = { pass: 1, cold, warmup: metric, phases: Object.fromEntries(phases.map((phase) => [phase, measured])) };
-  const summary = { runId: "native", options: { apps: ["corten"], build: true }, apps: { corten: {
+  const summary = { ...(marketplace ? { schema: resultSchema } : {}), runId: "native", options: { apps: ["corten"], build: true }, apps: { corten: {
     checks: { fixture: marketplace ? check : { ...check, qualification: { synthetic: true } } },
     qualification: { fixture: qualification, api: qualification }, runs: { [marketplace ? "fixture-neutral-json" : "fixture-page"]: [run] } } } };
   const inspect = () => inspectRawSupport(group, summary, root, tree(root));

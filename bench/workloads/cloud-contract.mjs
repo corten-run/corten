@@ -65,7 +65,12 @@ const historicalSelections = new Set([
   "d9c74b1fee3f6d5c71cee7405b24db73da1ffbef8f0d00c66924ebf7b475a251", // Retained r21 fleets.
   "57bf46a0e3e03d8a48bdcca952b522c148d91a7892c74e6bfbe2e860b927e19a", // 19defc76, immediately before placement.
 ]);
-const historicalSelection = (selected) => selected && historicalSelections.has(digest(selected));
+// The standalone all-group host also used the pre-rotation registry. It is
+// readable for collection, not an additional fleet roster or a launch input.
+const historicalHostSelections = new Set([...historicalSelections,
+  "dbf01bfc107ae1bec0861900558613fe120c32ab2957b03e9e65f019739c6871", // 83b3b8772, per-locale marketplace timing.
+]);
+const historicalSelection = (selected, allowed = historicalSelections) => selected && allowed.has(digest(selected));
 function buildFleet(input, createdAt, schema, placement, selected, single) {
   exact(input, ["round", "commit", "token", "tokens", "provider", "sshKey"]);
   const { round, commit, token, tokens, provider, sshKey } = input;
@@ -265,7 +270,7 @@ export function validateState(s, round, options) {
   } else {
     assert.deepEqual(s.host, legacyHost);
     assert.ok(!Object.hasOwn(s, "group") && !Object.hasOwn(s, "fleet") && !Object.hasOwn(s, "remainingPlacement"), "legacy host cannot select a group");
-    if (!historicalSelection(s.selection))
+    if (!historicalSelection(s.selection, historicalHostSelections))
       assert.deepEqual(s.selection, selection(), "complete current registry selection differs");
   }
   // Hosts launched since the bench package existed install it. Absent means the original job bytes.

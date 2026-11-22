@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { join } from "node:path";
 import { phases, readLoad } from "../../catalog/contract.mjs";
-import { readOutcome, timedProfiles } from "../../marketplace/run-contract.mjs";
+import { readOutcome, timedProfilesFor } from "../../marketplace/run-contract.mjs";
 import { summarizeSamples } from "../../catalog/stats.mjs";
 import { readRegular } from "./evidence.mjs";
 
@@ -42,7 +42,7 @@ export function inspectRawSupport(group, summary, root, manifest) {
         if (group === "catalog-page") equalJson(`${base}/qualification.json`, check);
       }
       const profiles = group === "catalog-page" ? [{ source, key: `${source}-page`, target: "page", locale: null }]
-        : timedProfiles.filter((p) => p.source === source);
+        : timedProfilesFor(summary.schema).filter((p) => p.source === source);
       for (const profile of profiles) for (const run of entry.runs[profile.key] ?? []) {
         const path = group === "catalog-page" ? `${base}/p${run.pass}-${profile.target}`
           : `${base}/p${run.pass}-${profile.locale ?? "neutral"}-${profile.target}`;

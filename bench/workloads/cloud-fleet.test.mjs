@@ -147,6 +147,36 @@ test("alternate placement agrees across saved identity, census, remote entry and
 // imports against synthetic account/SSH/ownership values, not today's fleetPlan.
 const originalReservation = () => JSON.parse(readFileSync(new URL("./test-fixtures/grouped-sfo2-reservation.json", import.meta.url)));
 
+test("the exact pre-rotation all-group roster can be collected but never supplies a new launch", async (t) => {
+  // Output of selection() at 83b3b8772, not reconstructed from today's registry.
+  const prior = JSON.parse(readFileSync(new URL("./test-fixtures/pre-rotation-all-group-selection.json", import.meta.url)));
+  const saved = { ...contract.reservation({ round: "r21", commit, token: "0123456789abcdef" }, at), selection: prior };
+  assert.equal(contract.validateState(saved, saved.round), saved);
+  for (const change of [(s) => s.groups.reverse(), (s) => s.groups.pop(),
+    (s) => s.groups[2].apps.reverse(), (s) => s.groups[1].contractSha256 = "0".repeat(64)]) {
+    const changed = structuredClone(prior); change(changed);
+    assert.throws(() => contract.validateState({ ...saved, selection: changed }, saved.round), /registry selection differs/);
+  }
+  const fresh = contract.reservation({ round: saved.round, commit, token: saved.token });
+  assert.deepEqual(fresh.selection, contract.selection());
+  assert.notDeepEqual(fresh.selection, prior);
+  assert.throws(() => contract.reservation({ round: saved.round, commit, token: saved.token, selection: prior }), /unexpected or missing fields/);
+  const withPrior = ({ fleetSha256, ...body }) => {
+    body.selection = prior;
+    return { ...body, fleetSha256: digest(JSON.stringify(body)) };
+  };
+  assert.throws(() => contract.validateLaunchFleet(withPrior(plan())), /fixed registry/);
+  assert.throws(() => contract.validateFleet(withPrior(originalReservation().fleet)), /historical fleet selection differs/);
+
+  const h = harness(t); h.seed(); h.change((s) => { s.selection = prior; });
+  await assert.rejects(h.launch().launch(), /already reserved/);
+  const inspect = async () => ({ ...syntheticInspection(), selection: prior });
+  assert.equal(await h.task({ inspect }).collect(), 1); // Terminal blocked evidence retained, not qualified.
+  assert.deepEqual(h.saved().selection, prior);
+  assert.equal(h.saved().evidenceOutcome, "blocked");
+  assert.equal(h.creates, 0);
+});
+
 test("a historical sfo2 fleet is readable, but cannot authorize a fresh dedicated launch", async (t) => {
   const s = originalReservation(), fleet = s.fleet;
   assert.notDeepEqual(fleet.selection, contract.selection());
