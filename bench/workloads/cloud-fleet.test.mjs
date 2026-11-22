@@ -73,8 +73,11 @@ test("the reviewed roster binds only catalog to c-16/sfo2, including census and 
 
 test("independent census binds a supervised sibling's exact host without admitting foreign hosts", () => {
   const [first, second] = groupNames, indexSha256 = "1".repeat(64);
-  const single = (group, index = indexSha256) => contract.fleetPlan(input(), at, "sfo3",
-    { stagedPlacement: true, single: { group, indexSha256: index, checkout: resolve(".") } });
+  const single = (group, index = indexSha256) => {
+    const spec = input(); spec.tokens = { [group]: spec.tokens[group] };
+    return contract.fleetPlan(spec, at, "sfo3",
+      { stagedPlacement: true, single: { group, indexSha256: index, checkout: resolve(".") } });
+  };
   const source = single(second), launch = single(first);
   const peer = { ...state(source, second), status: "running", provider: source.provider, id: "123", ip: "192.0.2.10" };
   const actual = droplet(source.jobs[0]);

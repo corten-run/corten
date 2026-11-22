@@ -201,7 +201,9 @@ export function assertFleetCensus(droplets, plan, remainingRegion, peers = []) {
     assert.ok(plan.single && s.fleet.single?.indexSha256 === plan.single.indexSha256
       && s.group !== plan.single.group && s.provider.accountId === plan.provider.accountId,
       "peer belongs to a different reservation or account");
-    return ownedDroplet(droplets, s, { priorSelection: true });
+    const d = ownedDroplet(droplets, s, { priorSelection: true });
+    assert.equal(d.networks.v4.filter((n) => n.type === "public").length, 1, "ambiguous peer public address");
+    return d;
   }));
   assert.equal(peerRows.size, peers.length, "duplicate peer host identity");
   const names = new Set(), ids = new Set();

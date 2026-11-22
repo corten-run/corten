@@ -139,7 +139,7 @@ export function watchSupervisedHost(options, notify) {
 
 // WorkerClass is a synthetic test boundary, never an option or saved field.
 // Separate event loops keep collection independent while SSH/SCP uses spawnSync.
-export function productionChild(args, { cancellation, WorkerClass = Worker, sources = installedSources, onReady, onFailure } = {}) {
+export function productionChild(args, { cancellation, WorkerClass = Worker, sources = installedSources, onReady, onFailure, independent = false } = {}) {
   return new Promise((resolve, reject) => {
     let worker, message, messages = 0, failed = false, notified = false;
     const uncertain = () => Object.assign(new Error("group-control-uncertain"), { controlTreeUncertain: true, controlUncertain: true });
@@ -154,7 +154,8 @@ export function productionChild(args, { cancellation, WorkerClass = Worker, sour
         assert.equal(digest(source.source), source.sha256);
       }
       const bootstrap = new URL(`data:text/javascript;base64,${Buffer.from(entry.source).toString("base64")}`);
-      worker = new WorkerClass(bootstrap, { workerData: { args, cancellation, sources, entry: entry.url, ...(onReady ? { admission: true } : {}) },
+      worker = new WorkerClass(bootstrap, { workerData: { args, cancellation, sources, entry: entry.url,
+        ...(onReady ? { admission: independent ? "continuation" : true } : {}) },
         stdout: true, stderr: true, execArgv: [] });
     } catch { reject(uncertain()); return; }
     worker.stdout.resume(); worker.stderr.resume();
@@ -306,7 +307,7 @@ export async function fleetMain(args, deps = {}) {
   const owner = json({ pid: process.pid, group: options.group });
   const locked = options.prepare || !!options.approval;
   if (locked) { physical(root); durable(lock, owner); }
-  let uncertain = false, attemptRoot = options.root, ownsLock = locked;
+  let uncertain = false, attemptRoot = options.root, ownsLock = locked, attemptLockOwned = false;
   const release = () => {
     assert.equal(regular(lock, 1024).toString(), owner); unlinkSync(lock); ownsLock = false; syncDirectory(root);
   };
@@ -330,19 +331,22 @@ export async function fleetMain(args, deps = {}) {
     const accountId = options.prepare ? options.accountId : slot.manifest.provider.accountId;
     assert.ok([...continuation.needsCensus].every((account) => account === accountId), "continuation custody requires the same provider account");
     continuation.recheck();
-    return await runFleet({ ...options, root: attemptRoot }, deps, { ...continuation, onReady() {
-      // The worker verified custody on its writing event loop. Every later
-      // admission independently rechecks the peer; this only releases the gate.
-      try { if (ownsLock) release(); }
-      catch { /* No lock takeover. Wait for the original child. */ }
-    } });
+    return await runFleet({ ...options, root: attemptRoot }, deps, {
+      ...continuation, onAttemptLock() { attemptLockOwned = true; },
+      onReady() {
+        // The worker verified custody on its writing event loop. Every later
+        // admission independently rechecks the peer; this only releases the gate.
+        try { if (ownsLock) release(); }
+        catch { /* No lock takeover. Wait for the original child. */ }
+      },
+    });
   } catch (error) {
     uncertain = error?.controlUncertain === true || error?.controlTreeUncertain === true;
     throw error;
   } finally {
     // A contained worker may leave its fleet lock even when the batch returns
     // a diagnostic status instead of throwing. Keep the continuation locked too.
-    if (ownsLock && !uncertain && !present(join(attemptRoot, ".fleet-operation.lock"))) release();
+    if (ownsLock && !uncertain && (!attemptLockOwned || !present(join(attemptRoot, ".fleet-operation.lock")))) release();
   }
 }
 
@@ -368,6 +372,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
     assert.deepEqual(readdirSync(root), [], "fleet-root-not-empty");
     const lock = join(root, ".fleet-operation.lock"), owner = json({ pid: process.pid, action: "prepare" });
     durable(lock, owner);
+    continuation?.onAttemptLock();
     let uncertain = false;
     try {
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
@@ -406,6 +411,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
   await controlCheckpoint(interrupted);
   const lock = join(root, ".fleet-operation.lock"), owner = json({ pid: process.pid, approvalSha256: options.approval });
   durable(lock, owner);
+  continuation?.onAttemptLock();
   let uncertain = false;
   try {
     const repeated = await fleetOperationPlan(options, { ...deps, reservedRegion: preview.subject.remainingRegion });
@@ -461,7 +467,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       try {
         if (job.outcome === "planned") code = main
           ? await main(childArgs(job.options, job.approvalSha256), { repo, spawn, providerFactory, inspect, sleep, interrupted: cancelled, write: () => {}, onReady })
-          : await productionChild(childArgs(job.options, job.approvalSha256), { cancellation, WorkerClass, onReady, onFailure });
+          : await productionChild(childArgs(job.options, job.approvalSha256), { cancellation, WorkerClass, onReady, onFailure, independent: !!continuation });
       }
       catch (error) { failure = error; if (error?.controlTreeUncertain || error?.controlUncertain) uncertain = true; }
       let saved, closed;
