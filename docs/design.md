@@ -7466,6 +7466,20 @@ rules something out.
     workstation, with other builds running, gave +1.5% (bound +2.8%) and is set aside as noise. Historical, a parent and child from
     before main changed the reading of a request's mode that a write runs: 16,292.0 a write at
     `30b39d455` against 15,210.8 at `45489ced9`, and with a `Public` page 16,308.7 against 16,310.7.
+    What marking a page `Public` costs before anything is kept
+    ([#1825 A `Public` page costs 3,300 instructions more than the same page for one visitor, before anything is kept](https://github.com/corten-run/corten/issues/1825)),
+    counted in process (`tests::cache::what_a_page_s_caching_costs`, a browser's request headers,
+    glibc's allocator) at `4827fa33b` against main's `564034b86`: the page for one visitor took
+    40,920 instructions against 40,908, the page marked `Public` in an app that keeps none
+    (`kept_answers(0)`) 43,259 against 44,420, and a kept page 42,054 against 42,694. Of the 1,161
+    fewer, 669 are `cache::settle` no longer reading the `Cache-Control` that `Cache` wrote while
+    it is still the answer's only line, known by the address of its bytes, which the cache mark
+    holds so that no other value has them (`a81cf9108`; a line a middleware wrote in its place or
+    beside it is read as before); 112 are one mark on a `Public` answer in place of two
+    (`75414d4e6`); and 380 are its header made once on each thread for each set of numbers, in
+    place of an allocation for each answer (`7e65e1da7`), which left a kept page 68 more, all in
+    glibc's allocator. With jemalloc the three took the `Public` page from 37,682 to 36,851 and a
+    kept page from 35,009 to 34,539, and the page for one visitor from 34,898 to 34,913.
     Not measured: how the URLs of an app in use are spread,
     so how often one first asked for in a full store is asked for again (the simulation's
     spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
@@ -7473,7 +7487,7 @@ rules something out.
     more from one start to the next; a miss kept with room in memory the store has used
     before (room made by a write or by a page's lifetime ending), in cycles; a store read
     from more
-    than one core; and the
+    than one core; what those 1,161 fewer instructions for a `Public` page are in cycles; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
@@ -7504,7 +7518,11 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; or the
     connection speaks HTTP/2, where a request's target carries its authority.
 
-    Last checked: 2026-11-21 for a write's count, the callgrind rounds above at `fc86d8eff` and
+    Last checked: 2026-11-21, what a `Public` mark costs before anything is kept, with rustc
+    1.99.1: each count the difference of a run of 1,200 requests and one of 200 under callgrind,
+    in process, a release build of each tree, three rounds with glibc's allocator and two with
+    jemalloc, the builds' order turned about from each round to the next, every count within three
+    instructions of the others of its build; 2026-11-21 for a write's count, the callgrind rounds above at `fc86d8eff` and
     `6984b2ac4`, and the cycles of the same write from the two builds, built with rustc 1.100.0
     on a dedicated 8-CPU cloud host (Xeon Platinum 8358, one thread a core) with nothing else
     running, started once on one CPU, loaded in turn for three seconds each by `wrk` with 64
