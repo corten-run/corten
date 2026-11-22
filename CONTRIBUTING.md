@@ -408,26 +408,44 @@ establish a general ranking.
       declaration is never added or changed after a run to clear its result.
 
       A negative control whose bound is at or above +1% but under the layout floor that applies
-      may go ahead when its user instructions pass a screen: the median of the paired changes in
-      user instructions per request is between -0.02% and +0.02% and its one-sided 95% upper bound
-      is at or below +0.02%, compared unrounded. The pull request reports it as "missed +1%;
-      placement and regression not distinguished", not as having met the margin or as unchanged
-      speed, with its user and kernel split. This is a screening rule, not an equivalence test: it
-      does not show that the control's instructions or CPU cost are unchanged. The floor recorded
-      in [design Choice 71](docs/design.md#choice-layout-floor) (+1.62%) applies only under the
-      protocol and on the host it was measured on: every recorded turn on a freshly started build,
-      a Xeon Platinum 8358, and rustc 1.100.0 with LLD 23.1.5 and the repository's release
-      profile. Any other run either carries its own A/A layout control in the same run, main
+      to it may go ahead when its user instructions pass a screen: the median of the paired
+      changes in user instructions per request is between -0.02% and +0.02% and its one-sided 95%
+      upper bound is at or below +0.02%, compared unrounded. The pull request reports it as
+      "missed +1%; placement and regression not distinguished", not as having met the margin or
+      as unchanged speed, with its user and kernel split. This is a screening rule, not an
+      equivalence test: it does not show that the control's instructions or CPU cost are
+      unchanged. The exception never covers a bound at or above the floor or a regression other
+      evidence corroborates, and does not replace the affected-route measurement above or the
+      memory and waiting measurements below.
+
+      A floor applies to a negative control in one of two ways; with neither, the control is held
+      to +1%. The floor recorded in [design Choice 71](docs/design.md#choice-layout-floor),
+      +1.62%, applies only to a run under the load protocol it was calibrated with, on the host
+      and toolchain it was measured on. The protocol: every turn, warm-up included, on a freshly
+      started build pinned to one CPU and loaded for 3 s by `wrk -t2 -c64` (two threads, 64
+      connections) on two other CPUs, the two builds' order turned every pair, 100 recorded pairs
+      after one that is not, and the bound the 59th of the 100 sorted per-pair changes. The host
+      and toolchain: a Xeon Platinum 8358 with one thread a core, Linux 6.12.117 and jemalloc
+      5.3.0 preloaded, and rustc 1.100.0 with LLD 23.1.5 and the repository's release profile.
+      That floor was calibrated on one workload, `plain`; for another negative control it is an
+      assumption, which the Choice records with when to revisit it. Any other run gets a floor
+      only from its own A/A layout control, run under the same protocol as the run and measured
+      on each negative control whose miss it would waive: main against main built twice, and main
       against main with one never-called function added as the Choice describes, with its pads,
-      pairs and statistic fixed in the plan before the run, which counts only if main built twice,
-      byte-identical, meets +1% in that run, and whose larger bound is that run's floor up to a
-      cap of +2%; or it holds every workload to +1%. The exception never covers a bound at or
-      above the floor or a regression other evidence corroborates, and does not replace the
-      affected-route measurement above or the memory and waiting measurements below. A reduction
-      in cycles is claimed as a CPU-cost win only when its bound establishes the predeclared
-      smallest worthwhile reduction and placement is ruled out: below minus the floor where one
-      applies, by a placement check declared before the run where none does. Otherwise it is
-      reported as a measured reduction, not a win.
+      pairs and statistic fixed in the plan before the run. It counts for a workload only if main
+      built twice, byte-identical, meets +1% on that workload in that run; the larger of its
+      layout bounds on that workload is then that workload's floor if it is at or below +2%. A
+      layout bound above +2% gives no floor, not a floor of +2%: that run holds every workload to
+      +1%. A negative control without its own A/A in that run is held to +1%.
+
+      Cycles alone never establish a CPU-cost win for a workload whose user instructions pass the
+      screen above, since placement alone can lower cycles too. A reduction in cycles is claimed
+      as a CPU-cost win only when its bound is beyond the predeclared smallest worthwhile
+      reduction and either a reduction in user instructions per request accounts for it or a
+      placement check declared before the run, an A/A layout control on that workload whose pads
+      are compared in both directions, rules placement out in the same run by the criterion its
+      plan fixed. Otherwise it is reported as "measured reduction, placement not ruled out", not
+      as a win.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,
