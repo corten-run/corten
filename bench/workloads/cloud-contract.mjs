@@ -609,8 +609,17 @@ export function installBenchmarkUnit(s) {
 }
 
 // Fixed source-bound entry point. No caller-provided command or adapter filtering.
+// Only file reconstruction for destroyed native failures needs the r27/r41
+// single-group roster. Do not admit it to reservation, launch or live custody.
+export function validateRemoteFileState(s) {
+  const priorSelection = s.status === "retired" && s.destroyedAt && s.retirement?.kind === "native-failed"
+    && s.schema === "benchmark-dedicated-group-host/v1" && s.fleet?.single?.group === "localized-marketplace"
+    && s.fleet.selection && digest(s.fleet.selection) === "b374b8f7bb9600efb0f06abc30dd08bbbaf97ef8fafb7e3858e83fd5d32570a8";
+  return validateState(s, s.round, { priorSelection });
+}
+
 export function remoteFiles(s) {
-  validateState(s, s.round);
+  validateRemoteFileState(s);
   const loadLayout = savedLoadLayout(s);
   const placement = savedPlacement(s);
   const sshIngress = bootstrapWorkspaceScript(s) === dedicatedWorkspace;
