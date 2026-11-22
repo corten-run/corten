@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as contract from "./cloud-contract.mjs";
 import { host as catalogHost } from "../catalog/droplet-contract.mjs";
@@ -13,6 +13,7 @@ import { campaignOutcome, controllerState, parseDropletArgs } from "./cloud-opti
 import { bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { digest } from "./cloud-local.mjs";
 import { guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
+import { shellTransport } from "./cloud-transport.mjs";
 
 const at = "2026-11-14T00:00:00.000Z";
 const input = () => ({ round: "r21", commit: "a".repeat(40), token: "f".repeat(16),
@@ -305,7 +306,9 @@ test("group launch permits exact siblings but reserves only this group's complet
   await assert.rejects(h.task({}, options).launch()); assert.equal(h.creates, 1);
 });
 
-test("ingress verification failure stays outside admission and retires only with terminal custody", async (t) => {
+for (const cancelAtProof of [false, true]) test(cancelAtProof
+  ? "cancellation at acknowledged valid setup proof preserves the host and lock"
+  : "ingress verification failure stays outside admission and retires only with terminal custody", async (t) => {
   const { h, options, fleet } = configured(t);
   options.group = groupNames[1]; h.flags.active = true; h.flags.bootstrapPending = 1;
   // Replay the real guardian against the in-memory kernel, including the
@@ -344,8 +347,11 @@ test("ingress verification failure stays outside admission and retires only with
     if (exitArchive) h.setArchive(archive([...metadata().slice(1),
       { name: "run.log", body: "benchmark job failed: stage=ssh-ingress-verification line=129 exit=1\n" }, { name: "control/" },
       ...Object.entries(reply.custody).map(([k, v]) => ({ name: "control/" + k, body: Buffer.from(v, "hex") }))]));
-    if (query) return { status: 0, stdout: JSON.stringify({ schema: "benchmark-failed-setup-host/v2", hostId: s.id, unit: s.unit,
-      setupFailed: true, exitCode: 1, observedAtMs: Date.now(), control: reply.proof }) };
+    if (query) {
+      if (cancelAtProof) h.flags.cancelled = true;
+      return { status: 0, stdout: JSON.stringify({ schema: "benchmark-failed-setup-host/v2", hostId: s.id, unit: s.unit,
+        setupFailed: true, exitCode: 1, observedAtMs: Date.now(), control: reply.proof }) };
+    }
     return result;
   };
   await assert.rejects(h.task({ run }, options).launch(), /ended before common bootstrap admission/);
@@ -360,6 +366,14 @@ test("ingress verification failure stays outside admission and retires only with
   await assert.rejects(h.task({ run }).collect());
   h.flags.wrongUnit = false;
   assert.equal(h.deletes, 0); assert.equal(h.saved().archiveSha256, undefined);
+  if (cancelAtProof) {
+    await assert.rejects(h.task({ run }).collect(), /cancelled/);
+    const saved = h.saved();
+    assert.equal(saved.control.ledger.at(-1).code, 0); assert.equal(saved.control.ledger.at(-1).setupProofRejected, undefined);
+    assert.ok(existsSync(join(h.local, "operation.lock"))); assert.equal(saved.retirement, undefined);
+    assert.equal(saved.deletionIntentAt, undefined); assert.equal(h.deletes, 0);
+    return;
+  }
   assert.equal(await h.task({ run }).collect(), 1);
   const s = h.saved();
   assert.equal(s.status, "retired"); assert.equal(s.retirement.kind, "setup-failed"); assert.ok(s.destroyedAt);
@@ -390,6 +404,50 @@ test("ingress verification failure stays outside admission and retires only with
       assert.equal(readFileSync(join(g.local, g.saved().evidence, "campaign/fake.json"), "utf8"), "{}");
     }
     assert.equal(g.deletes, 0); assert.equal(g.saved().validation, undefined); assert.equal(g.saved().retirement, undefined);
+  }
+});
+
+test("failed pre-registration cleanup preserves the archive and stops on missing proof, including on restart", async (t) => {
+  for (const mode of ["cancelled-proof", "invalid-proof", "refused", "lost-result", "archived-watcher"]) {
+    const cancelled = mode === "cancelled-proof";
+    const { h, options } = configured(t);
+    h.flags.hook = (bin, a) => { if (bin === "ssh" && a.at(-1).startsWith("systemctl show") && h.units === 1) h.flags.active = false; };
+    await assert.rejects(h.task({}, options).launch(), /ended before common bootstrap/);
+    h.flags.hook = undefined;
+    const entries = metadata(), first = h.saved().control.ledger[0].request.invocation.id;
+    if (mode === "archived-watcher") entries.push({ name: "control/" }, { name: `control/watch-failure-${first}.json`, body: '{"helperLine":342}\n' });
+    const bytes = archive(entries); h.setArchive(bytes);
+    let queries = 0;
+    const run = (bin, args, timeout, allowFail, expiry, control) => {
+      if (bin !== "ssh" || !args.at(-1).includes("<<'CORTEN_FAILED_SETUP_HOST'")) return h.run(bin, args, timeout, allowFail, expiry, control);
+      queries++;
+      const id = control.request.invocation.id, ack = `CORTEN_CONTROL ${id} ${"a".repeat(64)}\n`;
+      const status = cancelled || mode === "invalid-proof" ? 0 : 1;
+      if (cancelled && queries === 1) h.flags.cancelled = true;
+      return shellTransport({ repo: h.repo, spawn: () => ({ status, stdout: '{"setupFailed":false}', stderr: ack
+        + (mode === "lost-result" ? "" : `CORTEN_RESULT ${id} ${status}\n`) }) })(bin, args, timeout, allowFail, expiry, control);
+    };
+    const refusal = mode === "archived-watcher" ? "setup-watcher-proof-missing" : "setup-host-proof-refused";
+    await assert.rejects(h.task({ run }).collect(), cancelled ? /cancelled/ : mode === "lost-result" ? /remote control completion uncertain/ : { controllerStage: refusal });
+    const saved = h.saved(), last = saved.control.ledger.at(-1), lock = join(h.local, "operation.lock");
+    const lockHeld = existsSync(lock);
+    assert.equal(queries, mode === "archived-watcher" ? 0 : 1);
+    if (mode !== "archived-watcher") {
+      assert.equal(last.localTerminal, mode !== "lost-result");
+      assert.equal(last.code, cancelled || mode === "invalid-proof" ? 0 : mode === "refused" ? 1 : undefined);
+      assert.equal(last.setupProofRejected, mode === "invalid-proof" ? true : undefined);
+    }
+    assert.equal(saved.archiveSha256, digest(bytes)); assert.ok(saved.evidenceSha256);
+    assert.equal(saved.status, "starting"); assert.equal(saved.retirement, undefined); assert.equal(saved.deletionIntentAt, undefined);
+    const calls = h.calls.length, count = queries;
+    h.flags.cancelled = false;
+    const restart = await h.task({ run }).collect().then(() => undefined, (error) => error);
+    assert.equal(queries, count); assert.equal(h.calls.length, calls); assert.deepEqual(h.saved(), saved);
+    if (cancelled) assert.equal(restart.code, "EEXIST");
+    else if (mode === "lost-result") assert.match(restart.message, /ambiguous pre-bootstrap custody/);
+    else assert.equal(restart.controllerStage, refusal);
+    assert.equal(lockHeld, cancelled || mode === "lost-result"); assert.equal(existsSync(lock), lockHeld);
+    assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
   }
 });
 

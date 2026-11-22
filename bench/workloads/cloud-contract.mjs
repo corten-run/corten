@@ -302,7 +302,8 @@ export function validateState(s, round, options) {
     assert.ok(s.control.sealed.every((e) => ["bootstrap", "audit-json-api", "audit-mixed-production"].includes(e)));
     const ids = new Set();
     for (const [sequence, row] of s.control.ledger.entries()) {
-      exact(row, ["request", "localTerminal", ...(row.localTerminal ? ["code"] : [])]);
+      exact(row, ["request", "localTerminal", ...(row.localTerminal ? ["code"] : []),
+        ...(row.setupProofRejected === undefined ? [] : ["setupProofRejected"])]);
       const request = row.request, invocation = request.invocation;
       exact(request, ["invocation", "helperSha256", "epoch", "sequence", ...(request.seal === undefined ? [] : ["seal"])]);
       exact(invocation, ["schema", "round", "commit", "token", "id", "channel", "purpose", "requestSha256", "deadlineMs"]);
@@ -317,6 +318,9 @@ export function validateState(s, round, options) {
       full(invocation.id, /[a-f0-9]{32}/, "control invocation"); assert.ok(!ids.has(invocation.id)); ids.add(invocation.id);
       assert.equal(typeof row.localTerminal, "boolean");
       if (row.localTerminal) assert.ok(Number.isInteger(row.code) && row.code >= 0 && row.code <= 255);
+      if (row.setupProofRejected !== undefined) assert.ok(row.setupProofRejected === true && row.localTerminal && row.code === 0
+        && s.preBootstrapTerminal && s.status === "starting" && s.evidence && sequence === s.control.ledger.length - 1
+        && request.epoch === "collection" && invocation.channel === "ssh", "invalid setup proof rejection");
       if (request.seal !== undefined) {
         assert.notEqual(request.epoch, "collection"); assert.equal(invocation.channel, "ssh");
         const expected = s.control.ledger.slice(0, sequence + 1).filter((r) => r.request.epoch === request.epoch)
@@ -605,8 +609,17 @@ export function installBenchmarkUnit(s) {
 }
 
 // Fixed source-bound entry point. No caller-provided command or adapter filtering.
+// Only file reconstruction for destroyed native failures needs the r27/r41
+// single-group roster. Do not admit it to reservation, launch or live custody.
+export function validateRemoteFileState(s) {
+  const priorSelection = s.status === "retired" && s.destroyedAt && s.retirement?.kind === "native-failed"
+    && s.schema === "benchmark-dedicated-group-host/v1" && s.fleet?.single?.group === "localized-marketplace"
+    && s.fleet.selection && digest(s.fleet.selection) === "b374b8f7bb9600efb0f06abc30dd08bbbaf97ef8fafb7e3858e83fd5d32570a8";
+  return validateState(s, s.round, { priorSelection });
+}
+
 export function remoteFiles(s) {
-  validateState(s, s.round);
+  validateRemoteFileState(s);
   const loadLayout = savedLoadLayout(s);
   const placement = savedPlacement(s);
   const sshIngress = bootstrapWorkspaceScript(s) === dedicatedWorkspace;

@@ -385,7 +385,8 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     // answer is personal, and a `private` beside them is not trusted.
     let (mut no_store, mut is_private, mut must_understand) = (false, false, false);
     let (mut lines, mut quoted, mut text) = (0, false, true);
-    let typed = res.extensions().get::<Typed>().copied();
+    // A kept answer given again carries its mark with what was kept, not as an extension.
+    let typed = res.extensions().get::<Typed>().copied().or_else(|| crate::kept::Kept::typed(res.extensions()));
     // For a partial (below), whether any reader could find a `no-store` in its header
     // (`no-store=1`, beside `must-understand`), read with the rest rather than looked up again.
     let mut mentioned = false;
