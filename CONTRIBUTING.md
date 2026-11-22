@@ -419,33 +419,51 @@ establish a general ranking.
       memory and waiting measurements below.
 
       A floor applies to a negative control in one of two ways; with neither, the control is held
-      to +1%. The floor recorded in [design Choice 71](docs/design.md#choice-layout-floor),
-      +1.62%, applies only to a run under the load protocol it was calibrated with, on the host
-      and toolchain it was measured on. The protocol: every turn, warm-up included, on a freshly
-      started build pinned to one CPU and loaded for 3 s by `wrk -t2 -c64` (two threads, 64
-      connections) on two other CPUs, the two builds' order turned every pair, 100 recorded pairs
-      after one that is not, and the bound the 59th of the 100 sorted per-pair changes. The host
-      and toolchain: a Xeon Platinum 8358 with one thread a core, Linux 6.12.117 and jemalloc
-      5.3.0 preloaded, and rustc 1.100.0 with LLD 23.1.5 and the repository's release profile.
-      That floor was calibrated on one workload, `plain`; for another negative control it is an
-      assumption, which the Choice records with when to revisit it. Any other run gets a floor
-      only from its own A/A layout control, run under the same protocol as the run and measured
-      on each negative control whose miss it would waive: main against main built twice, and main
-      against main with one never-called function added as the Choice describes, with its pads,
-      pairs and statistic fixed in the plan before the run. It counts for a workload only if main
-      built twice, byte-identical, meets +1% on that workload in that run; the larger of its
-      layout bounds on that workload is then that workload's floor if it is at or below +2%. A
-      layout bound above +2% gives no floor, not a floor of +2%: that run holds every workload to
-      +1%. A negative control without its own A/A in that run is held to +1%.
+      to +1%.
 
-      Cycles alone never establish a CPU-cost win for a workload whose user instructions pass the
-      screen above, since placement alone can lower cycles too. A reduction in cycles is claimed
-      as a CPU-cost win only when its bound is beyond the predeclared smallest worthwhile
-      reduction and either a reduction in user instructions per request accounts for it or a
-      placement check declared before the run, an A/A layout control on that workload whose pads
-      are compared in both directions, rules placement out in the same run by the criterion its
-      plan fixed. Otherwise it is reported as "measured reduction, placement not ruled out", not
-      as a win.
+      The recorded floor, +1.62% ([design Choice 71](docs/design.md#choice-layout-floor)),
+      applies to one workload, the one it was calibrated on: `plain`, a `GET /private` with no
+      request header of its own to the probe app the Choice names, answered `200` with the record
+      page for one visitor. It applies to no other workload or request, and only to a run that
+      records a setup matching the calibration's in every item below. Any VM counts if it matches;
+      a difference in any item means no recorded floor.
+
+      1. CPU: Xeon Platinum 8358, one thread a core.
+      2. Kernel: Linux 6.12.117 (Debian's `6.12.117+deb13-amd64`).
+      3. Allocator: jemalloc 5.3.0 by `LD_PRELOAD=libjemalloc.so.2`, with
+         `MALLOC_CONF=background_thread:true,tcache_max:65536` exactly.
+      4. Pinning: the server on one CPU, the load on two others and the driver and `perf` on a
+         fourth, all four distinct.
+      5. Toolchain: rustc 1.100.0, LLD 23.1.5 and the repository's release profile.
+      6. Load: `wrk` 4.1.0 with `-t2 -c64` and 3 s turns; every turn, warm-up included, on a
+         freshly started build; the two builds' order turned every pair; 100 recorded pairs after
+         one that is not; the bound the 59th of the 100 sorted per-pair changes.
+
+      Any other negative control, and `plain` on any other setup, gets a floor only from its own
+      A/A layout control in the same run, under the run's protocol and measured on each negative
+      control whose miss it would waive: main against main built twice, and main against main with
+      one never-called function added as the Choice describes, with its pads, pairs and statistic
+      fixed in the plan before the run. If that control qualifies, the larger of its layout bounds
+      on a workload is that workload's floor if it is at or below +2%. A layout bound above +2%
+      gives no floor, not a floor of +2%: that run holds every workload to +1%. A negative control
+      without its own qualifying A/A in that run is held to +1%.
+
+      A layout control, the recorded one or a same-run one, qualifies only if the run records that
+      it passes every check below. If any check fails, the control gives no floor and the run
+      holds every workload to +1%.
+
+      1. Each comparison's two builds answer the workload's request with byte-identical status,
+         headers (but `Date`) and body.
+      2. Main built twice is byte-identical and meets +1% on that workload.
+      3. The pad is present in the padded binary and moved code: the count of function symbols in
+         both binaries whose addresses changed is above zero.
+      4. Every counter ran 100% of every turn, and the load tool reported no error in any turn.
+      5. Each pad comparison passes the user-instruction screen above, as a candidate must: its
+         median between -0.02% and +0.02% and its bound at or below +0.02%.
+
+      A layout floor never applies to the benefit side. A reduction in cycles on a workload whose
+      user instructions pass the screen above is reported as "measured reduction, placement not
+      ruled out", never as a CPU-cost win.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,

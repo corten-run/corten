@@ -8152,25 +8152,48 @@ rules something out.
     touches keeps the margin.
 
     The floor is +1.62%, the larger of the two layout bounds measured (+1.619274%, rounded up to two
-    places; a run's bound is compared with it unrounded). It applies only to a run under the load
-    protocol it was calibrated with, on the host and toolchain it was measured on: every turn,
-    warm-up included, on a freshly started build pinned to one CPU and loaded for 3 s by
-    `wrk -t2 -c64` (two threads, 64 connections) on two other CPUs, the builds' order turned every
-    pair, 100 recorded pairs after one that is not and the bound the 59th of the 100 sorted
-    per-pair changes; a Xeon Platinum 8358 (the exact model, not the family) with one thread a
-    core, Linux 6.12.117 and jemalloc 5.3.0 preloaded; and rustc 1.100.0 with LLD 23.1.5 and the
-    repository's release profile. It was calibrated on `plain` alone: for another negative control
-    under that protocol, host and toolchain it is an assumption, not a measurement (Stands on and
-    Revisit when below). Any other run, including one with each build started once on the same
-    host, gets a floor only from its own A/A layout control, run under the same protocol as the
-    run and measured on each negative control whose miss it would waive; a negative control
-    without its own A/A in that run is held to +1%. That control fixes its pads, pairs and
-    statistic in the plan before the run, counts for a workload only if main built twice,
-    byte-identical, meets +1% on that workload in the same run, and gives that workload a floor of
-    its larger layout bound there only if that bound is at or below +2%. A larger bound above +2%
-    gives no floor, and is not read as a floor of +2%: that run holds every workload to +1%. The
-    +2% limit leaves room above the +1.62% measured here for a host whose placement costs a little
-    more, and stops a noisy or unlucky layout control from making the gate whatever it measured.
+    places; a run's bound is compared with it unrounded). It applies to one workload, the one it was
+    calibrated on: `plain`, a `GET /private` with no request header of its own, sent by `wrk` to the
+    probe app that
+    [#1829 Run a kept page's handler once for requests that miss its copy together](https://github.com/corten-run/corten/pull/1829)
+    was measured with, which answers `200` with the record page for one visitor
+    (`cache-control: private, no-cache`, a 6,124-byte body). It applies to no other workload or
+    request, and only to a run that records a setup matching the calibration's in every item: a Xeon
+    Platinum 8358 (the exact model, not the family) with one thread a core; Linux 6.12.117 (Debian's
+    `6.12.117+deb13-amd64`); jemalloc 5.3.0 by `LD_PRELOAD=libjemalloc.so.2` with
+    `MALLOC_CONF=background_thread:true,tcache_max:65536` exactly; the server pinned to one CPU, the
+    load on two others and the driver and `perf` on a fourth, all four distinct; rustc 1.100.0, LLD
+    23.1.5 and the repository's release profile; and `wrk` 4.1.0 with `-t2 -c64` and 3 s turns,
+    every turn, warm-up included, on a freshly started build, the builds' order turned every pair,
+    100 recorded pairs after one that is not and the bound the 59th of the 100 sorted per-pair
+    changes. Any VM counts if it matches. A difference in any item, such as another CPU model or each
+    build started once, means no recorded floor. Any other negative control, and `plain` on any other
+    setup, gets a floor only from its own A/A layout control in the same run, under the run's
+    protocol and measured on each negative control whose miss it would waive; one without a
+    qualifying A/A in that run is held to +1%. That control fixes its pads, pairs and statistic in
+    the plan before the run, and gives a workload a floor of its larger layout bound there only if
+    that bound is at or below +2%. A larger bound above +2% gives no floor, and is not read as a floor
+    of +2%: that run holds every workload to +1%. The +2% limit leaves room above the +1.62% measured
+    here for a host whose placement costs a little more, and stops a noisy or unlucky layout control
+    from making the gate whatever it measured.
+
+    A layout control, the recorded one or a same-run one, gives a floor only if the run records that
+    it passes every check: each comparison's two builds answer the workload's request with
+    byte-identical status, headers (but `Date`) and body; main built twice is byte-identical and
+    meets +1% on that workload; the pad is in the padded binary and moved code (the count of function
+    symbols in both binaries whose addresses changed is above zero); every counter ran 100% of every
+    turn and the load tool reported no error in any turn; and each pad comparison passes the
+    user-instruction screen above, as a candidate must. If any check fails, the control gives no
+    floor and the run holds every workload to +1%: a pad whose answers or instruction count moved
+    measures more than placement, and a floor from it would waive a cost it cannot attribute. The
+    recorded calibration passes each. All three comparisons' answers to `/private` (7,098 bytes as
+    compared: status, headers but `Date`, and body) were byte-identical. The two builds of main were
+    byte-identical and met +1% at +0.59%. Each pad build held its one added function, which neither
+    main build has, and all 3,402 function symbols it shares with main moved (none in main built
+    twice). All 1,818 counter readings in pass 1's 606 turns, warm-up pairs included, and all 496 in
+    pass 2's 124 ran 100%, and `wrk` reported no connect, read, write, status or timeout error in any
+    of those 730 turns. The pads' user instructions passed the screen: medians of +0.00082% (40
+    bytes) and +0.00008% (3,100 bytes), bounds of +0.00130% and +0.00061%.
 
     The screen is set by the A/A runs. In all three comparisons the count of user instructions
     retired per request changed by at most 0.0102% in any pair (about four of the `plain` page's
@@ -8182,17 +8205,10 @@ rules something out.
     visibly moved, and passing it does not show the instruction stream or its CPU cost unchanged,
     or make a touched workload a control.
 
-    Cycles alone never establish a CPU-cost win for a workload whose user instructions pass the
-    screen, since placement alone lowers cycles too: the same pairs read the other way give
-    placement-only medians of -1.14% and -1.05% with bounds of -0.71% and -0.76%, and no run
-    measured how far another placement can lower them. A reduction in cycles is claimed as a
-    CPU-cost win only when its bound is beyond the predeclared smallest worthwhile reduction, a
-    threshold separate from the +1% gate, and either a reduction in user instructions per request
-    accounts for it or a placement check declared before the run (an A/A layout control on that
-    workload whose pads are compared in both directions) rules placement out in the same run by the
-    criterion its plan fixed. Otherwise it is reported as "measured reduction, placement not ruled
-    out". A recorded floor does not change this: two pads, and the same pairs read backwards, do not
-    bound what another placement does on the benefit side.
+    A layout floor never applies to the benefit side. A cycle reduction on a workload whose user
+    instructions pass the screen is reported as "measured reduction, placement not ruled out", never
+    as a CPU-cost win: placement alone can lower cycles as well as raise them, and no run here
+    measured how far. The CPU-win rule in Pull requests is otherwise unchanged.
 
     The runs: one host with nothing else running (Debian 13, Linux 6.12.117, rustc 1.100.0 with LLD
     23.1.5 and the repository's release profile, jemalloc 5.3.0 preloaded), every binary built there
@@ -8229,6 +8245,11 @@ rules something out.
     alone, two pads in one place); how far a placement can lower cycles; a protocol with each build
     started once; and latency, since these are cycles under load.
 
+    The receipt is on
+    [#1923 Control workloads with flat instructions miss the +1% cycle margin by up to 2.8% of user cycles, so the gate blocks changes it cannot attribute](https://github.com/corten-run/corten/issues/1923):
+    a comment there gives the aggregate tables above, and the raw CSVs and the host record are
+    attached to that issue.
+
     Not chosen: the exception for any workload whose instructions are flat (this Choice as first
     proposed), which would pass a real cost on a workload the change touches, such as data laid out
     to miss the cache more, work in the kernel or waiting on a lock, whose instructions stay flat;
@@ -8238,32 +8259,36 @@ rules something out.
     reported and the pull request held until a rerun met +1%, the rule until now, which held a pull
     request whose same two builds (the same SHA-256s in both runs) missed with one start and with
     fresh starts alike, and would pass a real cost of the same size on a lucky placement; a
-    same-run floor capped at +2% when the layout bound is above it, and a reduction claimed as a
-    win when its bound is below minus the floor (both in this Choice's second version), since a
-    capped floor would pass a miss on a run whose own placement measured more, and two pads read
-    backwards do not bound another placement on the benefit side; the recorded floor reused under
-    another load protocol, or a same-run A/A on a workload other than the one whose miss it waives,
-    since neither measures the placement that control saw; more pairs, pooled runs or a margin
-    declared again after a run, since more pairs narrow the bound around the placement's own offset
-    (+1.16% here), not toward zero, and the others are what Values 9 rules out; a layout
-    control in every run, which adds about 35 minutes of host time a workload where the recorded
-    floor applies (main built twice and the two pads took 34 minutes 52 seconds here, about 11
-    minutes 37 seconds for each comparison of 100 pairs), and is still asked of any run it does not
-    cover; and builds that pin placement (function alignment, a fixed link order), not tried, which
-    would gate a binary other than the one apps build.
+    same-run floor capped at +2% when the layout bound is above it (this Choice's second version),
+    since a capped floor would pass a miss on a run whose own placement measured more; the recorded
+    floor carried to the gate's other negative controls on a matching setup (this Choice's second
+    and third versions), since `plain` is the only workload measured and another hot path can be
+    more or less sensitive to the same pads; the recorded floor reused on another setup, or a
+    same-run A/A on a workload other than the one whose miss it waives, since neither measures the
+    placement that control saw; a layout control that gives a floor without checks that its pads
+    changed only placement, since a pad that changed the answers or the work would be read as
+    placement; a cycle reduction on flat instructions claimed as a win by a cutoff below minus the
+    floor or by a placement check reading the pads in both directions (the second and third
+    versions), since two pads read backwards do not bound what another placement does; more pairs,
+    pooled runs or a margin declared again after a run, since more pairs narrow the bound around the
+    placement's own offset (+1.16% here), not toward zero, and the others are what Values 9 rules
+    out; a layout control in every run, which adds about 35 minutes of host time a workload where
+    the recorded floor applies (main built twice and the two pads took 34 minutes 52 seconds here,
+    about 11 minutes 37 seconds for each comparison of 100 pairs), and is still asked of any run it
+    does not cover; and builds that pin placement (function alignment, a fixed link order), not
+    tried, which would gate a binary other than the one apps build.
 
     Stands on: measured (the three comparisons and the second pass above, one run of each on one
-    host, 100 pairs for cycles and 30 for the misses); reasoned (the layout builds changed the count
-    of user instructions retired per request by no more than 0.0102% in any pair, so a control whose
-    code the change does not touch and whose instruction count passes the screen is, as far as a
-    count shows, where the A/A builds were in its user code; the screen shows no more than that);
-    bet (a declaration, accepted in review, that a control's code paths are untouched is right, so a
-    cost the change adds through data layout, the kernel or waiting does not fall on it; and
-    `plain`'s floor holds for the gate's other negative controls under the same load protocol, host
-    and toolchain, the only place it is used without a same-run A/A on the workload); value (Fast,
-    and proven fast: a cycle change is attributed to the code that made it before it blocks a change
-    or proves one fast; Verified, not assumed: the floor is measured with A/A builds rather than
-    argued, and is held to the protocol, host and toolchain it was measured on, README Values).
+    host and one workload, 100 pairs for cycles and 30 for the misses, passing every check a layout
+    control must pass); reasoned (the layout builds changed the count of user instructions retired
+    per request by no more than 0.0102% in any pair, so a control whose code the change does not
+    touch and whose instruction count passes the screen is, as far as a count shows, where the A/A
+    builds were in its user code; the screen shows no more than that); bet (a declaration, accepted
+    in review, that a control's code paths are untouched is right, so a cost the change adds through
+    data layout, the kernel or waiting does not fall on it); value (Fast, and proven fast: a cycle
+    change is attributed to the code that made it before it blocks a change or proves one fast;
+    Verified, not assumed: the floor is measured with A/A builds rather than argued, and is held to
+    the workload and setup it was measured on, README Values).
 
     Revisit when: the gate runs on a CPU model it has no floor for (another droplet size, or a c-8
     with another CPU: the c-8s used for the gate have also had a Xeon Platinum 8168 and 8280), whose
@@ -8272,14 +8297,14 @@ rules something out.
     toolchain changes how code is placed, such as a rustc whose LLVM is a new major version
     (LLVM 23 under rustc 1.100.0 here) or whose release notes change inlining or function alignment,
     a linker other than LLD, or a release profile with other LTO, codegen units or opt-level; the
-    host's kernel or the allocator changes (Linux 6.12.117 and jemalloc 5.3.0 here); the probe's
-    workloads or main's layout change materially; a later A/A of main built twice under the same
-    protocol has a bound over +1%, so the protocol and not the placement fails the gate; a layout
-    control on another 8358 or another workload under the same protocol has a bound over the
-    recorded floor, or a same-run one has a larger bound over +2%, which gives that run no floor; an
-    A/A's user instruction count moves by more than 0.02%, or a run cannot resolve that band; a
-    placement check shows placement alone lowering cycles past a reduction already claimed as a win;
-    or a control that missed inside the floor is later measured as a real cost.
+    host's kernel, the allocator or its settings change (Linux 6.12.117, jemalloc 5.3.0 and its
+    `MALLOC_CONF` here); the probe's workloads or main's layout change materially; a later A/A of
+    main built twice under the same protocol has a bound over +1%, so the protocol and not the
+    placement fails the gate; a layout control on `plain` on another matching setup has a bound over
+    the recorded floor, or a same-run one has a larger bound over +2%, which gives that run no floor;
+    same-run layout controls on another workload give floors often enough to be worth recording one
+    here; an A/A's user instruction count moves by more than 0.02%, or a run cannot resolve that
+    band; or a control that missed inside the floor is later measured as a real cost.
 
     Last checked: 2026-11-22, the runs above at `14471284c` on a DigitalOcean c-8 in sfo3 (Xeon
     Platinum 8358, one thread a core, Linux 6.12.117), rustc 1.100.0, LLD 23.1.5, perf 6.12.117,
