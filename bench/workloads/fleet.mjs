@@ -299,7 +299,7 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
 
 // plan/main injection is a synthetic TEST seam at the existing production
 // boundaries. Neither the CLI nor saved JSON can select implementations.
-export async function fleetMain(args, deps = {}) {
+export async function fleetMain(args, deps = {}, preIntentFailures) {
   const options = parseFleetArgs(args), repo = realpathSync(deps.repo ?? checkout);
   if (!options.continuationRoot) return runFleet(options, deps);
   const { continuationLock, inspectContinuation } = await import("./group-continuation.mjs");
@@ -308,6 +308,7 @@ export async function fleetMain(args, deps = {}) {
   const locked = options.prepare || !!options.approval;
   if (locked) { physical(root); durable(lock, owner); }
   let uncertain = false, attemptRoot = options.root, ownsLock = locked, attemptLockOwned = false;
+  let preIntentStage = options.detach ? "continuation-replay" : undefined;
   const release = () => {
     assert.equal(regular(lock, 1024).toString(), owner); unlinkSync(lock); ownsLock = false; syncDirectory(root);
   };
@@ -331,6 +332,7 @@ export async function fleetMain(args, deps = {}) {
     const accountId = options.prepare ? options.accountId : slot.manifest.provider.accountId;
     assert.ok([...continuation.needsCensus].every((account) => account === accountId), "continuation custody requires the same provider account");
     continuation.recheck();
+    preIntentStage = undefined;
     return await runFleet({ ...options, root: attemptRoot }, deps, {
       ...continuation, onAttemptLock() { attemptLockOwned = true; },
       onReady() {
@@ -339,9 +341,10 @@ export async function fleetMain(args, deps = {}) {
         try { if (ownsLock) release(); }
         catch { /* No lock takeover. Wait for the original child. */ }
       },
-    });
+    }, preIntentFailures);
   } catch (error) {
     uncertain = error?.controlUncertain === true || error?.controlTreeUncertain === true;
+    if (preIntentStage) preIntentFailures?.set(error, preIntentStage);
     throw error;
   } finally {
     // A contained worker may leave its fleet lock even when the batch returns
@@ -352,7 +355,7 @@ export async function fleetMain(args, deps = {}) {
 
 async function runFleet(options, { repo = checkout, spawn, providerFactory, inspect, sleep,
   interrupted = () => false, write = console.log, plan = productionPlan, verify = verifyCollectedGroup, compiler, main, WorkerClass,
-  catalogProvider = providerTransport } = {}, continuation) {
+  catalogProvider = providerTransport } = {}, continuation, preIntentFailures) {
   repo = realpathSync(repo);
   const transport = shellTransport({ repo, spawn });
   const run = async (...args) => {
@@ -409,20 +412,27 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       }
     }
   }
-  const deps = { repo, run, plan, verify, inspect, interrupted, compiler, catalogProvider, continuation }, preview = await fleetOperationPlan(options, deps);
-  if (options["print-approval"]) {
-    write(JSON.stringify({ subject: preview.subject, approvalSha256: preview.approvalSha256, fullGroupQualified: false }));
-    return preview.subject.jobs.some((j) => j.missing?.length) ? 2 : 3;
-  }
-  assert.equal(options.approval, preview.approvalSha256, "fleet-exact-approval-required");
-  assert.ok(preview.subject.jobs.every((j) => !j.missing?.length), "fleet-integration-missing");
-  await controlCheckpoint(interrupted);
+  const deps = { repo, run, plan, verify, inspect, interrupted, compiler, catalogProvider, continuation };
   const lock = join(root, ".fleet-operation.lock"), owner = json({ pid: process.pid, approvalSha256: options.approval });
-  takeLock(lock, owner);
-  let uncertain = false;
+  let uncertain = false, ownsLock = false;
+  let preIntentStage = continuation ? "initial-plan" : undefined;
   try {
+    const preview = await fleetOperationPlan(options, deps);
+    if (options["print-approval"]) {
+      preIntentStage = undefined;
+      write(JSON.stringify({ subject: preview.subject, approvalSha256: preview.approvalSha256, fullGroupQualified: false }));
+      return preview.subject.jobs.some((j) => j.missing?.length) ? 2 : 3;
+    }
+    assert.equal(options.approval, preview.approvalSha256, "fleet-exact-approval-required");
+    assert.ok(preview.subject.jobs.every((j) => !j.missing?.length), "fleet-integration-missing");
+    await controlCheckpoint(interrupted);
+    preIntentStage = undefined;
+    takeLock(lock, owner);
+    ownsLock = true;
+    if (continuation) preIntentStage = "locked-plan";
     const repeated = await fleetOperationPlan(options, { ...deps, reservedRegion: preview.subject.remainingRegion });
     assert.equal(repeated.approvalSha256, options.approval, "fleet-action-changed");
+    if (continuation) preIntentStage = "final-pre-intent-recheck";
     if (options.detach || options["admit-remaining"]) {
       const { manifest } = repeated.fleet;
       await readPlacement(manifest.provider, placement, repeated.subject.remainingRegion ?? manifest.host.region,
@@ -434,6 +444,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       continuation?.recheck(root);
     }
     await controlCheckpoint(interrupted);
+    preIntentStage = undefined; // The intent write can partially succeed; do not label it a pre-intent refusal.
     if (options.detach) durable(join(root, "launch-intent.json"), json({ schema: "benchmark-group-fleet-staged-launch-intent/v1",
       approvalSha256: options.approval, subject: preview.subject }));
     if (options["admit-remaining"]) durable(join(root, "remaining-intent.json"), json({ schema: "benchmark-group-fleet-remaining-intent/v1",
@@ -567,23 +578,30 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
     return groups.some((g) => ["pending", "deferred"].includes(g.outcome)) ? 3 : groups.some((g) => ["terminal-incomplete", "unused-retired", "setup-failed-retired", "native-failed-retired"].includes(g.outcome)) ? 1 : 0;
   } catch (error) {
     if (error?.controlTreeUncertain || error?.controlUncertain) uncertain = true;
+    if (preIntentStage) preIntentFailures?.set(error, preIntentStage);
     throw error;
   } finally {
-    if (!uncertain) {
+    if (ownsLock && !uncertain) {
       physical(root); assert.equal(regular(lock, 1024 * 1024).toString(), owner, "fleet-lock-changed");
       unlinkSync(lock); syncDirectory(root);
     }
   }
 }
 
-export async function fleetCli(args) {
+export async function fleetCli(args, { writeError = console.error, ...deps } = {}) {
   const signals = productionSignals();
-  try { return await fleetMain(args, { interrupted: signals.interrupted }); }
+  // Keep the original exception for uncertainty and cleanup. A replacement
+  // error from cleanup must not inherit the failed check's label.
+  const preIntentFailures = new Map();
+  try { return await fleetMain(args, { ...deps, interrupted: signals.interrupted }, preIntentFailures); }
   catch (error) {
     if (placementFailures.has(error)) {
       const refusal = providerFailure(error);
-      console.error("fleet-placement-preflight-failed" + (refusal ? `: ${refusal.code}${refusal.httpStatus ? ` (HTTP ${refusal.httpStatus})` : ""}` : ""));
-    } else console.error("fleet-operation-failed");
+      writeError("fleet-placement-preflight-failed" + (refusal ? `: ${refusal.code}${refusal.httpStatus ? ` (HTTP ${refusal.httpStatus})` : ""}` : ""));
+    } else {
+      const stage = preIntentFailures.get(error);
+      writeError(stage ? `fleet-operation-failed: ${stage}` : "fleet-operation-failed");
+    }
     return 2;
   }
   finally { signals.close(); }
