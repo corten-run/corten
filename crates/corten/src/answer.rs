@@ -2720,8 +2720,7 @@ where
         if O::PAGE {
             Some(crate::kept::Shape::Page)
         } else {
-            // A whole body is kept where the app compresses it: none in a build that does not.
-            (O::WHOLE.0 && cfg!(feature = "compress")).then_some(crate::kept::Shape::Body)
+            O::WHOLE.0.then_some(crate::kept::Shape::Body)
         }
     }
 

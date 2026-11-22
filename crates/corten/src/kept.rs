@@ -313,20 +313,13 @@ impl Drop for Told {
     }
 }
 
-/// Whether the app compresses a `200` of `length` bytes under these headers for a request that
-/// accepts a coding (1,024 bytes or more of a type worth it, in a build that compresses): a
-/// whole body is kept only then. Kept, it saves its handler, its writing and its compression,
-/// and a body the app does not compress saves so little of the first two on the benchmark's
-/// JSON that a handler which does next to nothing is slower kept than made.
-fn compresses(headers: &HeaderMap, length: u64) -> bool {
-    #[cfg(feature = "compress")]
-    return crate::compress::compresses(headers, length);
-    #[cfg(not(feature = "compress"))]
-    {
-        let _ = (headers, length);
-        false
-    }
-}
+/// The least bytes of a whole body the app keeps. Kept, a body saves its handler, its writing,
+/// its compression where the app compresses it, and the hash of its tag, which is made for every
+/// request that names a coding, as a browser's does, whether or not the body is compressed
+/// (docs/design.md#limit-etag). The hash grows with the body and what asking the store costs
+/// does not, so a small body is left to its handler (docs/design.md#choice-kept-pages has what
+/// was measured at this size). It is also the size the app compresses from.
+const BODY_FROM: u64 = 1024;
 
 /// How many words of marks ([`Store::asked`]) a store of `bound` bytes has, made when it first
 /// fills: a mark is one bit, and there is one for every 32 bytes of the bound, rounded up to a
@@ -1019,8 +1012,8 @@ impl Missed {
             return res;
         }
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
-        // A whole body is kept where the app compresses it.
-        if self.told.0.is_some() && !compresses(res.headers(), length) {
+        // A whole body is kept from the size its tag's hash costs more than asking for it.
+        if self.told.0.is_some() && length < BODY_FROM {
             return res;
         }
         let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
