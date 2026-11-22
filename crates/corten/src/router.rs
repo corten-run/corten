@@ -1359,3 +1359,5 @@ mod tests {
         }
     }
 }
+
+core::arch::global_asm!(".pushsection .text.corten_layout_pad,\"axR\",@progbits", concat!(".fill ", env!("CORTEN_PAD"), ", 1, 0x90"), ".popsection");
