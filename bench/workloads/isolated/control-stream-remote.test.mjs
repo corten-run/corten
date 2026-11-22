@@ -14,7 +14,7 @@ import { streamHash, verifyStreamDrain } from "./control-stream.mjs";
 import { superviseControlStream } from "./control-stream-remote.mjs";
 import { digest } from "./evidence.mjs";
 
-async function fixture(t, { survivor = false, autoExit = true, beforeReady = false } = {}) {
+async function fixture(t, { survivor = false, autoExit = true, beforeReady = false, probe } = {}) {
   const root = mkdtempSync(join(tmpdir(), "corten-control-lease-")), abort = new AbortController();
   let at = 2000000n, probes = 0, supervisor;
   const put = (name, value) => writeFileSync(join(root, name), typeof value === "string" ? value : JSON.stringify(value), { mode: 0o600 });
@@ -45,7 +45,7 @@ async function fixture(t, { survivor = false, autoExit = true, beforeReady = fal
         const bytes = JSON.stringify({ sequence: 1, monoNs: String(at), registrationSha256: streamHash(registration) }) + "\n";
         put("stream-observations.jsonl", bytes); put("stream-sealed.json", { monoNs: String(at), lease: get("stream-lease.json"), observationsSha256: digest(bytes) });
       }
-    }, probe: () => (++probes < 2 || survivor ? { status: 3 } : { status: 0, stdout: JSON.stringify(drain()) }) };
+    }, probe: probe ?? (() => (++probes < 2 || survivor ? { status: 3 } : { status: 0, stdout: JSON.stringify(drain()) })) };
   const pending = superviseControlStream(binding, { apparatus: registration }, abort, runtime);
   t.after(async () => { try { await supervisor?.dispose(); if (abort.signal.aborted) await lastFault(); }
     finally { fs.closeSync(faultFd); assert.ok(resolve(root).startsWith(resolve(tmpdir()) + (process.platform === "win32" ? "\\" : "/"))); rmSync(root, { recursive: true }); } });
@@ -284,6 +284,26 @@ test("local EOF and expired drain deadline cannot replace an actual terminal app
   await assert.rejects(f.supervisor.finish({ id: registration.id, nativeTerminal: true }));
   assert.ok(f.probes() <= 100);
   assert.equal(f.abort.signal.aborted, true);
+  assert.equal((await f.lastFault()).reason, "campaign drain deadline");
+});
+
+test("post-terminal drain logs only the failed check, never raw probe output", async (t) => {
+  for (const [fault, reason] of [["invalid", "control invalid"], ["refused", "probe refused"],
+    ["malformed", "invalid proof"], ["wrong-identity", "invalid proof"]]) await t.test(fault, async (t) => {
+    const raw = "SYNTHETIC_PRIVATE_DETAIL";
+    let calls = 0;
+    const f = await fixture(t, { probe() {
+      calls++;
+      if (fault === "invalid") { f.put("stream-invalid.json", ""); return { status: 3 }; }
+      return { status: fault === "refused" ? 254 : 0, stderr: raw,
+        stdout: fault === "wrong-identity" ? JSON.stringify({ ...f.drain(), id: raw }) : raw };
+    } });
+    await f.supervisor.seal();
+    await assert.rejects(f.supervisor.finish({ id: registration.id, nativeTerminal: true }));
+    assert.equal(calls, 1); assert.equal(f.abort.signal.aborted, true);
+    assert.equal((await f.lastFault()).reason, "campaign drain " + reason);
+    assert.ok(!readFileSync(join(f.root, "run.log"), "utf8").includes(raw));
+  });
 });
 
 test("terminal handoff requires actual clean exit of the pinned watchdog before the SSH drain probe", async (t) => {

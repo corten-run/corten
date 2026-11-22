@@ -154,18 +154,24 @@ export async function superviseControlStream(binding, admission, abort, runtime 
       // Only the independently owned campaign process may observe the SSH tree
       // disappear. Local EOF is not an input to this proof.
       const deadline = now() + 10000000000n;
+      let stage = "campaign drain";
       try {
         for (let attempts = 0; attempts < 100 && now() < deadline; attempts++) {
+          stage = "campaign drain control invalid";
           assert.ok(!abort.signal.aborted && !existsSync(join(root, "stream-invalid.json")));
+          stage = "campaign drain probe refused";
           const result = probe();
           assert.ok(!result.error && !result.signal && [0, 3].includes(result.status), "apparatus drain uncertain");
           if (result.status === 0) {
+            stage = "campaign drain invalid proof";
             const proof = JSON.parse(result.stdout); verifyStreamDrain(binding, registration, proof); ended = true; return proof;
           }
+          stage = "campaign drain";
           await sleep(100);
         }
+        stage = "campaign drain deadline";
         assert.fail("apparatus disappearance deadline expired");
-      } catch (error) { invalidate("campaign drain"); throw error; }
+      } catch (error) { invalidate(stage); throw error; }
     },
     async dispose() { if (!ended && !revoked) invalidate("campaign disposed before drain"); await stopWatchdog(); },
   };
