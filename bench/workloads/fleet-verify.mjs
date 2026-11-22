@@ -1,11 +1,12 @@
 // Read-only fleet inventory. Receipts are diagnostics, never evidence authority.
 import assert from "node:assert/strict";
 import { lstatSync, readdirSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { fleetCreateMode, roundName, stagedFleet, validateFleet } from "./cloud-contract.mjs";
+import { fleetCreateMode, roundName, selection, stagedFleet, validateFleet } from "./cloud-contract.mjs";
 import { campaignOutcome, controllerState, full } from "./cloud-options.mjs";
-import { digest, fileHash, physical, regular, resolveStateRoot, treeHash } from "./cloud-local.mjs";
+import { livePeerLease, streamRecoveryReady } from "./cloud-control-stream.mjs";
+import { digest, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
@@ -23,7 +24,7 @@ export function fleetRoot(path, repo) {
 }
 export function present(path) { return lstatSync(path, { throwIfNoEntry: false }) !== undefined; }
 // For inspection only. A dead original batch owner does not unlock the fleet.
-function fleetLockSnapshot(root) {
+export function fleetLockSnapshot(root) {
   const path = join(root, ".fleet-operation.lock");
   try {
     if (!present(path)) return null;
@@ -37,14 +38,21 @@ function fleetLockSnapshot(root) {
   return "busy";
 }
 
-export function readFleet(root, round) {
+export function readFleet(root, round, { priorSelection = false } = {}) {
   roundName(round); physical(root);
-  const path = join(root, `fleet-${round}.json`), bytes = regular(path, 1024 * 1024), manifest = validateFleet(JSON.parse(bytes));
+  const path = join(root, `fleet-${round}.json`), bytes = regular(path, 1024 * 1024), manifest = validateFleet(JSON.parse(bytes), { priorSelection });
   assert.equal(manifest.round, round);
+  if (manifest.single) {
+    assert.ok([manifest.single.group, `${manifest.single.group}--${round}`].some((name) => root === join(dirname(root), name)),
+      "continuation group slot differs");
+    assert.ok(!present(join(root, "remaining-intent.json")), "independent group has no remaining admission");
+  }
   const allowed = new Set([`fleet-${round}.json`, ".fleet-operation.lock", "launch-intent.json", "remaining-intent.json", "receipts", ...manifest.jobs.map((j) => j.group)]);
   assert.ok(readdirSync(root).every((name) => allowed.has(name)), "fleet-root-members");
-  return { root, path, bytes, manifest, manifestSha256: digest(bytes) };
+  return { root, path, bytes, manifest, manifestSha256: digest(bytes), priorSelection };
 }
+export const continuationIndex = (root) => regular(join(root, "index.json"), 64 * 1024);
+export const continuationIndexSha256 = (root) => digest(continuationIndex(root));
 export function fleetChildOptions(fleet, group, mode) {
   const f = fleet.manifest;
   return { round: f.round, stateDir: join(fleet.root, group), [mode]: true,
@@ -124,7 +132,8 @@ export function readGroup(fleet, group) {
   physical(stateRoot);
   if (!present(local)) return { group, outcome: "ambiguous" };
   physical(local);
-  const bytes = regular(join(local, "state.json"), 1024 * 1024), state = controllerState(JSON.parse(bytes), fleet.manifest.round);
+  const bytes = regular(join(local, "state.json"), 1024 * 1024), state = controllerState(JSON.parse(bytes), fleet.manifest.round,
+    { priorSelection: fleet.priorSelection });
   assert.equal(state.schema, "benchmark-dedicated-group-host/v1");
   assert.equal(state.group, group); assert.deepEqual(state.fleet, fleet.manifest);
   assert.deepEqual(state.provider, fleet.manifest.provider);
@@ -135,6 +144,64 @@ export function readGroup(fleet, group) {
   }
   return { group, stateRoot, local, state, stateSha256: digest(bytes), outcome: present(join(local, "operation.lock")) ? "busy"
     : ["creating", "preparing", "starting", "running", "collected", "retired"].includes(state.status) ? "available" : "ambiguous" };
+}
+
+// A running status without sealed bootstrap and monitor custody proves nothing.
+export function supervisedHost(saved, phase, { pid = process.pid, peer = false } = {}) {
+  const s = saved?.state, monitor = s?.control?.monitor;
+  if (s?.status !== "running" || s.deletionIntentAt || s.destroyedAt || monitor?.phase !== phase
+    || !s.control.sealed.includes("bootstrap") || s.control.ledger.filter((r) => r.request.epoch === "bootstrap").at(-1)?.code !== 0) return;
+  const at = (name) => join(saved.local, name);
+  if (present(at("monitor-invalid.json"))) return;
+  if (phase === "live") {
+    if (saved.outcome !== "busy" || present(at("monitor-terminal.json")) || present(at("monitor-local-closed.json"))) return;
+    for (const lock of [at("operation.lock"), join(saved.stateRoot, ".groups-launch.lock")])
+      if (JSON.parse(regular(lock, 1024)).pid !== pid) return;
+    if (peer && (!s.bootstrapReady || !s.launchHostKeySha256 || present(at("stream-recovery.lock")) || !livePeerLease(saved.local, s))) return;
+  } else {
+    if (saved.outcome !== "available" || present(join(saved.stateRoot, ".groups-launch.lock"))
+      || !present(at("monitor-terminal.json")) || !present(at("monitor-local-closed.json"))) return;
+    streamRecoveryReady(saved.local, monitor); // Collection itself enforces elapsed lease.
+  }
+  const reg = JSON.parse(regular(at("monitor-registration.json"), 131072));
+  if (reg.id !== monitor.id || digest(JSON.stringify(reg)) !== monitor.registrationSha256
+    || reg.binding?.round !== s.round || reg.binding.commit !== s.commit || reg.binding.token !== s.token || reg.binding.helperSha256 !== s.control.helperSha256) return;
+  return { id: s.id, ip: s.ip, registration: monitor.registrationSha256 };
+}
+
+export function continuationPeer(fleet) {
+  const { root, manifest, manifestSha256 } = fleet, { single, round } = manifest;
+  assert.ok(single, "only an independent group can be a continuation peer");
+  const intent = readLaunchIntent(fleet), batch = join(root, ".fleet-operation.lock");
+  const bytes = regular(batch, 1024), { pid, approvalSha256, ...rest } = JSON.parse(bytes);
+  assert.deepEqual(rest, {});
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+  assert.equal(approvalSha256, intent.approvalSha256, "peer batch does not own its launch intent");
+  assert.equal(intent.subject.continuation?.indexSha256, single.indexSha256);
+  process.kill(pid, 0); // The stream lease alone does not prove the controller still exists.
+  const saved = readGroup(fleet, single.group), host = supervisedHost(saved, "live", { pid, peer: true });
+  assert.ok(host, "peer supervision not confirmed");
+  assert.ok(regular(batch, 1024).equals(bytes), "peer batch lock changed");
+  return { proof: { root, round, manifestSha256, intentSha256: intent.sha256, ...host }, state: saved.state };
+}
+
+export function recheckContinuationPeers(root, indexSha256, provider, group, peers = []) {
+  assert.ok(Array.isArray(peers) && peers.length < selection().groups.length);
+  const groups = new Set([group]), ids = new Set(), ips = new Set();
+  return peers.map((proof) => {
+    assert.equal(dirname(proof.root), root, "peer belongs to another continuation");
+    const fleet = readFleet(proof.root, proof.round, { priorSelection: true });
+    const { single } = fleet.manifest;
+    assert.equal(single?.indexSha256, indexSha256, "peer continuation index changed");
+    assert.ok(!groups.has(single.group), "duplicate continuation group");
+    groups.add(single.group);
+    assert.equal(fleet.manifest.provider.accountId, provider.accountId, "peer belongs to another provider account");
+    const peer = continuationPeer(fleet);
+    assert.deepEqual(peer.proof, proof, "approved peer changed");
+    assert.ok(!ids.has(proof.id) && !ips.has(proof.ip), "duplicate continuation peer host");
+    ids.add(proof.id); ips.add(proof.ip);
+    return peer.state;
+  });
 }
 
 function evidenceSnapshot(job) {
@@ -155,14 +222,24 @@ export function recheckCollectedGroup(fleet, snapshot) {
   const { group, ...hashes } = snapshot;
   assert.deepEqual(evidenceSnapshot(job), hashes, "group-evidence-changed");
 }
-export async function verifyCollectedGroup(fleet, group, { inspect, interrupted = () => false } = {}) {
+export function recheckContinuationProofs(proofs) {
+  assert.ok(Array.isArray(proofs) && proofs.length <= selection().groups.length);
+  for (const { root, round, manifestSha256, ...snapshot } of proofs) {
+    const fleet = readFleet(root, round, { priorSelection: true });
+    assert.equal(fleet.manifestSha256, manifestSha256, "continuation manifest changed");
+    assert.notEqual(fleetLockSnapshot(root), "busy", "continuation source busy");
+    recheckCollectedGroup(fleet, snapshot);
+  }
+}
+export async function verifyCollectedGroup(fleet, group, { inspect, start, details, bindArchive, interrupted = () => false } = {}) {
   const job = readGroup(fleet, group), { round, commit } = fleet.manifest;
   assert.equal(job.outcome, "available");
   const s = job.state;
   assert.ok(s.status === "collected" && s.collectedAt, "group-not-collected");
   assert.ok(!interrupted());
   const hashes = evidenceSnapshot(job), folder = join(job.local, s.evidence, "campaign");
-  const report = await inspectCampaign(Object.freeze({ folder, round, commit }), { inspect, interrupted });
+  if (bindArchive) await verifyArchiveTree(join(job.local, "results.tgz"), dirname(folder), s.archiveSha256);
+  const report = await inspectCampaign(Object.freeze({ folder, round, commit }), { inspect, start, interrupted });
   assert.ok(!interrupted());
   campaignOutcome(report, s, s.exitCode);
   assert.deepEqual(report.selection, s.selection);
@@ -187,13 +264,14 @@ export async function verifyCollectedGroup(fleet, group, { inspect, interrupted 
     recordedTimes: { reservationCreatedAt: s.createdAt, collectedAt: s.collectedAt, ...(s.destroyedAt ? { destroyedAt: s.destroyedAt } : {}) },
     timeScope: "reservation-and-collection-not-provider-billing-or-benchmark-elapsed", ...hashes,
     campaignSha256: report.campaignSha256, sourceSha256: report.sourceSha256,
+    ...(details ? { campaignCreatedAt: reservation.createdAt, baseEffectiveOptions: plan.bindings?.[0]?.execution?.effectiveOptions } : {}),
     ...(report.status === "verified" ? { appOutcomes: report.groups[0].appOutcomes.map(({ app, outcome, comparisonEligible }) => ({ app, outcome, comparisonEligible })) } : {}) };
   return { evidenceMode: inspect ? "synthetic-inspection" : "native-replay", row, snapshot };
 }
 
 // inspect and compiler are in-process synthetic TEST seams only. The CLI never accepts code,
 // module paths, reports or commands from JSON. Default replay imports fixed code.
-export async function verifyFleet({ root, round, commit }, { inspect, interrupted = () => false, compiler = localCompiler } = {}) {
+export async function verifyFleet({ root, round, commit }, { inspect, start, details, bindArchive, priorSelection, interrupted = () => false, compiler = localCompiler } = {}) {
   const base = { schema: "benchmark-group-fleet-inspection/v1", scope: "intrinsic-evidence", status: "incomplete",
     evidenceMode: inspect ? "synthetic-inspection" : "native-replay", nativeReadiness: false,
     publishableBaseline: false, comparisonScope: "within-group-host-only" };
@@ -202,7 +280,7 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
   let fleet;
   try {
     full(commit, /[a-f0-9]{40}/, "fleet-source");
-    fleet = readFleet(fleetRoot(root), round); assert.equal(fleet.manifest.commit, commit);
+    fleet = readFleet(fleetRoot(root), round, { priorSelection }); assert.equal(fleet.manifest.commit, commit);
   } catch { return { ...base, error: "fleet-invalid", groups: [] }; }
   const result = { ...base, round, commit, fleetSha256: fleet.manifest.fleetSha256,
     manifestSha256: fleet.manifestSha256, selection: fleet.manifest.selection, groups: [] };
@@ -219,6 +297,13 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
   let duplicate = false;
   for (const { group } of fleet.manifest.jobs) {
     let job;
+    const add = (row) => {
+      const s = job?.state;
+      result.groups.push(details && s ? { ...row, id: s.id, host: s.host, reservationCreatedAt: s.createdAt,
+        destroyedAt: s.destroyedAt, stateSha256: job.stateSha256, archiveSha256: s.archiveSha256,
+        evidenceOutcome: s.evidenceOutcome, exitCode: s.exitCode, monitorPhase: s.control?.monitor?.phase,
+        ...(s.retirement ? { retirement: s.retirement } : {}) } : row);
+    };
     try {
       job = readGroup(fleet, group);
       if (job.state?.id) {
@@ -233,15 +318,15 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
       const safelyRetained = () => !present(join(job.local, "stream-recovery.lock")) && !retainedInvalidOwner(job.local, s);
       const retained = job.outcome === "busy" && s.status === "retired" && s.retirement.kind === "native-failed"
         && s.control?.monitor?.phase === "invalid" && s.launchHostKeySha256 !== undefined && safelyRetained();
-      if (job.outcome !== "available" && !retained) { result.groups.push({ group, outcome: job.outcome }); continue; }
+      if (job.outcome !== "available" && !retained) { add({ group, outcome: job.outcome }); continue; }
       if (s.status === "retired") {
         if (s.retirement.kind === "native-failed") {
-          if (present(join(job.local, "stream-recovery.lock"))) { result.groups.push({ group, outcome: "busy" }); continue; }
+          if (present(join(job.local, "stream-recovery.lock"))) { add({ group, outcome: "busy" }); continue; }
           verifyFailedNativeRetirement(job.local, s);
           assert.equal(digest(regular(join(job.local, "state.json"), 1024 * 1024)), job.stateSha256, "retirement changed during verification");
           if (retained) assert.ok(safelyRetained(), "retained lock owner changed during verification");
           retirements.push({ group, index: result.groups.length, stateSha256: job.stateSha256, retained });
-          result.groups.push({ group, outcome: s.destroyedAt ? "native-failed-retired" : "cleanup-pending", id: s.id }); continue;
+          add({ group, outcome: s.destroyedAt ? "native-failed-retired" : "cleanup-pending", id: s.id }); continue;
         }
         const setup = s.retirement.kind === "setup-failed";
         const bytes = regular(join(job.local, setup ? "failed-setup-host.json" : "unused-host.json"), 4096), record = JSON.parse(bytes);
@@ -257,17 +342,17 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
           full(marker, /[1-9]\d{0,2}\n/, "nonzero setup exit"); const exit = Number(marker.trim()); assert.ok(exit <= 255);
           assert.deepEqual(record, setupEvidence(raw, s, terminalSetupScript(s, exit), exit, record.startedAtMs, record.finishedAtMs));
         } else verifyUnusedEvidence(record, s);
-        result.groups.push({ group, outcome: s.destroyedAt ? setup ? "setup-failed-retired" : "unused-retired" : "cleanup-pending", id: s.id }); continue;
+        add({ group, outcome: s.destroyedAt ? setup ? "setup-failed-retired" : "unused-retired" : "cleanup-pending", id: s.id }); continue;
       }
-      if (s.status !== "collected" || !s.collectedAt) { result.groups.push({ group, outcome: "uncollected" }); continue; }
-      const verified = await verifyCollectedGroup(fleet, group, { inspect, interrupted });
-      snapshots.push(verified.snapshot); result.groups.push(verified.row);
-    } catch { result.groups.push({ group, outcome: "error", error: "group-evidence-invalid" }); }
+      if (s.status !== "collected" || !s.collectedAt) { add({ group, outcome: "uncollected" }); continue; }
+      const verified = await verifyCollectedGroup(fleet, group, { inspect, start, details, bindArchive, interrupted });
+      snapshots.push(verified.snapshot); add(verified.row);
+    } catch { add({ group, outcome: "error", error: "group-evidence-invalid" }); }
   }
   let evidenceError;
   try {
     assert.ok(!interrupted());
-    assert.equal(readFleet(fleet.root, round).manifestSha256, fleet.manifestSha256);
+    assert.equal(readFleet(fleet.root, round, { priorSelection }).manifestSha256, fleet.manifestSha256);
     if (remaining) {
       assert.equal(readRemainingIntent(fleet).sha256, remaining.sha256);
       assert.deepEqual(snapshots.find(({ group }) => group === fleet.manifest.jobs[0].group), remaining.placement.firstGroup);
@@ -291,7 +376,7 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
   }
   if (fleetLockSnapshot(fleet.root) !== lock) return { ...busy(), ...(evidenceError ? { evidenceError } : {}) };
   if (evidenceError) return { ...result, error: evidenceError };
-  if (lock === null && result.groups.every((g) => g.outcome === "verified")) result.status = "verified";
+  if (!fleet.manifest.single && lock === null && result.groups.every((g) => g.outcome === "verified")) result.status = "verified";
   return result;
 }
 

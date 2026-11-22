@@ -19,7 +19,7 @@ test("Node application build and production stages share the verified stable run
 });
 
 test("eligible benchmark helpers use exact stable image digests", () => {
-  const files = ["bench/catalog/run.mjs", "bench/catalog/cleanup.test.mjs", "bench/json-api/contract.mjs",
+  const files = ["bench/catalog/raw.mjs", "bench/catalog/cleanup.test.mjs", "bench/json-api/contract.mjs",
     "bench/marketplace/raw-contract.mjs", "bench/live/run.mjs", "bench/nodelay/run.mjs",
     "bench/fullstack/apps/django/qualify-production.mjs",
     ...["alloc-faults", "conform", "flood-memory", "harden", "run-all"].map((name) => `bench/fullstack/${name}.mjs`)];

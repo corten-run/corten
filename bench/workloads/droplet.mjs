@@ -315,7 +315,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           const expected = { id: state.control.monitor.id, binding: { round: state.round, commit: state.commit,
             token: state.token, helperSha256: state.control.helperSha256 } };
           const connect = (opts) => execute("ssh", [...opts, 'root@' + state.ip], 30000, false, undefined, undefined,
-            { stream: true, expected, local, interrupted });
+            { stream: true, expected, local, interrupted, peerLease: !!fleet?.single });
           if (state.launchHostKeySha256) await usingLaunchHostKey(connect);
           else await connect(sshOptions);
           assert.ok(monitor);
@@ -635,7 +635,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           for (const path of ["bench/workloads/droplet.mjs", "bench/workloads/cloud-contract.mjs", "bench/workloads/isolated/campaign-entry.mjs", "bench/workloads/isolated/campaign-verify.mjs", ...benchPackagePaths])
             await execute("git", ["cat-file", "-e", `${state.commit}:${path}`]);
           const existing = await list();
-          if (fleet) assertFleetCensus(existing, fleet, remainingPlacement?.region);
+          if (fleet) assertFleetCensus(existing, fleet, remainingPlacement?.region, fleet.single ? checkFleetAdmission("census") : []);
           else assert.ok(!existing.some((d) => d.name?.startsWith("corten-bench-groups-") || d.tags?.includes(tags[0])), "benchmark host already exists");
           assert.ok(!existing.some((d) => d.name === state.name || d.tags?.includes(state.tag)), "this host already exists; never adopt/relaunch");
           const account = JSON.parse((await execute("doctl", ["account", "get", "--output", "json"])).stdout);
@@ -646,9 +646,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             const present = existing.filter((d) => fleet.jobs.some((row) => row.name === d.name)).length;
             assert.ok(existing.length + fleet.jobs.length - present <= limit, "account capacity cannot cover the reserved fleet");
             const catalog = fleetCatalogResult(await execute("doctl", fleetCatalogCommand, 60000, true));
-            fleetRegion(catalog, remainingPlacement?.region ?? fleet.host.region, { remainingOnly: remainingAdmission, staged: stagedFleet(fleet) });
+            fleetRegion(catalog, remainingPlacement?.region ?? fleet.host.region,
+              { remainingOnly: remainingAdmission, staged: stagedFleet(fleet), group: fleet.single?.group });
           }
-          checkFleetAdmission?.();
+          const peers = checkFleetAdmission?.(true);
           state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
           const created = await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,
             "--ssh-keys", options.sshKey, "--tag-names", [...tags, state.tag].join(","), "--wait", "--output", "json"], 10 * 60000, true);
@@ -663,6 +664,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             const diagnostic = providerFailure(created);
             throw Object.assign(new Error("create completion was not proved; allocation retained for recovery"), diagnostic ? { providerDiagnostic: diagnostic } : {});
           }
+          assert.ok(!fleet?.single || !peers?.some((peer) => peer.id === state.id || peer.ip === state.ip),
+            "newly bound host duplicates a supervised peer; retain custody without provisioning");
           const completed = JSON.parse(created.stdout);
           assert.ok(Array.isArray(completed) && completed.length === 1 && Number.isSafeInteger(completed[0]?.id)
             && completed[0].id > 0 && String(completed[0].id) === state.id,
