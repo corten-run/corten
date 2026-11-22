@@ -7928,7 +7928,9 @@ rules something out.
     header and main's, into its callers. A line a middleware wrote, one beside another, and one
     whose header the thread has put out, or that a kept answer carries to a thread that does not
     hold it, are read as main reads them, and so is `Cache::immutable`'s, which `7dd30d739`
-    did not read. Counted the same way, `f5dd113d4` against `a0eeeacca`, the median and range of
+    did not read (`a_header_another_thread_holds_is_read`, `an_immutable_or_no_store_header_is_read`
+    and `a_kept_page_whose_header_the_thread_does_not_hold_is_read`, each of the first two failing
+    when the check compares text or holds `immutable`'s header). Counted the same way, `f5dd113d4` against `a0eeeacca`, the median and range of
     three rounds in turned order: the page for one visitor 40,191.2 instructions against
     40,190.1, every function's count main's but 2 in `memcpy`, with 1,641.6 instruction-cache
     misses against 1,658.6 and 73.3 indirect branches mispredicted against 66.8; the unstaged
@@ -7940,11 +7942,44 @@ rules something out.
     (729 fewer, 2.93%), the page with five policies behind a middleware 43,995.5 against
     46,367.8 (2,372 fewer, 5.12%) and with one 43,357.2 against 46,357.4 (3,000 fewer, 6.47%),
     each more than `7dd30d739`'s 915, 599, 2,179 and 2,833, with no mark to clone and drop; every
-    round within 26 instructions of the others of its build. A third quiet-host run is declared
-    before it runs, as the second: this change's code as of `672f4db5a` against `a0eeeacca`,
-    the same six answers, every turn on a freshly started build, 100 pairs, passing when the
-    one-sided 95% upper bound of the paired change in user plus kernel cycles a request is
-    under +1% for every one of the six; until it passes, this change does not merge.
+    round within 26 instructions of the others of its build.
+    With main's `40aba72e1` merged (`3438b72d1`; that main hashes a kept page's URL once and
+    takes `bytes` 1.12.2), counted the same way against `40aba72e1`, the median and range of
+    three rounds in turned order: the page for one visitor 40,198.3 instructions against
+    40,187.2 (40,184.9 to 40,198.8 against 40,186.1 to 40,187.3; counted once by function,
+    40,185.6 against 40,188.1, every function main's but 2 fewer in `memcpy`); the unstaged
+    route with five policies 13,540.4 against 13,529.0 (13,528.0 to 13,540.8 against 13,519.6
+    to 13,533.2; by function every count main's but the guard's 3 in `route::laned`) and with
+    one 13,528.3 against 13,528.8; the `Public` page in an app that keeps none 42,277.0
+    against 43,353.3 (1,076 fewer, 2.48%), a kept page 24,187.3 against 24,921.1 (734 fewer,
+    2.94%), the page with five policies behind a middleware 43,993.6 against 46,380.3 (2,387
+    fewer, 5.15%) and with one 43,364.9 against 46,359.9 (2,995 fewer, 6.46%). A kept page
+    given where its header is not held (kept, then four other policies made on the thread, so
+    that `settle` looks through the four and reads the header as main does) took 24,930.5
+    against 24,918.3, 12 more: by function `settle` 916 against 893, the look, with the
+    header's clone and drop, made with its count beside its text, 6 fewer and `memcmp` 10
+    fewer; 1,611.8 instruction-cache misses against 1,593.8 and 314.3 data reads missed
+    against 284.9. Simulated instruction-cache misses on the page for one visitor were 1,657.5
+    against 1,654.0, on the unstaged route 1,029.5 against 1,005.1 with five policies and with
+    one. `ascii::digits`'s `inline(always)` reaches the JSON writer too (`json::unsigned`, an
+    integer of three digits or more: the benchmark fixture's 500 items have 124,192, widths,
+    heights and counts). Its instructions are main's there: `json::unsigned` disassembles to
+    the same 254 instructions in both builds of card-market, and counted the same way through
+    card-market's router in process (a test added to the counted trees only, each item asked
+    for once first, then (1,200 requests less 200) over 1,000 of `/api/items/{id}`), every
+    `corten::json` function ran main's count (`json::unsigned` 2,550.6 a request) while the
+    request's total, 50,171.1 against 50,436.9 (49,951.6 to 50,267.5 against 50,431.8 to
+    50,576.2), moved by glibc's allocator and a sort in the fixture's order, as runs of one
+    build do; the item's `ToJson` alone, 35,416.5 against 35,382.8 an item (35,412.2 to
+    35,428.0 against 35,303.8 to 35,416.8), every function main's but the allocator and
+    `memcpy`. A third quiet-host run is declared before it runs, as the second, in place of
+    the one declared against `a0eeeacca`: this change's code as of `3ed9d15f3` (`3438b72d1`'s)
+    against `40aba72e1`, the six answers and the kept page whose header is not held, every turn
+    on a freshly started build, 100 pairs, passing when the one-sided 95% upper bound of the
+    paired change in user plus kernel cycles a request is under +1% for every one of the seven;
+    until it passes, this change does not merge. After it, and apart from it, 30 pairs of each
+    in 1 s turns count user first-level instruction-cache misses and user instructions alone, to
+    say what the hardware's misses were, not as a condition.
     Set aside, counted the same way on the unstaged route with
     five policies and with one, each against main: a thread that stops looking in its four
     after eight misses in a row, but for one call in 64, 10 more instructions and 517 fewer, with
@@ -8063,7 +8098,10 @@ rules something out.
     whether the second run's 0.92% and 0.67% were the work the change added,
     and how often a thread's staged answers go
     through more than four sets of numbers, whose headers it makes again (both rotating
-    workloads counted above averaged fewer a request than main's); and the
+    workloads counted above averaged fewer a request than main's); how often a kept page is
+    given on a thread that does not hold its header, on another worker of a server with several
+    or after the thread put it out (the kept page counted above where it is not held ran on one
+    thread, put out on purpose); and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
@@ -8111,12 +8149,18 @@ rules something out.
     is found finishing work again and again on the `Signal` of a write from before its first
     answer that may be kept, which empties its store each time, so such a write should keep
     its path to count by; the third quiet-host run declared above finds the one-sided 95% bound
-    at +1% or more for any of its six answers; a measured app's thread goes through more than
-    four sets of numbers often enough that its `Public` answers' headers are read again; or an app
+    at +1% or more for any of its seven answers; a measured app's `settle` finds a `Public`
+    header its thread does not hold (a kept page given on another worker, or one whose header
+    the thread put out going through more than four sets of numbers) on a share of its answers
+    that shows, since each such answer pays the look through the four on top of main's read; or an app
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-22, under callgrind with cache and branch simulation (valgrind
+    Last checked: 2026-11-22, under callgrind as below `3438b72d1` (main's `40aba72e1` merged)
+    against `40aba72e1`, three rounds in turned order, with a kept page whose header the thread
+    does not hold, and card-market's item JSON (`/api/items/{id}` in process and its `ToJson`
+    alone, by a test added to the counted trees only, the mean of two starts that each moved the
+    stack); 2026-11-22, under callgrind with cache and branch simulation (valgrind
     3.19.0, rustc 1.99.1) `7dd30d739`, `a0eeeacca` built under another name, `050ac7ee3` and
     `f5dd113d4` against `a0eeeacca`, each count the mean of four starts at (2,200 requests less
     200) over 2,000, three rounds in turned order for `f5dd113d4`; 2026-11-22, the second run
