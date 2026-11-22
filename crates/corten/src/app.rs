@@ -2651,8 +2651,8 @@ impl<S: Steps> Layer<S> {
             req.extensions_mut().remove::<crate::router::MatchedPath>();
         }
         let path = self.shared.dev.then(|| req.uri().path().to_string());
-        // A write may change what a kept page shows: it is counted for its path when it is
-        // answered, and when it is dropped before that. Only for a method that is not safe, in
+        // A write may change what a kept page shows: it is counted when it is answered, and
+        // when it is dropped before that, for its path once the app counts writes by path. Only for a method that is not safe, in
         // an app that keeps answers.
         let wrote = self.shared.kept.as_ref().filter(|_| !req.method().is_safe()).map(|kept| kept.writing(req, &watch.0));
         // A debug build times the runtime's hover prefetch, so a page that grew slow is named
