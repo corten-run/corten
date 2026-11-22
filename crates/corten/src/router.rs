@@ -72,30 +72,38 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
     }
 }
 
-/// An answer that is a status alone: the router's `404` and `405`, marked as the router's own
-/// ([`crate::page::Unrouted`]), so the error page in its place is never shared.
+/// An answer that is a status alone: the router's `404` and `405`. The request is marked as the
+/// router's own ([`unrouted`]), so the error page in its place is never shared.
 struct Status(StatusCode);
 
 impl Endpoint for Status {
-    fn call(&self, _: Request) -> Answering {
-        let mut res = self.0.into_response();
-        res.extensions_mut().insert(crate::page::Unrouted);
-        Box::pin(std::future::ready(res))
+    fn call(&self, req: Request) -> Answering {
+        unrouted(&req);
+        Box::pin(std::future::ready(self.0.into_response()))
     }
 }
 
 /// The router's `501` for a method no route in the app has, marked so the error page tells it
-/// from a handler's or a middleware's own empty `501` ([`crate::Failure::UnknownMethod`]), and as
-/// the router's own, as [`Status`] is.
+/// from a handler's or a middleware's own empty `501` ([`crate::Failure::UnknownMethod`]), and
+/// the request as the router's own, as [`Status`] marks it.
 struct Unimplemented;
 
 impl Endpoint for Unimplemented {
     #[cold]
-    fn call(&self, _: Request) -> Answering {
+    fn call(&self, req: Request) -> Answering {
+        unrouted(&req);
         let mut res = StatusCode::NOT_IMPLEMENTED.into_response();
         res.extensions_mut().insert(crate::page::Cause::UnknownMethod);
-        res.extensions_mut().insert(crate::page::Unrouted);
         Box::pin(std::future::ready(res))
+    }
+}
+
+/// Marks `req` as one the router answers itself, no route's handler ([`crate::Signal::mark_unrouted`]):
+/// on the request's signal, which an app's request has, so the router's bare `404` allocates no
+/// extensions of its own for a mark. A router outside an app has no error page to mark it for.
+fn unrouted(req: &Request) {
+    if let Some(signal) = req.extensions().get::<crate::Signal>() {
+        signal.mark_unrouted();
     }
 }
 

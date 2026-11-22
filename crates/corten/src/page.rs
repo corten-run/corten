@@ -741,17 +741,12 @@ pub(crate) enum Cause {
 /// Marks a failure no handler answered: an extractor refused the request before the handler ran,
 /// or the deadline passed while it waited for the request's body. The error page in its place is
 /// never shared ([`page_or_error`]), as for a panic or a timeout ([`Cause`]), and nor is the
-/// failure sent as it is or as JSON ([`unanswered_settled`]): its text may be about who is asking.
+/// refusal in any other form it goes out in, whatever its status (a redirect, a relayed failure,
+/// a sign-in, the failure as it is or as JSON: [`unanswered_settled`]): it may be about who is
+/// asking. The router's own answer is marked on the request's signal instead
+/// ([`crate::Signal::mark_unrouted`]).
 #[derive(Clone, Copy)]
 pub(crate) struct Unanswered;
-
-/// Marks the router's own answer for a request no route's handler takes: the `404` of an unknown
-/// URL, the `405` of a method the route lacks, the `501` of one no route has. No handler said what
-/// the error page in its place is, and the app's can show who is asking, so it is never shared
-/// ([`page_or_error`]). A handler's own `404` has no mark. The failure itself is empty, so sent as
-/// it is or as JSON it shows no one.
-#[derive(Clone, Copy)]
-pub(crate) struct Unrouted;
 
 /// `res`, an extractor's refusal, marked [`Unanswered`].
 #[cold]
@@ -760,11 +755,21 @@ pub(crate) fn unanswered(mut res: Response) -> Response {
     res
 }
 
-/// `res`, a failure that goes out without the error page (as it is, or as JSON): one an extractor
-/// refused before its handler ran ([`Unanswered`]) is never shared, whatever a middleware wrote on
-/// it.
+/// A typed refusal ([`crate::Refused`], from an extractor, a handler or a middleware: a sign-in, a
+/// 401, 403 or 429, an unavailable lookup's 503), or the failure of a handler that panicked or
+/// passed its deadline: the same in every form it is sent in.
+fn refused(res: &Response) -> bool {
+    matches!(res.extensions().get::<Cause>(), Some(Cause::Panicked | Cause::TimedOut | Cause::Refused | Cause::Unidentified))
+        || res.extensions().get::<crate::caller::SignIn>().is_some()
+}
+
+/// `res`, an answer that goes out without the error page (as it was made, or as JSON): one an
+/// extractor refused before its handler ran ([`Unanswered`], whatever its status) and a refusal
+/// ([`refused`]) are never shared, whatever a middleware wrote on them. The router's own empty
+/// failure is not among them: sent as it is or as JSON, it shows no one.
 fn unanswered_settled(mut res: Response) -> Response {
-    if res.extensions().get::<Unanswered>().is_some() {
+    let failed = res.status().is_client_error() || res.status().is_server_error();
+    if res.extensions().get::<Unanswered>().is_some() || (failed && refused(&res)) {
         crate::cache::settle_refused(&mut res);
     }
     res
@@ -3614,10 +3619,10 @@ async fn errors_rendered<S: crate::app::Steps>(
     let dispatch = |pending| within_deadline(pending, next, deadline);
     if json {
         let shape = api.and_then(|mount| mount.errors.as_ref());
-        let res = crate::api::json_failure(run(pending, dispatch, deadline, signal).await, shared.dev, shape).await;
-        // Only a failure can be marked.
-        let failed = res.status().is_client_error() || res.status().is_server_error();
-        return if failed { unanswered_settled(res) } else { res };
+        // An extractor's refusal may be a redirect, which `json_failure` leaves as it is.
+        return unanswered_settled(
+            crate::api::json_failure(run(pending, dispatch, deadline, signal).await, shared.dev, shape).await,
+        );
     }
     if shared.layout_reads.is_empty() || mode.swaps() {
         return page_or_error(shared, pending, dispatch, deadline, signal, page).await;
@@ -3696,7 +3701,9 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     let status = res.status();
     let error = status.is_client_error() || status.is_server_error();
     if !error || res.extensions().get::<crate::answer::Relayed>().is_some() || res.extensions().get::<AsIs>().is_some() {
-        return res;
+        // An extractor's refusal goes out as it was made (a redirect, a relayed failure), and is
+        // still never shared.
+        return unanswered_settled(res);
     }
     // A JSON route answers every failure as JSON, a path that did not parse included.
     if res.extensions().get::<crate::answer::Answered>().is_some() {
@@ -3707,6 +3714,7 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     // A `NoStore` answer: the page that replaces it is one too.
     let no_store = crate::cache::Typed::is_no_store(&res);
     if let Some(crate::caller::SignIn(to)) = res.extensions().get::<crate::caller::SignIn>().cloned() {
+        // A refusal, whoever made it: the redirect or page in its place is never shared.
         let kept = std::mem::take(res.headers_mut());
         let Some(message) = sign_in_loops(asked.path(), &to) else {
             #[cfg(debug_assertions)]
@@ -3715,14 +3723,14 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
                 tracing::error!("corten: {message}");
                 print_unserved(shared.dev, &message);
                 let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
-                return carried(kept, no_store, error_page(shared, asked, failure).await);
+                return carried(kept, no_store, true, error_page(shared, asked, failure).await);
             }
-            return carried(kept, no_store, redirect(asked.mode, asked.fetched, to));
+            return carried(kept, no_store, true, redirect(asked.mode, asked.fetched, to));
         };
         tracing::error!("corten: {message}");
         let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
         let failure = if shared.dev { failure } else { failure.without_detail() };
-        return carried(kept, no_store, error_page(shared, asked, failure).await);
+        return carried(kept, no_store, true, error_page(shared, asked, failure).await);
     }
     let mut failed = res.extensions().get::<crate::Failed>().cloned();
     // Read here, before the answer's body is taken; not in a release build, where it would be one
@@ -3745,17 +3753,21 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     let rejection = failed.is_none() && cause.is_none() && browser && crate::api::is_plain_text(res.headers());
     if failed.is_none() && cause.is_none() && !empty_error && !rejection {
         // A refusal sent as it is: to a client that does not ask for HTML, or with a body that is
-        // not plain text.
-        return unanswered_settled(res);
+        // not plain text. Neither a typed refusal nor a sign-in reaches here.
+        if res.extensions().get::<Unanswered>().is_some() {
+            crate::cache::settle_refused(&mut res);
+        }
+        return res;
     }
     // No handler answered it: a refusal before the handler ran, a panic, the deadline, the router's
     // own failure. The error page can read the request's `Cookie` and `Authorization` without
     // reading a caller, and a `NoStore` handler never said it, so it is never shared, as a refused
-    // write's page is not.
+    // write's page is not. The router's mark is on the request's signal: its bare `404` has no
+    // extensions, and allocating them for a mark cost more than the rest of settling its page.
     let unanswered = rejection
+        || signal.is_unrouted()
         || matches!(cause, Some(Cause::Panicked | Cause::TimedOut | Cause::Refused | Cause::Unidentified))
-        || res.extensions().get::<Unanswered>().is_some()
-        || res.extensions().get::<Unrouted>().is_some();
+        || res.extensions().get::<Unanswered>().is_some();
     // What the handler and the app's middleware said besides the body (a request id,
     // `Retry-After`, `WWW-Authenticate`, `Allow`) goes out with the error page.
     let kept = std::mem::take(res.headers_mut());
@@ -3769,11 +3781,7 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
         // The PWA's offline page, which the service worker keeps: a 200. It is the app's error page
         // in place of the router's `404`, so it is settled as one too; the worker's own cache keeps
         // it whatever its `Cache-Control` says.
-        let mut res = carried(kept, no_store, error_page(shared, asked, Failure::Offline).await);
-        if unanswered {
-            crate::cache::settle_refused(&mut res);
-        }
-        return res;
+        return carried(kept, no_store, unanswered, error_page(shared, asked, Failure::Offline).await);
     }
     let detail = failed.map(|crate::Failed(message)| message);
     let failure = match cause {
@@ -3797,11 +3805,7 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     #[cfg(not(debug_assertions))]
     let shows = shared.dev;
     let failure = if shows { failure } else { failure.without_detail() };
-    let mut res = carried(kept, no_store, error_page(shared, asked, failure).await);
-    if unanswered {
-        crate::cache::settle_refused(&mut res);
-    }
-    res
+    carried(kept, no_store, unanswered, error_page(shared, asked, failure).await)
 }
 
 /// [`Req::asset`] with no static directory: a bug, which panics in debug builds.
@@ -3824,8 +3828,14 @@ fn no_assets(path: &'static str) -> crate::assets::AssetUrl<'static> {
 /// whoever set it said nothing may keep the answer, a failure included. Its other directives
 /// described the failed answer, so they are not carried. The page that replaces a `NoStore`
 /// answer (`no_store`) is `NoStore` too, whatever a middleware made of the answer's header, so
-/// the cache rules hold it to that.
-fn carried(kept: HeaderMap, no_store: bool, mut res: Response) -> Response {
+/// the cache rules hold it to that. The page in place of a failure no handler answered
+/// (`unshared`) is never shared: its own `Cache-Control` is the default, none of the CDN caching
+/// headers on it or on the failure goes out, and a `no-store` goes out `private, no-store`.
+fn carried(kept: HeaderMap, no_store: bool, unshared: bool, mut res: Response) -> Response {
+    if unshared {
+        // The page's own headers alone, a few: the failure's are filtered as they are carried.
+        crate::cache::settle_unshared_page(res.headers_mut());
+    }
     if no_store {
         crate::cache::Cache::no_store().apply(&mut res);
     }
@@ -3835,7 +3845,8 @@ fn carried(kept: HeaderMap, no_store: bool, mut res: Response) -> Response {
     use http::header::Entry;
     let headers = res.headers_mut();
     if !no_store && kept.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes())) {
-        headers.insert(header::CACHE_CONTROL, crate::cache::NO_STORE);
+        // `private` too on a page never shared, for a CDN that ignores a bare `no-store`.
+        headers.insert(header::CACHE_CONTROL, if unshared { crate::cache::PRIVATE_NO_STORE } else { crate::cache::NO_STORE });
     }
     // Allocates only for a failure that varied on something.
     let vary: Vec<HeaderValue> = kept.get_all(header::VARY).iter().cloned().collect();
@@ -3857,7 +3868,8 @@ fn carried(kept: HeaderMap, no_store: bool, mut res: Response) -> Response {
                     | header::LAST_MODIFIED
                     | header::CACHE_CONTROL
                     | header::VARY
-            ) || key.as_str().starts_with("corten-");
+            ) || key.as_str().starts_with("corten-")
+                || (unshared && crate::cache::CDN_CACHING.contains(&key.as_str()));
             if !replaced {
                 if let Entry::Vacant(entry) = headers.entry(key) {
                     kept_name = Some(entry.insert_entry(value));
@@ -4572,7 +4584,7 @@ mod carried_tests {
         kept.append(header::VARY, HeaderValue::from_bytes(b"caf\xe9").unwrap());
         let mut res = Response::new(Body::empty());
         res.headers_mut().append(header::VARY, HeaderValue::from_static("corten, accept"));
-        let res = carried(kept, false, res);
+        let res = carried(kept, false, false, res);
         let vary: Vec<_> = res.headers().get_all(header::VARY).iter().map(HeaderValue::as_bytes).collect();
         assert_eq!(vary, [&b"corten, accept"[..], b"Origin", b"cookie", b"caf\xe9"]);
     }

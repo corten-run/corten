@@ -48,8 +48,10 @@
 //! alone (below, `private, no-store` where its header names `no-store`) lose those headers as
 //! well, and so does the error page for a failure no handler answered (a request refused before
 //! the handler ran, a panic, the deadline, the router's own `404`, `405` or `501`), which is
-//! private whatever it said, as is such a refusal sent as it is or as JSON. A [`crate::live`]
-//! stream's fragments are text rendered after its headers went out, so they carry no such mark.
+//! private whatever it said, as is such a refusal in any other form it goes out in (a redirect, a
+//! relayed failure, a sign-in, the failure as it is or as JSON), and a [`crate::Refused`] in every
+//! form, whoever returned it. A [`crate::live`] stream's fragments are text rendered after its
+//! headers went out, so they carry no such mark.
 //!
 //! The app is the first shared cache of its own `Public` pages, JSON and text: the whole document
 //! or body one made for a request without credentials is kept for its shared lifetime and given
@@ -523,15 +525,29 @@ pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
     }
 }
 
-/// Settles a refused write's answer, which goes out without [`settle`], and the error page for a
-/// failure no handler answered: the default, whatever it said, and none of the CDN caching headers
-/// written on it (the page may show who is asking). One that names `no-store` goes out
-/// `private, no-store`, as [`settle`] gives a personal one.
+/// Settles a refused write's answer, which goes out without [`settle`], and a refusal or failure no
+/// handler answered that goes out without the error page (as it was made, or as JSON): the default,
+/// whatever it said, and none of the CDN caching headers written on it (it may be about who is
+/// asking). One that names `no-store` goes out `private, no-store`, as [`settle`] gives a personal
+/// one.
 pub(crate) fn settle_refused(res: &mut Response) {
     let headers = res.headers_mut();
     drop_cdn_caching(headers);
     let no_store = headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes()));
     headers.insert(header::CACHE_CONTROL, if no_store { PRIVATE_NO_STORE } else { PRIVATE });
+}
+
+/// Settles the error page for a failure no handler answered as [`settle_refused`] does, before the
+/// failure's headers are carried onto it (`crate::page`'s `carried`, which leaves out the CDN
+/// caching headers among them and makes a `no-store` there `private, no-store`): only what the
+/// page set itself. A `Cache-Control` it set is the default (`private, no-store` where it names
+/// `no-store`); without one, [`settle`] gives it the default.
+pub(crate) fn settle_unshared_page(headers: &mut HeaderMap) {
+    drop_cdn_caching(headers);
+    if let header::Entry::Occupied(mut entry) = headers.entry(header::CACHE_CONTROL) {
+        let no_store = entry.iter().any(|line| mentions_no_store(line.as_bytes()));
+        entry.insert(if no_store { PRIVATE_NO_STORE } else { PRIVATE });
+    }
 }
 
 /// In a debug build: whether an answer's headers, as sent, let a shared cache keep it: one of

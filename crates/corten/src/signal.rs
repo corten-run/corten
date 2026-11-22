@@ -112,8 +112,9 @@ struct Inner {
     /// The hashes of the callers it read, mixed: part of the page's key, so a page for someone
     /// else (after signing in or out) is loaded in full.
     callers: AtomicU64,
-    /// The app's error page is answering it.
-    error_page: AtomicBool,
+    /// The app's error page is answering it ([`ERROR_PAGE`]), and the router answered it itself
+    /// ([`UNROUTED`]): a byte for both, so the allocation stays the size it was.
+    failure: AtomicU8,
     /// Something negotiated the request's locale from its `Accept-Language` (`req.t()`,
     /// `req.lang()`), so the answer's `Vary` names the header (`crate::page::vary_on_language`).
     asked_language: AtomicBool,
@@ -173,6 +174,11 @@ const EARLY_KEPT: u8 = 4;
 const WHOLE: u8 = 8;
 /// [`Inner::late`]: middleware can change the preference, so use the current request's headers.
 const RECHECK_WHOLE: u8 = 16;
+/// [`Inner::failure`]: the app's error page is answering the request.
+const ERROR_PAGE: u8 = 1;
+/// [`Inner::failure`]: the router's own answer, not a handler's: the `404` of an unknown URL, the
+/// `405` of a method the route lacks, the `501` of one no route has.
+const UNROUTED: u8 = 2;
 
 type EarlyHeads = Vec<Arc<http::request::Parts>>;
 
@@ -575,13 +581,26 @@ impl Signal {
 
     /// The app's error page is answering the request.
     pub(crate) fn mark_error_page(&self) {
-        self.0.error_page.store(true, Ordering::Relaxed);
+        self.0.failure.fetch_or(ERROR_PAGE, Ordering::Relaxed);
     }
 
     /// True while the app's error page answers the request: an optional caller that cannot be
     /// looked up is none there.
     pub(crate) fn is_error_page(&self) -> bool {
-        self.0.error_page.load(Ordering::Relaxed)
+        self.0.failure.load(Ordering::Relaxed) & ERROR_PAGE != 0
+    }
+
+    /// The router answered the request itself, as no route's handler takes it: kept on the
+    /// request's signal rather than the response, whose extensions the bare `404` would otherwise
+    /// allocate for the mark.
+    pub(crate) fn mark_unrouted(&self) {
+        self.0.failure.fetch_or(UNROUTED, Ordering::Relaxed);
+    }
+
+    /// True when the router answered the request itself ([`Signal::mark_unrouted`]): the error
+    /// page in its place is never shared.
+    pub(crate) fn is_unrouted(&self) -> bool {
+        self.0.failure.load(Ordering::Relaxed) & UNROUTED != 0
     }
 
     /// The request's locale was negotiated from its `Accept-Language`: the answer's `Vary` names

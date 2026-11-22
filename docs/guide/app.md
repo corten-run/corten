@@ -1467,8 +1467,11 @@ above, whoever wrote them. The same holds for the error page in place of the rou
 to a request no handler takes (the 404 of an unknown URL, the 405 of a method the route lacks,
 the 501 of one no route has), the PWA's offline page included, which its service worker keeps
 whatever its `Cache-Control` says; a handler's own 404 is its answer, under the rules above. A
-request refused before the handler runs is not shared in the other forms it goes out in either:
-as it is, to a client that does not ask for HTML, or as JSON. An unstaged route's `NoStore`
+request refused before the handler runs is not shared in the other forms it goes out in either,
+whatever the refusal is: a redirect, a relayed failure or a sign-in goes out as it was made, a
+failure as it is to a client that does not ask for HTML, or as JSON. Nor is a `Refused` in any
+form, whoever returns it (an extractor, a handler, a middleware turning a request away), nor a
+panic's or the deadline's failure as JSON. An unstaged route's `NoStore`
 answer goes out `private, no-store` with none of them either
 ([a route outside the stages](#a-route-outside-the-stages)). A handler
 cannot mark an answer public any other way: a response it builds by hand is not an answer a route
@@ -3067,8 +3070,12 @@ failure still reaches the client. The ones that described the old body (`Content
 `Last-Modified`) and `Cache-Control` are the error page's own, and a header the error page sets
 wins, except a `Cache-Control` that names `no-store` (`NoStore`, `no_store` on its route, or one written by hand, on any
 of its lines and however a cache could find it): the failure said nothing may keep it, so the
-error page goes out `no-store` (`private, no-store` for `NoStore` and `no_store`, whatever a
-middleware made of the failure's header).
+error page goes out `no-store`. It is `private, no-store` for `NoStore` and `no_store`, whatever a
+middleware made of the failure's header, and on a page Corten never lets be shared
+([Caching](#caching): in place of a failure no handler answered, a refusal, or the router's own
+404, 405 or 501), where a `no-store` written by hand goes out so as well and none of the failure's
+CDN caching headers is kept. On the page for a handler's own failure, a `no-store` written by hand
+goes out bare unless the page is personal.
 
 The error page is an async function of the `Failure` and then extractors, as a handler's
 arguments are, with the state they read given beside it (`()` for none). A layout that shows
