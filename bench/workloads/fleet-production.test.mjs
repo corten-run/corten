@@ -436,7 +436,7 @@ test("continuation schedules around pinned catalog and retired JSON without repl
   assert.equal(treeHash(retained), oldTree, "historical bytes untouched");
 });
 
-for (const change of ["none", "cleanup lock", "reservation bytes", "renamed host"]) test(`stopped sibling, after intent: ${change}`, { timeout: 60000 }, async (t) => {
+for (const change of ["none", "cleanup lock", "late account lock", "reservation bytes", "renamed host"]) test(`stopped sibling, after intent: ${change}`, { timeout: 60000 }, async (t) => {
   const p = fixture(t, "ssh-late"), group = "fullstack-browser", other = "hardening", old = path.join(p.h.base, group);
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
   const args = (g, round) => [round, "--continuation-root", p.h.base, "--group", g];
@@ -478,6 +478,7 @@ for (const change of ["none", "cleanup lock", "reservation bytes", "renamed host
   assert.deepEqual(census, [{ group, round: "r21", accountId, manifestSha256: fileHash(path.join(old, "fleet-r21.json")),
     stateSha256: fileHash(path.join(local, "state.json")), id: state.id, root: old, launch: fileHash(path.join(old, "launch-intent.json")) }]);
   const lock = path.join(local, "operation.lock");
+  if (change === "late account lock") fs.writeFileSync(p.hosts + ".late-lock", lock);
   if (change === "cleanup lock") {
     const open = fs.openSync;
     const mock = t.mock.method(fs.default, "openSync", (file, ...args) => {
@@ -510,7 +511,7 @@ for (const change of ["none", "cleanup lock", "reservation bytes", "renamed host
     assert.ok(trace.every(({ method }) => method === "GET"), "no provider mutation after handoff");
     assert.equal(p.saved(path.join(other, other)).createIntentAt, undefined);
   }
-  if (change === "cleanup lock") fs.unlinkSync(lock);
+  if (change === "cleanup lock" || change === "late account lock") fs.unlinkSync(lock);
   if (change === "reservation bytes") save();
   assert.equal(treeHash(old), original);
 });
