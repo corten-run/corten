@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, fork } from "node:child_process";
 import * as fs from "node:fs";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
@@ -26,6 +27,34 @@ import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
 const checkout = fs.realpathSync(".");
 const checkoutCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim();
+
+// The synthetic trace is appended one newline-terminated row per write by workers and
+// provider children that may still be running, so a read can end inside a row. While
+// they run, take only newline-complete rows; once they have finished, a final row
+// without its newline is a truncated trace. Every complete row must parse.
+function readTrace(file, { finished = false } = {}) {
+  const text = fs.readFileSync(file, "utf8"), end = text.lastIndexOf("\n") + 1;
+  if (finished && end !== text.length) throw new Error(`truncated final trace row: ${JSON.stringify(text.slice(end))}`);
+  return text.slice(0, end).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+}
+
+test("trace reader takes only newline-complete rows while writers run and is strict once they finish", (t) => {
+  const dir = fs.mkdtempSync(path.join(tmpdir(), "fleet-trace-")), trace = path.join(dir, "boundaries.jsonl");
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const first = JSON.stringify({ group: "catalog-page", boundary: "provider-child-start", pid: 1 });
+  const second = JSON.stringify({ group: "catalog-page", boundary: "remote-active", options: { input: "x".repeat(300) } });
+  fs.writeFileSync(trace, `${first}\n`);
+  fs.appendFileSync(trace, second.slice(0, 257));
+  assert.deepEqual(readTrace(trace), [JSON.parse(first)], "a partial row is not returned while writers run");
+  assert.throws(() => readTrace(trace, { finished: true }), /truncated final trace row/);
+  fs.appendFileSync(trace, `${second.slice(257)}\n`);
+  assert.deepEqual(readTrace(trace), [JSON.parse(first), JSON.parse(second)], "the row is returned whole once complete");
+  assert.deepEqual(readTrace(trace, { finished: true }), [JSON.parse(first), JSON.parse(second)]);
+  fs.appendFileSync(trace, `${second.slice(0, 257)}\n`);
+  assert.throws(() => readTrace(trace), SyntaxError, "a newline-complete malformed row still fails");
+  assert.throws(() => readTrace(trace, { finished: true }), SyntaxError);
+});
+
 function roleCheckFor(fixtureCommit, sourceCommit) {
   // Reuse the real result for identical inputs within this fixture/worker so
   // role replay does not consume the offline monitor's peer-overlap window.
@@ -45,7 +74,8 @@ function roleCheckFor(fixtureCommit, sourceCommit) {
 
 function fixture(t, mode = "success") {
   t.after(() => {
-    const rows = events(), starts = rows.filter((row) => row.boundary === "provider-child-start");
+    // Every owned child has exited by now (asserted below), so the trace is complete.
+    const rows = readTrace(trace, { finished: true }), starts = rows.filter((row) => row.boundary === "provider-child-start");
     const exits = rows.filter((row) => row.boundary === "provider-child-exit");
     assert.deepEqual(exits.map((row) => row.pid).sort(), starts.map((row) => row.pid).sort(), "every owned child reaped");
     assert.ok(exits.every((row) => row.terminal));
@@ -122,7 +152,7 @@ const synthetic = (${syntheticDependencies.toString()})({
   deps.catalogProvider = syntheticCatalogProvider(syntheticPlacement([mode === "overlap" ? "sfo2" : "sfo3"]));
   const args = ["r21", "--fleet-root", h.base];
   const saved = (group = groupNames[0]) => JSON.parse(fs.readFileSync(path.join(h.base, group, "groups-r21/state.json")));
-  const events = () => fs.readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const events = () => readTrace(trace);
   const prepareArgs = [...args, "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
   async function prepare() {
     assert.equal(await fleetMain(prepareArgs, deps), 3);
