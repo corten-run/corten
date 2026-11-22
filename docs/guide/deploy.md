@@ -760,7 +760,10 @@ reservation fixes those locations; create never tries a different region.
 
 For a partial round, the [independent group procedure](../../bench/workloads/CLOUD.md#independent-group-continuation)
 replays completed results from their original evidence and reserves only the
-named missing group. Each group's result keeps its own measured commit and date.
+named missing group. Different groups in the same continuation can measure on
+separate droplets once each earlier host is supervised. Allocation is serialized;
+terminal collection is independent. Each group keeps its own measured commit,
+date and hardware.
 
 The grouped benchmark's [disposable-host preparation](../../bench/workloads/CLOUD.md#evidence-and-cleanup)
 holds firmware-update services outside the measurement boundary before baseline.

@@ -15,7 +15,8 @@ import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellati
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
-import { continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent, recheckContinuationProofs } from "./fleet-verify.mjs";
+import { continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
+  recheckContinuationPeers, recheckContinuationProofs } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -222,7 +223,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       assert.equal(first.state.status, "collected"); assert.ok(first.state.destroyedAt);
       assert.equal(first.stateSha256, intent.placement.firstGroup.stateSha256, "catalog state changed after remaining admission");
     }
-    return intent;
+    return { ...intent, fleetRoot: fleet.root };
   };
   if (stagedSibling) assert.ok(remainingAdmission, "only fleet admission may launch a v5 sibling");
   const admission = manifest && !preview ? readAdmission() : undefined;
@@ -244,7 +245,11 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     assert.equal(current.subject.manifestSha256, plan.subject.fleetSha256);
     assert.equal(job.approvalSha256, approval, "child approval differs from consumed fleet admission");
     assert.deepEqual(job.subject, plan.subject);
-    if (beforeCreate && manifest.single) recheckContinuationProofs(current.subject.continuation.verified);
+    if (beforeCreate && manifest.single) {
+      const { verified, peers } = current.subject.continuation;
+      if (beforeCreate === true) recheckContinuationProofs(verified);
+      return recheckContinuationPeers(dirname(current.fleetRoot), manifest.single.indexSha256, manifest.provider, options.group, peers);
+    }
   });
   checkFleetAdmission?.();
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");
