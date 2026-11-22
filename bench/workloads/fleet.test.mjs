@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, syntheticCatalogProvider, syntheticInspection, syntheticPlacement } from "./cloud-fixtures.mjs";
-import { fleetMain, fleetWorkerPaths, parseFleetArgs, productionChild, stagedChildIntent, watchSupervisedHost } from "./fleet.mjs";
+import { fleetCli, fleetMain, fleetWorkerPaths, parseFleetArgs, productionChild, stagedChildIntent, watchSupervisedHost } from "./fleet.mjs";
 import { fleetPlan, reservation, savedLoadLayout, savedPlacement, stagedFleet, tags } from "./cloud-contract.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
@@ -122,6 +122,112 @@ function fixture(t, flags = {}) {
   return { h, flags, args, prepare, deps, output, calls, children, completions, catalogCalls, manifest, seed, seedLegacy, approve, finishFirst, finishGroup, remaining,
     get first() { return firstJob; } };
 }
+
+function stubPreflight(p) {
+  p.deps.plan = (options, deps) => productionPlan(options, { ...deps, compiler: () => true, roleCheck: () => [] });
+}
+
+async function independentDetach(t) {
+  const p = fixture(t), group = "mixed-production";
+  const root = join(p.h.base, group), index = join(p.h.base, "index.json");
+  const args = ["r21", "--continuation-root", p.h.base, "--group", group];
+  const errors = [];
+  writeFileSync(index, "[]");
+  stubPreflight(p);
+  p.deps.inspect = () => assert.fail("fixture has no evidence to replay");
+  assert.equal(await fleetMain([...args, "--prepare", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps), 3);
+  const detach = [...args, "--detach"];
+  assert.equal(await fleetMain([...detach, "--print-approval"], p.deps), 3);
+  const approved = [...detach, "--approve-reviewed-merged-ready", p.output.at(-1).approvalSha256];
+  const cli = (argv = approved) => fleetCli(argv, { ...p.deps, writeError: (line) => errors.push(line) });
+  const notDispatched = (locked = false) => {
+    assert.deepEqual(p.children, []);
+    assert.deepEqual(readdirSync(root).sort(), locked ? [".fleet-operation.lock", "fleet-r21.json"] : ["fleet-r21.json"]);
+    assert.equal(existsSync(join(p.h.base, ".continuation-operation.lock")), locked);
+  };
+  return { p, root, index, approved, errors, cli, notDispatched };
+}
+
+test("independent detach names invalid replay without leaking the exception", async (t) => {
+  const f = await independentDetach(t);
+  writeFileSync(f.index, "SYNTHETIC_PRIVATE_INDEX");
+  assert.equal(await f.cli(), 2);
+  assert.deepEqual(f.errors, ["fleet-operation-failed: continuation-replay"]);
+  f.notDispatched();
+});
+
+test("independent detach names the pre-intent stage and preserves placement diagnostics", async (t) => {
+  for (const [kind, expected] of [
+    ["initial", "fleet-operation-failed: initial-plan"],
+    ["locked", "fleet-operation-failed: locked-plan"],
+    ["recheck", "fleet-operation-failed: final-pre-intent-recheck"],
+    ["placement", "fleet-placement-preflight-failed: catalog-http (HTTP 403)"],
+  ]) await t.test(kind, async (t) => {
+    const f = await independentDetach(t);
+    let argv = f.approved;
+    if (kind === "initial") argv = [...argv.slice(0, -1), "0".repeat(64)];
+    if (kind === "locked") {
+      const { plan } = f.p.deps;
+      let calls = 0;
+      f.p.deps.plan = async (...args) => {
+        const result = await plan(...args);
+        if (++calls === 2) result.missing.push("SYNTHETIC_PRIVATE_PATH");
+        return result;
+      };
+    }
+    if (kind === "recheck") f.p.flags.placement = () => {
+      writeFileSync(f.index, "[]\n");
+      return syntheticPlacement();
+    };
+    if (kind === "placement") {
+      const { catalogProvider } = f.p.deps;
+      f.p.deps.catalogProvider = (options) => {
+        const run = catalogProvider(options);
+        return Object.assign((args) => args[0] === "compute"
+          ? { status: 1, stderr: "SYNTHETIC_PRIVATE_PROVIDER_BODY", providerDiagnostic: { code: "catalog-http", httpStatus: 403 } }
+          : run(args), { close: run.close });
+      };
+    }
+    assert.equal(await f.cli(argv), 2);
+    assert.deepEqual(f.errors, [expected]);
+    f.notDispatched();
+  });
+});
+
+test("independent locked-plan error keeps identity, uncertainty and lock custody", async (t) => {
+  const f = await independentDetach(t), { plan } = f.p.deps, stages = new Map();
+  const error = Object.freeze(Object.assign(new Error("SYNTHETIC_PRIVATE_LOCKED_PLAN"), { controlUncertain: true }));
+  f.p.deps.plan = (...args) => {
+    if (existsSync(join(f.root, ".fleet-operation.lock"))) throw error;
+    return plan(...args);
+  };
+  await assert.rejects(fleetMain(f.approved, f.p.deps, stages), (actual) => actual === error && actual.controlUncertain === true);
+  assert.equal(stages.get(error), "locked-plan");
+  f.notDispatched(true);
+});
+
+test("independent detach does not label a failure after intent as a pre-intent refusal", async (t) => {
+  const f = await independentDetach(t);
+  f.p.deps.main = async () => { assert.ok(existsSync(join(f.root, "launch-intent.json"))); return 2; };
+  f.p.deps.write = () => { throw new Error("SYNTHETIC_PRIVATE_RECEIPT_FAILURE"); };
+  assert.equal(await f.cli(), 2);
+  assert.deepEqual(f.errors, ["fleet-operation-failed"]);
+  assert.ok(existsSync(join(f.root, "launch-intent.json")));
+});
+
+test("ordinary fleet CLI keeps its generic refusal and successful detach", async (t) => {
+  const p = fixture(t), errors = [];
+  stubPreflight(p);
+  await fleetMain(p.prepare(), p.deps);
+  const approved = await p.approve("--detach"), deps = { ...p.deps, writeError: (line) => errors.push(line) };
+  assert.equal(await fleetCli([...approved.slice(0, -1), "0".repeat(64)], deps), 2);
+  assert.deepEqual(errors, ["fleet-operation-failed"]);
+  assert.deepEqual(readdirSync(p.h.base), ["fleet-r21.json"]);
+  assert.equal(await fleetCli(approved, deps), 3);
+  assert.deepEqual(errors, ["fleet-operation-failed"]);
+  assert.deepEqual(p.children, [groupNames[0]]);
+  assert.ok(existsSync(join(p.h.base, "launch-intent.json")));
+});
 
 function continuationFixture(t) {
   const p = fixture(t), group = "fullstack-browser", index = join(p.h.base, "index.json");
