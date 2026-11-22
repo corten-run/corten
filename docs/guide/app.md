@@ -53,7 +53,9 @@ idle limits there are the route's
 while it is open, so a route that accepts them ends idle ones (closing one that has sent no frame
 for a set time, and pinging one that only listens so its pongs count) and bounds how many it
 keeps, or idle sockets take the cap from every other request. A refused `CONNECT` is an answer
-like any other. A clock of the server's own checks the header timeout a few times a
+like any other. A `2xx` to `CONNECT` goes out with no body, `Content-Length` or
+`Transfer-Encoding`, whatever its route set, since RFC 9110 9.3.6 forbids them there. A clock of
+the server's own checks the header timeout a few times a
 second, so a connection closes within a tenth of the timeout of it (at most a second either way). It applies to `serve`, `serve_on` and `serve_wrapped` alike (where a TLS handshake's time counts toward it), on
 every listener. `App::send_timeout` (60 seconds unless set, nginx's `send_timeout`) bounds what
 comes after: a write that finds the connection's send buffer full may wait that long for room,
