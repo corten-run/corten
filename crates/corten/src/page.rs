@@ -796,18 +796,6 @@ fn unanswered_settled(mut res: Response, signal: &crate::Signal) -> Response {
     res
 }
 
-/// `res` as it goes out without the error page, settled as [`unanswered_settled`] says. An answer
-/// that is not a failure is looked at only when a refusal was made while the stages ran
-/// ([`crate::Signal::made_refusal`]): the page every request gets reads one byte of its signal.
-#[inline]
-fn as_sent(res: Response, signal: &crate::Signal) -> Response {
-    let failed = res.status().is_client_error() || res.status().is_server_error();
-    if !failed && !signal.made_refusal() {
-        return res;
-    }
-    unanswered_settled(res, signal)
-}
-
 /// The error page of an app that gives none ([`crate::App::error_page`]): a plain document. An app
 /// made by `corten new` has its own, in its layout. Every error page is sent with
 /// `X-Robots-Tag: noindex`.
@@ -3654,7 +3642,9 @@ async fn errors_rendered<S: crate::app::Steps>(
         let shape = api.and_then(|mount| mount.errors.as_ref());
         let res = crate::api::json_failure(run(pending, dispatch, deadline, signal).await, shared.dev, shape).await;
         // An extractor's refusal may be a redirect or a `200`, which `json_failure` leaves as it is.
-        return as_sent(res, signal);
+        // A `2xx` is looked at only when a refusal was made while the stages ran: the answer every
+        // request gets reads one byte of its signal ([`crate::Signal::made_refusal`]).
+        return if res.status().is_success() && !signal.made_refusal() { res } else { unanswered_settled(res, signal) };
     }
     if shared.layout_reads.is_empty() || mode.swaps() {
         return page_or_error(shared, pending, dispatch, deadline, signal, page).await;
@@ -3734,8 +3724,10 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     let error = status.is_client_error() || status.is_server_error();
     if !error || res.extensions().get::<crate::answer::Relayed>().is_some() || res.extensions().get::<AsIs>().is_some() {
         // A refusal goes out as it was made (a `200` an extractor's rejection chose, a redirect, a
-        // relayed failure), and is still never shared.
-        return as_sent(res, signal);
+        // relayed failure), and is still never shared. A `2xx` is looked at only when a refusal was
+        // made while the stages ran: the page every request gets reads one byte of its signal
+        // ([`crate::Signal::made_refusal`]), and pays no lookup in the answer's extensions.
+        return if status.is_success() && !signal.made_refusal() { res } else { unanswered_settled(res, signal) };
     }
     // A JSON route answers every failure as JSON, a path that did not parse included.
     if res.extensions().get::<crate::answer::Answered>().is_some() {
