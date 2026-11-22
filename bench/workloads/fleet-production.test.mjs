@@ -439,15 +439,17 @@ test("continuation schedules around pinned catalog and retired JSON without repl
 for (const [retry, change] of [
   ...["none", "cleanup lock", "late account lock", "reservation bytes", "renamed host"].map((change) => [false, change]),
   ...["none", "late account lock", "archive bytes", "renamed host"].map((change) => [true, change]),
-]) test(`stopped ${retry ? "predecessor" : "sibling"}, after intent: ${change}`, { timeout: 60000 }, async (t) => {
+]) test(`stopped ${retry ? "predecessor" : "sibling"}, after intent: ${change}`, { timeout: retry ? 90000 : 60000 }, async (t) => {
   const p = fixture(t, "ssh-late"), group = retry ? "recoverable-live" : "fullstack-browser", other = "hardening";
-  const old = path.join(p.h.base, group), target = retry ? group : other, round = retry ? "r22" : "r21";
+  const old = path.join(p.h.base, group), target = retry ? group : other, oldRound = retry ? "r20" : "r21", round = "r21";
   const slot = path.join(p.h.base, retry ? `${group}--${round}` : other);
   const historical = retry ? "b".repeat(40) : commit;
   const oldDeps = retry ? { ...p.deps,
     spawn: (binary, argv) => binary === "git" && argv[0] === "rev-parse" && argv[1] === "HEAD"
       ? { status: 0, stdout: historical } : p.deps.spawn(binary, argv),
-    plan: (options, deps) => productionPlan(options, { ...deps, roleCheck: roleCheckFor(historical, checkoutCommit) }),
+    // Only seed the consumed predecessor intent at a synthetic commit. The
+    // new round uses the original role preflight and production worker.
+    plan: (options, deps) => productionPlan(options, { ...deps, roleCheck: () => [] }),
   } : p.deps;
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
   const args = (g, round) => [round, "--continuation-root", p.h.base, "--group", g];
@@ -457,11 +459,11 @@ for (const [retry, change] of [
     assert.equal(await fleetMain([...args(g, round), "--detach", "--print-approval"], deps), 3);
     return [...args(g, round), "--detach", "--approve-reviewed-merged-ready", p.output.at(-1).approvalSha256];
   };
-  assert.equal(await prepare(group, "r21", historical, oldDeps), 3);
-  assert.equal(await fleetMain(await approve(group, "r21", oldDeps), { ...oldDeps, main: async () => 2 }), 2);
-  const fleet = readFleet(old, "r21").manifest;
-  const state = reservation({ round: "r21", commit: historical, token: fleet.jobs[0].token, group, fleet });
-  const local = path.join(old, group, "groups-r21");
+  assert.equal(await prepare(group, oldRound, historical, oldDeps), 3);
+  assert.equal(await fleetMain(await approve(group, oldRound, oldDeps), { ...oldDeps, main: async () => 2 }), 2);
+  const fleet = readFleet(old, oldRound).manifest;
+  const state = reservation({ round: oldRound, commit: historical, token: fleet.jobs[0].token, group, fleet });
+  const local = path.join(old, group, `groups-${oldRound}`);
   fs.mkdirSync(local, { recursive: true });
   Object.assign(state, { status: "starting", provider: fleet.provider, fullGroupQualified: false, id: "701", ip: "192.0.2.1",
     createIntentAt: state.createdAt, control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256,
@@ -471,7 +473,7 @@ for (const [retry, change] of [
   const save = () => fs.writeFileSync(path.join(local, "state.json"), JSON.stringify(state));
   save();
   await assert.rejects(prepare(other, "r22"), /unresolved custody/);
-  if (retry) await assert.rejects(prepare(group, "r22"), /unresolved custody/);
+  if (retry) await assert.rejects(prepare(group, round), /unresolved custody/);
   const evidence = path.join(local, "evidence-Synthetic"), tar = path.join(local, "results.tgz");
   fs.mkdirSync(evidence); fs.writeFileSync(path.join(evidence, "exit-code"), "124\n");
   const bytes = archive([{ name: "exit-code", body: "124\n" }]);
@@ -480,20 +482,29 @@ for (const [retry, change] of [
     evidence: "evidence-Synthetic", extractionAttempts: ["evidence-Synthetic"], archiveSha256: digest(bytes), evidenceSha256: treeHash(evidence) });
   save();
   await assert.rejects(prepare(other, "r22"), /ENOENT/);
-  if (retry) await assert.rejects(prepare(group, "r22"), /ENOENT/);
+  if (retry) await assert.rejects(prepare(group, round), /ENOENT/);
   fs.writeFileSync(tar, "replaced"); await assert.rejects(prepare(other, "r22"), assert.AssertionError);
   fs.writeFileSync(tar, bytes);
   const original = treeHash(old);
   if (retry) {
-    await assert.rejects(prepare(group, "r22", historical, oldDeps), /different measured commit/);
-    await assert.rejects(prepare(group, "r22", commit, p.deps, "user:other-account"), /same provider account/);
-    await assert.rejects(prepare(group, "r21"), /higher round/);
+    await assert.rejects(prepare(group, round, historical, oldDeps), /different measured commit/);
+    await assert.rejects(prepare(group, round, commit, p.deps, "user:other-account"), /same provider account/);
+    await assert.rejects(prepare(group, oldRound), /higher round/);
     assert.ok(!fs.existsSync(slot));
   } else await assert.rejects(prepare(group, "r22"), /different measured commit/);
+  if (retry && change === "none") {
+    const campaign = path.join(evidence, "campaign"), entry = path.join(campaign, "entry");
+    const originalEvidence = state.evidenceSha256;
+    fs.mkdirSync(campaign); fs.writeFileSync(entry, "unexpected campaign evidence");
+    state.evidenceSha256 = treeHash(evidence); save();
+    await assert.rejects(prepare(group, round), /setup attempt entered the campaign/);
+    fs.unlinkSync(entry); fs.rmdirSync(campaign); state.evidenceSha256 = originalEvidence; save();
+    assert.equal(treeHash(old), original);
+  }
   assert.equal(await prepare(target, round), 3);
   if (retry) {
-    await assert.rejects(prepare(group, "r23", historical, oldDeps), /different measured commit/);
-    await assert.rejects(approve(group, "r21", oldDeps), /group round not prepared/);
+    await assert.rejects(prepare(group, "r22", historical, oldDeps), /different measured commit/);
+    await assert.rejects(approve(group, oldRound, oldDeps), /group round not prepared/);
     const deps = { repo: p.h.repo, inspect: syntheticInspection };
     const selected = (await continuationAdmission(p.h.base, group, deps)).rows.find((row) => row.group === group);
     const siblingView = (await continuationAdmission(p.h.base, other, deps)).rows.find((row) => row.group === group);
@@ -501,13 +512,13 @@ for (const [retry, change] of [
     for (const row of [selected, siblingView, reported]) {
       assert.equal(row.outcome, "prepared");
       assert.deepEqual(row.attempts.map(({ round, outcome }) => [round, outcome]), [
-        ["r21", "setup-failed-needs-census"], ["r22", "prepared"],
+        [oldRound, "setup-failed-needs-census"], [round, "prepared"],
       ]);
     }
   }
   const approved = await approve(target, round);
   const census = p.output.at(-1).subject.continuation.unconfirmed;
-  assert.deepEqual(census, [{ group, round: "r21", accountId, manifestSha256: fileHash(path.join(old, "fleet-r21.json")),
+  assert.deepEqual(census, [{ group, round: oldRound, accountId, manifestSha256: fileHash(path.join(old, `fleet-${oldRound}.json`)),
     stateSha256: fileHash(path.join(local, "state.json")), id: state.id, root: old, launch: fileHash(path.join(old, "launch-intent.json")) }]);
   const lock = path.join(local, "operation.lock");
   if (change === "late account lock") fs.writeFileSync(p.hosts + ".late-lock", lock);
