@@ -30,7 +30,8 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit,
-  unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission, renameBootstrapSeal = renameSync } = {}) {
+  unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission,
+  renameBootstrapSeal = process.platform === "win32" ? renameSync : undefined } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
   if (mergedHead !== "origin/main") full(mergedHead, /[a-f0-9]{40}/, "exact observed main commit required");
   const fleetBytes = options.group === undefined ? undefined : regular(options.fleet, 1024 * 1024);
@@ -50,24 +51,24 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   mkdirSync(requested, { recursive: true, mode: 0o700 });
   const base = realpathSync(requested); physical(base);
   const local = join(base, `groups-${options.round}`), statePath = join(local, "state.json"), archive = join(local, "results.tgz");
-  let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor;
+  let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
   const read = (path = local, round = options.round) => { boundary(path); return controllerState(JSON.parse(regular(join(path, "state.json"), 1024 * 1024)), round); };
-  const writeState = (value) => {
+  const stateStage = (kind) => kind ? `${statePath}.${kind}-${randomBytes(16).toString("hex")}.tmp` : `${statePath}.tmp`;
+  const writeState = (value, replace = renameSync, kind = value.control?.monitor?.phase === "invalid" ? "revoked" : undefined) => {
     controllerState(value, options.round);
     // An interrupted ordinary save can leave its exclusive staging file behind.
     // Never consume it or let it prevent a failure-only write under retained custody.
-    const staging = value.control?.monitor?.phase === "invalid"
-      ? `${statePath}.revoked-${randomBytes(16).toString("hex")}.tmp` : `${statePath}.tmp`;
+    const staging = stateStage(kind);
     durable(staging, `${JSON.stringify(value, null, 2)}\n`);
-    renameSync(staging, statePath); syncDirectory(local);
+    replace(staging, statePath); syncDirectory(local);
   };
   const save = () => { check(); writeState(state); };
   // Cancellation forbids further work, not recording how the owned monitor ended.
   // Record only the ending and, if cancellation beat the live-state write,
   // the registration already received from this stream. Never adopt a file alone.
-  const recordMonitorEnd = (phase) => {
+  const recordMonitorEnd = (phase, publish = writeState) => {
     const alreadyUncertain = preserveOperationLock;
     preserveOperationLock = true;
     const saved = read();
@@ -85,10 +86,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.equal(saved.control.monitor.registrationSha256, state.control.monitor.registrationSha256);
       assert.equal(saved.control.monitor.phase, "live");
     }
-    if (phase === "invalid" && !saved.control.sealed.length && acknowledgedBootstrapSeal(saved.control.ledger)) {
+    if (!saved.control.sealed.length && acknowledgedBootstrapSeal(saved.control.ledger)) {
       saved.control.sealed.push("bootstrap");
     }
-    saved.control.monitor.phase = phase; writeState(saved); state = saved;
+    if (phase === "closed") assert.ok(saved.control.sealed.includes("bootstrap"), "closed monitoring requires an acknowledged bootstrap seal");
+    saved.control.monitor.phase = phase; publish(saved); state = saved;
     if (phase === "closed") preserveOperationLock = alreadyUncertain;
   };
   async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs, remaining, registration) {
@@ -290,7 +292,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       invocation: state.control.ledger.at(-1).request.invocation.id, stdout };
     state.status = "starting"; save(); assert.fail(message);
   };
-  async function publishWindowsBootstrapSeal(remaining) {
+  async function publishBootstrapSeal(remaining) {
     remaining();
     assert.ok(state.control.monitor.phase === "live" && acknowledgedBootstrapSeal(state.control.ledger), "live acknowledged bootstrap seal required");
     const snapshot = (path, limit) => {
@@ -311,18 +313,25 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       && JSON.parse(launch.bytes).round === options.round, "bootstrap seal owner changed");
     state.control.sealed.push("bootstrap");
     controllerState(state, options.round);
-    const staging = `${statePath}.tmp`, bytes = encode();
+    const noOrdinaryStage = () => assert.ok(!lstatSync(stateStage(), { throwIfNoEntry: false }), "unfinished reservation write; preserve staging");
+    noOrdinaryStage();
+    // A failed seal must not occupy the ordinary state writer's staging name.
+    const staging = stateStage("bootstrap"), bytes = encode();
     durable(staging, bytes);
     const staged = snapshot(staging, 1024 * 1024);
+    verifyBootstrapPublication = () => {
+      boundary(); noOrdinaryStage();
+      assert.ok(!lstatSync(join(local, "monitor-invalid.json"), { throwIfNoEntry: false }), "bootstrap seal monitor revoked");
+      operation.verify(); launch.verify(); saved.verify(); staged.verify(bytes);
+    };
     let retryUntil;
     const delays = [25, 50, 100];
     for (let attempt = 0; ; attempt++) {
       remaining();
-      assert.ok(!lstatSync(join(local, "monitor-invalid.json"), { throwIfNoEntry: false }), "bootstrap seal monitor revoked");
-      operation.verify(); launch.verify(); saved.verify(); staged.verify(bytes);
+      verifyBootstrapPublication();
       remaining();
       assert.ok(retryUntil === undefined || performance.now() < retryUntil, "bootstrap seal rename retry expired");
-      try { renameBootstrapSeal(staging, statePath); break; }
+      try { renameBootstrapSeal(staging, statePath); verifyBootstrapPublication = undefined; break; }
       catch (error) {
         // Windows can report a delete-sharing denial as EPERM, also used for permanent denials.
         const delay = delays[attempt];
@@ -340,7 +349,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assert.ok(rows.length > 0 && rows.every((r) => r.localTerminal), "unsettled local control ledger");
     sealing = rows.map((r) => r.request.invocation);
     try { await ssh(":"); } finally { sealing = undefined; }
-    if (epoch === "bootstrap" && process.platform === "win32") await publishWindowsBootstrapSeal(remaining);
+    if (epoch === "bootstrap" && renameBootstrapSeal) await publishBootstrapSeal(remaining);
     else { state.control.sealed.push(epoch); save(); }
     controlEpoch = "collection";
   }
@@ -736,9 +745,19 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           try { await commonBootstrap(); }
           catch (error) {
             if (!monitor) throw error;
+            const alreadyUncertain = preserveOperationLock;
             preserveOperationLock = true; monitor.cancel();
-            try { await monitor.done; } catch { /* Unsettled transport retains custody. */ }
-            recordMonitorEnd("invalid");
+            const ending = await monitor.done.catch(() => undefined);
+            try {
+              if (!ending?.terminal) recordMonitorEnd("invalid", (saved) => writeState(saved, renameBootstrapSeal));
+              else if (verifyBootstrapPublication) {
+                // This is a new closed snapshot from the canonical ledger, not promotion of the failed stage.
+                verifyBootstrapPublication();
+                recordMonitorEnd("closed", (saved) => writeState(saved, renameBootstrapSeal, "closed"));
+                preserveOperationLock = alreadyUncertain;
+              }
+            } catch { /* Unsettled publication retains the original locks and staged evidence. */ }
+            if (!preserveOperationLock) throw new Error("bootstrap seal publication failed; terminal monitor recorded");
             throw Object.assign(new Error("bootstrap seal failed after monitor registration; preserve host and custody"), { controlTreeUncertain: true });
           }
           if (monitor) {

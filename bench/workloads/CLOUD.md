@@ -277,6 +277,11 @@ On Windows, after SSH acknowledges the bootstrap seal, the controller can
 briefly retry a local rename that reports `EPERM`. It rechecks the same staged
 file, canonical state and owner locks before retrying. It never repeats SSH or
 uses an abandoned temporary file, and stops on cancellation or deadline.
+If the monitor already settled with a terminal receipt, the controller can
+record it from the unchanged canonical ledger. A later collection still
+requires the normal closure, lease and remote checks. If the filesystem also
+refuses the final state replacement, the staged files and owner locks stay in
+place and ordinary collection can still refuse. Do not promote either stage.
 
 Use the per-child command above if an invalid monitor left locks behind. The
 foreground controller writes the invalid status without reusing an interrupted
