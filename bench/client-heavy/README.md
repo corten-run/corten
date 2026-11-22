@@ -68,15 +68,17 @@ asynchronous work.
 
 The runner records operation dispatch-to-two-animation-frames elapsed time,
 including scheduling and rendering, not pure handler CPU. Observer overhead is
-present in both journeys. Qualification has `actions: null`; action timings are
-collected only in the separate measurement pass after qualification. `readyMs`
+present in every journey. Qualification has `actions: null`; action timings are
+collected only in measured journeys after qualification. `readyMs`
 is mount-to-visible-screen-and-subscription readiness, not document load time.
 These local bounded numbers are diagnostics, not a
 ranking or cloud/load readiness. Offline `readyForLoad` remains false.
 
 ## Candidate freshness
 
-New output is `client-heavy-native/v3`. It saves the recomputed
+The single-sample diagnostic runner writes `client-heavy-native/v3`; the
+[dedicated comparison recipe](#dedicated-comparison-recipe) writes
+`client-heavy-native/v4` with three measured blocks. Both save the recomputed
 `benchmark-latest-stable-evaluation/v2` alongside the native observations. The
 policy, browser manifest/lock and root tooling manifest/lock byte identities are retained, with exact
 candidate roots and their resolved dependency/optional/peer paths. Saved replay
@@ -89,7 +91,8 @@ The reviewed 13-package 2026-11-17 primary registry observation has Solid and `@
 and Babel 8.1.2, but the stable `babel-preset-solid` 1.9.19 requires Solid
 `^1.9.16` and Babel `^7.0.0`. Solid remains visible as `unsupported`, reason
 `latest-stable-solid-2-needs-compatible-stable-compiler`, with null qualification
-and measurement. Its compiler hook is not invoked and it has no build artifacts.
+and no measurement (null in v3, an empty sample array in v4). Its compiler hook
+is not invoked and it has no build artifacts.
 Replay rejects attempted Solid builds/captures, missing or mixed policy, and
 invented unsupported peers. A failed build is never renamed unsupported.
 
@@ -141,6 +144,8 @@ oracles for all six apps; they are not the historical browser table's workload.
 
 Qualify the roster first. Then visit it in three serial blocks, rotating by two
 roster positions between blocks and skipping only cells that did not qualify.
+Every built app needs a qualification receipt. A recorded qualification failure
+can leave its peers comparable; a missing attempt blocks comparisons for all.
 Every attempted journey uses a fresh context, does the same work and records
 raw timings and cleanup. An observed, closed failed sample stays in its block
 and disqualifies that cell; nothing is retried or substituted. Unsupported Solid

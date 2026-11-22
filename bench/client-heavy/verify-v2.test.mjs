@@ -9,6 +9,7 @@ import { Evidence, json, sha256 } from "./evidence.mjs";
 import { options, sourceRoots, buildOptions, documentMarkup, comparisonProfile } from "./contract.mjs";
 import { committed, validateSaved } from "./verify.mjs";
 import { selectedApps, definition } from "../workloads/registry.mjs";
+import { validateClientCapture } from "../workloads/client.mjs";
 import { fixturePass, workload, settings } from "./replay-fixture.mjs";
 import { vendorConfiguration } from "./build-replay.mjs";
 import { admitSaved } from "./admission.mjs";
@@ -186,7 +187,50 @@ test("v4 refuses resealed missing, reused or tampered sample receipts", async (t
     await f.seal();
     const r = await f.validate();
     assert.equal(r.status, "invalid"); assert.ok(r.errors.some((entry) => entry.reason === reason), JSON.stringify(r.errors));
+    assert.ok(Object.values(r.cells).every((cell) => cell.comparison === undefined));
   }
+});
+
+test("resealed v4 needs an observed qualification for each built app before comparing healthy peers", async (t) => {
+  const f = await fixture(t, 4), vue = f.output.cells.vue, qualification = vue.qualification;
+  assert.equal(f.output.builds.vue.outcome, "built");
+  Object.assign(vue, { outcome: "failed", readyForMeasurement: false, measurements: [], qualification: null, reason: "runner-failed-before-adapter" });
+  await f.seal();
+  const missing = await f.validate();
+  assert.equal(missing.intrinsic.complete, false);
+  assert.ok(missing.errors.some((e) => e.at === "vue:cell" && e.reason === "missing-qualification-attempt-receipt"));
+  assert.equal(missing.cells.react.replayPassed, true);
+  assert.ok(Object.values(missing.cells).every((cell) => cell.comparison === undefined));
+
+  f.output.failure = { reason: "runner-failed", name: "Error", diagnosticSha256: sha256("synthetic interruption") };
+  await f.seal();
+  const interrupted = await f.validate();
+  assert.equal(interrupted.status, "blocked", JSON.stringify(interrupted.errors));
+  assert.equal(interrupted.intrinsic.complete, false); assert.equal(interrupted.cells.react.comparison, undefined);
+
+  // A retained readiness failure with an observed context close IS an attempt.
+  delete f.output.failure; delete vue.reason; vue.qualification = qualification;
+  const records = qualification.capture.records.slice(0, 2);
+  Object.assign(qualification.capture, { outcome: "failed", reason: "native-readiness-failed", records: null });
+  qualification.failure = { phase: "readiness", diagnostic: "Error", diagnosticSha256: sha256("synthetic readiness failure"), records, errors: [] };
+  qualification.oracle = validateClientCapture(f.plan.workload, qualification.capture, f.plan.settings);
+  qualification.readyMs = null; qualification.timing.operations = [];
+  await f.seal();
+  const observed = await f.validate();
+  assert.equal(observed.status, "failed", JSON.stringify(observed.errors));
+  assert.equal(observed.intrinsic.complete, true);
+  assert.equal(observed.cells.vue.qualification.passed, false); assert.equal(observed.cells.vue.qualification.closurePassed, true);
+  assert.equal(observed.cells.vue.comparison, undefined);
+  assert.equal(observed.cells.solid.outcome, "unsupported"); assert.equal(observed.cells.solid.qualification, null);
+  assert.equal(observed.cells.react.comparison.samples, 3);
+  assert.deepEqual(observed.cells.react.comparison.attemptedOrder, f.plan.measurementOrder.map((block) =>
+    block.filter((app) => app !== "vue" && app !== "solid")));
+
+  qualification.lifecycle.close.observed = false;
+  await f.seal();
+  const unclosed = await f.validate();
+  assert.ok(unclosed.blockers.includes("comparison-context-not-closed"));
+  assert.equal(unclosed.intrinsic.complete, false); assert.equal(unclosed.cells.react.comparison, undefined);
 });
 
 for (const [name, mutate] of [

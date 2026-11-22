@@ -311,6 +311,7 @@ export async function validateV2(request) {
       if (b.outcome === "not-run") { keys(b, ["outcome", "reason"]);
         const unsupported = candidatePolicy?.candidates.find((row) => row.app === app && row.status === "unsupported");
         need(b.reason === "runner-failed-before-build" || unsupported && b.reason === unsupported.reason, "invalid-unrun-build");
+        if (comparison && !output.failure) need(unsupported && b.reason === unsupported.reason, "missing-build-attempt-receipt");
         cell.build = { outcome: b.outcome, bytes: null }; return; }
       if (b.outcome === "failed") {
         keys(b, ["outcome", "reason", "diagnosticSha256"]);
@@ -388,9 +389,14 @@ export async function validateV2(request) {
       };
       const replayPass = async (pass, phase, label = phase) => {
         const replayed = await check(`${app}:${label}`, () => replayV2(pass, app, phase, plan.workload, plan.settings, plan.timeoutMs, origins)) ?? null;
+        if (comparison && replayed && pass.lifecycle.contextCreatedAt !== null && !replayed.closurePassed) block("comparison-context-not-closed");
         await check(`${app}:${label}:requests`, () => replayRequests(pass, replayed));
         return replayed;
       };
+      if (comparison) {
+        if (output.builds[app].outcome === "built") need(c.qualification !== null || output.failure, "missing-qualification-attempt-receipt");
+        else need(c.qualification === null, "qualification-without-native-build");
+      }
       const q = cell.qualification = c.qualification === null ? null : await replayPass(c.qualification, "qualification");
       const replayed = [];
       for (const [index, pass] of measurements.entries()) replayed.push(await replayPass(pass, "measurement", comparison ? `measurement-${index + 1}` : "measurement"));
@@ -406,20 +412,12 @@ export async function validateV2(request) {
       else need(c.outcome === (passed ? "passed" : (!comparison && (q?.passed ? replayed[0]?.oracle.outcome : q?.oracle.outcome) === "unsupported")
         ? "unsupported" : "failed"), "cell-outcome-differs-from-replay");
       cell.replayPassed = passed;
-      const policy = candidatePolicy?.candidates.find((row) => row.app === app);
-      if (comparison && passed && policy?.status === "satisfied" && policy.latestStableEligible === true && policy.blockers.length === 0) {
-        cell.comparison = { samples: count, actions: summarizeActions(replayed.map((m) => m.timings.actions)) };
-      }
     });
   }
   await check("context-order", () => {
     const { endedAt, windows } = replayContextOrder(output.cells, apps, plan.measurementOrder, allBuildEnd);
     lastContextEnd = endedAt;
     contextWindows = windows;
-    if (comparison) {
-      const attemptedOrder = plan.measurementOrder.map((block, index) => block.filter((app) => output.cells[app].measurements[index]));
-      for (const cell of Object.values(report.cells)) if (cell.comparison) cell.comparison.attemptedOrder = attemptedOrder;
-    }
   });
   if (output.builds.corten.outcome === "built") await check("compiler-input-closure", () => {
     const c = json("evidence/compiler-inputs.json");
@@ -533,6 +531,15 @@ export async function validateV2(request) {
   report.valid = report.diagnosticsPassed;
   report.intrinsic.valid = report.valid;
   report.intrinsic.complete = report.valid && subject !== undefined && report.blockers.length === 0;
+  if (comparison && report.intrinsic.complete && report.intrinsic.cleanupPassed) {
+    const attemptedOrder = plan.measurementOrder.map((block, index) => block.filter((app) => output.cells[app].measurements[index]));
+    for (const policy of candidatePolicy.candidates) {
+      const cell = report.cells[policy.app];
+      if (cell.replayPassed && policy.status === "satisfied" && policy.latestStableEligible === true && policy.blockers.length === 0) {
+        cell.comparison = { samples: cell.measurements.length, attemptedOrder, actions: summarizeActions(cell.measurements.map((m) => m.timings.actions)) };
+      }
+    }
+  }
   report.status = !report.valid ? "invalid" : !report.intrinsic.complete ? "blocked" : report.intrinsic.passed ? "verified" : "failed";
   return report;
 }
