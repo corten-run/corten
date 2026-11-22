@@ -7440,17 +7440,20 @@ rules something out.
     against 90, and the minor page faults fell from 1.641 to 1.617 a request with the URL held
     once; callgrind's simulated last level missed 102.3 times against 104.2, which is the store
     touching memory for the first time, what not copying does not change. A kept page took
-    60,707 instructions against 60,604 (+0.17%), and the store off, a page not `Public` and a
-    write the same to within 10. The rest of the 10,601 is the store's own: the entry, its key,
-    its place in the table and the slots, a copy of the head for the answer sent (a `HeaderMap`
-    and a value it shares), the mark on the answer, the tag's hash kept with the page, and
-    freeing each when it goes. Holding the handler's whole buffer and counting its capacity was
-    tried first (on `6c8c27b55`): a page's buffer is sized for the last page rendered and an
-    eighth more, so a uniform page holds an eighth it does not use, and its faults rose from
+    60,707 instructions against 60,604 (+0.17%, most of it in `_int_malloc` with the heap laid
+    out otherwise), and the store off, a page not `Public` and a write the same to within 10. Of the 10,601, by function, about 4,500 are the allocator's
+    (ten more allocations and a `realloc`, among them the entry, its key, the URL's list in the
+    table, a copy of the head for the answer sent and the mark on it, in a heap the store
+    grows, `_int_malloc` alone 1,592), about 2,300 the store reading the request and the answer
+    (the headers it is asked with, `Vary`, what an answer must not carry, the head's size), 900
+    putting the entry in its place under the lock, 500 `memcpy` and the rest the URL's hashes.
+    Holding the handler's whole buffer and counting its capacity was tried first (on
+    `6c8c27b55`): a page's buffer is sized for the last page rendered and an eighth more, so a uniform page holds an eighth it does not use, and its faults rose from
     1.65 to 1.81 a request; cut to its length, glibc gives the rest back where it is, so the
     bytes are not copied, where an allocator that cannot shrink in place copies them as before.
     Hashing a path for its count of writes by the table's keyed hash too, so that a lookup and a
-    write share one hash, cost a kept page 125 to 156 instructions more, and was left out.    By simulation from these counts (`bench/catalog/sim-kept-store.mjs` at `16f2f5480`: the
+    write share one hash, cost a kept page 125 to 156 instructions more, and was left out.
+    By simulation from these counts (`bench/catalog/sim-kept-store.mjs` at `16f2f5480`: the
     store's clock with and without the rule, 5,461 pages of 6 KiB in 32 MiB, four million
     requests of which the second two million are counted, drawn from a Zipf law over the
     app's URLs): over 4,000 URLs, which fit, with three requests in ten from a crawler
