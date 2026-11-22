@@ -1,6 +1,6 @@
 // Operator-gated production composition. No provider or state operations on import.
 import assert from "node:assert/strict";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
@@ -137,8 +137,14 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
         assert.ok(saved.fullGroupQualified === false && !saved.collectedAt && !saved.validation && !saved.evidenceOutcome,
           "only unqualified failure evidence can retire");
         const grouped = groupedPreplanFailure(local, saved);
+        // A refused custody probe can append a settled collection ledger row
+        // without replacing the original reservation. Approve both byte sets.
+        const original = join(local, "failed-native-reservation.json");
+        const preservedReservationSha256 = digest(lstatSync(original, { throwIfNoEntry: false })
+          ? regular(original, 1024 * 1024) : bytes);
         const { stagedChildIntent } = await import("./fleet.mjs");
         recovery = { policy: "grouped-preplan-failure-custody-only", measuredCommit: saved.commit, hostId: saved.id,
+          preservedReservationSha256,
           group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256,
           launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
           intent: stagedChildIntent(physicalRequest, saved), fleetSha256: saved.fleet.fleetSha256 };
