@@ -475,7 +475,8 @@ for (const [retry, change] of [
   await assert.rejects(prepare(other, "r22"), /unresolved custody/);
   if (retry) await assert.rejects(prepare(group, round), /unresolved custody/);
   const evidence = path.join(local, "evidence-Synthetic"), tar = path.join(local, "results.tgz");
-  fs.mkdirSync(evidence); fs.writeFileSync(path.join(evidence, "exit-code"), "124\n");
+  const exitFile = path.join(evidence, "exit-code");
+  fs.mkdirSync(evidence); fs.writeFileSync(exitFile, "124\n");
   const bytes = archive([{ name: "exit-code", body: "124\n" }]);
   Object.assign(state, { preBootstrapTerminal: { hostId: state.id, ip: state.ip, monitorId: state.control.monitor.id,
     invocation: state.control.ledger.at(-1).request.invocation.id, stdout: `Id=${state.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${state.unit}\nActiveState=failed\nRestart=no\nMainPID=0\nExecMainCode=1\nExecMainStartTimestamp=Fri 2026-11-13 01:00:00 UTC\n` },
@@ -493,6 +494,14 @@ for (const [retry, change] of [
     assert.ok(!fs.existsSync(slot));
   } else await assert.rejects(prepare(group, "r22"), /different measured commit/);
   if (retry && change === "none") {
+    const zeroExit = archive([{ name: "exit-code", body: "0\n" }]);
+    fs.writeFileSync(tar, zeroExit); fs.writeFileSync(exitFile, "0\n");
+    state.archiveSha256 = digest(zeroExit); state.evidenceSha256 = treeHash(evidence); save();
+    await assert.rejects(prepare(group, round), /nonzero setup exit/);
+    assert.ok(!fs.existsSync(slot), "a zero exit must not reserve a successor");
+    fs.writeFileSync(tar, bytes); fs.writeFileSync(exitFile, "124\n");
+    state.archiveSha256 = digest(bytes); state.evidenceSha256 = treeHash(evidence); save();
+
     const campaign = path.join(evidence, "campaign"), entry = path.join(campaign, "entry");
     const originalEvidence = state.evidenceSha256;
     fs.mkdirSync(campaign); fs.writeFileSync(entry, "unexpected campaign evidence");
