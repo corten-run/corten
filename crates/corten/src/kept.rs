@@ -39,12 +39,14 @@
 //!
 //! A `Public` route whose answer is JSON (`Json<T>`, `JsonResult<T>`), text or a file (`Media`,
 //! a sitemap or `robots.txt` of [`crate::seo`]) is kept the same
-//! way, under the same rules and by the same key, where the app compresses the answer: its
-//! whole body, of 1,024 bytes or more, in a build with the `compress` feature, for a `GET` that
+//! way, under the same rules and by the same key, from a size: its whole body, of 1,024 bytes
+//! or more ([`BODY_FROM`]), whatever its type and in every build, for a `GET` that
 //! shows nothing about who is asking ([`Shape::Body`]). A kept body saves its handler, its
-//! writing and its compression, and one the app does not compress saves too little of the first
-//! two, where the handler reads only memory, to pay for asking the store ([`compresses`]); so a
-//! build that does not compress keeps no body, and a route whose bodies are all too small stops
+//! writing, its compression where the app compresses it, and the hash of its tag, which a
+//! request that names a coding pays for whether or not the body is compressed. A smaller body
+//! is left to its handler: the hash grows with the body and the instructions asking the store
+//! costs do not (by their counts a body named with a coding gains from about 350 bytes; no
+//! size under 1,024 was run). A route whose bodies are all too small stops
 //! asking ([`Unkept`]). Once kept, a body is given to a request that accepts no coding as well.
 //! Which answers are whole bodies is known from the
 //! route's type when the app compiles ([`crate::answer::Answer::WHOLE`], which an answer type of
@@ -58,8 +60,9 @@
 //! other way, on the thread that runs it (`form::watched`). JSON the app holds as bytes
 //! (`json::Raw`) carries its own compressed forms in a build that compresses, a mark this does
 //! not replay, so it is its handler's for every request, which costs it no writing and no
-//! compression. A file is kept by its type as text is, so a picture of a type the app does not
-//! compress (PNG, JPEG, WebP) is its handler's for every request, and so are a file sent as a
+//! compression. A file is kept as text is, whatever its type: a picture no build compresses
+//! (PNG, JPEG, WebP) is kept for its tag's hash. Left to its handler for every request are a
+//! file sent as a
 //! stream (`Media::stream`), which has no body to hold, and one at a URL that names its content
 //! (`Public::immutable`), which says no lifetime the app keeps it for and is left to the caches
 //! that keep it for a year. A kept file is sent with the headers its handler gave it, its
@@ -203,10 +206,10 @@ thread_local! {
     static DRAWN: Cell<u32> = const { Cell::new(DRAWN_FROM) };
 }
 
-/// A route of whole bodies, by what became of the answers it made last. A body is kept where
-/// the app compresses it ([`compresses`]), which its size and its media type decide and no type
-/// of the route's shows, so a route whose bodies are all under that size, or all pictures the app
-/// does not compress, streams or files their URLs name, would ask the store, find nothing, and have every
+/// A route of whole bodies, by what became of the answers it made last. A body is kept from
+/// a size ([`BODY_FROM`]), which no type
+/// of the route's shows, so a route whose bodies are all under that size, or all
+/// streams or files their URLs name, would ask the store, find nothing, and have every
 /// answer refused: about as much again as a handler that answers a constant costs. After
 /// [`UNKEPT_RUN`] answers in a row of which none was kept, and with none between given from
 /// the store, the route's requests are its handler's, as they were before the app kept
@@ -272,7 +275,7 @@ impl Unkept {
 
     /// How many requests of a route that left the store out this thread leaves to their
     /// handlers before one asks, set to `left` for a test that counts them.
-    #[cfg(all(test, feature = "compress"))]
+    #[cfg(test)]
     pub(crate) fn leaves_next(left: usize) {
         while Self::left_before_one_asks() != left {
             DRAWN.set(draw(DRAWN.get()));
@@ -317,20 +320,17 @@ impl Drop for Told {
     }
 }
 
-/// Whether the app compresses a `200` of `length` bytes under these headers for a request that
-/// accepts a coding (1,024 bytes or more of a type worth it, in a build that compresses): a
-/// whole body is kept only then. Kept, it saves its handler, its writing and its compression,
-/// and a body the app does not compress saves so little of the first two on the benchmark's
-/// JSON that a handler which does next to nothing is slower kept than made.
-fn compresses(headers: &HeaderMap, length: u64) -> bool {
-    #[cfg(feature = "compress")]
-    return crate::compress::compresses(headers, length);
-    #[cfg(not(feature = "compress"))]
-    {
-        let _ = (headers, length);
-        false
-    }
-}
+/// The least bytes of a whole body the app keeps. Kept, a body saves its handler, its writing,
+/// its compression where the app compresses it, and the hash of its tag, which is made for every
+/// request that names a coding, as a browser's does, whether or not the body is compressed
+/// (docs/design.md#limit-etag). The hash grows with the body and the instructions asking the store
+/// costs do not, so a small body is left to its handler (docs/design.md#choice-kept-pages has
+/// what was measured at this size). It is also the size the app compresses from.
+const BODY_FROM: u64 = 1024;
+
+// One size in the guide for both: a build in which they differ does not compile.
+#[cfg(feature = "compress")]
+const _: () = assert!(BODY_FROM == crate::compress::MIN_SIZE);
 
 /// How many words of marks ([`Store::asked`]) a store of `bound` bytes has, made when it first
 /// fills: a mark is one bit, and there is one for every 32 bytes of the bound, rounded up to a
@@ -1276,8 +1276,8 @@ impl Missed {
             return res;
         }
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
-        // A whole body is kept where the app compresses it.
-        if self.told.0.is_some() && !compresses(res.headers(), length) {
+        // A whole body is kept from a size, whatever its type.
+        if self.told.0.is_some() && length < BODY_FROM {
             return res;
         }
         let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();

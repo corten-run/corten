@@ -243,7 +243,7 @@ pub trait Handler<T, S>: Clone + Send + Sync + Sized + 'static {
     const ACTION_PATCHES: bool = false;
 
     /// The typed route's answer is one that is the same for everyone (`Public`), a page or a
-    /// whole body (JSON, text, a file) in a build that compresses, which the app keeps and gives again
+    /// whole body (JSON, text, a file), which the app keeps and gives again
     /// in the handler's place ([`crate::kept`]).
     fn keeps(&self) -> Option<crate::kept::Shape> {
         None

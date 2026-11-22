@@ -293,9 +293,12 @@ local stream closure, lease expiry and an absent original owner PID. It uses
 the separate stream recovery lock and checks the registered boot and exact
 started unit. Read-only fleet inspection can verify a saved retirement behind
 those retained child locks, but not while their owner or a recovery collector
-may still be active. An unchanged root batch lock with a dead owner is reported
-as retained, not as changed evidence. A live, unrecognized or changing root
-lock is busy. Inspection never clears a lock or makes a locked fleet complete.
+may still be active. A root batch lock whose owner is gone is reported as
+retained, not as changed evidence. On Windows, reports can also replay when
+the OS proves the process now using that PID started after the unchanged lock
+was written. This does not authorize admission, collection or deletion. A
+live, unrecognized or changing root lock is busy. Inspection never clears a
+lock or makes a locked fleet complete.
 Live or uncertain
 custody is preserved. The shared failed-native procedure below checks the
 download, rehashes the remote data, renews the idle-host proof and records a

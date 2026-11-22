@@ -1741,16 +1741,15 @@ async fn only_an_app_with_a_public_page_counts_its_writes() {
     let dev = App::new(Routes::from(edit().merge(kept_routes(&runs)))).dev(true).router();
     assert_eq!(write(dev).await, "store=false counted=false", "under corten dev");
 
-    // A `Public` whole body is kept where the build compresses: an app whose only `Public` route
-    // answers one has a store there, and in a build that keeps no body its route asks nothing.
+    // A `Public` whole body is kept from a size, in every build: an app whose only `Public`
+    // route answers one has a store, whether or not the body turns out large enough.
     let words = || async { Public::new(Duration::from_secs(60), "words") };
     let body = App::new(Routes::from(edit().route("/words", crate::route::get(words).0))).router();
-    let kept = cfg!(feature = "compress");
-    assert_eq!(write(body).await, format!("store={kept} counted={kept}"), "a Public body alone");
+    assert_eq!(write(body).await, "store=true counted=true", "a Public body alone");
     // A file is a whole body too, kept or not: which is known only as each is made.
     let file = || async { Public::new(Duration::from_secs(60), crate::Media::new("image/png", &[0x89u8; 4][..])) };
     let filed = App::new(Routes::from(edit().route("/mark.png", crate::route::get(file).0))).router();
-    assert_eq!(write(filed).await, format!("store={kept} counted={kept}"), "a Public file alone");
+    assert_eq!(write(filed).await, "store=true counted=true", "a Public file alone");
 }
 
 static COUNTER_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -2269,8 +2268,7 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
         ("/gone", "an error page"),
         ("/now", "no lifetime"),
         ("/moved", "a redirect"),
-        ("/text", "a whole body too small for the app to compress"),
-        ("/file", "a file of a type the app does not compress"),
+        ("/text", "a whole body too small to keep"),
         ("/status", "a status alone has no body to keep"),
         ("/keyed", "a submit key drawn for this request"),
         ("/placed", "a submit key drawn before the page's render and placed in it as markup"),
@@ -2283,8 +2281,11 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
     for uri in ["/", "/catalog", "/inputs"] {
         assert!(kept(router.clone(), uri).await, "{uri}");
     }
-    // A whole body, where the app compresses it: in a build that does not, it is its handler's.
-    assert_eq!(kept(router.clone(), "/long").await, cfg!(feature = "compress"));
+    // A whole body of a size worth keeping, whatever its type: text the app compresses where
+    // the build does, and a picture no build compresses.
+    for uri in ["/long", "/file"] {
+        assert!(kept(router.clone(), uri).await, "{uri}");
+    }
     // The page that failed did fail, and each request's page has its own key.
     let recovered =
         |router: Router| async move { String::from_utf8(fetch(&router, "GET", "/recovered", &[]).await.2.to_vec()).unwrap() };
@@ -3009,8 +3010,8 @@ fn an_answer_s_type_says_whether_its_body_is_kept() {
     assert!(!whole::<StatusCode>() && !whole::<NoStore<Media>>());
     assert!(!whole::<crate::Relay>() && !whole::<HtmlResult>() && !whole::<Public<HtmlResult>>());
     assert!(!whole::<NoStore<String>>(), "an answer no cache may store");
-    // Bytes the app holds keep their own compressed forms where the build compresses, which is
-    // where a body is kept at all.
+    // Bytes the app holds keep their own compressed forms where the build compresses, and are
+    // left to their handler in every build.
     #[cfg(feature = "json")]
     assert!(!whole::<Json<crate::json::Raw>>());
 }
@@ -3019,8 +3020,8 @@ fn an_answer_s_type_says_whether_its_body_is_kept() {
 /// page is: the next request that shows nothing about who asks gets the same bytes with their
 /// age, with the tag and the coded bytes made once, and a write to the path drops them. A
 /// request that asks for JSON first is kept too, apart: its handler can read which client asked.
-/// Each body here is one the app compresses (1,024 bytes or more), which is what is kept.
-#[cfg(all(feature = "json", feature = "compress"))]
+/// Each body here is 1,024 bytes or more, which is what is kept.
+#[cfg(feature = "json")]
 #[tokio::test]
 async fn a_public_json_or_text_answer_is_kept_and_given_again() {
     let minute = Duration::from_secs(60);
@@ -3111,18 +3112,21 @@ async fn a_public_json_or_text_answer_is_kept_and_given_again() {
     assert_eq!(again.remove(header::AGE).expect("kept"), "0");
     assert!(again == first && same == body, "{again:?}");
     let (_, _, third) = fetch(&router, "GET", "/text", &coded).await;
-    assert_eq!(third.as_ptr(), same.as_ptr(), "the coded bytes made once");
-    assert_eq!(first[header::CONTENT_ENCODING], "gzip");
+    assert_eq!(third.as_ptr(), same.as_ptr(), "the bytes sent made once");
+    // Coded where the build compresses; as they are where it does not, and tagged either way.
+    assert_eq!(
+        first.get(header::CONTENT_ENCODING).map(HeaderValue::as_bytes),
+        cfg!(feature = "compress").then_some(&b"gzip"[..])
+    );
     let tag = first[header::ETAG].to_str().unwrap();
     let (status, _, none) = fetch(&router, "GET", "/text", &[("accept-encoding", "gzip"), ("if-none-match", tag)]).await;
     assert!(status == StatusCode::NOT_MODIFIED && none.is_empty() && texts.count() == 1);
 }
 
-/// A whole body is kept where the app compresses it: from 1,024 bytes, in a build that
-/// compresses. One byte under, and in a build that does not, the route is its handler's for
-/// every request. A kept body is given to a request that accepts no coding too.
+/// A whole body is kept from 1,024 bytes, in every build. One byte under, the route is its
+/// handler's for every request. A kept body is given to a request that accepts no coding too.
 #[tokio::test]
-async fn a_whole_body_is_kept_from_the_size_the_app_compresses() {
+async fn a_whole_body_is_kept_from_1024_bytes() {
     let minute = Duration::from_secs(60);
     let runs = Runs::default();
     let (under, at) = (runs.clone(), runs.clone());
@@ -3136,7 +3140,7 @@ async fn a_whole_body_is_kept_from_the_size_the_app_compresses() {
     };
     let routes = Table::new().route("/under", crate::route::get(under).0).route("/at", crate::route::get(at).0);
     let router = App::new(Routes::from(routes)).router();
-    for (path, kept) in [("/under", false), ("/at", cfg!(feature = "compress"))] {
+    for (path, kept) in [("/under", false), ("/at", true)] {
         for asked in [&[][..], &[("accept-encoding", "gzip")][..]] {
             let before = runs.count();
             let (_, first, body) = fetch(&router, "GET", path, asked).await;
@@ -3154,15 +3158,14 @@ async fn a_whole_body_is_kept_from_the_size_the_app_compresses() {
     }
 }
 
-/// A file is a whole body too. A sitemap, and a `Media` of a type the app compresses, are kept
-/// from the size it compresses, and the kept one is sent with what its handler said of it: its
-/// type, its file name, how long caches keep it. A picture of a type the app does not compress,
-/// a `robots.txt` under that size, a file sent as a stream, which has no body to hold, and a
-/// file at a URL that names its content (`Public::immutable`), which has no lifetime to keep it
-/// for, are their handlers' for every request, and so is every file in a build that does not
-/// compress.
+/// A file is a whole body too. A sitemap and a `Media` are kept from 1,024 bytes, whatever
+/// the type (a CSV the app compresses, a picture no build does), and the kept one is sent with
+/// what its handler said of it: its type, its file name, how long caches keep it. A file under
+/// that size, one with a tag of its handler's own, one sent as a stream, which has no body to
+/// hold, and one at a URL that names its content (`Public::immutable`), which has no lifetime
+/// to keep it for, are their handlers' for every request.
 #[tokio::test]
-async fn a_file_is_kept_where_the_app_compresses_it() {
+async fn a_file_is_kept_from_1024_bytes() {
     use crate::seo;
     let minute = Duration::from_secs(60);
     let runs = Runs::default();
@@ -3181,7 +3184,7 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
         let file = crate::Media::new("text/csv", csv());
         async move { Public::new(minute, file).header::<ETag>(HeaderValue::from_static("\"v1\"")) }
     };
-    // A `robots.txt` large enough to compress.
+    // A `robots.txt` large enough to keep.
     let crawlers = move || {
         crawlers.ran();
         async move { seo::robots(&["/account/"; 120], None) }
@@ -3225,6 +3228,12 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
         picture.ran();
         async move { Public::new(minute, crate::Media::new("image/png", vec![0x89; 4096])) }
     };
+    // A picture one byte under the size a body is kept from.
+    let dot = runs.clone();
+    let dot = move || {
+        dot.ran();
+        async move { Public::new(minute, crate::Media::new("image/png", vec![0x89; 1023])) }
+    };
     let export = move || {
         export.ran();
         let chunks = futures_util::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from(csv()))]);
@@ -3241,6 +3250,7 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
         .route("/flaky.csv", crate::route::get(flaky).0)
         .route("/mark.svg", crate::route::get(mark).0)
         .route("/picture.png", crate::route::get(picture).0)
+        .route("/dot.png", crate::route::get(dot).0)
         .route("/export.csv", crate::route::get(export).0);
     let router = App::new(Routes::from(routes)).router();
     for (path, kept) in [
@@ -3252,10 +3262,10 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
         ("/tagged.csv", false),
         ("/crawlers/robots.txt", true),
         ("/mark.svg", false),
-        ("/picture.png", false),
+        ("/picture.png", true),
+        ("/dot.png", false),
         ("/export.csv", false),
     ] {
-        let kept = kept && cfg!(feature = "compress");
         let before = runs.count();
         let (status, first, body) = fetch(&router, "GET", path, &[]).await;
         let (_, again, same) = fetch(&router, "GET", path, &[]).await;
@@ -3272,16 +3282,32 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
     assert_eq!(cards[header::CONTENT_TYPE], "text/csv");
     assert_eq!(cards[header::CONTENT_DISPOSITION], "attachment; filename=\"cards.csv\"");
     assert_eq!(cards[header::CACHE_CONTROL], "public, max-age=60");
+    assert!(cards.contains_key(header::AGE), "{cards:?}");
     #[cfg(feature = "compress")]
-    assert_eq!((cards.contains_key(header::AGE), &cards[header::CONTENT_ENCODING]), (true, &HeaderValue::from_static("gzip")));
+    assert_eq!(cards[header::CONTENT_ENCODING], "gzip");
+    // A kept picture is given to a request that names a coding as it is, with a tag, and the
+    // tag answers `304` with no handler run: what keeping one is for, since its tag's hash is
+    // made for the kept copy and not for each such request.
+    let before = runs.count();
+    let (_, picture, _) = fetch(&router, "GET", "/picture.png", &[("accept-encoding", "gzip")]).await;
+    assert!(picture.contains_key(header::AGE) && !picture.contains_key(header::CONTENT_ENCODING), "{picture:?}");
+    let named = [("accept-encoding", "gzip"), ("if-none-match", picture[header::ETAG].to_str().unwrap())];
+    let (status, unchanged, none) = fetch(&router, "GET", "/picture.png", &named).await;
+    assert_eq!((status, none.len(), runs.count() - before), (StatusCode::NOT_MODIFIED, 0, 0));
+    // No coding makes a picture smaller, so neither answer varies on the codings asked for.
+    for headers in [&picture, &unchanged] {
+        let named =
+            headers.get_all(header::VARY).iter().any(|value| value.as_bytes().windows(15).any(|w| w == b"accept-encoding"));
+        assert!(!named, "{headers:?}");
+    }
     // A file's key is its URL with its query, and a request with a cookie is its handler's.
     let before = runs.count();
     let (_, other, _) = fetch(&router, "GET", "/cards.csv?page=2", &[]).await;
     let (_, again, _) = fetch(&router, "GET", "/cards.csv?page=2", &[]).await;
     let (_, known, _) = fetch(&router, "GET", "/cards.csv", &[("cookie", "sid=1")]).await;
     assert_eq!((other.contains_key(header::AGE), known.contains_key(header::AGE)), (false, false));
-    assert_eq!(again.contains_key(header::AGE), cfg!(feature = "compress"));
-    assert_eq!(runs.count() - before, if cfg!(feature = "compress") { 2 } else { 3 });
+    assert!(again.contains_key(header::AGE), "{again:?}");
+    assert_eq!(runs.count() - before, 2);
     // A handler that failed is asked again, and what it then makes is kept.
     let before = runs.count();
     let (failed, first, _) = fetch(&router, "GET", "/flaky.csv", &[]).await;
@@ -3289,14 +3315,24 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
     let (_, third, _) = fetch(&router, "GET", "/flaky.csv", &[]).await;
     assert_eq!((failed, made), (StatusCode::NOT_FOUND, StatusCode::OK));
     assert_eq!((first.contains_key(header::AGE), second.contains_key(header::AGE)), (false, false));
-    assert_eq!(third.contains_key(header::AGE), cfg!(feature = "compress"));
-    assert_eq!(runs.count() - before, if cfg!(feature = "compress") { 2 } else { 3 });
+    assert!(third.contains_key(header::AGE), "{third:?}");
+    assert_eq!(runs.count() - before, 2);
     let (_, mark, _) = fetch(&router, "GET", "/mark.svg", &[]).await;
     assert_eq!(mark[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
     assert_eq!(mark[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    // A file larger than an eighth of what the app keeps is its handler's, as a page that large
+    // is: a picture of 8,192 bytes where the app keeps 64 KiB (its headers count toward its size
+    // too, so it is over the eighth and under a quarter), beside one of 4,096 that is kept.
+    let sized = |length: usize| move || async move { Public::new(minute, crate::Media::new("image/png", vec![0x89; length])) };
+    let bounded =
+        Table::new().route("/large.png", crate::route::get(sized(8192)).0).route("/small.png", crate::route::get(sized(4096)).0);
+    let bounded = App::new(Routes::from(bounded)).kept_answers(64 * 1024).router();
+    for (path, kept) in [("/large.png", false), ("/small.png", true)] {
+        fetch(&bounded, "GET", path, &[]).await;
+        assert_eq!(fetch(&bounded, "GET", path, &[]).await.1.contains_key(header::AGE), kept, "{path}");
+    }
     // A kept file is a kept answer in every other way: its tag answers `304`, a `HEAD` is its
     // handler's, and a write to its path drops it.
-    #[cfg(feature = "compress")]
     {
         let named = [("accept-encoding", "gzip"), ("if-none-match", cards[header::ETAG].to_str().unwrap())];
         let before = runs.count();
@@ -3319,7 +3355,6 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
 /// body large enough ends a run and so does one given from the store, so a route that answers
 /// both sizes keeps asking while one of those comes within each 64, also once its large bodies
 /// are all kept and only the small are made.
-#[cfg(feature = "compress")]
 #[tokio::test]
 async fn a_route_of_small_bodies_leaves_the_store_out_until_one_is_large_enough() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -3399,7 +3434,6 @@ async fn a_route_of_small_bodies_leaves_the_store_out_until_one_is_large_enough(
 /// An answer left out for another reason counts toward a route's run as one too small does: a
 /// route whose every body draws a form's submit key stops asking the store too, and one kept
 /// between ends that run as well.
-#[cfg(feature = "compress")]
 #[tokio::test]
 async fn a_route_none_of_whose_answers_is_kept_leaves_the_store_out_whatever_the_reason() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -3437,14 +3471,14 @@ async fn a_route_none_of_whose_answers_is_kept_leaves_the_store_out_whatever_the
 
 /// A kept answer in an API is the handler's part alone: what the API adds for the site that asks
 /// (`Access-Control-Allow-Origin`) is written for each request, so no site is sent another's.
-#[cfg(all(feature = "json", feature = "compress"))]
+#[cfg(feature = "json")]
 #[tokio::test]
 async fn a_kept_api_answer_is_sent_with_each_request_s_own_cors() {
     let runs = Runs::default();
     let ran = runs.clone();
     let rates = move || {
         ran.ran();
-        // Of a size the app compresses, which is what it keeps.
+        // Of a size the app keeps.
         async move { Public::new(Duration::from_secs(60), Ok::<_, JsonError>(Json(vec![1.5_f64; 400]))) }
     };
     struct Counted(Runs);
@@ -3588,12 +3622,12 @@ fn a_submit_key_is_seen_wherever_the_handler_s_poll_ran() {
 /// handler reads it (`req.t()`, `req.lang()`), in an app with messages, with a messages type
 /// that is not the app's, and with none. A body whose handler does not read it is one copy for
 /// every language.
-#[cfg(all(feature = "json", feature = "compress"))]
+#[cfg(feature = "json")]
 #[tokio::test]
 async fn a_kept_body_is_for_the_language_its_handler_read() {
     crate::i18n::messages! { struct BodyMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
     crate::i18n::messages! { struct OtherMsg { "fr" => "src/i18n/fr.json", "en" => "src/i18n/en.json" } }
-    /// Each body is its word this many times: of a size the app compresses, which is what it keeps.
+    /// Each body is its word this many times: of a size the app keeps.
     const REPEATED: usize = 600;
     let minute = Duration::from_secs(60);
     let runs = Runs::default();
@@ -3659,8 +3693,8 @@ async fn a_kept_body_is_for_the_language_its_handler_read() {
 /// What is not kept of a route that answers JSON for everyone, each of a size the app keeps: a
 /// failure, JSON the app holds as bytes (it carries its own coded forms, a mark the store does
 /// not replay), and a body with a form's new submit key in markup its handler rendered, also
-/// where the handler waited after rendering it. In a build that compresses, where one is kept.
-#[cfg(all(feature = "json", feature = "compress"))]
+/// where the handler waited after rendering it.
+#[cfg(feature = "json")]
 #[tokio::test]
 async fn a_json_answer_that_failed_or_is_one_request_s_alone_is_not_kept() {
     const SUBMIT: crate::form::FieldName<crate::form::SubmitKey> = crate::form::FieldName::__new("submit");
