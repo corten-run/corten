@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
-import { summarizeSamples } from "../catalog/stats.mjs";
+import { steadySampleWindow, summarizeSamples } from "../catalog/stats.mjs";
 import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupApps } from "./groups.mjs";
@@ -46,6 +46,15 @@ const stopText = (s) => `its container ${s.oomKilled ? `was OOM-killed (${s.exit
 // spread takes the lower value in each column on its own (req/s and p95 may come from different
 // passes), and one pass has no range.
 const stoppedMark = (n, asked) => n >= asked ? "" : ` (stopped: ${n} of ${asked} passes${n === 2 ? "; the lower of two values per column, not a median" : n === 1 ? "; one pass, no range" : ""})`;
+function roundedQuotient(mean, count) {
+  const product = mean * count, quotient = product / count;
+  if (quotient === mean) return true;
+  // If the nearest binary64 product rounds back past the mean, only the
+  // adjacent positive float on the other side can still divide to the mean.
+  const float = new Float64Array([product]), bits = new BigUint64Array(float.buffer);
+  bits[0] += quotient > mean ? -1n : 1n;
+  return float[0] / count === mean;
+}
 function statsEvidence(p, allowRoundedMemory) {
   finite(p.cpuAvgPct); finite(p.cpuMaxPct); assert.ok(p.cpuMaxPct >= p.cpuAvgPct);
   finite(p.memAvgMiB, Number.MIN_VALUE); finite(p.memMaxMiB, Number.MIN_VALUE);
@@ -57,6 +66,8 @@ function statsEvidence(p, allowRoundedMemory) {
     // Native replay still requires exact agreement with the actual Docker samples.
     const upper = summarizeSamples(Array(p.samples).fill({ cpu: 0, mem: p.memMaxMiB })).memAvgMiB;
     assert.ok(Number.isFinite(upper) && p.memAvgMiB <= upper, "missing/invalid measurement");
+    const [start, end] = steadySampleWindow(p.samples);
+    assert.ok(roundedQuotient(p.memAvgMiB, end - start), "missing/invalid measurement");
   }
   assert.ok(Number.isSafeInteger(p.cpuUsec) && p.cpuUsec > 0);
 }

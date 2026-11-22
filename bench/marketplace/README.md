@@ -349,6 +349,7 @@ The native memory mean uses the sampled steady window, while the peak uses every
 Floating-point summation can put the mean slightly above the peak even for a constant
 decimal reading. The v5 summary check (including merged split summaries) bounds that case
 by summing a history with every reading at the saved peak and the same sample count.
+An overshoot must also be a possible rounded quotient for that steady-window length.
 Native replay still requires both saved means to match the exact calculation from the
 retained Docker readings; it does not round or rewrite evidence.
 

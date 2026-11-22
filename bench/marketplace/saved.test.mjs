@@ -91,12 +91,15 @@ test("complete native fixture replays every raw profile, pass, phase, gate and c
 test("native replay admits the producer's decimal sum overshoot, not an inconsistent mean", async (t) => {
   const folder = temporary(t), args = { folder, round: "r17", commit };
   const s = writeSavedFixture(folder, commit, sourceTree(commit));
-  const phase = s.apps.corten.runs["api-neutral-json"][0].phases.sat64;
+  const app = s.apps.corten, key = "api-neutral-json", runs = app.runs[key];
+  const phase = runs[0].phases.sat64;
   const log = join(folder, "api/corten/p1-neutral-json/sat64-stats.log");
   const fixture = JSON.parse(readFileSync(`${log}.json`)).samples;
   const names = Object.keys(fixture), upstream = names.find((name) => name.endsWith("-upstream"));
-  const start = fixture[upstream][0].t;
-  fixture[upstream] = Array.from({ length: 31 }, (_, i) => ({ t: start + i * 350, cpu: 100, mem: 100.9 }));
+  const container = names.find((name) => name !== upstream), start = fixture[upstream][0].t;
+  for (const [name, mem] of [[container, 102.9], [upstream, 100.9]]) {
+    fixture[name] = Array.from({ length: 31 }, (_, i) => ({ t: start + i * 350, cpu: 100, mem }));
+  }
   const rows = names.flatMap((Name) => fixture[Name].map((p) => ({ ...p, Name }))).sort((a, b) => a.t - b.t);
   const fake = new EventEmitter();
   fake.stdout = new PassThrough(); fake.stderr = new PassThrough();
@@ -112,27 +115,41 @@ test("native replay admits the producer's decimal sum overshoot, not an inconsis
       now = t;
       fake.stdout.write(JSON.stringify({ Name, CPUPerc: `${cpu}%`, MemUsage: `${mem}MiB / ${Name === upstream ? "512MiB" : "1GiB"}` }) + "\n");
     }
-    stats = (await sampler.stop())[upstream];
+    stats = await sampler.stop();
   } finally {
     spawn.mock.restore(); clock.mock.restore(); syncBuiltinESMExports();
   }
-  assert.equal(stats.memAvgMiB, 100.90000000000003);
-  assert.equal(stats.memMaxMiB, 100.9);
+  assert.equal(stats[upstream].memAvgMiB, 100.90000000000003);
+  assert.equal(stats[upstream].memMaxMiB, 100.9);
+  assert.equal(stats[container].memAvgMiB, 102.90000000000006);
+  assert.equal(stats[container].memMaxMiB, 102.9);
   const saved = JSON.parse(readFileSync(`${log}.json`));
   const writeSummary = () => writeFileSync(join(folder, "summary.json"), JSON.stringify(s));
   const write = (avg) => {
-    saved.summary[upstream] = { ...stats, memAvgMiB: avg };
+    saved.summary[upstream] = { ...stats[upstream], memAvgMiB: avg };
     Object.assign(phase.upstream, saved.summary[upstream]);
     writeFileSync(`${log}.json`, JSON.stringify(saved));
     writeSummary();
   };
-  Object.assign(phase.upstream, stats);
+  Object.assign(phase.upstream, stats[upstream]);
+  Object.assign(phase, stats[container]);
+  const setAppMean = (mean) => {
+    phase.memAvgMiB = mean;
+    app.phases[key].sat64 = stageAggregate(runs, "sat64", 3);
+  };
+  setAppMean(stats[container].memAvgMiB);
   writeSummary();
   assert.deepEqual(validateSaved(args), s);
   assert.match(report(s), /Marketplace v2 r17/);
+  setAppMean(102.90000000000003);
+  validateSummary(s);
+  // The adjacent sums round to .03 and .06, skipping .05 despite the peak bound.
+  setAppMean(102.90000000000005);
+  assert.throws(() => validateSummary(s), /missing\/invalid measurement/);
+  setAppMean(stats[container].memAvgMiB);
   phase.upstream.samples = 1001;
   assert.throws(() => validateSummary(s), /missing\/invalid measurement/);
-  phase.upstream.samples = stats.samples;
+  phase.upstream.samples = stats[upstream].samples;
 
   // Even when both saved summaries agree and the number is within the rounding
   // envelope, the exact mean still has to agree with the raw Docker samples.
