@@ -2,7 +2,9 @@ FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+# Keep fetch and extraction diagnostics in the build log even if npm stalls.
+RUN timeout --verbose --kill-after=10s 10m \
+    npm ci --no-audit --no-fund --fetch-timeout=60000 --loglevel=silly
 COPY . .
 # The matched tier builds its own image with --build-arg PROFILE=matched (apps.mjs, buildArgs):
 # Next.js fixes its config when it builds (next.config.mjs), which reads both arguments from the

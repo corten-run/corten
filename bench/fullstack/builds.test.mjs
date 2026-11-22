@@ -296,6 +296,17 @@ const productionPrune = (/** @type {string} */ command) => /^npm prune --omit=de
 const postBuildPrune = (/** @type {string[]} */ commands, /** @type {number} */ index, /** @type {string | undefined} */ build) =>
   !!build && productionPrune(commands[index]) && commands.slice(0, index).includes(parts(build).at(-1) ?? "");
 
+// The image install has a deadline and diagnostic logging. The timed recipe runs the same
+// locked install without them. No other wrapper or install flags count as equivalent.
+const nextImageInstall = /^timeout --verbose --kill-after=10s 10m (npm ci --no-audit --no-fund) --fetch-timeout=60000 --loglevel=silly$/;
+
+test("Next.js bounds the locked image install before building the app", () => {
+  const commands = stagesOf("nextjs")[0].run;
+  const install = commands.findIndex((command) => nextImageInstall.test(command));
+  assert.ok(install >= 0 && install < commands.indexOf("npm run build"));
+  assert.equal(commands.filter((command) => /\bnpm ci\b/.test(command)).length, 1);
+});
+
 test("only exact production pruning after a build is packaging, never a recipe step", () => {
   for (const command of ["npm prune --omit=dev", "npm prune --omit=dev --no-audit --no-fund"]) {
     assert.equal(postBuildPrune(["npm run build", command], 1, "npm run build"), true);
@@ -330,7 +341,8 @@ test("each recipe runs its Dockerfile's commands, from its image, in its directo
     for (const stage of stages.filter((s) => s.run.some((c) => mine.some((m) => c.includes(m))))) {
       const commands = stage.run.flatMap((c) => c.split(" && ").map((x) => x.trim()));
       for (const [index, command] of commands.entries()) {
-        assert.ok(mine.includes(command) || packaging.some((p) => p.test(command)) || postBuildPrune(commands, index, r.build), `${name}: its Dockerfile runs ${command}, which its recipe does not`);
+        const recipeCommand = name === "nextjs" ? command.replace(nextImageInstall, "$1") : command;
+        assert.ok(mine.includes(recipeCommand) || packaging.some((p) => p.test(command)) || postBuildPrune(commands, index, r.build), `${name}: its Dockerfile runs ${command}, which its recipe does not`);
       }
       if (r.stage) assert.equal(stage.from, "tools", `${name}: its build stage starts from its tools stage`);
     }
