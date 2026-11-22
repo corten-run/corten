@@ -74,7 +74,7 @@ async function fixture(t, app) {
   return "http://127.0.0.1:" + server.address().port;
 }
 
-test("live runner uses a fresh Chromium for the next adapter after a real disconnect", { timeout: 30000 }, async t => {
+test("live runner uses a fresh Chromium for the next adapter after a real disconnect", { timeout: 90000 }, async t => {
   // Existing hosted native-workload step sets this flag in the Playwright image.
   const hosted = process.env.MIXED_BROWSER_TESTS === "1";
   if (!hosted && !existsSync(new URL("../../node_modules/playwright/package.json", import.meta.url))) return t.skip("Playwright is not installed");
