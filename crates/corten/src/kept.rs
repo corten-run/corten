@@ -951,29 +951,65 @@ impl Answers {
 /// [`KeptAnswers::changed`] drops what this process keeps at a page's path. It does not reach
 /// another instance of the app, or a CDN or proxy in front of it, which keep their copies for the
 /// lifetime the page was sent with (`docs/design.md#limit-kept-drop-reach`).
-#[derive(Clone, Default)]
+///
+/// A `Public` handler cannot take it. The app gives a kept answer in that handler's place, so a
+/// call there would run when the page is made and not for the requests the kept copy answers: a
+/// change is named where it is made, in a write's handler or a task. The handle is not
+/// [`crate::answer::Anonymous`] (and an app cannot make it one: the type and the trait are both
+/// Corten's), so the compiler refuses it there with the message it gives for any input a
+/// `Public` handler may not take:
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, KeptAnswers};
+/// use std::time::Duration;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/items", get = crate::items)]
+///     pub struct Items;
+/// }
+///
+/// async fn items(kept: KeptAnswers) -> Public<&'static str> {
+///     kept.changed(&url::Items);
+///     Public::new(Duration::from_secs(600), "the items")
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// That keeps the call out of the one handler the store skips. It is not a proof against side
+/// effects there: a `Public` handler can still reach the store through a handle it captured from
+/// [`crate::App::kept`], as it can do anything else it holds.
+#[derive(Clone)]
 pub struct KeptAnswers(Arc<OnceLock<Answers>>);
 
 impl KeptAnswers {
+    /// A handle with no store yet: [`KeptAnswers::set`] gives it the app's.
+    pub(crate) fn pending() -> KeptAnswers {
+        KeptAnswers(Arc::new(OnceLock::new()))
+    }
+
     /// The app's store, once its router is made.
     pub(crate) fn set(&self, answers: &Answers) {
         let _ = self.0.set(answers.clone());
     }
 
-    /// What the page at `to` shows has changed, so nothing this process kept at its path is
-    /// given again: every query there (`/items?page=2` with `/items`), and the copy kept for each
-    /// `Host`, `Accept-Language` and way of asking, as a write to the path drops them. Each is made
-    /// again by its handler when it is next asked for. An answer whose handler was reading when
-    /// this was called is sent and not given again, so a page made from what was there before does
-    /// not stand after it, however its making and this call interleave.
+    /// What the page at `to` shows has changed, so nothing this process kept at its path before
+    /// the call is given again: every query there (`/items?page=2` with `/items`), and the copy
+    /// kept for each `Host`, `Accept-Language` and way of asking, as a write to the path drops
+    /// them. Each is made again by its handler when it is next asked for.
     ///
-    /// Counted when it is called, so call it once the change is there for readers: after the
-    /// transaction commits, or, for work that outlives its request, at the end of that work
-    /// ([`crate::Signal::finish`]). A page asked for between the change and this call is made
-    /// from the change, and is not kept. Two paths share a count once in 65,536 times, and then
-    /// the other path's pages are dropped too. With no store (under `corten dev`, with
-    /// `App::kept_answers(0)`, in an app with no `Public` route of a kind it keeps, or before
-    /// the app's router is made) it does nothing.
+    /// The call adds one to the path's count, and that is the cutover. A lookup after it does not
+    /// give an answer kept before it, and an answer whose handler was reading at the call is not
+    /// kept, however the two interleave: such an answer still goes to the request it was made
+    /// for, and to no other. What was already under way is not recalled: a kept copy a lookup
+    /// had chosen before the call is still sent to that request. So call it once the change is
+    /// there for readers: after the transaction commits, or, for work that outlives its request,
+    /// at the end of that work ([`crate::Signal::finish`]). Until then the old page may still be
+    /// given, and one made in the meantime may be kept, from before the change or after it; the
+    /// call drops both. Two paths share a count once in 65,536 times, and then the other path's
+    /// pages are dropped too. With no store (under `corten dev`, with `App::kept_answers(0)`, in
+    /// an app with no `Public` route of a kind it keeps, or before the app's router is made) it
+    /// does nothing.
     ///
     /// A write at `/items/7/edit` changes the list at `/items`, and a task reprices every
     /// item and changes it too:
@@ -1028,7 +1064,8 @@ impl KeptAnswers {
     ///
     /// The page is named as a link to it is, by its route ([`crate::OnSite`]: a
     /// `#[derive(Route)]` value, a place on one, a `#[derive(Href)]` enum of those, or a checked
-    /// [`crate::Local`]), so a path written as text does not compile:
+    /// [`crate::Local`]), so a route that was renamed or removed, or a path written as text, does
+    /// not compile:
     ///
     /// ```compile_fail,E0277
     /// fn list_changed(kept: corten::KeptAnswers) {
@@ -1044,6 +1081,15 @@ impl KeptAnswers {
     ///     kept.changed(&to);
     /// }
     /// ```
+    ///
+    /// As for a link, the type says where the page is, not that the app serves it: whether a
+    /// handler is mounted at a route's path is the router's to say, and its tests'. A route
+    /// struct the app does not mount (a `#[derive(Route)]` that is in none of its routes, or a
+    /// module of routes it was not given) compiles, and the call drops what is kept at that
+    /// path, which is nothing when no route of the app serves it. A [`crate::Local`] is the way
+    /// to name a path that comes from outside the code (one a job reads from a queue): it is
+    /// checked to be a path on this site and nothing more, so it is the one way to pass a path
+    /// no route is known to serve.
     pub fn changed(&self, to: &(impl crate::route::OnSite + ?Sized)) {
         let Some(answers) = self.0.get() else { return };
         let link = crate::route::link(to);
@@ -1063,7 +1109,7 @@ impl<S: Send + Sync> crate::extract::FromRequestParts<S> for KeptAnswers {
 
     /// The store of the app serving the request; none outside an app (a bare router in a test).
     async fn from_request_parts(parts: &mut http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
-        let kept = KeptAnswers::default();
+        let kept = KeptAnswers::pending();
         let shared = parts.extensions.get::<crate::Signal>().and_then(crate::Signal::shared);
         if let Some(answers) = shared.and_then(|shared| shared.kept.as_ref()) {
             kept.set(answers);

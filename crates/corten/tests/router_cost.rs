@@ -16,10 +16,17 @@
 //! `ROUTER_KEPT=0` turns the store off (`App::kept_answers(0)`), for what a write pays the store
 //! in the same app; with it nothing is kept, so `ROUTER_ASKED=1` and `ROUTER_TARGET=kept` with a
 //! page, which assert that one is, do not go with it.
+//!
+//! What a write pays for naming the page it changed: `ROUTER_NAMED=1` with `ROUTER_TARGET=write`
+//! and `ROUTER_PUBLIC=page` gives the write a handler that takes `KeptAnswers` and calls
+//! `changed(&Home)` before it answers, as an app's handler does, in the same app otherwise. With
+//! `ROUTER_KEPT=0` that handler finds no store, so the call does nothing; with `ROUTER_ASKED=1`
+//! the store has its counts by path, and each write drops the page kept at `/home`. Compare it
+//! with the same variables but `ROUTER_NAMED`, whose handler takes nothing and names nothing.
 
 use std::time::Duration;
 
-use corten::{prelude::*, App, Params, Public};
+use corten::{prelude::*, App, KeptAnswers, Params, Public};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -62,6 +69,21 @@ mod paged {
     pub struct Home;
 }
 
+/// With a `Public` page, and a write that says the page changed.
+#[corten::routes]
+mod named {
+    #[route("/items/7/edit", get = crate::read, post = crate::save_named)]
+    pub struct Item;
+
+    #[route("/home", get = crate::home)]
+    pub struct Home;
+}
+
+async fn save_named(kept: KeptAnswers) -> &'static str {
+    kept.changed(&named::Home);
+    "saved"
+}
+
 async fn read() -> &'static str {
     "item"
 }
@@ -99,10 +121,13 @@ fn request_cost() {
     let (missing, write, kept, new) = (target == "missing", target == "write", target == "kept", target == "new");
     let path = if missing { "/items/7/unknown" } else { "/items/7/edit" };
     let status = if missing { 404 } else { 200 };
+    let named = std::env::var("ROUTER_NAMED").is_ok_and(|named| named == "1");
+    assert!(!named || (write && public == "page"), "ROUTER_NAMED=1 needs ROUTER_TARGET=write and ROUTER_PUBLIC=page");
     let (routes, shared) = match (write || kept || new, public.as_str()) {
         (false, _) => (url::router(), None),
         (true, "") => (plain::router(), None),
         (true, "words") => (words::router(), Some("/words")),
+        (true, "page") if named => (named::router(), Some("/home")),
         (true, "page") => (paged::router(), Some("/home")),
         (true, _) => panic!("unknown ROUTER_PUBLIC: {public}"),
     };
@@ -156,6 +181,10 @@ fn request_cost() {
             } else if !missing {
                 assert_eq!(body.as_ref(), b"item 7");
             }
+        }
+        if write && asked && !off && public == "page" {
+            // The page at /home stands unless the writes named it.
+            assert_eq!(ask("/home").await, !named, "ROUTER_NAMED={named}");
         }
     });
 }

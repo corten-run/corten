@@ -7476,11 +7476,19 @@ rules something out.
     however the two interleave. Before the counts are made it counts as a write that found none.
     A handler takes `KeptAnswers` as an argument and a task takes it from the app
     (`App::kept`) before the router is made, which gives it the store; it is one handle for
-    both, the only way work outside a request reaches the store. The page is named as a link
+    both, the only way work outside a request reaches the store. A `Public` handler cannot take
+    it (it is not `Anonymous`): the store answers in that handler's place, so a call there would
+    not run for the requests a kept copy answers. The page is named as a link
     is, by a type of `OnSite` (a route, a place on one, a `#[derive(Href)]` enum of those, a
-    checked `Local`), so a path written as text does not compile. It is counted when it is
-    called, so the app calls it once its change is there for readers, as a write is counted
-    when it is answered. It reaches the process that called it alone
+    checked `Local`), so a route renamed or removed, or a path written as text, does not
+    compile. As for a link, the type says where a page is and not that the app mounts a handler
+    there, which is the router's to say: a route struct the app does not mount compiles and
+    drops what is kept at its path, nothing when no route serves it, and `Local`, for a path
+    from outside the code, is checked only to be a path on this site. The call is the cutover:
+    it adds to the path's count, so no later lookup gives a copy kept before it, and an answer
+    whose handler was reading then answers its own request and is not kept; a copy a lookup had
+    already chosen is still sent. So the app calls it once its change is there for readers, as
+    a write is counted when it is answered. It reaches the process that called it alone
     ([Limit 35](#limit-kept-drop-reach)). Nothing else drops a page before its lifetime ends,
     but a write from before the counts were made (below): not a change in another instance, a
     purge at a CDN in front (which is given the kept page again with its `Age`), or a
@@ -7518,7 +7526,11 @@ rules something out.
     kept page would read beside its path's, for an app that can name each record it changed),
     taking the dropped copies out of the store at once (the search under the store's lock a
     write does not make either; a copy that no longer stands goes first when room is made), a
-    drop of every kept page, and reaching other instances ([Limit 35](#limit-kept-drop-reach));
+    drop of every kept page, reaching other instances ([Limit 35](#limit-kept-drop-reach)), and
+    a check that the named route is mounted: the route table is made when the app runs, from
+    the modules and areas it is given, so the compiler has no table to check against, and
+    binding the handle to a type of the app's routes would make links to the app's pages
+    checked two ways, here and nowhere else;
     and, left for changes of their own, a way for an extractor of the
     app's own to say it reads only the URL, every `Public` body kept whatever its size
     (what this first did, for the 3.9% and at the price of the 13.8% below), a least size other than the one the

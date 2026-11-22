@@ -649,7 +649,7 @@ impl App {
             access_log: false,
             layout_reads: Vec::new(),
             kept: crate::kept::BOUND,
-            keeping: crate::KeptAnswers::default(),
+            keeping: crate::KeptAnswers::pending(),
             middleware: (),
         }
     }

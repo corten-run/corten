@@ -1644,7 +1644,6 @@ async fn a_change_drops_the_copy_kept_for_each_host_language_and_way_of_asking()
     #[derive(crate::Route)]
     #[route("/")]
     struct Home;
-    #[cfg(feature = "compress")]
     #[derive(crate::Route)]
     #[route("/text")]
     struct Text;
@@ -1685,22 +1684,55 @@ async fn a_change_drops_the_copy_kept_for_each_host_language_and_way_of_asking()
     }
     assert_eq!(runs.count(), 8);
 
-    // A whole body is kept where the app compresses it, apart for a data client.
-    #[cfg(feature = "compress")]
-    {
-        let bodies: [&[(&'static str, &str)]; 2] = [&[], &[("accept", "application/json")]];
-        for asked in bodies {
-            assert!(!given("/text", asked).await && given("/text", asked).await, "{asked:?}");
-        }
-        assert_eq!(texts.count(), 2);
-        kept.changed(&Text);
-        for asked in bodies {
-            assert!(!given("/text", asked).await && given("/text", asked).await, "made again: {asked:?}");
-        }
-        assert_eq!(texts.count(), 4);
+    // A whole body is kept in every build, apart for a data client.
+    let bodies: [&[(&'static str, &str)]; 2] = [&[], &[("accept", "application/json")]];
+    for asked in bodies {
+        assert!(!given("/text", asked).await && given("/text", asked).await, "{asked:?}");
     }
-    #[cfg(not(feature = "compress"))]
-    let _ = texts;
+    assert_eq!(texts.count(), 2);
+    kept.changed(&Text);
+    for asked in bodies {
+        assert!(!given("/text", asked).await && given("/text", asked).await, "made again: {asked:?}");
+    }
+    assert_eq!(texts.count(), 4);
+}
+
+/// An app whose only `Public` route is a file no coding makes smaller (a PNG) keeps it in every
+/// build, with no page beside it, and the app's saying it changed drops both of its copies.
+#[tokio::test]
+async fn a_change_drops_a_kept_picture_in_an_app_with_no_page() {
+    #[derive(crate::Route)]
+    #[route("/logo.png")]
+    struct Logo;
+    let runs = Runs::default();
+    let counted = runs.clone();
+    let picture = move || {
+        counted.ran();
+        async move { Public::new(Duration::from_secs(60), crate::Media::new("image/png", vec![0x89; 4096])) }
+    };
+    let app = App::new(Routes::from(Table::new().route("/logo.png", crate::route::get(picture).0)));
+    let kept = app.kept();
+    let router = app.router();
+    assert_eq!(format!("{kept:?}"), "KeptAnswers { store: true }", "a store for the file alone");
+    let given = |asked: &'static [(&'static str, &'static str)]| {
+        let router = router.clone();
+        async move {
+            let (status, headers, body) = fetch(&router, "GET", "/logo.png", asked).await;
+            assert!(status == StatusCode::OK && body.len() == 4096 && headers[header::CONTENT_TYPE] == "image/png");
+            assert!(!headers.contains_key(header::CONTENT_ENCODING), "a picture is kept as it is");
+            headers.contains_key(header::AGE)
+        }
+    };
+    let ways: [&[(&'static str, &str)]; 2] = [&[("accept-encoding", "gzip, br")], &[("accept", "application/json")]];
+    for asked in ways {
+        assert!(!given(asked).await && given(asked).await, "{asked:?}");
+    }
+    assert_eq!(runs.count(), 2);
+    kept.changed(&Logo);
+    for asked in ways {
+        assert!(!given(asked).await && given(asked).await, "made again: {asked:?}");
+    }
+    assert_eq!(runs.count(), 4);
 }
 
 /// What a write's handler finds: whether the app has a store of kept pages, and whether the

@@ -1598,17 +1598,25 @@ let app = app.task("reprice", move |signal| reprice(items, kept, signal));
 ```
 
 `changed` takes the page as a link does, by its route (or a place on one, or a checked
-`Local`), so a path that is not a route of the app's does not compile, and drops what is kept at
-its path as a write there does: every query, and the copy kept for each host, language and way
-of asking. It is counted when it is called, so call it once the change is there for readers:
-after the commit, or at the end of work the handler left (`signal.finish`). A page whose
-handler was reading when it was called is sent and not kept, so a page made from what was there
-before is never given after the call. It names one path: a job that changed items 7 and 9 names
-each page, `url::Item { id: 7 }` and `url::Item { id: 9 }`, and there is no call for every page
-of a route at once. It reaches this process alone
-([design Limit 35](../design.md#limit-kept-drop-reach)): another instance behind the load
-balancer and a CDN in front keep their copies for the page's lifetime. With no store (under
-`corten dev`, with `kept_answers(0)`, in an app with no `Public` page) it does nothing.
+`Local`), so a route that was renamed or removed, or a path written as text, does not compile.
+As for a link, the type says where the page is, not that the app serves it: a route struct the
+app does not mount compiles, and drops what is kept at its path, nothing when no route serves
+it, so name the route the page is served by. `Local` is for a path from outside the code (one a job reads from a queue), and is
+checked only to be a path on this site. The call drops what is kept at the page's path as a write
+there does: every query, and the copy kept for each host, language and way of asking.
+
+The call is the cutover. After it, no request is given a copy kept before it, and a page whose
+handler was reading at the call is not kept: it still answers the request it was made for, and
+no other. A request whose kept copy was already chosen is sent that copy. So call it once the
+change is there for readers: after the commit, or at the end of work the handler left
+(`signal.finish`). Until then the page as it was may still be given. It names one path: a job
+that changed items 7 and 9 names each page, `url::Item { id: 7 }` and `url::Item { id: 9 }`, and
+there is no call for every page of a route at once. A `Public` handler cannot take
+`KeptAnswers`, since it does not run for the requests a kept copy answers. It reaches this
+process alone ([design Limit 35](../design.md#limit-kept-drop-reach)): another instance behind
+the load balancer and a CDN in front keep their copies for the page's lifetime. With no store
+(under `corten dev`, with `kept_answers(0)`, in an app with no `Public` route of a kind it keeps:
+a page, or JSON, text or a file) it does nothing.
 
 Nothing else is meant to drop a page before its lifetime ends (a write to another path does
 once in 65,536 times, where two paths share a count, and so does one that began before the app
@@ -1673,7 +1681,8 @@ kept too, as a copy apart from a request that does not ask for JSON first: a han
 `Req` can read which of the two asked. What an API adds for the site that asks
 (`Access-Control-Allow-Origin`) is written for each request and is no part of what is kept, so no
 site is sent another's. A write drops it as it drops a page: `PUT /api/items/7` drops what is
-kept for `GET /api/items/7`, and not the list at `/api/items`, which shows the change when its
+kept for `GET /api/items/7`, and the list at `/api/items` only when the write's handler names it
+(`kept.changed(..)` with the list's route, above); otherwise the list shows the change when its
 lifetime ends.
 
 A file (`Media`), a sitemap and `robots.txt` (`seo::File`) are kept as text is: from 1,024
