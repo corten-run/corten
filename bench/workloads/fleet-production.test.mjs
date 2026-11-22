@@ -264,7 +264,7 @@ function unusedRetirement(root, fleet, group) {
   const local = path.join(root, group, `groups-${fleet.round}`), ms = Date.now(), at = new Date(ms).toISOString();
   const state = { ...reservation({ round: fleet.round, commit: fleet.commit, token: fleet.jobs[0].token, group, fleet }),
     provider: fleet.provider, fullGroupQualified: false, status: "retired", createIntentAt: at, deletionIntentAt: at, destroyedAt: at,
-    id: "997", ip: "192.0.2.10" };
+    id: "997", ip: "192.0.2.10", retirement: { kind: "unused", evidenceSha256: "a".repeat(64) } };
   const observation = JSON.stringify({ schema: "benchmark-unused-host/v1", hostId: state.id, unit: state.unit, observedAtMs: ms, unused: true });
   const proof = JSON.stringify(unusedEvidence(observation, state, unusedHostScript(state), ms, ms));
   fs.mkdirSync(local, { recursive: true });
