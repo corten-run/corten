@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
+import { summarizeSamples } from "../catalog/stats.mjs";
 import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupApps } from "./groups.mjs";
 import { admitted, boundedFeatureProfile, boundedQualificationSettings, featureProfile, qualificationSettings, validateActiveQualification, validateQualification } from "./feature-contract.mjs";
 import { aggregateCold, cpuSettings, loadPhases, parsePart, phases, readableSchemas, roundIdentity, sources, splitApps, splitSubject, stageAggregate, timedProfiles, v3Schema } from "./run-contract.mjs";
 import { betweenDroplets, cleanOutcome, differText, outcomeFields, subjectMetrics } from "./split.mjs";
+import { evidenceVersion, maxStatsSamples } from "./raw-contract.mjs";
 const finite = (n, min = 0) => assert.ok(Number.isFinite(n) && n >= min, "missing/invalid measurement");
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "missing/invalid timestamp"); return n; };
 function loadEvidence(p) {
@@ -44,10 +46,18 @@ const stopText = (s) => `its container ${s.oomKilled ? `was OOM-killed (${s.exit
 // spread takes the lower value in each column on its own (req/s and p95 may come from different
 // passes), and one pass has no range.
 const stoppedMark = (n, asked) => n >= asked ? "" : ` (stopped: ${n} of ${asked} passes${n === 2 ? "; the lower of two values per column, not a median" : n === 1 ? "; one pass, no range" : ""})`;
-function statsEvidence(p) {
+function statsEvidence(p, nativeStats) {
   finite(p.cpuAvgPct); finite(p.cpuMaxPct); assert.ok(p.cpuMaxPct >= p.cpuAvgPct);
-  finite(p.memAvgMiB, Number.MIN_VALUE); finite(p.memMaxMiB, p.memAvgMiB);
+  finite(p.memAvgMiB, Number.MIN_VALUE); finite(p.memMaxMiB, Number.MIN_VALUE);
   assert.ok(Number.isSafeInteger(p.samples) && p.samples > 0);
+  if (p.memAvgMiB > p.memMaxMiB) {
+    assert.ok(nativeStats && p.samples <= maxStatsSamples, "missing/invalid measurement");
+    // Floating-point addition and division are monotone here. No sequence with
+    // this sample count and peak can yield a larger mean than an all-peak history.
+    // Native replay still requires exact agreement with the actual Docker samples.
+    const upper = summarizeSamples(Array(p.samples).fill({ cpu: 0, mem: p.memMaxMiB })).memAvgMiB;
+    assert.ok(Number.isFinite(upper) && p.memAvgMiB <= upper, "missing/invalid measurement");
+  }
   assert.ok(Number.isSafeInteger(p.cpuUsec) && p.cpuUsec > 0);
 }
 function hostEvidence(host, tools) {
@@ -101,6 +111,7 @@ function splitEvidence(s, v3, start, end, validateQualificationRecord) {
   return windows;
 }
 function validateApp(s, a, start, end, v3, validateQualificationRecord) {
+  const nativeStats = s.evidenceVersion === evidenceVersion;
   assert.match(a.imageId, /^sha256:[a-f0-9]{64}$/);
   assert.equal(a.builtCommit, s.commit);
   assert.equal(a.builtDirty, false);
@@ -144,9 +155,9 @@ function validateApp(s, a, start, end, v3, validateQualificationRecord) {
         if (!run.stopped) assert.deepEqual(Object.keys(run.phases).sort(), [...phases].sort(), "unexpected/missing run phases");
         for (const phase of phases.filter((p) => run.phases[p])) {
           const p = run.phases[phase];
-          loadEvidence(p); statsEvidence(p); finite(p.perCpuSecond, Number.MIN_VALUE);
+          loadEvidence(p); statsEvidence(p, nativeStats); finite(p.perCpuSecond, Number.MIN_VALUE);
           assert.ok(Math.abs(p.perCpuSecond - p.requests / (p.cpuUsec / 1e6)) < 1e-6, "CPU efficiency contradicts raw counter");
-          if (source === "api") { statsEvidence(p.upstream); assert.equal(p.upstream.highCpu, p.upstream.cpuAvgPct >= 80); }
+          if (source === "api") { statsEvidence(p.upstream, nativeStats); assert.equal(p.upstream.highCpu, p.upstream.cpuAvgPct >= 80); }
           else assert.equal(p.upstream, null);
         }
       }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { summaryFixture, writeSavedFixture } from "./saved-fixture.mjs";
-import { validateSummary } from "./report.mjs";
+import { report, validateSummary } from "./report.mjs";
 import { validateSaved } from "./validate.mjs";
 import { containerReceipt, evidenceVersion, imageReceipt, sourceTree } from "./raw-contract.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { passPlan, stageAggregate, timedProfiles } from "./run-contract.mjs";
 import { boundedFeatureProfile, featureProfile } from "./feature-contract.mjs";
+import { summarizeSamples } from "../catalog/stats.mjs";
 
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 const invalid = (fn) => assert.throws(fn, (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID");
@@ -82,6 +83,48 @@ test("complete native fixture replays every raw profile, pass, phase, gate and c
   const command = spawnSync(process.execPath, ["bench/marketplace/validate.mjs", folder, "r17", commit], { encoding: "utf8", timeout: 30000 });
   assert.equal(command.status, 0, command.stderr); assert.match(command.stdout, /raw saved evidence valid/);
   assert.deepEqual(hashes(), before, "saved validation must not write evidence");
+});
+
+test("native replay admits the producer's decimal sum overshoot, not an inconsistent mean", (t) => {
+  const folder = temporary(t), args = { folder, round: "r17", commit };
+  const s = writeSavedFixture(folder, commit, sourceTree(commit));
+  const phase = s.apps.corten.runs["api-neutral-json"][0].phases.sat64;
+  const log = join(folder, "api/corten/p1-neutral-json/sat64-stats.log");
+  const saved = JSON.parse(readFileSync(`${log}.json`));
+  const names = Object.keys(saved.samples), upstream = names.find((name) => name.endsWith("-upstream"));
+  const start = saved.samples[upstream][0].t;
+  saved.samples[upstream] = Array.from({ length: 31 }, (_, i) => ({ t: start + i * 350, cpu: 100, mem: 100.9 }));
+  const stats = summarizeSamples(saved.samples[upstream]);
+  assert.equal(stats.memAvgMiB, 100.90000000000003);
+  assert.equal(stats.memMaxMiB, 100.9);
+  writeFileSync(log, names.flatMap((Name) => saved.samples[Name].map((p) => JSON.stringify({
+    Name, CPUPerc: `${p.cpu}%`, MemUsage: `${p.mem}MiB / ${Name === upstream ? "512MiB" : "1GiB"}`,
+  }))).join("\n") + "\n");
+  const write = (avg) => {
+    saved.summary[upstream] = { ...stats, memAvgMiB: avg };
+    Object.assign(phase.upstream, saved.summary[upstream]);
+    writeFileSync(`${log}.json`, JSON.stringify(saved));
+    writeFileSync(join(folder, "summary.json"), JSON.stringify(s));
+  };
+  write(stats.memAvgMiB);
+  assert.deepEqual(validateSaved(args), s);
+  assert.match(report(s), /Marketplace v2 r17/);
+  assert.throws(() => validateSummary({ ...s, evidenceVersion: undefined }), /missing\/invalid measurement/);
+  phase.upstream.samples = 1001;
+  assert.throws(() => validateSummary(s), /missing\/invalid measurement/);
+  phase.upstream.samples = stats.samples;
+
+  // Even when both saved summaries agree and the number is within the rounding
+  // envelope, the exact mean still has to agree with the raw Docker samples.
+  write(100.90000000000002);
+  validateSummary(s);
+  assert.throws(() => validateSaved(args), /stats aggregate differs from raw history/);
+
+  for (const bad of [100.90000000000005, 101, 0, -1, Infinity, NaN, undefined]) {
+    write(bad);
+    assert.throws(() => validateSummary(s), /missing\/invalid measurement/);
+    invalid(() => validateSaved(args));
+  }
 });
 
 test("historical native evidence replays, but the two profiles' raw receipts cannot mix", (t) => {
