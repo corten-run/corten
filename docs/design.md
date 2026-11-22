@@ -7662,8 +7662,20 @@ rules something out.
     no room (`refused`), and on the other two as well. A bound at or above +1% on either blocks
     the merge, and a run that fails or cannot be used does not clear it; a bound under +1% clears
     this gate, and shows neither a lower cost nor that layout was the cause.
-    Fresh-start result (`50105442c` against `a0eeeacca`): **not yet recorded; the gate above is
-    open until it is.**
+    Fresh-start result (`50105442c` against `a0eeeacca`, 2026-11-22, 100 pairs a workload, each
+    turn on a newly started build, by the method above on a second quiet host of the same size, a
+    DigitalOcean c-8 in sfo3 with a Xeon Platinum 8358 where the first run's had an 8280, Linux
+    6.12.117 and rustc 1.100.0): the gate is cleared. The median change within a pair in user plus
+    kernel cycles a request, its one-sided 95% bound and range: `json-browser` -0.63% (bound
+    +0.04%, -9.08% to +7.13%), `refused` -0.13% (bound +0.29%, -7.84% to +7.00%), `browser`
+    -0.58% (bound -0.18%, -8.54% to +8.33%) and `gzip` -0.86% (bound -0.59%, -14.45% to
+    +8.61%), with user instructions -0.03% to +0.04% on all four. Both builds' answers were checked
+    before each workload (the same, or the head's brotli 5 smaller where it was to be given, and
+    zstd 1 from both where it found no room), and perf counted every turn for all of it. The first
+    run's bounds on the two, +3.05% and +1.14% with one start a build, did not recur; this run
+    differed from that one in its starts and in its host, so it does not say which, if either,
+    accounts for them. As declared, it clears the gate and shows neither a lower cost nor that
+    layout was the cause.
     The levels'
     bytes and instructions above are a probe's that compresses as `compress::encode` does, whose
     level-1 bytes matched the app's answers, on the catalog benchmark's ten record pages and
@@ -8019,7 +8031,9 @@ rules something out.
     features and with none. 2026-11-22, a kept page's and JSON body's brotli 5 under load on the
     quiet host at `5d72a9315` against `e7e89add8`, and the JSON body under callgrind with its layout
     varied and on a workstation's counters on the same commits, rustc 1.100.0 in rust:1-trixie, jemalloc 5.3.0
-    preloaded.
+    preloaded; 2026-11-22, the same brotli 5 under load at `50105442c` against `a0eeeacca` on a
+    second quiet host (Xeon Platinum 8358, Linux 6.12.117, rustc 1.100.0, jemalloc 5.3.0
+    preloaded), every turn on a newly started build.
 
 ## Rules
 
