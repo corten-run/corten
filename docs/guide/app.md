@@ -1547,8 +1547,10 @@ or at the same moment, that takes the store past its bound drops pages to make r
 thread encodes it before it asks for that room, so in a store at its bound a page can cost the
 thread the encoding and still not keep the bytes, and a page whose brotli did not fit is not
 tried again. A page or body past 32 KiB is given none and keeps the form made for each coding:
-the thread cannot stop an encoding it has started, so held JSON queued meanwhile waits for the
-rest of it, which for a 4 MiB body took about 440 ms on a workstation and for 32 KiB about 2 ms.
+the thread cannot stop a job it has started, so held JSON queued meanwhile waits for the rest
+of it, the store's lock included. On a workstation a 4 MiB body's encoding alone took about
+440 ms; at 32 KiB the whole job took about 2 ms at the median, and about 7 ms when another page
+was being kept into a full store at that moment. The bound limits the job's input, not that wait.
 So the smaller form is best effort, never a promise: the thread comes to a kept
 page's job only when no held JSON waits, so held JSON compressed without a pause can keep it
 waiting for as long as that lasts, past the page's lifetime

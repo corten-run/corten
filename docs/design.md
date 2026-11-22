@@ -7476,9 +7476,9 @@ rules something out.
     So it is best effort: held values compressed without a pause keep it waiting for as long as
     that lasts, past the page's lifetime, and a job whose bytes find no room is not tried again
     for that page. A body past 32 KiB (`BROTLI_MAX` in `kept.rs`) is given none and keeps the
-    form made for each coding: the thread cannot stop an encoding once it has started it, so a
-    held value queued meanwhile waits for the rest of that one job, and past that size the job
-    takes longer than a small held value's own forms do (below). Once it is made, a client that
+    form made for each coding: the thread cannot stop a job once it has started it, so a held
+    value queued meanwhile waits for the rest of that one job, and the bound keeps the job's input
+    small. It bounds that input, not the wait, which takes in the store's lock too (below). Once it is made, a client that
     ranks brotli as high as any coding, as a browser that also takes zstd does, gets it in the
     place of zstd 1, unless the form
     already made for the coding it would get otherwise is no larger: the levels' and codings' sizes
@@ -7516,29 +7516,56 @@ rules something out.
     stays at 1 for the few clients that take nothing else. Made on the request that makes the
     copy, brotli 5 would add 1.01 million instructions to it where zstd 1 adds 0.12 million.
 
-    A held value waits behind at most one kept body's brotli 5, the one running when it is
-    queued, and with the bound that is one of at most 32 KiB: on a workstation, brotli 5 of 32 KiB
-    took 1.8 ms at the median of 45 (1.6 to 6.2 ms), and a held 4 KB JSON value's forms, queued
-    just as such a job started, were made 6.5 ms after (3.9 to 20.5) against 4.2 ms (3.7 to 14.4)
-    on an idle thread in the same runs; its requests get the per-request form until then, as
-    before (0.06 ms of zstd 1 each for it, 0.5 ms for a 79 KB value). Without the bound the
-    default store's largest body, about 4 MiB, held it 476 ms (281 to 942) behind a job that alone
-    took 443 ms (247 to 743), and 512 KiB 46 ms (26 to 91) behind 38 ms, where a held value's own
-    forms take 4.2 ms at 4 KB and 42 ms at 79 KB; past 32 KiB the job takes longer than the
-    smaller of those (64 KiB: 4.3 ms, 3.1 to 31). The bodies that bound leaves out gave up 6% to
+    A held value waits behind at most one kept body's job, the one running when it is queued, and
+    with the bound that job's input is at most 32 KiB; the bound is on that input, not on the wait,
+    which takes in the store's write lock as well. Measured on a workstation, not a quiet host: a
+    probe in the crate keeps a page in a real store, queues the job `Kept::coded` queues for it
+    (`Entry::make_brotli`: the encoding, the store's write lock, the second check, the room and
+    the bytes put in), holds the thread at a fence once the job has started, reads a held JSON
+    value twice as two requests do so that its forms are queued, lets the job go and times until
+    the held value's forms are made. The held value so arrives before the encoding begins and
+    waits for all of the job, the worst case for one job. At 32,768 and 32,767 bytes the job took
+    1.7 to 1.9 ms at the median of 105 (1.4 to 21.5 ms), with room for its bytes and with none,
+    of which what follows the lock (the check, the room, the bytes put in) about 5 µs; a held
+    4 KB value's forms were made 6.2 to 9.0 ms after its second read (4.8 to 35.1) against 4.1
+    to 6.2 ms (2.9 to 36.1) on main in the same setups, where nothing is in its way, and a 79 KB
+    value's 46.5 to 48.6 ms against 43.3 to 46.3. The store's write lock is taken by a page kept
+    into a full store as well, which runs the clock under it: when another thread kept a 4 MiB
+    page into a full default store of about 30,000 pages, each read since the clock last passed,
+    just before the job finished encoding, that insertion held the lock 5.8 to 6.3 ms at the
+    median (4.3 to 63.8 ms) to drop 3,802 pages, and the job waited for it, 6.6 to 7.0 ms at the
+    median (1.5 to 43.9; its bytes then found room in 85 of 420), while the held 4 KB value's
+    forms took 12.3 to 12.6 ms (5.2 to 48.9) against 4.2 to 4.3 ms (2.9 to 78.4) on main, whose
+    held values the same insertion does not hold up (79 KB: 51.4 to 51.8 against 43.3 to 45.8).
+    So on that workstation the longest job a held value waited for was 21.5 ms with no other
+    writer and 43.9 ms behind such an insertion, and the longest a held 4 KB value took was 35.1
+    and 48.9 ms, where main's took up to 36.1 and 78.4 ms in the same setups: the ranges are the
+    busy machine's as much as the change's, and the medians are what it adds, about 2 to 4.5 ms
+    behind a job and about 8 ms behind one that waits for such an insertion. A job can wait for
+    more than one writer, so the wait has no fixed bound, and 32 KiB is the size these were
+    measured at, not a bound on latency past them. A held value's requests get the per-request
+    form until its forms are made, as before (0.06 ms of zstd 1 each for 4 KB, 0.5 ms for 79 KB).
+    Those are the probe's on release builds of this change merged with main (`674892046`) and of
+    main's `153be9116`, five alternated runs of 21 in a Linux container held to four CPUs on a
+    desktop that ran other builds throughout, on synthetic pages (a table of records from a
+    48-word vocabulary) and a JSON array of items: a busy desktop's times, good for their sizes
+    and ratios, not a cost per request.
+
+    Before the bound, an earlier probe (`cde42e710` against main's `a0eeeacca`, the same machine,
+    five alternated runs of 11 and three runs of 15 for the sizes between) timed a job's encoding
+    and its copy, not the lock or the bytes put in: behind the default store's largest body, about
+    4 MiB, a held 4 KB value's forms were made 476 ms (281 to 942) after its second read, the job
+    alone taking 443 ms (247 to 743), and behind 512 KiB 46 ms (26 to 91), the job 38 ms, where a held value's own forms take
+    4.2 ms at 4 KB and 42 ms at 79 KB; brotli 5 of 64 KiB took 4.3 ms (3.1 to 31) and of 32 KiB
+    1.8 ms (1.6 to 6.2). 32 KiB is the largest of the sizes tried whose encoding stayed under a
+    small held value's own forms, a choice among those synthetic pages, not a size past which
+    every body's encoding takes longer. The bodies that bound leaves out gave up 6% to
     9% of their bytes: brotli 5 against zstd 1 sent 12,852 bytes against 14,170 at 64 KiB, 99,333
     against 105,463 at 512 KiB and 778,799 against 831,796 at 4 MiB less 2 KiB, where it sends
-    6,628 against 7,402 at 32 KiB and 1,072 against 1,232 at 4 KiB. Those are a probe's in the
-    crate (`cde42e710` and main's `a0eeeacca`, release builds, five alternated runs of 11 in a
-    Linux container held to four CPUs on a desktop that ran other builds throughout, then three
-    runs of 15 of `cde42e710` for the sizes between): it queues a kept body's job as
-    `Entry::make_brotli` makes it (brotli 5, copied to its length), waits for the thread to start
-    it, reads a held value twice as two requests do and times until its forms are made, on
-    synthetic pages (a table of records from a 48-word vocabulary) and a JSON array of items; the
-    timings are a busy desktop's, good for their sizes and ratios, not a cost per request. The
-    bound changes neither the thread nor the encoding, so its result is the 32 KiB case above and,
-    past it, no job: `tests/cache.rs` checks that a body one byte past it queues none however
-    often a browser asks and one at it is queued on its second answer.
+    6,628 against 7,402 at 32 KiB and 1,072 against 1,232 at 4 KiB.
+    `tests/cache.rs` checks that a body of 32,769 bytes queues none however often a browser asks,
+    that one of 32,768 is queued on its second answer and not its first, and that the bound is the
+    body's length, not its compressed form's.
 
     A kept JSON, text or file body is bytes made once and sent many times too, and its compressed
     forms are kept the same way, so it gets its brotli 5 by the same rule and in the same queue:
@@ -7736,16 +7763,16 @@ rules something out.
     contributors to the JSON body's cycles on the quiet host, which saw one start of each build,
     and, with no diagnostic run of its own, to the refused page's; the measured regression is not
     yet explained or ruled out.
-    The test is a second run on the quiet host of this change's code as of `50105442c` (the
+    The test declared then was a second run on the quiet host of this change's code as of `50105442c` (the
     commits after it up to `cde42e710` change tests, comments and documentation only) against main's `a0eeeacca`, with every
     turn on a newly started build, 100 pairs a workload, the order turned about each pair and the
-    workloads and margin of the first: this change merges only if the one-sided 95% bound on the
+    workloads and margin of the first: this change was to merge only if the one-sided 95% bound on the
     median change within a pair in user plus kernel cycles a request is under +1% on both the
     kept JSON body given to a browser's codings (`json-browser`) and the page whose brotli found
     no room (`refused`), and on the other two as well. A bound at or above +1% on either blocks
-    the merge, and a run that fails or cannot be used does not clear it; a bound under +1% clears
-    this gate, and shows neither a lower cost nor that layout was the cause.
-    Fresh-start result (`50105442c` against `a0eeeacca`, 2026-11-22, 100 pairs a workload, each
+    the merge, and a run that fails or cannot be used does not clear it; a bound under +1% cleared
+    that gate, and shows neither a lower cost nor that layout was the cause.
+    Fresh-start result, historical (`50105442c` against `a0eeeacca`, 2026-11-22, 100 pairs a workload, each
     turn on a newly started build, by the method above on a second quiet host of the same size, a
     DigitalOcean c-8 in sfo3 with a Xeon Platinum 8358 where the first run's had an 8280, Linux
     6.12.117 and rustc 1.100.0): the declared numerical gate is met on all four. The median change
@@ -7768,17 +7795,31 @@ rules something out.
     `tests/kept_memory.rs` does with its `/mark` page. The first run's bounds on the two, +3.05%
     and +1.14% with one start a build, did not recur; this run differed from that one in its
     starts, its host and the commits on both sides, so it does not say which, if any, accounts for
-    them. As declared, a bound under +1% on all four clears the gate, with `refused`'s setup
+    them. As declared, a bound under +1% on all four cleared that gate, with `refused`'s setup
     verified only as far as above; it shows neither a lower cost nor that layout was the cause.
-    Neither run measures `dff0545ad`, which adds the bound on a body's size: an answer given
-    again runs the same code for a body of up to 32 KiB, and a page made and kept one comparison
-    more, but the binary differs, so both runs stay results for their own commits.
-    Neither run on a quiet host counted user first-level instruction-cache misses, which
-    CONTRIBUTING.md asks for as a diagnostic when code is added or moved and makes no exception
-    for; this is recorded as one. Each turn counted `cycles:u`, `cycles:k` and `instructions:u`
-    alone, so that no turn's counters were multiplexed and perf ran all three for the whole of
-    every turn; the simulated instruction misses above (callgrind's, 1,811 against 1,798 an
-    answer) are another measure and do not stand in for them. Each workload's 100 per-pair changes
+    Neither run measures this change as it would merge, so both are historical, results for their
+    own commits only: `dff0545ad` adds the bound on a body's size (an answer given again runs the
+    same code for a body of up to 32 KiB, and a page made and kept one comparison more, but the
+    binary differs), and main has since changed the kept store's key and lookup and the
+    dependency lock, merged here at `674892046`. The merge candidate is gated by a run of its own,
+    the third: this change merged with main's `153be9116` against that main, the same four
+    workloads with every turn on a newly started build, 100 pairs a workload and the same margin,
+    a one-sided 95% bound under +1% in user plus kernel cycles a request on each; a bound at or
+    above it, or a workload that fails or cannot be used, blocks the merge. In it `refused` is
+    fenced before every timed turn: a second app in the probe's process keeps a page of its own
+    and is asked for it twice, which queues that page's brotli 5 behind the refused page's on the
+    one thread, and the port opens only once that page is given in brotli, so the refused page's
+    job has run; the refused page is then asked for once more and must still be given its kept
+    zstd 1, on every start of both builds. A second pass of 30 pairs a workload counts user
+    first-level instruction-cache misses (`L1-icache-load-misses:u`) with `instructions:u`,
+    apart from the cycles so that neither pass's counters are multiplexed, as a diagnostic held to
+    no margin. That run is prepared and has not run; until it clears the margin this change does
+    not merge. Neither run so far on a quiet host counted user first-level instruction-cache
+    misses, which CONTRIBUTING.md asks for as a diagnostic when code is added or moved: each turn
+    counted `cycles:u`, `cycles:k` and `instructions:u` alone, so that no turn's counters were
+    multiplexed and perf ran all three for the whole of every turn; the simulated instruction
+    misses above (callgrind's, 1,811 against 1,798 an answer) are another measure and do not stand
+    in for them, and the third run's second pass counts them. Each workload's 100 per-pair changes
     in both runs are listed in the description of
     [#1846 Send a kept page in brotli 5, made off the request after its second answer](https://github.com/corten-run/corten/pull/1846).
     The levels'
@@ -8146,9 +8187,9 @@ rules something out.
     where the wait and not the compression is what a kept body saves (the benchmark's handler
     reads memory, and the rule for bodies is drawn from it); a route of a few large bodies
     among many small, in cycles (how often it leaves the store out is reasoned from the run's
-    length); the time a held value waits for the kept answer's brotli the thread is making
-    when it is queued, which is one job at most (reasoned from the queues; its instructions are
-    above); how often an answer in an app's store at its bound goes without its brotli for want
+    length); the time a held value waits for the kept answer's job the thread is running
+    when it is queued on a quiet host (it was timed on a workstation, above), and behind a job
+    that waits for more than one writer to the store; how often an answer in an app's store at its bound goes without its brotli for want
     of room; how the URLs of an app in use are spread,
     so how often one first asked for in a full store is asked for again (the simulation's
     spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
@@ -8297,7 +8338,9 @@ rules something out.
     preloaded), every turn on a newly started build; 2026-11-22, how long a held value waits
     behind a kept brotli 5, by the probe above at `cde42e710` and `a0eeeacca` with rustc 1.99.1
     and the same brotli and zstd, and the bound's counts at `dff0545ad` under callgrind (valgrind
-    3.24.0) with rustc 1.100.0 in rust:1-trixie.
+    3.24.0) with rustc 1.100.0 in rust:1-trixie; 2026-11-22, how long a held value waits behind a
+    kept page's whole job, its lock and its bytes put in included, at `674892046` against
+    `153be9116` by the second probe above, with rustc 1.99.1.
 
 ## Rules
 
