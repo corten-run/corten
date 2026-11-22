@@ -2721,13 +2721,15 @@ async fn a_public_json_or_text_answer_is_kept_and_given_again() {
 
 /// A kept JSON or text body's compressed forms are a kept page's: given brotli made at
 /// `Level::Kept` after its second answer to a client that takes brotli, by no request, so a
-/// browser gets it from then on with the same tag, and one that takes only gzip gets what was
-/// made for gzip. A data client's copy (`Accept: application/json` first) is kept apart, so it
-/// counts its own answers toward its own brotli.
+/// browser gets it once it is made with the same tag, and one that takes only gzip gets what was
+/// made for gzip. Its brotli is queued on that second answer exactly: not on the handler's, which
+/// is the first, nor on an answer in no coding between them, and once. A data client's copy
+/// (`Accept: application/json` first) is kept apart, so it counts its own answers toward its own
+/// brotli.
 #[cfg(all(feature = "json", feature = "compress"))]
 #[tokio::test]
 async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
-    use crate::compress::{encode, Coding, Level};
+    use crate::compress::{encode, Coding, Level, Turn};
     let minute = Duration::from_secs(60);
     let runs = Runs::default();
     let (json_ran, text_ran) = (runs.clone(), runs.clone());
@@ -2744,10 +2746,22 @@ async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
     let router = App::new(Routes::from(routes)).router();
     let browser = [("accept-encoding", "gzip, deflate, br, zstd")];
     let data = [("accept-encoding", "gzip, deflate, br, zstd"), ("accept", "application/json")];
+    // The kept answers' brotli jobs asked of the compression thread's queue on this thread, each
+    // given to it.
+    let queued = std::rc::Rc::new(std::cell::Cell::new(0));
+    let count = queued.clone();
+    crate::compress::QUEUEING.set(Some(Box::new(move |turn| {
+        if turn == Turn::Kept {
+            count.set(count.get() + 1);
+        }
+        true
+    })));
     for (path, asked) in [("/items", &browser[..]), ("/text", &browser[..]), ("/items", &data[..])] {
         let ran = runs.count();
+        let before = queued.get();
         let (_, first, fast) = fetch(&router, "GET", path, asked).await;
         assert_eq!(first[header::CONTENT_ENCODING], "zstd", "{path} {asked:?}: the handler's answer");
+        assert_eq!(queued.get(), before, "{path} {asked:?}: not queued on the first answer");
         let identity: Vec<_> = asked
             .iter()
             .copied()
@@ -2755,8 +2769,14 @@ async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
             .chain([("accept-encoding", "identity")])
             .collect();
         let (_, _, plain) = fetch(&router, "GET", path, &identity).await;
+        assert_eq!(queued.get(), before, "{path} {asked:?}: an answer in no coding does not count");
         let better = encode(Coding::Brotli, &plain, Level::Kept);
         assert!(better.len() < fast.len(), "{path}: {} of {}", better.len(), fast.len());
+        let (_, second, again) = fetch(&router, "GET", path, asked).await;
+        assert!(second.contains_key(header::AGE), "{path} {asked:?}: kept {second:?}");
+        assert_eq!(second[header::CONTENT_ENCODING], "zstd", "{path} {asked:?}: made by no request");
+        assert_eq!(again.as_ptr(), fast.as_ptr(), "{path} {asked:?}: the handler's answer's bytes");
+        assert_eq!(queued.get(), before + 1, "{path} {asked:?}: queued on the second answer");
         let started = std::time::Instant::now();
         let (headers, given) = loop {
             let (_, headers, given) = fetch(&router, "GET", path, asked).await;
@@ -2776,8 +2796,10 @@ async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
             asked.iter().copied().filter(|(name, _)| *name != "accept-encoding").chain([("accept-encoding", "gzip")]).collect();
         let (_, headers, _) = fetch(&router, "GET", path, &gzip).await;
         assert_eq!(headers[header::CONTENT_ENCODING], "gzip", "{path} {asked:?}");
+        assert_eq!(queued.get(), before + 1, "{path} {asked:?}: queued once");
         assert_eq!(runs.count() - ran, 1, "{path} {asked:?}: one run for all of them");
     }
+    crate::compress::QUEUEING.take();
 }
 
 /// A whole body is kept where the app compresses it: from 1,024 bytes, in a build that

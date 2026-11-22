@@ -7553,8 +7553,9 @@ rules something out.
     29,838 against 29,566, +272 (+0.92%), and gzip alone 29,359 against 29,312, +47 (+0.16%).
     One thread's count does not show what the
     two writes cost where several cores answer the same page, which no run here measured. Answers
-    whose work this change leaves alike, or adds a few comparisons to, differ by -211 to +254, so
-    these counts move with something beside that work; it is the allocator's in part: with
+    whose work this change leaves alike, or adds a few comparisons to, differ by -211 to +254 in
+    the rounds before the merge with `04c209fca` and by +47 to +272 after it, so these counts
+    move with something beside that work; it is the allocator's in part: with
     glibc's fast bins off (`GLIBC_TUNABLES=glibc.malloc.mxfast=0`, one run each, `9831ef711`
     against `564034b86`) the browser's
     difference is +27 (29,531 against 29,504), zstd's alone +11, gzip's alone -126 and the page
@@ -7809,8 +7810,9 @@ rules something out.
     and nothing a page's `GET` runs. 2026-11-21, a kept page's brotli 5 with rustc 1.100.0, brotli
     9.1.3, zstd 0.14.4 (libzstd 1.5.7) and flate2 1.1.11 (miniz_oxide 0.9.1): the probe on
     `b5324cbae`, `tests/kept_coding_cost.rs` under callgrind (valgrind 3.24.0) on `22fddd6da`,
-    `918ba8956` and `564034b86`, on `ae3634e49` and `04c209fca` for a kept page and a kept JSON
-    body, and with fast bins off on `9831ef711` and `564034b86`, in
+    `918ba8956` and `564034b86`, on `141a63084`, `d8169356a` and `687c75b63` for the hit that
+    reads a weight only when zstd won, on `ae3634e49` and `04c209fca` for a kept page and a kept
+    JSON body, and with fast bins off on `9831ef711` and `564034b86`, in
     rust:1-trixie with glibc's allocator, and `tests/kept_memory.rs` at `9831ef711`, with all
     features and with none.
 

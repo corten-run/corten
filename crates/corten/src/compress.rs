@@ -18,11 +18,14 @@
 //! with zstd 1 (a Linux container on a busy desktop, five runs, medians). brotli 11 would take
 //! about 194 ms (one run on Windows), too long for a value that changes while the app runs.
 //! An answer the app keeps ([`crate::kept`]: a page, or a whole JSON or text body) has each coding
-//! made once at the per-request level, by the first request that asks for it, and brotli 5 made on
-//! that same thread, queued on its second
-//! compressed answer to a client that ranks brotli first, when no held value waits: from then on
-//! such a client gets brotli 5 in the place of zstd 1 when it is smaller, 18% fewer bytes on a
-//! 4.4 KB page, and no request waits for it ([`Level::Kept`]).
+//! made once at the per-request level, by the first request that asks for it. Its brotli 5 is
+//! made by no request but by the thread that compresses held JSON, when no held value waits:
+//! each kept copy's second compressed answer to a client that ranks brotli as high as any coding
+//! queues it there (an answer in no coding, or a 304, does not count, and one the full queue
+//! refused leaves it to the next such answer). It is best effort: it is not made for a copy that
+//! no longer stands, nor kept where the store has no room left for it. Once it is kept, later
+//! such answers get it in the place of the form made for their coding when that is larger, 18%
+//! fewer bytes than zstd 1 on a 4.4 KB page ([`Level::Kept`]).
 //!
 //! Event streams ([`crate::live`], feeds) are compressed as one stream per connection, flushed
 //! after every event so it arrives at once, with the context kept between events: a redraw that
