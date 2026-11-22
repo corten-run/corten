@@ -193,6 +193,9 @@ thread_local! {
     /// Run by [`Entry::make_brotli`] on its thread once the page was found kept under the store's
     /// lock and before its brotli is put with it: what a test makes happen at that moment.
     static ADMITTING: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
+    /// Run by [`Entry::make_brotli`] on its thread once the page was found kept before the
+    /// encoding and just before it starts: what a test makes happen while the bytes are made.
+    static ENCODING: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
 }
 
 /// A copy of a kept answer's `head`, each line where it was, with room for [`ADDED`] more
@@ -784,6 +787,10 @@ impl Entry {
         let kept = || self.size.load(Ordering::Acquire) != GONE && self.stands(&store, Instant::now());
         if !kept() {
             return;
+        }
+        #[cfg(test)]
+        if let Some(then) = ENCODING.take() {
+            then();
         }
         // A copy of its own length, as each coding's bytes are (`Kept::coded`).
         let made = Bytes::copy_from_slice(&crate::compress::encode(Coding::Brotli, &self.body, Level::Kept));
@@ -2316,12 +2323,14 @@ mod tests {
 
     /// A page's brotli queued for the compression thread is not made, counted or given once the
     /// page no longer stands (a write to its path, its lifetime over, the store gone) when the
-    /// thread comes to it, though nothing looked the page up since: it takes no room from a page
-    /// that stands, and the page kept in its place is made and given its own.
+    /// thread comes to it, though nothing looked the page up since and the store has room for it:
+    /// the check before the encoding stops it, so no dead work holds the thread, and the page kept
+    /// in its place is made and given its own. (A write while the bytes are made is the check under
+    /// the lock's, below; no room at all is `a_kept_answer_s_brotli_that_found_no_room_is_not_queued_again`.)
     #[cfg(feature = "compress")]
     #[test]
     fn a_kept_answer_s_brotli_is_not_made_once_it_no_longer_stands() {
-        let bound = 64 << 10;
+        let bound = 1 << 20;
         for ended in ["written", "past its lifetime", "the store gone"] {
             let answers = Answers::new(bound).expect("a bound");
             let body = a_page(0);
@@ -2343,14 +2352,12 @@ mod tests {
             }
             assert_eq!(stale.coded.promotion.load(Ordering::Acquire), QUEUED, "{ended}: queued");
             let done = queued_before_done();
-            // A page that stands, with less room left beside it than the brotli would take.
-            let other = bound - answers.bytes() - OVERHEAD - 16;
-            let standing = answers.keep(entry(&answers, "/c", None, 60, other));
             if ended == "written" {
                 answers.count(count_of(b"/a"));
             }
             assert_eq!(stale.stands(&answers.0, Instant::now()), ended == "the store gone", "{ended}");
             let before = answers.bytes();
+            assert!(bound - before > 4 * body.len(), "{ended}: room for its brotli, so only the page's checks refuse it");
             let store = Arc::downgrade(&answers.0);
             if ended == "the store gone" {
                 drop(answers);
@@ -2364,16 +2371,21 @@ mod tests {
             done.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
             assert!(stale.coded.brotli.get().is_none(), "{ended}: not made");
             assert_eq!(answers.bytes(), before, "{ended}: nor counted");
+            // Not encoded either: the job run again on this thread, where a test sees its steps,
+            // stops at the check before the encoding.
+            ENCODING.set(Some(Box::new(|| ())));
+            ADMITTING.set(Some(Box::new(|| ())));
+            stale.make_brotli();
+            assert!(ENCODING.take().is_some(), "{ended}: the thread stopped before it encoded");
+            assert!(ADMITTING.take().is_some(), "{ended}: and never came to the admission");
+            assert!(stale.coded.brotli.get().is_none() && answers.bytes() == before, "{ended}");
             // Nor queued again: a later answer finds it was, asks nothing of the queue, and
             // writes nothing.
             let asked = the_queue_answers(&[]);
             Kept::coded(&extensions, &stale.body, accepts("br"), Coding::Brotli, || unreachable!("{ended}: made already"));
             crate::compress::QUEUEING.take();
             assert_eq!((asked.get(), stale.coded.promotion.load(Ordering::Acquire)), (0, QUEUED), "{ended}");
-            assert!(answers.find("/c", None, None, false).is_some(), "{ended}: the page that stands is kept");
-            // The page kept in its place, of other bytes, is made and given its own brotli, in
-            // room the other page leaves.
-            answers.0.drop_entry(&mut answers.0.inner.write().unwrap(), &standing);
+            // The page kept in its place, of other bytes, is made and given its own brotli.
             let body = a_page(1);
             let fresh = answers.keep(|place| Entry { body: body.clone(), ..entry(&answers, "/a", None, 60, body.len())(place) });
             assert_eq!(answers.find("/a", None, None, false).expect("the new page").0.body, body, "{ended}");
@@ -2388,6 +2400,29 @@ mod tests {
             assert_eq!(brotli, crate::compress::encode(Coding::Brotli, &body, Level::Kept), "{ended}");
             assert_eq!(Kept::coded(&extensions, &fresh.body, accepts("br"), Coding::Brotli, || unreachable!()).0, brotli);
         }
+    }
+
+    /// The check under the store's lock is the one that stops a page written while its brotli is
+    /// made: the page stood when the thread came to it, so it was encoded, and the store has room
+    /// for the bytes, but none are put with it or counted, and the thread never comes to the
+    /// admission.
+    #[cfg(feature = "compress")]
+    #[test]
+    fn a_page_written_while_its_brotli_is_made_is_not_given_it() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let body = a_page(0);
+        let page = answers.keep(|place| Entry { body: body.clone(), ..entry(&answers, "/a", None, 60, body.len())(place) });
+        let before = answers.bytes();
+        assert!((1 << 20) - before > 4 * body.len(), "room for its brotli");
+        let store = Answers(answers.0.clone());
+        ENCODING.set(Some(Box::new(move || store.count(count_of(b"/a")))));
+        ADMITTING.set(Some(Box::new(|| ())));
+        page.make_brotli();
+        assert!(ENCODING.take().is_none(), "the page stood before the encoding, so it was encoded");
+        assert!(ADMITTING.take().is_some(), "the check under the lock stopped it before the admission");
+        assert!(page.coded.brotli.get().is_none(), "nothing put with it");
+        assert_eq!(answers.bytes(), before, "nor counted");
+        assert!(!page.stands(&answers.0, Instant::now()), "written since");
     }
 
     /// A page's brotli at `Level::Kept` takes only the room the bound has left: it drops no other
