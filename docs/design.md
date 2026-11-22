@@ -7345,7 +7345,9 @@ rules something out.
     a CDN's caching header, as a page whose render drew the key is. A page's render marks the key it drew; markup rendered any other way (into JSON
     or text, into a file a page route answers, or to a string a page holds as `raw` markup)
     carries no mark, so every `Public` route's handler is watched (its own polls) for one being
-    drawn, and the watch marks the answer (`cache::Unrepeatable`) as a page's render does.
+    drawn, and the watch marks the answer (`cache::Unrepeatable`) as a page's render does. It
+    cannot tell a key placed in the answer from one drawn and dropped, so either makes the answer
+    private.
     It wraps a route whose answer type is `Public`, known when the route is made, in every
     build and whatever the store does (none kept, `corten dev`, a body route that leaves the
     store out, a build without `compress`); no other route pays for it. Holding the handler's
