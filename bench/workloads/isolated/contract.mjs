@@ -31,6 +31,7 @@ const root = fileURLToPath(new URL("../../../", import.meta.url));
 // reviewed source pin; a missing/invalid dependency inside a present parser fails.
 const clientParser = existsSync(new URL("../../client-heavy/contract.mjs", import.meta.url))
   ? await import("../../client-heavy/contract.mjs") : null;
+export const clientComparisonRecipe = clientParser?.comparisonProfile;
 const git = (args, input) => execFileSync("git", args, { cwd: root, input, windowsHide: true,
   env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" },
   maxBuffer: 64 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] });
@@ -110,6 +111,7 @@ export const recipes = freeze({
   "mixed-measure": ["mixed-production"],
   "mixed-production-measure": ["mixed-production"],
   "native-feed-measure": ["live-delivery", "recoverable-live"],
+  ...(clientComparisonRecipe ? { [clientComparisonRecipe]: ["client-heavy"] } : {}),
 });
 function request(value) {
   exact(value, ["group", "round", "commit", "recipe"], "request");
@@ -191,9 +193,14 @@ function native(group, round, recipe, reviewId) {
       defaults = { rows: d.rows, large: d.large, append: d.append, cards: d.cards, seed: d.seed, cleanupMs: d["cleanup-ms"],
         observationMs: d["observation-ms"], timeoutMs: d["timeout-ms"], cargo: d.cargo };
       args.push("--out", artifactRoot);
+      if (recipe === clientComparisonRecipe) args.push("--profile", clientComparisonRecipe);
       const actual = clientParser.options(args), value = actual.invocation.effective;
       effective = { rows: value.rows, large: value.large, append: value.append, cards: value.cards, seed: value.seed,
         cleanupMs: value["cleanup-ms"], observationMs: value["observation-ms"], timeoutMs: value["timeout-ms"], cargo: actual.cargo, out: artifactRoot };
+      if (actual.measurementOrder) {
+        Object.assign(effective, { profile: value.profile, measurementOrder: actual.measurementOrder });
+        changes.push({ profile: value.profile });
+      }
       settings = actual.workload;
     } else {
     defaults = { rows: 14, large: 110, append: 7, cards: 24, seed: 7, cleanupMs: 2000, observationMs: 100, timeoutMs: 30000, cargo: "cargo" };

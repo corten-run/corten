@@ -9,7 +9,7 @@ import { hostDurableWriter } from "./host-durable-writer.mjs";
 import { hostTerminalClock } from "./host-observation.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { jsonPreparationInvocation, jsonPreparationRound } from "../registry.mjs";
-import { executableReference, participantExecutables } from "./participant-executables.mjs";
+import { executableProofFailure, executableProofFailureMessage, executableReference, participantExecutables } from "./participant-executables.mjs";
 import { browserContainers } from "../../fullstack-browser/contract.mjs";
 import { commandCpuSet as boundCommandCpuSet, cpuRanges, cpuSetWithin, liveApplication, liveGroup, nativeControlPartition } from "./native-roles.mjs";
 
@@ -386,8 +386,10 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   function failure(phase, error, timing) {
     // Retain fixed public codes only, never messages, stacks, paths or arbitrary
     // error properties. First/last plus a count bound disk and memory on failure.
-    const code = ["ENOENT", "ESRCH", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ERR_ASSERTION"].includes(error?.code) ? error.code : "unknown";
-    const entry = { phase, operation: observationOperations.get(error) ?? sampleOperation, code,
+    const proofFailure = phase === "executables" ? error : null;
+    const code = proofFailure?.code ?? (["ENOENT", "ESRCH", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ERR_ASSERTION"].includes(error?.code) ? error.code : "unknown");
+    const entry = { phase, operation: proofFailure?.operation ?? observationOperations.get(error) ?? sampleOperation, code,
+      ...(proofFailure?.executableRef ? { executableRef: proofFailure.executableRef } : {}),
       at: Date.now(), samples, lastSampleAt, ...(timing?.attempts ? { catalogCensus: timing } : {}) };
     observerFailures.count++; observerFailures.first ??= entry; observerFailures.last = entry;
   }
@@ -468,7 +470,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     // Explicitly await appends in controls; enqueue/capture is not storage proof.
     drain() { return writer.drain(); },
     get pendingStorage() { return writer.settled; },
-    async finish(result, retainTerminalClock = false) {
+    async finish(result, retainTerminalClock = false, onSettled) {
       assert.equal(closed, false); closed = true; clearInterval(timer); releaseStartup();
       let empty = false;
       try { sample(); sampleOperation = "terminal-empty"; empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0"); }
@@ -477,9 +479,15 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       try { stored = await writer.finish(); assert.equal(stored.samples, samples); }
       catch (error) { pending?.close(); throw error; }
       if (pending) {
-        sampleOperation = "executable-proof";
-        try { durable(join(directory, "executables.json"), serial(pending.finish())); }
-        catch (error) { observerError = "host-executable-proof-incomplete"; failure("executables", error); }
+        sampleOperation = "executable-hash-helper";
+        try {
+          const proof = pending.finish();
+          sampleOperation = "executable-proof-publish";
+          durable(join(directory, "executables.json"), serial(proof));
+        } catch (error) {
+          observerError = "host-executable-proof-incomplete";
+          failure("executables", executableProofFailure(error?.operation ?? sampleOperation, error, error?.executableRef));
+        }
       }
       // An already-cancelled, fully drained command keeps its old nonqualifying
       // evidence contract. A new abort during asynchronous finish cannot seal
@@ -507,6 +515,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         throw new Error("host observation terminal storage incomplete");
       }
       if (empty) rmdirSync(join(root, path)); // Own empty child only; never recursive cleanup.
+      if (terminal) onSettled?.(); // Descriptors have settled even if their proof failed.
       return tree(directory);
     },
   });
@@ -547,6 +556,11 @@ export function inspectLifetime(binding, invocation, directory, expected) {
   assert.equal(context.group, binding.request.group); assert.equal(context.round, binding.request.round); assert.equal(context.commit, binding.request.commit);
   assert.equal(terminal.bootId, context.bootId); assert.equal(terminal.attached, true);
   assert.deepEqual(terminal.command, expected.result);
+  if (terminal.observerError === "host-executable-proof-incomplete") {
+    // Sealing is the final observer operation; a prior census fault remains
+    // independently recorded in first. Only fixed proof diagnostics are printed.
+    throw new Error(executableProofFailureMessage(terminal.observerFailures?.last));
+  }
   const ancestorPaths = [];
   for (let p = context.parent; ; p = posix.dirname(p)) { ancestorPaths.push(p); if (p === "/") break; }
   assert.deepEqual(context.ancestors.map((g) => g.path), ancestorPaths);

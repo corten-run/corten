@@ -11,7 +11,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
-import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
+import { fleetCli, fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
@@ -808,6 +808,28 @@ const catalogFailure = (diagnostic) => (error) => {
   if (diagnostic) assert.deepEqual(error.providerDiagnostic, diagnostic);
   return true;
 };
+
+test("prepare CLI distinguishes provider startup, catalog validation and disconnect during the catalog read", { timeout: 15000 }, async (t) => {
+  for (const [mode, diagnostic] of [
+    ["startup-refusal", "first-account-read-or-worker-start; transport-close-failed; custody-uncertain"],
+    ["catalog-shape", "catalog-validation; catalog-response"],
+    ["catalog-disconnect", "catalog-read; transport-close-failed; custody-uncertain"],
+  ]) await t.test(mode, async (t) => {
+    const p = fixture(t), exitCode = realCatalog(p, mode), errors = [];
+    const disconnected = mode !== "catalog-shape";
+    assert.equal(await fleetCli(p.prepareArgs, { ...p.deps, writeError: (line) => errors.push(line) }), 2);
+    assert.deepEqual(errors, [`fleet-placement-preflight-failed: ${diagnostic}`]);
+    assert.equal(exitCode(), disconnected ? 2 : 0);
+    assert.deepEqual(fs.readdirSync(p.h.base), disconnected ? [".fleet-operation.lock"] : []);
+    assert.deepEqual(p.events().filter((row) => row.boundary === "provider").map((row) => [row.method, row.path]),
+      mode === "startup-refusal" ? [] : [["GET", "/v2/account"], ["GET", "/v2/sizes?page=1&per_page=200"]]);
+    if (mode === "startup-refusal") {
+      assert.ok(p.events().some((row) => row.boundary === "before-provider-boot"));
+      assert.ok(!p.events().some((row) => row.boundary === "synthetic-credential"));
+    }
+    assert.equal(p.workers.length, 0);
+  });
+});
 
 test("prepare can retry a settled invalid listing, but retains the lock on disconnect", { timeout: 15000 }, async (t) => {
   for (const [mode, diagnostic] of [["catalog-shape", refusedCatalog], ["catalog-disconnect", null]]) await t.test(mode, async (t) => {

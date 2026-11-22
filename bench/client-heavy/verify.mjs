@@ -342,7 +342,7 @@ export async function validateSaved(request) {
       return JSON.parse(bytes.toString()).schema;
     } finally { await handle.close(); }
   });
-  if (["client-heavy-native/v2", "client-heavy-native/v3"].includes(version)) return (await import("./verify-v2.mjs")).validateV2(request);
+  if (["client-heavy-native/v2", "client-heavy-native/v3", "client-heavy-native/v4"].includes(version)) return (await import("./verify-v2.mjs")).validateV2(request);
   if (report.errors.length) return report;
   const files = await check("artifacts", () => snapshot(request.folder));
   if (!files) return report;
