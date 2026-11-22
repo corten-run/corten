@@ -111,6 +111,12 @@ Campaign rN maps to catalog cN, JSON prepare j(2N), JSON timing j(2N+1), marketp
 mixed/browser/client/hardening wN and live/recoverable rN. N is 17..1000000000. Existing
 native output for any reserved round prevents launch; there is no semantic retry.
 
+Both live runners write to their fixed native result roots. Once the command's terminal
+lifetime is proved, the campaign transfers only that round's result tree into the external
+phase archive and seals its manifest before rechecking the complete source checkout. The
+same intake retains failed-app output. Other tracked or untracked changes still block
+finalization. Historical result paths, standalone commands and the archive layout are unchanged.
+
 `campaign-contract.mjs` retains the complete registry and hashes the actual nine source
 procedure files alongside all measured sources. The production map uses native defaults
 except the existing marketplace-short-window, explicit native-feed-measure for both live

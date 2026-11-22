@@ -7,12 +7,12 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mock, test } from "node:test";
 import * as evidence from "./evidence.mjs";
 import * as contracts from "./campaign-contract.mjs";
-import { groupNames } from "../registry.mjs";
+import { groupNames, nativeArtifactRoot } from "../registry.mjs";
 import { fakeChild } from "./test-fixtures/process.mjs";
 import * as audit from "./test-fixtures/campaign-audit.mjs";
 import * as nativeReplay from "./native-replay.mjs";
@@ -30,6 +30,9 @@ let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observat
 let lifetimeStartup;
 let lifetimeRun;
 let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTicks, settleSurvives;
+let liveOutput;
+const sourceGit = (cwd, ...args) => childProcess.execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
+const sourceStatus = (cwd) => sourceGit(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all");
 mock.module("./control-admission.mjs", { exports: { ...controlAdmission,
   beginControlWindow(binding) {
     assert.equal(binding.round, "r21"); controlWindows.push("open");
@@ -45,7 +48,11 @@ mock.module("./evidence.mjs", { namedExports: { ...evidence,
   },
 } });
 mock.module("./worker.mjs", { namedExports: {
-  verifyWorkingSources(binding) { assert.ok(isDeepStrictEqual(binding, expectedPlan.bindings[0]), "working source binding differs"); if (mode === "source-changed") throw new Error("working source differs"); },
+  verifyWorkingSources(binding) {
+    assert.ok(isDeepStrictEqual(binding, expectedPlan.bindings[0]), "working source binding differs");
+    if (mode === "source-changed") throw new Error("working source differs");
+    if (liveOutput) assert.equal(sourceStatus(liveOutput.checkout), "", "binding requires a clean committed checkout, including untracked files");
+  },
   matchesWorkingSource: () => true,
 } });
 function jsonPhase(plan, phase, receiptPath) {
@@ -160,10 +167,11 @@ mock.module("./native-replay.mjs", { exports: { ...nativeReplay,
   },
 } });
 function completeNative(binding) {
-  return { status: binding.request.group === "live-delivery" ? "failed" : "verified",
+  const failedLiveApp = liveOutput ? liveOutput.exit === 1 : binding.request.group === "live-delivery";
+  return { status: failedLiveApp ? "failed" : "verified",
     attemptComplete: true, cleanupComplete: true, resources: "verified",
     ...(binding.request.group === "hardening" ? { comparisonEligibleApps: [] } : {}),
-    outcomes: binding.selection.apps.map((app, i) => ({ app, outcome: binding.request.group === "live-delivery" && i === 1 ? "failed" : "passed" })),
+    outcomes: binding.selection.apps.map((app, i) => ({ app, outcome: failedLiveApp && i === 1 ? "failed" : "passed" })),
     blockers: [], ...(binding.request.group === "fullstack-browser" ? {
       qualificationPassed: true, expectedExitCode: 0, comparisonEligibleApps: [...binding.selection.apps],
     } : {}) };
@@ -197,11 +205,20 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
         writeFileSync(join(output, "raw.log"), "all fake native bytes\n");
         if (mode === "unsafe") linkSync(join(output, "raw.log"), join(output, "summary.json"));
         else writeFileSync(join(output, "summary.json"), "{}");
+        if (liveOutput) {
+          writeFileSync(join(output, "coverage.json"), JSON.stringify({ passed: liveOutput.exit === 0 }));
+          if (liveOutput.dirt) {
+            const path = join(liveOutput.checkout, liveOutput.dirt);
+            mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, "changed source\n");
+          }
+          liveOutput.generatedStatus = sourceStatus(liveOutput.checkout);
+          liveOutput.generatedTree = evidence.tree(output);
+        }
       }
       if (mode === "abort-native" && native) abort.abort();
       const group = expectedPlan.bindings.find((b) => b.execution.invocation.argv[0] === invocation[0])?.request.group;
       child.close(invocation.includes("--check-only") ? 1 : mode === "process-fails" && native ? 9
-        : mode === "complete" && group === "client-heavy" ? 2 : mode === "complete" && group === "live-delivery" ? 1 : 0);
+        : liveOutput && native ? liveOutput.exit : mode === "complete" && group === "client-heavy" ? 2 : mode === "complete" && group === "live-delivery" ? 1 : 0);
     };
     if (mode === "pending") { release = finish; pendingStarted(); } else finish();
   });
@@ -228,6 +245,7 @@ const { validateCampaign: validateSavedCampaign } = await import("./campaign-ver
 let round = 100;
 function setup(policy = () => true) {
   admittedHost = null; admittedApparatus = null; controlWindows = []; settleAbort = null;
+  liveOutput = null;
   round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null; lifetimeStartup = null; lifetimeRun = null;
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
@@ -577,6 +595,61 @@ for (const boundary of ["unsafe", "leak", "source-changed", "abort-native"]) tes
   assert.notEqual(status.outcomes[0].outcome, "native-validated");
   if (boundary === "unsafe") assert.equal(status.uncollectedNativeRoots.length, 1);
   await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, count);
+});
+
+function setupLiveOutput(group, exit, dirt) {
+  const s = setupGroup(group), binding = s.plan.bindings[0];
+  mode = "complete";
+  const checkout = join(temporary, `live-git-${round}`);
+  mkdirSync(checkout);
+  sourceGit(checkout, "init", "--quiet");
+  sourceGit(checkout, "config", "core.autocrlf", "false");
+  writeFileSync(join(checkout, "tracked.mjs"), "export {};\n");
+  sourceGit(checkout, "add", "tracked.mjs");
+  sourceGit(checkout, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", "commit", "--quiet", "-m", "fixture source");
+  const artifactRoot = nativeArtifactRoot(group, binding.request.round), original = join(checkout, artifactRoot);
+  binding.validation.artifactRoot = relative(repo, original).replaceAll("\\", "/");
+  liveOutput = { checkout, exit, dirt };
+  return { ...s, original, artifactRoot, checkout };
+}
+
+for (const group of ["live-delivery", "recoverable-live"]) for (const exit of [0, 1]) test(`${group}: Git-visible live output seals before source recheck (exit ${exit})`, async () => {
+  const s = setupLiveOutput(group, exit), h = await begin(s);
+  const status = await s.campaign.advance(h);
+  assert.ok(liveOutput.generatedStatus.includes(`?? ${s.artifactRoot}/coverage.json\0`), "real Git saw ordinary results before intake");
+  assert.equal(sourceStatus(s.checkout), "");
+  assert.equal(existsSync(s.original), false);
+  assert.deepEqual(evidence.tree(join(h.directory, `00-${group}-timing`, "native")), liveOutput.generatedTree);
+  assert.equal(status.state, "finished"); assert.deepEqual(status.uncollectedNativeRoots, []);
+  assert.equal(status.outcomes[0].outcome, "native-validated");
+  assert.equal(status.outcomes[0].appOutcomes[1].outcome, exit === 0 ? "passed" : "failed");
+  writeFileSync(join(h.directory, "collection-manifest.json"), JSON.stringify(s.campaign.collect(h)));
+  const saved = await validateSavedCampaign({ folder: root, round: s.plan.round, commit: s.plan.commit });
+  assert.equal(saved.status, "verified", JSON.stringify(saved));
+  assert.deepEqual(saved.groups[0].appOutcomes, status.outcomes[0].appOutcomes);
+  mkdirSync(s.original);
+  assert.throws(() => s.campaign.verify(h), /native output appeared/);
+});
+
+for (const dirt of ["tracked.mjs", "untracked.mjs", "bench/live/results/parity/unrelated/keep.json"]) test(`live output intake does not hide unrelated ${dirt}`, async () => {
+  const s = setupLiveOutput("live-delivery", 0, dirt), h = await begin(s);
+  await assert.rejects(s.campaign.advance(h), /binding requires a clean committed checkout/);
+  assert.equal(sourceStatus(s.checkout), `${dirt === "tracked.mjs" ? " M" : "??"} ${dirt}\0`);
+  assert.equal(existsSync(s.original), false);
+  assert.deepEqual(evidence.tree(join(h.directory, "00-live-delivery-timing", "native")), liveOutput.generatedTree);
+  const status = s.campaign.status(h);
+  assert.equal(status.state, "preserved-uncertain");
+  assert.equal(status.outcomes[0].outcome, "preserved-uncertain");
+  assert.deepEqual(status.uncollectedNativeRoots, []);
+});
+
+test("live output is not transferred without proven command cleanup", async () => {
+  const s = setupLiveOutput("recoverable-live", 0), h = await begin(s);
+  lifetimeFailure = { command: 1, checks: { empty: false } };
+  await assert.rejects(s.campaign.advance(h), /command lifetime or cleanup unproven/);
+  assert.deepEqual(evidence.tree(s.original), liveOutput.generatedTree);
+  assert.equal(existsSync(join(h.directory, "00-recoverable-live-timing", "native")), false);
+  assert.equal(s.campaign.status(h).uncollectedNativeRoots.length, 1);
 });
 
 test("one root, opaque handle, all nine fixed native commands and retained failed outcome", async () => {
