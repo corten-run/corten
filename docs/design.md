@@ -7243,8 +7243,9 @@ rules something out.
     kept. A `Date` the handler set is left out of what is kept, so each answer given in its place
     is dated when it is sent, and its `Age` counts from the handler's date as a cache counts one
     (RFC 9111, 4.2.3, the apparent age less the time the answer took): a cache after the app then
-    finds the page as old whichever answer it is given. A page that date makes older than its
-    lifetime, or whose date is not in IMF-fixdate form, the form HTTP sends, is not kept, and
+    finds the page as old whichever answer it is given. A page that date makes as old as its
+    lifetime or older, or whose date is not in IMF-fixdate form, the form HTTP sends (the two
+    obsolete forms RFC 9110, 5.6.7 also defines are not read), is not kept, and
     neither is one with more than one `Date` line: the field holds one date (RFC 9110, 6.6.1) and
     a recipient may not join a second line to the first (5.3), so no one line says how old the
     page is, where reading the last one read let two contradictory dates keep a page. A page is
@@ -7379,8 +7380,13 @@ rules something out.
     before it for the watch, also when it fails: a field rendered to a string and placed in a
     page as markup. A key drawn outside the handler's polls, or on another thread during one
     (by a task it spawned, a render it handed to a blocking task, a thread of its own), is not
-    seen, and such an answer is kept with it, as every cache in front already
-    keeps it for the lifetime its route wrote. `Json` of bytes the app holds (`json::Raw`) is
+    seen, and such an answer is kept with it, as every cache in front already keeps it for the
+    lifetime its route wrote. It is then given both to later requests, from the store, and to
+    the requests that missed together and waited for it (below), where before this change each
+    of those ran its own handler and drew its own key.
+    [#1895 Keep a Public answer whose handler rendered a submit key out of shared caches, however it was rendered](https://github.com/corten-run/corten/pull/1895)
+    keeps the same limit for shared caches. This is the one account of that limit, which the
+    guide and `kept.rs` refer to. `Json` of bytes the app holds (`json::Raw`) is
     left out by its type: it keeps its compressed forms itself, so the store would refuse
     every one. An API's `Access-Control-Allow-Origin` is
     written from the request's `Origin` by the stage after the handler, so it is no part of a
@@ -7424,10 +7430,11 @@ rules something out.
     wait. The table holds no page, so a slow handler keeps nothing alive outside the bound,
     keeping one copy of a URL does not end the wait for another, and a request after a write
     makes the page again rather than wait for one read before it. The count the key takes
-    includes the writes that found no counts by path (above), so before the app has made an
-    answer it may keep, when no count by path is there to change, a write to any path still
-    parts the requests before it from those after, and ends what is remembered of every page not
-    kept (below). Two copies whose hashes meet are
+    includes the writes that found no counts by path (above): a write that began before the app
+    made an answer it may keep, whenever it ends, and work it left (`Signal::finish`) each time
+    some ends, parts the requests that miss any page before it from those after, and ends what
+    is remembered of every page not kept (below), as it drops every answer kept by then. That
+    holds after the counts by path are made too, for such a write still under way. Two copies whose hashes meet are
     made one after the other, since each request looks its own copy up once it has waited. A
     request looks for a kept copy again once it holds or has joined the page being made, so one
     kept between its first look and then (the first request's, or one made for every language by
@@ -7453,7 +7460,10 @@ rules something out.
     the table holds at most 2,048 entries and 1,024 remembered times, about 130 KB at most beside
     the bound by their sizes, and a request that ends does a lookup and forgets at most one page
     beside those whose time is up. When that request is dropped (its client left, its deadline
-    passed) or panics, the wait ends with it and they run their own, with nothing remembered. A
+    passed) or panics, the wait ends with it and they run their own, with nothing remembered;
+    that holds while the app reads the body it answered to keep it too, since no answer was
+    whole (an app's own page answer can have a body that waits). A body that fails as it is read
+    was answered, an error, and is remembered as not kept. A
     request that waited and was not given a page runs its own handler and does not wait again,
     even where a write has meanwhile started another request making the page: in a burst of
     writes such requests may each read the source, which bounds every request to one wait. A
@@ -7475,13 +7485,8 @@ rules something out.
     its requests then wait for nothing (the run above). An answer whose handler drew a form's new
     submit key is that request's alone and is not kept, so those waiting for it run their own,
     and it is remembered as not kept as a page drawn for one request is. That holds for a key the
-    watch sees (above). One drawn outside the handler's polls or on another thread during one is
-    not seen, so that answer is kept and the requests waiting for it are given it, as later
-    requests are given it from the store, where before this change each request that missed
-    together ran its own handler and drew its own key. So the limit the store has for later
-    requests holds for requests that wait, and
-    [#1895 Keep a Public answer whose handler rendered a submit key out of shared caches, however it was rendered](https://github.com/corten-run/corten/pull/1895)
-    keeps the same limit for shared caches. The guide and `kept.rs` refer here for it.
+    watch sees; one it does not see is given to those waiting, as the one account of that limit,
+    where the watch is described above, says.
 
     The two rules meet at a full store's first request for a URL, and the rule for a full store
     goes first. This is the one account of that case, which the guide and the changelog refer to.
@@ -7501,9 +7506,10 @@ rules something out.
     hold: they ask for one copy (the table's key, above: the URL, `Host` and `Accept-Language` as
     sent, whether a data client asked and the count of writes to the path each found, so
     requests for different copies, or on either side of a write, do not join); the second run's
-    answer is kept (when it fails or cannot be kept, as a page drawn for one request, a submit
-    key the watch sees or a body too small cannot, each request that waited then runs its own
-    handler); the table admits them (past 1,024 pages being made, and while the copy is
+    answer is kept and still stands for the requests that waited when they look (when it fails
+    or cannot be kept, as a page drawn for one request, a submit key the watch sees or a body
+    too small cannot, or is kept and then passes its lifetime or is dropped for room before a
+    request that waited looks, each such request then runs its own handler); the table admits them (past 1,024 pages being made, and while the copy is
     remembered as not kept, each request makes its own); and the URL's mark stays while they
     come. The marks are cleared once an eighth of them are set, all but the mark of the URL whose
     request clears them, which is set in the same pass, so a request for that URL meanwhile finds

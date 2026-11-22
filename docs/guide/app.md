@@ -1544,8 +1544,8 @@ else a page could differ by, and the answer nothing made for one request:
 
 A `Date` header the handler set is its own answer's and is not kept: each answer given in its
 place is dated when it is sent, and its `Age` counts from the handler's date, so a cache in front
-finds every answer as old as the first. A page that date makes older than its lifetime, or whose
-date is not written as HTTP writes one (`Sun, 06 Nov 1994 08:49:37 GMT`, with the day of the
+finds every answer as old as the first. A page that date makes as old as its lifetime or older, or
+whose date is not a valid IMF-fixdate (`Sun, 06 Nov 1994 08:49:37 GMT`, with the day of the
 week that date fell on, and a date that exists), is not kept, and neither is one with more than
 one `Date` line: a `Date` holds one date, and a second line is not one to join to the first
 ([RFC 9110, 5.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-5.3)), so neither says how
@@ -1604,7 +1604,8 @@ handler failed, or drew something for that request), each of the others then run
 handler, and does not wait again, and for a minute, or until the page is kept for such a request
 or written to, requests for that page do not wait for each other (the latest 1,024 such pages are
 remembered); a page another request kept meanwhile is not remembered so;
-when the first request is dropped or panics, each of the others runs its own. A request waits no
+when the first request is dropped or panics, even while the app reads the body it answered, each
+of the others runs its own, and nothing is remembered. A request waits no
 longer than its own deadline (`App::deadline`), which answers it as it would a slow handler; with
 `deadline(None)` nothing but the first request's handler bounds the wait, so one that never
 answers holds the others until it does or their clients leave. Only
@@ -1615,8 +1616,10 @@ for a request with another `Accept-Language` does not end it, even one that is t
 language and is given in its place while it stands, so once that copy's lifetime ends within the
 minute, requests in the first language each run the handler again until the minute is up or one
 of them keeps the page. A request that comes after a write to the page's path makes the page again
-rather than wait for one read before the write (before the app has made a page it may keep, a write
-to any path does, and ends what is remembered of every page not kept). At most 1,024 pages are made at once with others
+rather than wait for one read before the write. A write that began before the app made any answer
+it may keep does that for every page whenever it ends, after that first answer too, and so does
+work it left (`signal.finish`) each time some ends; each also ends what is remembered of every page
+not kept (below, where such a write drops every answer kept by then). At most 1,024 pages are made at once with others
 waiting for them; past that, a request makes its page as it would with nothing kept.
 
 `App::kept_answers(bytes)` sets how much is kept: 32 MiB unless set, and `0` keeps none. What is
@@ -1636,8 +1639,8 @@ the bits were last cleared and has since passed its lifetime or been dropped. Th
 is answered as with nothing kept, and no other request waits for it. The requests that ask for
 the URL while it is made are its second: the first of them makes the page and the others wait
 for that one as above. So requests that ask together for a URL new to a full store can run its
-handler twice where with room they run it once, and more when that second page is not kept or
-the app forgets the URL meanwhile; [design Choice 70](../design.md#choice-kept-pages) says
+handler twice where with room they run it once, and more when that second page is not kept, or
+no longer stands when they look, or the app forgets the URL meanwhile; [design Choice 70](../design.md#choice-kept-pages) says
 exactly when, and what the first request costs. A store that has filled mostly stays full, since a page past its lifetime keeps
 its room until another needs it. Nothing is kept under `corten dev`,
 so a change shows on the next load. An app with no `Public` page, and no `Public` JSON or text route in a build with `compress`, keeps nothing whatever the
@@ -1682,7 +1685,7 @@ others then run their own handlers, as when a page's handler fails, and do not w
 for a minute. An answer whose handler drew a form's new submit key is not kept, and is not given
 to those waiting; one drawn where the handler is not watched (the table above) is not seen, so
 the answer is kept and those waiting are given it, as later requests are
-([design Choice 70](../design.md#choice-kept-pages)).
+([design Choice 70](../design.md#choice-kept-pages) gives the one account of that limit).
 
 A file (`Media`), a sitemap or `robots.txt` (`seo::File`), a relay, a live stream and a feed are
 not kept: each is its handler's for every request, and so is JSON the app holds as bytes

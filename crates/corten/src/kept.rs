@@ -38,9 +38,9 @@
 //! and no value made for this request alone, and varies on nothing but what the key covers. A
 //! `Date` the handler set is not kept with it: each answer given in its place is dated when it
 //! is sent, and its `Age` counts from the handler's date as a cache would (RFC 9111, 4.2.3), so a
-//! cache after this one finds every answer as old. A page that date makes older than its
-//! lifetime, or whose date is not in the form HTTP sends (with the day of the week that date fell
-//! on, and a date that exists), is not kept.
+//! cache after this one finds every answer as old. A page that date makes as old as its
+//! lifetime or older, or whose date is not a valid IMF-fixdate (with the day of the week that
+//! date fell on, and a date that exists), is not kept.
 //!
 //! A `Public` route whose answer is JSON (`Json<T>`, `JsonResult<T>`) or text is kept the same
 //! way, under the same rules and by the same key, where the app compresses the answer: its
@@ -102,14 +102,15 @@
 //! the page again once it is to make it or wait for it, so one kept since its first look is given
 //! at once. When the page is not kept (an error, a page drawn for that request, an answer whose
 //! handler drew a form's new submit key the watch saw), or that request is dropped (its client
-//! left, its deadline passed) or panics, each runs its own handler then, and none waits again. A
+//! left, its deadline passed) or panics, also while its body is read to be kept, each runs its own
+//! handler then, and none waits again. A
 //! key drawn outside the handler's own polls (by a task it spawned, a render handed to a blocking
 //! task, a thread of its own) is not seen: that answer is kept and given to those waiting, as it
-//! is to later requests (`docs/design.md#choice-kept-pages`). At most
+//! is to later requests (the one account of that limit is in `docs/design.md#choice-kept-pages`). At most
 //! [`MAKING`] pages are made at once that others wait for; past that a request makes its page as
-//! it would with nothing kept. A page answered and not kept is remembered as not kept for
-//! [`FORGOT`], until a write to its path (to any path, while there are no counts by path) or
-//! until it is kept (by that request or another
+//! it would with nothing kept. A page answered and not kept (not one whose request ended first)
+//! is remembered as not kept for [`FORGOT`], until a write to its path, or one that found no
+//! counts by path (below) at any path, whenever it ends, or until it is kept (by that request or another
 //! meanwhile), so the requests that meet in that time each run the handler at once, as they would
 //! with nothing kept; that is best effort, as only the latest [`NOT_KEPT`] are remembered. It is
 //! remembered for the copy asked for (its URL, `Host` and `Accept-Language` as sent, and of a
