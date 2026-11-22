@@ -12,7 +12,7 @@ import { controllerFailure, fleetCatalogResult, full, providerAccount, providerF
 import { controllerPaths, productionPlan, productionSignals } from "./cloud-production.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
-import { continuationIndexSha256, continuationPeer, fleetChildOptions as childOptions, fleetRoot, present, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
+import { continuationPeer, fleetChildOptions as childOptions, fleetRoot, present, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
   recheckCollectedGroup, supervisedHost, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { groupNames } from "./registry.mjs";
@@ -302,22 +302,22 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
 export async function fleetMain(args, deps = {}, preIntentFailures) {
   const options = parseFleetArgs(args), repo = realpathSync(deps.repo ?? checkout);
   if (!options.continuationRoot) return runFleet(options, deps);
-  const { continuationLock, inspectContinuation } = await import("./group-continuation.mjs");
+  const { continuationLock, continuationAdmission } = await import("./group-continuation.mjs");
   const root = fleetRoot(options.continuationRoot, repo), lock = join(root, continuationLock);
   const owner = json({ pid: process.pid, group: options.group });
   const locked = options.prepare || !!options.approval;
-  if (locked) { physical(root); durable(lock, owner); }
-  let uncertain = false, attemptRoot = options.root, ownsLock = locked, attemptLockOwned = false;
-  let preIntentStage = options.detach ? "continuation-replay" : undefined;
+  let uncertain = false, attemptRoot = options.root, ownsLock = false, attemptLockOwned = false;
+  let preIntentStage = "continuation-admission";
   const release = () => {
     assert.equal(regular(lock, 1024).toString(), owner); unlinkSync(lock); ownsLock = false; syncDirectory(root);
   };
   try {
-    if (!locked) assert.ok(!present(lock), "continuation operation busy");
-    const continuation = await inspectContinuation(root, { repo, interrupted: deps.interrupted, inspect: deps.inspect });
-    const row = continuation.report.groups.find(({ group }) => group === options.group);
-    assert.ok(!row.result, "group already verified; never allocate again");
-    assert.ok(!continuation.report.groups.some((r) => r.unresolved), "continuation has unresolved custody or invalid evidence");
+    if (locked) { physical(root); durable(lock, owner); ownsLock = true; }
+    else assert.ok(!present(lock), "continuation operation busy");
+    const continuation = await continuationAdmission(root, options.group, { repo, interrupted: deps.interrupted, inspect: deps.inspect });
+    const row = continuation.rows.find(({ group }) => group === options.group);
+    assert.ok(!row.knownResult, "group already verified or pinned; never allocate again");
+    assert.ok(!continuation.rows.some((r) => r.unresolved), "continuation has unresolved custody or invalid evidence");
     const slot = continuation.slots.get(options.group);
     if (options.prepare) {
       const superseding = continuation.unlaunched.has(slot?.root) && options.commit !== slot.manifest.commit;
@@ -333,7 +333,7 @@ export async function fleetMain(args, deps = {}, preIntentFailures) {
     const accountId = options.prepare ? options.accountId : slot.manifest.provider.accountId;
     assert.ok([...continuation.needsCensus].every((account) => account === accountId), "continuation custody requires the same provider account");
     continuation.recheck();
-    preIntentStage = undefined;
+    preIntentStage = options.prepare ? "prepare-reservation" : undefined;
     return await runFleet({ ...options, root: attemptRoot }, deps, {
       ...continuation, onAttemptLock() { attemptLockOwned = true; },
       onReady() {
@@ -399,8 +399,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       physical(root); assert.equal(regular(lock, 1024).toString(), owner, "fleet-lock-changed");
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
       if (single) {
-        assert.equal(continuationIndexSha256(continuation.root), single.indexSha256, "continuation index changed");
-        continuation.recheckUnlaunched(single.group);
+        continuation.recheck(root, true);
       }
       durable(join(root, `fleet-${options.round}.json`), json(manifest));
       assert.deepEqual(readFleet(root, options.round).manifest, manifest);
@@ -422,6 +421,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
   let preIntentStage = continuation ? "initial-plan" : undefined;
   try {
     const preview = await fleetOperationPlan(options, deps);
+    continuation?.recheck();
     if (options["print-approval"]) {
       preIntentStage = undefined;
       write(JSON.stringify({ subject: preview.subject, approvalSha256: preview.approvalSha256, fullGroupQualified: false }));
@@ -445,9 +445,9 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
       assert.deepEqual(rootRecords(repeated.fleet), repeated.subject.records, "fleet-records-changed");
       assert.equal(regular(lock, 1024 * 1024).toString(), owner, "fleet-lock-changed");
       if (repeated.subject.firstGroup) recheckCollectedGroup(repeated.fleet, repeated.subject.firstGroup.snapshot);
-      continuation?.recheck(root);
     }
     await controlCheckpoint(interrupted);
+    continuation?.recheck(root);
     preIntentStage = undefined; // The intent write can partially succeed; do not label it a pre-intent refusal.
     if (options.detach) durable(join(root, "launch-intent.json"), json({ schema: "benchmark-group-fleet-staged-launch-intent/v1",
       approvalSha256: options.approval, subject: preview.subject }));
