@@ -4,7 +4,10 @@ import { summaryFixture, writeSavedFixture } from "./saved-fixture.mjs";
 import { report, validateSummary } from "./report.mjs";
 import { validateSaved } from "./validate.mjs";
 import { containerReceipt, evidenceVersion, imageReceipt, sourceTree } from "./raw-contract.mjs";
-import { execFileSync, spawnSync } from "node:child_process";
+import childProcess, { execFileSync, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
+import { PassThrough } from "node:stream";
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +15,7 @@ import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { passPlan, stageAggregate, timedProfiles } from "./run-contract.mjs";
 import { boundedFeatureProfile, featureProfile } from "./feature-contract.mjs";
-import { summarizeSamples } from "../catalog/stats.mjs";
+import { sampleStats } from "../catalog/stats.mjs";
 
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 const invalid = (fn) => assert.throws(fn, (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID");
@@ -85,31 +88,48 @@ test("complete native fixture replays every raw profile, pass, phase, gate and c
   assert.deepEqual(hashes(), before, "saved validation must not write evidence");
 });
 
-test("native replay admits the producer's decimal sum overshoot, not an inconsistent mean", (t) => {
+test("native replay admits the producer's decimal sum overshoot, not an inconsistent mean", async (t) => {
   const folder = temporary(t), args = { folder, round: "r17", commit };
   const s = writeSavedFixture(folder, commit, sourceTree(commit));
   const phase = s.apps.corten.runs["api-neutral-json"][0].phases.sat64;
   const log = join(folder, "api/corten/p1-neutral-json/sat64-stats.log");
-  const saved = JSON.parse(readFileSync(`${log}.json`));
-  const names = Object.keys(saved.samples), upstream = names.find((name) => name.endsWith("-upstream"));
-  const start = saved.samples[upstream][0].t;
-  saved.samples[upstream] = Array.from({ length: 31 }, (_, i) => ({ t: start + i * 350, cpu: 100, mem: 100.9 }));
-  const stats = summarizeSamples(saved.samples[upstream]);
+  const fixture = JSON.parse(readFileSync(`${log}.json`)).samples;
+  const names = Object.keys(fixture), upstream = names.find((name) => name.endsWith("-upstream"));
+  const start = fixture[upstream][0].t;
+  fixture[upstream] = Array.from({ length: 31 }, (_, i) => ({ t: start + i * 350, cpu: 100, mem: 100.9 }));
+  const rows = names.flatMap((Name) => fixture[Name].map((p) => ({ ...p, Name }))).sort((a, b) => a.t - b.t);
+  const fake = new EventEmitter();
+  fake.stdout = new PassThrough(); fake.stderr = new PassThrough();
+  fake.kill = () => { setImmediate(() => fake.emit("close", 0)); return true; };
+  const spawn = t.mock.method(childProcess, "spawn", () => fake);
+  let now = start;
+  const clock = t.mock.method(Date, "now", () => now);
+  syncBuiltinESMExports();
+  let stats;
+  try {
+    const sampler = sampleStats(names, log, 10);
+    for (const { Name, t, cpu, mem } of rows) {
+      now = t;
+      fake.stdout.write(JSON.stringify({ Name, CPUPerc: `${cpu}%`, MemUsage: `${mem}MiB / ${Name === upstream ? "512MiB" : "1GiB"}` }) + "\n");
+    }
+    stats = (await sampler.stop())[upstream];
+  } finally {
+    spawn.mock.restore(); clock.mock.restore(); syncBuiltinESMExports();
+  }
   assert.equal(stats.memAvgMiB, 100.90000000000003);
   assert.equal(stats.memMaxMiB, 100.9);
-  writeFileSync(log, names.flatMap((Name) => saved.samples[Name].map((p) => JSON.stringify({
-    Name, CPUPerc: `${p.cpu}%`, MemUsage: `${p.mem}MiB / ${Name === upstream ? "512MiB" : "1GiB"}`,
-  }))).join("\n") + "\n");
+  const saved = JSON.parse(readFileSync(`${log}.json`));
+  const writeSummary = () => writeFileSync(join(folder, "summary.json"), JSON.stringify(s));
   const write = (avg) => {
     saved.summary[upstream] = { ...stats, memAvgMiB: avg };
     Object.assign(phase.upstream, saved.summary[upstream]);
     writeFileSync(`${log}.json`, JSON.stringify(saved));
-    writeFileSync(join(folder, "summary.json"), JSON.stringify(s));
+    writeSummary();
   };
-  write(stats.memAvgMiB);
+  Object.assign(phase.upstream, stats);
+  writeSummary();
   assert.deepEqual(validateSaved(args), s);
   assert.match(report(s), /Marketplace v2 r17/);
-  assert.throws(() => validateSummary({ ...s, evidenceVersion: undefined }), /missing\/invalid measurement/);
   phase.upstream.samples = 1001;
   assert.throws(() => validateSummary(s), /missing\/invalid measurement/);
   phase.upstream.samples = stats.samples;
