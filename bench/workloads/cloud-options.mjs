@@ -51,7 +51,8 @@ export function fleetCatalogResult(result) {
 }
 
 const controllerStages = ["source-plan", "exact-approval", "remote-main-advertisement", "remote-main-fetch", "remote-main-ancestry",
-  "source-recheck", "controller-construction", "controller-launch", "controller-collect", "controller-audit", "controller-cancellation", "controller-retirement", "controller-checkpoint", "provider-settlement"];
+  "source-recheck", "controller-construction", "controller-launch", "controller-collect", "controller-audit", "controller-cancellation", "controller-retirement", "controller-checkpoint", "provider-settlement",
+  "setup-watcher-proof-missing", "setup-host-proof-refused"];
 export function controllerFailure(error) {
   const stage = error && typeof error === "object" ? Object.getOwnPropertyDescriptor(error, "controllerStage")?.value : undefined;
   return controllerStages.includes(stage) ? stage : undefined;

@@ -552,11 +552,27 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const evidence = unusedEvidence(raw, state, script, startedAtMs, finishedAtMs, knownHostsSha256);
     return retire("unused", evidence, finishedAtMs);
   };
+  const refuseSetup = (stage) => { throw Object.assign(new Error(stage), { controllerStage: stage }); };
+  const checkSetupCustody = (exit) => {
+    const custody = join(local, state.evidence, "control");
+    if (existsSync(custody) && readdirSync(custody).some((name) => /^watch-failure-[a-f0-9]{32}\.json$/.test(name)))
+      refuseSetup("setup-watcher-proof-missing");
+    // An acknowledged refusal is not a missing result. Do not append more
+    // controls on restart or treat the refusal as permission to retire.
+    const rows = state.control.ledger, last = rows.at(-1);
+    if (last?.localTerminal && last.code > 0 && last.code < 255 && last.request.epoch === "collection"
+      && last.request.invocation.channel === "ssh"
+      && last.request.invocation.requestSha256 === digest(`set -euo pipefail\n${terminalSetupScript(state, exit, rows.length - 1)}\n`))
+      refuseSetup("setup-host-proof-refused");
+  };
   const retireFailedSetup = async () => {
     assert.ok(["starting", "running"].includes(state.status) && !preserveOperationLock, "uncertain work cannot use setup retirement");
-    const exit = setupExit(), script = terminalSetupScript(state, exit), startedAtMs = Date.now();
-    const raw = (await ssh(script, 30000)).stdout, finishedAtMs = Date.now();
-    const evidence = setupEvidence(raw, state, script, exit, startedAtMs, finishedAtMs, local);
+    const exit = setupExit(), beforeEntry = !!state.preBootstrapTerminal;
+    if (beforeEntry) checkSetupCustody(exit);
+    const script = terminalSetupScript(state, exit), startedAtMs = Date.now();
+    const result = await ssh(script, 30000, beforeEntry), finishedAtMs = Date.now();
+    if (result.status !== 0 || result.error) refuseSetup("setup-host-proof-refused");
+    const evidence = setupEvidence(result.stdout, state, script, exit, startedAtMs, finishedAtMs, local);
     return retire("setup-failed", evidence, finishedAtMs);
   };
   async function retireNativeFailure(controllerCommit, grouped) {
@@ -892,6 +908,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           await confirmDeleted();
           state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
         }
+        if (setupCandidate && state.evidence) checkSetupCustody(setupExit());
         assert.ok(state.control?.monitor || !state.control?.sealed.includes("bootstrap"),
           "terminal status unavailable without SSH intrusion; preserve host; registered native collection needs an approved observation protocol");
         assert.ok(state.createIntentAt, "no create intent; reservation requires operator inspection");

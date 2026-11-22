@@ -5,7 +5,7 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { benchPackagePaths, controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
-import { controllerState, full, parseDropletArgs, providerFailure, unsentDelete } from "./cloud-options.mjs";
+import { controllerFailure, controllerState, full, parseDropletArgs, providerFailure, unsentDelete } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
@@ -350,7 +350,10 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   stage = "controller-checkpoint";
   await controlCheckpoint(interrupted);
   return result;
-  } catch (error) { throw mark(error, stage); }
+  } catch (error) {
+    const detail = stage === "controller-collect" && controllerFailure(error);
+    throw mark(error, detail && detail.startsWith("setup-") ? detail : stage);
+  }
   finally {
     try { await providerRun?.close(); }
     catch (error) { throw mark(error, "provider-settlement"); }

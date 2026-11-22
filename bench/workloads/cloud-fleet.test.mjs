@@ -13,6 +13,7 @@ import { campaignOutcome, controllerState, parseDropletArgs } from "./cloud-opti
 import { bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { digest } from "./cloud-local.mjs";
 import { guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
+import { shellTransport } from "./cloud-transport.mjs";
 
 const at = "2026-11-14T00:00:00.000Z";
 const input = () => ({ round: "r21", commit: "a".repeat(40), token: "f".repeat(16),
@@ -360,6 +361,39 @@ test("ingress verification failure stays outside admission and retires only with
       assert.equal(readFileSync(join(g.local, g.saved().evidence, "campaign/fake.json"), "utf8"), "{}");
     }
     assert.equal(g.deletes, 0); assert.equal(g.saved().validation, undefined); assert.equal(g.saved().retirement, undefined);
+  }
+});
+
+test("failed pre-registration cleanup preserves the archive and stops on missing proof, including on restart", async (t) => {
+  for (const mode of ["refused", "lost-result", "archived-watcher"]) {
+    const { h, options } = configured(t);
+    h.flags.hook = (bin, a) => { if (bin === "ssh" && a.at(-1).startsWith("systemctl show") && h.units === 1) h.flags.active = false; };
+    await assert.rejects(h.task({}, options).launch(), /ended before common bootstrap/);
+    h.flags.hook = undefined;
+    const entries = metadata(), first = h.saved().control.ledger[0].request.invocation.id;
+    if (mode === "archived-watcher") entries.push({ name: "control/" }, { name: `control/watch-failure-${first}.json`, body: '{"helperLine":342}\n' });
+    const bytes = archive(entries); h.setArchive(bytes);
+    let queries = 0;
+    const run = (bin, args, timeout, allowFail, expiry, control) => {
+      if (bin !== "ssh" || !args.at(-1).includes("<<'CORTEN_FAILED_SETUP_HOST'")) return h.run(bin, args, timeout, allowFail, expiry, control);
+      queries++;
+      const id = control.request.invocation.id, ack = `CORTEN_CONTROL ${id} ${"a".repeat(64)}\n`;
+      return shellTransport({ repo: h.repo, spawn: () => ({ status: 1, stdout: "not evidence", stderr: ack
+        + (mode === "lost-result" ? "" : `CORTEN_RESULT ${id} 1\n`) }) })(bin, args, timeout, allowFail, expiry, control);
+    };
+    const refusal = mode === "archived-watcher" ? "setup-watcher-proof-missing" : "setup-host-proof-refused";
+    await assert.rejects(h.task({ run }).collect(), mode === "lost-result" ? /remote control completion uncertain/ : { controllerStage: refusal });
+    const saved = h.saved(), last = saved.control.ledger.at(-1);
+    assert.equal(queries, mode === "archived-watcher" ? 0 : 1);
+    if (mode !== "archived-watcher") {
+      assert.equal(last.localTerminal, mode === "refused"); assert.equal(last.code, mode === "refused" ? 1 : undefined);
+    }
+    assert.equal(saved.archiveSha256, digest(bytes)); assert.ok(saved.evidenceSha256);
+    assert.equal(saved.status, "starting"); assert.equal(saved.retirement, undefined); assert.equal(saved.deletionIntentAt, undefined);
+    const calls = h.calls.length, count = queries;
+    await assert.rejects(h.task({ run }).collect(), mode === "lost-result" ? /ambiguous pre-bootstrap custody/ : { controllerStage: refusal });
+    assert.equal(queries, count); assert.equal(h.calls.length, calls); assert.deepEqual(h.saved(), saved);
+    assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
   }
 });
 
