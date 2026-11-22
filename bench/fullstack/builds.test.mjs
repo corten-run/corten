@@ -298,13 +298,26 @@ const postBuildPrune = (/** @type {string[]} */ commands, /** @type {number} */ 
 
 // The image install has a deadline and diagnostic logging. The timed recipe runs the same
 // locked install without them. No other wrapper or install flags count as equivalent.
-const nextImageInstall = /^timeout --verbose --kill-after=10s 10m (npm ci --no-audit --no-fund) --fetch-timeout=60000 --loglevel=silly$/;
+const nextImageInstall = /^timeout --verbose --kill-after=10s 10m (npm ci --no-audit --no-fund) --fetch-timeout=60000 --loglevel=http$/;
+const nextInstallInputs = ["WORKDIR /app", "ENV NEXT_TELEMETRY_DISABLED=1", "COPY package.json package-lock.json ./"];
 
-test("Next.js bounds the locked image install before building the app", () => {
-  const commands = stagesOf("nextjs")[0].run;
-  const install = commands.findIndex((command) => nextImageInstall.test(command));
-  assert.ok(install >= 0 && install < commands.indexOf("npm run build"));
-  assert.equal(commands.filter((command) => /\bnpm ci\b/.test(command)).length, 1);
+function checkNextInstall(/** @type {string[]} */ lines) {
+  const install = lines.findIndex((line) => line.startsWith("RUN ") && nextImageInstall.test(line.slice(4)));
+  assert.ok(install >= 0 && install < lines.indexOf("COPY . .") && install < lines.indexOf("RUN npm run build"));
+  assert.equal(lines.filter((line) => /^RUN .*\bnpm ci\b/.test(line)).length, 1);
+  // Inspect raw instructions: the general equivalence check drops RUN mounts.
+  // No source, npm configuration, or extra ENV/ARG can reach the logged install.
+  assert.match(lines[0], /^FROM \S+ AS build$/);
+  assert.deepEqual(lines.slice(1, install), nextInstallInputs);
+}
+
+test("Next.js bounds the locked image install before copying app source or building", () => {
+  const lines = instructionsOf(readFileSync(join(repo, dockerfileOf("nextjs")), "utf8"));
+  checkNextInstall(lines);
+  const manifestCopy = nextInstallInputs.at(-1);
+  assert.throws(() => checkNextInstall(lines.filter((line) => line !== manifestCopy)));
+  assert.throws(() => checkNextInstall(lines.map((line) => line === manifestCopy ? "COPY . ." : line)));
+  assert.throws(() => checkNextInstall(lines.map((line) => line.replace(/^RUN timeout /, "RUN --mount=type=bind,target=/app timeout "))));
 });
 
 test("only exact production pruning after a build is packaging, never a recipe step", () => {
