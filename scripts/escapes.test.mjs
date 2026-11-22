@@ -99,6 +99,7 @@ test("a class's field written through a this no cast types is found, however it 
   assert.equal(writes('Object["assign"](this, { a: 1 });'), 1);
   assert.equal(writes("(Object.assign)(this, { a: 1 });"), 1);
   assert.equal(writes("Object[`assign`](this, { a: 1 });"), 1);
+  assert.equal(writes("((Object)).assign(this, { a: 1 });"), 1);
   // A method a @this tag types has its field writes checked by tsc, but not a writer call's keys.
   assert.equal(js("/** @typedef {{ a: number }} F */\nclass A {\n  a = 0;\n  /** @this {F} */\n  m() { Object.assign(this, { b: 1 }); }\n}"), 1);
   assert.equal(writes("Object.assign(/** @type {F} */ (this), { a: 1 });"), 1);

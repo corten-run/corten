@@ -65,7 +65,8 @@ function member(node, object, name) {
   if (node.kind === ts.SyntaxKind.PropertyAccessExpression) key = /** @type {ts.PropertyAccessExpression} */ (node).name;
   else if (node.kind === ts.SyntaxKind.ElementAccessExpression) key = /** @type {ts.ElementAccessExpression} */ (node).argumentExpression;
   else return false;
-  const target = /** @type {ts.PropertyAccessExpression} */ (node).expression;
+  let target = /** @type {ts.PropertyAccessExpression} */ (node).expression;
+  while (target.kind === ts.SyntaxKind.ParenthesizedExpression) target = /** @type {ts.ParenthesizedExpression} */ (target).expression;
   // `Object.assign`'s name is an identifier; `Object[assign]`'s is a variable, and only a string
   // literal there is the key itself.
   const literal = node.kind === ts.SyntaxKind.PropertyAccessExpression ? key.kind === ts.SyntaxKind.Identifier : key.kind === ts.SyntaxKind.StringLiteral || key.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral;
