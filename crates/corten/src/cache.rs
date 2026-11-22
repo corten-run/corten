@@ -151,6 +151,7 @@ impl Cache {
 
     /// The header, held by the thread where an answer's header can be ([`Cache::held_header`]), and made
     /// for the answer alone while the thread runs an unstaged route's handler ([`Unstaged`]).
+    #[inline]
     fn value(self) -> HeaderValue {
         if UNSTAGED.get() {
             self.header()
@@ -163,6 +164,7 @@ impl Cache {
     /// once on a thread and each answer after shares its bytes (a clone counts a reference), while
     /// it is one of the last `HELD` sets of numbers that thread made one for. A held header is
     /// how [`settle`] knows the line it finds is one `Cache` made ([`held_alone`]).
+    #[inline(never)]
     fn held_header(self) -> HeaderValue {
         let Kind::Public { max_age, shared, stale, if_error } = self.kind else {
             return self.header();

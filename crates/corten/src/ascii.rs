@@ -87,7 +87,7 @@ pub(crate) fn pair(n: u8) -> &'static str {
 }
 
 /// The decimal digits of `n`, written at the end of `buf`, two per division.
-#[inline]
+#[inline(always)]
 pub(crate) fn digits(mut n: u64, buf: &mut [u8; 20]) -> &[u8] {
     let mut i = buf.len();
     while n >= 100 {
