@@ -128,11 +128,8 @@ fn request_cost() {
             return;
         }
         for _ in 0..requests {
-            let req = if write {
-                http::Request::post(path).header("sec-fetch-site", "same-origin")
-            } else {
-                http::Request::get(path)
-            };
+            let req =
+                if write { http::Request::post(path).header("sec-fetch-site", "same-origin") } else { http::Request::get(path) };
             let response = router.clone().oneshot(req.body(corten::http::Body::empty()).unwrap()).await.unwrap();
             assert_eq!(response.status().as_u16(), status);
             let body = response.into_body().collect().await.unwrap().to_bytes();
