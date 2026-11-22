@@ -7438,7 +7438,11 @@ rules something out.
     forms are kept the same way, so it gets its brotli 5 by the same rule and in the same queue:
     one rule for whatever the store keeps. JSON the app holds as bytes (`json::Raw`), whose
     forms are the held values that queue goes after, is never kept, so no answer has a job in
-    both. @@BODY@@
+    both. Counted as a kept page's below (`ae3634e49`, this change merged with main, against
+    main's `04c209fca`), a kept JSON body of 1,999 bytes given again to a data client with a
+    browser's codings ran 29,449 instructions (29,448 to 29,449) for 280 bytes of brotli 5
+    against 29,675 (29,675 to 29,676) for 328 of zstd 1, 226 fewer (-0.76%) and 14.6% fewer
+    bytes.
 
     Not chosen: in front of the middleware, for the reasons above, though it would save the
     stages too; asking the marks whether or not the store has room, which spares the copy
@@ -7542,6 +7546,11 @@ rules something out.
     the hit whose brotli found no room 29,782 (29,780 to 29,782) against 29,788 (29,788 to
     29,789) and 29,535 (29,535 to 29,536), and gzip alone 29,420 against 29,428 and 29,263: 6 to 8
     fewer, which does not account for the rest of the difference from main, +149, +247 and +157.
+    Merged with main's `04c209fca`, which keeps JSON and text bodies (`ae3634e49` against it, the
+    same three rounds, the bodies identical byte for byte but for the tied browser's; main's page
+    is now a byte shorter in zstd): the browser's hit ran 29,699 (29,697 to 29,699) for 542 bytes
+    against 29,560 (29,560 to 29,561) for 637, +139 (+0.47%), the hit whose brotli found no room
+    29,838 against 29,566, +272 (+0.92%), and gzip alone 29,359 against 29,312, +47 (+0.16%).
     One thread's count does not show what the
     two writes cost where several cores answer the same page, which no run here measured. Answers
     whose work this change leaves alike, or adds a few comparisons to, differ by -211 to +254, so
@@ -7800,7 +7809,8 @@ rules something out.
     and nothing a page's `GET` runs. 2026-11-21, a kept page's brotli 5 with rustc 1.100.0, brotli
     9.1.3, zstd 0.14.4 (libzstd 1.5.7) and flate2 1.1.11 (miniz_oxide 0.9.1): the probe on
     `b5324cbae`, `tests/kept_coding_cost.rs` under callgrind (valgrind 3.24.0) on `22fddd6da`,
-    `918ba8956` and `564034b86`, and with fast bins off on `9831ef711` and `564034b86`, in
+    `918ba8956` and `564034b86`, on `ae3634e49` and `04c209fca` for a kept page and a kept JSON
+    body, and with fast bins off on `9831ef711` and `564034b86`, in
     rust:1-trixie with glibc's allocator, and `tests/kept_memory.rs` at `9831ef711`, with all
     features and with none.
 
