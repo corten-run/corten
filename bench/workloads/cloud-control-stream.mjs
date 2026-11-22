@@ -70,6 +70,30 @@ function auditDirectory(path) {
   physical(path);
 }
 
+function* journalFrames(path) {
+  const before = lstatSync(path); assert.ok(before.isFile() && !before.isSymbolicLink() && before.nlink === 1);
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const opened = fstatSync(fd); assert.ok(opened.ino === before.ino && opened.dev === before.dev);
+    const size = opened.size; assert.ok(size <= streamLimits.journalBytes);
+    const chunkBytes = 2 * streamLimits.frameBytes;
+    let complete = false, suffix = Buffer.alloc(0);
+    for (let end = size; end > 0;) {
+      const start = Math.max(0, end - chunkBytes), bytes = Buffer.alloc(end - start);
+      assert.equal(readSync(fd, bytes, 0, bytes.length, start), bytes.length);
+      const chunk = suffix.length ? Buffer.concat([bytes, suffix]) : bytes;
+      let right = chunk.length;
+      for (let left = chunk.lastIndexOf(10); left >= 0; left = left === 0 ? -1 : chunk.lastIndexOf(10, left - 1)) {
+        if (complete) yield JSON.parse(chunk.toString("utf8", left + 1, right));
+        complete = true; right = left; // Ignore the possibly partial write at the snapshot's end.
+      }
+      if (start === 0 && complete) yield JSON.parse(chunk.toString("utf8", 0, right));
+      assert.ok(right <= chunkBytes, "oversized monitor journal record");
+      suffix = chunk.subarray(0, right); end = start;
+    }
+  } finally { closeSync(fd); }
+}
+
 export function localStreamStatus(local) {
   physical(local);
   for (const kind of ["invalid", "terminal"]) {
@@ -78,23 +102,25 @@ export function localStreamStatus(local) {
   }
   const path = join(local, "monitor-journal.jsonl");
   if (!existsSync(path)) return { kind: "pending" };
-  const before = lstatSync(path); assert.ok(before.isFile() && !before.isSymbolicLink() && before.nlink === 1);
-  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try {
-    const opened = fstatSync(fd); assert.ok(opened.ino === before.ino && opened.dev === before.dev);
-    const size = opened.size; assert.ok(size <= streamLimits.journalBytes);
-    const length = Math.min(size, 131072), bytes = Buffer.alloc(length);
-    assert.equal(readSync(fd, bytes, 0, length, size - length), length);
-    const lines = bytes.toString("utf8").split("\n"); lines.pop(); if (size > length) lines.shift();
-    return { kind: "progress", frame: lines.length ? JSON.parse(lines.at(-1)) : null };
-  } finally { closeSync(fd); }
+  for (const frame of journalFrames(path)) return { kind: "progress", frame };
+  return { kind: "progress", frame: null };
 }
 
 export function livePeerLease(local, state) {
-  const status = localStreamStatus(local), frame = status.frame, now = Date.now();
-  if (status.kind !== "progress" || frame?.kind !== "peer-lease" || frame.id !== state.control.monitor.id
-    || !Number.isSafeInteger(frame.atMs) || frame.atMs > now || now - frame.atMs >= streamLimits.leaseMs) return false;
-  return monitorRegistration(local, state).host.hostname === state.name;
+  physical(local);
+  const ended = () => ["invalid", "terminal", "local-closed"].some((kind) =>
+    lstatSync(join(local, `monitor-${kind}.json`), { throwIfNoEntry: false }) !== undefined);
+  const path = join(local, "monitor-journal.jsonl"), { id } = state.control.monitor;
+  if (ended() || !existsSync(path)) return false;
+  for (const frame of journalFrames(path)) {
+    if (frame?.id !== id) return false;
+    // A complete terminal frame is decisive even before the close sidecar.
+    if (["progress", "audit-begin", "audit-end", "delivery-sealed"].includes(frame.kind)) continue;
+    if (frame.kind !== "peer-lease" || !Number.isSafeInteger(frame.atMs)) return false;
+    const age = Date.now() - frame.atMs;
+    return age >= 0 && age < streamLimits.leaseMs && monitorRegistration(local, state).host.hostname === state.name && !ended();
+  }
+  return false;
 }
 
 export function streamRecoveryReady(local, monitor) {

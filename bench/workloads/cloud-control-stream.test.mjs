@@ -64,9 +64,34 @@ test("continuation peer requires a fresh lease tied to its registered native str
   assert.equal(livePeerLease(f.local, s), true);
   assert.equal(livePeerLease(f.local, { ...s, name: "other" }), false);
   const stale = { kind: "peer-lease", id: registration.id, atMs: Date.now() - streamLimits.leaseMs };
-  appendFileSync(join(f.local, "monitor-journal.jsonl"), JSON.stringify(stale) + "\n");
+  const journal = join(f.local, "monitor-journal.jsonl");
+  appendFileSync(journal, JSON.stringify(stale));
+  assert.equal(livePeerLease(f.local, s), true, "an unterminated write is not a lease record");
+  appendFileSync(journal, "\n" + JSON.stringify({ kind: "progress", id: registration.id }) + "\n");
   assert.equal(livePeerLease(f.local, s), false);
+  f.close(255);
+  assert.equal((await monitor.done).terminal, false);
+});
+
+test("continuation peer keeps its lease across nonterminal journal records but not a terminal frame", async (t) => {
+  const f = fixture(t, { peerLease: true }), { monitor } = await f.ready;
+  const s = { ...binding, name: registration.host.hostname, control: { helperSha256: binding.helperSha256,
+    monitor: { id: registration.id, registrationSha256: digest(JSON.stringify(registration)) } } };
+  f.frame("challenge", { sequence: 1, nonce: "e".repeat(32) });
+  f.frame("progress", { state: "active" });
+  assert.equal(livePeerLease(f.local, s), true, "a progress record is not lease loss");
+  for (let i = 0; i < 3; i++) f.frame("progress", { state: "active", details: "x".repeat(50000) });
+  f.frame("delivery-sealed", { campaign: "r21-0123456789abcdef" });
+  assert.equal(livePeerLease(f.local, s), true, "look past nonterminal records even across the tail read boundary");
+  for (const kind of ["invalid", "local-closed"]) {
+    const marker = join(f.local, `monitor-${kind}.json`);
+    writeFileSync(marker, "{}", { flag: "wx" });
+    try { assert.equal(livePeerLease(f.local, s), false, `a fresh lease does not override ${kind}`); }
+    finally { rmSync(marker); }
+  }
   f.frame("terminal", { id: registration.id, campaign: "r21-0123456789abcdef", nativeTerminal: true, sealSha256: "f".repeat(64) });
+  assert.equal(existsSync(join(f.local, "monitor-terminal.json")), false, "local stream has not closed");
+  assert.equal(livePeerLease(f.local, s), false);
   assert.equal((await monitor.done).terminal, true);
   assert.equal(livePeerLease(f.local, s), false);
 });
