@@ -1106,8 +1106,7 @@ impl KeptAnswers {
     /// module of routes it was not given) compiles, and the call drops what is kept at that
     /// path, which is nothing when no route of the app serves it. A [`crate::Local`] is the way
     /// to name a path that comes from outside the code (one a job reads from a queue): it is
-    /// checked to be a path on this site and nothing more, so it is the one way to pass a path
-    /// no route is known to serve.
+    /// checked to be a path on this site and nothing more.
     pub fn changed(&self, to: &(impl crate::route::OnSite + ?Sized)) {
         let Some(answers) = self.store() else { return };
         let link = crate::route::link(to);
