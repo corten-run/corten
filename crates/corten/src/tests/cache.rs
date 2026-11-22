@@ -910,6 +910,127 @@ async fn an_answer_of_the_app_s_own_that_holds_a_public_one_is_watched_for_a_sub
     }
 }
 
+/// `NoStore` is watched as the answer it holds is: around an answer type of the app's own that
+/// is `Public` on one branch, a relay that kept the upstream's `Surrogate-Control` drew a form's
+/// new submit key, and goes out `private, no-store` without that header, which `no-store` does not
+/// replace, rather than `no-store` with the CDN still told to keep it. With no key it is `no-store`.
+#[tokio::test]
+async fn a_no_store_answer_that_holds_a_public_one_whose_handler_drew_a_submit_key_keeps_no_cdn_header() {
+    use crate::answer::{AnyInputs, Format, NotAFeed};
+    use crate::route::get as typed;
+
+    enum Mixed {
+        Mine(String),
+        Shared(Public<crate::Relay>),
+    }
+
+    impl crate::response::IntoResponse for Mixed {
+        fn into_response(self) -> crate::response::Response {
+            match self {
+                Mixed::Mine(mine) => mine.into_response(),
+                Mixed::Shared(shared) => shared.into_response(),
+            }
+        }
+    }
+
+    impl crate::Answer for Mixed {
+        const FORMAT: Format = Format::Html;
+        type Inputs = AnyInputs;
+        type Rows = NotAFeed;
+        type Kind = AnyAnswer;
+    }
+
+    let minute = Duration::from_secs(60);
+    let relay = move |body: String| {
+        let mut headers = HeaderMap::new();
+        headers.insert("surrogate-control", HeaderValue::from_static("max-age=3600"));
+        Public::new(minute, crate::Relay::new(StatusCode::OK, headers, Body::from(body)))
+    };
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html();
+    let routes = || {
+        Routes::from(
+            Table::new()
+                .route("/keyed", typed(move || async move { NoStore(Mixed::Shared(relay(field()))) }).0)
+                .route("/plain", typed(move || async move { NoStore(Mixed::Shared(relay("plain".into()))) }).0)
+                .route("/mine", typed(move || async move { NoStore(Mixed::Mine("mine".into())) }).0),
+        )
+    };
+    for (app, router) in
+        [("the default store", App::new(routes()).router()), ("corten dev", App::new(routes()).dev(true).router())]
+    {
+        let (status, headers, body) = fetch(&router, "GET", "/keyed", &[]).await;
+        assert_eq!(status, StatusCode::OK, "{app}");
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-store", "{app}: {headers:?}");
+        for cdn in CDN_OVERRIDES {
+            assert!(!headers.contains_key(cdn), "{app}: {headers:?}");
+        }
+        assert!(String::from_utf8_lossy(&body).contains("data-submit value="), "{app}");
+        for path in ["/plain", "/mine"] {
+            let (status, headers, _) = fetch(&router, "GET", path, &[]).await;
+            assert_eq!(
+                (status, &headers[header::CACHE_CONTROL]),
+                (StatusCode::OK, &HeaderValue::from_static("no-store")),
+                "{app}: {path}"
+            );
+        }
+    }
+}
+
+/// An answer whose handler drew a form's new submit key goes out without a tag, not only without
+/// the one Corten would make: one the app gave it (`Public::header`) or one a relayed upstream
+/// sent names a body whose key a browser may already have sent. A `Public` answer without a key
+/// keeps the tag it was given.
+#[tokio::test]
+async fn an_answer_whose_handler_drew_a_submit_key_keeps_no_tag_it_was_given() {
+    use crate::route::get as typed;
+
+    struct ETag;
+    impl crate::answer::Header for ETag {
+        const NAME: &'static str = "etag";
+    }
+
+    let minute = Duration::from_secs(60);
+    let tagged = || HeaderValue::from_static("\"given\"");
+    let relay = move |body: String| {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ETAG, tagged());
+        Public::new(minute, crate::Relay::new(StatusCode::OK, headers, Body::from(body)))
+    };
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html();
+    let routes = || {
+        Routes::from(
+            Table::new()
+                .route("/text", typed(move || async move { Public::new(minute, field()).header::<ETag>(tagged()) }).0)
+                .route("/relay", typed(move || async move { relay(field()) }).0)
+                .route(
+                    "/plain-text",
+                    typed(move || async move { Public::new(minute, "plain".to_string()).header::<ETag>(tagged()) }).0,
+                )
+                .route("/plain-relay", typed(move || async move { relay("plain".into()) }).0),
+        )
+    };
+    for (app, router) in
+        [("the default store", App::new(routes()).router()), ("corten dev", App::new(routes()).dev(true).router())]
+    {
+        for path in ["/text", "/relay"] {
+            // A browser revalidating the copy it was given asks with that copy's tag.
+            for asked in [&[][..], &[("if-none-match", "\"given\"")][..]] {
+                let (status, headers, body) = fetch(&router, "GET", path, asked).await;
+                assert_eq!(status, StatusCode::OK, "{app}: {path}: {asked:?}");
+                assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{app}: {path}: {headers:?}");
+                assert!(!headers.contains_key(header::ETAG), "{app}: {path}: {headers:?}");
+                assert!(String::from_utf8_lossy(&body).contains("data-submit value="), "{app}: {path}");
+            }
+        }
+        for path in ["/plain-text", "/plain-relay"] {
+            let (status, headers, _) = fetch(&router, "GET", path, &[]).await;
+            assert_eq!(status, StatusCode::OK, "{app}: {path}");
+            assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{app}: {path}");
+            assert_eq!(headers[header::ETAG], "\"given\"", "{app}: {path}");
+        }
+    }
+}
+
 /// A middleware may make a new response of the one its `next` gave, with that one's status,
 /// headers and body and nothing else (its extensions gone). That takes no mark away: an answer
 /// whose handler or page drew a form's new submit key is still the browser's alone, without the

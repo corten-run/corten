@@ -4638,12 +4638,22 @@ fn unstaged_headers(mut res: crate::response::Response) -> crate::response::Resp
 }
 
 /// `headers` of an answer no shared cache may keep: `Cache-Control: private, no-cache`, or
-/// `no_store` when it names `no-store`, and none of the caching headers a CDN reads first.
+/// `no_store` when it names `no-store` (`private, no-store` when it says a plain `private` too,
+/// as a keyed answer's watch writes it, for a CDN that ignores `no-store`), and none of the
+/// caching headers a CDN reads first.
 fn unshared(headers: &mut http::HeaderMap, no_store: http::HeaderValue) {
     use http::header;
-    let names_no_store =
-        headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
-    headers.insert(header::CACHE_CONTROL, if names_no_store { no_store } else { crate::cache::PRIVATE });
+    let (mut names_no_store, mut private) = (false, false);
+    for line in headers.get_all(header::CACHE_CONTROL) {
+        names_no_store |= crate::cache::mentions_no_store(line.as_bytes());
+        private |= crate::cache::says(line.as_bytes()).private;
+    }
+    let policy = match (names_no_store, private) {
+        (false, _) => crate::cache::PRIVATE,
+        (true, true) => crate::cache::PRIVATE_NO_STORE,
+        (true, false) => no_store,
+    };
+    headers.insert(header::CACHE_CONTROL, policy);
     // A CDN reads its own before `Cache-Control`: any `*cache-control`, as a [`crate::Public`]
     // answer may not set, and the others Corten names ([`crate::cache::CDN_CACHING`]).
     let cdn: Vec<header::HeaderName> = headers
@@ -4664,7 +4674,7 @@ fn unshared(headers: &mut http::HeaderMap, no_store: http::HeaderValue) {
 /// which may hold one), watched for a form's new submit key in its polls as a staged one is
 /// (`answer::Made`). No stage settles an unstaged answer's caching, so one whose handler drew a
 /// key is made private here: `private, no-cache` (`private, no-store` where it names `no-store`),
-/// with no caching header a CDN reads first. Chosen by the answer's type when the route is made,
+/// with no caching header a CDN reads first and no tag. Chosen by the answer's type when the route is made,
 /// so the handler of any other unstaged route is the one it was, with nothing around it.
 #[derive(Clone)]
 pub(crate) struct Watched<H>(pub(crate) H);
@@ -4705,11 +4715,14 @@ impl<F: std::future::Future<Output = crate::response::Response>> std::future::Fu
     }
 }
 
-/// An unstaged answer whose handler drew a form's new submit key, made the browser's alone.
+/// An unstaged answer whose handler drew a form's new submit key, made the browser's alone, with
+/// no tag it was given (`crate::cache::drop_keyed_reuse`).
 #[cold]
 #[inline(never)]
 fn drew_key(res: &mut crate::response::Response) {
-    unshared(res.headers_mut(), crate::cache::PRIVATE_NO_STORE);
+    let headers = res.headers_mut();
+    unshared(headers, crate::cache::PRIVATE_NO_STORE);
+    headers.remove(http::header::ETAG);
 }
 
 /// The crate's tests build routes by hand, to test what `App` does with any response.

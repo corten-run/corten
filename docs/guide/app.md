@@ -1228,12 +1228,14 @@ answer whose own script must run is a page, not an unstaged route's. Its answer 
 `Cache-Control` unless the handler sets one, so a shared cache may keep it by its own rules
 ([Caching](#caching) describes the stages' rules, which it does not meet): an answer that changes
 says so (`NoStore`, `Public`), as the figure above does. One that sets a cookie is `private,
-no-cache` (`no-store` when it says one), whatever caching it says, and loses any
+no-cache` (`no-store` when it says one, `private, no-store` when it also says a plain `private`),
+whatever caching it says, and loses any
 `*-cache-control` header and the other caching headers a CDN reads first that [Caching](#caching)
 lists (`Surrogate-Control`, `Edge-Control`, ...), so no shared cache hands one visitor's cookie
 to another. So is a `Public` answer, or one of an answer type of the app's own, whose handler drew
-a form's new submit key ([Caching](#caching)): its handler is watched for one, as a staged
-route's is, and any other unstaged handler runs with nothing around it.
+a form's new submit key ([Caching](#caching)), in `NoStore` or a tuple of headers too, and it also
+loses a tag (`ETag`) it was given: its handler is watched for one, as a staged route's is, and
+any other unstaged handler runs with nothing around it.
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
 or a plain 501 with none when no route in the app has a handler for the method ([error
 pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
@@ -1405,7 +1407,9 @@ before `Cache-Control` that a middleware wrote, even when its `Cache-Control` al
 `Vercel-CDN-Cache-Control`, `Surrogate-Control`, Akamai's `Edge-Control` and nginx's
 `X-Accel-Expires`. A `no-store` on it goes out `private, no-store`: some CDNs ignore a bare
 `no-store`, and none keeps a `private` answer. Those names, matched exactly, are the whole list
-(a `Public` answer cannot set one either). Keeping a page with a form out of a shared cache by
+(a `Public` answer cannot set one either). It loses a tag (`ETag`) too, not only the one Corten
+would make: one the app (`Public::header`), a middleware or a relayed upstream gave it names a
+body whose key the browser may already have sent, and a `304` to it would keep that body. Keeping a page with a form out of a shared cache by
 any other means is the deployment's: a name its CDN is configured to read (RFC 9213 allows any),
 a layer around the app (`App::layer`, which runs after Corten settles the answer), and an edge
 rule that caches whatever the origin says. The key's render marks the answer: a page, a patch,
@@ -1414,7 +1418,9 @@ for a key it draws any other way, rendered to a string and put in JSON, in text,
 relay it made, or in a page as `raw` markup, and such an answer goes out as a page that draws
 one does, in every build, with or without the app's kept answers, and on a route that says
 `unstaged` too. So is the handler of an answer type of the app's own (one that implements
-`Answer`), since it may hold a `Public` answer on one branch. The request keeps the mark, so a
+`Answer`), since it may hold a `Public` answer on one branch, and of `NoStore` or a tuple of
+headers around either (a `no-store` there does not take away a CDN's own caching header), or a
+tuple whose header part of the app's own refuses with one, since a refusal is the whole answer. The request keeps the mark, so a
 middleware that makes a new response of the one it was given does not take it away. The watch
 sees what the handler draws itself, before it returns: a key drawn in a task it spawned, a
 render it handed to a blocking task or a thread of its own is not seen, nor is one drawn as a

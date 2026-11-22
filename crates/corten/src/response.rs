@@ -27,8 +27,9 @@ const _: () = assert!(std::mem::size_of::<Response>() <= 128, "a Response<Body> 
 pub trait IntoResponse {
     /// Whether the response may say that a shared cache keeps it for everyone in a way the type
     /// does not show: [`crate::Public`] says so, a type of Corten's that is never `Public` does
-    /// not, and one that holds another (`Result`, a tuple of headers before it) says what that
-    /// one does. A type of the app's own always does, since Corten cannot see what its
+    /// not, and one that holds another (`Result`, [`crate::NoStore`], a tuple of parts before it)
+    /// says what that one does, and a tuple what each part's refusal does too, since a refusal is
+    /// the whole answer. A type of the app's own always does, since Corten cannot see what its
     /// `into_response` makes (a `Public` answer on one branch): its route's handler is watched
     /// for a form's new submit key, as a `Public` one's is, and an answer whose handler drew one is
     /// sent to no shared cache. A raw `Response`, a `[(name, value)]` of headers and a
@@ -334,7 +335,12 @@ macro_rules! tuples {
     ($($ty:ident),+) => {
         #[allow(non_snake_case)]
         impl<R: IntoResponse, $($ty: IntoResponseParts,)+> IntoResponse for ($($ty,)+ R) {
-            const MAY_SHARE: MayShare = R::MAY_SHARE;
+            // A part's refusal answers in the body's place.
+            const MAY_SHARE: MayShare = {
+                let may = R::MAY_SHARE;
+                $(let may = MayShare::either(may, <$ty::Error as IntoResponse>::MAY_SHARE);)+
+                may
+            };
 
             fn into_response(self) -> Response {
                 let ($($ty,)+ body) = self;
@@ -351,7 +357,7 @@ macro_rules! tuples {
 
         #[allow(non_snake_case)]
         impl<R: IntoResponse, $($ty: IntoResponseParts,)+> IntoResponse for (StatusCode, $($ty,)+ R) {
-            const MAY_SHARE: MayShare = R::MAY_SHARE;
+            const MAY_SHARE: MayShare = <($($ty,)+ R) as IntoResponse>::MAY_SHARE;
 
             fn into_response(self) -> Response {
                 let (status, $($ty,)+ body) = self;

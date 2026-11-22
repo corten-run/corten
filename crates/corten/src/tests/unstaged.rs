@@ -785,6 +785,27 @@ pub(super) mod unstaged_shared_url {
 
     #[route("/mixed-keyed", get = unstaged_mixed_keyed, unstaged)]
     pub struct MixedKeyed;
+
+    #[route("/part-keyed", get = unstaged_part_keyed, unstaged)]
+    pub struct PartKeyed;
+
+    #[route("/status-part-keyed", get = unstaged_status_part_keyed, unstaged)]
+    pub struct StatusPartKeyed;
+
+    #[route("/no-store-relay-keyed", get = unstaged_no_store_relay_keyed, unstaged)]
+    pub struct NoStoreRelayKeyed;
+
+    #[route("/no-store-relay-plain", get = unstaged_no_store_relay_plain, unstaged)]
+    pub struct NoStoreRelayPlain;
+
+    #[route("/relay-keyed", get = unstaged_relay_keyed, unstaged)]
+    pub struct RelayKeyed;
+
+    #[route("/relay-plain", get = unstaged_relay_plain, unstaged)]
+    pub struct RelayPlain;
+
+    #[route("/cookie-keyed", get = unstaged_cookie_keyed, unstaged)]
+    pub struct CookieKeyed;
 }
 
 /// A form's submit key rendered to a string, in an answer that says any cache may keep it.
@@ -829,4 +850,116 @@ async fn an_unstaged_public_answer_whose_handler_drew_a_submit_key_is_the_browse
     let (status, headers, _) = call_with(router.clone(), "GET", "/shared-plain", None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers["cache-control"], "public, max-age=60");
+}
+
+/// A header part of the app's own whose refusal is the whole answer: here a `Public` one.
+struct Refusing(crate::Public<String>);
+
+impl crate::response::IntoResponseParts for Refusing {
+    type Error = crate::Public<String>;
+
+    fn into_response_parts(
+        self,
+        _: crate::response::ResponseParts,
+    ) -> Result<crate::response::ResponseParts, crate::Public<String>> {
+        Err(self.0)
+    }
+}
+
+async fn unstaged_part_keyed() -> (Refusing, ()) {
+    (Refusing(unstaged_shared_keyed().await), ())
+}
+
+async fn unstaged_status_part_keyed() -> (StatusCode, Option<Refusing>, ()) {
+    (StatusCode::NO_CONTENT, Some(Refusing(unstaged_shared_keyed().await)), ())
+}
+
+/// A relayed body with the upstream's own caching header for CDNs and its tag.
+fn upstream(body: String) -> crate::Public<crate::Relay> {
+    let mut headers = http::HeaderMap::new();
+    headers.insert("surrogate-control", http::HeaderValue::from_static("max-age=3600"));
+    headers.insert(http::header::ETAG, http::HeaderValue::from_static("\"upstream\""));
+    crate::Public::new(Duration::from_secs(60), crate::Relay::new(StatusCode::OK, headers, Body::from(body)))
+}
+
+fn keyed_field() -> String {
+    crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html()
+}
+
+async fn unstaged_no_store_relay_keyed() -> crate::NoStore<crate::Public<crate::Relay>> {
+    crate::NoStore(upstream(keyed_field()))
+}
+
+async fn unstaged_no_store_relay_plain() -> crate::NoStore<crate::Public<crate::Relay>> {
+    crate::NoStore(upstream("plain".into()))
+}
+
+async fn unstaged_relay_keyed() -> crate::Public<crate::Relay> {
+    upstream(keyed_field())
+}
+
+async fn unstaged_relay_plain() -> crate::Public<crate::Relay> {
+    upstream("plain".into())
+}
+
+/// A keyed `Public` body that sets a cookie and says `no-store` with the headers before it.
+async fn unstaged_cookie_keyed() -> ([(http::HeaderName, &'static str); 2], crate::Public<String>) {
+    ([(http::header::CACHE_CONTROL, "no-store"), (http::header::SET_COOKIE, "seen=1")], unstaged_shared_keyed().await)
+}
+
+/// A tuple's part answers in the body's place when it refuses, so a part of the app's own whose
+/// refusal is a `Public` answer is watched as that answer is, with or without a status first: a
+/// handler that drew a key goes out `private, no-cache` with the refusal's body, not with its
+/// lifetime.
+#[tokio::test]
+async fn an_unstaged_tuple_whose_part_refuses_with_a_keyed_public_answer_is_the_browser_s_alone() {
+    let router = App::new(unstaged_shared_url::router()).router();
+    for path in ["/part-keyed", "/status-part-keyed"] {
+        let (status, headers, body) = call_with(router.clone(), "GET", path, None, None).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(headers["cache-control"], "private, no-cache", "{path}: {headers:?}");
+        assert!(body.contains("data-submit value="), "{path}");
+    }
+}
+
+/// `NoStore` around a `Public` relay is watched as the relay is: one whose handler drew a key goes
+/// out `private, no-store` without the upstream's `Surrogate-Control`, which `no-store` does not
+/// replace, and without its tag; one without a key is `no-store`.
+#[tokio::test]
+async fn an_unstaged_no_store_answer_around_a_keyed_public_relay_keeps_no_cdn_header() {
+    let router = App::new(unstaged_shared_url::router()).router();
+    let (status, headers, body) = call_with(router.clone(), "GET", "/no-store-relay-keyed", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["cache-control"], "private, no-store", "{headers:?}");
+    assert!(!headers.contains_key("surrogate-control") && !headers.contains_key("etag"), "{headers:?}");
+    assert!(body.contains("data-submit value="));
+    let (_, headers, _) = call_with(router.clone(), "GET", "/no-store-relay-plain", None, None).await;
+    assert_eq!(headers["cache-control"], "no-store", "{headers:?}");
+}
+
+/// An unstaged answer whose handler drew a key goes out without a tag it was given, an upstream's
+/// here; a `Public` relay without one keeps the upstream's tag and caching header.
+#[tokio::test]
+async fn an_unstaged_answer_whose_handler_drew_a_submit_key_keeps_no_tag_it_was_given() {
+    let router = App::new(unstaged_shared_url::router()).router();
+    let (status, headers, _) = call_with(router.clone(), "GET", "/relay-keyed", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["cache-control"], "private, no-cache", "{headers:?}");
+    assert!(!headers.contains_key("etag") && !headers.contains_key("surrogate-control"), "{headers:?}");
+    let (_, headers, _) = call_with(router.clone(), "GET", "/relay-plain", None, None).await;
+    assert_eq!(headers["cache-control"], "public, max-age=60", "{headers:?}");
+    assert_eq!(headers["etag"], "\"upstream\"", "{headers:?}");
+    assert_eq!(headers["surrogate-control"], "max-age=3600", "{headers:?}");
+}
+
+/// The unstaged lane's pass over an answer that sets a cookie keeps the `private` beside the
+/// `no-store` the watch wrote on a keyed answer, for a CDN that ignores a bare `no-store`.
+#[tokio::test]
+async fn an_unstaged_keyed_answer_that_sets_a_cookie_stays_private_no_store() {
+    let router = App::new(unstaged_shared_url::router()).router();
+    let (status, headers, body) = call_with(router.clone(), "GET", "/cookie-keyed", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["cache-control"], "private, no-store", "{headers:?}");
+    assert_eq!(headers["set-cookie"], "seen=1");
+    assert!(body.contains("data-submit value="));
 }

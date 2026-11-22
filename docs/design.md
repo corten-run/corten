@@ -7377,7 +7377,9 @@ rules something out.
     in `Vary`, as a page is. With both, a URL's eight copies are shared by the ways of asking
     times the languages asked in. An answer may hold markup its handler rendered, and one with a
     form's new submit key is the request's alone: not kept, and sent `private, no-cache` without
-    a CDN's caching header, as a page whose render drew the key is. A page's render marks the key it drew; markup rendered any other way (into JSON,
+    a CDN's caching header, as a page whose render drew the key is, and without a tag it was
+    given (the app's, a middleware's or a relayed upstream's): that tag names a body whose key a
+    browser may have sent already, and a `304` to it would keep that body. A page's render marks the key it drew; markup rendered any other way (into JSON,
     text or a file, or to a string a page holds as `raw` markup)
     carries no mark, so the handler of every route whose answer may be `Public` is watched (its
     own polls) for one being drawn, and the watch marks the answer (`cache::Unrepeatable`) as a
@@ -7385,8 +7387,10 @@ rules something out.
     either makes the answer private.
     Which answers may be `Public` is a constant of the answer's type, `IntoResponse::MAY_SHARE`,
     known when the crate compiles: `Public` says yes; each of Corten's other answers says no, and
-    one that holds another (`Result`, a status or headers before it, `SwitchOr`) says what that
-    one does; a type of the app's own always says yes, since Corten cannot see what its
+    one that holds another (`Result`, `NoStore`, a status or headers before it, `SwitchOr`) says
+    what that one does, a tuple what each part's refusal does too, since a part that refuses
+    answers in the body's place (`NoStore` is not a no: a `no-store` leaves a CDN's own caching
+    header where it was, so the watch must still see a `Public` answer under it); a type of the app's own always says yes, since Corten cannot see what its
     `into_response` makes (an enum with a `Public` variant beside a private one), and its type
     for the constant is one an app cannot name, so it cannot say no (a `compile_fail` doctest).
     A raw `Response`, a `Relay` and headers alone say no: the caching their headers say is the
@@ -7394,7 +7398,9 @@ rules something out.
     the store does (none kept, `corten dev`, a body route that leaves the store out, a build
     without `compress`), staged or `unstaged`: an unstaged route has no stage to settle its
     caching, so one whose handler drew a key is made `private, no-cache` there, with no caching
-    header a CDN reads first, as one that sets a cookie is; any other unstaged handler is routed
+    header a CDN reads first and no tag, as one that sets a cookie is (the lane's pass over one
+    that sets a cookie keeps a plain `private` beside its `no-store`, so the watch's
+    `private, no-store` stays as written); any other unstaged handler is routed
     as it was, with nothing around it. Refusing `Public` on an unstaged route was not chosen: the
     guide names it as how an unstaged answer that changes says so, and covering it costs no other
     unstaged route anything. On any route whose answer cannot be `Public` the watch compiles away.
@@ -7402,7 +7408,12 @@ rules something out.
     it already had), which the stages read before they settle the answer, so a middleware of the
     app's that makes a new response of the one it was given, with its body and headers and none
     of its extensions, does not take the mark away; a layer around the app (`App::layer`) still
-    runs after the answer is settled. Held beside the handler's work in the future the route
+    runs after the answer is settled. One that also gives `next` a request rebuilt without the
+    first one's extensions takes the signal away with them, so a keyed answer it rebuilds too
+    can go out as its route wrote it; request provenance that survives a rebuilt request is being
+    made in
+    [#1890 Drop CDN caching headers from answers that are one visitor's alone and from unanswered failures](https://github.com/corten-run/corten/pull/1890),
+    and the watch is to use it once that is merged. Held beside the handler's work in the future the route
     already makes, the watch adds a read and a reset of a thread's mark around each poll, and a
     watched route holds the request's signal. A request answered in process from inside a
     handler (one that polls another route on its own stack) is polled within the outer watch, so

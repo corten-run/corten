@@ -1126,13 +1126,14 @@ away. A page that draws a key with `SubmitKey::field` is also never shared, what
 says: a cache that gave one visitor's page to the next would have the second visitor's submit
 taken for a repeat of the first. A `Public` page with such a form goes out `private, no-cache`,
 without the CDN caching headers a middleware wrote (`CDN-Cache-Control`, `Surrogate-Control` and
-the others [caching](app.md#caching) lists), so the browser asks again before reusing it, the
+the others [caching](app.md#caching) lists) and without a tag it was given, so the browser asks again before reusing it, the
 app does not keep it, and `corten dev` logs it; one that says `no-store` goes out `private,
 no-store`, since some CDNs ignore a bare `no-store`. The render marks the answer it is drawn
 for: a page, a patch, the layout's reads, and a `Rendered` placed in one. Text carries no mark: a
 live stream's fragment
 (rendered after the stream's headers went out), `Rendered::into_string` and `raw`. A `Public`
-route's handler (and an answer type of the app's own, staged or `unstaged`) is watched for a key
+route's handler (and an answer type of the app's own, `NoStore` or a tuple of headers around
+either, staged or `unstaged`) is watched for a key
 it draws as text too (in JSON, in text, in a file, or placed in a page with `raw`), and that
 answer is sent as a keyed page is. Only what the handler draws on its own thread before it
 returns is seen: not a key drawn by a task it spawned or on another thread, nor one drawn as a

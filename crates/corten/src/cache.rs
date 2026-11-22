@@ -322,10 +322,11 @@ const NOTICE_GONE: [&[u8]; 2] = [b"__Host-corten-notice=;", b"corten-notice=;"];
 /// of a shared one when the response may differ between users.
 pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     // An answer that drew a submit key ([`Unrepeatable`]) is the browser's alone, whatever its
-    // `Cache-Control` says: a CDN reads its own header first, so none of those Corten names stays.
+    // `Cache-Control` says: a CDN reads its own header first, so none of those Corten names stays,
+    // and no tag either.
     let drew_key = res.extensions().get::<Unrepeatable>().is_some();
     if drew_key {
-        drop_cdn_caching(res.headers_mut());
+        drop_keyed_reuse(res.headers_mut());
     }
     // One lookup for the usual response, which says nothing.
     match res.headers_mut().entry(header::CACHE_CONTROL) {
@@ -449,11 +450,21 @@ pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
     }
 }
 
-/// The `Cache-Control` for a page that drew a submit key and goes out without [`settle`] (a
-/// refused write's error page), with the CDN caching headers it had removed: `private, no-store`
-/// where it names `no-store`, as [`settle`] gives one, and the default otherwise.
-pub(crate) fn drawn_unsettled(headers: &mut HeaderMap) -> HeaderValue {
+/// Removes from an answer that drew a form's new submit key what would let it be given again: the
+/// caching headers a CDN reads first ([`drop_cdn_caching`]) and a tag, whoever set it (the app, a
+/// middleware, an upstream it relays). Corten makes no tag for one ([`tag`]); one it was given
+/// names a body whose key a browser may already have sent, and a `304` to it would keep that body.
+pub(crate) fn drop_keyed_reuse(headers: &mut HeaderMap) {
     drop_cdn_caching(headers);
+    headers.remove(header::ETAG);
+}
+
+/// The `Cache-Control` for a page that drew a submit key and goes out without [`settle`] (a
+/// refused write's error page), with the CDN caching headers and the tag it had removed
+/// ([`drop_keyed_reuse`]): `private, no-store` where it names `no-store`, as [`settle`] gives
+/// one, and the default otherwise.
+pub(crate) fn drawn_unsettled(headers: &mut HeaderMap) -> HeaderValue {
+    drop_keyed_reuse(headers);
     if headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes())) {
         PRIVATE_NO_STORE
     } else {

@@ -2413,7 +2413,9 @@ impl<A> NoStore<A> {
 }
 
 impl<A: IntoResponse> IntoResponse for NoStore<A> {
-    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+    // What it holds may be `Public` (on an unstaged route, or on one branch of a type of the
+    // app's own), with a CDN's caching header `no-store` does not replace: watched as that one is.
+    const MAY_SHARE: sealed::MayShare = A::MAY_SHARE;
 
     fn into_response(self) -> Response {
         let mut res = self.0.into_response();
