@@ -397,21 +397,37 @@ establish a general ranking.
       predeclared margin. Say what the run did not resolve. Retired instructions measure work,
       not speed; fewer cycles per request show lower CPU cost, not lower request latency.
 
-      A workload the change should leave as fast as it was is held to the predeclared margin of
-      +1%: the one-sided 95% upper bound on the median per-pair change in user plus kernel cycles
-      per request is under +1%. Moving code alone moves cycles, so a workload whose bound is at
-      or above +1% but under the layout floor recorded in
-      [design Choice 71](docs/design.md#choice-layout-floor) (+1.62% on the host type it names)
-      still passes when the same workload's user instructions are flat: the bound on its paired
-      change in user instructions per request is at or below +0.05%, and its median is between
-      -0.05% and +0.05%. The pull request reports that workload as within the layout floor,
-      claims nothing about its speed and gives its user and kernel split. A bound at or above
-      the floor, or instructions that are not flat, fails as before. A win is never claimed from
-      a change inside the floor: a reduction in cycles is a win only when its bound is below
-      minus the floor as well as the predeclared margin. A run on a host type the floor was not
-      measured on either measures its own A/A layout control in the same run, main against main
-      with one never-called function added as the Choice describes, whose bound is that run's
-      floor, or holds every such workload to +1%.
+      The no-regression margin is separate from that smallest worthwhile reduction: a workload the
+      change should leave as fast as it was is held to +1%, declared before the run. If the
+      one-sided 95% upper bound on the median per-pair change in user plus kernel cycles per
+      request is under +1%, the margin is met. If it is at or above +1%, the margin is not met,
+      with one exception, for a negative control: a workload the run's plan (its `margin.md`)
+      names before the run as one whose code paths the change does not touch, with the reason,
+      which the pull request's review accepts. A workload the change touches is held to +1% with
+      no floor, however flat its instructions, and so is a workload not named so before the run; a
+      declaration is never added or changed after a run to clear its result.
+
+      A negative control whose bound is at or above +1% but under the layout floor that applies
+      may go ahead when its user instructions pass a screen: the median of the paired changes in
+      user instructions per request is between -0.02% and +0.02% and its one-sided 95% upper bound
+      is at or below +0.02%, compared unrounded. The pull request reports it as "missed +1%;
+      placement and regression not distinguished", not as having met the margin or as unchanged
+      speed, with its user and kernel split. This is a screening rule, not an equivalence test: it
+      does not show that the control's instructions or CPU cost are unchanged. The floor recorded
+      in [design Choice 71](docs/design.md#choice-layout-floor) (+1.62%) applies only under the
+      protocol and on the host it was measured on: every recorded turn on a freshly started build,
+      a Xeon Platinum 8358, and rustc 1.100.0 with LLD 23.1.5 and the repository's release
+      profile. Any other run either carries its own A/A layout control in the same run, main
+      against main with one never-called function added as the Choice describes, with its pads,
+      pairs and statistic fixed in the plan before the run, which counts only if main built twice,
+      byte-identical, meets +1% in that run, and whose larger bound is that run's floor up to a
+      cap of +2%; or it holds every workload to +1%. The exception never covers a bound at or
+      above the floor or a regression other evidence corroborates, and does not replace the
+      affected-route measurement above or the memory and waiting measurements below. A reduction
+      in cycles is claimed as a CPU-cost win only when its bound establishes the predeclared
+      smallest worthwhile reduction and placement is ruled out: below minus the floor where one
+      applies, by a placement check declared before the run where none does. Otherwise it is
+      reported as a measured reduction, not a win.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,
