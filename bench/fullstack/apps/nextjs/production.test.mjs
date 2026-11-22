@@ -238,6 +238,13 @@ for (const source of profile ? ["fixture", "api"] : []) {
     });
     try {
       await ready(base, app);
+      const result = await qualify({ base, source, upstream: upstreamBase });
+      await mkdir(new URL("./work/", import.meta.url), { recursive: true });
+      await writeFile(new URL(`./work/bounded-qualification-${source}.json`, import.meta.url), JSON.stringify(result, null, 2));
+      assert.deepEqual(result.missing, []);
+      assert.equal(result.cells.json405, "405 json");
+      assert.equal(result.eligible, true);
+      assert.ok(result.unmeasured.includes("connectionCap"));
       const record = "/api/marketplace/item_1";
       const alert = record + "/alerts";
       const post = (path) => fetch(base + path, {
@@ -257,6 +264,22 @@ for (const source of profile ? ["fixture", "api"] : []) {
         assert.deepEqual(await refused.json(), { error: "method not allowed" });
         assert.deepEqual(refused.headers.getSetCookie(), []);
       }
+      const put = await fetch(base + alert + "?locale=en-US", {
+        method: "PUT", headers: { Origin: base },
+        body: new URLSearchParams({ email: "method@example.test", target_price: "1.25" }),
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(put.status, 405);
+      assert.equal(put.headers.get("allow"), "POST");
+      assert.deepEqual(await put.json(), { error: "method not allowed" });
+      assert.deepEqual(put.headers.getSetCookie(), []);
+      const malformed = await fetch(base + alert + "?locale=en-US", {
+        method: "PUT", headers: { Origin: base, "Content-Type": "application/json" },
+        body: "{", signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(malformed.status, 400, "the write route keeps Next's native malformed-body rejection");
+      await malformed.text();
+      assert.deepEqual(malformed.headers.getSetCookie(), []);
       const badInput = await post(alert);
       assert.equal(badInput.status, 400, "the write resource accepts POST but requires a locale");
       assert.deepEqual(await badInput.json(), { error: "Unsupported locale" });
@@ -281,13 +304,6 @@ for (const source of profile ? ["fixture", "api"] : []) {
       const scripts = [...html.matchAll(/<script\b[^>]*>/g)];
       assert.ok(scripts.length > 0, "Next's native scripts must remain present");
       for (const [tag] of scripts) assert.ok(tag.includes(`nonce="${nonce}"`), "Next script missing document nonce");
-      const result = await qualify({ base, source, upstream: upstreamBase });
-      await mkdir(new URL("./work/", import.meta.url), { recursive: true });
-      await writeFile(new URL(`./work/bounded-qualification-${source}.json`, import.meta.url), JSON.stringify(result, null, 2));
-      assert.deepEqual(result.missing, []);
-      assert.equal(result.cells.json405, "405 json");
-      assert.equal(result.eligible, true);
-      assert.ok(result.unmeasured.includes("connectionCap"));
       const live = await fetch(base + "/health/live", { signal: AbortSignal.timeout(5000) });
       assert.equal(live.status, 200);
       assert.equal(await live.text(), "ok");

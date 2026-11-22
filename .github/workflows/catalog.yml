@@ -197,6 +197,8 @@ jobs:
             bench/marketplace/results/w1/
             bench/fullstack/apps/fastapi/tests/results/
             bench/fullstack/apps/gin/production-results/
+            bench/fullstack/apps/nextjs/work/bounded-qualification-fixture.json
+            bench/fullstack/apps/nextjs/work/bounded-qualification-api.json
           if-no-files-found: warn
           retention-days: 14
 

@@ -10,6 +10,8 @@ requests do not append. The original localized messages remain the form result.
 The hydrated Pages Router form posts to the native `/api/marketplace/{id}/alerts?locale={locale}`
 API route. A plain form still posts to the SSR page. `/api/marketplace/{id}` is read-only
 (GET and HEAD); POST to the record returns a JSON 405 regardless of form input.
+The write route keeps Next's native body parser and size limit. A malformed body can
+be rejected there before the handler evaluates the method; it never reaches the store.
 Source failures in the enhanced API return the existing 502 JSON error without
 appending an alert, including unavailable upstreams and malformed records.
 
