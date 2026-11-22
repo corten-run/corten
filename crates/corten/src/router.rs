@@ -10,8 +10,9 @@
 //! without the body; a method the route has no handler for is a `405` whose `Allow` names those
 //! it has, and one no route in the app has a handler for is a `501` (RFC 9110 9.1; axum's router
 //! answered it `405`); a `HEAD` says the length its `GET` has (`Content-Length`, which the server
-//! writes for any other answer from its body's size); and a `2xx` to `CONNECT` has no body. A
-//! request's handler is boxed once, and so are the stages around it.
+//! writes for any other answer from its body's size); and a `2xx` to `CONNECT` has no body,
+//! `Content-Length` or `Transfer-Encoding`. A request's handler is boxed once, and so are the
+//! stages around it.
 //!
 //! [matchit]: https://docs.rs/matchit
 
@@ -909,7 +910,8 @@ impl Dispatch {
 
 /// What the router does to every answer on its way out, as HTTP has it: a `405`'s `Allow`; and,
 /// outside every layer, no body for a `HEAD`, which keeps the length its `GET` would say when
-/// the body's is known, nor for a `2xx` to `CONNECT`.
+/// the body's is known, nor for a `2xx` to `CONNECT`, which loses its `Content-Length` and
+/// `Transfer-Encoding` too.
 ///
 /// The length of any other answer is left to the server, which writes it from the body's exact
 /// size into the head it sends (hyper 1.12's HTTP/1 encoder, `content-length: 0` included where
@@ -949,12 +951,14 @@ impl Fix {
         use http_body::Body as _;
         if self.method == Asked::Connect && res.status().is_success() {
             // RFC 9110 9.3.6: a `2xx` to `CONNECT` switches the connection to a tunnel, so it has no
-            // content. Its headers are left as they are, as axum left them.
-            let headers = res.headers();
-            if headers.contains_key(header::CONTENT_LENGTH)
-                || headers.contains_key(header::TRANSFER_ENCODING)
-                || res.body().size_hint().lower() != 0
-            {
+            // content, and a server must not send `Content-Length` or `Transfer-Encoding` in it.
+            // hyper refuses to send a head with either (hyper 1.12's HTTP/1 encoder), which would
+            // close the connection with no answer at all (#1915), so both go with the body. Its
+            // other headers are left as they are.
+            let headers = res.headers_mut();
+            let length = headers.remove(header::CONTENT_LENGTH).is_some();
+            let chunked = headers.remove(header::TRANSFER_ENCODING).is_some();
+            if length || chunked || res.body().size_hint().lower() != 0 {
                 res = res.map(|_| Body::empty());
             }
             return res;
