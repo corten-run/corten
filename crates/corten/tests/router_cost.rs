@@ -12,10 +12,12 @@
 //! `ROUTER_ASKED=1` asks for that route three times first, so a page is kept by then.
 //! `ROUTER_TARGET=kept` with `ROUTER_PUBLIC=page` counts the kept page given again, and
 //! `ROUTER_TARGET=new` with it a page no kept one stands for, made and kept: a new URL each
-//! request (`/home?n=1`, ...), in a store with room for all of them.
+//! request (`/home?n=0`, ...), in a store with room for all of them. After the counted requests
+//! the first and the last of those URLs are asked for again and must be given from the store, so
+//! a run whose pages were made but not kept fails rather than counting a render alone.
 //! `ROUTER_KEPT=0` turns the store off (`App::kept_answers(0)`), for what a write pays the store
-//! in the same app; with it nothing is kept, so `ROUTER_ASKED=1` and `ROUTER_TARGET=kept` with a
-//! page, which assert that one is, do not go with it.
+//! in the same app; with it nothing is kept, so `ROUTER_ASKED=1`, `ROUTER_TARGET=kept` and
+//! `ROUTER_TARGET=new` with a page, which assert that one is, do not go with it.
 //!
 //! What a write pays for naming the page it changed: `ROUTER_NAMED=1` with `ROUTER_TARGET=write`
 //! and `ROUTER_PUBLIC=page` gives the write a handler that takes `KeptAnswers` and calls
@@ -133,6 +135,8 @@ fn request_cost() {
     };
     let app = App::new(routes);
     let off = std::env::var("ROUTER_KEPT").is_ok_and(|kept| kept == "0");
+    assert!(!(new && off), "ROUTER_TARGET=new counts pages made and kept, so it needs the store: unset ROUTER_KEPT");
+    assert!(!new || requests > 0, "ROUTER_TARGET=new needs ROUTER_REQUESTS above 0");
     let router = if off { app.kept_answers(0).router() } else { app.router() };
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(async {
@@ -166,6 +170,14 @@ fn request_cost() {
                 let response = router.clone().oneshot(req).await.unwrap();
                 assert_eq!(response.status().as_u16(), 200);
                 assert!(!response.headers().contains_key("age"), "a new URL is made");
+                response.into_body().collect().await.unwrap();
+            }
+            // Outside the counted loop, and the same work at every count: the pages were kept.
+            for n in [0, requests - 1] {
+                let req = http::Request::get(format!("/home?n={n}")).body(corten::http::Body::empty()).unwrap();
+                let response = router.clone().oneshot(req).await.unwrap();
+                assert_eq!(response.status().as_u16(), 200);
+                assert!(response.headers().contains_key("age"), "the page made for /home?n={n} was kept");
                 response.into_body().collect().await.unwrap();
             }
             return;
