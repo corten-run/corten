@@ -7548,16 +7548,21 @@ rules something out.
     value's 46.5 to 48.6 ms against 43.3 to 46.3. The store's write lock is taken by a page kept
     into a full store as well, which runs the clock under it: when another thread kept a 4 MiB
     page into a full default store of about 30,000 pages, each read since the clock last passed,
-    just before the job finished encoding, that insertion held the lock 5.8 to 6.3 ms at the
-    median (4.3 to 63.8 ms) to drop 3,802 pages, and the job waited for it, 6.6 to 7.0 ms at the
-    median (1.5 to 43.9; its bytes then found room in 85 of 420), while the held 4 KB value's
+    just before the job finished encoding, that insertion's call (`Store::keep`, timed from before
+    it asked for the lock until it returned, which is not the time it held the lock) took 5.8 to
+    6.3 ms at the median (4.3 to 63.8 ms) and dropped 3,802 pages, and the job as a whole, from its
+    start to its end, took 6.6 to 7.0 ms at the median (1.5 to 43.9) over all 420, the 85 whose
+    bytes found room and the 335 that did not. The probe did not time when the job asked for the
+    lock, so it shows neither how long each job was blocked nor that every refusal followed a
+    wait. Meanwhile the held 4 KB value's
     forms took 12.3 to 12.6 ms (5.2 to 48.9) against 4.2 to 4.3 ms (2.9 to 78.4) on main, whose
     held values the same insertion does not hold up (79 KB: 51.4 to 51.8 against 43.3 to 45.8).
-    So on that workstation the longest job a held value waited for was 21.5 ms with no other
-    writer and 43.9 ms behind such an insertion, and the longest a held 4 KB value took was 35.1
+    So on that workstation the longest whole jobs seen were 21.5 ms with no other writer and 43.9
+    ms in the setup with such an insertion, times observed, not lock waits or ceilings, and the
+    longest a held 4 KB value took was 35.1
     and 48.9 ms, where main's took up to 36.1 and 78.4 ms in the same setups: the ranges are the
     busy machine's as much as the change's, and the medians are what it adds, about 2 to 4.5 ms
-    behind a job and about 8 ms behind one that waits for such an insertion. A job can wait for
+    behind a job and about 8 ms in the setup with such an insertion. A job can wait for
     more than one writer, so the wait has no fixed bound, and 32 KiB is the size these were
     measured at, not a bound on latency past them. A held value's requests get the per-request
     form until its forms are made, as before (0.06 ms of zstd 1 each for 4 KB, 0.5 ms for 79 KB).
@@ -7565,7 +7570,22 @@ rules something out.
     main's `153be9116`, five alternated runs of 21 in a Linux container held to four CPUs on a
     desktop that ran other builds throughout, on synthetic pages (a table of records from a
     48-word vocabulary) and a JSON array of items: a busy desktop's times, good for their sizes
-    and ratios, not a cost per request.
+    and ratios, not a cost per request. CONTRIBUTING.md asks for waiting to be timed on a quiet
+    Linux host, so the fourth run below times it there too, with the same probe on this change
+    merged with main's `7a275ef15` against that main, built with the release profile and run with
+    jemalloc preloaded on four of the host's CPUs: a body of 32,768 bytes, held JSON of 4,021 and
+    78,967 bytes, the four setups (no job, room, no room, and the 4 MiB insertion), 20 processes
+    of each build alternated, of 21 repetitions each, a repetition paired with the other build's
+    in the same round and place. Its bounds were set before it runs, on the 4 KB value, whose
+    wait matters most against its own cost: the one-sided 95% upper bound on the median added time
+    in a pair is under H, the base's median of that value's own forms on the host in the same
+    pass, with room and with none (the size of the bound was chosen so one encoding costs less than
+    those forms, above), and under H plus the base's median insertion call where the 4 MiB page is
+    kept (a job can wait for one such writer by design). The setup with no job, the same in both
+    builds, must read under +0.5 ms, every job with room must put its bytes in and every one
+    without must find none, or the pass cannot be used. A bound at or over its limit, or a pass
+    that cannot be used, blocks the merge as the cycles' margin does; the 79 KB value is reported
+    with no bound. Until it runs, the wait on a quiet host is not measured.
 
     Before the bound, an earlier probe (`cde42e710` against main's `a0eeeacca`, the same machine,
     five alternated runs of 11 and three runs of 15 for the sizes between) timed a job's encoding
@@ -7583,9 +7603,11 @@ rules something out.
     that one of 32,768 is queued on its second answer and not its first, and that the bound is the
     body's length, not its compressed form's.
 
-    A kept JSON, text or file body is bytes made once and sent many times too, and its compressed
-    forms are kept the same way, so it gets its brotli 5 by the same rule and in the same queue:
-    one rule for whatever the store keeps. JSON the app holds as bytes (`json::Raw`), whose
+    A kept JSON, text or file body is bytes made once and sent many times too, and where the app
+    compresses it its compressed forms are kept the same way, so it gets its brotli 5 by the same
+    rule and in the same queue: one rule for whatever the store keeps. A body of a type no build
+    compresses, a picture, kept since main's `7a275ef15` for its tag's hash, has no compressed form,
+    so no answer queues one for it, which `tests/cache.rs` checks. JSON the app holds as bytes (`json::Raw`), whose
     forms are the held values that queue goes after, is never kept, so no answer has a job in
     both. Counted as a kept page's below (`ae3634e49`, this change merged with main, against
     main's `04c209fca`), a kept JSON body of 1,999 bytes given again to a data client with a
