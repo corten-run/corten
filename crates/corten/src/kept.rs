@@ -190,9 +190,11 @@ thread_local! {
 /// bodies, but about one in 256, drawn on each thread, which asks as before and so finds out
 /// a route whose bodies grew. Most often each was too small; an answer left out for another
 /// reason (a failure, a submit key, a lifetime of nothing) counts the same, since asking for
-/// it gained as little. A route that answers some of each keeps asking: an answer kept ends
-/// the run, and so does one given from the store, since once a route's large bodies are kept
-/// the only ones still made are the small. While a route leaves the store out, a body it kept
+/// it gained as little. A route that answers some of each keeps asking while an answer kept or
+/// given comes within each [`UNKEPT_RUN`]: one kept ends the run, and so does one given from
+/// the store, since once a route's large bodies are kept the only ones still made are the
+/// small. Without one (64 failures in a row from a route with bodies kept, too) it leaves,
+/// until the request that asks is one for a body kept or worth keeping. While a route leaves the store out, a body it kept
 /// earlier is not given, but to the request that asks: it is made again, as it would be had it
 /// not been kept, and the kept one may be given after it, while its lifetime lasts.
 ///
@@ -231,9 +233,16 @@ impl Unkept {
             if run != 0 {
                 self.0.store(0, Ordering::Relaxed);
             }
-        } else if run < UNKEPT_RUN {
-            // From the count this request read alone: where an answer was kept or given
-            // meanwhile, the run it ended stays ended. Two requests at once may count as one.
+        } else {
+            self.counted(run);
+        }
+    }
+
+    /// One more answer not kept, after a run read as `run`. Counted from that run alone: where
+    /// an answer was kept or given since it was read, the run it ended stays ended. Two
+    /// requests at once may count as one.
+    fn counted(&self, run: u8) {
+        if run < UNKEPT_RUN {
             let _ = self.0.compare_exchange(run, run + 1, Ordering::Relaxed, Ordering::Relaxed);
         }
     }
@@ -272,7 +281,9 @@ fn draw(mut last: u32) -> u32 {
 
 /// What became of one request that found nothing kept, told to its route when this goes: its
 /// answer was kept, or it was not, whatever the reason and also where the handler never
-/// answered.
+/// answered. A request for a URL not asked for before in a full store has none
+/// ([`Asked::missed`]): what was refused there is the URL, before any answer, and counting it
+/// would let a walk over new URLs make a route leave that has bodies kept.
 struct Told(Option<Arc<Unkept>>, bool);
 
 impl Drop for Told {
@@ -1054,6 +1065,47 @@ mod tests {
         let route = left();
         route.found();
         assert!((0..1024).all(|_| !route.leaves()));
+    }
+
+    /// An answer kept or given between a request's read of the run and its count is not lost:
+    /// the run it ended stays ended, where a plain write of the count read would start it at
+    /// its length.
+    #[test]
+    fn a_run_ended_while_a_request_counted_stays_ended() {
+        let route = Unkept::default();
+        for _ in 0..UNKEPT_RUN - 1 {
+            route.made(false);
+        }
+        let read = route.0.load(Ordering::Relaxed);
+        assert_eq!(read, UNKEPT_RUN - 1);
+        route.made(true);
+        route.counted(read);
+        assert_eq!(route.0.load(Ordering::Relaxed), 0);
+        assert!(!route.leaves());
+        // With nothing between, the count read is the one counted from.
+        route.counted(0);
+        assert_eq!(route.0.load(Ordering::Relaxed), 1);
+        // A run stops at its length, however many more answers are not kept.
+        let route = left();
+        for _ in 0..600 {
+            route.made(false);
+        }
+        assert_eq!(route.0.load(Ordering::Relaxed), UNKEPT_RUN);
+    }
+
+    /// The request that asks is drawn: of two routes that left the store out and are asked
+    /// turn about, each gets to ask, where a count of the thread's requests would come round
+    /// to the same one every time.
+    #[test]
+    fn two_routes_asked_turn_about_both_get_to_ask() {
+        let (one, other) = (left(), left());
+        DRAWN.set(DRAWN_FROM);
+        let (mut first, mut second) = (0, 0);
+        for _ in 0..1 << 17 {
+            first += u32::from(!one.leaves());
+            second += u32::from(!other.leaves());
+        }
+        assert!((384..=640).contains(&first) && (384..=640).contains(&second), "512 each within a quarter: {first} {second}");
     }
 
     /// Each thread draws for itself: what one has drawn moves no other's turn.
