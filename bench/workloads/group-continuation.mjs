@@ -10,7 +10,7 @@ import { digest, fileHash, physical, regular, treeHash } from "./cloud-local.mjs
 import { full } from "./cloud-options.mjs";
 import { retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { continuationIndex, continuationIndexSha256, continuationPeer, fleetLockSnapshot, fleetRoot, outside, present, readFleet, readGroup, readLaunchIntent,
-  readRemainingIntent, recheckCollectedGroup, verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
+  readRemainingIntent, recheckCollectedGroup, reportBatch, sameReportBatch, verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
 
 export const continuationLock = ".continuation-operation.lock";
 const groups = selection(), names = groups.groups.map(({ group }) => group);
@@ -114,7 +114,7 @@ export async function continuationAdmission(root, group, deps) {
   return scanContinuation(root, deps, group);
 }
 
-async function scanContinuation(root, { repo, interrupted, inspect } = {}, admittedGroup) {
+async function scanContinuation(root, { repo, interrupted, inspect, processStart } = {}, admittedGroup) {
   root = fleetRoot(root, repo);
   const bytes = continuationIndex(root), indexSha256 = digest(bytes), index = JSON.parse(bytes);
   assert.ok(Array.isArray(index) && index.length <= 64, "invalid continuation index");
@@ -133,6 +133,7 @@ async function scanContinuation(root, { repo, interrupted, inspect } = {}, admit
   });
   const attempts = new Map(names.map((group) => [group, []])), slots = new Map(), unlaunched = new Map(), ids = new Set();
   const proofs = [], retryEvidence = [], manifests = [], states = [], peers = [], unconfirmed = [], needsCensus = new Set(), liveIps = new Set();
+  const retainedLocks = [];
   const claim = (id) => { assert.ok(!ids.has(id), "duplicate continuation host identity"); ids.add(id); };
   const matchesCurrentContract = (selected) => groups.groups.some((s) => s.group === selected.group
     && s.contractSha256 === selected.contractSha256 && JSON.stringify(s.apps) === JSON.stringify(selected.apps));
@@ -208,13 +209,14 @@ async function scanContinuation(root, { repo, interrupted, inspect } = {}, admit
   const read = async (fleet, checkout, archives) => {
     if (admittedGroup) return readAdmission(fleet, checkout, archives);
     const { manifest, manifestSha256 } = fleet, { round, commit } = manifest;
-    const lock = fleetLockSnapshot(fleet.root);
+    const lock = reportBatch(fleet, processStart);
     if (lock === "busy" && manifest.single) { addPeer(fleet); return; }
     assert.notEqual(lock, "busy", "continuation source has an active batch");
     const launch = manifest.single && present(join(fleet.root, "launch-intent.json")) ? readLaunchIntent(fleet).sha256 : undefined;
     manifests.push({ ...fleet, lock, launch });
     const replay = inspect ? { inspect } : await measuredReplay(repo, measuredCheckout(root, checkout, commit), commit);
-    const report = await verifyFleet({ root: fleet.root, round, commit }, { ...replay, interrupted, details: true, bindArchive: true, priorSelection: true });
+    const report = await verifyFleet({ root: fleet.root, round, commit }, { ...replay, interrupted, details: true, bindArchive: true,
+      priorSelection: true, processStart, retainCheck: (check) => retainedLocks.push(check) });
     assert.ok(!report.error, report.error);
     assert.equal(report.manifestSha256, manifestSha256, "continuation manifest changed");
     for (const row of report.groups) {
@@ -311,7 +313,8 @@ async function scanContinuation(root, { repo, interrupted, inspect } = {}, admit
       const current = readFleet(root, manifest.round, { priorSelection: true });
       assert.equal(current.manifestSha256, manifestSha256);
       if (root !== operatingRoot) {
-        assert.equal((admittedGroup ? lockBytes : fleetLockSnapshot)(root), lock, "continuation source lock changed");
+        if (admittedGroup) assert.equal(lockBytes(root), lock, "continuation source lock changed");
+        else assert.ok(sameReportBatch(lock, reportBatch(current, processStart)), "continuation source lock changed");
         if (unlaunched.has(root)) assert.ok(manifestOnly(current), "unlaunched attempt changed");
       }
       if (admittedGroup && (manifest.single || stagedFleet(manifest))) {
@@ -324,12 +327,14 @@ async function scanContinuation(root, { repo, interrupted, inspect } = {}, admit
       const current = readGroup(fleet, group);
       assert.equal(current.stateSha256, stateSha256, "continuation state changed");
       assert.equal(current.outcome, outcome, "continuation custody changed");
-      if (noCreate) assert.ok(notCreated(fleet, current, (admittedGroup ? lockBytes : fleetLockSnapshot)(fleet.root)), "no-create custody changed");
+      if (noCreate) assert.ok(notCreated(fleet, current, admittedGroup ? lockBytes(fleet.root) : reportBatch(fleet, processStart)),
+        "no-create custody changed");
       if (retirementFile) assert.equal(digest(regular(join(current.local, retirementFile),
         retirementFile === "failed-native-host.json" ? undefined : 4096)), current.state.retirement.evidenceSha256, "continuation retirement changed");
     }
     for (const { fleet, snapshot } of proofs) recheckCollectedGroup(fleet, snapshot);
     for (const { fleet, snapshot } of retryEvidence) recheckCollectedGroup(fleet, snapshot);
+    for (const check of retainedLocks) check();
   };
   const recheckUnlaunched = (group) => {
     for (const fleet of unlaunched.values()) if (fleet.manifest.single.group === group) {

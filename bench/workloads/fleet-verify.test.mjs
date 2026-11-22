@@ -1,16 +1,17 @@
 // Synthetic saved artifacts only. These cannot establish native readiness.
 import assert from "node:assert/strict";
-import { appendFileSync, linkSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, linkSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { setImmediate as turn } from "node:timers/promises";
+import { setImmediate as turn, setTimeout as wait } from "node:timers/promises";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, syntheticInspection } from "./cloud-fixtures.mjs";
 import { fleetPlan, reservation } from "./cloud-contract.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { groupNames } from "./registry.mjs";
-import { readFleet, recheckCollectedGroup, verifyCollectedGroup, verifyFleet, verifyFleetCli } from "./fleet-verify.mjs";
+import { fleetChildOptions, fleetLockSnapshot, readFleet, recheckCollectedGroup, verifyCollectedGroup, verifyFleet, verifyFleetCli } from "./fleet-verify.mjs";
 import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
+import { inspectContinuation } from "./group-continuation.mjs";
 
 function fixture(t) {
   const h = harness(t), at = "2026-11-14T00:00:00.000Z";
@@ -98,6 +99,81 @@ test("a root lock acquired during verification is busy, not changed evidence", a
   assert.equal(final.status, "incomplete"); assert.equal(final.error, "fleet-operation-busy");
   assert.equal(final.fleetLock, "busy"); assert.deepEqual(final.groups, []);
   assert.equal(readFileSync(path, "utf8"), bytes);
+});
+
+function batchIntents(p) {
+  const fleet = readFleet(p.h.base, "r21"), group = groupNames[0], options = fleetChildOptions(fleet, group, "detach");
+  const child = { controllerCommit: commit, options };
+  const subject = { schema: "benchmark-group-fleet-staged-approval/v1", action: "detach", controllerCommit: commit, round: "r21",
+    stateRoot: fleet.root, requestedRoot: fleet.root, manifestSha256: fleet.manifestSha256, fleet: fleet.manifest, records: {},
+    admission: { mode: "first-group-only", firstGroup: group, gate: "collected-verified-deleted", nativeReadiness: false },
+    jobs: [{ group, outcome: "planned", missing: [], options, subject: child, approvalSha256: digest(JSON.stringify(child)) },
+      ...groupNames.slice(1).map((group) => ({ group, outcome: "deferred" }))] };
+  const approvalSha256 = digest(JSON.stringify(subject));
+  const launch = JSON.stringify({ schema: "benchmark-group-fleet-staged-launch-intent/v1", approvalSha256, subject });
+  writeFileSync(join(fleet.root, "launch-intent.json"), launch);
+  const remaining = { ...subject, action: "admit-remaining", records: { "launch-intent.json": digest(launch) },
+    admission: { ...subject.admission, mode: "remaining-once" }, firstGroup: { evidenceMode: "native-replay", row: { group, outcome: "verified" } },
+    jobs: [{ group, outcome: "verified" }, ...groupNames.slice(1).map((group) => {
+      const options = fleetChildOptions(fleet, group, "detach"), subject = { options, controllerCommit: commit };
+      return { group, outcome: "planned", missing: [], options, subject, approvalSha256: digest(JSON.stringify(subject)) };
+    })] };
+  const remainingSha256 = digest(JSON.stringify(remaining));
+  writeFileSync(join(fleet.root, "remaining-intent.json"), JSON.stringify({
+    schema: "benchmark-group-fleet-remaining-intent/v1", approvalSha256: remainingSha256, subject: remaining,
+  }));
+  return { launch: approvalSha256, remaining: remainingSha256 };
+}
+
+test("report replays pinned root evidence behind a dead or provably reused batch PID, without unlocking it", async (t) => {
+  const p = fixture(t), j = p.seed(groupNames[0]), intents = batchIntents(p);
+  const campaign = `campaign/${j.report.campaign}`;
+  writeFileSync(j.archivePath, archive([
+    { name: "campaign/" }, { name: `${campaign}/` },
+    ...["run.log", "host.txt", "exit-code", "campaign/.host-attempt.json", `${campaign}/plan.json`]
+      .map((name) => ({ name, body: readFileSync(join(j.evidence, name)) })),
+  ]));
+  j.state.archiveSha256 = fileHash(j.archivePath);
+  j.save();
+  const path = join(p.h.base, ".fleet-operation.lock");
+  const setPid = (pid, approval = intents.remaining) => writeFileSync(path, JSON.stringify({ pid, approvalSha256: approval }));
+  setPid(2147483647);
+  const dead = await p.verify({ processStart: () => assert.fail("an absent PID needs no start lookup") });
+  assert.equal(dead.fleetLock, "retained"); assert.equal(dead.groups[0].outcome, "verified");
+
+  setPid(process.pid);
+  assert.equal((await p.verify()).fleetLock, "busy", "the operating system's real live owner must block");
+  assert.equal((await p.verify({ processStart: () => undefined })).fleetLock, "busy", "unreadable start time is ambiguous");
+  assert.equal((await p.verify({ processStart: () => Math.floor(statSync(path).mtimeMs) })).fleetLock, "busy", "same tick is ambiguous");
+  await wait(20);
+  const before = treeHash(p.h.base), deps = { processStart: (pid) => { assert.equal(pid, process.pid); return Date.now(); } };
+  const historical = await p.verify(deps);
+  assert.deepEqual(historical, dead);
+  assert.equal(historical.status, "incomplete"); assert.equal(historical.publishableBaseline, false);
+  assert.equal(historical.groups[0].archiveSha256, j.state.archiveSha256);
+  assert.equal(treeHash(p.h.base), before);
+  assert.equal(fleetLockSnapshot(p.h.base), "busy", "the admission check is unchanged");
+  const continuation = join(p.h.temp, "continuation");
+  mkdirSync(continuation);
+  writeFileSync(join(continuation, "index.json"), JSON.stringify([{ root: p.h.base, checkout: p.h.repo, commit, round: "r21",
+    archives: { [j.group]: j.state.archiveSha256 } }]));
+  const inspected = await inspectContinuation(continuation, { ...deps, inspect: p.inspect });
+  assert.equal(inspected.report.groups[0].outcome, "verified");
+  inspected.recheck();
+
+  const changed = await p.verify({ ...deps, inspect: async (input) => {
+    appendFileSync(path, "\n"); await wait(20); return p.inspect(input);
+  } });
+  assert.equal(changed.fleetLock, "busy"); assert.deepEqual(changed.groups, []);
+  assert.throws(() => inspected.recheck(), /continuation source lock changed/);
+  setPid(process.pid, intents.launch); await wait(20);
+  assert.deepEqual(await p.verify(deps), dead, "a retained initial launch also replays");
+  setPid(process.pid, "e".repeat(64)); await wait(20);
+  assert.equal((await p.verify(deps)).fleetLock, "busy", "a foreign approval stays busy");
+  writeFileSync(path, JSON.stringify({ pid: process.pid, action: "prepare" })); await wait(20);
+  assert.equal((await p.verify(deps)).fleetLock, "busy", "a prepare lock stays busy");
+  writeFileSync(path, "{");
+  assert.equal((await p.verify(deps)).fleetLock, "busy", "a malformed lock stays busy");
 });
 
 for (const change of ["manifest", "duplicate"]) {
