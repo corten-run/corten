@@ -6,19 +6,20 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { isIPv4 } from "node:net";
-import { fleetCatalogCommand, fleetPlan, fleetRegion, requireStagedFleet, roundName, selection } from "./cloud-contract.mjs";
+import { fleetCatalogCommand, fleetPlan, fleetRegion, requireStagedFleet, roundName } from "./cloud-contract.mjs";
 import { digest, durable, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { controllerFailure, fleetCatalogResult, full, providerAccount, providerFailure, providerIdentity } from "./cloud-options.mjs";
 import { controllerPaths, productionPlan, productionSignals } from "./cloud-production.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
 import { streamRecoveryReady } from "./cloud-control-stream.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
-import { fleetChildOptions as childOptions, fleetRoot, present, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
+import { continuationIndexSha256, fleetChildOptions as childOptions, fleetRoot, present, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
   recheckCollectedGroup, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
+import { groupNames } from "./registry.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const ownPaths = ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"].map((name) => `bench/workloads/${name}`);
+const ownPaths = ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs", "group-continuation.mjs"].map((name) => `bench/workloads/${name}`);
 export const fleetWorkerPaths = [...new Set([...ownPaths, ...controllerPaths,
   ...providerFiles.map((name) => posix.normalize(`bench/workloads/${name}`)), "bench/workloads/registry.mjs", "bench/json-api/contract.mjs",
   "bench/catalog/fixtures.mjs", "bench/marketplace/fixtures.mjs", "bench/catalog/stats.mjs", "bench/load-tool.mjs"])].sort();
@@ -33,7 +34,8 @@ const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 
 export function parseFleetArgs(args) {
   const o = { round: args[0] }, seen = new Set();
-  const values = { "--fleet-root": "root", "--commit": "commit", "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--approve-reviewed-merged-ready": "approval" };
+  const values = { "--fleet-root": "root", "--continuation-root": "continuationRoot", "--group": "group", "--commit": "commit",
+    "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--approve-reviewed-merged-ready": "approval" };
   for (let i = 1; i < args.length; i++) {
     const flag = args[i]; assert.ok(!seen.has(flag), "fleet-option"); seen.add(flag);
     if (["--prepare", "--detach", "--admit-remaining", "--collect", "--print-approval"].includes(flag)) o[flag.slice(2)] = true;
@@ -43,8 +45,13 @@ export function parseFleetArgs(args) {
     }
   }
   roundName(o.round); assert.ok(Number(o.round.slice(1)) >= 17);
-  fleetRoot(o.root);
   assert.equal([o.prepare, o.detach, o["admit-remaining"], o.collect].filter(Boolean).length, 1, "fleet-mode");
+  if (o.continuationRoot) {
+    assert.ok(!o.root && groupNames.includes(o.group) && (o.prepare || o.detach), "continuation requires one group and prepare or detach");
+    o.continuationRoot = fleetRoot(o.continuationRoot);
+    o.root = join(o.continuationRoot, o.group);
+  } else assert.equal(o.group, undefined, "group requires a continuation root");
+  fleetRoot(o.root);
   if (o.prepare) {
     full(o.commit, /[a-f0-9]{40}/, "fleet-source"); full(o.sshKey, /[1-9]\d*/, "fleet-key");
     providerIdentity({ accountId: o.accountId, context: o.context });
@@ -219,13 +226,16 @@ export function stagedChildIntent(stateRoot, saved) {
 
 // verify and compiler are code-only synthetic TEST seams, never selected by argv/JSON.
 export async function fleetOperationPlan(options, { repo = checkout, run, plan = productionPlan, verify = verifyCollectedGroup,
-  inspect, interrupted = () => false, compiler = localCompiler, catalogProvider = providerTransport, reservedRegion } = {}) {
+  inspect, interrupted = () => false, compiler = localCompiler, catalogProvider = providerTransport, reservedRegion, continuation } = {}) {
   repo = realpathSync(repo);
   const root = fleetRoot(options.root, repo), head = await exactSource(repo, run), fleet = readFleet(root, options.round);
   assert.equal(fleet.manifest.commit, head, "fleet-source-mismatch");
   const mode = options.detach ? "detach" : options["admit-remaining"] ? "admit-remaining" : "collect", records = rootRecords(fleet);
   const launching = mode !== "collect", first = fleet.manifest.jobs[0].group;
-  if (launching) requireStagedFleet(fleet.manifest);
+  if (launching) {
+    requireStagedFleet(fleet.manifest);
+    if (fleet.manifest.single) assert.ok(continuation && mode === "detach", "use continuation detach for an independent group");
+  }
   let deferred = false;
   if (mode === "collect" && present(join(root, "launch-intent.json")) && !present(join(root, "remaining-intent.json"))) {
     // Only a valid staged reservation explains absent future children. Legacy
@@ -301,6 +311,7 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
   const subject = { schema: launching ? "benchmark-group-fleet-staged-approval/v1" : "benchmark-group-fleet-approval/v1", action: mode, controllerCommit: head,
     stateRoot: root, requestedRoot: resolve(options.root), round: options.round, manifestSha256: fleet.manifestSha256,
     fleet: fleet.manifest, records, jobs, ...(remainingRegion === undefined ? {} : { remainingRegion }),
+    ...(continuation ? { continuation: continuation.subject } : {}),
     ...(launching ? { admission: { mode: mode === "detach" ? "first-group-only" : "remaining-once", firstGroup: first,
       gate: "collected-verified-deleted", nativeReadiness: false }, ...(firstGroup ? { firstGroup } : {}) } : {}),
     declaration: "operator-approved-after-merged-independent-review-and-full-native-readiness" };
@@ -309,10 +320,52 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
 
 // plan/main injection is a synthetic TEST seam at the existing production
 // boundaries. Neither the CLI nor saved JSON can select implementations.
-export async function fleetMain(args, { repo = checkout, spawn, providerFactory, inspect, sleep,
+export async function fleetMain(args, deps = {}) {
+  const options = parseFleetArgs(args), repo = realpathSync(deps.repo ?? checkout);
+  if (!options.continuationRoot) return runFleet(options, deps);
+  const { continuationLock, inspectContinuation } = await import("./group-continuation.mjs");
+  const root = fleetRoot(options.continuationRoot, repo), lock = join(root, continuationLock);
+  const owner = json({ pid: process.pid, group: options.group });
+  const locked = options.prepare || !!options.approval;
+  if (locked) { physical(root); durable(lock, owner); }
+  let uncertain = false, attemptRoot = options.root;
+  try {
+    if (!locked) assert.ok(!present(lock), "continuation operation busy");
+    const continuation = await inspectContinuation(root, { repo, interrupted: deps.interrupted, inspect: deps.inspect });
+    const row = continuation.report.groups.find(({ group }) => group === options.group);
+    assert.ok(!row.result, "group already verified; never allocate again");
+    assert.ok(!continuation.report.groups.some((r) => r.unresolved), "continuation has unresolved custody or invalid evidence");
+    const slot = continuation.slots.get(options.group);
+    if (options.prepare) {
+      assert.ok(row.outcome === "missing" || row.retryable, "group already reserved; never allocate again");
+      if (slot) {
+        assert.ok(Number(options.round.slice(1)) > Number(slot.manifest.round.slice(1)), "use a new, higher round for this group");
+        attemptRoot = join(root, `${options.group}--${options.round}`);
+      }
+    } else {
+      assert.ok(row.outcome === "prepared" && slot.manifest.round === options.round, "group round not prepared or already attempted");
+      attemptRoot = slot.root;
+    }
+    const accountId = options.prepare ? options.accountId : slot.manifest.provider.accountId;
+    assert.ok([...continuation.needsCensus].every((account) => account === accountId), "unconfirmed historical cleanup requires the same provider account");
+    continuation.recheck();
+    return await runFleet({ ...options, root: attemptRoot }, deps, continuation);
+  } catch (error) {
+    uncertain = error?.controlUncertain === true || error?.controlTreeUncertain === true;
+    throw error;
+  } finally {
+    // A contained worker may leave its fleet lock even when the batch returns
+    // a diagnostic status instead of throwing. Keep the continuation locked too.
+    if (locked && !uncertain && !present(join(attemptRoot, ".fleet-operation.lock"))) {
+      assert.equal(regular(lock, 1024).toString(), owner); unlinkSync(lock); syncDirectory(root);
+    }
+  }
+}
+
+async function runFleet(options, { repo = checkout, spawn, providerFactory, inspect, sleep,
   interrupted = () => false, write = console.log, plan = productionPlan, verify = verifyCollectedGroup, compiler, main, WorkerClass,
-  catalogProvider = providerTransport } = {}) {
-  const options = parseFleetArgs(args); repo = realpathSync(repo);
+  catalogProvider = providerTransport } = {}, continuation) {
+  repo = realpathSync(repo);
   const transport = shellTransport({ repo, spawn });
   const run = async (...args) => {
     assert.equal(args[0], "git", "fleet-local-only");
@@ -335,14 +388,16 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
     try {
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
       const provider = { accountId: options.accountId, context: options.context };
-      const region = await readPlacement(provider, placement, undefined, { staged: true });
+      const single = continuation && { group: options.group, indexSha256: continuation.indexSha256, checkout: repo };
+      const region = await readPlacement(provider, placement, undefined, { staged: true, group: single?.group });
       const used = new Set(), token = () => { let v; do { v = randomBytes(8).toString("hex"); } while (used.has(v)); used.add(v); return v; };
       const manifest = fleetPlan({ round: options.round, commit: options.commit, token: token(),
-        tokens: Object.fromEntries(selection().groups.map(({ group }) => [group, token()])),
-        provider, sshKey: options.sshKey }, undefined, region, { stagedPlacement: true });
+        tokens: Object.fromEntries((single ? [single.group] : groupNames).map((group) => [group, token()])),
+        provider, sshKey: options.sshKey }, undefined, region, { stagedPlacement: true, single });
       await controlCheckpoint(interrupted); // Provider close is asynchronous.
       physical(root); assert.equal(regular(lock, 1024).toString(), owner, "fleet-lock-changed");
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
+      if (single) assert.equal(continuationIndexSha256(continuation.root), single.indexSha256, "continuation index changed");
       durable(join(root, `fleet-${options.round}.json`), json(manifest));
       assert.deepEqual(readFleet(root, options.round).manifest, manifest);
       write(JSON.stringify({ schema: "benchmark-group-fleet-preparation/v1", round: options.round, outcome: "prepared", groups: manifest.jobs.map(({ group }) => group), fullGroupQualified: false }));
@@ -357,7 +412,7 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
       }
     }
   }
-  const deps = { repo, run, plan, verify, inspect, interrupted, compiler, catalogProvider }, preview = await fleetOperationPlan(options, deps);
+  const deps = { repo, run, plan, verify, inspect, interrupted, compiler, catalogProvider, continuation }, preview = await fleetOperationPlan(options, deps);
   if (options["print-approval"]) {
     write(JSON.stringify({ subject: preview.subject, approvalSha256: preview.approvalSha256, fullGroupQualified: false }));
     return preview.subject.jobs.some((j) => j.missing?.length) ? 2 : 3;
@@ -374,11 +429,12 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
     if (options.detach || options["admit-remaining"]) {
       const { manifest } = repeated.fleet;
       await readPlacement(manifest.provider, placement, repeated.subject.remainingRegion ?? manifest.host.region,
-        { remainingOnly: repeated.subject.action === "admit-remaining", staged: true });
+        { remainingOnly: repeated.subject.action === "admit-remaining", staged: true, group: manifest.single?.group });
       assert.equal(readFleet(root, options.round).manifestSha256, repeated.fleet.manifestSha256, "fleet-manifest-changed");
       assert.deepEqual(rootRecords(repeated.fleet), repeated.subject.records, "fleet-records-changed");
       assert.equal(regular(lock, 1024 * 1024).toString(), owner, "fleet-lock-changed");
       if (repeated.subject.firstGroup) recheckCollectedGroup(repeated.fleet, repeated.subject.firstGroup.snapshot);
+      continuation?.recheck(root);
     }
     await controlCheckpoint(interrupted);
     if (options.detach) durable(join(root, "launch-intent.json"), json({ schema: "benchmark-group-fleet-staged-launch-intent/v1",

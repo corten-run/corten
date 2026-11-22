@@ -140,8 +140,8 @@ export function cancellationState(value) {
     full(value[key], /[a-f0-9]{64}/, "cancellation evidence hash");
 }
 export const unitQuery = (s) => `systemctl show ${s.unit} --property=Id --property=LoadState --property=FragmentPath --property=ActiveState --property=Restart --property=MainPID --property=ExecMainCode --property=ExecMainStartTimestamp`;
-export function controllerState(s, round) {
-  validateState(s, round);
+export function controllerState(s, round, options) {
+  validateState(s, round, options);
   const allowed = ["schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "createdAt", "status", "id", "ip",
     "createIntentAt", "archiveSha256", "evidenceSha256", "extractionAttempts", "evidence", "evidenceOutcome", "collectedAt", "deletionIntentAt", "destroyedAt",
     "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control", "benchPackage", "remainingPlacement", "launchHostKeySha256"];

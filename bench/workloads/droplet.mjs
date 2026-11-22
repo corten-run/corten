@@ -646,9 +646,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             const present = existing.filter((d) => fleet.jobs.some((row) => row.name === d.name)).length;
             assert.ok(existing.length + fleet.jobs.length - present <= limit, "account capacity cannot cover the reserved fleet");
             const catalog = fleetCatalogResult(await execute("doctl", fleetCatalogCommand, 60000, true));
-            fleetRegion(catalog, remainingPlacement?.region ?? fleet.host.region, { remainingOnly: remainingAdmission, staged: stagedFleet(fleet) });
+            fleetRegion(catalog, remainingPlacement?.region ?? fleet.host.region,
+              { remainingOnly: remainingAdmission, staged: stagedFleet(fleet), group: fleet.single?.group });
           }
-          checkFleetAdmission?.();
+          checkFleetAdmission?.(true);
           state.status = "creating"; state.createIntentAt = new Date().toISOString(); save();
           const created = await execute("doctl", ["compute", "droplet", "create", state.name, "--size", state.host.size, "--region", state.host.region, "--image", state.host.image,
             "--ssh-keys", options.sshKey, "--tag-names", [...tags, state.tag].join(","), "--wait", "--output", "json"], 10 * 60000, true);
