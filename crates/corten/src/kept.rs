@@ -343,7 +343,7 @@ struct Store {
     written: OnceLock<Box<[AtomicU32]>>,
     /// The writes that found no counts to count in ([`Answers::writing`]), all together: none
     /// are made until an answer that may be kept is ([`Missed::keep`]), so an app that keeps
-    /// nothing pays one add for a write. An answer stands only while this is as its request
+    /// nothing pays for no count by path. An answer stands only while this is as its request
     /// found it too, so such a write that ends after an answer was kept drops it, and every
     /// other one: only the writes under way when the counts are made, and work they left,
     /// can.
@@ -1596,56 +1596,94 @@ mod tests {
     }
 
     /// A write that ends after a request asked is seen by that request, whichever way the write
-    /// was counted and whenever the counts by path came to be: two threads write, one of them
-    /// makes the counts part of the way through, and one asks.
+    /// was counted and whenever the counts by path came to be: at its own path always, and at
+    /// every other when it found no counts. One thread writes freely and makes the counts part
+    /// of the way through; another writes in turn with one that asks, which asks before each of
+    /// its writes begins and looks once it has ended, so every one of those writes is checked,
+    /// whatever the scheduler does.
     #[test]
     fn a_write_that_ends_as_the_counts_are_made_is_seen_by_who_asked_before() {
-        let (mut early, mut by_path) = (0, 0);
+        /// Lets the other side of the turns go on if this one ends early, as a failed check does.
+        struct Open<'a>(&'a AtomicUsize);
+        impl Drop for Open<'_> {
+            fn drop(&mut self) {
+                self.0.store(usize::MAX, Ordering::SeqCst);
+            }
+        }
+        const WRITES_EACH: usize = 40;
+        let (mut early, mut by_path, mut seen_elsewhere) = (0, 0, 0);
         for round in 0..200_usize {
             let answers = Answers::new(1 << 20).expect("a bound");
-            let (begun, done) = (AtomicUsize::new(0), AtomicUsize::new(0));
-            let (answers, begun, done) = (&answers, &begun, &done);
-            let seen = std::thread::scope(|scope| {
-                let writers: Vec<_> = (0..2)
-                    .map(|writer| {
-                        scope.spawn(move || {
-                            let mut modes = (0, 0);
-                            for n in 0..40 {
-                                if (writer, n) == (0, 1 + round % 38) {
-                                    answers.counts();
-                                }
-                                let write = write(answers, "/p");
-                                match write.counted {
-                                    None => modes.0 += 1,
-                                    Some(_) => modes.1 += 1,
-                                }
-                                // Begun: its count comes after every request that asked by now.
-                                begun.fetch_add(1, Ordering::SeqCst);
-                                write.answered(&Response::new(Body::empty()));
-                                done.fetch_add(1, Ordering::SeqCst);
-                            }
-                            modes
-                        })
-                    })
-                    .collect();
-                scope.spawn(move || {
-                    for _ in 0..200 {
-                        let asked = Written::of(&answers.0, "/p");
-                        let before = begun.load(Ordering::SeqCst);
+            // The turn the asker opened, the turn the writer ended, and how that write counted.
+            let (asked, ended, found_none) = (AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0));
+            let (answers, asked, ended, found_none) = (&answers, &asked, &ended, &found_none);
+            // Asked before any write: the free writer's first finds no counts and ends after it.
+            let first = Written::of(&answers.0, "/q");
+            let (modes, elsewhere) = std::thread::scope(|scope| {
+                let free = scope.spawn(move || {
+                    let mut modes = (0, 0);
+                    for n in 0..WRITES_EACH {
+                        if n == 1 + round % (WRITES_EACH - 2) {
+                            answers.counts();
+                        }
+                        let write = write(answers, "/p");
+                        match write.counted {
+                            None => modes.0 += 1,
+                            Some(_) => modes.1 += 1,
+                        }
+                        write.answered(&Response::new(Body::empty()));
                         std::thread::yield_now();
-                        // More have ended than had begun: one began, and so was counted, since.
-                        if done.load(Ordering::SeqCst) > before {
-                            assert!(!asked.stands(&answers.0), "a write ended since the request asked");
+                    }
+                    modes
+                });
+                let turned = scope.spawn(move || {
+                    let _open = Open(ended);
+                    let mut modes = (0, 0);
+                    for n in 1..=WRITES_EACH {
+                        while asked.load(Ordering::SeqCst) < n {
+                            std::thread::yield_now();
+                        }
+                        let write = write(answers, "/p");
+                        match write.counted {
+                            None => modes.0 += 1,
+                            Some(_) => modes.1 += 1,
+                        }
+                        found_none.store(usize::from(write.counted.is_none()), Ordering::SeqCst);
+                        write.answered(&Response::new(Body::empty()));
+                        ended.store(n, Ordering::SeqCst);
+                    }
+                    modes
+                });
+                let asker = scope.spawn(move || {
+                    let _open = Open(asked);
+                    let mut elsewhere = 0;
+                    for n in 1..=WRITES_EACH {
+                        let (here, there) = (Written::of(&answers.0, "/p"), Written::of(&answers.0, "/q"));
+                        asked.store(n, Ordering::SeqCst);
+                        while ended.load(Ordering::SeqCst) < n {
+                            std::thread::yield_now();
+                        }
+                        // Its write began after this asked, and has ended.
+                        assert!(!here.stands(&answers.0), "a write ended at the path since the request asked");
+                        if found_none.load(Ordering::SeqCst) == 1 {
+                            assert!(!there.stands(&answers.0), "a write that found no counts ended since");
+                            elsewhere += 1;
                         }
                     }
+                    elsewhere
                 });
-                writers.into_iter().map(|writer| writer.join().expect("a writer")).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1))
+                let (free, turned, asker) = (free.join(), turned.join(), asker.join());
+                let (free, turned) = (free.expect("the free writer"), turned.expect("the writer in turn"));
+                ((free.0 + turned.0, free.1 + turned.1), asker.expect("the one that asks"))
             });
-            early += seen.0;
-            by_path += seen.1;
+            assert!(!first.stands(&answers.0), "a write that found no counts ended since the round's first request");
+            early += modes.0;
+            by_path += modes.1;
+            seen_elsewhere += 1 + elsewhere;
         }
-        // Both ways of counting were met.
-        assert!(early > 0 && by_path > 0, "{early} {by_path}");
+        // Both ways of counting were met, and a write with no counts was looked for at another
+        // path at least once a round.
+        assert!(early > 0 && by_path > 0 && seen_elsewhere >= 200, "{early} {by_path} {seen_elsewhere}");
     }
 
     /// Threads that keep, read, grow and write at once leave the bytes counted equal to what the

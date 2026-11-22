@@ -12,7 +12,8 @@
 //! `ROUTER_ASKED=1` asks for that route three times first, so a page is kept by then.
 //! `ROUTER_TARGET=kept` with `ROUTER_PUBLIC=page` counts the kept page given again.
 //! `ROUTER_KEPT=0` turns the store off (`App::kept_answers(0)`), for what a write pays the store
-//! in the same app.
+//! in the same app; with it nothing is kept, so `ROUTER_ASKED=1` and `ROUTER_TARGET=kept` with a
+//! page, which assert that one is, do not go with it.
 
 use std::time::Duration;
 

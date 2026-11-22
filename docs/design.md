@@ -7341,10 +7341,11 @@ rules something out.
     left (`Signal::finish`) drops them again each time some ends, since nothing of its path was
     read to count by: a task that keeps that write's `Signal` and finishes work on it again and
     again empties the store each time, for as long as it does. None is known, and the count by
-    path it would need is the hash of the path, about half of what this saves. That first answer
+    path it would need is the hash of the path, 486 of the 979 instructions this saves a write
+    at the harness's path of 13 bytes (below). That first answer
     makes the counts whether or not it is then kept (a write may have gone through while its
     handler read), so an app whose writes never pause still comes to keep its pages. A page
-    route pays the same one add until its first page is made.
+    route's writes are counted the same way until its first page is made.
     Which answers are whole bodies is known
     when the route is made (`Answer::WHOLE`, of a type an app cannot name, as `KEYED` is), so the
     route of a file, a relay, a stream, a feed or an answer type of the app's own asks the store
@@ -7565,7 +7566,9 @@ rules something out.
     `Public` route answers text too small to keep, 15,446.1 a write against 16,425.1, 979.0
     fewer (6.0%), and 15,221.1 against 16,205.0 once that text had been asked for; with a
     `Public` page not yet asked for, 15,221.9 against 16,201.1; with no `Public` route,
-    15,357.1 against 15,357.0. Where the counts are there the change costs a little: a write
+    15,357.1 against 15,357.0. Of the 979, the hash of the path (`count_of`, with what it
+    calls) is 486, by callgrind's count for the function in `1091ae766` at that path of 13
+    bytes. Where the counts are there the change costs a little: a write
     with a page kept took 16,734.1 against 16,714.1, 20.0 more (0.12%) to find the counts
     made, and a kept page given again 17,971.5 against 17,966.5, 5.0 more (0.03%) for the
     second count it reads. What the store still costs a write that finds no counts is not
@@ -7583,13 +7586,20 @@ rules something out.
     connections from two threads on two cores of their own, the app on one, `perf stat` on the
     app's process, six starts of both builds and eight pairs of 3 s turns in each with the
     order turned about: 42,961 cycles a write against 43,832, 1.7% fewer at the median of the
-    48 pairs (+0.6% to -3.1% by start, fewer in 34), with 22,694 user instructions a write
-    against 23,345. The same build against itself gave +0.2% (-1.8% to +2.0% by start), and
+    48 pairs (-6.8% to +5.3% by pair, +0.6% to -3.1% by start, fewer in 34): user cycles
+    18,249 against 18,920 and kernel cycles 24,756 against 24,886, with 22,694 user
+    instructions a write against 23,345. That is 651 instructions fewer where the harness
+    counts 979, at a path of 5 bytes (`/save`) where the harness's has 13; the hash reads the
+    path a byte at a time, and whether its length is all of that difference is not checked.
+    Both builds' answers were checked before the run and no request failed in its 96 turns.
+    The same build against itself gave +0.2% (-1.8% to +2.0% by start), and
     the two trees built without compression, where neither has a store and a write does the
     same work in both, +0.2% (-5.8% to +4.8% by start, 20,687 user instructions against
-    20,704). Two builds differ from one start to the next by more than this saves, so the
-    cycles agree with the instructions saved and do not show the saving on their own; what a
-    write with a page kept and a kept page given again pay in cycles for their 19.9 and 4.8
+    20,704). Two builds differ from one start to the next by more than this saves, no
+    smallest worthwhile reduction was declared before the run, and perf's running percentage
+    was not recorded, so this claims no fewer cycles: the cycles went the way of the
+    instructions saved, and do not show the saving on their own. What a
+    write with a page kept and a kept page given again pay in cycles for their 20.0 and 5.0
     instructions is not measured, being far under what that run can tell apart.
     A kept body, with the catalog benchmark's JSON route marked `Public` for a minute and two
     routes beside it that make nothing, of 2 bytes and of 2,000 (`69c8fb1bf` with this
@@ -7683,7 +7693,10 @@ rules something out.
     become most of a kept page's cost on a measured app, so a place further out is worth its
     rules; a multi-core measurement shows requests waiting on the store's lock; writes no
     handler takes (a scanner's `POST /`) make kept pages again often enough to show, so the
-    router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; or an app
+    router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; an app
+    is found finishing work again and again on the `Signal` of a write from before its first
+    answer that may be kept, which empties its store each time, so such a write should keep
+    its path to count by; or an app
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
