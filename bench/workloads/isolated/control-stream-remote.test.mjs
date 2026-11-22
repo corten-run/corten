@@ -299,7 +299,9 @@ test("post-terminal drain logs only the failed check, never raw probe output", a
         stdout: fault === "wrong-identity" ? JSON.stringify({ ...f.drain(), id: raw }) : raw };
     } });
     await f.supervisor.seal();
-    await assert.rejects(f.supervisor.finish({ id: registration.id, nativeTerminal: true }));
+    await assert.rejects(f.supervisor.finish({ id: registration.id, nativeTerminal: true }), {
+      name: "Error", message: "campaign drain " + reason,
+    });
     assert.equal(calls, 1); assert.equal(f.abort.signal.aborted, true);
     assert.equal((await f.lastFault()).reason, "campaign drain " + reason);
     assert.ok(!readFileSync(join(f.root, "run.log"), "utf8").includes(raw));

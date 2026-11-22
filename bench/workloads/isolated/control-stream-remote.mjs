@@ -171,7 +171,7 @@ export async function superviseControlStream(binding, admission, abort, runtime 
         }
         stage = "campaign drain deadline";
         assert.fail("apparatus disappearance deadline expired");
-      } catch (error) { invalidate(stage); throw error; }
+      } catch { invalidate(stage); throw new Error(stage); }
     },
     async dispose() { if (!ended && !revoked) invalidate("campaign disposed before drain"); await stopWatchdog(); },
   };
