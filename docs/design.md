@@ -7350,8 +7350,8 @@ rules something out.
     no coding too, which gets no tag and so saves nothing by it where its handler makes
     nothing: that request pays for asking the store. In a build with `compress` that was 1.3%
     more cycles for a PNG of 8,000 bytes (1.2% fewer to 4.0% more) and 3.0% more for one of
-    1,024 (0.3% fewer to 7.8% more), the means and ranges of ten builds and starts of the same
-    code, the second at the 3% set for it and over it by 0.02 of a point (below). A body's size is known only once it is made, so a route whose bodies are
+    1,024 (0.3% fewer to 7.8% more), the means and ranges of five builds of the same code each
+    run on two CPUs, the second at the 3% set for it and over it by 0.02 of a point (below). A body's size is known only once it is made, so a route whose bodies are
     all too small would ask the store and have each refused: after 64 answers in a row of
     which none was kept, with none between given from the store, the route's requests are its
     handler's as before, but for about one in 256, drawn on each thread, which asks and so
