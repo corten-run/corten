@@ -514,6 +514,8 @@ pub struct App<M = ()> {
     layout_reads: Vec<Arc<dyn crate::layout::Erased>>,
     /// How many bytes of `Public` answers the app keeps ([`App::kept_answers`]).
     kept: usize,
+    /// The handle to them a task holds ([`App::kept`]), given the store when the router is made.
+    keeping: crate::KeptAnswers,
     middleware: M,
 }
 
@@ -647,6 +649,7 @@ impl App {
             access_log: false,
             layout_reads: Vec::new(),
             kept: crate::kept::BOUND,
+            keeping: crate::KeptAnswers::default(),
             middleware: (),
         }
     }
@@ -689,6 +692,7 @@ impl App {
             access_log: self.access_log,
             layout_reads: self.layout_reads,
             kept: self.kept,
+            keeping: self.keeping,
             middleware,
         }
     }
@@ -966,14 +970,25 @@ impl<M: Middleware> App<M> {
     /// eighth of the bound, an answer is kept only when its URL was asked for before, so a
     /// URL asked for once seldom takes a page's room and a page's handler runs twice before
     /// its page is kept. A write to a page's path drops what is
-    /// kept there, whatever it is answered, and so does one that redirects to it; a
-    /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
+    /// kept there, whatever it is answered, and so does one that redirects to it; a change the
+    /// app makes another way (a write at another path, a task) drops it when the app says so
+    /// ([`crate::KeptAnswers::changed`]), and one in another instance shows when the lifetime
+    /// ends. None is kept
     /// under `corten dev`, and an app with no `Public` route of a kind it keeps (a page, or JSON,
     /// text or a file in a build with `compress`) keeps none and counts no writes, whatever the bound. The bytes counted are each page's key, its headers, its body and each
     /// compressed form made of it.
     pub fn kept_answers(mut self, bytes: usize) -> Self {
         self.kept = bytes;
         self
+    }
+
+    /// The answers the app keeps, for a task or other work outside a request to say what a change
+    /// it made touches ([`crate::KeptAnswers::changed`]); a handler takes `KeptAnswers` as an
+    /// argument instead. Taken before the app is served, it reaches the store once the router is
+    /// made (by [`serve`], `App::router` or `App::test`), and does nothing before that or in an
+    /// app that keeps nothing. It reaches this process's store alone.
+    pub fn kept(&self) -> crate::KeptAnswers {
+        self.keeping.clone()
     }
 
     /// The security policy (default [`Policy::new`]: same-origin everything).
@@ -1631,6 +1646,9 @@ impl<M: Middleware> App<M> {
         // with no route eligible to keep a page has none for a write to drop, so its writes are not
         // counted.
         shared.kept = if dev || !table.keeps() { None } else { crate::kept::Answers::new(self.kept) };
+        if let Some(answers) = &shared.kept {
+            self.keeping.set(answers);
+        }
         // An app whose areas and APIs have no middleware of their own runs the app's alone.
         let plain = scopes.prefixed.iter().all(|(_, scope)| scope.middleware.is_empty());
         let shared = Arc::new(shared);

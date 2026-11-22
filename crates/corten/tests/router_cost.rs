@@ -10,7 +10,9 @@
 //! with no `Public` route, or with `ROUTER_PUBLIC=words` one whose
 //! `Public` text is too small to keep, or with `ROUTER_PUBLIC=page` a `Public` page.
 //! `ROUTER_ASKED=1` asks for that route three times first, so a page is kept by then.
-//! `ROUTER_TARGET=kept` with `ROUTER_PUBLIC=page` counts the kept page given again.
+//! `ROUTER_TARGET=kept` with `ROUTER_PUBLIC=page` counts the kept page given again, and
+//! `ROUTER_TARGET=new` with it a page no kept one stands for, made and kept: a new URL each
+//! request (`/home?n=1`, ...), in a store with room for all of them.
 //! `ROUTER_KEPT=0` turns the store off (`App::kept_answers(0)`), for what a write pays the store
 //! in the same app; with it nothing is kept, so `ROUTER_ASKED=1` and `ROUTER_TARGET=kept` with a
 //! page, which assert that one is, do not go with it.
@@ -94,10 +96,10 @@ fn request_cost() {
     let target = std::env::var("ROUTER_TARGET").unwrap_or_default();
     let public = std::env::var("ROUTER_PUBLIC").unwrap_or_default();
     let asked = std::env::var("ROUTER_ASKED").is_ok_and(|asked| asked == "1");
-    let (missing, write, kept) = (target == "missing", target == "write", target == "kept");
+    let (missing, write, kept, new) = (target == "missing", target == "write", target == "kept", target == "new");
     let path = if missing { "/items/7/unknown" } else { "/items/7/edit" };
     let status = if missing { 404 } else { 200 };
-    let (routes, shared) = match (write || kept, public.as_str()) {
+    let (routes, shared) = match (write || kept || new, public.as_str()) {
         (false, _) => (url::router(), None),
         (true, "") => (plain::router(), None),
         (true, "words") => (words::router(), Some("/words")),
@@ -129,6 +131,17 @@ fn request_cost() {
             let shared = shared.expect("ROUTER_TARGET=kept needs ROUTER_PUBLIC=page");
             for _ in 0..requests {
                 assert!(ask(shared).await, "the kept page");
+            }
+            return;
+        }
+        if new {
+            assert_eq!(shared, Some("/home"), "ROUTER_TARGET=new needs ROUTER_PUBLIC=page");
+            for n in 0..requests {
+                let req = http::Request::get(format!("/home?n={n}")).body(corten::http::Body::empty()).unwrap();
+                let response = router.clone().oneshot(req).await.unwrap();
+                assert_eq!(response.status().as_u16(), 200);
+                assert!(!response.headers().contains_key("age"), "a new URL is made");
+                response.into_body().collect().await.unwrap();
             }
             return;
         }

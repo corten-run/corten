@@ -79,9 +79,11 @@
 //! the app's middleware (another site's, one for another host) is not counted.
 //! A write that went through also drops what is kept at the place on this site its
 //! answer names (`Location`, `Content-Location`; RFC 9111 section 4.4). A page whose handler
-//! was reading while a write went through is not kept. Nothing else drops a page before its
-//! lifetime ends, but a write from before the app counted writes by path (below): the lifetime
-//! is how stale the app said the page may be. Off under `corten dev`,
+//! was reading while a write went through is not kept. A change the app makes some other way (a
+//! write at another path, a task, a job a handler started) names the pages it touches with
+//! [`KeptAnswers::changed`], which counts a write to their path in this process. Nothing else
+//! drops a page before its lifetime ends, but a write from before the app counted writes by path
+//! (below): the lifetime is how stale the app said the page may be. Off under `corten dev`,
 //! and in an app with no route that keeps a page, whose writes are then not counted. The
 //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
 //! the compressed forms made for it, with an allowance for what holds them; the body, the key
@@ -339,6 +341,7 @@ fn marks_for(bound: usize) -> usize {
 }
 
 /// The app's kept answers, at most `bound` bytes of them.
+#[derive(Clone)]
 pub(crate) struct Answers(Arc<Store>);
 
 struct Store {
@@ -923,6 +926,149 @@ impl Answers {
     /// write that began before them is counted with the others like it, and one after, by path.
     fn counts(&self) {
         self.0.written.get_or_init(|| (0..WRITES).map(|_| AtomicU32::new(0)).collect());
+    }
+
+    /// Counts a change the app made to what the pages at `path` show ([`KeptAnswers::changed`]),
+    /// as a write to the path is counted: with no counts yet, with the writes that found none, so
+    /// no answer whose handler read before it stands, at whatever path.
+    fn changed(&self, path: &[u8]) {
+        match self.0.written.get() {
+            Some(counts) => {
+                counts[count_of(path)].fetch_add(1, Ordering::AcqRel);
+            }
+            None => self.early(),
+        }
+    }
+}
+
+/// The app's kept answers ([`crate::App::kept_answers`]), for a change the app makes that no write
+/// to a page's own path says: a form at `/items/7/edit` that changes the list at `/items`, a task
+/// that reprices every item, a job a handler started and did not wait for. A handler takes it as
+/// it takes a [`crate::Signal`]; a task, or anything else outside a request, gets it from the app
+/// before it is served ([`crate::App::kept`]). Cloning is cheap, and every clone reaches the same
+/// store.
+///
+/// [`KeptAnswers::changed`] drops what this process keeps at a page's path. It does not reach
+/// another instance of the app, or a CDN or proxy in front of it, which keep their copies for the
+/// lifetime the page was sent with (`docs/design.md#limit-kept-drop-reach`).
+#[derive(Clone, Default)]
+pub struct KeptAnswers(Arc<OnceLock<Answers>>);
+
+impl KeptAnswers {
+    /// The app's store, once its router is made.
+    pub(crate) fn set(&self, answers: &Answers) {
+        let _ = self.0.set(answers.clone());
+    }
+
+    /// What the page at `to` shows has changed, so nothing this process kept at its path is
+    /// given again: every query there (`/items?page=2` with `/items`), and the copy kept for each
+    /// `Host`, `Accept-Language` and way of asking, as a write to the path drops them. Each is made
+    /// again by its handler when it is next asked for. An answer whose handler was reading when
+    /// this was called is sent and not given again, so a page made from what was there before does
+    /// not stand after it, however its making and this call interleave.
+    ///
+    /// Counted when it is called, so call it once the change is there for readers: after the
+    /// transaction commits, or, for work that outlives its request, at the end of that work
+    /// ([`crate::Signal::finish`]). A page asked for between the change and this call is made
+    /// from the change, and is not kept. Two paths share a count once in 65,536 times, and then
+    /// the other path's pages are dropped too. With no store (under `corten dev`, with
+    /// `App::kept_answers(0)`, in an app with no `Public` route of a kind it keeps, or before
+    /// the app's router is made) it does nothing.
+    ///
+    /// A write at `/items/7/edit` changes the list at `/items`, and a task reprices every
+    /// item and changes it too:
+    ///
+    /// ```
+    /// use corten::{prelude::*, KeptAnswers, Signal};
+    /// use std::time::Duration;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/items", get = crate::items)]
+    ///     pub struct Items;
+    ///
+    ///     #[route("/items/{id}/edit", get = crate::edit, post = crate::save)]
+    ///     pub struct Edit {
+    ///         pub id: u32,
+    ///     }
+    /// }
+    ///
+    /// async fn items(req: Req) -> Public<HtmlResult> {
+    ///     Public::new(Duration::from_secs(600), req.page(html! { <main>"The items"</main> }))
+    /// }
+    ///
+    /// async fn edit(at: Params<url::Edit>) -> String {
+    ///     format!("item {}", at.id)
+    /// }
+    ///
+    /// async fn save(req: Req, kept: KeptAnswers, at: Params<url::Edit>) -> HtmlResult {
+    ///     // ... item `at.id` saved, and committed
+    ///     kept.changed(&url::Items);
+    ///     req.redirect(&url::Edit { id: at.id })
+    /// }
+    ///
+    /// async fn reprice(kept: KeptAnswers, signal: Signal) {
+    ///     while !signal.is_aborted() {
+    ///         // ... every item repriced, and committed
+    ///         kept.changed(&url::Items);
+    ///         tokio::select! {
+    ///             biased;
+    ///             _ = signal.aborted() => return,
+    ///             _ = tokio::time::sleep(Duration::from_secs(3600)) => {}
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// fn main() {
+    ///     let app = App::new(url::router());
+    ///     let kept = app.kept();
+    ///     let _app = app.task("reprice", move |signal| reprice(kept, signal));
+    /// }
+    /// ```
+    ///
+    /// The page is named as a link to it is, by its route ([`crate::OnSite`]: a
+    /// `#[derive(Route)]` value, a place on one, a `#[derive(Href)]` enum of those, or a checked
+    /// [`crate::Local`]), so a path written as text does not compile:
+    ///
+    /// ```compile_fail,E0277
+    /// fn list_changed(kept: corten::KeptAnswers) {
+    ///     kept.changed("/items");
+    /// }
+    /// ```
+    ///
+    /// and neither does another site's URL:
+    ///
+    /// ```compile_fail,E0277
+    /// fn list_changed(kept: corten::KeptAnswers) {
+    ///     let to: corten::http::Uri = "https://shop.example/items".parse().unwrap();
+    ///     kept.changed(&to);
+    /// }
+    /// ```
+    pub fn changed(&self, to: &(impl crate::route::OnSite + ?Sized)) {
+        let Some(answers) = self.0.get() else { return };
+        let link = crate::route::link(to);
+        let path = link.split(['?', '#']).next().unwrap_or_default();
+        answers.changed(path.as_bytes());
+    }
+}
+
+impl std::fmt::Debug for KeptAnswers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeptAnswers").field("store", &self.0.get().is_some()).finish()
+    }
+}
+
+impl<S: Send + Sync> crate::extract::FromRequestParts<S> for KeptAnswers {
+    type Rejection = std::convert::Infallible;
+
+    /// The store of the app serving the request; none outside an app (a bare router in a test).
+    async fn from_request_parts(parts: &mut http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
+        let kept = KeptAnswers::default();
+        let shared = parts.extensions.get::<crate::Signal>().and_then(crate::Signal::shared);
+        if let Some(answers) = shared.and_then(|shared| shared.kept.as_ref()) {
+            kept.set(answers);
+        }
+        Ok(kept)
     }
 }
 

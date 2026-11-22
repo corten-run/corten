@@ -1475,6 +1475,234 @@ async fn a_write_drops_the_pages_kept_at_its_path() {
     assert!(fetch(&router, "GET", "/read", &[]).await.1.contains_key(header::AGE), "and no other path's page");
 }
 
+static LIST_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static LIST_OTHER_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A list of items kept for a minute, a form that edits one at a path of its own and says the list
+/// changed, a note on one that does not say so, and another page.
+#[crate::routes]
+mod list_url {
+    #[route("/items", get = list_items)]
+    pub struct Items;
+
+    #[route("/items/{id}/edit", get = list_edit, post = list_save)]
+    pub struct Edit {
+        pub id: u32,
+    }
+
+    #[route("/items/{id}/note", post = list_note)]
+    pub struct Note {
+        pub id: u32,
+    }
+
+    #[route("/elsewhere", get = list_other)]
+    pub struct Elsewhere;
+}
+
+async fn list_items(req: Req) -> Public<HtmlResult> {
+    LIST_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Public::new(Duration::from_secs(60), req.test_page_for("Items", html! { <p>"items"</p> }))
+}
+
+async fn list_other(req: Req) -> Public<HtmlResult> {
+    LIST_OTHER_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Public::new(Duration::from_secs(60), req.test_page_for("Elsewhere", html! { <p>"elsewhere"</p> }))
+}
+
+async fn list_edit(at: crate::Params<list_url::Edit>) -> String {
+    format!("item {}", at.id)
+}
+
+async fn list_save(kept: crate::KeptAnswers, _: crate::Params<list_url::Edit>) -> StatusCode {
+    kept.changed(&list_url::Items);
+    StatusCode::NO_CONTENT
+}
+
+async fn list_note(_: crate::Params<list_url::Note>) -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
+/// A write at another path drops the list only when its handler says the list changed
+/// (`KeptAnswers::changed`): every query at the list's path, and no other path's page. One that
+/// says nothing leaves the list kept, as a write elsewhere always did.
+#[tokio::test]
+async fn a_write_at_another_path_drops_the_page_it_says_it_changed() {
+    use std::sync::atomic::Ordering;
+    let router = App::new(list_url::router()).router();
+    let same_origin = [("sec-fetch-site", "same-origin")];
+    let kept = |path: &'static str| {
+        let router = router.clone();
+        async move { fetch(&router, "GET", path, &[]).await.1.contains_key(header::AGE) }
+    };
+    for path in ["/items", "/items?page=2", "/elsewhere"] {
+        assert!(!kept(path).await && kept(path).await, "{path}");
+    }
+    assert_eq!((LIST_RUNS.load(Ordering::Relaxed), LIST_OTHER_RUNS.load(Ordering::Relaxed)), (2, 1));
+
+    assert_eq!(fetch(&router, "POST", "/items/7/note", &same_origin).await.0, StatusCode::NO_CONTENT);
+    assert!(kept("/items").await && kept("/items?page=2").await, "a write elsewhere that says nothing");
+
+    assert_eq!(fetch(&router, "POST", "/items/7/edit", &same_origin).await.0, StatusCode::NO_CONTENT);
+    assert!(!kept("/items").await && !kept("/items?page=2").await, "the list, every query");
+    assert!(kept("/items").await && kept("/items?page=2").await, "made again, and kept");
+    assert!(kept("/elsewhere").await, "no other path's page");
+    assert_eq!((LIST_RUNS.load(Ordering::Relaxed), LIST_OTHER_RUNS.load(Ordering::Relaxed)), (4, 1));
+}
+
+/// Work outside any request (a task, a job) holds the app's `KeptAnswers`, taken before the
+/// router is made, and drops a page with it; a place on the page names its path. The handle does
+/// nothing before the router is made, or in an app that keeps nothing.
+#[tokio::test]
+async fn a_job_outside_a_request_drops_a_page() {
+    let runs = Runs::default();
+    let app = App::new(Routes::from(kept_routes(&runs)));
+    let kept = app.kept();
+    kept.changed(&Root);
+    assert_eq!(format!("{kept:?}"), "KeptAnswers { store: false }", "no store until the router is made");
+    let router = app.router();
+    assert_eq!(format!("{kept:?}"), "KeptAnswers { store: true }");
+    let given = |router: Router| async move { fetch(&router, "GET", "/", &[]).await.1.contains_key(header::AGE) };
+    assert!(!given(router.clone()).await && given(router.clone()).await);
+
+    let job = kept.clone();
+    tokio::spawn(async move { job.changed(&Root) }).await.unwrap();
+    assert!(!given(router.clone()).await, "dropped by the job");
+    assert!(given(router.clone()).await);
+    #[derive(crate::view::Id)]
+    struct Total;
+    kept.changed(&Root.at(Total));
+    assert!(!given(router.clone()).await, "a place on the page is the page's path");
+    #[derive(crate::Route)]
+    #[route("/other")]
+    struct Other;
+    kept.changed(&Other);
+    assert!(given(router.clone()).await, "another path's change");
+    assert_eq!(runs.count(), 3);
+
+    let none = App::new(Routes::from(kept_routes(&runs))).kept_answers(0);
+    let nothing = none.kept();
+    let router = none.router();
+    nothing.changed(&Root);
+    assert_eq!(format!("{nothing:?}"), "KeptAnswers { store: false }", "an app that keeps none");
+    assert!(!given(router).await);
+}
+
+/// A page whose handler was reading when the app said it changed may show what was there before:
+/// it is sent, and never given again, however its making and the call interleave. So the next
+/// request runs the handler, and that page is kept. Before the app counts writes by path (no
+/// answer that may be kept was made yet) the call is counted as a write that found no counts.
+#[tokio::test]
+async fn a_page_made_while_the_app_said_it_changed_is_not_given_after() {
+    #[derive(crate::Route)]
+    #[route("/slow")]
+    struct Slow;
+    for counted in [false, true] {
+        let (runs, release) = (Runs::default(), std::sync::Arc::new(tokio::sync::Notify::new()));
+        let (counted_runs, wait) = (runs.clone(), release.clone());
+        let page = move |req: Req| {
+            counted_runs.ran();
+            let (first, wait) = (counted_runs.count() == 1, wait.clone());
+            async move {
+                if first {
+                    wait.notified().await;
+                }
+                Public::new(Duration::from_secs(60), req.test_page_for("Slow", html! { <p>"slow"</p> }))
+            }
+        };
+        let other = |req: Req| async move { Public::new(Duration::from_secs(60), req.test_page_for("O", html! { <p>"o"</p> })) };
+        let routes = Table::new().route("/slow", crate::route::get(page).0).route("/other", crate::route::get(other).0);
+        let app = App::new(Routes::from(routes));
+        let kept = app.kept();
+        let router = app.router();
+        if counted {
+            // An answer that may be kept was made: the app counts by path from here.
+            fetch(&router, "GET", "/other", &[]).await;
+        }
+        let reading = tokio::spawn({
+            let router = router.clone();
+            async move { fetch(&router, "GET", "/slow", &[]).await }
+        });
+        while runs.count() == 0 {
+            tokio::task::yield_now().await;
+        }
+        kept.changed(&Slow);
+        release.notify_one();
+        let (status, headers, _) = reading.await.unwrap();
+        assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "counted={counted}");
+        let (_, headers, _) = fetch(&router, "GET", "/slow", &[]).await;
+        assert!(runs.count() == 2 && !headers.contains_key(header::AGE), "counted={counted}: made again: {headers:?}");
+        let (_, headers, _) = fetch(&router, "GET", "/slow", &[]).await;
+        assert!(runs.count() == 2 && headers.contains_key(header::AGE), "counted={counted}: and that one is kept");
+    }
+}
+
+/// The app's saying a page changed drops every copy kept at its path: one for each `Host`, each
+/// `Accept-Language` the page varies on and, of a whole body, the copy a data client asked for.
+#[tokio::test]
+async fn a_change_drops_the_copy_kept_for_each_host_language_and_way_of_asking() {
+    crate::i18n::messages! { struct ChangedMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    #[derive(crate::Route)]
+    #[route("/")]
+    struct Home;
+    #[cfg(feature = "compress")]
+    #[derive(crate::Route)]
+    #[route("/text")]
+    struct Text;
+    let (runs, texts) = (Runs::default(), Runs::default());
+    let (counted, text_ran) = (runs.clone(), texts.clone());
+    let page = move |req: Req| {
+        counted.ran();
+        async move {
+            let lang = req.lang();
+            Public::new(Duration::from_secs(60), req.test_page_for("Lang", html! { <p>"in "{lang}</p> }))
+        }
+    };
+    let text = move || {
+        text_ran.ran();
+        async move { Public::new(Duration::from_secs(60), "kept ".repeat(400)) }
+    };
+    let routes = Table::new().route("/", crate::route::get(page).0).route("/text", crate::route::get(text).0);
+    let app = App::new(Routes::from(routes)).messages::<ChangedMsg>();
+    let kept = app.kept();
+    let router = app.router();
+    let ways: [&[(&'static str, &str)]; 4] = [
+        &[("host", "localhost"), ("accept-language", "fr")],
+        &[("host", "localhost"), ("accept-language", "en")],
+        &[("host", "127.0.0.1"), ("accept-language", "fr")],
+        &[("host", "127.0.0.1"), ("accept-language", "en")],
+    ];
+    let given = |path: &'static str, asked: &'static [(&'static str, &'static str)]| {
+        let router = router.clone();
+        async move { fetch(&router, "GET", path, asked).await.1.contains_key(header::AGE) }
+    };
+    for asked in ways {
+        assert!(!given("/", asked).await && given("/", asked).await, "{asked:?}");
+    }
+    assert_eq!(runs.count(), 4);
+    kept.changed(&Home);
+    for asked in ways {
+        assert!(!given("/", asked).await && given("/", asked).await, "made again: {asked:?}");
+    }
+    assert_eq!(runs.count(), 8);
+
+    // A whole body is kept where the app compresses it, apart for a data client.
+    #[cfg(feature = "compress")]
+    {
+        let bodies: [&[(&'static str, &str)]; 2] = [&[], &[("accept", "application/json")]];
+        for asked in bodies {
+            assert!(!given("/text", asked).await && given("/text", asked).await, "{asked:?}");
+        }
+        assert_eq!(texts.count(), 2);
+        kept.changed(&Text);
+        for asked in bodies {
+            assert!(!given("/text", asked).await && given("/text", asked).await, "made again: {asked:?}");
+        }
+        assert_eq!(texts.count(), 4);
+    }
+    #[cfg(not(feature = "compress"))]
+    let _ = texts;
+}
+
 /// What a write's handler finds: whether the app has a store of kept pages, and whether the
 /// write is counted, for its path or with the writes from before the app counts by path.
 async fn store_and_count(signal: crate::Signal) -> String {
