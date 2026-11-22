@@ -18,7 +18,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     const file = hostKeyFile(argv, "yes");
     if (file === known || fs.readFileSync(file, "utf8") !== launchKey) throw new Error("SSH must use the pinned launch key");
   };
-  let readiness = 0;
+  let readiness = 0, installed = false, quietMs = 0;
   const spawn = (binary, argv, options) => {
     let input = options.input, reply = good;
     const readinessProbe = binary === "ssh" && argv.at(-1) === "/bin/bash -s";
@@ -60,9 +60,17 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
       }
       if (script.startsWith("systemctl show")) return reply(`Id=${saved.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${saved.unit}\nActiveState=active\nRestart=no\nMainPID=123\nExecMainCode=0\nExecMainStartTimestamp=Sun 2026-11-15 00:00:00 UTC\n`);
       if (script === bootstrapWorkspaceScript(saved, { launch: true })) return reply("", config.mode === "owner-capture-fail" ? 1 : 0);
-      if (script === "true"
-        || script.includes("sha256sum --check --status") || script.startsWith("bash -n /bench/job.sh")
-        || script === ":" || script === `systemctl start ${saved.unit}`) return reply();
+      if (script.startsWith("bash -n /bench/job.sh")) {
+        if (!script.includes("90-corten-benchmark.conf") || !script.endsWith("systemctl daemon-reload"))
+          throw new Error("missing quiet handoff policy");
+        installed = true;
+        return reply();
+      }
+      if (script === `systemctl start ${saved.unit}`) {
+        if (quietMs !== 120000) throw new Error("benchmark started without quiet handoff");
+        return reply();
+      }
+      if (script === "true" || script.includes("sha256sum --check --status") || script === ":") return reply();
     }
     if (binary === "sftp") {
       const [, from, to] = /^put "([^"]+)" "(\/bench\/[a-z0-9.-]+)"\n$/.exec(input);
@@ -108,7 +116,10 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     return child;
   };
   return { repo: config.repo, spawn, streamSpawn,
-    sleep: async () => { if (config.mode !== "ssh-late" || readiness !== 1) throw new Error("unexpected synthetic sleep"); },
+    sleep: async (ms) => {
+      if (installed && quietMs < 120000 && ms === 1000) { quietMs += ms; return; }
+      if (config.mode !== "ssh-late" || readiness !== 1) throw new Error("unexpected synthetic sleep");
+    },
     providerFactory: ({ interrupted, createMode }) => {
       record({ boundary: "provider-factory" });
       return providerTransport({ repo: config.repo, interrupted, createMode, launch(binary, argv, options) {
