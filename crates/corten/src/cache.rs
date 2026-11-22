@@ -44,9 +44,9 @@
 //! [`crate::live`] stream's fragments are text rendered after its headers went out, so they carry
 //! no such mark.
 //!
-//! The app is the first shared cache of its own `Public` pages: the whole document one made for a
-//! request without credentials is kept for its shared lifetime and given again in the handler's
-//! place ([`crate::App::kept_answers`], `docs/design.md#choice-kept-pages`), and goes out through
+//! The app is the first shared cache of its own `Public` pages, JSON and text: the whole document
+//! or body one made for a request without credentials is kept for its shared lifetime and given
+//! again in the handler's place ([`crate::App::kept_answers`], `docs/design.md#choice-kept-pages`), and goes out through
 //! the same checks as the handler's own answer.
 //!
 //! A `Public` handler cannot read a cookie or a header through an extractor of the app's own unless
@@ -592,7 +592,7 @@ pub(crate) struct Unrepeatable;
 /// A page's `200` to a `GET` or `HEAD` with a weak `ETag` from its body and its `corten-*`
 /// headers, or `304 Not Modified` in its place when the request's `If-None-Match` (`has`, each
 /// line) names that tag. The tag is made from the answer this request would be sent (rendered
-/// for it, or the kept page given in its place, `crate::kept`), so a `304` says the
+/// for it, or the kept answer given in its place, `crate::kept`), so a `304` says the
 /// client's copy is what it would get now, whoever is asking. The runtime's headers count because
 /// a cache keeps a stored header the `304` does not send (RFC 9111 4.3.4): a copy that came with a
 /// notice or a place to go must not be reused for an answer without one. Weak, since the body is
