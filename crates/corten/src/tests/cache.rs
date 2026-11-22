@@ -1696,6 +1696,63 @@ async fn a_page_made_while_a_write_went_through_is_not_kept() {
     assert!(runs.count() == 2 && headers.contains_key(header::AGE), "and that one is kept");
 }
 
+/// An app counts its writes by path once it has made an answer it may keep. Until then a write
+/// reads nothing of its path and is counted with the others like it: an answer the app does not
+/// keep makes no counts, however often it is asked for, and a page whose handler read while such
+/// a write went through, at any path, is sent and not kept. Once the counts are there a write
+/// drops only what is kept at its own path.
+#[tokio::test]
+async fn a_write_is_counted_by_path_once_an_answer_may_be_kept() {
+    let same_origin = [("sec-fetch-site", "same-origin")];
+    let (runs, written) = (Runs::default(), std::sync::Arc::new(tokio::sync::Notify::new()));
+    let (counted, wait) = (runs.clone(), written.clone());
+    let page = move |req: Req| {
+        counted.ran();
+        let (first, wait) = (counted.count() == 1, wait.clone());
+        async move {
+            if first {
+                wait.notified().await;
+            }
+            Public::new(Duration::from_secs(60), req.test_page_for("Slow", html! { <p>"slow"</p> }))
+        }
+    };
+    // A body too small for any build to keep.
+    let words = || async { Public::new(Duration::from_secs(60), "words") };
+    let how = |signal: crate::Signal| async move { signal.counted_as() };
+    let routes = Table::new()
+        .route("/", crate::route::get(page).0)
+        .route("/words", crate::route::get(words).0)
+        .route("/items/{id}/edit", crate::router::post(how));
+    let router = App::new(Routes::from(routes)).router();
+    let write = |router: Router| async move {
+        let (status, _, body) = fetch(&router, "POST", "/items/7/edit", &same_origin).await;
+        assert_eq!(status, StatusCode::OK);
+        String::from_utf8(body.to_vec()).unwrap()
+    };
+    assert_eq!(write(router.clone()).await, "early", "nothing asked for yet");
+    for _ in 0..3 {
+        assert!(!fetch(&router, "GET", "/words", &[]).await.1.contains_key(header::AGE));
+    }
+    assert_eq!(write(router.clone()).await, "early", "an answer the app does not keep makes no counts");
+
+    let reading = tokio::spawn({
+        let router = router.clone();
+        async move { fetch(&router, "GET", "/", &[]).await }
+    });
+    while runs.count() == 0 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(write(router.clone()).await, "early", "a page asked for and not yet made makes none either");
+    written.notify_one();
+    let (status, headers, _) = reading.await.unwrap();
+    assert!(status == StatusCode::OK && !headers.contains_key(header::AGE));
+    let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
+    assert!(runs.count() == 2 && !headers.contains_key(header::AGE), "its handler read across a write: {headers:?}");
+    assert_eq!(write(router.clone()).await, "path", "an answer that may be kept was made");
+    let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
+    assert!(runs.count() == 2 && headers.contains_key(header::AGE), "a write at another path leaves it: {headers:?}");
+}
+
 static SHELF_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 #[crate::routes(area = Shelf)]

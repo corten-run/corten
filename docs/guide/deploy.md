@@ -254,7 +254,7 @@ and sent `Vary: Accept`, nginx fetched JSON for the JSON request by default and 
 HTML with `Vary` ignored. The runtime loads a navigation answered with a document as a whole
 page, so it still works, more slowly; a data client gets HTML where it asked for JSON.
 
-The app keeps its own `Public` pages too, and its `Public` JSON and text
+The app keeps its own `Public` pages too, and its `Public` JSON and text of a size it compresses
 ([the pages the app keeps](app.md#the-pages-the-app-keeps)),
 so a cache in front may be sent one the app made earlier. Such an answer carries `Age`, and a cache
 that follows RFC 9111 counts its own lifetime from when the page was made rather than from when it
@@ -265,8 +265,8 @@ costs the app neither the render nor the compression. A purge at the cache in fr
 reach the app: the cache is sent the kept page again until its lifetime ends or a write through
 the app drops it, so a page that must change at once on a purge takes a short lifetime in the app
 and a long one nowhere. What is kept is held in the process's memory, 32 MiB of it unless
-`App::kept_answers` says otherwise, with 256 KiB beside it once a `Public` page, JSON or text
-answer is asked for and 128 KiB more once they fill it (a 256th of the bound, or up to a 128th
+`App::kept_answers` says otherwise, with 256 KiB beside it once an answer it may keep
+is asked for and 128 KiB more once they fill it (a 256th of the bound, or up to a 128th
 where that is not a power of two).
 The bound counts the bytes asked of the allocator, and an allocator holds more than it is asked
 for when pages come and go: the benchmark app's resident memory settled 35 MiB above where it
@@ -759,18 +759,27 @@ Before reserving a new grouped fleet, its [placement preflight](../../bench/work
 checks the provider's size and region listings for all required hosts. The
 reservation fixes those locations; create never tries a different region.
 
+For a partial round, the [independent group procedure](../../bench/workloads/CLOUD.md#independent-group-continuation)
+replays completed results from their original evidence and reserves only the
+named missing group. Different groups in the same continuation can measure on
+separate droplets once each earlier host is supervised. Allocation is serialized;
+terminal collection is independent. Each group keeps its own measured commit,
+date and hardware.
+
 The grouped benchmark's [disposable-host preparation](../../bench/workloads/CLOUD.md#evidence-and-cleanup)
 holds firmware-update services outside the measurement boundary before baseline.
 On a fresh dedicated group host it also limits incoming SSH to the controller's
 authenticated provisioning IPv4 source. Keep that egress for collection and
 cleanup; do not make a separate login during measurement.
 Its cleanup check retains all process observations and exempts only kernel threads
-proved by saved Linux stat flags and matching PID/start identity. The supervised marketplace
-run can [take one additional cleanup observation](../../bench/workloads/isolated/CAMPAIGN.md#post-command-udev-settle)
-if every new user-space identity is a proven systemd-udevd worker born after the sealed
-command-lifetime cutoff. Cleanup still fails unless the monotonic wait is proved, the
-workers are gone, and the ordinary boundary checks pass. This cannot repair an old failed run
-or discount activity during measurement. This is benchmark-host preparation, not app deployment advice.
+proved by saved Linux stat flags and matching PID/start identity. Supervised marketplace
+timing and untimed JSON preparation can
+[take one additional cleanup observation](../../bench/workloads/isolated/CAMPAIGN.md#post-command-udev-settle)
+after sealed command termination if every new user-space identity is a proved udev worker.
+Marketplace timing still requires worker birth after the terminal cutoff; JSON preparation
+permits birth after its pre-phase census. The bounded wait, worker exit and ordinary whole-host
+boundary checks must all pass. This cannot repair old evidence or discount activity during
+measurement. This is benchmark-host preparation, not app deployment advice.
 
 A new benchmark allocation launched from a commit that includes
 [pinned unused-host recovery](../../bench/workloads/CLOUD.md#failed-allocation-retirement)

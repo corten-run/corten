@@ -31,7 +31,7 @@ mock.module("node:fs", { namedExports: {
   readdirSync(path) { return procFiles && path === "/proc"
     ? [...procFiles.keys()].flatMap((k) => /^\/proc\/(\d+)\/stat$/.exec(k)?.slice(1) ?? []) : fs.readdirSync(path); },
 } });
-const { hostTerminalClock, observeHost, udevSettleCandidates, verifyHostBoundary, verifySettledHostBoundary } = await import("./host-observation.mjs");
+const { hostTerminalClock, observeHost, udevSettleCandidates, udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } = await import("./host-observation.mjs");
 const { registration } = await import("../test-fixtures/control-stream-fixture.mjs");
 
 const before = { bootId: "boot", hostname: "host", containers: [], networks: [], processes: [] };
@@ -108,6 +108,23 @@ test("a proved sleeping post-terminal udev worker can settle; the first after st
   });
   assert.deepEqual(first, keep);
   assert.throws(() => verifySettledHostBoundary(baseline, first, settled, undefined), /terminal clock/);
+});
+
+test("only JSON preparation can settle a worker born before the terminal cutoff, strictly after the baseline", () => {
+  const { baseline, first, settled, terminal } = udevBoundaries();
+  const preparation = udevSettlePolicy("json-api", "prepare");
+  const timing = udevSettlePolicy("localized-marketplace", "timing");
+  assert.equal(udevSettlePolicy("json-api", "timing"), null);
+  assert.equal(udevSettlePolicy("catalog-page", "timing"), null);
+  const bornAt = (ticks) => Object.assign(first.processes[1], { startTicks: ticks,
+    stat: stat(62274, ticks, "4194624", "(udev-worker)", "846", "S") });
+  bornAt("209500");
+  assert.equal(udevSettleCandidates(baseline, first, terminal, timing), null);
+  assert.deepEqual(verifySettledHostBoundary(baseline, first, settled, terminal, preparation).settledUdevWorkers,
+    [{ pid: 62274, startTicks: "209500" }]);
+  assert.equal(udevSettleCandidates(baseline, first, undefined, preparation), null);
+  bornAt("23630");
+  assert.equal(udevSettleCandidates(baseline, first, terminal, preparation), null);
 });
 
 test("a name, cgroup or executable alone never permits settling an unknown or possibly in-window task", () => {

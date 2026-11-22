@@ -11,6 +11,7 @@ import { browserCpus } from "../../fullstack-browser/contract.mjs";
 import { participantSnapshot, replayExecution } from "../../fullstack-browser/native-execution.mjs";
 import { composeHostProof, inspectLifetime, processIdentity, inspectBrowserParticipants, inspectLiveActors, resolveParticipantExecutables } from "./host-lifetime.mjs";
 import { executableIdentity, executableReference, hashExecutableDescriptor } from "./participant-executables.mjs";
+import { jsonPhase } from "./campaign-contract.mjs";
 
 const campaign = "r17-0123456789abcdef", command = 0, pid = 100;
 const binding = { request: { group: "client-heavy", round: "w17", commit: "a".repeat(40) }, resources: { app: null } };
@@ -64,22 +65,22 @@ test("sealed deferred executable records replay without rewriting sample timesta
   assert.throws(f.replay);
   rmSync(path); assert.throws(f.replay, { code: "ERR_ASSERTION" });
 });
-function fixture(t, change = () => {}, bound = binding) {
+function fixture(t, change = () => {}, bound = binding, invoke = invocation, runResult = result) {
   const directory = mkdtempSync(join(tmpdir(), "isolated-host-replay-"));
   t.after(() => { assert.ok(resolve(directory).startsWith(resolve(tmpdir()) + sep)); rmSync(directory, { recursive: true }); });
   const ancestors = []; for (let p = parent; ; p = posix.dirname(p)) { ancestors.push(group(p)); if (p === "/") break; }
   const context = { schema: "benchmark-isolated-host-lifetime/v1", campaign, command, leaderPid: pid, parent, path,
-    ...bound.request, bindingSha256: deploymentSha256(bound), invocation, bootId: "boot", ancestors };
+    ...bound.request, bindingSha256: deploymentSha256(bound), invocation: invoke, bootId: "boot", ancestors };
   const processes = [[100, "node", "a", null], [101, "rustc", "c", null], [102, "chrome", "b", "--type=renderer"]]
     .map(([pid, name, hash, type]) => ({ stat: stat(pid, name), cgroup: `0::${path}\n`, executableSha256: hash.repeat(64), type }));
   const samples = [{ at: 0, groups: [group(path)], processes: [] }, { at: 50, groups: [group(path, [100, 101, 102])], processes },
     { at: 100, groups: [group(path)], processes: [] }];
-  const terminal = { terminal: true, attached: true, empty: true, samples: 3, observerError: null, command: result, bootId: "boot", ancestors };
+  const terminal = { terminal: true, attached: true, empty: true, samples: 3, observerError: null, command: runResult, bootId: "boot", ancestors };
   change({ context, samples, terminal });
   writeFileSync(join(directory, "binding.json"), JSON.stringify(context));
   writeFileSync(join(directory, "samples.jsonl"), samples.map((s) => JSON.stringify(s) + "\n").join(""));
   writeFileSync(join(directory, "terminal.json"), JSON.stringify(terminal));
-  return { directory, observation: () => inspectLifetime(bound, invocation, directory, { campaign, command, pid, result }) };
+  return { directory, observation: () => inspectLifetime(bound, invoke, directory, { campaign, command, pid, result: runResult }) };
 }
 
 function browserFixture(t, selectedApp = "app", isolated = false, workload = "fullstack-browser") {
@@ -481,7 +482,7 @@ test("actual inherited controls need no invented cap; terminal observations comp
   native.hostSubject.processWindows[0].endedAt = 40;
   assert.equal(composeHostProof(binding, native, observed).resources, "blocked");
 });
-test("only a verified marketplace lifetime exposes its sealed, same-boot terminal clock", (t) => {
+test("a verified marketplace lifetime still exposes its sealed, same-boot terminal clock", (t) => {
   const marketplace = { ...binding, request: { ...binding.request, group: "localized-marketplace" } };
   const clock = { bootId: "boot", uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" };
   const withClock = ({ terminal }) => { terminal.terminalClock = clock; };
@@ -495,6 +496,30 @@ test("only a verified marketplace lifetime exposes its sealed, same-boot termina
     terminal.terminalClock = { ...clock, bootId: "other" };
   }, marketplace).observation());
   assert.throws(() => fixture(t, withClock).observation());
+});
+test("only the exact JSON preparation execution can expose a sealed JSON terminal clock", (t) => {
+  const plan = { round: "r17", bindings: [{ ...binding, request: { ...binding.request, group: "json-api", round: "j35" } }] };
+  const prepare = jsonPhase(plan, "prepare"), timing = jsonPhase(plan, "timing", "/bench/campaign/json-native-audits.json");
+  const execute = prepare.execution.invocation, prepareExit = { ...result, code: 1 };
+  const clock = { bootId: "boot", uptime: "106.00 1280.00\n", ticksPerSecond: 100, monoNs: "4000000" };
+  const withClock = ({ terminal }) => { terminal.terminalClock = clock; };
+  const inspect = (bound, invoke, change = withClock) => fixture(t, change, bound, invoke, prepareExit).observation();
+
+  const clean = inspect(prepare, execute);
+  assert.equal(clean.status, "verified");
+  assert.deepEqual(clean.terminalClock, clock);
+  assert.equal(inspect(prepare, execute, ({ terminal }) => {
+    withClock({ terminal }); terminal.empty = false;
+  }).terminalClock, undefined);
+  assert.equal(inspect(prepare, execute, () => {}).status, "verified", "old preparations never needed a clock");
+  const refused = /terminal clock not allowed for this invocation/;
+  assert.throws(() => inspect(timing, timing.execution.invocation), refused);
+  for (const generator of ["catalog", "marketplace"])
+    assert.throws(() => inspect(prepare, { executable: "node", argv: [`bench/${generator}/fixtures.mjs`] }), refused);
+  assert.throws(() => inspect(prepare, { ...execute, argv: [...execute.argv, "--check-only"] }), refused);
+  assert.throws(() => inspect({ ...prepare, execution: timing.execution }, execute), refused);
+  assert.throws(() => inspect(timing, { ...execute, argv: execute.argv.map((arg) => arg === "j34" ? "j35" : arg) }), refused);
+  assert.throws(() => inspect(prepare, execute, ({ terminal }) => { terminal.terminalClock = { ...clock, bootId: "other" }; }));
 });
 test("missing effective command controls cannot verify a client lifetime", (t) => {
   const f = fixture(t, ({ samples }) => {

@@ -1507,7 +1507,7 @@ mistake, the runtime loads the URL as a whole page instead of swapping it in.
 ### The pages the app keeps
 
 The app is the first shared cache of its own `Public` pages, and of its `Public` JSON and
-text (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
+text where it compresses them (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
 such request in the handler's place until the answer's shared lifetime ends: `s-maxage` where
 the answer has `.shared(..)`, else `max_age`. So a `Public` page's handler does not run for
 every request, and what it read may be that old when a visitor sees it, as it already may be
@@ -1599,18 +1599,34 @@ of a page's handler: in a full store the answer to the first request for a URL t
 not remember is not kept, whether the page is new, or was kept while there was room or before
 the bits were last cleared and has since passed its lifetime or been dropped. A store that has filled mostly stays full, since a page past its lifetime keeps
 its room until another needs it. Nothing is kept under `corten dev`,
-so a change shows on the next load. An app with no `Public` page keeps nothing whatever the
-bound, and its writes are not counted, so it pays nothing for pages it cannot keep. An app's tests keep pages as a deploy does (`App::test`,
+so a change shows on the next load. An app with no `Public` page, and no `Public` JSON or text route in a build with `compress`, keeps nothing whatever the
+bound, and its writes are not counted, so it pays nothing for pages it cannot keep; one whose `Public` JSON or text
+is all too small to keep still holds a store there, since a body's size is known only when it is made, and
+pays one add for a write: writes are counted by path from the first answer the app may keep,
+and until then all together, so a write that was under way when that first answer was made drops
+every answer kept by the time it ends, once. An app's tests keep pages as a deploy does (`App::test`,
 `App::router`): a test that changes what a `Public` page shows other than by a write through the
 app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page
 only in the instance that answered it, and a restart starts empty.
 
-A `Public` route that answers JSON (`Public<JsonResult<T>>`) or text is kept the same way: its
-whole body, under every rule above and by the same key (the language too, where the handler
-reads it with `req.t()` or `req.lang()`), with each coding's bytes made once and, outside an API
-(whose answers are not tagged), the tag's hash. What it saves is the handler with what it reads, the writing of the JSON, the
-hash and the compression. Such a route has one answer at its URL, where a page route has the
+A `Public` route that answers JSON (`Public<JsonResult<T>>`) or text is kept the same way where
+the app compresses the answer: its whole body, when that is 1,024 bytes or more and the build has
+the `compress` feature, under every rule above and by the same key (the language too, where the
+handler reads it with `req.t()` or `req.lang()`), with each coding's bytes made once and, outside
+an API (whose answers are not tagged), the tag's hash. What it saves is the handler with what it
+reads, the writing of the JSON, the hash and the compression, and once kept it is given to a
+request that accepts no coding as well. A smaller body, and any body in a build without
+`compress`, is its handler's for every request: on the benchmark, whose handler reads only
+memory, keeping one cost more than making it
+([design Choice 70](../design.md#choice-kept-pages)). A route whose bodies are all under the size
+stops asking the store after 64 answers in a row of which none was kept (one left out for another
+reason, a failure or a form's submit key, counts too, so 64 failures in a row from a route with
+bodies kept make it leave as well), but for about one request in 256, so it
+costs a load and a draw more than it did before bodies were kept and is found out if its bodies grow; a route
+where fewer than about one request in twelve is for a body large enough leaves the store out more
+often than not. While it does, a body it kept earlier is made again for each request, and the kept
+one may be given after a newer one, within its lifetime. Such a route has one answer at its URL, where a page route has the
 document, its swap and its data, so a data client's request (`Accept: application/json` first) is
 kept too, as a copy apart from a request that does not ask for JSON first: a handler that takes
 `Req` can read which of the two asked. What an API adds for the site that asks
@@ -1621,9 +1637,8 @@ lifetime ends.
 
 A file (`Media`), a sitemap or `robots.txt` (`seo::File`), a relay, a live stream and a feed are
 not kept: each is its handler's for every request, and so is JSON the app holds as bytes
-(`Json<json::Raw>`) in a build with the `compress` feature, which already keeps its compressed
-forms. One file is kept: a file of a known size that a page route
-answers in its page's place (`PageOr<Media>`), as that page would be. Neither is anything that is not `Public`: a
+(`Json<json::Raw>`), which already keeps its compressed forms. One file is kept: a file of a known size that a page route
+answers in its page's place (`PageOr<Media>`), as that page would be. Nothing that is not `Public` is kept either: a
 page for one visitor runs its handler for every request, because a key that had to cover the
 caller is where a mistake shows one user's page to another. Cache the data such a page reads in
 the app, where it knows when the data changes.
