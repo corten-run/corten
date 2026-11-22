@@ -9,6 +9,7 @@ import { mock, test } from "node:test";
 import { definition, selectedApps } from "../../registry.mjs";
 import { createClientWorkload } from "../../client.mjs";
 import { evaluateLatestStable, latestStableSources } from "../../latest-stable.mjs";
+import { comparisonProfile, options } from "../../../client-heavy/contract.mjs";
 
 // The native owner lands separately. Resolve only the exact missing static seam in
 // this test process; never create/copy a verifier or add a production injection API.
@@ -57,7 +58,7 @@ function fixture(t) {
     report.sources.files = entries.map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 }));
   }
   source("bench/client-heavy/run.mjs"); source("Cargo.toml", "# Synthetic Cargo input\n");
-  const save = () => { put("result.json", output); put("plan.json", plan); put("native/build.json", output.builds); put("native/workload.json", settings);
+  const save = () => { put("result.json", output); put("plan.json", plan); put("native/build.json", output.builds); put("native/workload.json", plan.workload);
     put("evidence/source-before.json", { entries }); put("evidence/source-after.json", { entries }); };
   save(); return { folder, binding, output, plan, put, save, source, entries };
 }
@@ -95,6 +96,31 @@ test("synthetic v3 adapter binds the recomputed policy and preserves unsupported
   assert.equal(value.rankingEligible, false); assert.deepEqual(value.comparisonEligibleApps, []);
   assert.deepEqual(value.outcomes.map((r) => r.outcome), ["passed", "passed", "passed", "unsupported", "passed", "passed"]);
   f.binding.latestStable.schema = "benchmark-latest-stable-evaluation/v1";
+  assert.equal((await inspectSaved(f.binding, f.folder)).status, "invalid");
+});
+
+test("v4 adapter accepts only the fixed binding and never claims OS proof", async (t) => {
+  const f = candidateFixture(t);
+  f.binding.request.recipe = comparisonProfile;
+  const args = [...f.plan.invocation.argv, "--profile", comparisonProfile];
+  const { invocation, workload, measurementOrder } = options(args, f.plan.root, f.plan.platform);
+  Object.assign(f.binding.execution, { settings: workload, invocation: { executable: "node", argv: ["bench/client-heavy/run.mjs", ...args] } });
+  const { rows, large, append, cards } = invocation.effective;
+  Object.assign(f.binding.execution.effectiveOptions, { rows, large, append, cards, profile: comparisonProfile, measurementOrder });
+  Object.assign(f.plan, { invocation, workload, measurementOrder });
+  Object.assign(f.output, { schema: "client-heavy-native/v4", effectiveWorkload: workload });
+  Object.assign(report, { schema: "client-heavy-saved-verification/v4", effectiveWorkload: workload, invocation });
+  for (const cells of [f.output.cells, report.cells]) for (const cell of Object.values(cells)) {
+    cell.measurements = cell.measurement ? measurementOrder.map(() => structuredClone(cell.measurement)) : [];
+    delete cell.measurement;
+  }
+  report.cells.react.comparison = { samples: measurementOrder.length, actions: [] };
+  f.save();
+  const native = await inspectSaved(f.binding, f.folder);
+  assert.equal(native.status, "failed"); assert.equal(native.attemptComplete, true);
+  assert.equal(native.resources, "blocked"); assert.deepEqual(native.comparisonEligibleApps, ["react"]);
+  f.plan.measurementOrder = [...measurementOrder].reverse();
+  f.save();
   assert.equal((await inspectSaved(f.binding, f.folder)).status, "invalid");
 });
 

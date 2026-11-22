@@ -6,7 +6,7 @@ import { join, dirname, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
 import { Evidence, json, sha256 } from "./evidence.mjs";
-import { options, sourceRoots, buildOptions, documentMarkup } from "./contract.mjs";
+import { options, sourceRoots, buildOptions, documentMarkup, comparisonProfile } from "./contract.mjs";
 import { committed, validateSaved } from "./verify.mjs";
 import { selectedApps, definition } from "../workloads/registry.mjs";
 import { fixturePass, workload, settings } from "./replay-fixture.mjs";
@@ -21,7 +21,7 @@ const producerRoot = "/producer", outputPath = "bench/client-heavy/work/unit";
 // Completely synthetic source/build/browser receipts. Their successful intrinsic
 // replay MUST NOT authenticate them or create a real review receipt.
 async function fixture(t, version = 2) {
-  const commit = version === 3 ? currentCommit : "e006be831cd69e423bfd3e159362b54746597b96";
+  const commit = version >= 3 ? currentCommit : "e006be831cd69e423bfd3e159362b54746597b96";
   const folder = await mkdtemp(join(tmpdir(), "client-v2-unit-")), e = new Evidence(process.cwd(), folder);
   t.after(async () => { const r = relative(tmpdir(), folder); assert.ok(r && !isAbsolute(r) && !r.startsWith("..")); await rm(folder, { recursive: true, force: true }); });
   const write = async (p, b) => { await mkdir(dirname(join(folder, p)), { recursive: true }); await writeFile(join(folder, p), b); };
@@ -33,16 +33,19 @@ async function fixture(t, version = 2) {
   sources.sort((a, b) => a.path.localeCompare(b.path, "en"));
   const empty = await e.blob(Buffer.alloc(0)), module = await e.blob(Buffer.from("// synthetic dependency, never executed\n"));
   const source = new Map(sources.map((s) => [s.path, s]));
-  const config = options(["unit", "--rows", "8", "--large", "10", "--append", "1", "--cards", "2", "--cleanup-ms", "10", "--observation-ms", "5"], producerRoot, "linux");
-  assert.deepEqual(config.workload, workload); assert.deepEqual(config.settings, settings);
-  const plan = { schema: "client-heavy-plan/v1", round: "unit", commit, invocation: config.invocation, workload, settings, timeoutMs: 30000,
+  const config = options(version === 4 ? ["unit", "--profile", comparisonProfile]
+    : ["unit", "--rows", "8", "--large", "10", "--append", "1", "--cards", "2", "--cleanup-ms", "10", "--observation-ms", "5"], producerRoot, "linux");
+  if (version < 4) { assert.deepEqual(config.workload, workload); assert.deepEqual(config.settings, settings); }
+  const { workload: spec, settings: limits, measurementOrder } = config;
+  const plan = { schema: "client-heavy-plan/v1", round: "unit", commit, invocation: config.invocation, workload: spec, settings: limits, timeoutMs: 30000,
+    ...(measurementOrder ? { measurementOrder } : {}),
     selectedApps: [...apps], definition: definition("client-heavy"), sourceBefore: "evidence/source-before.json", root: producerRoot, platform: "linux",
     nodeClock: { clock: "node-performance", timeOrigin: 1000 }, inheritedConfigurationNames: ["PATH"] };
-  const output = { schema: `client-heavy-native/v${version}`, group: "client-heavy", round: "unit", effectiveWorkload: workload, settings, timeoutMs: 30000,
+  const output = { schema: `client-heavy-native/v${version}`, group: "client-heavy", round: "unit", effectiveWorkload: spec, settings: limits, timeoutMs: 30000,
     selectedApps: [...apps], definition: definition("client-heavy"), builds: {}, cells: {}, passed: true, readyForLoad: false, cleanupFailures: [],
     collection: { accounting: "complete", proof: "blocked", blockers: ["external-trusted-execution-source-build-and-host-admission-required"], isolation: "unknown", rankingEligible: false, reviewSubject: "review-subject.json" },
     provenance: { commit, sourceBefore: "evidence/source-before.json", sourceAfter: "evidence/source-after.json", node: "unit", platform: "linux", release: "unit", cpu: "unit", logicalCpus: 1,
-      browser: "unit", browserInstances: 1, rendererProcessLimit: 1, concurrentPages: 1, passes: 2, note: "SYNTHETIC UNIT ONLY" },
+      browser: "unit", browserInstances: 1, rendererProcessLimit: 1, concurrentPages: 1, passes: 1 + (measurementOrder?.length ?? 1), note: "SYNTHETIC UNIT ONLY" },
     terminal: { clock: "node-performance", timeOrigin: 1000, signals: [], resources: ["browser", "server"].map((resource, i) => ({ resource,
       startedAt: 10000 + i * 2, endedAt: 10001 + i * 2, returned: true, observed: true, failure: null })) } };
   const dependencyEntries = {};
@@ -88,7 +91,7 @@ async function fixture(t, version = 2) {
     const inputs = inputPaths.map((path) => ({ path, ...(source.has(path) ? (({ path: _, ...ref }) => ref)(source.get(path)) : module) }));
     const raw = Buffer.from(`throw new Error('saved code must not run'); // ${app}`), code = Buffer.concat([raw, Buffer.from("\n")]), bundle = app === "corten" ? "client.js" : "app.js";
     const meta = { inputs: Object.fromEntries(inputPaths.map((p) => [p, {}])), outputs: { "stdout.js": { bytes: raw.length, entryPoint: entry, imports: [], inputs: Object.fromEntries(inputPaths.map((p) => [p, { bytesInOutput: 0 }])) } } };
-    const bytes = { "index.html": Buffer.from(documentMarkup(app, workload, "<section>Synthetic unit</section>")), [bundle]: code };
+    const bytes = { "index.html": Buffer.from(documentMarkup(app, spec, "<section>Synthetic unit</section>")), [bundle]: code };
     if (app === "corten") Object.assign(bytes, { "runtime.js": Buffer.from(await readFile(join(folder, source.get("crates/corten/js/dist/corten.js").blob))), "views.js": Buffer.from("// synthetic views") });
     const artifactHashes = Object.fromEntries(Object.entries(bytes).map(([p, b]) => [p, sha256(b)]));
     for (const [p, b] of Object.entries(bytes)) await write(`native/${app}/${p}`, b);
@@ -101,28 +104,34 @@ async function fixture(t, version = 2) {
     const buildAt = 10 + apps.indexOf(app) * 2;
     await saveJson(`native/${app}/build-receipt.json`, { schema: "client-heavy-build-receipt/v1", app, startedAt: app === "corten" ? 4 : buildAt, endedAt: buildAt + 1, esbuild: { version: "0.28.2", entry: module },
       optionsSha256: sha256(json(opts)), metafileSha256: sha256(json(meta)), rawBundle: await e.blob(raw), footer: empty, inputs, artifacts: artifactHashes });
-    output.cells[app] = { outcome: "passed", qualification: fixturePass(app, false), measurement: fixturePass(app, true), readyForMeasurement: true };
-    for (const phase of ["qualification", "measurement"]) {
-      const p = output.cells[app][phase], start = 100 + apps.indexOf(app) * 1000 + (phase === "measurement" ? 200 : 0);
+    function capture(measured, start, elapsedMs = 0.25) {
+      const p = fixturePass(app, measured, spec, limits);
       p.lifecycle.contextCreatedAt = start; p.lifecycle.deadline.scheduledAt += start; p.lifecycle.deadline.cancelledAt += start;
       p.lifecycle.close.startedAt += start; p.lifecycle.close.endedAt += start; p.timing.timeOrigin += start + 10;
       p.timing.operations.forEach((s) => { s.timeOrigin += start + 10; });
+      if (measured) { p.timing.operations[0].endedAt = p.timing.operations[0].startedAt + elapsedMs; p.actions[0].elapsedMs = elapsedMs; }
       p.requests = Object.entries(bytes).map(([name, b], id) => ({ id, path: `/${app}/${name}`,
         method: "GET", resourceType: name.endsWith("html") ? "document" : "script", startedAt: start + 2 + id, endedAt: start + 3 + id, status: 200, body: { bytes: b.length, sha256: sha256(b) }, failure: null }));
+      return p;
     }
+    const start = 100 + apps.indexOf(app) * (measurementOrder ? 350 : 1000);
+    output.cells[app] = { outcome: "passed", qualification: capture(false, start), readyForMeasurement: true,
+      ...(measurementOrder ? { measurements: measurementOrder.map((block, i) => capture(true, 100 + (apps.length * (i + 1) + block.indexOf(app)) * 350, [0.75, 0.25, 0.5][i])) }
+        : { measurement: capture(true, start + 200) }) };
   }
-  if (version === 3) {
+  if (version >= 3) {
     const inputs = Object.fromEntries(await Promise.all(Object.entries(latestStableSources).map(async ([key, path]) =>
       [key, await readFile(join(folder, source.get(path).blob))])));
     output.latestStable = evaluateLatestStable({ group: "client-heavy", ...inputs });
     const row = output.latestStable.candidates.find((r) => r.app === "solid");
     await remove("native/solid");
     output.builds.solid = { outcome: "not-run", reason: row.reason };
-    output.cells.solid = { outcome: "unsupported", reason: row.reason, qualification: null, measurement: null, readyForMeasurement: false };
+    output.cells.solid = { outcome: "unsupported", reason: row.reason, qualification: null, readyForMeasurement: false,
+      ...(measurementOrder ? { measurements: [] } : { measurement: null }) };
     output.passed = false;
   }
   const seal = async () => {
-    await saveJson("plan.json", plan); await saveJson("result.json", output); await saveJson("native/workload.json", workload); await saveJson("native/build.json", output.builds);
+    await saveJson("plan.json", plan); await saveJson("result.json", output); await saveJson("native/workload.json", spec); await saveJson("native/build.json", output.builds);
     for (const app of apps) await saveJson(`${app}.json`, output.cells[app]);
     await rm(join(folder, "review-subject.json"), { force: true }); await e.seal({ group: "client-heavy", round: "unit", commit });
   };
@@ -149,6 +158,34 @@ test("v3 public replay preserves unsupported Solid and qualified diagnostic peer
   assert.equal(r.cells.solid.build.bytes, null);
   assert.equal(r.cells.react.replayPassed, true); assert.ok(r.cells.react.measurement.timings);
   assert.ok(r.latestStable.candidates.every((row) => row.latestStableEligible === !["solid", "remix"].includes(row.app)));
+});
+
+test("v4 replays each block and recomputes summaries for native and policy passes only", async (t) => {
+  const f = await fixture(t, 4), r = await f.validate();
+  assert.equal(r.schema, "client-heavy-saved-verification/v4");
+  assert.equal(r.status, "failed", JSON.stringify(r.errors));
+  assert.equal(r.intrinsic.complete, true); assert.equal(r.rankingEligible, false);
+  assert.deepEqual(r.cells.react.comparison, { samples: 3, actions: f.plan.workload.operations.map(({ id, kind }, i) =>
+    ({ operation: id, kind, medianMs: i === 0 ? 0.5 : 0.25, minMs: 0.25, maxMs: i === 0 ? 0.75 : 0.25 })) });
+  assert.equal(r.cells.remix.replayPassed, true); assert.equal(r.cells.remix.comparison, undefined);
+  assert.equal(r.cells.solid.outcome, "unsupported"); assert.deepEqual(r.cells.solid.measurements, []);
+  assert.deepEqual(r.processWindows.filter((w) => w.phase === "measurement").map((w) => w.app),
+    f.plan.measurementOrder.flat().filter((app) => app !== "solid"));
+});
+
+test("v4 refuses resealed missing, reused or tampered sample receipts", async (t) => {
+  const f = await fixture(t, 4), samples = f.output.cells.react.measurements;
+  for (const [replacement, reason] of [
+    [samples.slice(0, 2), "missing-measurement-attempt-receipt"],
+    [[samples[0], samples[0], samples[2]], "context-before-build-or-previous-close"],
+    [[samples[1], samples[0], samples[2]], "context-before-build-or-previous-close"],
+    [[samples[0], samples[1], { ...samples[2], actions: [] }], "timings-differ-from-endpoint-recomputation"],
+  ]) {
+    f.output.cells.react.measurements = replacement;
+    await f.seal();
+    const r = await f.validate();
+    assert.equal(r.status, "invalid"); assert.ok(r.errors.some((entry) => entry.reason === reason), JSON.stringify(r.errors));
+  }
 });
 
 for (const [name, mutate] of [

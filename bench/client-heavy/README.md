@@ -124,10 +124,35 @@ binding policy from custody-verified committed-equivalent inputs. Only the
 existing exact-byte or uniform LF-to-CRLF checkout conversion is accepted;
 different policy dispositions, invented hashes or mixed conversion fail closed.
 
-Composition can consider each candidate separately only after freshness and
-native admission. The current small one-measurement recipe still reports
-`rankingEligible: false` and no comparison-eligible apps. This change provides
-no framework performance qualification, no new baseline, and no ranking.
+### Dedicated comparison recipe
+
+New dedicated client-heavy campaigns bind `client-heavy-comparison-v1` in the
+existing isolated runner. The local diagnostic default and legacy campaign keep
+their single measured pass, and saved v2/v3 results remain readable and unranked.
+To exercise the comparison capture locally (not to qualify or publish a result),
+pass `--profile client-heavy-comparison-v1` to `run.mjs`; it accepts no workload
+or timing overrides.
+
+The recipe uses 100 initial rows, a 1,000-row large create, an append of 100 and
+200 dashboard cards. These cover the established 100-row batch, 1,000-row table
+and 200-price dashboard scales without carrying 10,000-row snapshots through
+each operation and replicate. They use the same seeded inputs, operations and
+oracles for all six apps; they are not the historical browser table's workload.
+
+Qualify the roster first. Then visit it in three serial blocks, rotating by two
+roster positions between blocks and skipping only cells that did not qualify.
+Every attempted journey uses a fresh context, does the same work and records
+raw timings and cleanup. An observed, closed failed sample stays in its block
+and disqualifies that cell; nothing is retried or substituted. Unsupported Solid
+keeps its row and has no samples. A native Remix pass still does not waive its
+version-policy blocker.
+
+Replay derives per-action median, minimum and maximum from all three admitted
+samples. Only an eligible cell whose entire attempt also passes isolated host
+proof and custody can carry that summary into the official result. The native
+artifact still cannot grant ranking eligibility by itself. Use the values only
+as within-host observations with their ranges; the recipe does not declare a
+winner, resolve small differences, or replace the historical baseline.
 
 Integration left to the parent: add `node --test bench/client-heavy/*.test.mjs`
 to the check command and route the client-heavy group's native execution to

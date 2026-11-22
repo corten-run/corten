@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { bindExecution } from "./contract.mjs";
+import { bindExecution, clientComparisonRecipe } from "./contract.mjs";
 import { catalogFleetPlacement, providerCreateHost } from "../cloud-contract.mjs";
 import { bindCampaign, campaignRounds, jsonPhase, mixedPhase, productionRecipes, validateCampaign } from "./campaign-contract.mjs";
 import { groupNames, selectedApps } from "../registry.mjs";
@@ -149,12 +149,21 @@ test("group campaigns bind the entire exact native group with stable all-group p
     assert.equal(plan.schema, "benchmark-isolated-group-campaign/v1");
     assert.deepEqual(plan.order, [group]);
     const legacy = all.bindings.find((b) => b.request.group === group);
-    const dedicated = bindExecution({ ...legacy.request, review: null }, "dedicated");
+    const recipe = group === "client-heavy" ? clientComparisonRecipe : legacy.request.recipe;
+    const dedicated = bindExecution({ ...legacy.request, recipe, review: null }, "dedicated");
     assert.ok(isDeepStrictEqual(plan.bindings, [dedicated]), "dedicated group binding differs");
     assert.equal(dedicated.host.region, providerCreateHost("dedicated").region);
     assert.notEqual(dedicated.subjectSha256, legacy.subjectSha256);
-    for (const field of ["procedures", "recipes", "sourceSha256", "ready", "executionAuthorized"])
+    for (const field of ["procedures", "sourceSha256", "ready", "executionAuthorized"])
       assert.deepEqual(plan[field], all[field]);
+    assert.deepEqual(plan.recipes, { ...all.recipes, [group]: recipe });
+    if (group === "client-heavy") {
+      assert.equal(legacy.request.recipe, "native-defaults");
+      assert.deepEqual(dedicated.execution.invocation.argv.slice(-2), ["--profile", clientComparisonRecipe]);
+      assert.equal(dedicated.execution.effectiveOptions.measurementOrder.length, 3);
+      const downgraded = { ...plan, bindings: [bindExecution({ ...legacy.request, review: null }, "dedicated")] };
+      assert.throws(() => validateCampaign(downgraded), /fixed native bindings/);
+    }
     assert.ok(Object.isFrozen(plan) && Object.isFrozen(plan.bindings[0].selection.apps));
     if (group === "hardening") {
       assert.ok(dedicated.sources.files.some((f) => f.path === hardeningCpuGate));

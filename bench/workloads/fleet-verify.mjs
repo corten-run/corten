@@ -364,7 +364,8 @@ export async function verifyCollectedGroup(fleet, group, { inspect, start, detai
     timeScope: "reservation-and-collection-not-provider-billing-or-benchmark-elapsed", ...hashes,
     campaignSha256: report.campaignSha256, sourceSha256: report.sourceSha256,
     ...(details ? { campaignCreatedAt: reservation.createdAt, baseEffectiveOptions: plan.bindings?.[0]?.execution?.effectiveOptions } : {}),
-    ...(report.status === "verified" ? { appOutcomes: report.groups[0].appOutcomes.map(({ app, outcome, comparisonEligible }) => ({ app, outcome, comparisonEligible })) } : {}) };
+    ...(report.status === "verified" ? { appOutcomes: report.groups[0].appOutcomes.map(({ app, outcome, comparisonEligible, comparison }) =>
+      ({ app, outcome, comparisonEligible, ...(comparisonEligible && comparison ? { comparison } : {}) })) } : {}) };
   return { evidenceMode: inspect ? "synthetic-inspection" : "native-replay", row, snapshot };
 }
 

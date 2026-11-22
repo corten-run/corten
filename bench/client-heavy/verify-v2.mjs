@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual as same } from "node:util";
 import { win32, posix } from "node:path";
 import { selectedApps, definition } from "../workloads/registry.mjs";
-import { options, sourceRoots, buildOptions, documentMarkup } from "./contract.mjs";
+import { options, sourceRoots, buildOptions, documentMarkup, summarizeActions } from "./contract.mjs";
 import { snapshot, committed } from "./verify.mjs";
 import { need, keys, finite, digest, span, diagnostic, closure, replayV2 } from "./replay-v2.mjs";
 import { depInputs, compilerSourcePath, compilerWorkingDirectory, cargoMetadata } from "./compiler.mjs";
@@ -23,7 +23,7 @@ const names = (v) => need(Array.isArray(v) && v.every((s) => typeof s === "strin
 // These are the v3 replay gates used below, after the unchanged physical/source
 // readers establish custody. They do not authenticate caller-supplied bytes.
 export function replayCandidatePolicy(output, sourceBytes) {
-  need(output.schema === "client-heavy-native/v3", "candidate-policy-needs-v3-producer");
+  need(["client-heavy-native/v3", "client-heavy-native/v4"].includes(output.schema), "candidate-policy-needs-v3-producer");
   const inputs = Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) => [key, sourceBytes(path)]));
   const policy = evaluateLatestStable({ group: "client-heavy", ...inputs });
   need(policy.schema === candidateLatestStableSchema && policy.valid && same(policy, output.latestStable), "candidate-policy-differs-from-source-recomputation");
@@ -34,7 +34,9 @@ export function replayProducerSchema(source, schema) {
   // The producer's fixed version declaration is a source contract. Read it,
   // never import/evaluate saved JavaScript or infer legacy from a missing field.
   const declarations = [...source.toString("utf8").matchAll(/^export const schema = "(client-heavy-native\/v[23])";\r?$/gm)];
-  need(declarations.length === 1 && declarations[0][1] === schema, "native-schema-differs-from-source-producer");
+  const comparison = /^export const comparisonSchema = "client-heavy-native\/v4";\r?$/m.test(source.toString("utf8"));
+  need(declarations.length === 1 && (schema === "client-heavy-native/v4" ? declarations[0][1] === "client-heavy-native/v3" && comparison
+    : declarations[0][1] === schema), "native-schema-differs-from-source-producer");
 }
 
 export function replayCandidateDisposition(policy, app, cell, build, filePaths) {
@@ -42,10 +44,31 @@ export function replayCandidateDisposition(policy, app, cell, build, filePaths) 
   const unsupported = policy.candidates.find((row) => row.app === app && row.status === "unsupported");
   if (unsupported) {
     need(app === "solid" && unsupported.reason === unsupportedSolidReason && cell.outcome === "unsupported"
-      && cell.reason === unsupported.reason && cell.qualification === null && cell.measurement === null && cell.readyForMeasurement === false
+      && cell.reason === unsupported.reason && cell.qualification === null
+      && (Array.isArray(cell.measurements) ? cell.measurements.length === 0 : cell.measurement === null) && cell.readyForMeasurement === false
       && build.outcome === "not-run" && [unsupported.reason, "runner-failed-before-build"].includes(build.reason)
       && ![...filePaths].some((path) => path.startsWith(`native/${app}/`)), "unsupported-client-has-build-or-capture");
   } else if (cell.outcome === "unsupported" && cell.qualification === null) need(false, "unsupported-client-without-policy-or-capture");
+}
+
+// Reconstruct the command's single-context timeline in scheduled order, not
+// timestamp-sorted order: reused, swapped or overlapping receipts cannot pass.
+export function replayContextOrder(cells, apps, order, buildEnd) {
+  const passes = (app, phase, pass) => ({ app, phase, pass });
+  const qualifications = (app) => passes(app, "qualification", cells[app].qualification);
+  const ledger = order ? [...apps.map(qualifications),
+    ...order.flatMap((block, i) => block.map((app) => passes(app, "measurement", cells[app].measurements[i])))]
+    : apps.flatMap((app) => [qualifications(app), passes(app, "measurement", cells[app].measurement)]);
+  let endedAt = buildEnd;
+  const windows = [];
+  for (const { app, phase, pass } of ledger) {
+    if (!pass || pass.lifecycle.contextCreatedAt === null) continue;
+    const life = pass.lifecycle;
+    need(life.contextCreatedAt >= endedAt, "context-before-build-or-previous-close");
+    endedAt = life.close.endedAt;
+    windows.push({ kind: "browser", app, phase, startedAt: life.contextCreatedAt, endedAt: life.close.startedAt });
+  }
+  return { endedAt: windows.length ? endedAt : 0, windows };
 }
 function checkBlobRef(ref, maxBytes) {
   keys(ref, ["bytes", "sha256", "blob"]);
@@ -127,12 +150,12 @@ export async function validateV2(request) {
   });
   const output = await check("result.json", () => {
     const o = json("result.json");
-    const candidatePolicy = o.schema === "client-heavy-native/v3";
+    const candidatePolicy = ["client-heavy-native/v3", "client-heavy-native/v4"].includes(o.schema);
     keys(o, ["schema", "group", "round", "effectiveWorkload", "settings", "timeoutMs", "provenance", "selectedApps", "definition",
       "builds", "cells", "passed", "readyForLoad", "collection", "terminal", "cleanupFailures", ...(candidatePolicy ? ["latestStable"] : [])], ["failure"]);
-    need(["client-heavy-native/v2", "client-heavy-native/v3"].includes(o.schema) && o.group === "client-heavy" && o.round === request.round
+    need((o.schema === "client-heavy-native/v2" || candidatePolicy) && o.group === "client-heavy" && o.round === request.round
       && o.provenance.commit === request.commit, "wrong-run-identity");
-    if (candidatePolicy) report.schema = "client-heavy-saved-verification/v3";
+    if (candidatePolicy) report.schema = o.schema === "client-heavy-native/v4" ? "client-heavy-saved-verification/v4" : "client-heavy-saved-verification/v3";
     need(same(o.selectedApps, apps) && same(o.definition, definition("client-heavy")), "incomplete-or-changed-registry-inventory");
     inventory(o.cells); inventory(o.builds);
     need(typeof o.passed === "boolean" && o.readyForLoad === false, "invalid-summary-readiness");
@@ -146,13 +169,16 @@ export async function validateV2(request) {
     return o;
   });
   if (!output) return report;
+  const comparison = output.schema === "client-heavy-native/v4";
+  if (comparison && output.failure) block("comparison-runner-failed");
   const plan = await check("plan.json", () => {
     const p = json("plan.json");
     keys(p, ["schema", "round", "commit", "invocation", "workload", "settings", "timeoutMs", "selectedApps", "definition", "sourceBefore",
-      "root", "platform", "nodeClock", "inheritedConfigurationNames"]);
+      "root", "platform", "nodeClock", "inheritedConfigurationNames", ...(comparison ? ["measurementOrder"] : [])]);
     need(p.schema === "client-heavy-plan/v1" && p.round === request.round && p.commit === request.commit && typeof p.root === "string"
       && ["win32", "linux", "darwin"].includes(p.platform), "invalid-plan-identity");
     const parsed = options(p.invocation.argv, p.root, p.platform);
+    need(Boolean(parsed.measurementOrder) === comparison && same(p.measurementOrder, parsed.measurementOrder), "comparison-order-differs-from-fixed-invocation");
     need(same(p.invocation, parsed.invocation) && same(p.workload, parsed.workload) && same(p.settings, parsed.settings)
       && p.timeoutMs === parsed.timeoutMs && parsed.round === request.round, "plan-differs-from-fixed-invocation");
     need(same(p.workload, output.effectiveWorkload) && same(p.settings, output.settings) && p.timeoutMs === output.timeoutMs
@@ -164,7 +190,7 @@ export async function validateV2(request) {
   });
   if (!plan) return report;
   const origins = plan.nodeClock.timeOrigin;
-  let lastContextEnd = 0, lastBuildEnd = 0;
+  let lastContextEnd = 0, lastBuildEnd = 0, contextWindows = [];
   const pathApi = plan.platform === "win32" ? win32 : posix;
   const relativeOutput = pathApi.relative(plan.root, plan.invocation.effective.out).replaceAll("\\", "/");
   await check("provenance", () => {
@@ -174,7 +200,8 @@ export async function validateV2(request) {
     need(p.commit === request.commit && p.sourceBefore === "evidence/source-before.json" && p.sourceAfter === "evidence/source-after.json"
       && p.platform === plan.platform && [p.node, p.platform, p.release, p.cpu, p.note].every((s) => typeof s === "string" && s.length > 0)
       && Number.isSafeInteger(p.logicalCpus) && p.logicalCpus > 0 && (p.browser === null || typeof p.browser === "string")
-      && p.browserInstances === 1 && p.rendererProcessLimit === 1 && p.concurrentPages === 1 && p.passes === 2, "invalid-provenance-topology");
+      && p.browserInstances === 1 && p.rendererProcessLimit === 1 && p.concurrentPages === 1
+      && p.passes === 1 + (plan.measurementOrder?.length ?? 1), "invalid-provenance-topology");
   });
   const toolReceipts = new Map(), configuration = new Set(plan.inheritedConfigurationNames);
   const tool = async (label, required = false) => {
@@ -262,7 +289,7 @@ export async function validateV2(request) {
   const sourceRef = (path) => sourceMap.get(path) ?? (path.startsWith("node_modules/") ? nodeDependencies.get(path.slice(13))
     : path.startsWith("bench/browser/node_modules/") ? browserDependencies.get(path.slice(27)) : null);
   let candidatePolicy = null;
-  if (output.schema === "client-heavy-native/v3") candidatePolicy = await check("latest-stable", () => {
+  if (output.schema !== "client-heavy-native/v2") candidatePolicy = await check("latest-stable", () => {
     const policy = replayCandidatePolicy(output, (path) => blob(sourceMap.get(path)));
     report.latestStable = policy;
     return policy;
@@ -278,7 +305,7 @@ export async function validateV2(request) {
   });
   for (const app of apps) {
     report.cells[app] = { outcome: output.cells[app]?.outcome ?? null, reason: output.cells[app]?.reason ?? null,
-      replayPassed: false, qualification: null, measurement: null, build: null };
+      replayPassed: false, qualification: null, ...(comparison ? { measurements: [] } : { measurement: null }), build: null };
     await check(`${app}:build`, () => {
       const b = output.builds[app], cell = report.cells[app];
       if (b.outcome === "not-run") { keys(b, ["outcome", "reason"]);
@@ -326,19 +353,15 @@ export async function validateV2(request) {
       cell.build = { outcome: "built", bytes: code.length, sha256: hash(code), integrity: "matched-not-authenticated" };
     });
     await check(`${app}:cell`, async () => {
-      const c = output.cells[app]; keys(c, ["outcome", "qualification", "measurement", "readyForMeasurement"], ["reason"]);
+      const c = output.cells[app], cell = report.cells[app];
+      keys(c, ["outcome", "qualification", comparison ? "measurements" : "measurement", "readyForMeasurement"], ["reason"]);
       need(["passed", "failed", "unsupported", "not-run"].includes(c.outcome) && (c.reason === undefined || typeof c.reason === "string" && c.reason.trim()), "invalid-cell-outcome");
       need(same(json(`${app}.json`), c), "raw-app-differs-from-summary");
-      if (output.schema === "client-heavy-native/v3") replayCandidateDisposition(candidatePolicy, app, c, output.builds[app], files.keys());
-      for (const phase of ["qualification", "measurement"]) if (c[phase] !== null) report.cells[app][phase] = await check(`${app}:${phase}`, () =>
-        replayV2(c[phase], app, phase, plan.workload, plan.settings, plan.timeoutMs, origins)) ?? null;
-      for (const phase of ["qualification", "measurement"]) if (c[phase]?.lifecycle.contextCreatedAt !== null && c[phase] !== null) {
-        const life = c[phase].lifecycle;
-        need(life.contextCreatedAt >= Math.max(lastContextEnd, allBuildEnd), "context-before-build-or-previous-close");
-        lastContextEnd = life.close.endedAt;
-      }
-      for (const phase of ["qualification", "measurement"]) if (c[phase] !== null) await check(`${app}:${phase}:requests`, () => {
-        const pass = c[phase], replayed = report.cells[app][phase];
+      if (output.schema !== "client-heavy-native/v2") replayCandidateDisposition(candidatePolicy, app, c, output.builds[app], files.keys());
+      const measurements = comparison ? c.measurements : c.measurement === null ? [] : [c.measurement];
+      const count = plan.measurementOrder?.length ?? 1;
+      need(Array.isArray(measurements) && measurements.length <= count && measurements.every(Boolean), "invalid-measurement-inventory");
+      const replayRequests = (pass, replayed) => {
         need(Array.isArray(pass.requests), "missing-http-request-ledger");
         const paths = new Set(); let started = -1, bytes = 0;
         for (const [i, r] of pass.requests.entries()) {
@@ -362,18 +385,38 @@ export async function validateV2(request) {
           for (const name of Object.keys(output.builds[app].artifacts)) need(paths.has(`/${app}/${name}`), "missing-native-artifact-request");
           replayed.requests = { count: pass.requests.length, bytes, paths: [...paths].sort() };
         } else if (replayed) replayed.requests = null;
-      });
-      const q = report.cells[app].qualification, m = report.cells[app].measurement;
-      need(q?.passed === true || c.measurement === null, "measurement-before-qualification");
-      need(q?.passed !== true || c.measurement !== null || (output.failure && typeof c.reason === "string"), "missing-measurement-attempt-receipt");
-      const passed = q?.passed === true && m?.passed === true;
+      };
+      const replayPass = async (pass, phase, label = phase) => {
+        const replayed = await check(`${app}:${label}`, () => replayV2(pass, app, phase, plan.workload, plan.settings, plan.timeoutMs, origins)) ?? null;
+        await check(`${app}:${label}:requests`, () => replayRequests(pass, replayed));
+        return replayed;
+      };
+      const q = cell.qualification = c.qualification === null ? null : await replayPass(c.qualification, "qualification");
+      const replayed = [];
+      for (const [index, pass] of measurements.entries()) replayed.push(await replayPass(pass, "measurement", comparison ? `measurement-${index + 1}` : "measurement"));
+      if (comparison) cell.measurements = replayed;
+      else cell.measurement = replayed.length ? replayed[0] : null;
+      need(q?.passed === true || measurements.length === 0, "measurement-before-qualification");
+      need(q?.passed !== true || measurements.length === count || (output.failure && (comparison || typeof c.reason === "string")), "missing-measurement-attempt-receipt");
+      const passed = q?.passed === true && replayed.length === count && replayed.every((m) => m?.passed === true);
       need(c.readyForMeasurement === passed && (c.outcome === "passed") === passed, "cell-flags-differ-from-raw-replay");
-      if (q?.oracle.functionalPassed || m?.oracle.functionalPassed) need(output.builds[app].outcome === "built", "passing-capture-without-build");
-      if (c.qualification === null) need(c.measurement === null && !!c.reason && c.outcome !== "passed", "unavailable-cell-needs-reason");
-      else need(c.outcome === (passed ? "passed" : (q?.passed ? m?.oracle.outcome : q?.oracle.outcome) === "unsupported" ? "unsupported" : "failed"), "cell-outcome-differs-from-replay");
-      report.cells[app].replayPassed = passed;
+      if (q?.oracle.functionalPassed || replayed.some((m) => m?.oracle.functionalPassed)) need(output.builds[app].outcome === "built", "passing-capture-without-build");
+      if (c.qualification === null) need(measurements.length === 0 && (!!c.reason || comparison && output.failure)
+        && c.outcome !== "passed", "unavailable-cell-needs-reason");
+      else need(c.outcome === (passed ? "passed" : (!comparison && (q?.passed ? replayed[0]?.oracle.outcome : q?.oracle.outcome) === "unsupported")
+        ? "unsupported" : "failed"), "cell-outcome-differs-from-replay");
+      cell.replayPassed = passed;
+      const policy = candidatePolicy?.candidates.find((row) => row.app === app);
+      if (comparison && passed && policy?.status === "satisfied" && policy.latestStableEligible === true && policy.blockers.length === 0) {
+        cell.comparison = { samples: count, actions: summarizeActions(replayed.map((m) => m.timings.actions)) };
+      }
     });
   }
+  await check("context-order", () => {
+    const { endedAt, windows } = replayContextOrder(output.cells, apps, plan.measurementOrder, allBuildEnd);
+    lastContextEnd = endedAt;
+    contextWindows = windows;
+  });
   if (output.builds.corten.outcome === "built") await check("compiler-input-closure", () => {
     const c = json("evidence/compiler-inputs.json");
     keys(c, ["schema", "metadata", "toolchain", "artifacts", "depfiles", "inputs", "unavailable"], ["compilerRoot"]);
@@ -480,11 +523,7 @@ export async function validateV2(request) {
     report.executionWindow = { clock: "unix-ms", startedAt: origins + (snapshotTimes.get("source-before")?.startedAt ?? 0),
       endedAt: origins + Math.max(terminalEnd, ...[...snapshotTimes.values()].map((s) => s.endedAt)) };
     report.processWindows = [...(run ? [{ kind: "compiler", startedAt: origins + run.startedAt, endedAt: origins + run.endedAt }] : []),
-      ...apps.flatMap((app) => ["qualification", "measurement"].flatMap((phase) => {
-        const life = output.cells[app][phase]?.lifecycle;
-        return life?.contextCreatedAt !== null && life?.close ? [{ kind: "browser", app, phase,
-          startedAt: origins + life.contextCreatedAt, endedAt: origins + life.close.startedAt }] : [];
-      }))];
+      ...contextWindows.map((window) => ({ ...window, startedAt: origins + window.startedAt, endedAt: origins + window.endedAt }))];
   });
   report.diagnosticsPassed = report.errors.length === 0;
   report.valid = report.diagnosticsPassed;

@@ -122,9 +122,11 @@ procedure files alongside all measured sources. The production map uses native d
 except the existing marketplace-short-window, explicit native-feed-measure for both live
 groups and new mixed-production-measure. Mixed adds --measure --profile matched as the
 native README specifies. The older mixed-measure remains the default-profile recipe,
-unchanged. Numeric defaults come from native parsers, not new CLI constants. Browser,
-client and hardening retain their declared native bounded production procedures; this is
-not a claim that their measurements or proof are available. All need merged-source review.
+unchanged. Numeric defaults come from native parsers, not new CLI constants. Dedicated
+client-heavy campaigns bind `client-heavy-comparison-v1` from the measured source; the
+legacy full campaign retains client-heavy's single-sample diagnostic recipe. Browser
+and hardening keep their bounded production procedures. No recipe name establishes
+measurement or host proof. All need merged-source review.
 
 ## Durable evidence
 
@@ -412,6 +414,10 @@ selection shape, ordered groups, collectionIntegrity manifest-verified, commandL
 observed-terminal, empty uncollectedNativeRoots and blockers, archiveTreeSha256 and
 reservationSha256. Each group has group/outcome native-validated/bindingSha256/
 nativeManifestSha256 plus ordered appOutcomes entries {app,outcome,comparisonEligible}.
+For a verified dedicated client-heavy comparison only, eligible rows also
+carry a `comparison` with sample count and per-action median/min/max milliseconds.
+The native replay ties all three measured blocks to the fixed recipe and host
+process windows; no per-candidate summary is exposed on an unverified attempt.
 Failed/unsupported apps remain comparison-ineligible. It has no qualified/controllerReady/
 deletion approval claim. The live controller separately establishes operator authorization,
 approved merged source, provider/unit ownership and exact unchanged archive-tree binding.

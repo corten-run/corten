@@ -95,7 +95,7 @@ export async function inspectNative(binding, folder) {
       }
       if (group === "client-heavy" && result.attemptComplete) {
         const native = await (await import("../../client-heavy/verify.mjs")).validateSaved({ folder, round, commit });
-        assert.ok(["client-heavy-saved-verification/v2", "client-heavy-saved-verification/v3"].includes(native.schema));
+        assert.ok(["client-heavy-saved-verification/v2", "client-heavy-saved-verification/v3", "client-heavy-saved-verification/v4"].includes(native.schema));
         result = { ...result, hostSubject: { executionWindow: native.executionWindow, processWindows: native.processWindows,
           toolIdentities: native.toolIdentities, subjectSha256: native.subjectSha256, filesSha256: tree(folder).sha256 } };
       }
