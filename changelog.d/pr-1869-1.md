@@ -1,0 +1,1 @@
+- The native Linux benchmark evidence test now drives its fault-injection samples directly, so the observer's periodic timer cannot add failures to the test's exact count. [#1868 Make the benchmark observer fault-injection test drive its own timer](https://github.com/corten-run/corten/issues/1868)

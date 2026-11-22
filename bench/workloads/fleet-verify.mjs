@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fleetCreateMode, roundName, selection, stagedFleet, validateFleet } from "./cloud-contract.mjs";
 import { campaignOutcome, controllerState, full } from "./cloud-options.mjs";
+import { livePeerLease, streamRecoveryReady } from "./cloud-control-stream.mjs";
 import { digest, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
@@ -143,6 +144,64 @@ export function readGroup(fleet, group) {
   }
   return { group, stateRoot, local, state, stateSha256: digest(bytes), outcome: present(join(local, "operation.lock")) ? "busy"
     : ["creating", "preparing", "starting", "running", "collected", "retired"].includes(state.status) ? "available" : "ambiguous" };
+}
+
+// A running status without sealed bootstrap and monitor custody proves nothing.
+export function supervisedHost(saved, phase, { pid = process.pid, peer = false } = {}) {
+  const s = saved?.state, monitor = s?.control?.monitor;
+  if (s?.status !== "running" || s.deletionIntentAt || s.destroyedAt || monitor?.phase !== phase
+    || !s.control.sealed.includes("bootstrap") || s.control.ledger.filter((r) => r.request.epoch === "bootstrap").at(-1)?.code !== 0) return;
+  const at = (name) => join(saved.local, name);
+  if (present(at("monitor-invalid.json"))) return;
+  if (phase === "live") {
+    if (saved.outcome !== "busy" || present(at("monitor-terminal.json")) || present(at("monitor-local-closed.json"))) return;
+    for (const lock of [at("operation.lock"), join(saved.stateRoot, ".groups-launch.lock")])
+      if (JSON.parse(regular(lock, 1024)).pid !== pid) return;
+    if (peer && (!s.bootstrapReady || !s.launchHostKeySha256 || present(at("stream-recovery.lock")) || !livePeerLease(saved.local, s))) return;
+  } else {
+    if (saved.outcome !== "available" || present(join(saved.stateRoot, ".groups-launch.lock"))
+      || !present(at("monitor-terminal.json")) || !present(at("monitor-local-closed.json"))) return;
+    streamRecoveryReady(saved.local, monitor); // Collection itself enforces elapsed lease.
+  }
+  const reg = JSON.parse(regular(at("monitor-registration.json"), 131072));
+  if (reg.id !== monitor.id || digest(JSON.stringify(reg)) !== monitor.registrationSha256
+    || reg.binding?.round !== s.round || reg.binding.commit !== s.commit || reg.binding.token !== s.token || reg.binding.helperSha256 !== s.control.helperSha256) return;
+  return { id: s.id, ip: s.ip, registration: monitor.registrationSha256 };
+}
+
+export function continuationPeer(fleet) {
+  const { root, manifest, manifestSha256 } = fleet, { single, round } = manifest;
+  assert.ok(single, "only an independent group can be a continuation peer");
+  const intent = readLaunchIntent(fleet), batch = join(root, ".fleet-operation.lock");
+  const bytes = regular(batch, 1024), { pid, approvalSha256, ...rest } = JSON.parse(bytes);
+  assert.deepEqual(rest, {});
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+  assert.equal(approvalSha256, intent.approvalSha256, "peer batch does not own its launch intent");
+  assert.equal(intent.subject.continuation?.indexSha256, single.indexSha256);
+  process.kill(pid, 0); // The stream lease alone does not prove the controller still exists.
+  const saved = readGroup(fleet, single.group), host = supervisedHost(saved, "live", { pid, peer: true });
+  assert.ok(host, "peer supervision not confirmed");
+  assert.ok(regular(batch, 1024).equals(bytes), "peer batch lock changed");
+  return { proof: { root, round, manifestSha256, intentSha256: intent.sha256, ...host }, state: saved.state };
+}
+
+export function recheckContinuationPeers(root, indexSha256, provider, group, peers = []) {
+  assert.ok(Array.isArray(peers) && peers.length < selection().groups.length);
+  const groups = new Set([group]), ids = new Set(), ips = new Set();
+  return peers.map((proof) => {
+    assert.equal(dirname(proof.root), root, "peer belongs to another continuation");
+    const fleet = readFleet(proof.root, proof.round, { priorSelection: true });
+    const { single } = fleet.manifest;
+    assert.equal(single?.indexSha256, indexSha256, "peer continuation index changed");
+    assert.ok(!groups.has(single.group), "duplicate continuation group");
+    groups.add(single.group);
+    assert.equal(fleet.manifest.provider.accountId, provider.accountId, "peer belongs to another provider account");
+    const peer = continuationPeer(fleet);
+    assert.deepEqual(peer.proof, proof, "approved peer changed");
+    assert.ok(!ids.has(proof.id) && !ips.has(proof.ip), "duplicate continuation peer host");
+    ids.add(proof.id); ips.add(proof.ip);
+    return peer.state;
+  });
 }
 
 function evidenceSnapshot(job) {
