@@ -158,9 +158,15 @@ before consuming its intent and before the first create. Remaining admission
 and its children recheck only the exact `c-8` placement bound into the reviewed
 remaining approval. Those checks refuse a missing pair; they never substitute
 another region after approval.
-`fleet-placement-preflight-failed` means the saved account
-or placement could not be verified; inspect both listings rather than editing the
-manifest. An acknowledged catalog HTTP denial or a fully received but invalid
+`fleet-placement-preflight-failed: STAGE` identifies the failed placement check:
+transport construction or close, either account read or identity check, catalog read or
+validation, the checkpoint before region selection, or region selection itself.
+The first account read also starts the worker and waits for its handshake:
+`first-account-read-or-worker-start` does not mean a request was sent. Only a safe
+provider code and HTTP status may follow the stage, with fixed flags if transport
+close also failed or custody is uncertain. No account data or response body is
+printed. Inspect the failed check rather than editing any manifest. An
+acknowledged catalog HTTP denial or a fully received but invalid
 listing stops without a create and releases settled locks. A truncated response,
 timeout or disconnected worker does not establish settlement; the lock stays.
 An already recorded launch intent still cannot be replayed. Each child has an
@@ -519,7 +525,7 @@ can name the failing stage: `continuation-admission` (including custody and
 eligibility), `prepare-reservation`, `initial-plan` or `locked-plan` (including exact approval checks),
 or `final-pre-intent-recheck`. These labels identify the check, not its cause or
 whether locks were released. Placement keeps its separate
-`fleet-placement-preflight-failed` diagnostic. Inspect saved intent and custody
+`fleet-placement-preflight-failed: STAGE` diagnostic. Inspect saved intent and custody
 before deciding what to do next; an unlabeled failure does not establish that
 intent was never written.
 

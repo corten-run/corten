@@ -8,11 +8,12 @@ import { serveProviderWorker } from "./cloud-provider-worker.mjs";
 const [mode, trace, hostsPath, stateDir, group, userId] = process.argv.slice(2);
 assert.equal(process.argv.length, 8);
 assert.ok(["success", "overlap", "advertisement", "marker", "provider-failure", "withhold-close", "host-id-mismatch", "late-create",
-  "catalog-denial", "catalog-count", "catalog-shape", "catalog-pagination", "catalog-disconnect"].includes(mode));
+  "startup-refusal", "catalog-denial", "catalog-count", "catalog-shape", "catalog-pagination", "catalog-disconnect"].includes(mode));
 assert.ok(getHeapStatistics().heap_size_limit <= 128 * 1024 ** 2);
 delete process.env.NODE_OPTIONS;
 process.stdin.resume(); // Drain the transport's actual captured bootstrap bytes.
 const record = (event) => appendFileSync(trace, `${JSON.stringify({ group, ...event })}\n`);
+if (mode === "startup-refusal") { record({ boundary: "before-provider-boot" }); process.exit(2); }
 const state = () => JSON.parse(readFileSync(join(stateDir, "groups-r21/state.json")));
 const hosts = () => existsSync(hostsPath) ? JSON.parse(readFileSync(hostsPath)) : [];
 const later = mode === "overlap" && group !== "catalog-page";
