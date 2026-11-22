@@ -974,7 +974,7 @@ over 1,000, three runs each, which differed by at most 1; before at `9201e6dd0`,
 | unknown URL, HTML 404 page | 17,684 | 17,656 | 15,325 | 15,297 |
 
 Under load the server's user and kernel cycles per request fell by 2.0% on `GET`s alone and 1.9%
-with `POST`s among them (medians of eight alternating pairs at the same two commits; 24 cores
+with `POST`s among them (the median change of eight alternating pairs at the same two commits; 24 cores
 serving 4,096 keep-alive connections from a load generator on the host's other 24), nearly all
 of it user time. A text answer from an [`unstaged`](#a-route-outside-the-stages) route gets the
 same room and none of those headers, so it costs more than it did (counted the same way): 121
