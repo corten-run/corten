@@ -13,7 +13,7 @@ import { jsonSources, saveJsonFixture } from "./test-fixtures/json.mjs";
 import { marketplaceResult } from "./test-fixtures/marketplace.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
 import { contractSha256, selectedApps } from "../registry.mjs";
-import { featureProfile, qualification, qualificationSettings, produceBoundedQualification } from "../../marketplace/feature-contract.mjs";
+import { boundedFeatureProfile, featureProfile, qualification, qualificationSettings, produceBoundedQualification } from "../../marketplace/feature-contract.mjs";
 import { qualificationProbes, boundedQualificationProbes } from "../../marketplace/qualification-fixture.mjs";
 import { matchesWorkingSource } from "./worker.mjs";
 
@@ -153,7 +153,7 @@ test("marketplace uses its native schema, exact configuration and full excluded-
   for (const app of Object.values(historical.apps)) for (const source of ["fixture", "api"])
     app.qualification[source] = qualification(qualificationProbes(), source);
   fs.writeFileSync(path, JSON.stringify(historical));
-  assert.throws(() => inspectEvidence(b, root), /requires bounded qualification/);
+  assert.throws(() => inspectEvidence(b, root), { code: "ERR_ASSERTION", actual: featureProfile, expected: boundedFeatureProfile });
   fs.writeFileSync(path, JSON.stringify(s));
   assert.throws(() => inspectEvidence({ ...b, selection: { ...b.selection, contractSha256: "e7196bc53d5d9a48543dacdfa245c672d5dda68c514f43339779de58f022c9eb" } }, root), /native marketplace result schema/);
   assert.equal(inspectEvidence(b, root).qualification, "blocked");
