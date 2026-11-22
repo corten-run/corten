@@ -70,6 +70,7 @@ use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use std::time::Instant;
 
 use bytes::Bytes;
+use http::uri::PathAndQuery;
 use http::{header, HeaderMap, HeaderValue, StatusCode};
 
 use crate::body::Body;
@@ -301,11 +302,10 @@ struct Inner {
     hand: usize,
 }
 
-/// What a copy is kept for, in one allocation: its URL (the path and query) and the `Host` and
-/// `Accept-Language` it was asked with, as they were sent. A copy of its own: a request's header
-/// values are slices of the connection's read buffer, which a kept one would hold whole. Made
-/// before the handler runs, so it holds the `Accept-Language` (and its size counts it) whether or
-/// not the page turns out to vary on it ([`Entry::language`]).
+/// What a copy is kept for, in one allocation: its URL (the path and query), the `Host` it was
+/// asked with and, when its `Vary` names the header, the `Accept-Language`, as they were sent. A
+/// copy of its own, made once the answer is to be kept: a request's URL and header values are
+/// slices of the connection's read buffer, which a kept one would hold whole.
 struct Key {
     /// The URL, then the `Host` and the `Accept-Language` that were sent.
     bytes: Box<[u8]>,
@@ -318,9 +318,14 @@ struct Key {
 }
 
 impl Key {
+    /// The bytes a key of these holds.
+    fn length(at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> usize {
+        at.len() + host.map_or(0, HeaderValue::len) + language.map_or(0, HeaderValue::len)
+    }
+
     fn new(at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Self {
+        let mut bytes = Vec::with_capacity(Key::length(at, host, language));
         let (host, language) = (host.map(HeaderValue::as_bytes), language.map(HeaderValue::as_bytes));
-        let mut bytes = Vec::with_capacity(at.len() + host.map_or(0, <[u8]>::len) + language.map_or(0, <[u8]>::len));
         bytes.extend_from_slice(at.as_bytes());
         let mut end = |sent: &[u8]| {
             bytes.extend_from_slice(sent);
@@ -673,7 +678,7 @@ impl Answers {
 pub(crate) struct Asked<'a> {
     answers: &'a Answers,
     signal: &'a crate::Signal,
-    at: &'a str,
+    at: &'a PathAndQuery,
     /// `at`'s hash, by the store's keys.
     hash: u64,
     host: Option<&'a HeaderValue>,
@@ -753,14 +758,13 @@ impl<'a> Asked<'a> {
         if req.extensions().get::<crate::router::MatchedPath>().is_none_or(|matched| matched.matched() != at) {
             return None;
         }
-        let at = at.as_str();
-        let hash = answers.0.keys.hash_one(at);
+        let hash = answers.0.keys.hash_one(at.as_str());
         Some(Asked { answers, signal, at, hash, host, language })
     }
 
     /// The kept answer for this request, as its handler gave it, with its age.
     pub(crate) fn find(&self) -> Option<Response> {
-        let (entry, age) = self.answers.found(self.hash, self.at, self.host, self.language)?;
+        let (entry, age) = self.answers.found(self.hash, self.at.as_str(), self.host, self.language)?;
         // Kept for the language it was asked in: the answer names `Accept-Language` as it leaves
         // the app, whatever `Vary` a middleware puts on it after this (`crate::page::vary_on_language`).
         if entry.by_language {
@@ -787,15 +791,17 @@ impl<'a> Asked<'a> {
     /// handler's and nothing here is paid for it but the mark it leaves.
     pub(crate) fn missed(&self, req: &Request) -> Option<Missed> {
         let store = &*self.answers.0;
-        if store.full() && !store.asked(self.host, self.at) {
+        if store.full() && !store.asked(self.host, self.at.as_str()) {
             return None;
         }
         Some(Missed {
             asked: Instant::now(),
-            written: Written::of(&self.answers.0, self.at),
+            written: Written::of(&self.answers.0, self.at.as_str()),
             signal: req.extensions().get::<crate::Signal>().cloned(),
             nonce: req.extensions().get::<crate::security::NonceSlot>().cloned(),
-            key: Key::new(self.at, self.host, self.language),
+            at: self.at.clone(),
+            host: self.host.cloned(),
+            language: self.language.cloned(),
             hash: self.hash,
         })
     }
@@ -807,7 +813,13 @@ pub(crate) struct Missed {
     written: Written,
     signal: Option<crate::Signal>,
     nonce: Option<crate::security::NonceSlot>,
-    key: Key,
+    /// The URL, `Host` and `Accept-Language` it was asked with, sharing the request's bytes until
+    /// its answer is kept: its [`Key`] is copied from them then, with the `Accept-Language` only
+    /// when the answer varies on it, so a header the page does not read is neither held nor
+    /// counted.
+    at: PathAndQuery,
+    host: Option<HeaderValue>,
+    language: Option<HeaderValue>,
     hash: u64,
 }
 
@@ -848,8 +860,8 @@ impl Missed {
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
         let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
         // The URL is held once, by the entry: the map holds its hash.
-        let key = self.key.bytes.len();
-        let size = key + head + OVERHEAD + length as usize;
+        let sent = self.language.as_ref().filter(|_| language);
+        let size = Key::length(self.at.as_str(), self.host.as_ref(), sent) + head + OVERHEAD + length as usize;
         if length == 0 || size > answers.0.bound / SHARE {
             return res;
         }
@@ -859,15 +871,9 @@ impl Missed {
             // A body of an exact size that could not be read: not a page to send as it is.
             return crate::response::IntoResponse::into_response(StatusCode::INTERNAL_SERVER_ERROR);
         };
-        // Held in the buffer the handler made it in, which is the answer's alone here, cut to the
-        // body's length: a page's buffer is sized for the last page rendered, and kept whole it
-        // would hold all of that. An allocator that can (glibc's) gives back the rest where it
-        // is, so the bytes are not copied; one that cannot copies them, and so does a body that
-        // shares its bytes (one made from a static, or a middleware's).
-        let mut body = Vec::from(body);
-        body.shrink_to_fit();
-        let body = Bytes::from(body);
-        let Missed { key, hash, asked: made, written, .. } = self;
+        let body = own(body);
+        let key = Key::new(self.at.as_str(), self.host.as_ref(), sent);
+        let Missed { hash, asked: made, written, .. } = self;
         let entry = answers.keep(|place| Entry {
             key,
             hash,
@@ -890,6 +896,20 @@ impl Missed {
         parts.extensions.insert(Kept(entry));
         Response::from_parts(parts, Body::from(body))
     }
+}
+
+/// A kept answer's body in an allocation the length of its bytes: a page's render buffer is sized
+/// for the last page rendered and an eighth more, and kept whole it would hold all of that. The
+/// buffer the handler made, the answer's alone here, is asked to shrink to the body's length, which
+/// leaves the bytes where they are when the allocator can shrink it in place and moves them when it
+/// cannot (jemalloc, from one of its size classes to a smaller one). A body whose bytes are shared
+/// (one made from a static, a middleware's, one cut from a larger buffer) is copied or moved to the
+/// start of its buffer before that. What the shrink gives back goes to the allocator, which may
+/// keep it from the system.
+fn own(body: Bytes) -> Bytes {
+    let mut body = Vec::from(body);
+    body.shrink_to_fit();
+    Bytes::from(body)
 }
 
 /// Whether an answer with these headers varies on `Accept-Language`; `None` when it varies on
@@ -1329,6 +1349,28 @@ mod tests {
         assert_eq!(answers.find("/p", None, Some(&fr)).expect("the one that stands").0.body.len(), 20);
         assert!(answers.find("/p", None, Some(&en)).is_none());
         assert_eq!(answers.bytes(), 20 + OVERHEAD, "the one past its lifetime went when the URL was kept again");
+    }
+
+    /// A kept body is held in an allocation of its length, whatever buffer it was made in: one
+    /// sized for a larger page, a part of one, or bytes another holds as well.
+    #[test]
+    fn a_kept_body_is_held_in_an_allocation_of_its_length() {
+        let page = |length: usize| (0..length).map(|n| (n % 251) as u8).collect::<Vec<u8>>();
+        let mut larger = Vec::with_capacity(64 << 10);
+        larger.extend_from_slice(&page(5_000));
+        let shared = Bytes::from(page(5_000));
+        let other = shared.clone();
+        for (body, made) in [
+            (Bytes::from(larger), "in a buffer sized for a larger page"),
+            (Bytes::from(page(70_000)).slice(..5_000), "cut from a larger buffer"),
+            (shared, "held by another as well"),
+        ] {
+            let held = own(body);
+            assert_eq!(held, page(5_000), "{made}");
+            // A `Bytes` held alone gives back its buffer whole, so this is what the body holds.
+            assert_eq!(Vec::from(held).capacity(), 5_000, "{made}");
+        }
+        assert_eq!(other, page(5_000));
     }
 
     /// Two URLs with the same hash share a place in the table and are told apart by the URL each
