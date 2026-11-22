@@ -7491,10 +7491,10 @@ rules something out.
     The two rules meet at a full store's first request for a URL, and the rule for a full store
     goes first. This is the one account of that case, which the guide and the changelog refer to.
     That first request is the handler's as with nothing kept: it leaves its mark, takes no part
-    in the table, and no other request waits for it. It is not free for that: merged with main's
-    kept bodies, that request ran 236 instructions (1.0%) more than on main (below), which the
-    annotated runs put in glibc's `malloc` and in no step of this change's own, a cause reasoned
-    and not measured. The requests that miss the URL while it is
+    in the table, and no other request waits for it. It is not free for that: merged with main at
+    `0ac0b52bf`, that request ran 62 instructions (0.3%) more than on main (below); at the earlier
+    merge with main's kept bodies it ran 236 more, which the annotated runs put in glibc's
+    `malloc` and in no step of this change's own, a cause reasoned and not measured. The requests that miss the URL while it is
     made find its mark, so they are its second request and meet in the table as any others do:
     the first of them makes the page and the rest wait for that one. From there a request the
     marks admit takes the table's lock when it starts and when it ends, whether or not its answer
@@ -7771,8 +7771,8 @@ rules something out.
     kept with room 36,151 against 34,911 (3.6% more), a write and the page made again 46,736
     against 44,793 (4.3% more), a kept page given again 19,512 against 19,514 and a page for one
     visitor 18,183 against 18,183, each build's rounds within 54 instructions of each other.
-    Before the merge the change added 928 and 1,237 to the second and third (above); it now adds
-    1,240 and 1,943. By callgrind's annotated runs of `c23881059` and `0f96e95d0` (737 apart on
+    Before the merge the change added 928 and 1,237 to the second and third (above); at that
+    merge it added 1,240 and 1,943. By callgrind's annotated runs of `c23881059` and `0f96e95d0` (737 apart on
     the third, 240 on a new URL in a full store), the third's growth is the future that keeps the
     page, which now holds main's watch for a submit key, 137 of its own, glibc's `malloc` 412,
     `memcpy` 38 and the hash of whether a data client asked 34; a new URL in a full store's is
@@ -7780,6 +7780,17 @@ rules something out.
     no other function 15 apart. That `malloc` takes its slower path more often because its state
     after the larger futures of earlier requests differs is reasoned from where the counts fall,
     not measured.
+    Merged with main at `0ac0b52bf` (whose crates are `250e4b81c`'s, which counts writes by path
+    only from the first answer that may be kept), with the key taking the writes that found no
+    counts and a page not remembered as not kept when its request ends while its body is read
+    (`6dc25952d` against `0ac0b52bf` with this change's fixture, the same five cases in 3 rounds
+    that alternated the builds), a new URL in a full store ran 22,945 instructions against 22,883
+    at the median (62 more, 0.3%), a page made and kept with room 36,163 against 34,926 (1,237
+    more, 3.5%), a write and the page made again 46,773 against 44,849 (1,924 more, 4.3%), a kept
+    page given again 19,517 against 19,520 and a page for one visitor 18,183 against 18,183, each
+    build's rounds within 28 instructions of each other. The gap for a new URL in a full store
+    narrowed mostly on main's side: main's count rose 156 from `04c209fca` to `0ac0b52bf` and
+    this change's fell 18. Why was not annotated.
     What a write pays for its count, under callgrind (valgrind 3.24.0, rustc 1.99.1, release with
     debuginfo) on an app with one route whose `GET` and `POST` each answer text, sent
     `POST /items/7/edit` in process with `oneshot`, as (instructions at 1,200 writes less those at
@@ -7965,6 +7976,8 @@ rules something out.
     release builds of `c23881059`, `f8b49d2e0` and `687c75b63` counted the same way.
     2026-11-21, merged with main's kept bodies, rustc 1.100.0, release builds of `0f96e95d0` and
     `04c209fca` counted the same way, and annotated beside `c23881059` and `687c75b63`.
+    2026-11-22, merged with main at `0ac0b52bf`, rustc 1.100.0, release builds of `6dc25952d` and
+    `0ac0b52bf` counted the same way.
     2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
     request-cost harness's write cases and two routes in the catalog benchmark) for the counts,
     and for the run under load its parent `3d23cf64f` and `48ef77477` (this change's
