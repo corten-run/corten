@@ -105,7 +105,7 @@
 //! left, its deadline passed) or panics, each runs its own handler then, and none waits again. A
 //! key drawn outside the handler's own polls (by a task it spawned, a render handed to a blocking
 //! task, a thread of its own) is not seen: that answer is kept and given to those waiting, as it
-//! is to later requests (Choice 70 in `docs/design.md`). At most
+//! is to later requests (`docs/design.md#choice-kept-pages`). At most
 //! [`MAKING`] pages are made at once that others wait for; past that a request makes its page as
 //! it would with nothing kept. A page answered and not kept is remembered as not kept for
 //! [`FORGOT`], until a write to its path (to any path, while there are no counts by path) or
@@ -120,7 +120,8 @@
 //! full store the first request for a URL not asked for before is the handler's as with nothing
 //! kept ([`Miss::Pass`]): it leaves its mark ([`Store::asked`]) and no other request waits for it.
 //! Those that come while it is made are the URL's second request and wait as above. When that
-//! runs a new URL's handler at most twice, and when more, is said once, in Choice 70.
+//! runs a new URL's handler at most twice, and when more, is said once, in
+//! `docs/design.md#choice-kept-pages`.
 //!
 //! Writes are counted by path once the app has made an answer it may keep, and not before: an
 //! app can have a store and keep nothing in it (its `Public` text is all too small, which is
