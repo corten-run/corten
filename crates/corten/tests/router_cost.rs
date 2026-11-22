@@ -11,6 +11,8 @@
 //! `Public` text is too small to keep, or with `ROUTER_PUBLIC=page` a `Public` page.
 //! `ROUTER_ASKED=1` asks for that route three times first, so a page is kept by then.
 //! `ROUTER_TARGET=kept` with `ROUTER_PUBLIC=page` counts the kept page given again.
+//! `ROUTER_KEPT=0` turns the store off (`App::kept_answers(0)`), for what a write pays the store
+//! in the same app.
 
 use std::time::Duration;
 
@@ -101,7 +103,9 @@ fn request_cost() {
         (true, "page") => (paged::router(), Some("/home")),
         (true, _) => panic!("unknown ROUTER_PUBLIC: {public}"),
     };
-    let router = App::new(routes).router();
+    let app = App::new(routes);
+    let off = std::env::var("ROUTER_KEPT").is_ok_and(|kept| kept == "0");
+    let router = if off { app.kept_answers(0).router() } else { app.router() };
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(async {
         let ask = |path: &'static str| {

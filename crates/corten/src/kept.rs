@@ -74,7 +74,8 @@
 //! A write that went through also drops what is kept at the place on this site its
 //! answer names (`Location`, `Content-Location`; RFC 9111 section 4.4). A page whose handler
 //! was reading while a write went through is not kept. Nothing else drops a page before its
-//! lifetime ends: the lifetime is how stale the app said the page may be. Off under `corten dev`,
+//! lifetime ends, but a write from before the app counted writes by path (below): the lifetime
+//! is how stale the app said the page may be. Off under `corten dev`,
 //! and in an app with no route that keeps a page, whose writes are then not counted. The
 //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
 //! the compressed forms made for it, with an allowance for what holds them; the body, the key
@@ -91,7 +92,8 @@
 //! known only as each answer is made), and until then a write reads nothing of its path and
 //! adds one to a count of all such writes. An answer stands only while that count is as its
 //! request found it, so a write that began before the counts by path were made and ends after
-//! drops every answer kept by then, once.
+//! drops every answer kept by then, at whatever path, and so does work it left
+//! ([`crate::Signal::finish`]) each time some ends: nothing of its path was read to count by.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -389,7 +391,8 @@ impl Written {
 }
 
 /// A request that may change what its path shows (a method that is not safe), from before its
-/// handler can start until it is answered or dropped: its path's count goes up either way.
+/// handler can start until it is answered or dropped: it is counted either way, for its path
+/// or, where it found no counts by path, with the others like it.
 pub(crate) struct Writing<'a> {
     answers: &'a Answers,
     /// The path's count and the request's `Host`; none for a write that found no counts to
@@ -400,7 +403,8 @@ pub(crate) struct Writing<'a> {
 
 impl Writing<'_> {
     /// The write was answered: counts it for its path and for the places on this site its answer
-    /// names (RFC 9111 section 4.4), so nothing kept there stands. Its path counts whatever the
+    /// names (RFC 9111 section 4.4), so nothing kept there stands; one that found no counts by
+    /// path is counted for every path at once. Its path counts whatever the
     /// answer: a handler that answered `4xx` or `5xx`, or passed its deadline (a `503`, or a
     /// `408` while it waited for the body), may have written first, and its status does not say
     /// (work it left under `Signal::finish` counts again when it ends). That holds for the
@@ -1589,6 +1593,59 @@ mod tests {
         later.answered(&res);
         assert!(!kept("/p") && kept("/other"), "by path from here on");
         assert_eq!(answers.0.early.load(Ordering::Acquire), 3);
+    }
+
+    /// A write that ends after a request asked is seen by that request, whichever way the write
+    /// was counted and whenever the counts by path came to be: two threads write, one of them
+    /// makes the counts part of the way through, and one asks.
+    #[test]
+    fn a_write_that_ends_as_the_counts_are_made_is_seen_by_who_asked_before() {
+        let (mut early, mut by_path) = (0, 0);
+        for round in 0..200_usize {
+            let answers = Answers::new(1 << 20).expect("a bound");
+            let (begun, done) = (AtomicUsize::new(0), AtomicUsize::new(0));
+            let (answers, begun, done) = (&answers, &begun, &done);
+            let seen = std::thread::scope(|scope| {
+                let writers: Vec<_> = (0..2)
+                    .map(|writer| {
+                        scope.spawn(move || {
+                            let mut modes = (0, 0);
+                            for n in 0..40 {
+                                if (writer, n) == (0, 1 + round % 38) {
+                                    answers.counts();
+                                }
+                                let write = write(answers, "/p");
+                                match write.counted {
+                                    None => modes.0 += 1,
+                                    Some(_) => modes.1 += 1,
+                                }
+                                // Begun: its count comes after every request that asked by now.
+                                begun.fetch_add(1, Ordering::SeqCst);
+                                write.answered(&Response::new(Body::empty()));
+                                done.fetch_add(1, Ordering::SeqCst);
+                            }
+                            modes
+                        })
+                    })
+                    .collect();
+                scope.spawn(move || {
+                    for _ in 0..200 {
+                        let asked = Written::of(&answers.0, "/p");
+                        let before = begun.load(Ordering::SeqCst);
+                        std::thread::yield_now();
+                        // More have ended than had begun: one began, and so was counted, since.
+                        if done.load(Ordering::SeqCst) > before {
+                            assert!(!asked.stands(&answers.0), "a write ended since the request asked");
+                        }
+                    }
+                });
+                writers.into_iter().map(|writer| writer.join().expect("a writer")).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1))
+            });
+            early += seen.0;
+            by_path += seen.1;
+        }
+        // Both ways of counting were met.
+        assert!(early > 0 && by_path > 0, "{early} {by_path}");
     }
 
     /// Threads that keep, read, grow and write at once leave the bytes counted equal to what the

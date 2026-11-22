@@ -162,12 +162,12 @@ struct Inner {
     late: AtomicU8,
 }
 
-/// [`Inner::late`]: a write eligible for late fill, so a whole page the app's or an area's
-/// middleware makes with `Req` carries the head it was made with.
 /// In [`Signal`]'s `write`: a write that began before the app counted writes by path. No path
 /// has this count, of which there are far fewer.
 const WROTE_EARLY: usize = usize::MAX;
 
+/// [`Inner::late`]: a write eligible for late fill, so a whole page the app's or an area's
+/// middleware makes with `Req` carries the head it was made with.
 const LATE: u8 = 1;
 /// [`Inner::late`]: the slot cannot accept more heads, even from a detached extractor.
 const EARLY_CLOSED: u8 = 2;

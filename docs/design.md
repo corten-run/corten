@@ -7221,7 +7221,7 @@ rules something out.
     other route's `GET` pays for it. A write pays a hash of its path and a count, and only in an
     app with such a route that has made an answer it may keep: whether an app has such a route
     is known when the router is made, and an app with none makes no store and counts no writes;
-    one that has such a route and has made no such answer pays one add for a write (below).
+    one that has such a route and has made no such answer pays for no count by path (below).
 
     "Cannot tell who asks" is less than a key needs: an extractor of the app's own may be
     `Anonymous` and read the browser's `User-Agent` or a country header a proxy set. So a page
@@ -7336,8 +7336,12 @@ rules something out.
     its path and adds one to a count of all such writes when it is answered or dropped, as work
     it left does when it ends, and an answer stands only while that count is as its request
     found it. So a write that began before the counts and ends after drops every answer kept
-    by then, once, where a count by path drops its own path's: only a write under way when the
-    first such answer is made can, and what it drops was made while it ran. That first answer
+    by then, where a count by path drops its own path's: only a write under way when the
+    first such answer is made can, and what it drops was made while it ran. Work such a write
+    left (`Signal::finish`) drops them again each time some ends, since nothing of its path was
+    read to count by: a task that keeps that write's `Signal` and finishes work on it again and
+    again empties the store each time, for as long as it does. None is known, and the count by
+    path it would need is the hash of the path, about half of what this saves. That first answer
     makes the counts whether or not it is then kept (a write may have gone through while its
     handler read), so an app whose writes never pause still comes to keep its pages. A page
     route pays the same one add until its first page is made.
@@ -7391,10 +7395,11 @@ rules something out.
     Writes are counted by a hash of the path with its escapes decoded, and a kept page stands
     only while the count is the one its request found before its handler ran: a write takes no
     lock and searches nothing, and a page whose handler was reading while the write went
-    through is not kept. There are 65,536 counts (256 KiB, made when the first answer the app may keep is
-    asked for, so an app with no route that asks the store holds none), and a write to another path drops a
+    through is not kept. There are 65,536 counts (256 KiB, made with the first answer the app may keep,
+    so an app that makes none holds none), and a write to another path drops a
     given kept page early once in 65,536 times, which costs that page a render. Nothing else
-    drops a page before its lifetime ends: not a change made by a task
+    drops a page before its lifetime ends, but a write from before the counts were made
+    (below): not a change made by a task
     or another instance, a purge at a CDN in front (which is given the kept page again with
     its `Age`), or a request's `Cache-Control: no-cache`. How long a page stands is the app's
     to say, and a reload is not a reason to render it.
