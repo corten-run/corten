@@ -1,4 +1,4 @@
-//! The answers the app keeps to send again: pages, and whole bodies of JSON or text.
+//! The answers the app keeps to send again: pages, and whole bodies of JSON, text or a file.
 //!
 //! A page whose route says its answer is the same for everyone ([`crate::Public`]) is one every
 //! shared cache may keep for the lifetime it names. The app is the first of them: it keeps the
@@ -167,7 +167,7 @@ fn with_room(head: &HeaderMap) -> HeaderMap {
 const WRITES: usize = 1 << 16;
 
 /// What a route that is kept answers, known when the app compiles: a page, kept as the whole
-/// document a browser loads, or a whole body (JSON, text), kept for whoever asks. Public in a
+/// document a browser loads, or a whole body (JSON, text, a file), kept for whoever asks. Public in a
 /// private module, as the `Handler` whose `keeps` names it is: an app cannot name it.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Shape {
@@ -190,8 +190,9 @@ thread_local! {
 }
 
 /// A route of whole bodies, by what became of the answers it made last. A body is kept where
-/// the app compresses it ([`compresses`]), which its size decides and no type shows, so a route
-/// whose bodies are all under that size would ask the store, find nothing, and have every
+/// the app compresses it ([`compresses`]), which its size and its media type decide and no type
+/// of the route's shows, so a route whose bodies are all under that size, or all pictures the app
+/// does not compress, streams or files their URLs name, would ask the store, find nothing, and have every
 /// answer refused: about as much again as a handler that answers a constant costs. After
 /// [`UNKEPT_RUN`] answers in a row of which none was kept, and with none between given from
 /// the store, the route's requests are its handler's, as they were before the app kept

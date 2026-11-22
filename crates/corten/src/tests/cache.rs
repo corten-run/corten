@@ -1519,6 +1519,10 @@ async fn only_an_app_with_a_public_page_counts_its_writes() {
     let body = App::new(Routes::from(edit().route("/words", crate::route::get(words).0))).router();
     let kept = cfg!(feature = "compress");
     assert_eq!(write(body).await, format!("store={kept} counted={kept}"), "a Public body alone");
+    // A file is a whole body too, kept or not: which is known only as each is made.
+    let file = || async { Public::new(Duration::from_secs(60), crate::Media::new("image/png", &[0x89u8; 4][..])) };
+    let filed = App::new(Routes::from(edit().route("/mark.png", crate::route::get(file).0))).router();
+    assert_eq!(write(filed).await, format!("store={kept} counted={kept}"), "a Public file alone");
 }
 
 static COUNTER_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -1744,7 +1748,8 @@ impl<S: Send + Sync> crate::extract::FromRequestParts<S> for Device {
 impl crate::answer::Anonymous for Device {}
 
 /// What is not kept: an answer that is not for everyone, sets a cookie, drew this request's
-/// nonce, failed, is not a page or a whole body (a file, a status alone), has no lifetime or is
+/// nonce, failed, is not a page or a whole body (a status alone), is a body the app does not
+/// compress (a picture, a short text), has no lifetime or is
 /// too large for the bound; one whose handler takes an input of the app's own; and nothing in an
 /// app that keeps none, or under `corten dev`.
 #[tokio::test]
@@ -1805,7 +1810,7 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
             .route("/long", typed(move || async move { Public::new(minute, "text ".repeat(300)) }).0)
             .route(
                 "/file",
-                typed(move || async move { Public::new(minute, Ok::<_, Error>(Media::new("image/png", &b"\x89PNG"[..]))) }).0,
+                typed(move || async move { Public::new(minute, Ok::<_, Error>(Media::new("image/png", &[0x89u8; 2048][..]))) }).0,
             )
             .route("/status", typed(move || async move { Public::new(minute, StatusCode::OK) }).0)
             .route(
@@ -2499,11 +2504,11 @@ async fn a_kept_page_keeps_the_hash_its_policy_allows_its_style_block_by() {
     assert_eq!(again[header::CONTENT_SECURITY_POLICY], policy);
 }
 
-// ---- The whole bodies the app keeps: JSON and text ----
+// ---- The whole bodies the app keeps: JSON, text and files ----
 
-/// Which answers are kept as a whole body is known when the app compiles: JSON and text, in a
-/// `Result` or not. A page is kept as a page, and a file, a relay or a status is its handler's
-/// for every request.
+/// Which answers may be kept as a whole body is known when the app compiles: JSON, text and a
+/// file, in a `Result` or not. A page is kept as a page, and a relay or a status is its
+/// handler's for every request.
 #[test]
 fn an_answer_s_type_says_whether_its_body_is_kept() {
     use crate::answer::Answer;
@@ -2514,7 +2519,11 @@ fn an_answer_s_type_says_whether_its_body_is_kept() {
     assert!(whole::<Public<String>>() && whole::<Public<crate::Result<&'static str>>>());
     #[cfg(feature = "json")]
     assert!(whole::<Json<u32>>() && whole::<JsonResult<u32>>() && whole::<Public<JsonResult<u32>>>());
-    assert!(!whole::<StatusCode>() && !whole::<Media>() && !whole::<Public<crate::Result<Media>>>());
+    assert!(whole::<Media>() && whole::<crate::Result<Media>>() && whole::<Public<crate::Result<Media>>>());
+    assert!(
+        whole::<crate::seo::File>() && whole::<Public<crate::seo::File>>() && whole::<crate::Result<Public<crate::seo::File>>>()
+    );
+    assert!(!whole::<StatusCode>() && !whole::<NoStore<Media>>());
     assert!(!whole::<crate::Relay>() && !whole::<HtmlResult>() && !whole::<Public<HtmlResult>>());
     assert!(!whole::<NoStore<String>>(), "an answer no cache may store");
     // Bytes the app holds keep their own compressed forms where the build compresses, which is
@@ -2677,6 +2686,18 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
     let csv = || "sku,qty\n".repeat(200);
     let (sitemap, robots, cards, mark, picture, export) =
         (runs.clone(), runs.clone(), runs.clone(), runs.clone(), runs.clone(), runs.clone());
+    let (paged, chart) = (runs.clone(), runs.clone());
+    let svg = || format!("<svg>{}</svg>", "<g/>".repeat(300));
+    // A sitemap's page, which may not be there: the answer `seo`'s own example gives.
+    let paged = move || {
+        paged.ran();
+        let urls = (0..40).map(|_| seo::SitemapUrl { loc: "https://example.com/cards/7", lastmod: None });
+        async move { Ok::<_, Error>(seo::sitemap(urls)) }
+    };
+    let chart = move || {
+        chart.ran();
+        async move { Public::new(minute, crate::Media::new("image/svg+xml", svg())) }
+    };
     let sitemap = move || {
         sitemap.ran();
         async move { seo::sitemap((0..40).map(|_| seo::SitemapUrl { loc: "https://example.com/cards/7", lastmod: None })) }
@@ -2691,7 +2712,7 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
     };
     let mark = move || {
         mark.ran();
-        async move { Public::immutable(crate::Media::new("image/svg+xml", format!("<svg>{}</svg>", "<g/>".repeat(300)))) }
+        async move { Public::immutable(crate::Media::new("image/svg+xml", svg())) }
     };
     let picture = move || {
         picture.ran();
@@ -2705,7 +2726,9 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
     let routes = Table::new()
         .route("/sitemap.xml", crate::route::get(sitemap).0)
         .route("/robots.txt", crate::route::get(robots).0)
-        .route("/cards.csv", crate::route::get(cards).0)
+        .route("/sitemap/2.xml", crate::route::get(paged).0)
+        .route("/cards.csv", crate::route::get(cards).0.post(|| async { StatusCode::NO_CONTENT }))
+        .route("/chart.svg", crate::route::get(chart).0)
         .route("/mark.svg", crate::route::get(mark).0)
         .route("/picture.png", crate::route::get(picture).0)
         .route("/export.csv", crate::route::get(export).0);
@@ -2713,7 +2736,9 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
     for (path, kept) in [
         ("/sitemap.xml", true),
         ("/robots.txt", false),
+        ("/sitemap/2.xml", true),
         ("/cards.csv", true),
+        ("/chart.svg", true),
         ("/mark.svg", false),
         ("/picture.png", false),
         ("/export.csv", false),
@@ -2740,6 +2765,23 @@ async fn a_file_is_kept_where_the_app_compresses_it() {
     let (_, mark, _) = fetch(&router, "GET", "/mark.svg", &[]).await;
     assert_eq!(mark[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
     assert_eq!(mark[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    // A kept file is a kept answer in every other way: its tag answers `304`, a `HEAD` is its
+    // handler's, and a write to its path drops it.
+    #[cfg(feature = "compress")]
+    {
+        let named = [("accept-encoding", "gzip"), ("if-none-match", cards[header::ETAG].to_str().unwrap())];
+        let before = runs.count();
+        let (status, unchanged, body) = fetch(&router, "GET", "/cards.csv", &named).await;
+        assert_eq!((status, body.len(), runs.count() - before), (StatusCode::NOT_MODIFIED, 0, 0), "{unchanged:?}");
+        let (status, head, _) = fetch(&router, "HEAD", "/cards.csv", &[]).await;
+        assert_eq!((status, head.contains_key(header::AGE), runs.count() - before), (StatusCode::OK, false, 1));
+        let (status, ..) = fetch(&router, "POST", "/cards.csv", &[("sec-fetch-site", "same-origin")]).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_, made, _) = fetch(&router, "GET", "/cards.csv", &[]).await;
+        assert_eq!((made.contains_key(header::AGE), runs.count() - before), (false, 2), "made again after the write");
+        let (_, kept, _) = fetch(&router, "GET", "/cards.csv", &[]).await;
+        assert_eq!((kept.contains_key(header::AGE), runs.count() - before), (true, 2), "and kept again");
+    }
 }
 
 /// A route whose bodies are all too small to keep stops asking the store after 64 in a row, and

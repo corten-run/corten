@@ -102,7 +102,7 @@ pub trait Answer: IntoResponse + Sized {
     /// a page says `const PAGE: bool = true;` (or forwards its page's), or its route starts no read
     /// and its layout's places draw nothing.
     const PAGE: bool = false;
-    /// The answer is one whole body that only the handler's inputs decide (JSON, text): what the
+    /// The answer is one whole body that only the handler's inputs decide (JSON, text, a file): what the
     /// app keeps for a [`Public`] route where it compresses the body, as it keeps a page
     /// ([`crate::kept`]). Not a public API:
     /// its type is one an app cannot name, so an answer type of the app's own is never kept this way
@@ -1532,10 +1532,13 @@ impl Answer for Relay {
 /// which sends no `Cache-Control` unless the handler says one. At a URL that names its
 /// content, a hash of the bytes, the bytes never change, so [`Public::immutable`] lets every cache
 /// keep it for a year, as Corten's own versioned files are; its handler cannot read who is asking,
-/// as any `Public` handler cannot. A [`Public::new`] one of a type the app compresses (a CSV, an
-/// SVG) and of a known size is kept by the app as a `Public` page is, with its headers, and given
-/// again in the handler's place until its lifetime ends ([`App::kept_answers`](crate::App::kept_answers));
-/// a picture of another type, a stream and an immutable one are the handler's for every request.
+/// as any `Public` handler cannot. A [`Public::new`] one the app compresses (1,024 bytes or
+/// more of a type such as CSV or SVG, in a build with the `compress` feature) is kept by the app
+/// as `Public` text is, with its headers, and given again in the handler's place to a request
+/// that shows nothing about who asks, until its lifetime ends
+/// ([`App::kept_answers`](crate::App::kept_answers)); any other is the handler's for every
+/// request: a smaller one, a picture of a type the app does not compress, a stream, an
+/// immutable one.
 ///
 /// ```
 /// use corten::{prelude::*, Media};

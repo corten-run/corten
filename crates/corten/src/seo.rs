@@ -1,8 +1,9 @@
 //! `robots.txt` and XML sitemaps, written as the search engine protocols define them. Each is the
 //! same for every crawler, so a handler returns it as it comes, `Public<seo::File>`, which shared
-//! caches keep for an hour, and so does the app, for one of a size it compresses
-//! ([`App::kept_answers`](crate::App::kept_answers)): a sitemap's handler runs once an hour, not
-//! for every crawler, and a URL added since shows when that hour ends.
+//! caches keep for an hour. So does the app, for one it compresses (1,024 bytes or more, in a
+//! build with the `compress` feature), as it keeps any `Public` text
+//! ([`App::kept_answers`](crate::App::kept_answers)): a sitemap's handler then does not run for
+//! every crawler that asks without credentials, and a URL added since may wait that hour to show.
 //!
 //! ```
 //! use corten::{prelude::*, seo};

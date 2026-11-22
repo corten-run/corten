@@ -1506,8 +1506,8 @@ mistake, the runtime loads the URL as a whole page instead of swapping it in.
 
 ### The pages the app keeps
 
-The app is the first shared cache of its own `Public` pages, and of its `Public` JSON and
-text where it compresses them (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
+The app is the first shared cache of its own `Public` pages, and of its `Public` JSON,
+text and files where it compresses them (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
 such request in the handler's place until the answer's shared lifetime ends: `s-maxage` where
 the answer has `.shared(..)`, else `max_age`. So a `Public` page's handler does not run for
 every request, and what it read may be that old when a visitor sees it, as it already may be
