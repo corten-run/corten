@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, fork } from "node:child_process";
 import * as fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
@@ -17,7 +18,7 @@ import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, reservation, savedLoadLayout, savedPlacement, verifySshIngress } from "./cloud-contract.mjs";
-import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { readFleet, recheckSetupSibling, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { unitQuery } from "./cloud-options.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
@@ -435,8 +436,8 @@ test("continuation schedules around pinned catalog and retired JSON without repl
   assert.equal(treeHash(retained), oldTree, "historical bytes untouched");
 });
 
-for (const change of ["cleanup lock", "reservation bytes"]) test(`a stopped sibling's changed ${change} after intent prevents create`, { timeout: 60000 }, async (t) => {
-  const p = fixture(t), group = "fullstack-browser", other = "hardening", old = path.join(p.h.base, group);
+for (const change of ["none", "cleanup lock", "reservation bytes", "renamed host"]) test(`stopped sibling, after intent: ${change}`, { timeout: 60000 }, async (t) => {
+  const p = fixture(t, "ssh-late"), group = "fullstack-browser", other = "hardening", old = path.join(p.h.base, group);
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
   const args = (g, round) => [round, "--continuation-root", p.h.base, "--group", g];
   const prepare = (g, round) => fleetMain([...args(g, round), "--prepare", "--commit", commit,
@@ -471,29 +472,46 @@ for (const change of ["cleanup lock", "reservation bytes"]) test(`a stopped sibl
   fs.writeFileSync(tar, "replaced"); await assert.rejects(prepare(other, "r22"), assert.AssertionError);
   fs.writeFileSync(tar, bytes);
   const original = treeHash(old);
-  assert.equal(await prepare(other, "r22"), 3);
-  const approved = await approve(other, "r22");
+  assert.equal(await prepare(other, "r21"), 3);
+  const approved = await approve(other, "r21");
   const census = p.output.at(-1).subject.continuation.unconfirmed;
   assert.deepEqual(census, [{ group, round: "r21", accountId, manifestSha256: fileHash(path.join(old, "fleet-r21.json")),
     stateSha256: fileHash(path.join(local, "state.json")), id: state.id, root: old, launch: fileHash(path.join(old, "launch-intent.json")) }]);
   const lock = path.join(local, "operation.lock");
+  if (change === "cleanup lock") {
+    const open = fs.openSync;
+    const mock = t.mock.method(fs.default, "openSync", (file, ...args) => {
+      const fd = open(file, ...args);
+      if (file === tar) fs.writeFileSync(lock, "hash in progress", { flag: "wx" });
+      return fd;
+    });
+    syncBuiltinESMExports();
+    try { assert.throws(() => recheckSetupSibling(p.h.base, other, census[0]), /setup sibling recovery started/); }
+    finally { mock.mock.restore(); syncBuiltinESMExports(); }
+    fs.unlinkSync(lock);
+  }
   let reached = false;
   p.deps.WorkerClass = class extends p.deps.WorkerClass {
     constructor(entry, options) {
       assert.ok(fs.existsSync(path.join(p.h.base, other, "launch-intent.json")));
       if (change === "cleanup lock") fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }), { flag: "wx" });
-      else fs.appendFileSync(path.join(local, "state.json"), "\n");
+      if (change === "reservation bytes") fs.appendFileSync(path.join(local, "state.json"), "\n");
+      if (change === "renamed host") fs.writeFileSync(p.hosts, JSON.stringify([{ id: 701, name: "renamed", tags: [] }]));
       reached = true;
       super(entry, options);
     }
   };
-  assert.equal(await fleetMain(approved, p.deps), 2);
+  assert.equal(await fleetMain(approved, p.deps), change === "none" ? 3 : 2);
   assert.ok(reached);
   const trace = p.events().filter(({ boundary }) => boundary === "provider");
   assert.ok(trace.some(({ method, path }) => method === "GET" && path.startsWith("/v2/droplets?")));
-  assert.ok(trace.every(({ method }) => method === "GET"), "no provider mutation after handoff");
-  assert.equal(JSON.parse(fs.readFileSync(path.join(p.h.base, other, other, "groups-r22", "state.json"))).createIntentAt, undefined);
-  if (change === "cleanup lock") fs.unlinkSync(lock); else save();
+  if (change === "none") assert.deepEqual(trace.filter(({ method }) => method === "POST").map(({ group }) => group), [other]);
+  else {
+    assert.ok(trace.every(({ method }) => method === "GET"), "no provider mutation after handoff");
+    assert.equal(p.saved(path.join(other, other)).createIntentAt, undefined);
+  }
+  if (change === "cleanup lock") fs.unlinkSync(lock);
+  if (change === "reservation bytes") save();
   assert.equal(treeHash(old), original);
 });
 

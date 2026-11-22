@@ -313,18 +313,22 @@ function evidenceSnapshot(job) {
 // the terminal attempt named in the approval must still be idle and unchanged.
 export function recheckSetupSibling(root, selectedGroup, row) {
   assert.equal(dirname(row.root), root, "setup sibling belongs to another continuation");
-  const fleet = readFleet(row.root, row.round, { priorSelection: true });
-  assert.ok(fleet.manifest.single?.group === row.group && row.group !== selectedGroup);
-  assert.equal(fleet.manifest.provider.accountId, row.accountId);
-  assert.equal(fleet.manifestSha256, row.manifestSha256);
-  assert.equal(readLaunchIntent(fleet).sha256, row.launch);
-  const saved = readGroup(fleet, row.group);
-  assert.equal(saved.stateSha256, row.stateSha256, "setup sibling reservation changed");
-  assert.ok(saved.state?.preBootstrapTerminal && saved.state.status === "starting" && saved.state.id === row.id);
-  assert.ok(saved.outcome === "available" && !present(join(fleet.root, ".fleet-operation.lock"))
-    && !present(join(saved.stateRoot, ".groups-launch.lock")) && !present(join(saved.local, "stream-recovery.lock")),
-  "setup sibling recovery started");
-  evidenceSnapshot(saved);
+  const idleAttempt = () => {
+    const fleet = readFleet(row.root, row.round, { priorSelection: true });
+    assert.ok(fleet.manifest.single?.group === row.group && row.group !== selectedGroup);
+    assert.equal(fleet.manifest.provider.accountId, row.accountId);
+    assert.equal(fleet.manifestSha256, row.manifestSha256);
+    assert.equal(readLaunchIntent(fleet).sha256, row.launch);
+    const saved = readGroup(fleet, row.group);
+    assert.equal(saved.stateSha256, row.stateSha256, "setup sibling reservation changed");
+    assert.ok(saved.state?.preBootstrapTerminal && saved.state.status === "starting" && saved.state.id === row.id);
+    assert.ok(saved.outcome === "available" && !present(join(fleet.root, ".fleet-operation.lock"))
+      && !present(join(saved.stateRoot, ".groups-launch.lock")) && !present(join(saved.local, "stream-recovery.lock")),
+    "setup sibling recovery started");
+    return saved;
+  };
+  evidenceSnapshot(idleAttempt());
+  idleAttempt(); // Hashing the archive/tree may overlap the start of collection.
 }
 
 // Read-only per-group replay, shared by final inspection and staged admission.
