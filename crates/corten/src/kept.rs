@@ -37,7 +37,8 @@
 //! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
 //! and no value made for this request alone, and varies on nothing but what the key covers.
 //!
-//! A `Public` route whose answer is JSON (`Json<T>`, `JsonResult<T>`) or text is kept the same
+//! A `Public` route whose answer is JSON (`Json<T>`, `JsonResult<T>`), text or a file (`Media`,
+//! a sitemap or `robots.txt` of [`crate::seo`]) is kept the same
 //! way, under the same rules and by the same key, where the app compresses the answer: its
 //! whole body, of 1,024 bytes or more, in a build with the `compress` feature, for a `GET` that
 //! shows nothing about who is asking ([`Shape::Body`]). A kept body saves its handler, its
@@ -57,7 +58,12 @@
 //! other way, on the thread that runs it (`form::watched`). JSON the app holds as bytes
 //! (`json::Raw`) carries its own compressed forms in a build that compresses, a mark this does
 //! not replay, so it is its handler's for every request, which costs it no writing and no
-//! compression. Any other answer (a file, a relay, a
+//! compression. A file is kept by its type as text is, so a picture of a type the app does not
+//! compress (PNG, JPEG, WebP) is its handler's for every request, and so are a file sent as a
+//! stream (`Media::stream`), which has no body to hold, and one at a URL that names its content
+//! (`Public::immutable`), which says no lifetime the app keeps it for and is left to the caches
+//! that keep it for a year. A kept file is sent with the headers its handler gave it, its
+//! `Content-Disposition` among them. Any other answer (a relay, a
 //! stream, a feed, a status alone) is its handler's for every request, but for what a page route
 //! answers in a page's place: a file of a known size from a route that says it answers a page
 //! or a file (`PageOr`), and an answer type of the app's own that says it is a page, are kept

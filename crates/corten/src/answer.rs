@@ -1532,7 +1532,10 @@ impl Answer for Relay {
 /// which sends no `Cache-Control` unless the handler says one. At a URL that names its
 /// content, a hash of the bytes, the bytes never change, so [`Public::immutable`] lets every cache
 /// keep it for a year, as Corten's own versioned files are; its handler cannot read who is asking,
-/// as any `Public` handler cannot.
+/// as any `Public` handler cannot. A [`Public::new`] one of a type the app compresses (a CSV, an
+/// SVG) and of a known size is kept by the app as a `Public` page is, with its headers, and given
+/// again in the handler's place until its lifetime ends ([`App::kept_answers`](crate::App::kept_answers));
+/// a picture of another type, a stream and an immutable one are the handler's for every request.
 ///
 /// ```
 /// use corten::{prelude::*, Media};
@@ -1788,6 +1791,7 @@ impl IntoResponse for Media {
 
 impl Answer for Media {
     const FORMAT: Format = Format::Html;
+    const WHOLE: sealed::Whole = sealed::Whole(true);
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
     type Kind = AnyAnswer;

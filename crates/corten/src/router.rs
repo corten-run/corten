@@ -147,7 +147,7 @@ impl Endpoint for Keeping {
         Box::pin(async move {
             // An answer with a form's new submit key is this request's alone. A page's render
             // marks one it drew (`cache::Unrepeatable`); markup rendered any other way (into
-            // JSON or text, into a file a page route answers, or to a string the page then
+            // JSON, text or a file, or to a string the page then
             // holds as markup) has no mark to carry, so the handler is watched for one being
             // drawn.
             let (res, drew_key) = crate::form::watched(answer).await;
