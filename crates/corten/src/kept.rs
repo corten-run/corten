@@ -44,7 +44,7 @@
 //! writing and its compression, and one the app does not compress saves too little of the first
 //! two, where the handler reads only memory, to pay for asking the store ([`compresses`]); so a
 //! build that does not compress keeps no body, and a route whose bodies are all too small stops
-//! asking ([`Small`]). Once kept, a body is given to a request that accepts no coding as well.
+//! asking ([`Unkept`]). Once kept, a body is given to a request that accepts no coding as well.
 //! Which answers are whole bodies is known from the
 //! route's type when the app compiles ([`crate::answer::Answer::WHOLE`], which an answer type of
 //! the app's own cannot claim). Such a route has one answer at its URL, where a page route has
@@ -169,66 +169,117 @@ pub enum Shape {
     Body,
 }
 
-/// How many whole bodies too small to be kept a route makes in a row before it stops asking the
-/// store ([`Small`]).
-const SMALL_RUN: u8 = 64;
+/// How many answers in a row a route of whole bodies makes with none kept before it stops
+/// asking the store ([`Unkept`]).
+const UNKEPT_RUN: u8 = 64;
+
+/// Where each thread's draws start ([`Unkept::leaves`]): any number but zero.
+const DRAWN_FROM: u32 = 0x9E37_79B9;
 
 thread_local! {
-    /// The requests on this thread that a route of small bodies left to its handler unasked, as
-    /// far as a byte counts them: when it comes round, one asks the store all the same.
-    static LEFT: Cell<u8> = const { Cell::new(0) };
+    /// This thread's last draw of which request a route that left the store out asks it for.
+    static DRAWN: Cell<u32> = const { Cell::new(DRAWN_FROM) };
 }
 
-/// A route of whole bodies, by those it made last. A body is kept where the app compresses it
-/// ([`compresses`]), which its size decides and no type shows, so a route whose bodies are all
-/// under that size would ask the store, find nothing, and have every answer refused: about as
-/// much again as a handler that answers a constant costs. After [`SMALL_RUN`] such bodies in a
-/// row, with none between that was large enough or was found kept, the route's requests are
-/// its handler's, as they were before the app kept bodies, but one in 256 on each thread,
-/// which asks as before and so finds out a route whose bodies grew. A route that answers both
-/// sizes keeps asking: a body large enough ends the run, and so does one given from the store,
-/// since once a route's large bodies are kept the only ones still made are the small. While a
-/// route leaves the store out, a body it kept earlier is not given, but to the one request
-/// that asks; it is made again, as it would be had it not been kept.
+/// A route of whole bodies, by what became of the answers it made last. A body is kept where
+/// the app compresses it ([`compresses`]), which its size decides and no type shows, so a route
+/// whose bodies are all under that size would ask the store, find nothing, and have every
+/// answer refused: about as much again as a handler that answers a constant costs. After
+/// [`UNKEPT_RUN`] answers in a row of which none was kept, and with none between given from
+/// the store, the route's requests are its handler's, as they were before the app kept
+/// bodies, but about one in 256, drawn on each thread, which asks as before and so finds out
+/// a route whose bodies grew. Most often each was too small; an answer left out for another
+/// reason (a failure, a submit key, a lifetime of nothing) counts the same, since asking for
+/// it gained as little. A route that answers some of each keeps asking: an answer kept ends
+/// the run, and so does one given from the store, since once a route's large bodies are kept
+/// the only ones still made are the small. While a route leaves the store out, a body it kept
+/// earlier is not given, but to the request that asks: it is made again, as it would be had it
+/// not been kept, and the kept one may be given after it, while its lifetime lasts.
+///
+/// The count has a cache line to itself: every request to the route reads it, and a request
+/// that finds nothing kept writes the counts of the `Arc` that holds it.
 #[derive(Default)]
-pub(crate) struct Small(AtomicU8);
+#[repr(align(64))]
+pub(crate) struct Unkept(AtomicU8);
 
-impl Small {
+impl Unkept {
     /// Whether this request is the handler's without the store being asked.
     #[inline]
     pub(crate) fn leaves(&self) -> bool {
-        if self.0.load(Ordering::Relaxed) < SMALL_RUN {
+        if self.0.load(Ordering::Relaxed) < UNKEPT_RUN {
             return false;
         }
-        LEFT.with(|left| {
-            let count = left.get().wrapping_add(1);
-            left.set(count);
-            count != 0
+        // Drawn, not counted: a count of the thread's requests comes round in step with clients
+        // that ask in a pattern, and one route of two would then never be the one that asks.
+        DRAWN.with(|drawn| {
+            let next = draw(drawn.get());
+            drawn.set(next);
+            next >> 24 != 0
         })
     }
 
     /// The route's request was given a kept body: the route has bodies worth asking for.
     #[inline]
     pub(crate) fn found(&self) {
-        if self.0.load(Ordering::Relaxed) != 0 {
-            self.0.store(0, Ordering::Relaxed);
-        }
+        self.made(true);
     }
 
-    /// The route made a body the store refused for its size, or one it did not.
-    fn made(&self, small: bool) {
-        // Two requests at once may count one body: the run is a little longer then.
+    /// The route made an answer for a request that found nothing kept, and it was kept or not.
+    fn made(&self, kept: bool) {
         let run = self.0.load(Ordering::Relaxed);
-        let next = if small { run.saturating_add(1).min(SMALL_RUN) } else { 0 };
-        if next != run {
-            self.0.store(next, Ordering::Relaxed);
+        if kept {
+            if run != 0 {
+                self.0.store(0, Ordering::Relaxed);
+            }
+        } else if run < UNKEPT_RUN {
+            // From the count this request read alone: where an answer was kept or given
+            // meanwhile, the run it ended stays ended. Two requests at once may count as one.
+            let _ = self.0.compare_exchange(run, run + 1, Ordering::Relaxed, Ordering::Relaxed);
         }
     }
 
-    /// This thread's count of requests left starts again, for a test that counts them.
+    /// How many requests of a route that left the store out this thread leaves to their
+    /// handlers before one asks, set to `left` for a test that counts them.
     #[cfg(all(test, feature = "compress"))]
-    pub(crate) fn none_left() {
-        LEFT.set(0);
+    pub(crate) fn leaves_next(left: usize) {
+        while Self::left_before_one_asks() != left {
+            DRAWN.set(draw(DRAWN.get()));
+        }
+    }
+
+    /// How many requests this thread leaves before one asks, as its draws stand.
+    #[cfg(test)]
+    fn left_before_one_asks() -> usize {
+        let mut next = draw(DRAWN.get());
+        let mut left = 0;
+        while next >> 24 != 0 {
+            next = draw(next);
+            left += 1;
+        }
+        left
+    }
+}
+
+/// The draw after `last` (xorshift, Marsaglia 2003): every number but zero comes round once
+/// before any comes twice, and its top byte is zero for one in 256 of them.
+#[inline]
+fn draw(mut last: u32) -> u32 {
+    last ^= last << 13;
+    last ^= last >> 17;
+    last ^= last << 5;
+    last
+}
+
+/// What became of one request that found nothing kept, told to its route when this goes: its
+/// answer was kept, or it was not, whatever the reason and also where the handler never
+/// answered.
+struct Told(Option<Arc<Unkept>>, bool);
+
+impl Drop for Told {
+    fn drop(&mut self) {
+        if let Some(route) = &self.0 {
+            route.made(self.1);
+        }
     }
 }
 
@@ -827,7 +878,7 @@ impl<'a> Asked<'a> {
     /// meanwhile is seen. None in a full store for a URL not asked for before: keeping its
     /// answer would drop a page for one no one is known to ask for again, so the answer is the
     /// handler's and nothing here is paid for it but the mark it leaves.
-    pub(crate) fn missed(&self, req: &Request, small: Option<Arc<Small>>) -> Option<Missed> {
+    pub(crate) fn missed(&self, req: &Request, route: Option<Arc<Unkept>>) -> Option<Missed> {
         let store = &*self.answers.0;
         if store.full() && !store.asked(self.host, self.at) {
             return None;
@@ -843,7 +894,7 @@ impl<'a> Asked<'a> {
             host: self.host.and_then(|host| HeaderValue::from_bytes(host.as_bytes()).ok()),
             language: self.language.and_then(|language| HeaderValue::from_bytes(language.as_bytes()).ok()),
             data: self.data,
-            small,
+            told: Told(route, false),
         })
     }
 }
@@ -858,8 +909,8 @@ pub(crate) struct Missed {
     host: Option<HeaderValue>,
     language: Option<HeaderValue>,
     data: bool,
-    /// Of a route of whole bodies, which is told whether this one was large enough to keep.
-    small: Option<Arc<Small>>,
+    /// Of a route of whole bodies, which is told whether this request's answer was kept.
+    told: Told,
 }
 
 impl Missed {
@@ -898,12 +949,8 @@ impl Missed {
         }
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
         // A whole body is kept where the app compresses it.
-        if let Some(small) = &self.small {
-            let worth = compresses(res.headers(), length);
-            small.made(!worth);
-            if !worth {
-                return res;
-            }
+        if self.told.0.is_some() && !compresses(res.headers(), length) {
+            return res;
         }
         let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
         // The URL is held twice, by the entry and by the map.
@@ -923,7 +970,7 @@ impl Missed {
         // A copy of its own length: a page's buffer is sized for the last page rendered, and the
         // bytes made from it hold all of that for as long as they are kept.
         let body = Bytes::copy_from_slice(&body);
-        let Missed { at, host, language: asked, data, asked: made, written, .. } = self;
+        let Missed { at, host, language: asked, data, asked: made, written, mut told, .. } = self;
         let entry = answers.keep(|place| Entry {
             at,
             place,
@@ -943,6 +990,7 @@ impl Missed {
             used: AtomicBool::new(false),
             size: AtomicUsize::new(size),
         });
+        told.1 = true;
         // This answer's tag and compression are the kept one's first.
         parts.extensions.insert(Kept(entry));
         Response::from_parts(parts, Body::from(body))
@@ -971,6 +1019,83 @@ fn varies(headers: &HeaderMap) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A route that left the store out: `UNKEPT_RUN` answers of which none was kept.
+    fn left() -> Unkept {
+        let route = Unkept::default();
+        for made in 0..UNKEPT_RUN {
+            assert!(!route.leaves(), "after {made} answers");
+            route.made(false);
+        }
+        route
+    }
+
+    /// Of a route that left the store out, about one request in 256 asks all the same, and none
+    /// waits long for its turn: so a route whose bodies grew is found out.
+    #[test]
+    fn about_one_request_in_256_of_a_route_that_left_asks() {
+        let route = left();
+        DRAWN.set(DRAWN_FROM);
+        let (mut asked, mut wait, mut longest) = (0, 0, 0);
+        for _ in 0..1 << 18 {
+            if route.leaves() {
+                wait += 1;
+                longest = longest.max(wait);
+            } else {
+                asked += 1;
+                wait = 0;
+            }
+        }
+        assert!((922..=1126).contains(&asked), "1,024 of 262,144 within a tenth: {asked}");
+        assert!(longest < 4096, "the longest run of requests left: {longest}");
+        // An answer kept, or one given from the store, ends it: every request asks again.
+        route.made(true);
+        assert!((0..1024).all(|_| !route.leaves()));
+        let route = left();
+        route.found();
+        assert!((0..1024).all(|_| !route.leaves()));
+    }
+
+    /// Each thread draws for itself: what one has drawn moves no other's turn.
+    #[test]
+    fn each_thread_draws_which_request_asks_for_itself() {
+        let route = left();
+        DRAWN.set(DRAWN_FROM);
+        let fresh = Unkept::left_before_one_asks();
+        let _ = route.leaves();
+        assert_ne!(Unkept::left_before_one_asks(), fresh, "this thread's draws moved on");
+        let other = std::thread::spawn(Unkept::left_before_one_asks).join().expect("the thread");
+        assert_eq!(other, fresh, "another thread's did not");
+    }
+
+    /// Threads that count, end and read a route's run together leave it a run: no more than
+    /// its length, and ended by the next answer kept.
+    #[test]
+    fn a_run_counted_from_many_threads_stays_a_run() {
+        let route = Arc::new(Unkept::default());
+        let threads: Vec<_> = (0..8)
+            .map(|thread| {
+                let route = route.clone();
+                std::thread::spawn(move || {
+                    for turn in 0..20_000_u32 {
+                        match (turn + thread) % 7 {
+                            0 => route.made(true),
+                            1 => route.found(),
+                            2 => drop(route.leaves()),
+                            _ => route.made(false),
+                        }
+                        assert!(route.0.load(Ordering::Relaxed) <= UNKEPT_RUN);
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().expect("the thread");
+        }
+        route.made(true);
+        assert_eq!(route.0.load(Ordering::Relaxed), 0);
+        assert!(!route.leaves());
+    }
 
     /// What [`Sent::read`] reads, by a lookup of each header's name: the rule as the functions
     /// that own each part of it say it.
