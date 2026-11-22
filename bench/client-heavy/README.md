@@ -119,7 +119,8 @@ optional or peer is not. An incompatible edge blocks each actual consumer,
 without imposing latest-every-transitive or hiding that consumer. The reviewed
 `@remix-run/test` 1.2.0 publishes esbuild `^0.27.1`; it uses a private 0.27.2,
 outside [the Windows dev-server advisory](https://github.com/advisories/GHSA-g7r4-m6w7-qqqr).
-Only that dependency edge may resolve the private copy. The actual benchmark
+Only that dependency edge may resolve the private copy, whose archive identity
+and platform dependency declarations are checked. The actual benchmark
 bundler remains the observed latest root esbuild 0.28.2. Root tooling source/lock identity
 is part of candidate replay; no global or transitive parser fallback is used.
 The parser is verification tooling only and is not shipped in client bundles.

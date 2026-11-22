@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import test from "node:test";
 import { chromium } from "playwright";
 import { buildApps, root } from "./build.mjs";
@@ -43,12 +43,17 @@ test("the locked JavaScript builds still pass the client-heavy browser oracle", 
         const pass = await journey(launched.browser, server.url, app, workload, settings, timeoutMs);
         assert.equal(pass.capture.outcome, "captured", `${app}: ${JSON.stringify(pass.failure)}`);
         assert.equal(pass.oracle.functionalPassed, true, app);
+        assert.equal(pass.lifecycle.deadline.firedAt, null, app);
+        const close = pass.lifecycle.close;
+        assert.ok(close?.returned && close.observed && close.failure === null, `${app}: ${JSON.stringify(close)}`);
         assert.equal(pass.actions, null, app);
       }
     } finally {
       try { await launched?.close(); } finally { await server.close(); }
     }
   } finally {
+    const path = relative(tmpdir(), out);
+    assert.ok(path && !isAbsolute(path) && !path.startsWith(".."));
     await rm(out, { recursive: true, force: true });
   }
 });

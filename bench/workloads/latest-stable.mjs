@@ -26,6 +26,7 @@ const canonical = (value) => value && typeof value === "object"
   ? Array.isArray(value) ? `[${value.map(canonical).join(",")}]`
     : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`
   : JSON.stringify(value);
+const dependencyKinds = ["dependencies", "optionalDependencies", "peerDependencies", "peerDependenciesMeta"];
 
 /**
  * Offline, read-only policy evaluation of UTF-8 source strings or byte arrays.
@@ -135,17 +136,27 @@ const reviewedRegistry = Object.freeze({
 });
 // Retained v2 observation: do not replay its forced Remix resolution with the
 // private-tool rule, or reinterpret the previous blocked row as current.
-const { "@remix-run/test": currentRemixTest, ...previousPackages } = reviewedRegistry;
 const previousRegistry = Object.freeze({
-  ...previousPackages,
   "@babel/core": ["8.1.2", "ea4b870f29d90df7b3ada07d3f20dcb05ad15f0230608ef149c32c10f157f1ad"],
+  "babel-preset-solid": ["1.9.19", "5607d3867fc265be88881506bd28b15e8ab14a961b5c9dabfcce3556684f8068"],
+  esbuild: ["0.28.2", "7a6838097b106ef5d8877fd543a1e25c46e5eb1730945fb7e57bc467c12c7c8c"],
+  react: ["19.3.1", "ecf8c02b9096a7813842d87fae50a707a8809c5c3d0ec6b359ac51d40188ff6f"],
+  "react-dom": ["19.3.1", "2d72d7d33a8b0fea5614e1b415d06470877efa8eebbdf638cee04e5b83c2c7a5"],
   remix: ["3.2.0", "95e8629a1d6f270cd0fe6066ee4fe4c76ebaacae285451a9b551162661018b8d"],
   "solid-js": ["2.0.0", "5c1b6535469aaf1b97917b14541b82832b2ac1566eaf7771f2ff89ab1c34a31c"],
   svelte: ["5.57.3", "634f95528477681a4038169e260043050af2538ef1b29703dcb345df298f4c51"],
   vue: ["3.5.45", "1ee58b6cbee8116c5f29a4c60ab4c46d8253f5151c2e5c66ac91185b6993d603"],
   "@vue/compiler-sfc": ["3.5.45", "b590cd088c7527f22e55087dac8ae5a8d189ec7872e121940290afeadaafe942"],
   "@babel/parser": ["8.1.2", "23bea21411dae23f43b3b3ab8fa846391329cf6d1eea2dac894f258e96ba6de1"],
+  "babel-plugin-jsx-dom-expressions": ["0.40.14", "5b401b6520332ddd9fac5dc2d285e31d8bffa6d14b2c6e02dbf81e5174ce3ed5"],
   "@solidjs/web": ["2.0.0", "463c70691ccf608a7fb49f7d40a02b05044c563ea08637bd826668703c43a8d2"],
+});
+// Reviewed version response at https://registry.npmjs.org/esbuild/0.27.2.
+// Bind both the archive and its published dependency maps (including binaries).
+const privateEsbuild = Object.freeze({
+  version: "0.27.2", resolved: "https://registry.npmjs.org/esbuild/-/esbuild-0.27.2.tgz",
+  integrity: "sha512-HyNQImnsOC7X9PMNaCIeAm4ISCQXs5a5YasTXVliKv4uuBo1dKrG0A+uQS8M5eXjVMnLg3WgXaKvprHlFJQffw==",
+  dependencySha256: "6ddacbd6815df6ddbaff1acb08c11e0533693e7aa81735a18b1f40a679cce1af",
 });
 export const registryObservationSchema = "benchmark-npm-registry-observation/v1";
 export const unsupportedSolidReason = "latest-stable-solid-2-needs-compatible-stable-compiler";
@@ -207,11 +218,11 @@ function evaluateCandidates(input) {
     "tooling:parser-lock-mismatch");
     need(lock?.lockfileVersion === 3 && lock.packages?.[""], "lockfile:invalid-shape");
     need(manifest && typeof manifest === "object" && !Array.isArray(manifest), "manifest:invalid-shape");
-    const remixTestVersion = currentRemixTest[0], privateEsbuild = "0.27.2";
+    const remixTestVersion = reviewedRegistry["@remix-run/test"][0];
     // Keep the private test tool in its published range and outside
     // GHSA-g7r4-m6w7-qqqr, without changing the actual benchmark bundler.
     const overrides = previous ? { "@remix-run/test": { esbuild: "$esbuild" } }
-      : { [`@remix-run/test@${remixTestVersion}`]: { esbuild: privateEsbuild } };
+      : { [`@remix-run/test@${remixTestVersion}`]: { esbuild: privateEsbuild.version } };
     need(canonical(manifest.overrides) === canonical(overrides), "manifest:unreviewed-overrides");
     for (const kind of ["dependencies", "devDependencies", "optionalDependencies"]) need(canonical(manifest[kind] ?? {}) === canonical(lock.packages[""][kind] ?? {}), `lockfile:root-${kind}-mismatch`);
     const resolvePackage = (from, name) => {
@@ -229,6 +240,13 @@ function evaluateCandidates(input) {
     };
     const remixTest = "node_modules/@remix-run/test";
     const remixTestEsbuild = previous ? null : `${remixTest}/node_modules/esbuild`;
+    if (remixTestEsbuild && Object.hasOwn(lock.packages, remixTestEsbuild)) {
+      const pkg = lock.packages[remixTestEsbuild];
+      need(pkg?.version === privateEsbuild.version && !pkg.link && pkg.resolved === privateEsbuild.resolved
+        && pkg.integrity === privateEsbuild.integrity, "lockfile:unreviewed-remix-test-esbuild-archive");
+      const edges = Object.fromEntries(dependencyKinds.map((kind) => [kind, pkg[kind] ?? {}]));
+      need(sha256(canonical(edges)) === privateEsbuild.dependencySha256, "lockfile:unreviewed-remix-test-esbuild-dependencies");
+    }
     for (const app of selectedApps("client-heavy")) {
       const closure = new Map(), pending = [], incompatible = [];
       for (const name of candidateDependencies[app]) {
@@ -253,7 +271,7 @@ function evaluateCandidates(input) {
         // A latest root/compiler retains the dependency declarations actually
         // published for that version. Internal dependencies are supported pins,
         // not new independent latest targets (e.g. Vue's Babel parser 7).
-        if (observations[name]?.version === pkg.version) for (const kind of ["dependencies", "optionalDependencies", "peerDependencies", "peerDependenciesMeta"]) {
+        if (observations[name]?.version === pkg.version) for (const kind of dependencyKinds) {
           need(canonical(pkg[kind] ?? {}) === canonical(observations[name][kind] ?? {}), `lockfile:${name}:${kind}-differs-from-registry`);
         }
         closure.set(path, { path, package: name, version: pkg.version });
@@ -267,10 +285,8 @@ function evaluateCandidates(input) {
             need(typeof range === "string" && semver.validRange(range) !== null, `lockfile:${dependency}:invalid-${kind}-range`);
             if (resolved) {
               const version = lock.packages[resolved]?.version;
-              if (resolved === remixTestEsbuild) {
-                need(path === remixTest && kind === "dependency" && pkg.version === remixTestVersion, "lockfile:unreviewed-remix-test-esbuild-consumer");
-                need(version === privateEsbuild, "lockfile:unreviewed-remix-test-esbuild-version");
-              }
+              if (resolved === remixTestEsbuild) need(path === remixTest && kind === "dependency"
+                && pkg.version === remixTestVersion, "lockfile:unreviewed-remix-test-esbuild-consumer");
               if (typeof version !== "string" || !semver.satisfies(version, range)) incompatible.push({ from: path, kind, package: dependency, range, resolved, version });
               pending.push(resolved);
             }

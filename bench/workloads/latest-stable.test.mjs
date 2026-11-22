@@ -168,9 +168,21 @@ test("prior reviewed v2 bytes still replay without qualifying previously blocked
   assert.deepEqual(remix.incompatible, [{ from: "node_modules/@remix-run/test", kind: "dependency",
     package: "esbuild", range: "^0.27.1", resolved: "node_modules/esbuild", version: "0.28.2" }]);
   assert.equal(result.candidates.find((r) => r.app === "solid").status, "unsupported");
+  assert.equal(Object.keys(result.observation.packages).length, 13);
+  assert.equal(Object.hasOwn(result.observation.packages, "@remix-run/test"), false);
   const current = candidateInputs();
   invalid({ ...current, policy: prior.policy }, "manifest:unreviewed-overrides");
   invalid({ ...prior, policy: current.policy }, "manifest:unreviewed-overrides");
+});
+
+for (const [what, edit, error] of [
+  ["version", (p) => { p.version = "0.27.7"; }, "archive"],
+  ["archive URL", (p) => { delete p.resolved; }, "archive"],
+  ["archive integrity", (p) => { delete p.integrity; }, "archive"],
+  ["platform declarations", (p) => { delete p.optionalDependencies; }, "dependencies"],
+]) test(`the private esbuild requires the reviewed ${what}`, () => {
+  invalid(mutateCandidate("lockfile", (p) => edit(p.packages["node_modules/@remix-run/test/node_modules/esbuild"])),
+    `lockfile:unreviewed-remix-test-esbuild-${error}`);
 });
 
 test("production builder recomputes candidate-specific latest targets without inventing latest-all-transitives or native qualification", () => {
@@ -229,7 +241,6 @@ for (const [name, key, edit] of [
   ["unrelated nested esbuild", "lockfile", (p) => { p.packages["node_modules/remix/node_modules/esbuild"] = { version: "0.28.2" }; }],
   ["forged Remix test range", "lockfile", (p) => { p.packages["node_modules/@remix-run/test"].dependencies.esbuild = "^0.28.0"; }],
   ["unreviewed Remix test release", "lockfile", (p) => { p.packages["node_modules/@remix-run/test"].version = "1.2.1"; }],
-  ["unreviewed private esbuild", "lockfile", (p) => { p.packages["node_modules/@remix-run/test/node_modules/esbuild"].version = "0.27.7"; }],
   ["forced compiler peer", "lockfile", (p) => { p.packages["node_modules/babel-preset-solid"].peerDependencies["@babel/core"] = "^8.0.0"; }],
   ["tooling parser declaration", "toolingManifest", (p) => { p.devDependencies.semver = "7.8.5"; }],
   ["tooling parser alias", "toolingManifest", (p) => { p.dependencies = { semver: "npm:semver@7.8.6" }; }],
