@@ -8,7 +8,8 @@ import { accountId, archive, commit, context, harness, syntheticInspection } fro
 import { fleetPlan, reservation } from "./cloud-contract.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { groupNames } from "./registry.mjs";
-import { fleetChildOptions, fleetLockSnapshot, readFleet, recheckCollectedGroup, verifyCollectedGroup, verifyFleet, verifyFleetCli } from "./fleet-verify.mjs";
+import { fleetChildOptions, fleetLockSnapshot, readFleet, recheckCollectedGroup, verifyCollectedGroup, verifyFleet, verifyFleetCli,
+  windowsProcessStart } from "./fleet-verify.mjs";
 import { localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
 import { inspectContinuation } from "./group-continuation.mjs";
@@ -124,6 +125,12 @@ function batchIntents(p) {
   }));
   return { launch: approvalSha256, remaining: remainingSha256 };
 }
+
+test("Windows process-start adapter reads the current process creation time", { skip: process.platform !== "win32" }, () => {
+  const at = windowsProcessStart(process.pid);
+  assert.ok(Number.isSafeInteger(at) && at <= Date.now(), "Windows returned no valid process creation time");
+  assert.ok(Math.abs(at - performance.timeOrigin) < 60_000, "creation time does not match this Node process");
+});
 
 test("report replays pinned root evidence behind a dead or provably reused batch PID, without unlocking it", async (t) => {
   const p = fixture(t), j = p.seed(groupNames[0]), intents = batchIntents(p);

@@ -44,9 +44,10 @@ export function fleetLockSnapshot(root) {
   return "busy";
 }
 
-function windowsProcessStart(pid) {
+export function windowsProcessStart(pid) {
   const root = process.env.SystemRoot;
-  if (process.platform !== "win32" || !root || !/^[a-z]:[\\/]/i.test(root) || pid > 0x7fffffff) return;
+  if (process.platform !== "win32" || !root || !/^[a-z]:[\\/]/i.test(root)
+      || !Number.isSafeInteger(pid) || pid <= 0 || pid > 0x7fffffff) return;
   const result = spawnSync(join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
     ["-NoProfile", "-NonInteractive", "-Command",
       `$ErrorActionPreference = 'Stop'; ([DateTimeOffset]([Diagnostics.Process]::GetProcessById(${pid}).StartTime)).ToUnixTimeMilliseconds()`],
