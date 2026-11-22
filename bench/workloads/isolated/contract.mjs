@@ -51,7 +51,7 @@ const exact = (value, keys, at) => {
 const snapshotPins = freeze({
   ...(!clientParser ? { "bench/client-heavy/run.mjs": "71fc21c81f109b4ae43eb6585c675fe3e9eb49fa526de57ab20e8d4f48edbb8e" } : {}),
   // Per-adapter Chromium and cancelled-prefix retention do not change native live CLI/defaults.
-  "bench/live/parity.mjs": "6b5831e63e24da4bdd46a92440b701f739a6b41991698da1b8d06b4e9e76b11c",
+  "bench/live/parity.mjs": "eeb4fb10a908493a44a27381fa1595ec04e911631ba14c716fd110ddabbdd198",
 });
 const clientSourceRoots = Object.freeze([...(clientParser?.sourceRoots ?? [])]);
 export const sourceRoots = Object.freeze([...new Set(["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", ".dockerignore", ".gitignore",

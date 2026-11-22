@@ -9,7 +9,7 @@ import test from "node:test";
 import { isDeepStrictEqual } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { portFor, settingsFor, workloadFor } from "./native.mjs";
-import { browserJourney, run } from "./parity.mjs";
+import { browserJourney, runLiveAdapters } from "./parity.mjs";
 import { verifyRound } from "./verify.mjs";
 
 const group = "live-delivery", workload = workloadFor();
@@ -79,7 +79,7 @@ async function fixture(t, app) {
   return "http://127.0.0.1:" + server.address().port;
 }
 
-const apps = "aspnet,express";
+const apps = "aspnet,express", options = { group, requested: apps, profile: "bounded" };
 async function runnerFixture(t) {
   const scratch = await mkdtemp(join(tmpdir(), "live-browser-lifetime-")), out = join(scratch, "evidence");
   t.after(async () => {
@@ -131,7 +131,7 @@ test("live runner uses a fresh Chromium for the next adapter after a real discon
   if (!hosted && !existsSync(chromium.executablePath())) return t.skip("bundled Chromium is not installed");
   const { out, history, spawn } = await runnerFixture(t);
   const browsers = [], attempted = [];
-  assert.equal(await run({ group, apps, out }, { spawn, signal: t.signal, chromium: { async launch(options) {
+  assert.equal(await runLiveAdapters({ ...options, out }, { spawn, signal: t.signal, chromium: { async launch(options) {
     assert.ok(browsers.every((b) => !b.isConnected()), "previous adapter retained its browser");
     const browser = await chromium.launch(options); browsers.push(browser); return browser;
   } }, async journey(browser, base, input, settings, port) {
@@ -159,7 +159,7 @@ test("production cancellation during launch closes the browser and removes its o
   const { out, history, spawn } = await runnerFixture(t);
   const stop = new AbortController();
   let closed = 0;
-  await assert.rejects(run({ group, apps, out }, { spawn, signal: stop.signal, chromium: { async launch() {
+  await assert.rejects(runLiveAdapters({ ...options, out }, { spawn, signal: stop.signal, chromium: { async launch() {
     stop.abort(new Error("aborted during launch"));
     return { async close() { closed++; } };
   } }, journey: () => assert.fail("cancelled runner started a scenario") }), /aborted during launch/);
@@ -174,7 +174,7 @@ for (const stage of ["scenario", "fanout"]) test(`production cancellation retain
   const { out, history, spawn } = await runnerFixture(t);
   const stop = new AbortController(), attempts = [];
   let closed = 0;
-  await assert.rejects(run({ group, apps, out, measure: stage === "fanout" }, {
+  await assert.rejects(runLiveAdapters({ ...options, out, measure: stage === "fanout" }, {
     spawn, signal: stop.signal, chromium: { async launch() { return { async close() { closed++; }, isConnected: () => closed === 0 }; } },
     async journey(_browser, _base, _input, settings, port) {
       assert.equal(port.directory, "aspnet");

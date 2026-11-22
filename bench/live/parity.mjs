@@ -285,9 +285,13 @@ export function verifyArtifact(artifact, expected) {
   return summary;
 }
 
-// Dependency overrides serve bounded tests only. The CLI always uses the real
-// browser, Docker and capture code; both paths save and verify identical evidence.
-export async function run({ group, out, apps: requested, build = false, round, profile = "bounded", measure = false, isolated = false },
+export async function run({ group, out, apps: requested, build = false, round, profile = "bounded", measure = false, isolated = false }) {
+  return runLiveAdapters({ group, out, requested, build, round, profile, measure, isolated });
+}
+
+// Dependency overrides exercise this same loop in bounded tests. The CLI
+// always uses the real browser, Docker and capture code.
+export async function runLiveAdapters({ group, out, requested, build, round, profile, measure, isolated },
   { spawn = spawnSync, chromium, signal: testSignal, journey = browserJourney, fanout = fanoutJourney } = {}) {
   if (isolated) requireNativeCommandCpuSet(liveActorCpus.browser);
   const apps = select(group, requested);
