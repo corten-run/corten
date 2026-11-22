@@ -3114,14 +3114,17 @@ async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
     crate::compress::QUEUEING.take();
 }
 
-/// A kept body past `BROTLI_MAX` is never given a brotli at `Level::Kept`, since a held value
-/// queued while it is made would wait for all of it: no answer queues one, and a browser gets the
-/// form made for its coding every time. One at the bound is queued on its second answer as before.
+/// A kept body past `BROTLI_MAX` (32,768 bytes, as it is written here and not read from the
+/// constant) is never given a brotli at `Level::Kept`, since a held value queued while it is made
+/// would wait for all of it: no answer queues one, and a browser gets the form made for its coding
+/// every time. The bound is the body's own length, not its compressed form's. One at the bound is
+/// queued on its second answer as before, and not on its first.
 #[cfg(feature = "compress")]
 #[tokio::test]
 async fn a_kept_body_past_the_brotli_bound_keeps_the_form_made_for_its_coding() {
     use crate::compress::Turn;
     use crate::kept::BROTLI_MAX;
+    assert_eq!(BROTLI_MAX, 32 * 1024, "the bound Choice 70 and the guide give");
     let minute = Duration::from_secs(60);
     let runs = Runs::default();
     let text = |length: usize, runs: Runs| {
@@ -3134,8 +3137,8 @@ async fn a_kept_body_past_the_brotli_bound_keeps_the_form_made_for_its_coding() 
         }
     };
     let routes = Table::new()
-        .route("/at", crate::route::get(text(BROTLI_MAX, runs.clone())).0)
-        .route("/past", crate::route::get(text(BROTLI_MAX + 1, runs.clone())).0);
+        .route("/at", crate::route::get(text(32_768, runs.clone())).0)
+        .route("/past", crate::route::get(text(32_769, runs.clone())).0);
     let router = App::new(Routes::from(routes)).router();
     let browser = [("accept-encoding", "gzip, deflate, br, zstd")];
     let queued = std::rc::Rc::new(std::cell::Cell::new(0));
@@ -3148,6 +3151,7 @@ async fn a_kept_body_past_the_brotli_bound_keeps_the_form_made_for_its_coding() 
     })));
     let (_, first, made) = fetch(&router, "GET", "/past", &browser).await;
     assert!(!first.contains_key(header::AGE) && first[header::CONTENT_ENCODING] == "zstd", "the handler's answer: {first:?}");
+    assert!(made.len() < 32_768, "its zstd ({} bytes) is within the bound, its body is not", made.len());
     for n in 1..6 {
         let (_, headers, again) = fetch(&router, "GET", "/past", &browser).await;
         assert!(headers.contains_key(header::AGE), "answer {n}: kept {headers:?}");
@@ -3155,10 +3159,11 @@ async fn a_kept_body_past_the_brotli_bound_keeps_the_form_made_for_its_coding() 
         assert_eq!(again.as_ptr(), made.as_ptr(), "answer {n}: the form made for zstd");
     }
     assert_eq!((queued.get(), runs.count()), (0, 1), "no brotli queued past the bound, one run");
-    for n in 0..2 {
+    for (n, queued_by_then) in [(0, 0), (1, 1)] {
         assert_eq!(fetch(&router, "GET", "/at", &browser).await.1[header::CONTENT_ENCODING], "zstd", "answer {n}");
+        assert_eq!(queued.get(), queued_by_then, "answer {n}: at the bound, queued on its second answer and not its first");
     }
-    assert_eq!((queued.get(), runs.count()), (1, 2), "at the bound, queued on its second answer");
+    assert_eq!(runs.count(), 2, "one run a URL");
     crate::compress::QUEUEING.take();
 }
 

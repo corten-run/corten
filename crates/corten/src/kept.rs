@@ -160,11 +160,12 @@ const GONE: usize = usize::MAX;
 const QUEUED: u8 = 2;
 
 /// The largest kept body given a brotli at [`Level::Kept`]; a larger one keeps the form made for
-/// each coding. Its encoding runs on the thread held values share and cannot be stopped once it
-/// starts, so a held value queued meanwhile waits for the rest of it: at 32 KiB that is 1.8 ms at
-/// the median of 45 (1.6 to 6.2 ms), at 64 KiB 4.3 ms and at the 4 MiB the default bound keeps
-/// 443 ms, where the held value's own forms take 4.2 ms for 4 KB and 42 ms for 79 KB (a Linux
-/// container on a busy desktop, `docs/design.md#choice-kept-pages`).
+/// each coding. Its job runs on the thread held values share and cannot be stopped once it starts,
+/// so a held value queued meanwhile waits for the rest of that one job: the encoding, the store's
+/// lock and the bytes put in. This bounds the job's input, not that wait, which
+/// `docs/design.md#choice-kept-pages` gives as it was measured (on a workstation, not a quiet
+/// host): without the bound, a held value waited about half a second behind the largest body the
+/// default store keeps.
 #[cfg(feature = "compress")]
 pub(crate) const BROTLI_MAX: usize = 32 << 10;
 
