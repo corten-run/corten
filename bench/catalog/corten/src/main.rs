@@ -10,6 +10,26 @@ mod routes {
     #[route("/", get = home)]
     pub struct Home;
 
+    #[route("/files/sitemap.xml", get = sitemap)]
+    pub struct Sitemap;
+
+    #[route("/files/export.csv", get = export)]
+    pub struct Export;
+
+    #[route("/files/picture.png", get = picture)]
+    pub struct Picture;
+
+    #[route("/files/small.png", get = small)]
+    pub struct Small;
+
+    #[route("/files/large.png", get = large)]
+    pub struct Large;
+
+    #[route("/kept/{id}", get = kept)]
+    pub struct Kept<'a> {
+        pub id: &'a str,
+    }
+
     #[route("/catalog/{id}", get = show)]
     pub struct Catalog<'a> {
         pub id: &'a str,
@@ -49,6 +69,64 @@ async fn home(req: Req) -> HtmlResult {
 async fn show(req: Req, State(source): State<Source>, Params(at): Params<routes::Catalog<'_>>) -> HtmlResult {
     let record = source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?;
     req.page(views::document(&req, &record.title, views::record(&record, at.query.field.as_deref().unwrap_or(""))))
+}
+
+/// The record's page, the same for everyone for a minute.
+async fn kept(req: Req, State(source): State<Source>, Params(at): Params<routes::Kept<'_>>) -> corten::Public<HtmlResult> {
+    let page = async {
+        let record = source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?;
+        req.page(views::document(&req, &record.title, views::record(&record, "")))
+    }
+    .await;
+    corten::Public::new(std::time::Duration::from_secs(60), page)
+}
+
+/// A sitemap of 500 URLs, written for each request.
+async fn sitemap() -> corten::Public<corten::seo::File> {
+    let urls: Vec<String> = (0..500).map(|i| format!("https://example.com/catalog/record_{i}")).collect();
+    corten::seo::sitemap(urls.iter().map(|loc| corten::seo::SitemapUrl { loc, lastmod: Some("2026-11-01") }))
+}
+
+static CSV: std::sync::LazyLock<corten::http::Bytes> = std::sync::LazyLock::new(|| {
+    corten::http::Bytes::from((0..400).map(|i| format!("{i},card {i},{}\n", i * 7)).collect::<String>())
+});
+
+/// A CSV the app holds: its handler makes nothing.
+async fn export() -> corten::Public<corten::Media> {
+    corten::Public::new(std::time::Duration::from_secs(60), corten::Media::new("text/csv", CSV.clone()))
+}
+
+/// Bytes that do not compress, as a picture's do not.
+fn noise(length: usize) -> corten::http::Bytes {
+    let mut state = 0x9E37_79B9u32;
+    let bytes: Vec<u8> = (0..length)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            (state >> 24) as u8
+        })
+        .collect();
+    corten::http::Bytes::from(bytes)
+}
+
+static PNG: std::sync::LazyLock<corten::http::Bytes> = std::sync::LazyLock::new(|| noise(8000));
+static SMALL: std::sync::LazyLock<corten::http::Bytes> = std::sync::LazyLock::new(|| noise(1024));
+static LARGE: std::sync::LazyLock<corten::http::Bytes> = std::sync::LazyLock::new(|| noise(1 << 20));
+
+/// A picture the app holds, of a type no build compresses.
+async fn picture() -> corten::Public<corten::Media> {
+    corten::Public::new(std::time::Duration::from_secs(60), corten::Media::new("image/png", PNG.clone()))
+}
+
+/// The same of 1,024 bytes.
+async fn small() -> corten::Public<corten::Media> {
+    corten::Public::new(std::time::Duration::from_secs(60), corten::Media::new("image/png", SMALL.clone()))
+}
+
+/// The same of 1 MiB.
+async fn large() -> corten::Public<corten::Media> {
+    corten::Public::new(std::time::Duration::from_secs(60), corten::Media::new("image/png", LARGE.clone()))
 }
 
 async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>) -> JsonResult<Arc<Record>> {
