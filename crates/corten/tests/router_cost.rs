@@ -4,6 +4,7 @@
 //! `--ignored --exact request_cost`, `ROUTER_REQUESTS=1200` and again `ROUTER_REQUESTS=200`.
 //! Subtract totals and divide by 1,000. `ROUTER_TARGET=missing` counts a 404; otherwise it
 //! counts the matched parameter route. No sockets, fixture or global allocator is needed.
+//! `ROUTER_TARGET=unstaged` counts a text answer from a route outside the app's stages.
 //!
 //! What a write pays for the answers the app keeps: `ROUTER_TARGET=write` counts a `POST` to
 //! the same path (a route with no parameter, so the three apps share its handlers), in an app
@@ -37,6 +38,13 @@ async fn item(at: Params<url::Item>) -> String {
 #[corten::routes]
 mod plain {
     #[route("/items/7/edit", get = crate::read, post = crate::save)]
+    pub struct Item;
+}
+
+/// The route outside the app's stages.
+#[corten::routes]
+mod bare {
+    #[route("/items/7/edit", get = crate::read, unstaged)]
     pub struct Item;
 }
 
@@ -94,10 +102,11 @@ fn request_cost() {
     let target = std::env::var("ROUTER_TARGET").unwrap_or_default();
     let public = std::env::var("ROUTER_PUBLIC").unwrap_or_default();
     let asked = std::env::var("ROUTER_ASKED").is_ok_and(|asked| asked == "1");
-    let (missing, write, kept) = (target == "missing", target == "write", target == "kept");
+    let (missing, write, kept, unstaged) = (target == "missing", target == "write", target == "kept", target == "unstaged");
     let path = if missing { "/items/7/unknown" } else { "/items/7/edit" };
     let status = if missing { 404 } else { 200 };
     let (routes, shared) = match (write || kept, public.as_str()) {
+        (false, _) if unstaged => (bare::router(), None),
         (false, _) => (url::router(), None),
         (true, "") => (plain::router(), None),
         (true, "words") => (words::router(), Some("/words")),
@@ -140,6 +149,8 @@ fn request_cost() {
             let body = response.into_body().collect().await.unwrap().to_bytes();
             if write {
                 assert_eq!(body.as_ref(), b"saved");
+            } else if unstaged {
+                assert_eq!(body.as_ref(), b"item");
             } else if !missing {
                 assert_eq!(body.as_ref(), b"item 7");
             }
