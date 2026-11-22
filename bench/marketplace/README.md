@@ -540,6 +540,15 @@ always reports `readyForLoad: false`: no standalone formatting test certifies a 
 
 ## Before measuring
 
+If the Next.js image fails to build, check `build-nextjs.log` first. Its locked
+`npm ci` step logs package fetches and npm warnings/errors, including extraction
+failures, without a full npm trace. The step sets npm's `fetch-timeout` to 60
+seconds; the deadline for the whole install is 10 minutes (TERM, then KILL after
+another 10 seconds if needed).
+An install that ultimately fails is a setup failure, not a timing result. This
+step is included when `bench/fullstack/docker-rebuild.mjs` times a cold image
+build. The separate dependency timing in `bench/fullstack/builds.mjs` is unchanged.
+
 1. Run the twenty adapters' ecosystem-local tests and Docker/browser gate. Keep catalog
    behavior unchanged, and do not rewrite historical result files.
 2. Review request-time native localization and serializer paths, not just captured answers.

@@ -18,6 +18,13 @@ test("actual fixed guardian registers and pins exact socket ancestry, streams au
   assert.equal(verifyStreamDrain(result.binding, registration, result.drain).remoteDrained, true);
   assert.ok(result.frames.includes("progress") && result.frames.includes("audit-end") && result.frames.includes("delivery-sealed") && result.frames.at(-1) === "terminal");
 });
+test("a failed group with no audit closes the guardian and admits a separate disappearance proof", () => {
+  const r = kernel("failed-group");
+  assert.deepEqual(r.frames.filter((kind) => kind !== "challenge"), ["registered", "progress", "terminal"]);
+  assert.equal(r.terminal, true); assert.equal(r.invalid, false); assert.ok(r.seal);
+  assert.equal(r.auditPublished, false);
+  assert.equal(verifyStreamDrain(r.binding, r.registration, r.drain).remoteDrained, true);
+});
 for (const mode of ["early-job-exit", "already-exited", "exit-after-renewals"])
   test("an exited job without progress preserves registration but is never a result: " + mode, () => {
     const result = kernel(mode);
