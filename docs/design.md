@@ -2289,12 +2289,13 @@ rules something out.
     a `Cache-Control` written after the mark: the lane now reads the answer's `NoStore` mark. An
     unstaged route that answers without one costs 11 instructions more for it, 7 of them in
     `route::unstaged_headers` (`tests::cache::what_settling_a_page_costs` with `SETTLE_CASE` set to
-    `unstaged`: 6,405 against 6,394 for main `564034b86`, the `service_fn` control 3,088 in both
-    builds), which takes it to about 109 over 6,932. Correctness comes first (the README's Values),
-    so the check stays. Removing the CDN headers as the `NoStore` answer is made instead counted 1
-    more, but a header the handler writes after the mark (a later part of the same tuple) would
-    then go out, so it was not taken. The bound below moves by those 11, as it moved for the host
-    check, so the next change that adds to an unstaged route reopens this again.
+    `unstaged`: 6,405 against 6,394 for main `564034b86` and again for main `e7e89add8`, the
+    `service_fn` control 3,088 in each build), which takes it to about 109 over 6,932.
+    Correctness comes first (the README's Values), so the check stays. Removing the CDN headers as
+    the `NoStore` answer is made instead counted 1 more, but a header the handler writes after the
+    mark (a later part of the same tuple) would then go out, so it was not taken. The bound below
+    moves by those 11, as it moved for the host check, so the next change that adds to an unstaged
+    route reopens this again.
 
     The instruction bounds below bound work on the measured routes, not speed. For a change
     to the request path, also measure cycles under load as
@@ -2464,11 +2465,12 @@ rules something out.
     measurement.
 
     Last checked: 2026-11-21, the unstaged route and the `service_fn` control in
-    `tests::cache::what_settling_a_page_costs` on this change against main `564034b86`
-    (callgrind, release, jemalloc, three rounds alternating the builds, every run within 0.2 of
-    the others); 2026-11-20, `staged_page_future_sizes` at `3089d0a97`, after it failed on
-    main: the stage future grew from 2,632 to 3,008 bytes in a debug build and from 2,176 to
-    2,280 in a release one, holding the page snapshot that sharing the staged header reads keeps
+    `tests::cache::what_settling_a_page_costs` on this change against main `564034b86`, and
+    after merging main `e7e89add8` against it, the same counts (callgrind, release, jemalloc,
+    three rounds alternating the builds, every run within 0.2 of the others); 2026-11-20,
+    `staged_page_future_sizes` at `3089d0a97`, after it failed on main: the stage future grew
+    from 2,632 to 3,008 bytes in a debug build and from 2,176 to 2,280 in a release one, holding
+    the page snapshot that sharing the staged header reads keeps
     before dispatch, not the request again (the stage owns one request slot, and dispatch takes
     it). This Choice's catalog GET counts were taken with that snapshot and are what the stages
     cost with it, so the Choice stands and the measurements moved; 2026-11-19, the header lookup, extension
