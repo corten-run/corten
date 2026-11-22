@@ -544,7 +544,9 @@ If the Next.js image fails to build, check `build-nextjs.log` first. Its locked
 `npm ci` step logs package fetches and npm warnings/errors, including extraction
 failures, without a full npm trace. Each fetch attempt is limited to 60 seconds.
 The install gets TERM after 10 minutes (KILL after another 10 seconds if needed).
-A fetch or install failure is a setup failure, not a timing result.
+An install that ultimately fails is a setup failure, not a timing result. This
+step is included when `bench/fullstack/docker-rebuild.mjs` times a cold image
+build. The separate dependency timing in `bench/fullstack/builds.mjs` is unchanged.
 
 1. Run the twenty adapters' ecosystem-local tests and Docker/browser gate. Keep catalog
    behavior unchanged, and do not rewrite historical result files.
