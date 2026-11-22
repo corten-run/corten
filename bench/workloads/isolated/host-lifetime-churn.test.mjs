@@ -680,6 +680,19 @@ test("a future sample write failure keeps admitted captures owned until sticky f
   assert.equal(f.held.size, 0);
 });
 
+test("an earlier sampling fault does not hide a later executable proof failure", async (t) => {
+  const f = await fixture(t, [], true);
+  f.override = (path) => { if (path === "/proc/4242/cmdline") throw missing("EIO"); };
+  await f.tick();
+  f.override = () => {}; f.failProofWrite = true;
+  await assert.rejects(f.finish, { message: "host-executable-proof-incomplete: executable-proof-publish: ENOSPC" });
+  assert.equal(f.terminal.observerFailures.first.operation, "process-cmdline");
+  assert.equal(f.terminal.observerFailures.first.code, "EIO");
+  assert.equal(f.terminal.observerFailures.last.phase, "executables");
+  assert.equal(f.terminal.observerFailures.count, 2);
+  assert.throws(f.proof, { code: "ENOENT" });
+});
+
 for (const [fault, operation, code] of [["failHash", "executable-hash-helper", "EIO"],
   ["failProofWrite", "executable-proof-publish", "ENOSPC"]]) test(`failed lifetime finish retains ${operation} and closes its descriptors`, async (t) => {
   const f = await fixture(t, [], true); assert.equal(f.held.size, 1); f[fault] = true;

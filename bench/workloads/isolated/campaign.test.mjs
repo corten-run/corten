@@ -18,6 +18,7 @@ import * as audit from "./test-fixtures/campaign-audit.mjs";
 import * as nativeReplay from "./native-replay.mjs";
 import { composePhase } from "./composition.mjs";
 import * as actualLifetime from "./host-lifetime.mjs";
+import { reserveCompilerTarget } from "../../client-heavy/compiler.mjs";
 import { samplingControl } from "./test-fixtures/host-lifetime-storage.mjs";
 import { ioError } from "./test-fixtures/host-durable-writer-control.mjs";
 import * as actualHost from "./host-observation.mjs";
@@ -663,6 +664,29 @@ test("live output is not transferred without proven command cleanup", async () =
   assert.equal(s.campaign.status(h).uncollectedNativeRoots.length, 1);
 });
 
+test("client-heavy compiler target: public replacement before pin is never adopted or removed", async (t) => {
+  const root = mkdtempSync(join(temporary, "pre-pin-")), target = join(root, "build.compiler");
+  const open = fs.openSync;
+  let foreign;
+  const hook = t.mock.method(fs, "openSync", (path, ...args) => {
+    if (foreign === undefined) {
+      if (existsSync(target)) renameSync(target, join(root, "displaced"));
+      mkdirSync(target); // Even an empty foreign directory must survive.
+      foreign = fs.lstatSync(target, { bigint: true }).ino;
+    }
+    return open(path, ...args);
+  });
+  syncBuiltinESMExports();
+  let reservation;
+  try {
+    assert.throws(() => { reservation = reserveCompilerTarget(target); }, /already exists|EEXIST/);
+  } finally {
+    hook.mock.restore(); syncBuiltinESMExports(); await reservation?.close(true);
+  }
+  assert.equal(fs.lstatSync(target, { bigint: true }).ino, foreign);
+  assert.deepEqual(fs.readdirSync(root), ["build.compiler"]);
+});
+
 for (const scenario of ["success", "native failure", "incomplete proof", "not drained", "substituted", "raced", "preexisting"]) test(`client-heavy compiler target: ${scenario}`, async (t) => {
   const s = setupGroup("client-heavy"), h = await begin(s);
   const target = `${join(repo, s.plan.bindings[0].validation.artifactRoot)}.compiler`;
@@ -691,7 +715,7 @@ for (const scenario of ["success", "native failure", "incomplete proof", "not dr
     assert.ok(paths.includes("00-client-heavy-timing/native/raw.log"));
     assert.ok(!paths.some((path) => path.includes("scratch") || path.includes(".compiler")));
   } else {
-    await assert.rejects(s.campaign.advance(h), scenario === "preexisting" ? /EEXIST/ : ["substituted", "raced"].includes(scenario)
+    await assert.rejects(s.campaign.advance(h), scenario === "preexisting" ? /compiler target already exists/ : ["substituted", "raced"].includes(scenario)
       ? /compiler target replaced/ : /command lifetime or cleanup unproven/);
     assert.equal(s.campaign.status(h).state, "preserved-uncertain");
   }

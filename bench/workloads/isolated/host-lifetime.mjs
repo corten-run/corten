@@ -556,8 +556,11 @@ export function inspectLifetime(binding, invocation, directory, expected) {
   assert.equal(context.group, binding.request.group); assert.equal(context.round, binding.request.round); assert.equal(context.commit, binding.request.commit);
   assert.equal(terminal.bootId, context.bootId); assert.equal(terminal.attached, true);
   assert.deepEqual(terminal.command, expected.result);
-  if (terminal.observerError === "host-executable-proof-incomplete")
-    throw new Error(executableProofFailureMessage(terminal.observerFailures?.first));
+  if (terminal.observerError === "host-executable-proof-incomplete") {
+    // Sealing is the final observer operation; a prior census fault remains
+    // independently recorded in first. Only fixed proof diagnostics are printed.
+    throw new Error(executableProofFailureMessage(terminal.observerFailures?.last));
+  }
   const ancestorPaths = [];
   for (let p = context.parent; ; p = posix.dirname(p)) { ancestorPaths.push(p); if (p === "/") break; }
   assert.deepEqual(context.ancestors.map((g) => g.path), ancestorPaths);
