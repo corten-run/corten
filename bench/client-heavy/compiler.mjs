@@ -27,7 +27,13 @@ export function reserveCompilerTarget(target) {
       assert.ok(!exists(target), "compiler target already exists");
       renameSync(staged, target); // Windows refuses to replace a directory.
     } else {
-      execFileSync("/bin/mv", ["-n", staged, parent], { stdio: "ignore", timeout: 5000 });
+      try { execFileSync("/bin/mv", ["-n", staged, parent], { stdio: "ignore", timeout: 5000 }); }
+      catch (error) {
+        // Some mv -n versions exit 1 rather than 0 on a skipped destination.
+        if (error.status === 1 && !error.code && !error.signal && exists(staged) && exists(target))
+          throw new Error("compiler target already exists", { cause: error });
+        throw error;
+      }
       assert.ok(!exists(staged), "compiler target already exists");
     }
     assert.equal(currentId(), identity, "compiler target replaced during reservation");

@@ -664,6 +664,33 @@ test("live output is not transferred without proven command cleanup", async () =
   assert.equal(s.campaign.status(h).uncollectedNativeRoots.length, 1);
 });
 
+for (const [label, status, collision] of [["collision exit 0", 0, true], ["collision exit 1", 1, true],
+  ["move failure without collision", 1, false], ["launch failure with existing target", null, true]]) {
+  test(`client-heavy compiler target: mv -n ${label}`, { skip: process.platform === "win32" }, (t) => {
+    const root = mkdtempSync(join(temporary, "mv-status-")), target = join(root, "build.compiler");
+    const failure = Object.assign(new Error("move failed"), { status, signal: null, ...(status === null ? { code: "EACCES" } : {}) });
+    let foreign;
+    const hook = t.mock.method(childProcess, "execFileSync", (file, [option, staged, parent]) => {
+      assert.equal(file, "/bin/mv"); assert.equal(option, "-n"); assert.equal(parent, root); assert.ok(existsSync(staged));
+      if (collision) {
+        mkdirSync(target); writeFileSync(join(target, "keep"), "foreign");
+        foreign = fs.lstatSync(target, { bigint: true }).ino;
+      }
+      if (status !== 0) throw failure;
+    });
+    syncBuiltinESMExports();
+    try {
+      assert.throws(() => reserveCompilerTarget(target), collision && status !== null
+        ? { message: "compiler target already exists" } : (error) => error === failure);
+    } finally { hook.mock.restore(); syncBuiltinESMExports(); }
+    assert.deepEqual(fs.readdirSync(root), collision ? ["build.compiler"] : []);
+    if (collision) {
+      assert.equal(fs.lstatSync(target, { bigint: true }).ino, foreign);
+      assert.equal(readFileSync(join(target, "keep"), "utf8"), "foreign");
+    }
+  });
+}
+
 test("client-heavy compiler target: public replacement before pin is never adopted or removed", async (t) => {
   const root = mkdtempSync(join(temporary, "pre-pin-")), target = join(root, "build.compiler");
   const open = fs.openSync;
