@@ -119,29 +119,29 @@ impl Endpoint for Giving {
 /// route.
 struct Keeping {
     shape: crate::kept::Shape,
-    /// Of a route of whole bodies: whether those it made last were too small to be kept.
-    small: Option<Arc<crate::kept::Small>>,
+    /// Of a route of whole bodies: whether any of the answers it made last was kept.
+    unkept: Option<Arc<crate::kept::Unkept>>,
     inner: Route,
 }
 
 impl Endpoint for Keeping {
     #[inline]
     fn call(&self, req: Request) -> Answering {
-        // A route whose bodies are too small to be kept is its handler's, as it was before the
-        // app kept bodies.
-        if self.small.as_ref().is_some_and(|small| small.leaves()) {
+        // A route none of whose bodies is kept (each too small, most often) is its handler's, as
+        // it was before the app kept bodies.
+        if self.unkept.as_ref().is_some_and(|route| route.leaves()) {
             return self.inner.call(req);
         }
         // Any other request (a navigation, one with a cookie, a write) is the handler's as before.
         let Some(asked) = crate::kept::Asked::of(&req, self.shape) else { return self.inner.call(req) };
         if let Some(kept) = asked.find() {
-            if let Some(small) = &self.small {
-                small.found();
+            if let Some(route) = &self.unkept {
+                route.found();
             }
             return Box::pin(std::future::ready(kept));
         }
         // In a full store a URL not asked for before is the handler's as any other request.
-        let Some(missed) = asked.missed(&req, self.small.clone()) else { return self.inner.call(req) };
+        let Some(missed) = asked.missed(&req, self.unkept.clone()) else { return self.inner.call(req) };
         let here = req.extensions().get::<crate::layout::StartHere>().cloned();
         let answer = self.inner.call(req);
         Box::pin(async move {
@@ -299,8 +299,8 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
             let handled: Route = Arc::new(Handled { handler: handler.clone(), state, types: PhantomData });
             match keeps {
                 Some(shape) => {
-                    let small = (shape == crate::kept::Shape::Body).then(Default::default);
-                    Arc::new(Keeping { shape, small, inner: handled })
+                    let unkept = (shape == crate::kept::Shape::Body).then(Default::default);
+                    Arc::new(Keeping { shape, unkept, inner: handled })
                 }
                 None => handled,
             }

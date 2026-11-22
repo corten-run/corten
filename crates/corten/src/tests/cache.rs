@@ -2663,8 +2663,8 @@ async fn a_whole_body_is_kept_from_the_size_the_app_compresses() {
 }
 
 /// A route whose bodies are all too small to keep stops asking the store after 64 in a row, and
-/// is its handler's as it was before the app kept bodies, but for one request in 256 on a
-/// thread, which asks as before: so a route whose bodies grew is found out, and kept again. A
+/// is its handler's as it was before the app kept bodies, but for about one request in 256,
+/// which asks as before: so a route whose bodies grew is found out, and kept again. A
 /// body large enough ends a run and so does one given from the store, so a route that answers
 /// both sizes keeps asking, also once its large bodies are all kept and only the small are made.
 #[cfg(feature = "compress")]
@@ -2686,8 +2686,8 @@ async fn a_route_of_small_bodies_leaves_the_store_out_until_one_is_large_enough(
     let other = |router: Router, n: usize| async move {
         fetch(&router, "GET", &format!("/body?n={n}"), &[]).await.1.contains_key(header::AGE)
     };
-    // This thread's count of requests left to their handlers starts here, whatever ran before.
-    crate::kept::Small::none_left();
+    // This thread leaves 255 requests to their handlers before one asks, whatever it drew before.
+    crate::kept::Unkept::leaves_next(255);
 
     // 63 small bodies and a large one: the run ended, and the large one is kept and given.
     for _ in 0..63 {
@@ -2721,8 +2721,8 @@ async fn a_route_of_small_bodies_leaves_the_store_out_until_one_is_large_enough(
     assert!(!other(router.clone(), 99).await && !other(router.clone(), 99).await, "the store is not asked");
     assert!(!asked(router.clone()).await, "nor is the body kept before given");
     assert_eq!(runs.count() - before, 3);
-    // Until the one request in 256 on this thread that asks: three were left above, so the
-    // 253rd from here asks, finds nothing, and its body is kept, which ends the run.
+    // Until the request this thread asks for: three were left above, so the 253rd from here
+    // asks, finds nothing, and its body is kept, which ends the run.
     for left in 3..255 {
         assert!(!other(router.clone(), 99).await, "left to the handler: request {left}");
     }
@@ -2733,6 +2733,7 @@ async fn a_route_of_small_bodies_leaves_the_store_out_until_one_is_large_enough(
     // The one that asks may find a body kept: that ends the run as well. 64 small bodies, 255
     // requests left to the handler, and the next is given the kept body, as are those after it.
     size.store(8, Ordering::Relaxed);
+    crate::kept::Unkept::leaves_next(255);
     for n in 300..364 {
         assert!(!other(router.clone(), n).await);
     }
@@ -2741,6 +2742,45 @@ async fn a_route_of_small_bodies_leaves_the_store_out_until_one_is_large_enough(
     }
     assert!(asked(router.clone()).await, "the one that asks is given the kept body");
     assert!(other(router.clone(), 50).await && asked(router.clone()).await, "and the route asks again");
+}
+
+/// An answer left out for another reason counts toward a route's run as one too small does: a
+/// route whose every body draws a form's submit key stops asking the store too, and one kept
+/// between ends that run as well.
+#[cfg(feature = "compress")]
+#[tokio::test]
+async fn a_route_none_of_whose_answers_is_kept_leaves_the_store_out_whatever_the_reason() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    const SUBMIT: crate::form::FieldName<crate::form::SubmitKey> = crate::form::FieldName::__new("submit");
+    let keyed = std::sync::Arc::new(AtomicBool::new(true));
+    let draws = keyed.clone();
+    let body = move || {
+        let keyed = draws.load(Ordering::Relaxed);
+        async move {
+            let field = if keyed { crate::form::SubmitKey::field(SUBMIT).to_html() } else { String::new() };
+            Public::new(Duration::from_secs(60), format!("{field}{}", "a".repeat(2048)))
+        }
+    };
+    let router = App::new(Routes::from(Table::new().route("/body", crate::route::get(body).0))).router();
+    let asked = |router: Router, n: usize| async move {
+        fetch(&router, "GET", &format!("/body?n={n}"), &[]).await.1.contains_key(header::AGE)
+    };
+    crate::kept::Unkept::leaves_next(255);
+    // 63 bodies with a key, each of a size the app keeps and none kept, and one without, which
+    // is: the route still asked.
+    for n in 0..63 {
+        assert!(!asked(router.clone(), n).await);
+    }
+    keyed.store(false, Ordering::Relaxed);
+    assert!(!asked(router.clone(), 100).await && asked(router.clone(), 100).await, "kept, after 63 with a key");
+    // 64 with a key in a row: the route leaves the store out, so a body it could keep is not.
+    keyed.store(true, Ordering::Relaxed);
+    for n in 200..264 {
+        assert!(!asked(router.clone(), n).await);
+    }
+    keyed.store(false, Ordering::Relaxed);
+    assert!(!asked(router.clone(), 300).await && !asked(router.clone(), 300).await, "the store is not asked");
+    assert!(!asked(router.clone(), 100).await, "nor is the body kept before given");
 }
 
 /// A kept answer in an API is the handler's part alone: what the API adds for the site that asks
@@ -2956,8 +2996,8 @@ async fn a_kept_body_is_for_the_language_its_handler_read() {
 /// What is not kept of a route that answers JSON for everyone, each of a size the app keeps: a
 /// failure, JSON the app holds as bytes (it carries its own coded forms, a mark the store does
 /// not replay), and a body with a form's new submit key in markup its handler rendered, also
-/// where the handler waited after rendering it.
-#[cfg(feature = "json")]
+/// where the handler waited after rendering it. In a build that compresses, where one is kept.
+#[cfg(all(feature = "json", feature = "compress"))]
 #[tokio::test]
 async fn a_json_answer_that_failed_or_is_one_request_s_alone_is_not_kept() {
     const SUBMIT: crate::form::FieldName<crate::form::SubmitKey> = crate::form::FieldName::__new("submit");
