@@ -160,6 +160,59 @@ static LAST_EVENT_ID: header::HeaderName = header::HeaderName::from_static("last
 /// [`crate::page::NOTICE_HEADER`], held once for the same reason.
 static NOTICE: header::HeaderName = crate::page::NOTICE_HEADER;
 
+/// The ages, in seconds, whose `Age` is written without an allocation: those of up to four
+/// digits, two hours and three quarters, which takes in a lifetime of an hour.
+const AGES: u64 = 10_000;
+
+/// Every whole number under [`AGES`] in decimal, one after another (`0123456789101112`, on to
+/// `9999`): an `Age` is a slice of it.
+static DIGITS: &str = {
+    const LENGTH: usize = 10 + 90 * 2 + 900 * 3 + 9_000 * 4;
+    static BYTES: [u8; LENGTH] = {
+        let mut bytes = [0; LENGTH];
+        let (mut at, mut number) = (0, 0);
+        while number < AGES {
+            let mut place = match number {
+                0..10 => 1,
+                10..100 => 10,
+                100..1_000 => 100,
+                _ => 1_000,
+            };
+            while place > 0 {
+                bytes[at] = b'0' + (number / place % 10) as u8;
+                at += 1;
+                place /= 10;
+            }
+            number += 1;
+        }
+        // A length that is not the digits' fails the build: too short is an index past the
+        // end above, too long is this.
+        assert!(at == LENGTH);
+        bytes
+    };
+    match std::str::from_utf8(&BYTES) {
+        Ok(digits) => digits,
+        Err(_) => panic!("digits are text"),
+    }
+};
+
+/// An `Age` of `seconds`. Under [`AGES`] it is a slice of [`DIGITS`], where a value made from the
+/// number is two allocations for every answer given again: about 900 instructions of the 39,000
+/// a kept file's request took (docs/design.md#choice-kept-pages). An older answer's is made
+/// from the number.
+fn age_value(seconds: u64) -> HeaderValue {
+    // Where the numbers of this many digits begin in `DIGITS`, and the first of them.
+    let (digits, from, first) = match seconds {
+        0..10 => (1, 0, 0),
+        10..100 => (2, 10, 10),
+        100..1_000 => (3, 190, 100),
+        1_000..AGES => (4, 2_890, 1_000),
+        _ => return HeaderValue::from(seconds),
+    };
+    let at = from + (seconds - first) as usize * digits;
+    HeaderValue::from_static(&DIGITS[at..at + digits])
+}
+
 /// A copy of a kept answer's `head`, each line where it was, with room for [`ADDED`] more
 /// names: a copy made by `clone` holds its lines in a vector as long as they are, which grows on
 /// the first name a stage adds. (A head with more than four lines beyond the first of their
@@ -607,6 +660,12 @@ pub(crate) struct Entry {
 pub(crate) struct Kept(Arc<Entry>);
 
 impl Kept {
+    /// The cache's mark of the kept answer these are the extensions of, which its handler's
+    /// answer carried as an extension of its own (`crate::cache::Typed`).
+    pub(crate) fn typed(extensions: &http::Extensions) -> Option<crate::cache::Typed> {
+        extensions.get::<Kept>().map(|Kept(entry)| entry.cache)
+    }
+
     fn of<'a>(extensions: &'a http::Extensions, body: &Bytes) -> Option<&'a Entry> {
         let Kept(entry) = extensions.get::<Kept>()?;
         (entry.body.as_ptr() == body.as_ptr() && entry.body.len() == body.len()).then_some(&**entry)
@@ -960,6 +1019,10 @@ impl<'a> Sent<'a> {
     fn read(headers: &'a HeaderMap, shape: Shape) -> Option<Self> {
         // By their names and first, since they are what most requests a page is not kept for
         // carry: a session's cookie, and the runtime's header on a navigation inside the app.
+        // Each is a lookup of about 100 instructions that the pass below could make in its
+        // stride, and is not: found there, after a browser's other headers, an `Authorization`
+        // cost its request 611 more to spare every other one that lookup
+        // (docs/design.md#choice-kept-pages).
         if crate::cache::Credentials::read(headers).personal(|| headers.contains_key(header::AUTHORIZATION))
             || headers.contains_key(crate::page::MODE_HEADER)
         {
@@ -1042,10 +1105,11 @@ impl<'a> Asked<'a> {
         let mut res = Response::new(Body::from(entry.body.clone()));
         let mut head = with_room(&entry.head);
         // So a cache after this one, the browser's too, does not start the lifetime over.
-        head.insert(header::AGE, HeaderValue::from(age));
+        head.insert(header::AGE, age_value(age));
         *res.headers_mut() = head;
+        // The cache's mark is the entry's ([`Kept::typed`]): an extension is an allocation and
+        // a place in the map, and this answer has one for the entry already.
         let extensions = res.extensions_mut();
-        extensions.insert(entry.cache);
         if let Some(style) = &entry.style {
             extensions.insert(style.clone());
         }
@@ -1219,6 +1283,20 @@ mod tests {
             route.made(false);
         }
         route
+    }
+
+    /// An `Age` reads as its number, whether it is a slice of the digits or made from the number:
+    /// every age the digits hold, and those past them.
+    #[test]
+    fn an_age_is_its_number_in_decimal() {
+        assert_eq!(DIGITS.len(), 38_890);
+        for seconds in (0..AGES).chain([AGES, AGES + 1, 86_400, 31_536_000, u64::MAX]) {
+            assert_eq!(age_value(seconds).to_str().ok(), Some(seconds.to_string().as_str()), "{seconds}");
+        }
+        // No allocation under `AGES`: the value's bytes are the digits' own.
+        let (digits, held) = (DIGITS.as_bytes().as_ptr_range(), age_value(AGES - 1));
+        assert!(digits.contains(&held.as_bytes().as_ptr()));
+        assert!(!digits.contains(&age_value(AGES).as_bytes().as_ptr()));
     }
 
     /// Of a route that left the store out, about one request in 256 asks all the same, and none

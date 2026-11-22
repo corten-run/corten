@@ -486,7 +486,7 @@ If a standalone group failed before native entry and its collector recorded the
 archive but not deletion, an unrelated group can use that same census. Its
 launch approval includes the stopped host's original ID: even a renamed or
 retagged host still present in the account prevents creation. An active cleanup
-blocks admission. This does not retire the failed group, retry it, or publish a result.
+blocks admission. This does not retire or retry the failed group, or publish a result.
 
 When retrying a group on a new host, a proved Windows PID reuse on a destroyed
 host does not make its old monitor active again. Preparation reads the original
@@ -563,6 +563,18 @@ prepared sibling. Do not move attempts to a new index or root. An ambiguous or
 active attempt is refused; leave its evidence and locks in place and use the
 existing recovery procedure. Run the report after collection to select another
 missing group.
+
+If the operator independently confirmed external deletion of a standalone host
+whose setup stopped before native entry, continue with the same commands, a
+higher round, and a different reviewed merged commit. The report shows
+`setup-failed-needs-census` when the original terminal observation, launch
+intent, nonzero setup exit and campaign-free archive are preserved and no owner
+lock remains. This is local eligibility, not a retirement receipt or a result.
+The new reservation leaves the old attempt untouched. Its approval binds the
+old host ID and evidence; immediately before create, the worker checks the
+old ID is absent from the full census in the same account (even if the host was
+renamed), and rechecks the original locks and evidence. Do not interpret prepare
+or preview as proof of provider absence.
 
 If a standalone group was prepared but never launched, use the same prepare
 command in the same continuation root with an explicitly higher round and a
@@ -693,6 +705,23 @@ observations or a running unit preserves the host. Fleet output reports
 `setup-failed-retired`; repeat collection checks the same receipt and absence,
 without another DELETE. Native-started jobs use the separate collection and
 custody paths above. No retirement path can delete a running benchmark.
+
+For failure before monitor registration, `setup-watcher-proof-missing` means
+the preserved archive already records a watcher failure. `setup-host-proof-refused`
+means the registered terminal host query had an acknowledged nonzero exit, or
+exited zero but returned unusable proof. In the latter case the ledger retains
+code zero and records the proof rejection separately. Neither is a retirement receipt. Do not repeat collection to try
+to replace the missing proof. A missing transport acknowledgement remains
+uncertain. If cancellation leaves an acknowledged exit zero without a proof
+decision, the operation lock stays in place. Do not clear the locks or fill in
+a ledger result.
+
+For operator cleanup, bind the saved reservation to the exact account and numeric
+host ID. Independently establish the identity of the host, a terminal unit with
+no queued jobs or live benchmark work, and an intact archive matching the saved
+hash before authorizing any removal. If the host is already absent, do not
+delete again. Keep the operator decision and exact-ID absence confirmation
+separate from native state; neither qualifies the group or authorizes a retry.
 
 The common-bootstrap marker precedes native entry. It is not native evidence or
 a reason to strand a terminal host whose entry failed before writing any data.
@@ -940,6 +969,9 @@ Existing locks are never taken over or cleared by recovery.
 The saved measured commit and failure evidence remain unchanged; no validation,
 successful exit or collection result is invented. Fleet inspection reports
 `native-failed-retired` or `cleanup-pending`, never a qualified baseline.
+For the destroyed r27 and r41 marketplace hosts, replay uses the original
+per-locale roster to regenerate the three custody scripts and check their saved
+hashes. That roster cannot authorize a reservation, launch or live custody check.
 
 After independent review and merge, an operator previews the exact action with:
 
