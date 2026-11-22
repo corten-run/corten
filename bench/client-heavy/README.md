@@ -119,9 +119,10 @@ optional or peer is not. An incompatible edge blocks each actual consumer,
 without imposing latest-every-transitive or hiding that consumer. The reviewed
 `@remix-run/test` 1.2.0 publishes esbuild `^0.27.1`; it uses a private 0.27.2,
 outside [the Windows dev-server advisory](https://github.com/advisories/GHSA-g7r4-m6w7-qqqr).
-Only that dependency edge may resolve the private copy, whose archive identity
-and platform dependency declarations are checked. The actual benchmark
-bundler remains the observed latest root esbuild 0.28.2. Root tooling source/lock identity
+Only that dependency edge may resolve the private copy. Replay checks both
+archives' identities and the private copy's platform dependency declarations.
+The actual benchmark bundler remains the observed latest root esbuild 0.28.2.
+Root tooling source/lock identity
 is part of candidate replay; no global or transitive parser fallback is used.
 The parser is verification tooling only and is not shipped in client bundles.
 The dependency smoke in Benchmark Evidence builds the npm clients and runs the
@@ -156,8 +157,9 @@ can leave its peers comparable; a missing attempt blocks comparisons for all.
 Every attempted journey uses a fresh context, does the same work and records
 raw timings and cleanup. An observed, closed failed sample stays in its block
 and disqualifies that cell; nothing is retried or substituted. Unsupported Solid
-keeps its row and has no samples. A native Remix pass still does not waive its
-version-policy blocker.
+keeps its row and has no samples. Native passes do not waive a candidate's
+version-policy blocker. The earlier Remix blocker remains part of its saved
+observation, not a disposition for new inputs.
 
 Replay derives per-action median, minimum and maximum from all three admitted
 samples and reports the attempted order per block alongside the ranges. With

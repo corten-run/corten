@@ -285,8 +285,12 @@ function evaluateCandidates(input) {
             need(typeof range === "string" && semver.validRange(range) !== null, `lockfile:${dependency}:invalid-${kind}-range`);
             if (resolved) {
               const version = lock.packages[resolved]?.version;
-              if (resolved === remixTestEsbuild) need(path === remixTest && kind === "dependency"
-                && pkg.version === remixTestVersion, "lockfile:unreviewed-remix-test-esbuild-consumer");
+              if (resolved === remixTestEsbuild) {
+                need(path === remixTest && kind === "dependency" && pkg.version === remixTestVersion,
+                  "lockfile:unreviewed-remix-test-esbuild-consumer");
+                const { dist } = observations["@remix-run/test"];
+                need(pkg.resolved === dist.tarball && pkg.integrity === dist.integrity, "lockfile:unreviewed-remix-test-archive");
+              }
               if (typeof version !== "string" || !semver.satisfies(version, range)) incompatible.push({ from: path, kind, package: dependency, range, resolved, version });
               pending.push(resolved);
             }

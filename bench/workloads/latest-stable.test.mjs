@@ -185,6 +185,14 @@ for (const [what, edit, error] of [
     `lockfile:unreviewed-remix-test-esbuild-${error}`);
 });
 
+for (const [what, edit] of [
+  ["absent", (p) => { delete p.resolved; delete p.integrity; }],
+  ["substituted", (p, remix) => { p.resolved = remix.resolved; p.integrity = remix.integrity; }],
+]) test(`the private esbuild consumer rejects ${what} archive identity`, () => {
+  invalid(mutateCandidate("lockfile", ({ packages }) => edit(packages["node_modules/@remix-run/test"], packages["node_modules/remix"])),
+    "lockfile:unreviewed-remix-test-archive");
+});
+
 test("production builder recomputes candidate-specific latest targets without inventing latest-all-transitives or native qualification", () => {
   const input = candidateInputs(), result = evaluateLatestStable(input);
   assert.equal(result.schema, candidateLatestStableSchema); assert.equal(result.valid, true, JSON.stringify(result.errors));
