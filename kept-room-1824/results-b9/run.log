@@ -1,0 +1,59 @@
+checked 1 requests: A twice and B the same; 6124 bytes
+je-room-off: the warm-up took about 7 s a pair; 30 pairs should take about 4 minutes
+je-room-off: pair 10 of 30 done 20:25:36
+je-room-off: pair 20 of 30 done 20:26:46
+je-room-off: pair 30 of 30 done 20:27:57
+je-room-off: done, /m/1824b/results/pairs-je-room-off.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+je-room-thp: the warm-up took about 7 s a pair; 30 pairs should take about 4 minutes
+je-room-thp: pair 10 of 30 done 20:29:16
+je-room-thp: pair 20 of 30 done 20:30:28
+je-room-thp: pair 30 of 30 done 20:31:39
+je-room-thp: done, /m/1824b/results/pairs-je-room-thp.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+je-hit-thp: the warm-up took about 7 s a pair; 40 pairs should take about 5 minutes
+je-hit-thp: pair 10 of 40 done 20:32:56
+je-hit-thp: pair 20 of 40 done 20:34:05
+je-hit-thp: pair 30 of 40 done 20:35:15
+je-hit-thp: pair 40 of 40 done 20:36:24
+je-hit-thp: done, /m/1824b/results/pairs-je-hit-thp.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+je-plain-thp: the warm-up took about 7 s a pair; 40 pairs should take about 5 minutes
+je-plain-thp: pair 10 of 40 done 20:37:40
+je-plain-thp: pair 20 of 40 done 20:38:50
+je-plain-thp: pair 30 of 40 done 20:40:00
+je-plain-thp: pair 40 of 40 done 20:41:09
+je-plain-thp: done, /m/1824b/results/pairs-je-plain-thp.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+je-room-populate: the warm-up took about 7 s a pair; 30 pairs should take about 4 minutes
+je-room-populate: pair 10 of 30 done 20:42:28
+je-room-populate: pair 20 of 30 done 20:43:39
+je-room-populate: pair 30 of 30 done 20:44:51
+je-room-populate: done, /m/1824b/results/pairs-je-room-populate.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+je-hit-populate: the warm-up took about 7 s a pair; 30 pairs should take about 4 minutes
+je-hit-populate: pair 10 of 30 done 20:46:07
+je-hit-populate: pair 20 of 30 done 20:47:17
+je-hit-populate: pair 30 of 30 done 20:48:26
+je-hit-populate: done, /m/1824b/results/pairs-je-hit-populate.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+je-plain-populate: the warm-up took about 7 s a pair; 30 pairs should take about 4 minutes
+je-plain-populate: pair 10 of 30 done 20:49:43
+je-plain-populate: pair 20 of 30 done 20:50:52
+je-plain-populate: pair 30 of 30 done 20:52:02
+je-plain-populate: done, /m/1824b/results/pairs-je-plain-populate.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+gl-room-off: the warm-up took about 7 s a pair; 20 pairs should take about 3 minutes
+gl-room-off: pair 10 of 20 done 20:53:21
+gl-room-off: pair 20 of 20 done 20:54:33
+gl-room-off: done, /m/1824b/results/pairs-gl-room-off.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+gl-room-thp: the warm-up took about 8 s a pair; 20 pairs should take about 3 minutes
+gl-room-thp: pair 10 of 20 done 20:55:56
+gl-room-thp: pair 20 of 20 done 20:57:11
+gl-room-thp: done, /m/1824b/results/pairs-gl-room-thp.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+gl-room-pad: the warm-up took about 7 s a pair; 20 pairs should take about 3 minutes
+gl-room-pad: pair 10 of 20 done 20:58:33
+gl-room-pad: pair 20 of 20 done 20:59:48
+gl-room-pad: done, /m/1824b/results/pairs-gl-room-pad.csv

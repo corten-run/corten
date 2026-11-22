@@ -1,0 +1,104 @@
+diff --git a/crates/corten/src/kept.rs b/crates/corten/src/kept.rs
+index 5c90f4aa5..f763b6094 100644
+--- a/crates/corten/src/kept.rs
++++ b/crates/corten/src/kept.rs
+@@ -338,6 +338,43 @@ fn marks_for(bound: usize) -> usize {
+     (bound / 2048).max(1).next_power_of_two()
+ }
+ 
++/// corten-run/corten#1824 measurement variant, not in the repository and not a candidate: the
++/// size of the store's chunks for kept bodies ([`Store::copy_in`]).
++#[cfg(target_os = "linux")]
++const CHUNK: usize = 2 << 20;
++
++/// corten-run/corten#1824 measurement variant, not a candidate. Makes `chunk`'s spare room
++/// resident in one call (`madvise(MADV_POPULATE_WRITE)`, Linux 5.14 and later; where that is
++/// refused, each page is written, one fault a page as before). It logs which of the two ways it
++/// took, once (`POPULATE`).
++#[cfg(target_os = "linux")]
++fn populate(chunk: &mut bytes::BytesMut) {
++    const MADV_POPULATE_WRITE: i32 = 23;
++    const PAGE: usize = 4096;
++    extern "C" {
++        fn madvise(addr: *mut std::ffi::c_void, len: usize, advice: i32) -> i32;
++    }
++    static SAID: std::sync::Once = std::sync::Once::new();
++    let spare = chunk.spare_capacity_mut();
++    let start = spare.as_mut_ptr() as usize;
++    let first = start.next_multiple_of(PAGE);
++    let end = (start + spare.len()) / PAGE * PAGE;
++    if end <= first {
++        return;
++    }
++    // SAFETY: `first..end` is within `spare`, a live allocation `chunk` owns, written only by the
++    // kernel or here, one byte a page, as uninitialized room `chunk` does not read.
++    unsafe {
++        let populated = madvise(first as *mut std::ffi::c_void, end - first, MADV_POPULATE_WRITE) == 0;
++        if !populated {
++            for page in (first..end).step_by(PAGE) {
++                (page as *mut u8).write_volatile(0);
++            }
++        }
++        SAID.call_once(|| eprintln!("POPULATE {}", if populated { "madvise" } else { "written" }));
++    }
++}
++
+ /// The app's kept answers, at most `bound` bytes of them.
+ pub(crate) struct Answers(Arc<Store>);
+ 
+@@ -361,6 +398,10 @@ struct Store {
+     marks: OnceLock<Box<[AtomicU64]>>,
+     /// How many of the marks are set.
+     marked: AtomicUsize,
++    /// corten-run/corten#1824 measurement variant: the chunk kept bodies are copied into while
++    /// the store has room, made resident when it is made ([`Store::copy_in`]).
++    #[cfg(target_os = "linux")]
++    chunk: std::sync::Mutex<bytes::BytesMut>,
+     /// The keys of its hash of a URL, the process's own, so a client cannot choose URLs that share
+     /// a place in its table.
+     keys: RandomState,
+@@ -714,6 +755,25 @@ impl Store {
+         self.bytes.load(Ordering::Relaxed) > self.bound - self.bound / SHARE
+     }
+ 
++    /// corten-run/corten#1824 measurement variant, not a candidate: a copy of `body` of its own
++    /// length, in the store's chunk while the store has room (a new chunk of [`CHUNK`] bytes,
++    /// made resident at once by [`populate`], when the last one has no room for it), so a kept
++    /// body is written into memory touched before; as main does otherwise. A chunk is given
++    /// back only when every body copied into it is dropped.
++    #[cfg(target_os = "linux")]
++    fn copy_in(&self, body: &[u8]) -> Bytes {
++        if body.len() > CHUNK / 8 || self.full() {
++            return Bytes::copy_from_slice(body);
++        }
++        let mut chunk = self.chunk.lock().unwrap_or_else(PoisonError::into_inner);
++        if chunk.capacity() - chunk.len() < body.len() {
++            *chunk = bytes::BytesMut::with_capacity(CHUNK);
++            populate(&mut chunk);
++        }
++        chunk.extend_from_slice(body);
++        chunk.split().freeze()
++    }
++
+     /// Whether the URL `at` (a path and query), asked for with `host` in any language, was asked
+     /// for before by a request no kept answer stood for, in a full store, since the marks were
+     /// last cleared; and marks it.
+@@ -797,6 +857,8 @@ impl Answers {
+                 early: AtomicU32::new(0),
+                 marks: OnceLock::new(),
+                 marked: AtomicUsize::new(0),
++                #[cfg(target_os = "linux")]
++                chunk: std::sync::Mutex::new(bytes::BytesMut::new()),
+                 keys: RandomState::new(),
+                 inner: RwLock::default(),
+             }))
+@@ -1159,6 +1221,9 @@ impl Missed {
+         // kept. Asking the allocator to shrink the buffer instead moves it under jemalloc, the
+         // template's allocator, whenever the page is in a smaller size class than its buffer,
+         // which is a copy with more work around it (`docs/design.md#choice-kept-pages`).
++        #[cfg(target_os = "linux")]
++        let body = answers.0.copy_in(&body);
++        #[cfg(not(target_os = "linux"))]
+         let body = Bytes::copy_from_slice(&body);
+         let key = Key::new(self.at.as_str(), self.host.as_ref(), sent);
+         let Missed { hash, data, asked: made, written, mut told, .. } = self;

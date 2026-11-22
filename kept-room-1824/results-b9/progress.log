@@ -1,0 +1,57 @@
+== 1824b faultcost 20:23:29
+first FAULTCOST mode=demand mib=4096 pages=1048576 ns_per_page=3491 kcycles_per_page=4685 ucycles_per_page=895 minflt_per_page=1.0000 anon_huge_kb=0
+warmed FAULTCOST mode=demand mib=13256 pages=3393536 ns_per_page=3473 kcycles_per_page=4867 ucycles_per_page=904 minflt_per_page=1.0000 anon_huge_kb=0
+round 1 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1720 kcycles_per_page=5251 ucycles_per_page=847 minflt_per_page=1.0000 anon_huge_kb=0
+round 1 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1392 kcycles_per_page=4840 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 1 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=976 kcycles_per_page=3396 ucycles_per_page=41 minflt_per_page=0.0020 anon_huge_kb=262144
+round 1 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=38 kcycles_per_page=0 ucycles_per_page=137 minflt_per_page=0.0000 anon_huge_kb=0
+round 2 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1656 kcycles_per_page=5168 ucycles_per_page=853 minflt_per_page=1.0000 anon_huge_kb=0
+round 2 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1252 kcycles_per_page=4452 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 2 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=966 kcycles_per_page=3473 ucycles_per_page=42 minflt_per_page=0.0020 anon_huge_kb=262144
+round 2 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=39 kcycles_per_page=1 ucycles_per_page=141 minflt_per_page=0.0000 anon_huge_kb=0
+round 3 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1688 kcycles_per_page=5325 ucycles_per_page=845 minflt_per_page=1.0000 anon_huge_kb=0
+round 3 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1234 kcycles_per_page=4529 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 3 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=972 kcycles_per_page=3398 ucycles_per_page=41 minflt_per_page=0.0020 anon_huge_kb=262144
+round 3 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=38 kcycles_per_page=1 ucycles_per_page=137 minflt_per_page=0.0000 anon_huge_kb=0
+round 4 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1636 kcycles_per_page=5131 ucycles_per_page=850 minflt_per_page=1.0000 anon_huge_kb=0
+round 4 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1276 kcycles_per_page=4564 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 4 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=1015 kcycles_per_page=3571 ucycles_per_page=41 minflt_per_page=0.0020 anon_huge_kb=262144
+round 4 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=39 kcycles_per_page=0 ucycles_per_page=139 minflt_per_page=0.0000 anon_huge_kb=0
+round 5 FAULTCOST mode=demand mib=256 pages=65536 ns_per_page=1701 kcycles_per_page=5244 ucycles_per_page=846 minflt_per_page=1.0000 anon_huge_kb=0
+round 5 FAULTCOST mode=populate mib=256 pages=65536 ns_per_page=1261 kcycles_per_page=4430 ucycles_per_page=0 minflt_per_page=1.0000 anon_huge_kb=0
+round 5 FAULTCOST mode=thp mib=256 pages=65536 ns_per_page=965 kcycles_per_page=3493 ucycles_per_page=43 minflt_per_page=0.0020 anon_huge_kb=262144
+round 5 FAULTCOST mode=touched mib=256 pages=65536 ns_per_page=39 kcycles_per_page=1 ucycles_per_page=126 minflt_per_page=0.0000 anon_huge_kb=0
+== 1824b check start 20:23:47
+je-room-off: checked 1 requests: A twice and B the same; 6124 bytes
+je-room-thp: checked 1 requests: A twice and B the same; 6124 bytes
+je-hit-thp: checked 1 requests: A twice and B the same; 6124 bytes
+je-plain-thp: checked 1 requests: A twice and B the same; 6124 bytes
+je-room-populate: checked 1 requests: A twice and B the same; 6124 bytes
+je-hit-populate: checked 1 requests: A twice and B the same; 6124 bytes
+je-plain-populate: checked 1 requests: A twice and B the same; 6124 bytes
+gl-room-off: checked 1 requests: A twice and B the same; 6124 bytes
+gl-room-thp: checked 1 requests: A twice and B the same; 6124 bytes
+gl-room-pad: checked 1 requests: A twice and B the same; 6124 bytes
+== 1824b checks ok 20:24:18
+== je-room-off start 20:24:18
+== je-room-off ok 20:27:57
+== je-room-thp start 20:27:57
+== je-room-thp ok 20:31:39
+== je-hit-thp start 20:31:39
+== je-hit-thp ok 20:36:24
+== je-plain-thp start 20:36:24
+== je-plain-thp ok 20:41:09
+== je-room-populate start 20:41:09
+== je-room-populate ok 20:44:51
+== je-hit-populate start 20:44:51
+== je-hit-populate ok 20:48:26
+== je-plain-populate start 20:48:26
+== je-plain-populate ok 20:52:02
+== gl-room-off start 20:52:02
+== gl-room-off ok 20:54:33
+== gl-room-thp start 20:54:33
+== gl-room-thp ok 20:57:11
+== gl-room-pad start 20:57:11
+== gl-room-pad ok 20:59:48
+failed: none
+ALL-DONE
