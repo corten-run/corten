@@ -315,7 +315,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           const expected = { id: state.control.monitor.id, binding: { round: state.round, commit: state.commit,
             token: state.token, helperSha256: state.control.helperSha256 } };
           const connect = (opts) => execute("ssh", [...opts, 'root@' + state.ip], 30000, false, undefined, undefined,
-            { stream: true, expected, local, interrupted });
+            { stream: true, expected, local, interrupted, peerLease: !!fleet?.single });
           if (state.launchHostKeySha256) await usingLaunchHostKey(connect);
           else await connect(sshOptions);
           assert.ok(monitor);
@@ -635,7 +635,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           for (const path of ["bench/workloads/droplet.mjs", "bench/workloads/cloud-contract.mjs", "bench/workloads/isolated/campaign-entry.mjs", "bench/workloads/isolated/campaign-verify.mjs", ...benchPackagePaths])
             await execute("git", ["cat-file", "-e", `${state.commit}:${path}`]);
           const existing = await list();
-          if (fleet) assertFleetCensus(existing, fleet, remainingPlacement?.region);
+          if (fleet) assertFleetCensus(existing, fleet, remainingPlacement?.region, fleet.single ? checkFleetAdmission("census") : []);
           else assert.ok(!existing.some((d) => d.name?.startsWith("corten-bench-groups-") || d.tags?.includes(tags[0])), "benchmark host already exists");
           assert.ok(!existing.some((d) => d.name === state.name || d.tags?.includes(state.tag)), "this host already exists; never adopt/relaunch");
           const account = JSON.parse((await execute("doctl", ["account", "get", "--output", "json"])).stdout);

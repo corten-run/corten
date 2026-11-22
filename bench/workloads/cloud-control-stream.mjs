@@ -90,6 +90,14 @@ export function localStreamStatus(local) {
   } finally { closeSync(fd); }
 }
 
+export function livePeerLease(local, state) {
+  const status = localStreamStatus(local), frame = status.frame, now = Date.now();
+  if (status.kind !== "progress" || frame?.kind !== "peer-lease" || frame.id !== state.control.monitor.id
+    || !Number.isSafeInteger(frame.atMs) || frame.atMs > now || now - frame.atMs >= streamLimits.leaseMs) return false;
+  monitorRegistration(local, state);
+  return true;
+}
+
 export function streamRecoveryReady(local, monitor) {
   const status = localStreamStatus(local); assert.ok(["invalid", "terminal"].includes(status.kind));
   assert.equal(status.id, monitor.id);
@@ -153,10 +161,11 @@ export function queueStreamAudit(local, state, options, approvedDeliverySha256) 
   renameSync(pending, target); syncDirectory(local);
 }
 
-export function openControlStream({ repo, argv, env, expected, local, launch = spawn, interrupted = () => false }) {
+export function openControlStream({ repo, argv, env, expected, local, launch = spawn, interrupted = () => false, peerLease = false }) {
   physical(local); assert.ok(!existsSync(join(local, "monitor-journal.jsonl")), "monitor cannot restart/adopt a stream");
   const fd = openSync(join(local, "monitor-journal.jsonl"), "wx", 0o600);
   let bytes = 0, sequence = 0, buffer = Buffer.alloc(0), registration, terminal, child, timer, file, audit, auditBytes = 0;
+  let nativeEntered = false, lastPeerLease = 0;
   let readyResolve, readyReject, doneResolve, doneReject, settled = false, closing = false, last = Date.now(), deadline = last + streamLimits.maximumMs;
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
   const done = new Promise((resolve, reject) => { doneResolve = resolve; doneReject = reject; });
@@ -208,7 +217,16 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
       if (kind === "challenge") {
         assert.match(payload.nonce, /^[a-f0-9]{32}$/); assert.ok(Number.isSafeInteger(payload.sequence) && payload.sequence > 0);
         send("renew", payload); last = Date.now();
-      } else if (kind === "progress") replaceProgress(frame);
+        // A fresh challenge from the existing stream, after native entry.
+        // This is local custody evidence, not a new remote probe or timing.
+        if (peerLease && nativeEntered && last - lastPeerLease >= streamLimits.challengeMs) {
+          append({ kind: "peer-lease", id: expected.id, atMs: last });
+          lastPeerLease = last;
+        }
+      } else if (kind === "progress") {
+        if (payload.state === "active") nativeEntered = true;
+        replaceProgress(frame);
+      }
       else if (kind === "audit-begin") {
         assert.equal(audit, undefined); assert.ok(["json-api", "mixed-production"].includes(payload.group));
         assert.match(payload.campaign, /^r[1-9]\d*-[a-f0-9]{16}$/); assert.match(payload.subjectSha256, /^[a-f0-9]{64}$/);

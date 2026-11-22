@@ -11,10 +11,9 @@ import { digest, durable, physical, regular, syncDirectory } from "./cloud-local
 import { controllerFailure, fleetCatalogResult, full, providerAccount, providerFailure, providerIdentity } from "./cloud-options.mjs";
 import { controllerPaths, productionPlan, productionSignals } from "./cloud-production.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
-import { streamRecoveryReady } from "./cloud-control-stream.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
-import { continuationIndexSha256, fleetChildOptions as childOptions, fleetRoot, present, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
-  recheckCollectedGroup, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { continuationIndexSha256, continuationPeer, fleetChildOptions as childOptions, fleetRoot, present, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
+  recheckCollectedGroup, supervisedHost, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { groupNames } from "./registry.mjs";
 
@@ -116,33 +115,11 @@ function childArgs(options, hash) {
   return [...args, "--approve-reviewed-merged-ready", hash];
 }
 
-// readGroup already validates the owned reservation and the complete terminal
-// bootstrap ledger. A running host, or a monitor registered before its seal,
-// does not authorize another allocation.
-function supervisedHost(saved, phase) {
-  const s = saved?.state, monitor = s?.control?.monitor;
-  if (s?.status !== "running" || s.deletionIntentAt || s.destroyedAt || monitor?.phase !== phase
-    || !s.control.sealed.includes("bootstrap") || s.control.ledger.filter((r) => r.request.epoch === "bootstrap").at(-1)?.code !== 0) return;
-  const at = (name) => join(saved.local, name);
-  if (present(at("monitor-invalid.json"))) return;
-  if (phase === "live") {
-    if (saved.outcome !== "busy" || present(at("monitor-terminal.json")) || present(at("monitor-local-closed.json"))) return;
-    for (const lock of [at("operation.lock"), join(saved.stateRoot, ".groups-launch.lock")])
-      if (JSON.parse(regular(lock, 1024)).pid !== process.pid) return;
-  } else {
-    if (saved.outcome !== "available" || present(join(saved.stateRoot, ".groups-launch.lock"))
-      || !present(at("monitor-terminal.json")) || !present(at("monitor-local-closed.json"))) return;
-    streamRecoveryReady(saved.local, monitor); // Validate close/binding; collection itself enforces elapsed lease.
-  }
-  const reg = JSON.parse(regular(at("monitor-registration.json"), 131072));
-  if (reg.id !== monitor.id || digest(JSON.stringify(reg)) !== monitor.registrationSha256
-    || reg.binding?.round !== s.round || reg.binding.commit !== s.commit || reg.binding.token !== s.token || reg.binding.helperSha256 !== s.control.helperSha256) return;
-  return { id: s.id, ip: s.ip, registration: monitor.registrationSha256 };
-}
-
 export function watchSupervisedHost(options, notify) {
   const fleet = readFleet(dirname(options.fleet), options.round);
-  assert.notEqual(options.group, fleet.manifest.jobs[0].group);
+  const independent = !!fleet.manifest.single;
+  if (independent) assert.equal(options.group, fleet.manifest.single.group);
+  else assert.notEqual(options.group, fleet.manifest.jobs[0].group);
   assert.equal(options.stateDir, join(fleet.root, options.group));
   assert.ok(!present(options.stateDir), "remaining group already reserved");
   const registration = join(options.stateDir, `groups-${options.round}`, "monitor-registration.json");
@@ -151,7 +128,7 @@ export function watchSupervisedHost(options, notify) {
   const timer = setInterval(() => {
     try {
       if (present(registration)) {
-        const proof = supervisedHost(readGroup(fleet, options.group), "live");
+        const proof = supervisedHost(readGroup(fleet, options.group), "live", { peer: independent });
         if (proof) { clearInterval(timer); notify(proof); }
       }
     } catch { /* Settlement still runs and must independently pass the final check. */ }
@@ -328,7 +305,10 @@ export async function fleetMain(args, deps = {}) {
   const owner = json({ pid: process.pid, group: options.group });
   const locked = options.prepare || !!options.approval;
   if (locked) { physical(root); durable(lock, owner); }
-  let uncertain = false, attemptRoot = options.root;
+  let uncertain = false, attemptRoot = options.root, ownsLock = locked;
+  const release = () => {
+    assert.equal(regular(lock, 1024).toString(), owner); unlinkSync(lock); ownsLock = false; syncDirectory(root);
+  };
   try {
     if (!locked) assert.ok(!present(lock), "continuation operation busy");
     const continuation = await inspectContinuation(root, { repo, interrupted: deps.interrupted, inspect: deps.inspect });
@@ -347,18 +327,21 @@ export async function fleetMain(args, deps = {}) {
       attemptRoot = slot.root;
     }
     const accountId = options.prepare ? options.accountId : slot.manifest.provider.accountId;
-    assert.ok([...continuation.needsCensus].every((account) => account === accountId), "unconfirmed historical cleanup requires the same provider account");
+    assert.ok([...continuation.needsCensus].every((account) => account === accountId), "continuation custody requires the same provider account");
     continuation.recheck();
-    return await runFleet({ ...options, root: attemptRoot }, deps, continuation);
+    return await runFleet({ ...options, root: attemptRoot }, deps, { ...continuation, onReady(fleet, proof) {
+      try {
+        const peer = continuationPeer(fleet).proof;
+        if (ownsLock && peer.id === proof.id && peer.ip === proof.ip && peer.registration === proof.registration) release();
+      } catch { /* No handoff without confirmed custody. Wait for the original child. */ }
+    } });
   } catch (error) {
     uncertain = error?.controlUncertain === true || error?.controlTreeUncertain === true;
     throw error;
   } finally {
     // A contained worker may leave its fleet lock even when the batch returns
     // a diagnostic status instead of throwing. Keep the continuation locked too.
-    if (locked && !uncertain && !present(join(attemptRoot, ".fleet-operation.lock"))) {
-      assert.equal(regular(lock, 1024).toString(), owner); unlinkSync(lock); syncDirectory(root);
-    }
+    if (ownsLock && !uncertain && !present(join(attemptRoot, ".fleet-operation.lock"))) release();
   }
 }
 
@@ -549,7 +532,8 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
           const done = operate(job, stopped, watch ? (proof) => {
             if (!claimHost(job.group, proof)) stopped = "prior-admission-failed";
             ready.resolve();
-          } : undefined, watch ? () => { stopped ??= "prior-admission-failed"; } : undefined).then((value) => {
+          } : continuation ? (proof) => continuation.onReady(preview.fleet, proof) : undefined,
+          watch ? () => { stopped ??= "prior-admission-failed"; } : undefined).then((value) => {
             settled[i] = { status: "fulfilled", value };
             if (!["pending", "deferred", "verified"].includes(value.outcome)) stopped ??= "prior-admission-failed";
           }, (reason) => {

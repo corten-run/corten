@@ -344,17 +344,18 @@ test("independent continuation admits a second host while the first is remotely 
     const deadline = Date.now() + 15000;
     while (!ready()) { assert.ok(Date.now() < deadline, "synthetic readiness deadline"); await delay(50); }
   };
-  const active = (group) => p.events().some((row) => row.group === group && row.boundary === "monitor-registered");
+  const active = (group) => p.events().some((row) => row.group === group && row.boundary === "remote-active");
+  const handoff = () => !fs.existsSync(path.join(p.h.base, ".continuation-operation.lock"));
   const finish = (group) => fs.writeFileSync(path.join(p.h.temp, "finish-" + group), "");
   const running = [];
   try {
     assert.equal(await prepare(first), 3);
     const approved = await approve(first);
     running.push(fleetMain(approved, p.deps));
-    await wait(() => active(first));
+    await wait(() => active(first) && handoff());
     assert.equal(await prepare(second), 3);
     running.push(fleetMain(await approve(second), p.deps));
-    await wait(() => active(second));
+    await wait(() => active(second) && handoff());
     const events = p.events();
     assert.deepEqual(events.filter((row) => row.method === "POST").map(({ group }) => group), [first, second]);
     assert.ok(!events.some((row) => row.boundary === "monitor-terminal"));

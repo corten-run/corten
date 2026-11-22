@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { registerHooks } from "node:module";
+import { dirname } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 
 let booted = false, providerFailure, controllerFailure, stopWatching;
@@ -43,17 +44,19 @@ try {
   assert.ok(approval && !preview && !options.deliverAudit && !options.r21MeasuredCheckout);
   assert.ok(options.collect || options.detach && options.group && options.fleet);
   const cancelled = new Int32Array(workerData.cancellation);
+  let remainingAdmission = false;
   if (workerData.admission) {
     assert.ok(options.detach && options.group && options.fleet);
+    const { readFleet } = await import(new URL("./fleet-verify.mjs", workerData.entry).href);
+    remainingAdmission = !readFleet(dirname(options.fleet), options.round).manifest.single;
     const { watchSupervisedHost } = await import(new URL("./fleet.mjs", workerData.entry).href);
     stopWatching = watchSupervisedHost(options, (proof) => parentPort.postMessage({ schema: "benchmark-group-fleet-worker-ready/v1", ...proof }));
   }
   // productionMain's finally confirms credential-worker settlement. Its result
   // alone is insufficient: the parent also waits for this worker's clean exit.
-  // The parent sets admission only when dispatching a remaining child from
-  // the consumed intent, after the first group's verification and deletion.
+  // The parent watches either a remaining child or an independent attempt.
   const code = await productionMain(workerData.args, {
-    interrupted: () => Atomics.load(cancelled, 0) !== 0, write: () => {}, remainingAdmission: workerData.admission === true,
+    interrupted: () => Atomics.load(cancelled, 0) !== 0, write: () => {}, remainingAdmission,
   });
   assert.ok([0, 1, 3].includes(code));
   parentPort.postMessage({ schema: "benchmark-group-fleet-worker-result/v1", code });

@@ -77,7 +77,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     const expected = JSON.parse(Buffer.from(argv.at(-1).split(" ").at(-1), "hex"));
     record({ boundary: "monitor", argv, options: { shell: options.shell, windowsHide: options.windowsHide } });
     const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
-    let sequence = 0, closed = false;
+    let sequence = 0, challenge = 0, challengedAt = 0, closed = false;
     const frame = (kind, payload) => child.stdout.write(JSON.stringify({ schema: "benchmark-control-frame/v1",
       sequence: ++sequence, id: expected.id, kind, payload }) + "\n");
     const close = (code) => { if (!closed) { closed = true; clearInterval(timer); child.emit("close", code, null); } };
@@ -89,6 +89,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
       record({ boundary: "monitor-registered" });
       frame("registered", { ...registration, ...expected, host: { ...registration.host, hostname: state().name } });
       frame("progress", { state: "active" });
+      record({ boundary: "remote-active", id: state().id });
     });
     const independent = config.mode === "independent-overlap";
     const deadline = Date.now() + (independent ? 90000 : 5000), timer = setInterval(() => {
@@ -98,6 +99,9 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
         clearInterval(timer); record({ boundary: "monitor-terminal" }); frame("terminal", { id: expected.id, nativeTerminal: true,
           campaign: `${expected.binding.round}-${expected.binding.token}`, sealSha256: "f".repeat(64) });
       } else if (Date.now() > deadline) close(255);
+      else if (independent && sequence && Date.now() - challengedAt >= 250) {
+        frame("challenge", { nonce: "a".repeat(32), sequence: ++challenge }); challengedAt = Date.now();
+      }
     }, 10);
     return child;
   };
