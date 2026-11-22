@@ -620,6 +620,12 @@ must complete within the cleanup deadline and before terminal observation starts
 fails or arrives after that boundary remains in the ledger and cannot qualify. A browser
 context closing is not that proof.
 
+JS-enabled journeys can also prove specific full-document replacements, including the
+required reset, missing-item and return navigations, without weakening same-document
+resource or framework transport checks. An eligible full-document cleanup still requires a
+settled, clean live landing through the terminal window; the dead DOM and counts are not
+invented. See [the JS replacement proof and its limits](LIFECYCLE.md#js-enabled-document-replacement).
+
 `lifecycle.mjs` correlates observed instrumentation realms with native default execution
 contexts, frame/loader commits, target discovery and page WebSocket/EventSource receipts.
 The native journal is frozen before harness context closure; the post-harness journal is
