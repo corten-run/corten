@@ -7925,21 +7925,27 @@ rules something out.
     resident memory, about 10 MB, differed by at most 124 kB either way. A kept file is held as a copy
     of its own, so bytes the app holds are held twice while the copy is kept, with each coded
     form made of them.
-    What the app's naming a change costs the requests that do not name one, under callgrind
-    (valgrind 3.24.0, rustc 1.100.0, release, the default features) with the request-cost
-    harness (`crates/corten/tests/router_cost.rs`, as (instructions at 1,200 requests less those
-    at 200) over 1,000), `05c3d412f` (this change) against main's `dc24029c4` with that commit's
-    harness, five rounds alternating the builds, given as the median and range of the five: a
-    kept page given again took 15,335.3 (15,335.3 to 15,335.5) against 15,331.1 (15,329.9 to
-    15,331.1); a new URL for each request, made and kept with room (`ROUTER_TARGET=new`, which
-    this change adds), 28,513.7 (28,512.5 to 28,514.5) against 28,517.9 (28,512.9 to 28,520.3);
-    a write with a page kept at another path 14,652.1 (14,652.1 to 14,652.2) against 14,652.8
-    (14,651.7 to 14,652.9); and a route that keeps nothing 12,629.0 (12,629.0 to 12,629.1)
-    against 12,627.0 (12,626.9 to 12,627.0). No request runs code this change adds. By function,
-    in the last round, the kept page's 4.6 more and the other route's 2.1 more are all in glibc's
-    `memcmp` itself, and no function of Corten's or the standard library's differs by half an
-    instruction a request; why `memcmp` differs was not found. What `changed` costs (a link
-    written, a path hashed, an atomic add) was not counted: it runs only when the app calls it.
+    What naming a change costs, under callgrind (valgrind 3.19.0, rustc 1.99.1, release, the
+    default features, jemalloc preloaded as an app's image runs it) with the request-cost harness
+    (`crates/corten/tests/router_cost.rs`, as (instructions at 1,200 requests less those at 200)
+    over 1,000), `beea494fd` (this change) against main's `7a275ef15` with that commit's harness,
+    three rounds alternating the builds; each case's three rounds were within 2.2 instructions,
+    and the medians are given. A write whose handler takes `KeptAnswers` and names a kept page
+    (`ROUTER_NAMED=1`) took 13,641.6 against 13,001.5 for the same write naming nothing in the same
+    build (640 more, 4.9%): the extractor and the handler's larger future (307 against 83 in the
+    handler's future, 134 more copied), the path's hash (182) and the link's allocation (68). With
+    no store (`App::kept_answers(0)`) it took 12,161.1 against 11,898.7 (262 more, 2.2%): all but
+    the hash and the link. The requests that do not name one, this change against main: a kept page
+    given again 13,575.6 against 13,544.6, a write with a page kept elsewhere 13,001.5 against
+    12,989.3, the same with no store 11,898.7 against 11,891.6, and a route that keeps nothing
+    11,502.0 against 11,498.0. By function the kept page's 31 more and the write's 12 more are in
+    the harness's own closure (it reads the answer's headers, and `HeaderMap::contains_key` is no
+    longer inlined into it), with no function of Corten's differing. Under glibc's allocator the
+    same builds count 197 more for the route that keeps nothing and 227 more for the write with no
+    store, in glibc's `_int_malloc` and `unlink_chunk`: the free lists the requests find differ with
+    what was allocated before them (the app's handle and the harness's own variables), so those are
+    not counted as this change's cost. Cycles were not measured: a kit for paired cycles on a quiet
+    host is prepared, not run.
     A body kept whatever its type and its build, with five file routes added to the catalog
     benchmark (`af70bde86`, this change's `86be6a024` with them, against `e133aae42`, main's
     `090b3048e` with them): the CSV above and a PNG of 8,000 bytes, of 1,024 bytes and of
@@ -8114,8 +8120,8 @@ rules something out.
     thread of the handler's own, which the watch does not see.
 
     Last checked: 2026-11-22 for a change the app names (`KeptAnswers::changed`), by the tests
-    beside it and, for what it costs the requests that do not name one, the request-cost
-    harness's counts under callgrind at `05c3d412f` against `dc24029c4` (above); 2026-11-22 for a body kept whatever its type and its build, `e133aae42` (main's
+    beside it and, for what it costs a write that names one and the requests that do not, the
+    request-cost harness's counts under callgrind at `beea494fd` against `7a275ef15` (above); 2026-11-22 for a body kept whatever its type and its build, `e133aae42` (main's
     `090b3048e` with five file routes in the catalog benchmark) and `af70bde86` (this change's
     `86be6a024` with them), kept under the tag `evidence/keep-any-body-1877`; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
     benchmark) and `05ead69a7` (this change's `8db0885c7` with them), kept under the tag
