@@ -7647,17 +7647,25 @@ rules something out.
     each within the margin; a kept page, each build started once, took 1.80% more with a bound of
     2.02% more (from 5.37% fewer to 5.25% more; user 2.56% more, kernel 0.92% more) on 0.19% more
     instructions (24,247 against 24,202), and the page not `Public` 1.51% more with a bound of
-    1.67% more on 0.02% more, which missed it. Those two were run again on that host with every
-    turn on a newly started build, 100 pairs each, and both met the margin: a kept page took 0.31%
-    more with a bound of 0.90% more (from 8.08% fewer to 10.63% more; user 1.06% more, kernel
-    0.47% fewer) on 0.19% more instructions (24,235 against 24,190), and the page not `Public`
-    0.54% more with a bound of 0.86% more (from 10.13% fewer to 6.34% more) on 0.01% more. So
-    the two misses, taken on one start of each build, did not recur over a hundred starts, and
-    with that rerun every case has met the margin; it does not show a gain for a kept page, whose
-    0.19% more instructions stand. A new URL's kernel cycles, where the faults are counted, fell
-    by 0.54% and 0.93% for the page and the JSON body, so the kernel's share of a page asked for
-    once remains. These runs counted neither page faults nor first-level instruction-cache misses,
-    so that no turn's counters were multiplexed.
+    1.67% more on 0.02% more, which missed it. So with one start a build four of the six cases met
+    the margin and two missed it. Those two were run again on that host with every turn on a newly
+    started build, 100 pairs each, and met it: a kept page took 0.31% more with a bound of 0.90%
+    more (from 8.08% fewer to 10.63% more; user 1.06% more, kernel 0.47% fewer) on 0.19% more
+    instructions (24,235 against 24,190), and the page not `Public` 0.54% more with a bound of
+    0.86% more (from 10.13% fewer to 6.34% more) on 0.01% more. The rerun is another protocol, not
+    a repeat, and does not clear the first run's misses. By the maintainer's decision, not as a
+    result of either run, the fresh-start run is the merge gate for these two: one start measures
+    one placement of the code in memory, which differs from build to build and deploy to deploy,
+    while a hundred starts average over placements as deployments meet them; and the page not
+    `Public`, whose code this change does not touch, missed by a like amount. Whether a long-lived
+    process of this build is slower on a kept page neither run resolves, and neither shows a gain
+    there, where 0.19% more instructions stand. With the change a new URL took 30,522 user and
+    30,180 kernel cycles at the medians, against 21,165 and 24,579 for the store off in its own
+    turns (main: 31,198 and 30,383, against 20,801 and 24,795), so what a page asked for once still
+    costs over the store off is in user cycles as well as the kernel's. The faults counted earlier
+    (1.6 a request where the store off takes none, above) make first touches of memory a likely
+    part of it, not a measured one: these runs counted neither page faults nor first-level
+    instruction-cache misses, so that no turn's counters were multiplexed.
     By simulation from these counts (`bench/catalog/sim-kept-store.mjs` at `16f2f5480`: the
     store's clock with and without the rule, 5,461 pages of 6 KiB in 32 MiB, four million
     requests of which the second two million are counted, drawn from a Zipf law over the
