@@ -7,7 +7,9 @@ do not consume or reset alerts. Readback is independent of the form response.
 An accepted marketplace POST appends exactly one row after checking the locale,
 item, email and localized target. Invalid fields, missing items and cross-site
 requests do not append. The original localized messages remain the form result.
-The hydrated Pages Router form calls a native Next API route. A plain form still posts to the SSR page.
+The hydrated Pages Router form posts to the native `/api/marketplace/{id}/alerts?locale={locale}`
+API route. A plain form still posts to the SSR page. `/api/marketplace/{id}` is read-only
+(GET and HEAD); POST to the record returns a JSON 405 regardless of form input.
 Source failures in the enhanced API return the existing 502 JSON error without
 appending an alert, including unavailable upstreams and malformed records.
 
