@@ -148,8 +148,7 @@ jobs:
   smoke:
     name: smoke (${{ matrix.group }})
     runs-on: ubuntu-24.04
-    # A passing group takes 7 to 8.5 minutes (measured, one run of the three); a hung one would
-    # hold the runner for six hours (#317).
+    # Bound each group independently so a hung check cannot hold the runner for six hours.
     timeout-minutes: 30
     strategy:
       # Every group reports, so one failure does not hide another.
@@ -158,8 +157,10 @@ jobs:
         # `parts`: the steps the group runs, each named in its step's condition (`PARTS` below), in
         # lowercase letters and hyphens, which is all the check in `browser` reads as a part.
         include:
+          - group: benchmark-checks
+            parts: npm-check
           - group: chromium-examples
-            parts: npm-check watchlist-chromium card-market seller-desk deck-builder
+            parts: watchlist-chromium card-market seller-desk deck-builder
           - group: firefox-feeds
             parts: watchlist-firefox auction-room listings-feed
           # watchlist-dev runs the image the watchlist step builds, so it stays in its group.
