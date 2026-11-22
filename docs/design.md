@@ -7934,10 +7934,10 @@ rules something out.
     (`ROUTER_NAMED=1`) took 13,641.6 against 13,001.5 for the same write naming nothing in the same
     build (640 more, 4.9%): the extractor and the handler's larger future (307 against 83 in the
     handler's future, 134 more copied), the path's hash (182) and the link's allocation (68). With
-    no store (`App::kept_answers(0)`) it took 12,161.1 against 11,898.7 (262 more, 2.2%): all but
+    no store (`App::kept_answers(0)`) it took 12,161.1 against 11,898.6 (262.5 more, 2.2%): all but
     the hash and the link. The requests that do not name one, this change against main: a kept page
     given again 13,575.6 against 13,544.6, a write with a page kept elsewhere 13,001.5 against
-    12,989.3, the same with no store 11,898.7 against 11,891.6, and a route that keeps nothing
+    12,989.3, the same with no store 11,898.6 against 11,891.6, and a route that keeps nothing
     11,502.0 against 11,498.0. By function the kept page's 31 more and the write's 12 more are in
     the harness's own closure (it reads the answer's headers, and `HeaderMap::contains_key` is no
     longer inlined into it), with no function of Corten's differing. Under glibc's allocator the
