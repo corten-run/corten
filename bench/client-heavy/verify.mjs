@@ -122,7 +122,7 @@ export async function snapshot(folder, profile = null) {
   };
   await walk("", 0);
   for (const { path, before } of pending) {
-    need(profile.oversized.accepts(path, Number(before.size), files), "oversized-blob-not-browser-executable");
+    need(profile.oversized.accepts(path, Number(before.size), files), "oversized-blob-not-tool-executable");
     await read(path, before);
   }
   return files;

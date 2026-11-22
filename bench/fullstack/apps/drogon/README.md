@@ -21,6 +21,21 @@ The request-owned trace is attached before starting the read. Fixture lookups,
 native parsing/serialization, existing POST validation and render-before-append
 ordering are unchanged. Legacy item and catalog pages are outside this change.
 
+With `PROFILE=matched`, the marketplace page, record JSON, alert readback and
+`/health/live` use the configured `HOSTS` list. It accepts comma-separated names
+or IP addresses with optional ports and defaults to `localhost,127.0.0.1,[::1]`.
+An unlisted authority gets 421. The page and JSON send strict CSP and accompanying
+response headers. Existing scripts load from the same origin, and marketplace
+links and forms still work without them. Marketplace source failures return a
+localized HTML 502 or 504 to page clients without changing JSON Problem Details.
+Liveness answers without reading the source. These settings do not apply to
+legacy item, catalog, live-stream or static routes.
+
+The Catalog Contract job invokes `tests/marketplace-matched.mjs` on its existing
+marketplace image with both sources. It uses the shared bounded qualification and
+checks that the normal browser scripts and alert form work under CSP, with
+independent HTTP readback. It does not measure load.
+
 With the native dependencies from the Dockerfile installed, run from this directory:
 
 ```sh
@@ -124,9 +139,10 @@ Context is a value passed to the native source read and applied to a new outboun
 request, not stored on either native client pool, a thread or a global current
 operation. Delayed callbacks may retain that value without borrowing the caller's
 header storage. Fixture reads still make no HTTP request; `/api/alerts` readback
-still makes no source read. Catalog, legacy routes, parsers, rendering, profiles
-and existing source deadlines are unchanged. Both `defaults` and `matched` are
-tested; Drogon currently has no profile-specific application middleware.
+still makes no source read. The tracing change leaves Catalog, legacy routes,
+parsers, rendering and existing source deadlines unchanged. Both `defaults`
+and `matched` are tested; `matched` now uses the marketplace route policy
+described above, independently of trace forwarding.
 
 CTest includes parent validation, all 256 possible tracestate bytes and delayed
 immutable capture after caller mutation/destruction. The actual HTTP driver runs
