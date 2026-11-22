@@ -694,6 +694,23 @@ observations or a running unit preserves the host. Fleet output reports
 without another DELETE. Native-started jobs use the separate collection and
 custody paths above. No retirement path can delete a running benchmark.
 
+For failure before monitor registration, `setup-watcher-proof-missing` means
+the preserved archive already records a watcher failure. `setup-host-proof-refused`
+means the registered terminal host query had an acknowledged nonzero exit, or
+exited zero but returned unusable proof. In the latter case the ledger retains
+code zero and records the proof rejection separately. Neither is a retirement receipt. Do not repeat collection to try
+to replace the missing proof. A missing transport acknowledgement remains
+uncertain. If cancellation leaves an acknowledged exit zero without a proof
+decision, the operation lock stays in place. Do not clear the locks or fill in
+a ledger result.
+
+For operator cleanup, bind the saved reservation to the exact account and numeric
+host ID. Independently establish the identity of the host, a terminal unit with
+no queued jobs or live benchmark work, and an intact archive matching the saved
+hash before authorizing any removal. If the host is already absent, do not
+delete again. Keep the operator decision and exact-ID absence confirmation
+separate from native state; neither qualifies the group or authorizes a retry.
+
 The common-bootstrap marker precedes native entry. It is not native evidence or
 a reason to strand a terminal host whose entry failed before writing any data.
 If the job writes its exit marker before publishing its first campaign state,
