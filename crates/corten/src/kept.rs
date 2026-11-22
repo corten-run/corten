@@ -196,6 +196,9 @@ thread_local! {
     /// Run by [`Entry::make_brotli`] on its thread once the page was found kept before the
     /// encoding and just before it starts: what a test makes happen while the bytes are made.
     static ENCODING: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
+    /// Run by [`Entry::make_brotli`] on its thread once the bytes are made and just before it
+    /// asks for the store's write lock: what a test sees or makes happen at that moment.
+    static LOCKING: std::cell::Cell<Option<Box<dyn FnOnce()>>> = const { std::cell::Cell::new(None) };
 }
 
 /// A copy of a kept answer's `head`, each line where it was, with room for [`ADDED`] more
@@ -795,6 +798,10 @@ impl Entry {
         // A copy of its own length, as each coding's bytes are (`Kept::coded`).
         let made = Bytes::copy_from_slice(&crate::compress::encode(Coding::Brotli, &self.body, Level::Kept));
         let size = made.len() + FORM;
+        #[cfg(test)]
+        if let Some(then) = LOCKING.take() {
+            then();
+        }
         let _inner = store.inner.write().unwrap_or_else(PoisonError::into_inner);
         if !kept() {
             return;
@@ -2423,6 +2430,39 @@ mod tests {
         assert!(page.coded.brotli.get().is_none(), "nothing put with it");
         assert_eq!(answers.bytes(), before, "nor counted");
         assert!(!page.stands(&answers.0, Instant::now()), "written since");
+    }
+
+    /// A page's brotli is made before the job asks for the store's write lock, so a writer that
+    /// holds the lock (a page kept into a full store runs the clock under it) does not hold up the
+    /// encoding, only the bytes' admission, which waits for it and puts them in once it lets go.
+    #[cfg(feature = "compress")]
+    #[test]
+    fn a_kept_answer_s_brotli_is_made_while_a_writer_holds_the_store_s_lock() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let body = a_page(0);
+        let page = answers.keep(|place| Entry { body: body.clone(), ..entry(&answers, "/a", None, 60, body.len())(place) });
+        let before = answers.bytes();
+        let writer = answers.0.inner.write().unwrap();
+        let (came, at_lock) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let job = scope.spawn(|| {
+                let store = answers.0.clone();
+                LOCKING.set(Some(Box::new(move || {
+                    let held = matches!(store.inner.try_write(), Err(std::sync::TryLockError::WouldBlock));
+                    came.send(held).unwrap();
+                })));
+                page.make_brotli();
+                LOCKING.take().is_none()
+            });
+            let held = at_lock.recv_timeout(std::time::Duration::from_secs(10)).expect("the bytes were made while the writer held the lock");
+            assert!(held, "and the lock was held when the job asked for it");
+            assert!(page.coded.brotli.get().is_none(), "and are not put in while it holds it");
+            drop(writer);
+            assert!(job.join().unwrap(), "the thread came to the lock");
+        });
+        let brotli = page.coded.brotli.get().expect("put in once the writer let go").clone();
+        assert_eq!(brotli, crate::compress::encode(Coding::Brotli, &body, Level::Kept));
+        assert_eq!(answers.bytes(), before + brotli.len() + FORM, "and counted");
     }
 
     /// A page's brotli at `Level::Kept` takes only the room the bound has left: it drops no other
