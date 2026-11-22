@@ -751,11 +751,15 @@ fn worker() -> Option<&'static Worker> {
 }
 
 #[cfg(test)]
+/// What a test has the queue do with each job ([`QUEUEING`]).
+pub(crate) type Queueing = Box<dyn FnMut(Turn) -> bool>;
+
+#[cfg(test)]
 thread_local! {
     /// Asked by [`later`] on this thread for each job before the queue is: false refuses the job
     /// as a full queue does, true gives it to the queue. What a test makes the queue do, and how
     /// it counts the jobs asked for, with no other test's jobs in the way.
-    pub(crate) static QUEUEING: std::cell::Cell<Option<Box<dyn FnMut(Turn) -> bool>>> = const { std::cell::Cell::new(None) };
+    pub(crate) static QUEUEING: std::cell::Cell<Option<Queueing>> = const { std::cell::Cell::new(None) };
 }
 
 /// Gives `job` to the thread that compresses held values, in `turn`'s queue. False when it is not
