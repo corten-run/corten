@@ -366,13 +366,21 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
   };
   const root = fleetRoot(options.root, repo);
   const placement = { repo, interrupted, catalogProvider };
+  const takeLock = (path, owner) => {
+    try { durable(path, owner); }
+    catch (error) {
+      // Only an exclusive-create refusal proves the existing lock is not ours.
+      if (error.code !== "EEXIST" && present(path)) continuation?.onAttemptLock();
+      throw error;
+    }
+    continuation?.onAttemptLock();
+  };
   if (options.prepare) {
     assert.equal(await exactSource(repo, run), options.commit, "fleet-source-mismatch");
     mkdirSync(root, { recursive: true, mode: 0o700 }); physical(root);
     assert.deepEqual(readdirSync(root), [], "fleet-root-not-empty");
     const lock = join(root, ".fleet-operation.lock"), owner = json({ pid: process.pid, action: "prepare" });
-    durable(lock, owner);
-    continuation?.onAttemptLock();
+    takeLock(lock, owner);
     let uncertain = false;
     try {
       assert.deepEqual(readdirSync(root), [".fleet-operation.lock"]);
@@ -410,8 +418,7 @@ async function runFleet(options, { repo = checkout, spawn, providerFactory, insp
   assert.ok(preview.subject.jobs.every((j) => !j.missing?.length), "fleet-integration-missing");
   await controlCheckpoint(interrupted);
   const lock = join(root, ".fleet-operation.lock"), owner = json({ pid: process.pid, approvalSha256: options.approval });
-  durable(lock, owner);
-  continuation?.onAttemptLock();
+  takeLock(lock, owner);
   let uncertain = false;
   try {
     const repeated = await fleetOperationPlan(options, { ...deps, reservedRegion: preview.subject.remainingRegion });

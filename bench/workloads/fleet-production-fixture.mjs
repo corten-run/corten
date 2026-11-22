@@ -91,15 +91,17 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
       frame("progress", { state: "active" });
       record({ boundary: "remote-active", id: state().id });
     });
-    const independent = config.mode === "independent-overlap";
-    const deadline = Date.now() + (independent ? 90000 : 5000), timer = setInterval(() => {
+    const independent = config.mode === "independent-overlap", held = independent || !!config.holdUntilGroup;
+    // A real peer keeps answering its monitor while provisioning the next
+    // group. Model that rather than letting a slow test machine expire it.
+    const deadline = Date.now() + (independent ? 90000 : held ? 30000 : 5000), timer = setInterval(() => {
       const peer = independent ? fs.existsSync(path.join(path.dirname(config.hosts), "finish-" + config.group))
         : !config.holdUntilGroup || fs.existsSync(path.join(path.dirname(config.stateDir), config.holdUntilGroup, "groups-r21/monitor-registration.json"));
       if (peer && state().control.sealed.includes("bootstrap")) {
         clearInterval(timer); record({ boundary: "monitor-terminal" }); frame("terminal", { id: expected.id, nativeTerminal: true,
           campaign: `${expected.binding.round}-${expected.binding.token}`, sealSha256: "f".repeat(64) });
       } else if (Date.now() > deadline) close(255);
-      else if (independent && sequence && Date.now() - challengedAt >= 250) {
+      else if (held && sequence && Date.now() - challengedAt >= 250) {
         frame("challenge", { nonce: "a".repeat(32), sequence: ++challenge }); challengedAt = Date.now();
       }
     }, 10);
