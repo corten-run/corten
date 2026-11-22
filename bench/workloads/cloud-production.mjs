@@ -16,7 +16,7 @@ import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
 import { continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
-  recheckContinuationPeers, recheckIndexedLaunchCustody } from "./fleet-verify.mjs";
+  recheckContinuationPeers, recheckIndexedLaunchCustody, recheckSetupSibling } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -277,7 +277,10 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       if (historicalIds.size) assert.equal(historicalHostsAbsent, true, "unconfirmed historical host not proved absent from the account census");
       const root = dirname(current.fleetRoot), { indexSha256, indexedCustody, peers } = current.subject.continuation;
       const currentPeers = recheckContinuationPeers(root, indexSha256, manifest.provider, options.group, peers);
-      if (beforeCreate === true) recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
+      if (beforeCreate === true) {
+        recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
+        for (const row of unconfirmed) if (row.root !== undefined) recheckSetupSibling(root, options.group, row);
+      }
       return currentPeers;
     }
   });
