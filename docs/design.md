@@ -7685,9 +7685,9 @@ rules something out.
     `5fbe4e9ef` and `564034b86`, and of `35c98f2bc` against `e388e070c`, counted by valgrind
     3.24.0's callgrind. 2026-11-21, a new URL in a full store left out of the table and the four
     cases beside it, rustc 1.100.0, release builds of `b1cfca825` and `564034b86` counted by
-    valgrind 3.24.0's callgrind; and with the fixture counting only refused URLs, the marks of
-    the URL that clears them kept and the counts of copies kept for every language, release
-    builds of `9d0bd5e47` and `564034b86`, the same way.
+    valgrind 3.24.0's callgrind. 2026-11-21, the fixture counting only refused URLs, the mark of
+    the URL that clears the marks kept and the counts of copies kept for every language, rustc
+    1.100.0, release builds of `9d0bd5e47` and `564034b86` counted the same way.
     2026-11-21 for a write's count, the callgrind rounds above at `fc86d8eff` and
     `6984b2ac4`, and the cycles of the same write from the two builds, built with rustc 1.100.0
     on a dedicated 8-CPU cloud host (Xeon Platinum 8358, one thread a core) with nothing else
