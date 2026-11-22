@@ -22,16 +22,23 @@
  * for a success that is not JSON, and a `TypeError` for JSON that is not `{"title", "data"}`.
  */
 export class ReadError extends Error {
+  name = "ReadError";
+  /** The answer's status, or 0 when there was none it could use. @readonly @type {number} */
+  status = 0;
+  /** Whether the answer was a redirect, which `read()` does not follow (`status` 0). @readonly @type {boolean} */
+  redirected = false;
   /** @param {string} url @param {number} status @param {unknown} [cause] @param {boolean} [redirected] */
   constructor(url, status, cause, redirected = false) {
     super(`corten: ${url} answered ${status || (redirected ? "a redirect" : "nothing it could read")}`, { cause });
-    this.name = "ReadError";
-    /** The answer's status, or 0 when there was none it could use. @readonly */
-    this.status = status;
-    /** Whether the answer was a redirect, which `read()` does not follow (`status` 0). @readonly */
-    this.redirected = redirected;
+    // Written through `ReadErrorFields`, not `this`: checked JavaScript takes a property a
+    // constructor sets first as declared, so only this way is a misspelled write an error
+    // (docs/design.md#choice-handlers-checked-where-called).
+    /** @type {ReadErrorFields} */ (this).status = status;
+    /** @type {ReadErrorFields} */ (this).redirected = redirected;
   }
 }
+
+/** The fields `ReadError`'s constructor writes, writable. @typedef {{ status: number, redirected: boolean }} ReadErrorFields */
 
 /**
  * The data of the screen at `url`, as its route's `req.screen` answers a data client
