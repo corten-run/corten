@@ -8139,7 +8139,9 @@ rules something out.
     floor that applies, and its user instructions pass a screen (the median of their paired changes
     between -0.02% and +0.02%, its one-sided 95% bound at or below +0.02%), the pull request reports
     it as "missed +1%; placement and regression not distinguished", with its user and kernel split
-    and no claim about its speed, and the miss does not block it. That accepts a residual risk on
+    and no claim about its speed, and the miss does not block it, unless the run's plan made +1%
+    decisive for it before this exception existed or other evidence corroborates a regression. That
+    accepts a residual risk on
     controls; it does not show they are unchanged, and a placement cost in the binary that ships is
     still a cost. A workload the change touches keeps +1% with no floor, however flat its
     instructions, since a change to the data a request reads, its allocation, the kernel's work or
@@ -8195,8 +8197,9 @@ rules something out.
     fails, the control gives no floor and the run holds every workload to +1%: a pad whose answers
     or instruction count moved measures more than placement, and a floor from it would waive a cost
     it cannot attribute. The recorded calibration passes checks 2 to 5 as written. It passes the
-    first only as its kit compared, which removed carriage returns and masked `Age` and `ETag`
-    values as well as `Date`: all three comparisons' answers to `/private` were identical after that
+    first only as its kit compared, which normalized the whole `curl -i` output, headers and
+    body, before comparing it (carriage returns removed, `Date` lines dropped, `Age` and `ETag`
+    values masked): all three comparisons' answers to `/private` were identical after that
     (7,098 bytes as compared, no `Age` or `ETag` present), and the bytes before it were not kept. It
     is accepted with that weaker evidence, and only for this receipt, because the two builds of main
     are one binary and each pad adds a function nothing calls, so no path that writes the answer
@@ -8313,7 +8316,7 @@ rules something out.
     a linker other than LLD, or a release profile with other LTO, codegen units or opt-level; the
     host's kernel, the allocator or its settings change (Linux 6.12.117, jemalloc 5.3.0 and its
     `MALLOC_CONF` here); the probe's workloads or main's layout change materially; a later A/A of
-    main built twice under the same protocol has a bound over +1%, so the protocol and not the
+    main built twice under the same protocol has a bound at or above +1%, so the protocol and not the
     placement fails the gate; a layout control on `plain` on another matching setup has a bound over
     the recorded floor, or a same-run one has a larger bound over +2%, which gives that run no floor;
     same-run layout controls on another workload give floors often enough to be worth recording one
