@@ -7421,13 +7421,17 @@ rules something out.
     inner answer: a private answer that could have been shared, never the other way round; the
     inner request's own answer is marked through its own signal. Measured on 2026-11-22 with
     `tests::cache::what_settling_a_page_costs` under callgrind (Last checked), instructions a
-    request before and after: a `Public` page given from the store 16,948 and 16,961 (+0.08%);
-    one made for each request (`kept_answers(0)`) 19,581 and 19,627 (+0.23%), the watch and the
-    signal the route holds; a `Public` JSON body given 16,012 and 16,019, made for each 54,343
-    and 54,320; a private page 16,800 and 16,796; a `Public` text body from an unstaged route
-    7,807 and 7,829 (+0.28%); text from an unstaged route that is not `Public` 6,446 and 6,439;
-    and a `Public` page with a keyed form, the one case that draws a key, 22,182 and 22,358
-    (+0.79%), from marking the request too. These are instruction counts, not cycles. A first
+    request before and after: a `Public` page given from the store 16,948 and 16,981 (+0.19%);
+    one made for each request (`kept_answers(0)`) 19,581 and 19,647 (+0.34%), the watch and the
+    signal the route holds; a `Public` JSON body given 16,012 and 16,045 (+0.21%), made for each
+    54,343 and 54,346; a private page 16,800 and 16,790; a `Public` text body from an unstaged
+    route 7,807 and 7,829 (+0.28%); text from an unstaged route that is not `Public` 6,446 and
+    6,439; and a `Public` page with a keyed form, the one case that draws a key, 22,182 and
+    22,471 (+1.30%), from marking the request and dropping a tag it may have been given. Before
+    `NoStore`, a tuple's refusing part and a given tag were covered, the three staged `Public`
+    cases with no key counted 16,961, 19,627 and 16,019 and the others the same: those cases
+    take none of the branches that changed, and the 13 to 26 more are not traced to a line. These
+    are instruction counts, not cycles. A first
     version, a router endpoint around the handler, cost the page made for each request 149 more
     and the private page 24, from a second copy of the answer and a second form of every route's
     call. A render that reads
@@ -7830,12 +7834,13 @@ rules something out.
     app's own answer type, which is always watched, is found on a hot path where the watch's
     cost shows, so such a type should be able to say it is never `Public`.
 
-    Last checked: 2026-11-22 for the watch for a submit key, `f4a4472a3` (this change merged
-    with main) against its merge base with main, `a0eeeacca`, each with the same
+    Last checked: 2026-11-22 for the watch for a submit key, `d3e1b4efb` (this change merged
+    with main) against its merge base with main, `361724c85`, and before that `f4a4472a3`
+    against `a0eeeacca` (whose crates are the same as `361724c85`'s), each with the same
     `tests::cache::what_settling_a_page_costs` (the function, its doc and its two unstaged routes
     as at `0ced821d8`, 4,172 bytes, SHA-256
     `a1e48f7272d3a4cce21df616f5733ce0deef6d7f471dd6e3d5e31f60b9d63870`, copied into
-    `a0eeeacca` unchanged), built with rustc 1.100.0 in
+    each base unchanged), built with rustc 1.100.0 in
     release with all features and counted under callgrind (valgrind 3.24.0, Debian's
     `libjemalloc2`), each count the difference of a run of 1,200 requests and one of 200, eight
     cases in three rounds alternating which build ran first, every round within two
