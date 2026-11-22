@@ -7633,16 +7633,16 @@ rules something out.
     where each is `public, max-age=60` to `64`. With jemalloc the five took 34,094 against
     34,091, 36,107 against 36,856, 33,710 against 34,211, 38,050 against 40,152 and 36,891
     against 37,292. The saving is `cache::settle` no longer reading the `Cache-Control` that
-    `Cache` wrote while it is still the answer's only line, known by the address of its bytes,
-    which the cache mark holds so that no other value has them (a line a middleware wrote in
-    its place or beside it is read as before; a kept answer, page or body, is given that line
-    and that mark again), 2,310 and 576 fewer in `settle` in the two cases with five policies;
+    `Cache` wrote while it is still the answer's only line, known then by the address of its
+    bytes, which the cache mark held so that no other value had them, and now by those bytes
+    being a header the thread holds (below; a line a middleware wrote in its place or beside it
+    is read as before), 2,310 and 576 fewer in `settle` in the two cases with five policies;
     and the header made once on a thread for each set of numbers while they are among the last
     four that thread made one for (a fifth puts the oldest out, whose header is made again when
     it is asked for), in place of one made for each answer. A header is made, new or again,
     with its text and the count of its references in one allocation. Made from a `Vec`, as
     main makes it, `Bytes` allocates that count beside the text, or at its first clone when
-    the text fills the `Vec` (96 bytes), so a header the thread and the mark both hold would
+    the text fills the `Vec` (96 bytes), so a header the thread and the answer both hold would
     have allocated once more than main's for each one made again. Earlier, at `4827fa33b`
     against `564034b86` with one set of numbers, the skip was 669 of the `Public` page's
     1,161 fewer and the held header 380.
@@ -7679,7 +7679,7 @@ rules something out.
     references costs (the miss made four more than main's answer), and nothing here explains
     the kernel's 4.16%. An unstaged route's answer now has its header made as main makes it, and
     held by nothing (`a5577a2eb`): while a thread runs an unstaged route's handler
-    (`route::Lane`), `Cache` makes it from a `Vec` and the mark holds none of its bytes; a
+    (`route::Lane`), `Cache` makes it from a `Vec` and the mark held none of its bytes; a
     request the handler has an app's router answer meanwhile is settled by reading its header,
     as one written by hand is. Counted the same way, `a5577a2eb` against `a0eeeacca`: the
     unstaged route with five policies took 13,490 instructions against 13,538 and with one
@@ -7732,6 +7732,46 @@ rules something out.
     read the page for one visitor, its control, 0.54% more, bound 0.86%, on 0.01% more
     instructions; that does not pass the page here. The run makes this Choice's condition to
     revisit for it true, and the Choice is reopened in this change.
+    Under callgrind as above (rustc 1.99.1, the mean of four starts that each moved the stack),
+    `7dd30d739` against `a0eeeacca`, and `a0eeeacca` built under another name as a control for
+    layout alone: on the page for one visitor the one function whose instructions changed was
+    `settle`, 72 against 60 (it looked for the cache mark before the header, to compare the
+    line with the bytes the mark held), and every other function ran main's count; the
+    simulated instruction-cache misses were 1,676 against 1,658 and the indirect branches
+    mispredicted 69.3 against 66.8, where the control read 1,655 and 73.0 on 13 more
+    instructions of its own. On the unstaged route with five policies `7dd30d739` ran 22 fewer
+    instructions than main: main's header in `Cache::made` with `ascii::digits` no longer
+    inlined into it (474 against 551, and 41 fewer in `memcpy`), `Cache::typed` (36) and 18 more
+    in `Cache::apply`, a mark 40 bytes larger to insert and drop (23) and the guard (3), with 27
+    more instruction-cache misses where the control had 21 fewer. So neither
+    answer's added work is near what the run found: 12 instructions are 0.03% of the page's,
+    whose cycles rose 0.92%, nearly all in user cycles, and the unstaged route took more cycles
+    on fewer instructions. These counts do not say what the two builds' layouts cost in cycles.
+    The change now leaves both answers running main's code (`050ac7ee3`, `f5dd113d4`): `settle`
+    knows a line it need not read by its bytes being a header the thread holds, which the line
+    and the thread each hold so no other value has their address, and looks for the cache mark
+    where main does, after the header; the mark is main's again; and `ascii::digits` is inlined
+    into main's header again (`inline(always)`), `Cache::value`, which chooses between the held
+    header and main's, into its callers. A line a middleware wrote, one beside another, and one
+    whose header the thread has put out, or that a kept answer carries to a thread that does not
+    hold it, are read as main reads them, and so is `Cache::immutable`'s, which `7dd30d739`
+    did not read. Counted the same way, `f5dd113d4` against `a0eeeacca`, the median and range of
+    three rounds in turned order: the page for one visitor 40,191.2 instructions against
+    40,190.1, every function's count main's but 2 in `memcpy`, with 1,641.6 instruction-cache
+    misses against 1,658.6 and 73.3 indirect branches mispredicted against 66.8; the unstaged
+    route with five policies 13,533.6 against 13,534.3 and with one 13,528.5 against 13,528.6,
+    every function's count main's but the guard's 3 in `route::laned`, 1,012.6 and 1,012.8
+    instruction-cache misses against 1,016.2 and 1,016.1, and 60.3 and 60.9 data reads missed
+    against 41.4, where the control moved them by 17; the `Public` page in an app that keeps
+    none 42,284.6 against 43,351.4 (1,067 fewer, 2.46%), a kept page 24,153.7 against 24,882.5
+    (729 fewer, 2.93%), the page with five policies behind a middleware 43,995.5 against
+    46,367.8 (2,372 fewer, 5.12%) and with one 43,357.2 against 46,357.4 (3,000 fewer, 6.47%),
+    each more than `7dd30d739`'s 915, 599, 2,179 and 2,833, with no mark to clone and drop; every
+    round within 26 instructions of the others of its build. A third quiet-host run is declared
+    before it runs, as the second: this change's code as of `672f4db5a` against `a0eeeacca`,
+    the same six answers, every turn on a freshly started build, 100 pairs, passing when the
+    one-sided 95% upper bound of the paired change in user plus kernel cycles a request is
+    under +1% for every one of the six; until it passes, this change does not merge.
     Set aside, counted the same way on the unstaged route with
     five policies and with one, each against main: a thread that stops looking in its four
     after eight misses in a row, but for one call in 64, 10 more instructions and 517 fewer, with
@@ -7740,7 +7780,9 @@ rules something out.
     held, 541 and 549 fewer, the five then never missing, which only moves the miss to a ninth
     set of numbers; and no mark on an unstaged answer, 316 and 315 fewer, which would send a
     staged request answered inside such a handler out without the mark that makes it private
-    to a request with credentials.
+    to a request with credentials; and the cache mark holding the header's bytes (`7dd30d739`,
+    above), which made `settle` look for the mark before the header on every answer and an
+    unstaged answer's mark larger.
     A kept body, with the catalog benchmark's JSON route marked `Public` for a minute and two
     routes beside it that make nothing, of 2 bytes and of 2,000 (`69c8fb1bf` with this
     change's code against `c26cbdb5a` on main's `564034b86`), counted under callgrind with a
@@ -7839,8 +7881,9 @@ rules something out.
     more from one start to the next; a miss kept with room in memory the store has used
     before (room made by a write or by a page's lifetime ending), in cycles; a store read
     from more
-    than one core; why the page for one visitor and the unstaged route with five policies took
-    more cycles in the run declared above on about as many or fewer instructions,
+    than one core; what a change of the binary's layout alone costs these answers in cycles on
+    that host (main's source built under another name was counted only under callgrind), so
+    whether the second run's 0.92% and 0.67% were the work the change added,
     and how often a thread's staged answers go
     through more than four sets of numbers, whose headers it makes again (both rotating
     workloads counted above averaged fewer a request than main's); and the
@@ -7888,13 +7931,18 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; an app
     is found finishing work again and again on the `Signal` of a write from before its first
     answer that may be kept, which empties its store each time, so such a write should keep
-    its path to count by; the quiet-host run declared above finds the one-sided 95% bound at +1%
-    or more for any of its six answers; or an app
+    its path to count by; the third quiet-host run declared above finds the one-sided 95% bound
+    at +1% or more for any of its six answers; a measured app's thread goes through more than
+    four sets of numbers often enough that its `Public` answers' headers are read again; or an app
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-22, the run declared above, `7dd30d739` against `a0eeeacca`, every
-    turn on a freshly started build, on a DigitalOcean c-8 (sfo3); 2026-11-22, a `Public` mark
+    Last checked: 2026-11-22, under callgrind with cache and branch simulation (valgrind
+    3.19.0, rustc 1.99.1) `7dd30d739`, `a0eeeacca` built under another name, `050ac7ee3` and
+    `f5dd113d4` against `a0eeeacca`, each count the mean of four starts at (2,200 requests less
+    200) over 2,000, three rounds in turned order for `f5dd113d4`; 2026-11-22, the second run
+    declared above, `7dd30d739` against `a0eeeacca`, every turn on a freshly started build, on
+    a DigitalOcean c-8 (sfo3); 2026-11-22, a `Public` mark
     in cycles, `699f6436f` against `e7e89add8` on a
     quiet cloud host with eight dedicated CPUs (Xeon Platinum 8280, Linux 6.12.117, `wrk` 4.1.0,
     rustc 1.100.0), 100 pairs of 3 s turns, and under callgrind with cache and branch simulation
