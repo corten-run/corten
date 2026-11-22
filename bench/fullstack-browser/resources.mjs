@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { readRetiredDOM } from "./retired.mjs";
+import { replacedRealm } from "./lifecycle.mjs";
 
 // Installed before native scripts. It observes browser primitives, never removes
 // a native listener, clears a native timer, or supplies framework cleanup.
@@ -210,8 +211,7 @@ export class ResourceAudit {
   }
   retired(before, after) {
     if (!before?.scope || before.scope === after.scope) return null;
-    if (before.realm !== after.realm) return { scope: before.scope, owned: null, basis: "Native document realm replaced", probeAvailable: false,
-      reason: "A destroyed realm cannot supply a fresh retired-DOM observation; no zero counts or successful event probe are invented" };
+    if (before.realm !== after.realm) return replacedRealm(before, after);
     const found = after.scopes.find((s) => s.scope === before.scope);
     return { scope: before.scope, owned: found?.owned ?? null, connected: found?.connected ?? null, basis: "Document-start native primitive ledger", probeAvailable: Boolean(found) };
   }
