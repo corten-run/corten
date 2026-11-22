@@ -213,7 +213,10 @@ rules something out.
    class declares its fields, so a misspelled write is
    flagged only when `this` is retyped to a typedef that repeats the fields (`@this` on a method, a
    cast in the constructor), and a read of the misspelled name only when a method other than the
-   constructor set it and `undefined` is not accepted; TypeScript 5.8 added `erasableSyntaxOnly`.
+   constructor set it and `undefined` is not accepted, and a field declared with no value that the
+   constructor writes only through such a typedef is refused under `strict` by 7.0.2 (TS2564) and
+   accepted in JavaScript by 6.0.3, so it is declared with a first value; TypeScript 5.8 added
+   `erasableSyntaxOnly`.
    TypeScript 7.0.2 exports no stable parsing entry point: its root exports only `version` and
    `versionMajorMinor`, and its parser and AST entry points are all under `typescript/unstable/`.
    The repository's AST checks import `typescript/unstable/sync`, `typescript/unstable/fs` and
@@ -224,10 +227,14 @@ rules something out.
    `bench/fullstack-browser` and `bench/workloads` have their own package, `bench/package.json`,
    pinned exactly to TypeScript 6.0.3, the newest release with that API);
    reasoned (with the check at the call, no declarations sit between markup and script to go stale;
-   component behavior is exported functions, not classes; the runtime's one hand-written class,
-   `<corten-live>`, sets only the fields it declares, and the classes it generates, one per view
-   (the macro writes them) and one per typed event (`assets.rs` writes them), are typed by the
-   declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
+   component behavior is exported functions, not classes; the runtime has two hand-written
+   classes, `<corten-live>` (its fields `source` and `applied`) and `corten/read`'s `ReadError`
+   (`status` and `redirected`, and the `name` it inherits), and each declares its fields and
+   writes them only through a typedef of them (`LiveFields`, `ReadErrorFields`), so `tsc` refuses
+   a misspelled write in either, and `scripts/escapes.mjs` lists the two and fails when the
+   runtime, kit, template or example scripts gain a class or lose one; the classes it
+   generates, one per view (the macro writes them) and one per typed event (`assets.rs` writes
+   them), are typed by the declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
    was read, and none's value is used as a type it is not; the unstable parser API lets
    `scripts/escapes.mjs` inspect JSDoc and `scripts/events.mjs` compare the compiler's DOM event
    maps with `crates/corten-macros/src/dom.rs` without a separate parser dependency.
@@ -251,10 +258,11 @@ rules something out.
    JavaScript gains type syntax of its own (TC39's type annotations proposal), which a script
    could carry in place of JSDoc; or a script needs a check `checkJs` cannot give with a JSDoc type
    (an object built up a property at a time that cannot be written as a literal or a typed value);
-   or a component or the runtime has a hand-written class, or a function called with `new`, that
-   sets properties it does not declare, or a function that reads `arguments`; or TypeScript stops
-   reading a JSDoc form the scripts use (7.0 dropped several, among them `@enum`, `@class`, Closure
-   function types, a bare `?` or postfix `!`, and a value written where a type belongs, none of
+   or a component or the runtime has a hand-written class beyond the two that
+   `scripts/escapes.mjs` lists, or one of those writes a field other than through its typedef, or a
+   function called with `new` sets properties it does not declare, or a function reads
+   `arguments`; or TypeScript stops reading a JSDoc form the scripts use (7.0 dropped several,
+   among them `@enum`, `@class`, Closure function types, a bare `?` or postfix `!`, and a value written where a type belongs, none of
    which they use); or a TypeScript release changes what the probes behind the measured premise
    show; or TypeScript ships a stable parsing API for these AST checks; or a TypeScript 7.x
    update changes the unstable sync, filesystem or AST APIs they use; or benchmark tooling moves
@@ -350,7 +358,16 @@ rules something out.
    their closures, free names, form handler discovery and URL resolution), and the 12,526 calls
    the browser evidence tests made to the extractor's exported functions. Of those calls' inputs,
    2,593 were seen under both compilers, all with the same output. Another 338 per run carry
-   per-run random values, so they never recur across runs and were not compared.
+   per-run random values, so they never recur across runs and were not compared;
+   2026-11-22, at `06d7a766a` and the change, with TypeScript 6.0.3 and 7.0.2 on `jsconfig.json`:
+   the scripts it checks, searched for a class with 7.0.2's parser (`scripts/escapes.mjs`), have
+   `<corten-live>` and `ReadError`, besides the typing fixture's two and the declarations of
+   generated classes. As written there, a misspelled `status` in `ReadError`'s constructor
+   failed only at the fixture's typed read of it (TS2551), and a misspelled `redirected`, or
+   either of `<corten-live>`'s two writes misspelled, passed on both. Written through a typedef,
+   each of the four misspellings is refused at the write (TS2551) on both, a misspelled field
+   declaration at each cast (TS2352), and a plain `this.` write is still accepted. 7.0.2 refused
+   the fields declared with no value (TS2564), 6.0.3 accepted them.
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in
@@ -5511,7 +5528,7 @@ rules something out.
     that imports it, each page's import map names it
     (`,"corten/read":"/assets/<version>/scripts/corten-read.js"`, 60 bytes, 4 to 9 once the page
     is compressed), and the pages whose scripts import it preload it (a 77-byte
-    `<link rel="modulepreload">`). The module is 749 bytes, 486 with gzip and 409 with brotli,
+    `<link rel="modulepreload">`). The module is 772 bytes, 494 with gzip and 415 with brotli,
     which the users of an app that reads download once a release. The server's work is
     unchanged: a `req.screen` page costs 37,950 instructions a request as HTML and 41,211 as a
     data client's JSON on `dea1788d2` and on `4eb3d62d1`, within 0.2 of each other in every run
@@ -5539,7 +5556,8 @@ rules something out.
     at level 6 and brotli at quality 11, on `dea1788d2` and `4eb3d62d1`, once each, and the
     module's again on `c74c4fa83`, once it cancels a refused answer's body, gives a malformed
     success a `cause` and lets an abort win over a failed answer, 666, 438 and 367, and on
-    `7664551c8`, once it tells a redirect apart (`redirected`), 749, 486 and 409; a
+    `7664551c8`, once it tells a redirect apart (`redirected`), 749, 486 and 409, and on
+    `06d7a766a` and the change, once `ReadError` declares its fields, 772, 494 and 415; a
     `req.screen` page's instructions a request under callgrind, 1,200 requests through the
     router in process less 200, over 1,000, in both modes, three alternated runs of each build,
     release, in `rust:1-bookworm`: HTML 37,949.68 to 37,949.73 on `dea1788d2` and 37,949.64 to
@@ -5587,7 +5605,9 @@ rules something out.
     `7664551c8`, the read checks in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2
     (Playwright 1.64.1); 2026-11-16, the hand mount's check when the crate compiles
     (`Route::Data` and `DataMatches`, its `compile_fail` doctests and message test) on
-    `f109794c6`.
+    `f109794c6`; 2026-11-22, the module's size and the smoke's read checks on `06d7a766a` and the
+    change, once `ReadError` declares its fields, the read checks in Chromium 159.0.8154.6, Firefox
+    159.0 and WebKit 27.2 (Playwright 1.65.1).
 
 56. <a id="choice-network-only-preload"></a>**The generated service worker answers a navigation
     under a `network_only` prefix with the request navigation preload already sent, rather than

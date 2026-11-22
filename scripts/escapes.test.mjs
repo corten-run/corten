@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { problems } from "./escapes.mjs";
+import { classes, problems, unlisted } from "./escapes.mjs";
 import { parseFiles } from "./typescript.mjs";
 
 test("a batched parse isolates files with the same basename and preserves declaration/JSDoc types", () => {
@@ -61,4 +61,16 @@ test("a comment that turns the checker off is found, and the same words elsewher
   // Prose that names one is not one.
   assert.equal(js("// A fixture marks the line with @ts-expect-error.\nconst a = 1;"), 0);
   assert.equal(js('const a = "// @ts-ignore";\nconst r = /\\/\\/ @ts-ignore/;'), 0);
+});
+
+test("a class is found declared, as an expression and nested, named or anonymous, and a function is not one", () => {
+  assert.deepEqual(classes("a.js", "export class A extends Error {}"), ["a.js: A"]);
+  assert.deepEqual(classes("a.js", 'customElements.define("x-y", class extends HTMLElement {});'), ["a.js: anonymous"]);
+  assert.deepEqual(classes("a.js", "const B = class Named {};\nfunction f() { return class { m() { return new (class C {})(); } }; }"), ["a.js: Named", "a.js: anonymous", "a.js: C"]);
+  assert.deepEqual(classes("a.js", "/** A class of rows. */\nfunction Row() {}\nconst klass = 1; // class Fake {}\nconst s = \"class D {}\";"), []);
+});
+
+test("the classes found are held to the list, counting repeats", () => {
+  assert.deepEqual(unlisted(["a.js: A", "b.js: anonymous"], ["b.js: anonymous", "a.js: A"]), { added: [], gone: [] });
+  assert.deepEqual(unlisted(["a.js: A", "a.js: anonymous", "a.js: anonymous"], ["a.js: anonymous", "a.js: B"]), { added: ["a.js: A", "a.js: anonymous"], gone: ["a.js: B"] });
 });
