@@ -264,6 +264,68 @@ function continuationFixture(t) {
   return { ...p, group, old, next, manifest, index, prepare, preview, detach, history };
 }
 
+test("continuation refuses a live staged remaining owner before it writes its intent", async (t) => {
+  const p = continuationFixture(t), staged = fixture(t);
+  const remaining = await staged.remaining(), lock = join(staged.h.base, ".fleet-operation.lock");
+  const launch = JSON.parse(readFileSync(join(staged.h.base, "launch-intent.json")));
+  writeFileSync(p.index, JSON.stringify([{ root: staged.h.base, checkout: staged.h.repo, round: "r21", commit,
+    archives: { [groupNames[0]]: staged.first.state.archiveSha256 } }]));
+  assert.equal(await p.prepare("r21"), 3);
+  const approval = await p.preview("r21");
+  // Same live PID, different actions. The first-only action really is spent:
+  // its only planned child was deleted and every other child was deferred.
+  writeFileSync(lock, JSON.stringify({ pid: process.pid, approvalSha256: launch.approvalSha256 }));
+  assert.equal(await p.preview("r21"), approval);
+  // Barrier: the remaining action holds the lock but has not written its intent.
+  writeFileSync(lock, JSON.stringify({ pid: process.pid, approvalSha256: remaining.at(-1) }));
+  assert.ok(!existsSync(join(staged.h.base, "remaining-intent.json")));
+  await assert.rejects(p.detach("r21", approval), /active batch/);
+  assert.ok(!existsSync(join(p.old, "launch-intent.json")));
+  assert.deepEqual(p.children, []);
+
+  // Now consume the remaining intent through the synthetic runner. Simulate a
+  // retained lock with one bound sibling and other planned siblings missing.
+  unlinkSync(lock);
+  staged.flags.child = async () => 2;
+  assert.equal(await fleetMain(remaining, staged.deps), 2);
+  const sibling = staged.seed(groupNames[1]), pid = 123;
+  writeFileSync(lock, JSON.stringify({ pid, approvalSha256: remaining.at(-1) }));
+  let ownerGone = false;
+  const kill = process.kill;
+  t.mock.method(process, "kill", (target, signal) => {
+    if (target !== pid || signal !== 0) return kill(target, signal);
+    if (ownerGone) throw Object.assign(new Error("synthetic original owner gone"), { code: "ESRCH" });
+    return true;
+  });
+  await assert.rejects(p.preview("r21"), /active batch/);
+  ownerGone = true;
+  const updated = await p.preview("r21");
+  assert.notEqual(updated, approval);
+  assert.equal(p.output.at(-1).subject.continuation.unconfirmed[0].id, sibling.id);
+  p.flags.placement = () => { ownerGone = false; return syntheticPlacement(); };
+  await assert.rejects(p.detach("r21", updated), /source lock changed/);
+  assert.ok(!existsSync(join(p.old, "launch-intent.json")));
+  assert.deepEqual(p.children, []);
+});
+
+test("continuation archive pins cannot establish missing or in-flight historical custody", async (t) => {
+  for (const status of ["missing", "reserved", "creating", "preparing", "starting"]) await t.test(status, async (t) => {
+    const p = continuationFixture(t), retained = fixture(t), [catalog] = groupNames;
+    retained.seedLegacy();
+    if (status !== "missing") retained.seed(catalog, (state) => {
+      Object.assign(state, { status, bootstrapReady: undefined });
+      if (status === "reserved" || status === "creating") { delete state.id; delete state.ip; }
+      if (status === "reserved") delete state.createIntentAt;
+    });
+    writeFileSync(p.index, JSON.stringify([{ root: retained.h.base, checkout: retained.h.repo, round: "r21", commit,
+      archives: { [catalog]: "a".repeat(64) } }]));
+    await assert.rejects(p.prepare("r21"), /unresolved custody/);
+    assert.deepEqual(p.catalogCalls, []);
+    assert.deepEqual(p.children, []);
+    assert.ok(!existsSync(p.old));
+  });
+});
+
 test("a pristine continuation prepare appends a different measured commit without dispatch or changing the verified catalog", async (t) => {
   const p = continuationFixture(t), retained = fixture(t), catalog = "catalog-page";
   retained.seedLegacy();
