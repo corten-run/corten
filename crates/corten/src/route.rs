@@ -3911,7 +3911,10 @@ pub(crate) fn read_path<T: serde::de::DeserializeOwned>(parts: &http::request::P
 }
 
 impl crate::response::IntoResponse for ParamsRejection {
-    const MAY_SHARE: crate::answer::sealed::MayShare = crate::answer::sealed::MayShare::NO;
+    #[inline]
+    fn may_share() -> crate::answer::sealed::MayShare {
+        crate::answer::sealed::MayShare::NO
+    }
 
     fn into_response(self) -> crate::response::Response {
         *self.0
@@ -4669,9 +4672,9 @@ fn unshared(headers: &mut http::HeaderMap, no_store: http::HeaderValue) {
     }
 }
 
-/// An unstaged route's handler whose answer may be `Public`
-/// ([`crate::response::IntoResponse::MAY_SHARE`]: a `Public` answer, or a type of the app's own,
-/// which may hold one), watched for a form's new submit key in its polls as a staged one is
+/// An unstaged route's handler whose answer may be `Public` (`IntoResponse::may_share`: a
+/// `Public` answer, or a type of the app's own, which may hold one), watched for a form's new
+/// submit key in its polls as a staged one is
 /// (`answer::Made`). No stage settles an unstaged answer's caching, so one whose handler drew a
 /// key is made private here: `private, no-cache` (`private, no-store` where it names `no-store`),
 /// with no caching header a CDN reads first and no tag. Chosen by the answer's type when the route is made,
@@ -4851,8 +4854,8 @@ pub mod __private {
         S: Clone + Send + Sync + 'static,
     {
         let handler = handler.into_handler();
-        // A constant of the answer's type.
-        if <<H as crate::answer::Signature<T>>::Out as crate::response::IntoResponse>::MAY_SHARE.0 {
+        // Known from the answer's type, folded in a release build.
+        if <<H as crate::answer::Signature<T>>::Out as crate::response::IntoResponse>::may_share().0 {
             UnstagedMethods(crate::router::get(super::Watched(handler)))
         } else {
             UnstagedMethods(crate::router::get(handler))

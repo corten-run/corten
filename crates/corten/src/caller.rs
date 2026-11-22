@@ -595,7 +595,10 @@ impl<S: Send + Sync, T: Identify<S>> FromRequestParts<S> for Caller<T> {
 /// [`Caller`]'s refusal is: the error page for a browser (a sign-in is a redirect), JSON for an
 /// API or a data client, with `WWW-Authenticate` on a 401 and `Retry-After` on a 429.
 impl IntoResponse for Refused {
-    const MAY_SHARE: crate::answer::sealed::MayShare = crate::answer::sealed::MayShare::NO;
+    #[inline]
+    fn may_share() -> crate::answer::sealed::MayShare {
+        crate::answer::sealed::MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         match self.0 {

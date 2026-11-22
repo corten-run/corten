@@ -736,8 +736,8 @@ pub(crate) mod sealed {
     /// say yes.
     pub struct Whole(pub(crate) bool);
 
-    /// What [`crate::response::IntoResponse::MAY_SHARE`] says. Only Corten can name it, so only
-    /// Corten's own types say no.
+    /// What `IntoResponse::may_share` says. Only Corten can name it, so only Corten's own types
+    /// say no.
     pub struct MayShare(pub(crate) bool);
 
     impl MayShare {
@@ -904,7 +904,10 @@ impl<For: SetsCookies, Kind> HtmlResponse<For, Kind> {
 }
 
 impl<For, Kind> IntoResponse for HtmlResponse<For, Kind> {
-    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         self.0
@@ -1252,7 +1255,10 @@ impl From<Relay> for JsonResponse {
 
 #[cfg(feature = "json")]
 impl IntoResponse for JsonResponse {
-    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         self.0
@@ -1389,7 +1395,10 @@ impl From<crate::Errors> for JsonError {
 
 #[cfg(feature = "json")]
 impl IntoResponse for JsonError {
-    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         match self {
@@ -1524,7 +1533,10 @@ impl Relay {
 }
 
 impl IntoResponse for Relay {
-    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         self.0
@@ -1809,7 +1821,10 @@ impl std::fmt::Display for StreamFailed {
 impl std::error::Error for StreamFailed {}
 
 impl IntoResponse for Media {
-    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         self.0
@@ -1926,7 +1941,10 @@ impl<For> From<Relay> for PageOr<Relay, For> {
 }
 
 impl<A: FileAnswer, For> IntoResponse for PageOr<A, For> {
-    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         match self {
@@ -1980,7 +1998,10 @@ pub(crate) struct Relayed {
 pub struct LiveResponse(pub(crate) Response);
 
 impl IntoResponse for LiveResponse {
-    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         self.0
@@ -2005,7 +2026,10 @@ impl<T> Answer for corten_feed::FeedResponse<T> {
 
 #[cfg(feature = "feed")]
 impl<T> IntoResponse for corten_feed::FeedResponse<T> {
-    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         self.into_http().map(Body::new)
@@ -2366,7 +2390,10 @@ const fn shared_header(name: &str) -> bool {
 }
 
 impl<A: Shareable> IntoResponse for Public<A> {
-    const MAY_SHARE: sealed::MayShare = sealed::MayShare(true);
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        sealed::MayShare(true)
+    }
 
     fn into_response(self) -> Response {
         let mut res = self.answer.into_response();
@@ -2415,7 +2442,10 @@ impl<A> NoStore<A> {
 impl<A: IntoResponse> IntoResponse for NoStore<A> {
     // What it holds may be `Public` (on an unstaged route, or on one branch of a type of the
     // app's own), with a CDN's caching header `no-store` does not replace: watched as that one is.
-    const MAY_SHARE: sealed::MayShare = A::MAY_SHARE;
+    #[inline]
+    fn may_share() -> sealed::MayShare {
+        A::may_share()
+    }
 
     fn into_response(self) -> Response {
         let mut res = self.0.into_response();
@@ -2740,8 +2770,8 @@ fn mark<O: Answer>(res: &mut Response) {
 
 pin_project_lite::pin_project! {
     /// A route's answer as its handler makes it, [`mark`]ed. One that may be `Public`
-    /// ([`IntoResponse::MAY_SHARE`]: a `Public` answer, or a type of the app's own, which may hold
-    /// one; a constant of the answer's type, so no other route's request does any of this) is
+    /// (`IntoResponse::may_share`: a `Public` answer, or a type of the app's own, which may hold
+    /// one; known from the answer's type, so no other route's request does any of this) is
     /// watched for a form's new submit key drawn in the handler's polls however it was rendered
     /// (into JSON or text, into a file, or to a string placed in a page as markup)
     /// ([`crate::form::KeyWatch`]): an answer whose handler drew one is the request's alone
@@ -2774,7 +2804,7 @@ impl<F: Future<Output = Response>, O: Answer> Future for Made<F, O> {
     #[inline]
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Response> {
         let this = self.project();
-        let watched = <O as IntoResponse>::MAY_SHARE.0;
+        let watched = <O as IntoResponse>::may_share().0;
         let mut polled = if watched { this.watch.poll(this.made, cx) } else { this.made.poll(cx) };
         if let std::task::Poll::Ready(res) = &mut polled {
             mark::<O>(res);
@@ -2825,9 +2855,9 @@ where
         if let Some(here) = req.extensions().get::<crate::layout::StartHere>().cloned() {
             here.arrive(&mut req, O::PAGE, self.shared);
         }
-        // An answer that may be `Public` (a constant) is watched for a submit key, which marks
+        // An answer that may be `Public` (known from its type) is watched for a submit key, which marks
         // the request's signal: taken here, where the request still holds it.
-        let signal = if <O as IntoResponse>::MAY_SHARE.0 { req.extensions().get::<crate::Signal>().cloned() } else { None };
+        let signal = if <O as IntoResponse>::may_share().0 { req.extensions().get::<crate::Signal>().cloned() } else { None };
         // A `Public` answer is the same for everyone: written as for a visitor whose zone is not
         // known, its live part's fragments too.
         #[cfg(feature = "zones")]

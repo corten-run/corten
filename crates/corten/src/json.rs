@@ -342,7 +342,10 @@ pub use read::__private as __read;
 pub struct Json<T>(pub T);
 
 impl<T: ToJson> IntoResponse for Json<T> {
-    const MAY_SHARE: crate::answer::sealed::MayShare = crate::answer::sealed::MayShare::NO;
+    #[inline]
+    fn may_share() -> crate::answer::sealed::MayShare {
+        crate::answer::sealed::MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         let mut res = self.0.__into_response();

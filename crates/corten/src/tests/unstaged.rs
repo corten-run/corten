@@ -786,6 +786,9 @@ pub(super) mod unstaged_shared_url {
     #[route("/mixed-keyed", get = unstaged_mixed_keyed, unstaged)]
     pub struct MixedKeyed;
 
+    #[route("/boxed-keyed", get = unstaged_boxed_keyed, unstaged)]
+    pub struct BoxedKeyed;
+
     #[route("/part-keyed", get = unstaged_part_keyed, unstaged)]
     pub struct PartKeyed;
 
@@ -831,13 +834,35 @@ async fn unstaged_mixed_keyed() -> Wrapped {
     Wrapped(unstaged_shared_keyed().await)
 }
 
+/// An answer erased behind a trait of the app's own over `IntoResponse`, as `dyn IntoResponse`
+/// can be: Corten does not see what the box holds, here a `Public` answer.
+trait Boxed: crate::response::IntoResponse + Send {
+    fn respond(self: Box<Self>) -> crate::response::Response;
+}
+
+impl<T: crate::response::IntoResponse + Send> Boxed for T {
+    fn respond(self: Box<Self>) -> crate::response::Response {
+        (*self).into_response()
+    }
+}
+
+impl crate::response::IntoResponse for Box<dyn Boxed> {
+    fn into_response(self) -> crate::response::Response {
+        self.respond()
+    }
+}
+
+async fn unstaged_boxed_keyed() -> Box<dyn Boxed> {
+    Box::new(unstaged_shared_keyed().await)
+}
+
 /// An unstaged route has no stage to settle its caching, so one whose answer may be `Public` is
 /// watched for a submit key its handler draws, as a staged one is: an answer that holds one goes
 /// out `private, no-cache`, a new key for each request, and one without keeps its lifetime.
 #[tokio::test]
 async fn an_unstaged_public_answer_whose_handler_drew_a_submit_key_is_the_browser_s_alone() {
     let router = App::new(unstaged_shared_url::router()).router();
-    for path in ["/shared-keyed", "/mixed-keyed"] {
+    for path in ["/shared-keyed", "/mixed-keyed", "/boxed-keyed"] {
         let (status, headers, body) = call_with(router.clone(), "GET", path, None, None).await;
         let (_, again, other) = call_with(router.clone(), "GET", path, None, None).await;
         assert_eq!(status, StatusCode::OK, "{path}");

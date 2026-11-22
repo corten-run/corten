@@ -557,7 +557,10 @@ impl fmt::Display for FormRejection {
 impl std::error::Error for FormRejection {}
 
 impl IntoResponse for FormRejection {
-    const MAY_SHARE: crate::answer::sealed::MayShare = crate::answer::sealed::MayShare::NO;
+    #[inline]
+    fn may_share() -> crate::answer::sealed::MayShare {
+        crate::answer::sealed::MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         match self {
@@ -2729,7 +2732,10 @@ impl serde::Serialize for Errors {
 /// [`crate::JsonError`]); pages use [`crate::Req::invalid`], which answers this way to data clients.
 #[cfg(feature = "json")]
 impl crate::response::IntoResponse for Errors {
-    const MAY_SHARE: crate::answer::sealed::MayShare = crate::answer::sealed::MayShare::NO;
+    #[inline]
+    fn may_share() -> crate::answer::sealed::MayShare {
+        crate::answer::sealed::MayShare::NO
+    }
 
     fn into_response(self) -> crate::response::Response {
         self.response()

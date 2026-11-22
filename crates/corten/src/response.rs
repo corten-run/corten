@@ -24,6 +24,30 @@ const _: () = assert!(std::mem::size_of::<Response>() <= 128, "a Response<Body> 
 /// A value that answers a request: text (`text/plain`), bytes (`application/octet-stream`), a
 /// `StatusCode`, a [`Response`], a refusal, and a tuple of a status and headers before any of them
 /// (`(StatusCode::CREATED, [(header::LOCATION, url)], "made")`).
+///
+/// An answer can be erased behind a box, as `dyn IntoResponse` or a trait of the app's own over
+/// this one, which answers through a method that takes the box. Corten does not see what such a
+/// box holds, so the handler of a route that answers one is watched for a form's new submit key,
+/// as that of any answer type of the app's own is:
+///
+/// ```
+/// use corten::http::{IntoResponse, Response};
+///
+/// trait Boxed: IntoResponse + Send {
+///     fn respond(self: Box<Self>) -> Response;
+/// }
+///
+/// impl<T: IntoResponse + Send> Boxed for T {
+///     fn respond(self: Box<Self>) -> Response {
+///         (*self).into_response()
+///     }
+/// }
+///
+/// let erased: Box<dyn IntoResponse + Send> = Box::new("made");
+/// let boxed: Box<dyn Boxed> = Box::new("made");
+/// assert_eq!(boxed.respond().status(), 200);
+/// # drop(erased);
+/// ```
 pub trait IntoResponse {
     /// Whether the response may say that a shared cache keeps it for everyone in a way the type
     /// does not show: [`crate::Public`] says so, a type of Corten's that is never `Public` does
@@ -35,15 +59,38 @@ pub trait IntoResponse {
     /// sent to no shared cache. A raw `Response`, a `[(name, value)]` of headers and a
     /// [`crate::Relay`] say no: what caching their headers say is the app's or the upstream's, and
     /// the stages settle it as any answer's ([`crate::cache`]). Not a public API: its type is one
-    /// an app cannot name, so an app's own type cannot say no.
+    /// an app cannot name, so an app's own type cannot say no, nor say what one of Corten's does.
     ///
-    /// ```compile_fail,E0326
+    /// A function of the type, not a constant: an associated constant would make the trait one no
+    /// `dyn IntoResponse` can be made of, and `Self: Sized` leaves this out of a trait object.
+    /// Each body is a literal or the bodies of the types it holds, so a release build folds it
+    /// where it is read, and a route whose answer says no has no watch.
+    ///
+    /// ```compile_fail,E0053
     /// use corten::http::{IntoResponse, Response};
     ///
     /// struct Mine;
     ///
     /// impl IntoResponse for Mine {
-    ///     const MAY_SHARE: bool = false;
+    ///     fn may_share() -> bool {
+    ///         false
+    ///     }
+    ///
+    ///     fn into_response(self) -> Response {
+    ///         "mine".into_response()
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0053
+    /// use corten::http::{IntoResponse, Response};
+    ///
+    /// struct Mine;
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn may_share() -> impl Sized {
+    ///         <&'static str as IntoResponse>::may_share()
+    ///     }
     ///
     ///     fn into_response(self) -> Response {
     ///         "mine".into_response()
@@ -57,7 +104,9 @@ pub trait IntoResponse {
     /// struct Mine;
     ///
     /// impl IntoResponse for Mine {
-    ///     const MAY_SHARE: corten::answer::sealed::MayShare = corten::answer::sealed::MayShare(false);
+    ///     fn may_share() -> corten::answer::sealed::MayShare {
+    ///         <&'static str as IntoResponse>::may_share()
+    ///     }
     ///
     ///     fn into_response(self) -> Response {
     ///         "mine".into_response()
@@ -65,7 +114,13 @@ pub trait IntoResponse {
     /// }
     /// ```
     #[doc(hidden)]
-    const MAY_SHARE: MayShare = MayShare(true);
+    #[inline]
+    fn may_share() -> MayShare
+    where
+        Self: Sized,
+    {
+        MayShare(true)
+    }
 
     /// The response.
     fn into_response(self) -> Response;
@@ -115,7 +170,10 @@ where
     B: http_body::Body<Data = Bytes> + Send + 'static,
     B::Error: Into<BoxError>,
 {
-    const MAY_SHARE: MayShare = MayShare::NO;
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
 
     #[inline]
     fn into_response(self) -> Response {
@@ -124,7 +182,10 @@ where
 }
 
 impl IntoResponse for http::response::Parts {
-    const MAY_SHARE: MayShare = MayShare::NO;
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         Response::from_parts(self, Body::empty())
@@ -132,7 +193,10 @@ impl IntoResponse for http::response::Parts {
 }
 
 impl IntoResponse for Body {
-    const MAY_SHARE: MayShare = MayShare::NO;
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
 
     #[inline]
     fn into_response(self) -> Response {
@@ -141,7 +205,10 @@ impl IntoResponse for Body {
 }
 
 impl IntoResponse for () {
-    const MAY_SHARE: MayShare = MayShare::NO;
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
 
     #[inline]
     fn into_response(self) -> Response {
@@ -150,7 +217,10 @@ impl IntoResponse for () {
 }
 
 impl IntoResponse for Infallible {
-    const MAY_SHARE: MayShare = MayShare::NO;
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         match self {}
@@ -158,7 +228,10 @@ impl IntoResponse for Infallible {
 }
 
 impl IntoResponse for StatusCode {
-    const MAY_SHARE: MayShare = MayShare::NO;
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
 
     #[inline]
     fn into_response(self) -> Response {
@@ -169,7 +242,10 @@ impl IntoResponse for StatusCode {
 }
 
 impl<T: IntoResponse, E: IntoResponse> IntoResponse for Result<T, E> {
-    const MAY_SHARE: MayShare = MayShare::either(T::MAY_SHARE, E::MAY_SHARE);
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::either(T::may_share(), E::may_share())
+    }
 
     #[inline]
     fn into_response(self) -> Response {
@@ -194,7 +270,10 @@ const OCTETS: &str = "application/octet-stream";
 macro_rules! bodies {
     ($content_type:expr => $($ty:ty),*) => {$(
         impl IntoResponse for $ty {
-            const MAY_SHARE: MayShare = MayShare::NO;
+            #[inline]
+            fn may_share() -> MayShare {
+                MayShare::NO
+            }
 
             #[inline]
             fn into_response(self) -> Response {
@@ -207,7 +286,10 @@ bodies!(TEXT => &'static str, String, Box<str>, Cow<'static, str>);
 bodies!(OCTETS => Bytes, Vec<u8>, &'static [u8], Box<[u8]>, Cow<'static, [u8]>);
 
 impl IntoResponse for BytesMut {
-    const MAY_SHARE: MayShare = MayShare::NO;
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         self.freeze().into_response()
@@ -215,7 +297,10 @@ impl IntoResponse for BytesMut {
 }
 
 impl<const N: usize> IntoResponse for [u8; N] {
-    const MAY_SHARE: MayShare = MayShare::NO;
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         self.to_vec().into_response()
@@ -223,7 +308,10 @@ impl<const N: usize> IntoResponse for [u8; N] {
 }
 
 impl<const N: usize> IntoResponse for &'static [u8; N] {
-    const MAY_SHARE: MayShare = MayShare::NO;
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         self.as_slice().into_response()
@@ -231,7 +319,10 @@ impl<const N: usize> IntoResponse for &'static [u8; N] {
 }
 
 impl IntoResponse for HeaderMap {
-    const MAY_SHARE: MayShare = MayShare::NO;
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         let mut res = Response::new(Body::empty());
@@ -241,7 +332,10 @@ impl IntoResponse for HeaderMap {
 }
 
 impl IntoResponse for Extensions {
-    const MAY_SHARE: MayShare = MayShare::NO;
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         let mut res = Response::new(Body::empty());
@@ -257,7 +351,10 @@ where
     V: TryInto<HeaderValue>,
     V::Error: std::fmt::Display,
 {
-    const MAY_SHARE: MayShare = MayShare::NO;
+    #[inline]
+    fn may_share() -> MayShare {
+        MayShare::NO
+    }
 
     fn into_response(self) -> Response {
         (self, ()).into_response()
@@ -265,7 +362,10 @@ where
 }
 
 impl<R: IntoResponse> IntoResponse for (StatusCode, R) {
-    const MAY_SHARE: MayShare = R::MAY_SHARE;
+    #[inline]
+    fn may_share() -> MayShare {
+        R::may_share()
+    }
 
     #[inline]
     fn into_response(self) -> Response {
@@ -336,11 +436,12 @@ macro_rules! tuples {
         #[allow(non_snake_case)]
         impl<R: IntoResponse, $($ty: IntoResponseParts,)+> IntoResponse for ($($ty,)+ R) {
             // A part's refusal answers in the body's place.
-            const MAY_SHARE: MayShare = {
-                let may = R::MAY_SHARE;
-                $(let may = MayShare::either(may, <$ty::Error as IntoResponse>::MAY_SHARE);)+
+            #[inline]
+            fn may_share() -> MayShare {
+                let may = R::may_share();
+                $(let may = MayShare::either(may, <$ty::Error as IntoResponse>::may_share());)+
                 may
-            };
+            }
 
             fn into_response(self) -> Response {
                 let ($($ty,)+ body) = self;
@@ -357,7 +458,10 @@ macro_rules! tuples {
 
         #[allow(non_snake_case)]
         impl<R: IntoResponse, $($ty: IntoResponseParts,)+> IntoResponse for (StatusCode, $($ty,)+ R) {
-            const MAY_SHARE: MayShare = <($($ty,)+ R) as IntoResponse>::MAY_SHARE;
+            #[inline]
+            fn may_share() -> MayShare {
+                <($($ty,)+ R) as IntoResponse>::may_share()
+            }
 
             fn into_response(self) -> Response {
                 let (status, $($ty,)+ body) = self;

@@ -356,7 +356,10 @@ impl std::fmt::Display for BodyRejection {
 impl std::error::Error for BodyRejection {}
 
 impl crate::http::IntoResponse for BodyRejection {
-    const MAY_SHARE: crate::answer::sealed::MayShare = crate::answer::sealed::MayShare::NO;
+    #[inline]
+    fn may_share() -> crate::answer::sealed::MayShare {
+        crate::answer::sealed::MayShare::NO
+    }
 
     fn into_response(self) -> crate::http::Response {
         crate::http::IntoResponse::into_response((self.status, self.text))

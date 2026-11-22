@@ -910,6 +910,70 @@ async fn an_answer_of_the_app_s_own_that_holds_a_public_one_is_watched_for_a_sub
     }
 }
 
+/// An answer erased behind a box, as a trait of the app's own over `IntoResponse` (whose being
+/// one a `dyn IntoResponse` needs too), is an answer type of the app's own: its handler is
+/// watched, so a box that holds a `Public` answer whose handler drew a form's new submit key goes
+/// out `private, no-cache`, and one that drew none keeps its lifetime.
+#[tokio::test]
+async fn a_boxed_answer_of_the_app_s_own_is_watched_for_a_submit_key() {
+    use crate::answer::{AnyInputs, Format, NotAFeed};
+    use crate::response::IntoResponse;
+    use crate::route::get as typed;
+
+    trait Boxed: IntoResponse + Send {
+        fn respond(self: Box<Self>) -> crate::response::Response;
+    }
+
+    impl<T: IntoResponse + Send> Boxed for T {
+        fn respond(self: Box<Self>) -> crate::response::Response {
+            (*self).into_response()
+        }
+    }
+
+    impl IntoResponse for Box<dyn Boxed> {
+        fn into_response(self) -> crate::response::Response {
+            self.respond()
+        }
+    }
+
+    impl crate::Answer for Box<dyn Boxed> {
+        const FORMAT: Format = Format::Html;
+        type Inputs = AnyInputs;
+        type Rows = NotAFeed;
+        type Kind = AnyAnswer;
+    }
+
+    // `dyn IntoResponse` is a type, as it was before the watch.
+    let erased: Box<dyn IntoResponse + Send> = Box::new("erased");
+    drop(erased);
+    assert!(<Box<dyn Boxed> as IntoResponse>::may_share().0, "a box of the app's own may be `Public`");
+
+    let minute = Duration::from_secs(60);
+    let field = || crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html();
+    let boxed = |answer: Public<String>| -> Box<dyn Boxed> { Box::new(answer) };
+    let routes = || {
+        Routes::from(
+            Table::new()
+                .route("/keyed", typed(move || async move { boxed(Public::new(minute, field())) }).0)
+                .route("/plain", typed(move || async move { boxed(Public::new(minute, "plain".to_string())) }).0),
+        )
+    };
+    for (app, router) in [
+        ("the default store", App::new(routes()).router()),
+        ("none kept", App::new(routes()).kept_answers(0).router()),
+        ("corten dev", App::new(routes()).dev(true).router()),
+    ] {
+        let (status, headers, body) = fetch(&router, "GET", "/keyed", &[]).await;
+        let (_, _, other) = fetch(&router, "GET", "/keyed", &[]).await;
+        assert_eq!(status, StatusCode::OK, "{app}");
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{app}: {headers:?}");
+        assert!(String::from_utf8_lossy(&body).contains("data-submit value=") && body != other, "{app}");
+        let (status, headers, _) = fetch(&router, "GET", "/plain", &[]).await;
+        assert_eq!(status, StatusCode::OK, "{app}");
+        assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60", "{app}");
+    }
+}
+
 /// `NoStore` is watched as the answer it holds is: around an answer type of the app's own that
 /// is `Public` on one branch, a relay that kept the upstream's `Surrogate-Control` drew a form's
 /// new submit key, and goes out `private, no-store` without that header, which `no-store` does not
@@ -1112,8 +1176,8 @@ async fn an_answer_a_middleware_rebuilt_keeps_a_submit_key_its_handler_drew_from
 
 /// A refused cross-site write gets the app's error page, which goes out before the cache rules
 /// run. One that draws a submit key goes out as any page that draws one does: a `no-store` it
-/// says as `private, no-store`, and none of the CDN caching headers it wrote. One that draws none
-/// is sent `private, no-cache`, whatever it said, as before.
+/// says as `private, no-store`, and none of the CDN caching headers or the tag it wrote. One that
+/// draws none is sent `private, no-cache`, whatever it said, as before, with its tag.
 #[tokio::test]
 async fn a_refusal_page_that_draws_a_submit_key_is_not_shared() {
     let refused = |keyed: bool, cache: &'static str| {
@@ -1126,6 +1190,7 @@ async fn a_refusal_page_that_draws_a_submit_key_is_not_shared() {
                     req.test_page("Not allowed", form).map(|mut page| {
                         let headers = page.headers_mut();
                         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+                        headers.insert(header::ETAG, HeaderValue::from_static("\"given\""));
                         for name in CDN_OVERRIDES {
                             headers.insert(name, HeaderValue::from_static("max-age=60"));
                         }
@@ -1155,6 +1220,11 @@ async fn a_refusal_page_that_draws_a_submit_key_is_not_shared() {
     ] {
         let headers = refused(keyed, cache).await;
         assert_eq!(headers[header::CACHE_CONTROL], sent, "keyed {keyed}, {cache}");
+        if keyed {
+            assert!(!headers.contains_key(header::ETAG), "a keyed refusal sends no tag ({cache}): {headers:?}");
+        } else {
+            assert_eq!(headers[header::ETAG], "\"given\"", "a refusal with no key keeps its tag ({cache})");
+        }
         for name in CDN_OVERRIDES {
             if keyed {
                 assert!(!headers.contains_key(name), "a keyed refusal sends no {name} ({cache})");
