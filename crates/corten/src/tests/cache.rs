@@ -3212,7 +3212,7 @@ fn what_settling_a_page_costs() {
             for _ in 0..requests {
                 let req = Request::get("/items/7").body(Body::empty()).unwrap();
                 let res = if case == "control" {
-                    control.clone().oneshot(req).await.unwrap()
+                    control.oneshot(req).await.unwrap()
                 } else {
                     router.clone().oneshot(req).await.unwrap()
                 };
