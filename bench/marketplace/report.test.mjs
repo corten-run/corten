@@ -35,7 +35,7 @@ function synthetic(schema = resultSchema) {
   return s;
 }
 
-function grouped(group, round, { historical = true, schema = resultSchema } = {}) {
+function grouped(group, round, { schema = resultSchema, historical = schema === v5Schema } = {}) {
   const s = synthetic(schema); s.round = round; s.options.round = round;
   s.options.group = group; s.options.apps = groupApps(group);
   s.apps = Object.fromEntries(s.options.apps.map((a) => [a, s.apps[a]]));
@@ -71,9 +71,10 @@ test("historical named groups require exact evidence and compare only with the s
   assert.equal(loss.qualificationLosses[0].app, "nextjs");
   const rotating = grouped("production", "r26");
   const candidate = rotating.apps.nextjs;
-  candidate.qualification.api = qualification(unsupported, "api");
+  const missingCsp = boundedQualificationProbes("api"); delete missingCsp.page.headers["content-security-policy"];
+  candidate.qualification.api = produceBoundedQualification(missingCsp, "api");
   candidate.runs = {}; candidate.phases = {};
-  const transition = compare(rotating, s);
+  const transition = compare(rotating, grouped("production", "r24", { schema: v5Schema, historical: false }));
   assert.deepEqual(transition.rows, []);
   assert.equal(transition.compatible, false);
   assert.deepEqual(transition.qualificationLosses, loss.qualificationLosses);
@@ -87,7 +88,7 @@ test("historical named groups require exact evidence and compare only with the s
 });
 
 test("bounded qualification reports what is unmeasured and cannot mix with v1", () => {
-  const group = "production", previous = grouped(group, "r20");
+  const group = "production", previous = grouped(group, "r20", { schema: v5Schema });
   const active = grouped(group, "r24", { historical: false });
   const text = report(active);
   assert.match(text, /Feature contract: marketplace-production\/v2\./);

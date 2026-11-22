@@ -191,23 +191,30 @@ test("native replay admits the producer's decimal sum overshoot, not an inconsis
   }
 });
 
-test("historical native evidence replays, but the two profiles' raw receipts cannot mix", (t) => {
-  for (const historical of [true, false]) {
-    const folder = temporary(t), args = { folder, round: "r17", commit };
-    const expected = writeSavedFixture(folder, commit, sourceTree(commit), { historical });
-    assert.equal(expected.measurement.featureProfile, historical ? featureProfile : boundedFeatureProfile);
-    assert.deepEqual(validateSaved(args), expected);
-    const other = summaryFixture(commit, { historical: !historical });
-    const raw = join(folder, "api/corten/qualification.json"), imagesPath = join(folder, "images.json");
-    const saved = readFileSync(raw);
-    writeFileSync(raw, JSON.stringify(other.apps.corten.qualification.api));
-    invalid(() => validateSaved(args));
-    writeFileSync(raw, saved);
-    const images = JSON.parse(readFileSync(imagesPath));
-    images.corten.labels["run.corten.marketplace.profile"] = other.measurement.featureProfile;
-    writeFileSync(imagesPath, JSON.stringify(images));
-    invalid(() => validateSaved(args));
-  }
+test("v6 cannot claim historical qualification even with matching raw receipts", (t) => {
+  const folder = temporary(t), args = { folder, round: "r17", commit };
+  const summary = writeSavedFixture(folder, commit, sourceTree(commit), { historical: true });
+  assert.throws(() => validateSummary(summary), /bounded qualification/);
+  assert.throws(() => validateSaved(args), /bounded qualification/);
+});
+
+for (const historical of [true, false]) test(`native historical=${historical} qualification replays but raw receipts cannot mix`, (t) => {
+  const schema = historical ? v5Schema : resultSchema;
+  const measured = measuredSource(t, schema);
+  const folder = temporary(t), args = { folder, round: "r17", commit: measured.commit };
+  const expected = writeSavedFixture(folder, measured.commit, measured.tree, { historical, schema });
+  assert.equal(expected.measurement.featureProfile, historical ? featureProfile : boundedFeatureProfile);
+  assert.deepEqual(validateSaved(args), expected);
+  const other = summaryFixture(commit, { historical: !historical });
+  const raw = join(folder, "api/corten/qualification.json"), imagesPath = join(folder, "images.json");
+  const saved = readFileSync(raw);
+  writeFileSync(raw, JSON.stringify(other.apps.corten.qualification.api));
+  invalid(() => validateSaved(args));
+  writeFileSync(raw, saved);
+  const images = JSON.parse(readFileSync(imagesPath));
+  images.corten.labels["run.corten.marketplace.profile"] = other.measurement.featureProfile;
+  writeFileSync(imagesPath, JSON.stringify(images));
+  invalid(() => validateSaved(args));
 });
 
 test("native replay requires the retained executable identity and raw version probe", (t) => {

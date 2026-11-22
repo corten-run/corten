@@ -21,26 +21,26 @@ import { controller, launcherSignals, processRuns, splitController, splitDryRun 
 import { evidenceVersion } from "./raw-contract.mjs";
 
 const commit = "a".repeat(40), group = "production";
-const qualified = () => Object.fromEntries(sources.map((source) => [source, qualification(qualificationProbes(), source)]));
-// Raw evidence of a candidate that lacks a required feature: no Content-Security-Policy.
-function unsupported() {
-  const probes = qualificationProbes(); delete probes.page.headers["content-security-policy"];
-  return { fixture: qualification(probes, "fixture"), api: qualification(probes, "api") };
-}
+const qualified = (historical = false, missingCsp = false) => Object.fromEntries(sources.map((source) => {
+  const probes = historical ? qualificationProbes() : boundedQualificationProbes(source);
+  if (missingCsp) delete probes.page.headers["content-security-policy"];
+  return [source, historical ? qualification(probes, source) : produceBoundedQualification(probes, source)];
+}));
 // Excluded by its raw qualification: not timed, so no runs or aggregates.
-const exclude = (a) => Object.assign(a, { qualification: unsupported(), runs: {}, phases: {} });
+const exclude = (a, historical = false) => Object.assign(a, { qualification: qualified(historical, true), runs: {}, phases: {} });
 // A whole round of a named group shaped like run.mjs writes it: candidate i serves 1000 + 37i +
 // pass requests per phase, and every candidate qualified on both sources.
 function full(round = "r17", g = group, schema = resultSchema) {
   const timedProfiles = timedProfilesFor(schema);
+  const historical = schema === v5Schema;
   const apps = groupApps(g);
   const s = { schema, workload, round, runId: `marketplace-${round}-0000000000`, commit, dirty: false, complete: true, checksPassed: true,
     failures: [], cleanupFailures: [], finishedCommit: commit, finishedDirty: false,
     startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T01:00:00.000Z", options: { round, build: true, apps, checkOnly: false, ...nightly, startupTimeout: 120, group: g }, apps: {},
     host: { cpu: "Synthetic CPU", onlineCpus: "0-7", platform: "test", release: "test", node: "test", docker: "test" }, tools: Object.fromEntries(["upstream", "checker", "k6"].map((k) => [k, { imageId: `sha256:${"b".repeat(64)}` }])),
-    fixtureSha256: createHash("sha256").update(JSON.stringify(records())).digest("hex"), measurement: { profiles: timedProfiles, upstream: "Synthetic test only", cpuWindow: "Not measured", coldClock: "Synthetic test only", cpus: cpuSettings({}), encoding: "identity", fixedRate: 150, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, featureProfile, qualificationSettings } };
+    fixtureSha256: createHash("sha256").update(JSON.stringify(records())).digest("hex"), measurement: { profiles: timedProfiles, upstream: "Synthetic test only", cpuWindow: "Not measured", coldClock: "Synthetic test only", cpus: cpuSettings({}), encoding: "identity", fixedRate: 150, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, featureProfile: historical ? featureProfile : boundedFeatureProfile, qualificationSettings: historical ? qualificationSettings : boundedQualificationSettings } };
   apps.forEach((app, i) => {
-    const a = s.apps[app] = { label: app, image: `cb-marketplace-production-${app}`, imageId: `sha256:${"b".repeat(64)}`, builtCommit: commit, builtDirty: false, checks: {}, runs: {}, phases: {}, qualification: qualified() };
+    const a = s.apps[app] = { label: app, image: `cb-marketplace-production-${app}`, imageId: `sha256:${"b".repeat(64)}`, builtCommit: commit, builtDirty: false, checks: {}, runs: {}, phases: {}, qualification: qualified(historical) };
     for (const source of sources) {
       a.checks[source] = { workload, source, jsonRecords: 500, pages: 264, profiles: locales.flatMap((locale) => [false, true].flatMap((javaScriptEnabled) => [false, true].map((mobile) => ({ locale, javaScriptEnabled, mobile, passed: true })))),
         upstream: source === "api" ? { readsPerRequest: 1, uncachedPage: true, uncachedJson: true, jsonReserialized: true, errors: true } : null };
@@ -76,7 +76,7 @@ function part(k, n, { round = "r17", g = group, cortenScale = 1, excluded = [], 
   s.host = { ...s.host, cpu: `Synthetic CPU d${k}` };
   if (k > 1) s.finishedAt = `2026-01-01T01:00:0${k}.000Z`;
   if (cortenScale !== 1) scale(s.apps.corten, cortenScale);
-  for (const app of excluded) exclude(s.apps[app]);
+  for (const app of excluded) exclude(s.apps[app], schema === v5Schema);
   return validateSummary(s);
 }
 // The app's container stopped in this pass and phase: the run keeps the phases before it, and no
@@ -235,7 +235,7 @@ test("droplets' parts merge into one round of the group, each candidate from its
 });
 
 test("bounded split parts merge only with the same qualification contract", () => {
-  const archived = [part(1, 2), part(2, 2)];
+  const archived = [part(1, 2, { schema: v5Schema }), part(2, 2, { schema: v5Schema })];
   const active = structuredClone(archived);
   for (const s of active) {
     s.measurement.featureProfile = boundedFeatureProfile;

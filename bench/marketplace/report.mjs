@@ -221,6 +221,7 @@ export function validateSummary(s) {
   let validateQualificationRecord;
   if (s.options.group) {
     assert.ok(s.schema === v5Schema || s.schema === resultSchema, "named feature groups require v5 or newer");
+    if (s.schema === resultSchema) assert.equal(s.measurement.featureProfile, boundedFeatureProfile, "v6 named groups require bounded qualification");
     validateQualificationRecord = qualificationValidator(s.measurement);
     // A merged split round checks this on each droplet (splitEvidence).
     if (s.split === undefined) assert.ok(admitted(s.apps.corten) && Object.values(s.apps).filter(admitted).length > 1, "a group needs a feature-qualified Corten and peer");
