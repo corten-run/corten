@@ -470,7 +470,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     // Explicitly await appends in controls; enqueue/capture is not storage proof.
     drain() { return writer.drain(); },
     get pendingStorage() { return writer.settled; },
-    async finish(result, retainTerminalClock = false) {
+    async finish(result, retainTerminalClock = false, onSettled) {
       assert.equal(closed, false); closed = true; clearInterval(timer); releaseStartup();
       let empty = false;
       try { sample(); sampleOperation = "terminal-empty"; empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0"); }
@@ -515,6 +515,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         throw new Error("host observation terminal storage incomplete");
       }
       if (empty) rmdirSync(join(root, path)); // Own empty child only; never recursive cleanup.
+      if (terminal) onSettled?.(); // Descriptors have settled even if their proof failed.
       return tree(directory);
     },
   });

@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,7 +30,7 @@ let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observat
 let lifetimeStartup;
 let lifetimeRun;
 let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTicks, settleSurvives;
-let liveOutput;
+let liveOutput, compilerScratch;
 const sourceGit = (cwd, ...args) => childProcess.execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
 const sourceStatus = (cwd) => sourceGit(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all");
 mock.module("./control-admission.mjs", { exports: { ...controlAdmission,
@@ -135,12 +135,14 @@ mock.module("./host-lifetime.mjs", { exports: {
     const { directory, command, startupSignal } = args;
     const startup = lifetimeStartup;
     mkdirSync(directory); writeFileSync(join(directory, "raw.json"), "{}");
-    const observer = { attach() { if (startup) startup.attached++; }, dispose() { if (startup) startup.disposed++; }, finish(result, retainTerminalClock) {
+    const observer = { attach() { if (startup) startup.attached++; }, dispose() { if (startup) startup.disposed++; }, finish(result, retainTerminalClock, settled) {
       const checks = { accounting: true, terminal: result.terminal, empty: true, observer: true,
         unforced: !result.cancelled && !result.forced, leader: true };
       if (lifetimeFailure?.command === command) Object.assign(checks, lifetimeFailure.checks);
       if (retainTerminalClock) { assert.equal(mode, "udev-settle"); assert.equal(command, 1); assert.equal(observations, 2); }
+      if (compilerScratch && command === 1) assert.ok(existsSync(join(compilerScratch.target, "scratch")), "target must exist during descriptor sealing");
       writeFileSync(join(directory, "terminal.json"), JSON.stringify({ ...checks, ...(retainTerminalClock ? { terminalClock: udevClock() } : {}) }));
+      if (checks.terminal && checks.empty) settled?.();
       return evidence.tree(directory);
     } };
     if (!startup) return observer;
@@ -197,6 +199,15 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
     if (lifetimeRun) { lifetimeRun.started = true; lifetimeRun.start(); return; }
     const native = !invocation[0].endsWith("fixtures.mjs");
     const finish = () => {
+      if (compilerScratch) {
+        const id = options.env.CORTEN_ISOLATED_COMPILER_TARGET_ID;
+        if (native) {
+          const { target, scenario } = compilerScratch, stat = fs.lstatSync(target, { bigint: true });
+          assert.equal(id, `${stat.dev}:${stat.ino}`);
+          if (scenario === "substituted") { renameSync(target, `${target}.original`); mkdirSync(target); }
+          writeFileSync(join(target, "scratch"), "not native output");
+        } else assert.equal(id, undefined);
+      }
       if (native) {
         const group = expectedPlan.bindings.find((b) => b.execution.invocation.argv[0] === invocation[0]).request.group;
         const binding = group === "json-api" ? jsonPhase(expectedPlan, invocation.includes("--check-only") ? "prepare" : "timing", invocation.at(-1))
@@ -245,7 +256,7 @@ const { validateCampaign: validateSavedCampaign } = await import("./campaign-ver
 let round = 100;
 function setup(policy = () => true) {
   admittedHost = null; admittedApparatus = null; controlWindows = []; settleAbort = null;
-  liveOutput = null;
+  liveOutput = null; compilerScratch = null;
   round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null; lifetimeStartup = null; lifetimeRun = null;
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
@@ -650,6 +661,48 @@ test("live output is not transferred without proven command cleanup", async () =
   assert.deepEqual(evidence.tree(s.original), liveOutput.generatedTree);
   assert.equal(existsSync(join(h.directory, "00-recoverable-live-timing", "native")), false);
   assert.equal(s.campaign.status(h).uncollectedNativeRoots.length, 1);
+});
+
+for (const scenario of ["success", "native failure", "incomplete proof", "not drained", "substituted", "raced", "preexisting"]) test(`client-heavy compiler target: ${scenario}`, async (t) => {
+  const s = setupGroup("client-heavy"), h = await begin(s);
+  const target = `${join(repo, s.plan.bindings[0].validation.artifactRoot)}.compiler`;
+  compilerScratch = { target, scenario };
+  if (scenario === "native failure") mode = "process-fails";
+  if (scenario === "incomplete proof") lifetimeFailure = { command: 1, checks: { observer: false } };
+  if (scenario === "not drained") lifetimeFailure = { command: 1, checks: { empty: false } };
+  if (scenario === "preexisting") { mkdirSync(target, { recursive: true }); writeFileSync(join(target, "scratch"), "foreign"); }
+  let moved;
+  if (scenario === "raced") {
+    const rename = fs.renameSync;
+    const hook = t.mock.method(fs, "renameSync", (from, to) => {
+      if (from === target) {
+        rename(target, `${target}.original`); mkdirSync(target);
+        writeFileSync(join(target, "scratch"), "foreign"); moved = to;
+      }
+      return rename(from, to);
+    });
+    syncBuiltinESMExports();
+    t.after(() => { hook.mock.restore(); syncBuiltinESMExports(); });
+  }
+  if (scenario === "success" || scenario === "native failure") {
+    const status = await s.campaign.advance(h);
+    assert.equal(status.state, "finished");
+    const paths = evidence.tree(h.directory).entries.map(({ path }) => path);
+    assert.ok(paths.includes("00-client-heavy-timing/native/raw.log"));
+    assert.ok(!paths.some((path) => path.includes("scratch") || path.includes(".compiler")));
+  } else {
+    await assert.rejects(s.campaign.advance(h), scenario === "preexisting" ? /EEXIST/ : ["substituted", "raced"].includes(scenario)
+      ? /compiler target replaced/ : /command lifetime or cleanup unproven/);
+    assert.equal(s.campaign.status(h).state, "preserved-uncertain");
+  }
+  if (["not drained", "substituted", "preexisting"].includes(scenario)) {
+    assert.equal(readFileSync(join(target, "scratch"), "utf8"), scenario === "preexisting" ? "foreign" : "not native output");
+    if (scenario === "substituted") assert.ok(existsSync(`${target}.original`));
+  } else assert.equal(existsSync(target), false);
+  if (scenario === "raced") {
+    assert.equal(readFileSync(join(moved, "scratch"), "utf8"), "foreign");
+    assert.equal(readFileSync(join(`${target}.original`, "scratch"), "utf8"), "not native output");
+  }
 });
 
 for (const failure of ["moved bytes", "seal open", "seal file sync", "seal directory sync"]) test(`live transfer keeps both pending paths after I/O failure: ${failure}`,

@@ -1,6 +1,58 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
-import { join, relative, resolve, sep, isAbsolute, posix, win32 } from "node:path";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, realpathSync, renameSync, rmdirSync } from "node:fs";
+import { readdir, readFile, rm } from "node:fs/promises";
+import { dirname, join, relative, resolve, sep, isAbsolute, posix, win32 } from "node:path";
+
+const compilerTargetId = "CORTEN_ISOLATED_COMPILER_TARGET_ID";
+function directoryId(stat) {
+  assert.ok(stat.isDirectory(), "compiler target is not a physical directory");
+  return `${stat.dev}:${stat.ino}`;
+}
+
+/** Exclusive scratch ownership; a held descriptor prevents inode reuse. */
+export function reserveCompilerTarget(target) {
+  const parent = realpathSync(dirname(target));
+  mkdirSync(target, { mode: 0o700 });
+  const fd = openSync(target, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const currentId = (path = target) => directoryId(lstatSync(path, { bigint: true }));
+  let identity;
+  try {
+    identity = directoryId(fstatSync(fd, { bigint: true }));
+    assert.equal(currentId(), identity, "compiler target replaced during reservation");
+  } catch (error) { closeSync(fd); throw error; }
+  return {
+    env: { [compilerTargetId]: identity },
+    async close(remove) {
+      try {
+        if (remove) {
+          assert.equal(realpathSync(dirname(target)), parent, "compiler target parent changed");
+          assert.equal(currentId(), identity, "compiler target replaced before cleanup");
+          // Never recursively remove a directory at the public build path. Move
+          // it into a private sibling and recheck the pinned inode there first.
+          const staging = mkdtempSync(join(parent, ".compiler-cleanup-")), moved = join(staging, "target");
+          try {
+            renameSync(target, moved);
+            assert.equal(currentId(moved), identity, "compiler target replaced during cleanup");
+            await rm(moved, { recursive: true });
+          } finally {
+            if (!lstatSync(moved, { throwIfNoEntry: false })) rmdirSync(staging);
+          }
+        }
+      } finally { closeSync(fd); }
+    },
+  };
+}
+
+export async function withCompilerTarget(target, build) {
+  const delegated = process.env[compilerTargetId];
+  if (delegated !== undefined) {
+    assert.equal(directoryId(lstatSync(target, { bigint: true })), delegated, "compiler target differs from campaign reservation");
+    assert.equal(readdirSync(target).length, 0, "campaign compiler target is not fresh");
+    return build();
+  }
+  const owned = reserveCompilerTarget(target);
+  try { return await build(); } finally { await owned.close(true); }
+}
 
 export function compilerSourcePath(root, input, workingDirectory = root) {
   const api = /^[A-Za-z]:\//.test(root) ? win32 : posix;
