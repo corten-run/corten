@@ -195,6 +195,10 @@ status, timing and contract-relevant response-header facts. Request bodies, requ
 headers, discovered action URLs and raw page bodies are never serialized. A killed
 worker leaves `qualification-in-progress`; execution/filter failures retain fixed
 reasons and all preceding safe events. No arbitrary exception text is saved.
+For Trusted Types, the CSP projection retains only Corten's fixed policy name
+`corten`, never arbitrary names. Nonce and hash bytes remain masked. The projection
+also retains Corten's empty allowlists for Bluetooth, local fonts and window
+management; other values for those features are unfilterable.
 
 On completion, the sidecar also contains `qualification`, `rawProbeSha256`, original
 per-probe hashes, and `pageProjection` (original page hash and retained byte spans).

@@ -31,9 +31,13 @@ node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page
 # The reviewed fleet reservation passes its named layout to the same entry:
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group catalog-page --load-layout c16-generator-v1
-# For another group only when the fleet reserved c-8/sfo2:
+# For a non-catalog group only at the placement authorized by the fleet:
 node bench/workloads/isolated/campaign-entry.mjs r17 --commit FULL_40_LOWERCASE_SHA --state-dir /bench/campaign --group json-api --placement dedicated-sfo2
 ```
+
+In new rounds the fleet can also pass `--placement dedicated-lon1` or
+`--placement dedicated-blr1`. The sfo3 command still has no placement flag.
+The catalog job keeps its separate `c16-generator-v1` layout.
 
 The argument order and root are fixed. No selection, recipe, command, validator, image,
 environment, output-path, retry or resume argument is accepted. The parent provisions a
@@ -183,6 +187,29 @@ process/container/network or changed host halts sequencing. These conservative o
 are not a resource peak measurement, an independent quiet-host audit, or proof of isolation.
 Actual native CPU quotas/cpusets must still pass the fixed native saved-evidence gate.
 
+The full-stack browser's timed roles are the application (CPU 1), upstream (CPUs 2-3)
+and Chromium with its Node driver (CPUs 4-7); none uses the SSH apparatus's CPU 0.
+The campaign pins the existing delegated command scope before starting the browser runner.
+The runner checks effective CPU placement before timing. Replay requires the sampled
+driver/Chromium cgroup, role-specific Docker limits, and corresponding running container
+cgroups in the timing windows. This proves separation for those roles, not reserved physical
+cores, host service placement, or qualification of the native browser matrix.
+
+Detach preview and its locked recheck generate the official plan from committed
+source. They use the same CPU-partition projection as stream open and replay.
+Client-heavy keeps its Node driver, Chromium, Rust compiler and loopback server in
+the delegated CPU 4-7 scope. Live delivery and recoverable live keep the existing
+host browser/driver (including publisher) on CPUs 4-7 and each sequential app
+container on CPU 1 at the existing one-CPU/1-GiB budget. Replay matches running app
+and browser identities within the retained work windows and checks observed
+processes' own effective sets, including child cgroups. It does not claim a trace
+of every short-lived process. Mixed production shares the throughput roles for its
+measured stage only; its separate functional capture has no pinning proof.
+
+Hardening is blocked before create pending an isolated adapter for its existing
+benign service and dependency-recovery actors. This also blocks a bundled launch
+that includes the unsupported group. Connection-flood resistance: not measured.
+
 ## Kernel lifetime observations
 
 The parent-owned service must put its wrapper/worker in a supervisor leaf under its exact
@@ -191,8 +218,9 @@ and enabled on the empty service root. A compatible systemd layout uses
 `Delegate=cpu cpuset memory pids` and `DelegateSubgroup=supervisor`; the parent must verify
 that layout on its actual systemd/kernel. Core does not change parent controllers, quotas,
 cpusets or memory budgets and never moves the wrapper or an unrelated process. It fails
-closed when delegation/accounting is absent. This is not an approved new finite client
-budget or mandatory isolated CPU partition.
+closed when delegation/accounting is absent. Full-stack browser, client-heavy and
+both live commands require their bound child cpuset, without setting a new finite
+host-process CPU quota or memory budget.
 
 The fixed cloud bootstrap prepares Node 26, the root, bench and bench/browser npm lockfile
 installations, Playwright Chromium, the native runner's digest-pinned Node tool image,
@@ -340,6 +368,20 @@ CI must exclude this file explicitly and mandatory Linux CI must select it expli
 These controls do not establish the full browser matrix, source authority, host exclusivity
 or campaign readiness. The v2 native adapter/producer integration remains a separate gate.
 
+## Post-command udev settle
+
+In supervised localized-marketplace timing only, a first-after inventory containing
+new sleeping children of the same baseline `systemd-udevd` can trigger one five-second wait
+and one more host observation after the marketplace command and its kernel observation are
+terminal. The Linux start ticks must place every new non-kernel identity strictly after the
+cutoff in the sealed command-lifetime record. Both the uptime and the monotonic apparatus
+samples must support the wait. Cancellation keeps the first-after inventory and skips the
+second census. Exact cgroup, parent PID/start identity and matching executable path,
+device and inode are required, not just the worker name. Saved replay checks all the sealed
+observations by the same rules. A worker or replacement still present, uncertain timing or
+ownership, a new login, benchmark process, or changed Docker baseline still stops sequencing. This does not rerun or
+alter a measured window, prove the host was quiet, or repair historical evidence.
+
 ## Awaitable intrinsic API
 
 `await validateCampaign({folder,round,commit})` from campaign-verify.mjs accepts the extracted
@@ -382,6 +424,10 @@ they are not unsafe archive path names. Environment values are not forwarded fro
 `json-audit-subject.json` binds those images, 36 identities, source/commit and both native
 and source manifests. It explicitly has qualified:false and a review-needed blocker.
 The retained image list includes the 18 app images and both actual Node/k6 tool images.
+If Docker omits `Config.WorkingDir`, the image evidence omits `config.workingDir` in both
+the live audit subject and saved JSON. If Docker reports it, the subject binds the exact
+value, including an empty string. Omission alone does not block review or authorize timing.
+
 The fixed k6 image/version is prepared before functional checks, even in check-only mode;
 this runs no load. Staging independently inspects both tool image execution configurations.
 App and tool image-default entrypoint/command observations are compared with actual Docker

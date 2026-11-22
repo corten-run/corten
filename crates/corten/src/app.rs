@@ -512,7 +512,7 @@ pub struct App<M = ()> {
     access_log: bool,
     /// The values only the layout shows ([`App::layout_read`]).
     layout_reads: Vec<Arc<dyn crate::layout::Erased>>,
-    /// How many bytes of `Public` pages the app keeps ([`App::kept_answers`]).
+    /// How many bytes of `Public` answers the app keeps ([`App::kept_answers`]).
     kept: usize,
     middleware: M,
 }
@@ -944,25 +944,30 @@ impl<M: Middleware> App<M> {
         self
     }
 
-    /// How many bytes of [`crate::Public`] pages the app keeps to give again (32 MiB unless set;
-    /// `0` keeps none). A page whose route says its answer is the same for everyone is one any
-    /// shared cache may keep for the lifetime it names, and the app is the first of them: the
-    /// whole document made for a `GET` with no cookie or `Authorization` is given to the next
-    /// such request in the handler's place until that lifetime ends (`s-maxage` where the answer
-    /// has `.shared(..)`, else `max_age`), with an `Age`. Every stage still runs for it, the
-    /// app's middleware too; what it saves is the handler, the render, the tag's hash and the
-    /// compression. So a `Public` page's handler does not run for every request, and what it
-    /// reads may be that old when a visitor sees it, as it already may be behind a CDN. A page
-    /// whose handler takes an extractor of the app's own is not kept: it may read a header the
-    /// kept page's key does not cover.
+    /// How many bytes of [`crate::Public`] answers the app keeps to give again (32 MiB unless
+    /// set; `0` keeps none): pages, and whole bodies of JSON or text where the app compresses
+    /// them (1,024 bytes or more, with the `compress` feature). A route that says its
+    /// answer is the same for everyone names one any shared cache may keep for the lifetime it
+    /// gives, and the app is the first of them: the whole document, or such a body of a route
+    /// that answers JSON or text, made for a `GET` with no cookie or `Authorization` is given to the
+    /// next such request in the handler's place until that lifetime ends (`s-maxage` where the
+    /// answer has `.shared(..)`, else `max_age`), with an `Age`. Every stage still runs for it,
+    /// the app's middleware too; what it saves is the handler, the render or the writing of the
+    /// JSON, the tag's hash and the compression. So a `Public` handler does not run for every
+    /// request, and what it reads may be that old when it is seen, as it already may be behind a
+    /// CDN. An answer whose handler takes an extractor of the app's own is not kept: it may read
+    /// a header the key does not cover. Neither is a file (`Media`), a relay, a stream or a feed,
+    /// but for a file of a known size that a page route answers in its page's place (`PageOr`).
     ///
     /// Past the bound, a page not read since the last time room was made goes first, and one
     /// larger than an eighth of the bound is not kept. Once the kept pages are within an
     /// eighth of the bound, an answer is kept only when its URL was asked for before, so a
-    /// URL asked for once takes no page's room. A write to a page's path drops what is
+    /// URL asked for once seldom takes a page's room and a page's handler runs twice before
+    /// its page is kept. A write to a page's path drops what is
     /// kept there, whatever it is answered, and so does one that redirects to it; a
     /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
-    /// under `corten dev`. The bytes counted are each page's key, its headers, its body and each
+    /// under `corten dev`, and an app with no `Public` route of a kind it keeps (a page, or JSON
+    /// or text in a build with `compress`) keeps none and counts no writes, whatever the bound. The bytes counted are each page's key, its headers, its body and each
     /// compressed form made of it.
     pub fn kept_answers(mut self, bytes: usize) -> Self {
         self.kept = bytes;
@@ -1541,8 +1546,6 @@ impl<M: Middleware> App<M> {
             shared.zoned_dates = self.zoned_dates;
         }
         shared.dev = dev;
-        // Under `corten dev` every load is the handler's, so a change shows on the next one.
-        shared.kept = if dev { None } else { crate::kept::Answers::new(self.kept) };
         shared.layout_reads = self.layout_reads.into();
         // The same path routed in two places (the app's routes and an area's) is one route to the router,
         // with the methods of both.
@@ -1622,6 +1625,10 @@ impl<M: Middleware> App<M> {
         if let Some(unstaged) = unstaged {
             table = table.merge(unstaged);
         }
+        // Under `corten dev` every load is the handler's, so a change shows on the next one. An app
+        // with no route eligible to keep a page has none for a write to drop, so its writes are not
+        // counted.
+        shared.kept = if dev || !table.keeps() { None } else { crate::kept::Answers::new(self.kept) };
         // An app whose areas and APIs have no middleware of their own runs the app's alone.
         let plain = scopes.prefixed.iter().all(|(_, scope)| scope.middleware.is_empty());
         let shared = Arc::new(shared);
@@ -2540,7 +2547,8 @@ impl<S: Steps> Layer<S> {
         // page, no caller lookup.
         if !self.policy.answers(req.uri(), || origin.host()) {
             let mut res = crate::security::misdirected();
-            self.policy.headers(&mut res, None, &self.policy.csp);
+            let vary = res.headers().contains_key(header::VARY);
+            self.policy.headers(&mut res, None, &self.policy.csp, vary);
             res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
             pending.discard();
             return res;
@@ -2563,7 +2571,8 @@ impl<S: Steps> Layer<S> {
         let cors = mount.filter(|mount| !mount.origins().is_empty()).and_then(|mount| mount.allowed_origin(origin.value()));
         if let Some(mount) = mount {
             if let Some(mut res) = mount.preflight(req.method(), headers, cors) {
-                self.policy.headers(&mut res, None, csp);
+                let vary = res.headers().contains_key(header::VARY);
+                self.policy.headers(&mut res, None, csp, vary);
                 res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
                 pending.discard();
                 return res;
@@ -2575,22 +2584,36 @@ impl<S: Steps> Layer<S> {
         // A page's nonce is made only if its HTML asks for one; an API route never has one.
         let nonce = mount.is_none().then(|| NonceSlot::new(shell, csp.script_loads));
         if let Some(refused) = self.policy.refuse(req.method(), &mut origin, cors.is_some() && !credentials.has_cookie()) {
-            let mut refused = match mount {
-                Some(mount) => crate::api::json_failure(refused, false, mount.errors.as_ref()).await,
+            let (mut refused, vary) = match mount {
+                Some(mount) => {
+                    let refused = crate::api::json_failure(refused, false, mount.errors.as_ref()).await;
+                    let vary = refused.headers().contains_key(header::VARY);
+                    (refused, vary)
+                }
                 None if page.refusal_wants_html(headers) => {
                     page.credentials = credentials.for_error_page(headers);
                     let watch = Watch(self.signal(&credentials, crate::extract::BODY_LIMIT));
                     let asked = Asked::new(req, &self.shared, &mut page, nonce.as_ref(), &watch.0);
                     let page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
-                    signal::follow(page, watch, self.zoned())
+                    // The error page's language, as on any other answer (below).
+                    let asked = watch.0.asked_language();
+                    let mut page = signal::follow(page, watch, self.zoned());
+                    let vary = page::vary_on_language(asked, page.headers_mut());
+                    (page, vary)
                 }
-                None => refused,
+                None => (refused, false),
             };
-            self.policy.headers(&mut refused, nonce.as_ref(), csp);
+            self.policy.headers(&mut refused, nonce.as_ref(), csp, vary);
             if mount.is_none() {
                 self.policy.document(&mut refused, csp, mode.swaps());
             }
-            refused.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
+            // An error page that drew a submit key keeps the rule every such page has.
+            let policy = if refused.extensions().get::<cache::Unrepeatable>().is_some() {
+                cache::drawn_unsettled(refused.headers_mut())
+            } else {
+                cache::PRIVATE
+            };
+            refused.headers_mut().insert(header::CACHE_CONTROL, policy);
             pending.discard();
             return refused;
         }
@@ -2641,7 +2664,11 @@ impl<S: Steps> Layer<S> {
         // The signal ends when this future is dropped, then when the response is dropped.
         let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
         let caller = watch.0.is_personal();
+        let asked = watch.0.asked_language();
         let mut res = signal::follow(res, watch, self.zoned());
+        // Whatever answered (a page, JSON, a redirect, the error page, a middleware after
+        // `next`): a locale it negotiated from `Accept-Language` is in its `Vary`.
+        let vary = page::vary_on_language(asked, res.headers_mut());
         if let Some(wrote) = wrote {
             wrote.answered(&res);
         }
@@ -2655,7 +2682,7 @@ impl<S: Steps> Layer<S> {
             res.headers_mut().insert(header::ALLOW, http::HeaderValue::from_static(""));
         }
         // First: the security headers reserve room for `Cache-Control` and `Vary` too.
-        self.policy.headers(&mut res, nonce.as_ref(), csp);
+        self.policy.headers(&mut res, nonce.as_ref(), csp, vary);
         if mount.is_none() {
             self.policy.document(&mut res, csp, mode.swaps());
         }
@@ -2672,6 +2699,12 @@ impl<S: Steps> Layer<S> {
         // Corten's own routes (assets, the runtime) are settled the same way: they say what they
         // are, and anything that does not gets the default.
         cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
+        // A live stream's fragments carry no mark, so under `corten dev` it logs a key one draws
+        // when its headers as sent let a shared cache keep it.
+        #[cfg(debug_assertions)]
+        if let Some(path) = &path {
+            crate::LiveShared::note(&res, path);
+        }
         // A body with this request's nonce differs every time, so its tag would never match.
         if !nonced {
             if let Some(has) = has {

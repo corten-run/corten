@@ -27,6 +27,12 @@ mod api {
     pub struct Record<'a> {
         pub id: &'a str,
     }
+
+    #[route("/api/ping", get = ping)]
+    pub struct Ping;
+
+    #[route("/api/pong", get = pong)]
+    pub struct Pong;
 }
 
 #[derive(Clone, Default, Route, Fields)]
@@ -46,29 +52,61 @@ async fn home(req: Req) -> HtmlResult {
     ))
 }
 
-async fn show(req: Req, State(source): State<Source>, Params(at): Params<routes::Catalog<'_>>) -> corten::Public<HtmlResult> {
-    let page = async {
-        let record = source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?;
-        req.page(views::document(&req, &record.title, views::record(&record, at.query.field.as_deref().unwrap_or(""))))
-    }
-    .await;
-    static LIFE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    let life = *LIFE.get_or_init(|| std::env::var("CORTEN_LIFE").ok().and_then(|life| life.parse().ok()).unwrap_or(60));
-    corten::Public::new(std::time::Duration::from_secs(life), page)
+async fn show(req: Req, State(source): State<Source>, Params(at): Params<routes::Catalog<'_>>) -> HtmlResult {
+    let record = source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?;
+    req.page(views::document(&req, &record.title, views::record(&record, at.query.field.as_deref().unwrap_or(""))))
 }
 
-async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>) -> JsonResult<Arc<Record>> {
-    Ok(Json(source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?))
+async fn json(
+    State(source): State<Source>,
+    Params(at): Params<api::Record<'_>>,
+) -> corten::Public<JsonResult<Arc<Record>>> {
+    let answer: JsonResult<Arc<Record>> =
+        async { Ok(Json(source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?)) }.await;
+    corten::Public::new(std::time::Duration::from_secs(60), answer)
 }
+
+/// The cheapest handler there is: what keeping an answer costs where it saves nothing.
+async fn ping() -> corten::Public<String> {
+    corten::Public::new(std::time::Duration::from_secs(60), String::from("ok"))
+}
+
+/// The same with a body the app compresses: 2,000 bytes that are there already.
+async fn pong() -> corten::Public<&'static str> {
+    corten::Public::new(std::time::Duration::from_secs(60), PONG)
+}
+
+static PONG: &str = concat!(
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+    "pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong pong ",
+);
 
 fn app(source: Source, lean: bool) -> App {
     let app = App::new(routes::router(source.clone()))
         .api(|routes| api::api(routes, source))
         .assets(views::Static)
         .components(&[views::SiteHeader]);
-    let app = match std::env::var("CORTEN_KEPT").ok().and_then(|kept| kept.parse().ok()) {
-        Some(kept) => app.kept_answers(kept),
-        None if std::env::var("CORTEN_KO").as_deref() == Ok("1") => app.kept_answers(0),
+    // How many bytes of answers the app keeps, for a measurement (0 keeps none).
+    let app = match std::env::var("CORTEN_KEPT").ok().and_then(|bytes| bytes.parse().ok()) {
+        Some(bytes) => app.kept_answers(bytes),
         None => app,
     };
     if lean {

@@ -102,6 +102,54 @@ pub trait Answer: IntoResponse + Sized {
     /// a page says `const PAGE: bool = true;` (or forwards its page's), or its route starts no read
     /// and its layout's places draw nothing.
     const PAGE: bool = false;
+    /// The answer is one whole body that only the handler's inputs decide (JSON, text): what the
+    /// app keeps for a [`Public`] route where it compresses the body, as it keeps a page
+    /// ([`crate::kept`]). Not a public API:
+    /// its type is one an app cannot name, so an answer type of the app's own is never kept this way
+    /// (`Json` of a type of the app's is `Json`'s answer, kept under the checks every kept answer
+    /// passes).
+    ///
+    /// ```compile_fail,E0326
+    /// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, Answer, AnyAnswer};
+    ///
+    /// struct Mine;
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn into_response(self) -> Response {
+    ///         "mine".into_response()
+    ///     }
+    /// }
+    ///
+    /// impl Answer for Mine {
+    ///     const FORMAT: Format = Format::Html;
+    ///     const WHOLE: bool = true;
+    ///     type Inputs = AnyInputs;
+    ///     type Rows = NotAFeed;
+    ///     type Kind = AnyAnswer;
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0603
+    /// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, Answer, AnyAnswer};
+    ///
+    /// struct Mine;
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn into_response(self) -> Response {
+    ///         "mine".into_response()
+    ///     }
+    /// }
+    ///
+    /// impl Answer for Mine {
+    ///     const FORMAT: Format = Format::Html;
+    ///     const WHOLE: corten::answer::sealed::Whole = corten::answer::sealed::Whole(true);
+    ///     type Inputs = AnyInputs;
+    ///     type Rows = NotAFeed;
+    ///     type Kind = AnyAnswer;
+    /// }
+    /// ```
+    #[doc(hidden)]
+    const WHOLE: sealed::Whole = sealed::Whole(false);
     /// What a request from the runtime ([`crate::Mode::Action`]) or a script's read can get:
     /// [`Patches`] for `HtmlResult<Patches>` (and `Public<..>` or `NoStore<..>` of it), a patch
     /// whenever the runtime asked; [`Screen<T>`] for `HtmlResult<Screen<T>>` (and `Public<..>` or
@@ -684,6 +732,10 @@ pub(crate) mod sealed {
     /// inputs say yes.
     pub struct Keyed(pub(crate) bool);
 
+    /// What [`super::Answer::WHOLE`] says. Only Corten can name it, so only Corten's own answers
+    /// say yes.
+    pub struct Whole(pub(crate) bool);
+
     pub trait Kind {}
     impl Kind for AnyAnswer {}
     impl Kind for Patches {}
@@ -1001,18 +1053,12 @@ impl<A: Shareable> Shareable for std::result::Result<A, JsonError> {
 }
 
 #[cfg(feature = "json")]
-impl<T> Shareable for crate::Json<T>
-where
-    crate::Json<T>: IntoResponse,
-{
+impl<T: crate::json::ToJson> Shareable for crate::Json<T> {
     type ForAll = Self;
 }
 
 #[cfg(feature = "json")]
-impl<T> ForEveryone for crate::Json<T>
-where
-    crate::Json<T>: IntoResponse,
-{
+impl<T: crate::json::ToJson> ForEveryone for crate::Json<T> {
     type Named = Self;
 
     fn for_all(self) -> Self {
@@ -1339,17 +1385,16 @@ impl IntoResponse for JsonError {
 impl<A: Answer> Answer for std::result::Result<A, JsonError> {
     const FORMAT: Format = A::FORMAT;
     const PAGE: bool = A::PAGE;
+    const WHOLE: sealed::Whole = A::WHOLE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
     type Kind = AnyAnswer;
 }
 
 #[cfg(feature = "json")]
-impl<T> Answer for crate::Json<T>
-where
-    crate::Json<T>: IntoResponse,
-{
+impl<T: crate::json::ToJson> Answer for crate::Json<T> {
     const FORMAT: Format = Format::Json;
+    const WHOLE: sealed::Whole = T::__KEPT;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
     type Kind = AnyAnswer;
@@ -1358,6 +1403,7 @@ where
 impl<A: Answer> Answer for Result<A, Error> {
     const FORMAT: Format = A::FORMAT;
     const PAGE: bool = A::PAGE;
+    const WHOLE: sealed::Whole = A::WHOLE;
     type Inputs = A::Inputs;
     type Rows = A::Rows;
     type Kind = <A::Kind as KindOf<A>>::InResult;
@@ -1365,6 +1411,7 @@ impl<A: Answer> Answer for Result<A, Error> {
 
 impl Answer for &'static str {
     const FORMAT: Format = Format::Html;
+    const WHOLE: sealed::Whole = sealed::Whole(true);
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
     type Kind = AnyAnswer;
@@ -1372,6 +1419,7 @@ impl Answer for &'static str {
 
 impl Answer for String {
     const FORMAT: Format = Format::Html;
+    const WHOLE: sealed::Whole = sealed::Whole(true);
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
     type Kind = AnyAnswer;
@@ -2132,8 +2180,9 @@ impl<A: Shareable> Public<A> {
     ///
     /// The name is checked when the app builds (`cargo build`, `cargo test`; `cargo check` does
     /// not evaluate it). A header that would make the answer one visitor's (`set-cookie`), one
-    /// Corten sets itself (`cache-control` and a CDN's `*-cache-control`, `vary`, the encoding
-    /// and length, the security headers, CORS, `corten-*`), one the answer has (`content-type`,
+    /// Corten sets itself (`cache-control`, any `*-cache-control` and the other caching headers a
+    /// CDN reads first, `surrogate-control`, `edge-control` and `x-accel-expires`, `vary`, the
+    /// encoding and length, the security headers, CORS, `corten-*`), one the answer has (`content-type`,
     /// `location`, `content-disposition`) or one of the connection's does not compile, and neither does a name that is
     /// not a lowercase header name:
     ///
@@ -2207,14 +2256,13 @@ headers! {
 /// those the answer itself has (its type, the place a redirect goes, a range, a download's file
 /// name, which [`Media::attachment`] writes escaped), and those that are
 /// the connection's, not the answer's. Names under `corten-` and `access-control-` (an API's
-/// CORS) are Corten's too, and so is any `*cache-control` and `surrogate-control`: a CDN
-/// obeys them over `Cache-Control`, which Corten makes `private` for an answer it must not
-/// share.
-const NOT_SHARED: [&str; 28] = [
+/// CORS) are Corten's too, and so are the caching headers a CDN obeys over `Cache-Control`, which
+/// Corten makes `private` for an answer it must not share: those it removes from such an answer
+/// (`crate::cache::CDN_CACHING`, the same list) and any other `*cache-control`.
+const NOT_SHARED: [&str; 27] = [
     "set-cookie",
     "clear-site-data",
     "cache-control",
-    "surrogate-control",
     "expires",
     "age",
     "date",
@@ -2257,21 +2305,27 @@ const fn has(name: &[u8], part: &[u8], at_end: bool) -> bool {
     true
 }
 
-/// Whether a [`Public`] answer may set the header `name` (lowercase), when the app compiles.
-const fn shared_header(name: &str) -> bool {
-    let name = name.as_bytes();
-    if has(name, b"corten-", false) || has(name, b"access-control-", false) || has(name, b"cache-control", true) {
-        return false;
-    }
+/// Whether `name` is one of `names`, when the app compiles.
+const fn listed(name: &[u8], names: &[&str]) -> bool {
     let mut n = 0;
-    while n < NOT_SHARED.len() {
-        let refused = NOT_SHARED[n].as_bytes();
-        if refused.len() == name.len() && has(name, refused, false) {
-            return false;
+    while n < names.len() {
+        let listed = names[n].as_bytes();
+        if listed.len() == name.len() && has(name, listed, false) {
+            return true;
         }
         n += 1;
     }
-    true
+    false
+}
+
+/// Whether a [`Public`] answer may set the header `name` (lowercase), when the app compiles.
+const fn shared_header(name: &str) -> bool {
+    let name = name.as_bytes();
+    !(has(name, b"corten-", false)
+        || has(name, b"access-control-", false)
+        || has(name, b"cache-control", true)
+        || listed(name, &NOT_SHARED)
+        || listed(name, &crate::cache::CDN_CACHING))
 }
 
 impl<A: Shareable> IntoResponse for Public<A> {
@@ -2295,6 +2349,7 @@ impl<A: Shareable> IntoResponse for Public<A> {
 impl<A: Answer + Shareable> Answer for Public<A> {
     const FORMAT: Format = A::FORMAT;
     const PAGE: bool = A::PAGE;
+    const WHOLE: sealed::Whole = A::WHOLE;
     type Inputs = AnonymousInputs;
     type Rows = A::Rows;
     type Kind = <A::Kind as KindOf<A>>::InPublic;
@@ -2615,7 +2670,7 @@ pub struct Endpoint<H, O> {
     pub(crate) answer: PhantomData<fn() -> O>,
     /// The answer is [`Public`] (its inputs are [`AnonymousInputs`]).
     pub(crate) shared: bool,
-    /// And each input is one the kept page's key covers ([`Anonymous::KEYED`]).
+    /// And each input is one the kept answer's key covers ([`Anonymous::KEYED`]).
     pub(crate) keyed: bool,
 }
 
@@ -2650,8 +2705,16 @@ where
 {
     const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
 
-    fn keeps(&self) -> bool {
-        self.shared && self.keyed && O::PAGE
+    fn keeps(&self) -> Option<crate::kept::Shape> {
+        if !(self.shared && self.keyed) {
+            return None;
+        }
+        if O::PAGE {
+            Some(crate::kept::Shape::Page)
+        } else {
+            // A whole body is kept where the app compresses it: none in a build that does not.
+            (O::WHOLE.0 && cfg!(feature = "compress")).then_some(crate::kept::Shape::Body)
+        }
     }
 
     #[inline]
@@ -2870,15 +2933,25 @@ mod tests {
 
     #[test]
     fn a_public_answer_takes_the_app_s_headers_and_not_corten_s_or_the_connection_s() {
-        for name in ["x-robots-tag", "link", "content-language", "etag", "last-modified", "x-cache-tag"] {
+        for name in
+            ["x-robots-tag", "link", "content-language", "etag", "last-modified", "x-cache-tag", "surrogate-key", "cache-tag"]
+        {
             assert!(super::shared_header(name), "{name}");
+        }
+        // The caching headers a CDN reads first, which Corten removes from a page that draws a
+        // submit key: the same list.
+        for name in crate::cache::CDN_CACHING {
+            assert!(!super::shared_header(name), "{name}");
         }
         for name in [
             "set-cookie",
             "cache-control",
             "cdn-cache-control",
             "cloudflare-cdn-cache-control",
+            "vercel-cdn-cache-control",
             "surrogate-control",
+            "edge-control",
+            "x-accel-expires",
             "access-control-allow-origin",
             "corten-mode",
             "content-type",

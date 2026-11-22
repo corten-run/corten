@@ -1,4 +1,4 @@
-//! The pages the app keeps to send again.
+//! The answers the app keeps to send again: pages, and whole bodies of JSON or text.
 //!
 //! A page whose route says its answer is the same for everyone ([`crate::Public`]) is one every
 //! shared cache may keep for the lifetime it names. The app is the first of them: it keeps the
@@ -6,11 +6,12 @@
 //! that lifetime (`s-maxage` where the answer has one, else `max-age`, RFC 9111 section 4.2.1)
 //! gives it to the next such request in the handler's place, with an `Age`.
 //!
-//! While the store has room every such answer is kept. Once it is full, keeping an answer drops
-//! another page, so an answer is kept then only when its URL was asked for before
-//! ([`Store::asked`]): a crawler walking more URLs than the bound has room for, or searches no
-//! one repeats, are answered by the handler without a copy into the store, and take no room
-//! from the pages that are asked for again.
+//! While the store has room every such answer is kept. Once it is full, keeping an answer may
+//! drop another page, so an answer is kept then only when its URL was asked for before, as far
+//! back as the marks that say so go ([`Store::asked`]): a crawler's first walk over more URLs
+//! than the bound has room for, or searches no one repeats, are answered by the handler without
+//! a copy into the store, and all but the few whose mark is another's take no room from the
+//! pages that are asked for again.
 //!
 //! It stands where the handler does, after the app's middleware, so every stage still runs for
 //! every request: a middleware sees the `200` with the whole body, the security headers and
@@ -28,11 +29,39 @@
 //! written in UTC), no `Authorization`, no caller read by a middleware, no `corten` header, JSON
 //! not asked for first, no notice sent back, no body, and the URL the router matched (a
 //! middleware that changed it since leaves the request to the handler). The key is the `Host`,
-//! the path and query, and `Accept-Language` when the page's `Vary` names it or a message was
-//! read in the language it asks for: a page for `/items?page=2` is not the one for `/items`. The
-//! headers are compared as they were sent, so `fr` and `fr-FR` each have a copy. An answer is
+//! the path and query, and `Accept-Language` when the page's `Vary` names it (`App::messages`, or
+//! a locale negotiated from it, before or after the page was made, which a copy given says again
+//! as it leaves the app, whatever `Vary` a middleware put on it): a page for `/items?page=2` is
+//! not the one for `/items`. The headers are compared as they were sent, so `fr` and `fr-FR`
+//! each have a copy. An answer is
 //! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
 //! and no value made for this request alone, and varies on nothing but what the key covers.
+//!
+//! A `Public` route whose answer is JSON (`Json<T>`, `JsonResult<T>`) or text is kept the same
+//! way, under the same rules and by the same key, where the app compresses the answer: its
+//! whole body, of 1,024 bytes or more, in a build with the `compress` feature, for a `GET` that
+//! shows nothing about who is asking ([`Shape::Body`]). A kept body saves its handler, its
+//! writing and its compression, and one the app does not compress saves too little of the first
+//! two, where the handler reads only memory, to pay for asking the store ([`compresses`]); so a
+//! build that does not compress keeps no body, and a route whose bodies are all too small stops
+//! asking ([`Unkept`]). Once kept, a body is given to a request that accepts no coding as well.
+//! Which answers are whole bodies is known from the
+//! route's type when the app compiles ([`crate::answer::Answer::WHOLE`], which an answer type of
+//! the app's own cannot claim). Such a route has one answer at its URL, where a page route has
+//! the document, its swap and its data, so a request that asks for JSON first is kept too, as a
+//! copy apart from one that does not: a handler that takes `Req` can read which of the two
+//! asked (`req.mode`). What an API adds for the site that asks (`Access-Control-Allow-Origin`,
+//! `Vary: origin`) is written after the handler for each request, and is no part of what is
+//! kept. An answer with markup its handler rendered that holds a form's new submit key is that
+//! request's alone: a page's render marks one, and the handler is watched for one drawn any
+//! other way, on the thread that runs it (`form::watched`). JSON the app holds as bytes
+//! (`json::Raw`) carries its own compressed forms in a build that compresses, a mark this does
+//! not replay, so it is its handler's for every request, which costs it no writing and no
+//! compression. Any other answer (a file, a relay, a
+//! stream, a feed, a status alone) is its handler's for every request, but for what a page route
+//! answers in a page's place: a file of a known size from a route that says it answers a page
+//! or a file (`PageOr`), and an answer type of the app's own that says it is a page, are kept
+//! as the page would be.
 //!
 //! A write drops what is kept at its path, whatever the query (a named post is `?do=name` at its
 //! page's path) and however the path is escaped, whatever it is answered: a handler or a
@@ -45,7 +74,8 @@
 //! A write that went through also drops what is kept at the place on this site its
 //! answer names (`Location`, `Content-Location`; RFC 9111 section 4.4). A page whose handler
 //! was reading while a write went through is not kept. Nothing else drops a page before its
-//! lifetime ends: the lifetime is how stale the app said the page may be. Off under `corten dev`. The
+//! lifetime ends: the lifetime is how stale the app said the page may be. Off under `corten dev`,
+//! and in an app with no route that keeps a page, whose writes are then not counted. The
 //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
 //! the compressed forms made for it, with an allowance for what holds them; the body, the key
 //! and each compressed form are held in allocations of their own size
@@ -56,9 +86,10 @@
 //! started and did not wait for, a store whose readers lag its writers) can leave the page as
 //! it was until its lifetime ends.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
 use std::sync::Weak;
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
@@ -78,8 +109,9 @@ pub(crate) const BOUND: usize = 32 << 20;
 /// The share of the bound one answer may take: a larger one is not kept.
 const SHARE: usize = 8;
 
-/// The copies kept for one URL, one for each `Host` and `Accept-Language` it was asked with: a
-/// new one past this takes the place of the oldest.
+/// The copies kept for one URL, one for each `Host`, `Accept-Language` and way of asking (a
+/// whole body's, for a data client or not) it was asked with: a new one past this takes the
+/// place of the oldest.
 const COPIES: usize = 8;
 
 /// What an entry counts for beside its key, its headers and its bytes: itself, its header map
@@ -127,6 +159,155 @@ fn with_room(head: &HeaderMap) -> HeaderMap {
 /// The counts of writes, one for the paths whose hash names it: enough of them (256 KiB, made
 /// when the first page is asked for) that an app's writes seldom share a count with a kept page.
 const WRITES: usize = 1 << 16;
+
+/// What a route that is kept answers, known when the app compiles: a page, kept as the whole
+/// document a browser loads, or a whole body (JSON, text), kept for whoever asks. Public in a
+/// private module, as the `Handler` whose `keeps` names it is: an app cannot name it.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Shape {
+    Page,
+    Body,
+}
+
+/// How many answers in a row a route of whole bodies makes with none kept before it stops
+/// asking the store ([`Unkept`]).
+const UNKEPT_RUN: u8 = 64;
+
+/// Where each thread's draws start ([`Unkept::leaves`]): any number but zero.
+const DRAWN_FROM: u32 = 0x9E37_79B9;
+
+thread_local! {
+    /// This thread's last draw of which request a route that left the store out asks it for.
+    static DRAWN: Cell<u32> = const { Cell::new(DRAWN_FROM) };
+}
+
+/// A route of whole bodies, by what became of the answers it made last. A body is kept where
+/// the app compresses it ([`compresses`]), which its size decides and no type shows, so a route
+/// whose bodies are all under that size would ask the store, find nothing, and have every
+/// answer refused: about as much again as a handler that answers a constant costs. After
+/// [`UNKEPT_RUN`] answers in a row of which none was kept, and with none between given from
+/// the store, the route's requests are its handler's, as they were before the app kept
+/// bodies, but about one in 256, drawn on each thread, which asks as before and so finds out
+/// a route whose bodies grew. Most often each was too small; an answer left out for another
+/// reason (a failure, a submit key, a lifetime of nothing) counts the same, since asking for
+/// it gained as little. A route that answers some of each keeps asking while an answer kept or
+/// given comes within each [`UNKEPT_RUN`]: one kept ends the run, and so does one given from
+/// the store, since once a route's large bodies are kept the only ones still made are the
+/// small. Without one (64 failures in a row from a route with bodies kept, too) it leaves,
+/// until the request that asks is one for a body kept or worth keeping. While a route leaves the store out, a body it kept
+/// earlier is not given, but to the request that asks: it is made again, as it would be had it
+/// not been kept, and the kept one may be given after it, while its lifetime lasts.
+///
+/// The count has a cache line to itself: every request to the route reads it, and a request
+/// that finds nothing kept writes the counts of the `Arc` that holds it.
+#[derive(Default)]
+#[repr(align(64))]
+pub(crate) struct Unkept(AtomicU8);
+
+impl Unkept {
+    /// Whether this request is the handler's without the store being asked.
+    #[inline]
+    pub(crate) fn leaves(&self) -> bool {
+        if self.0.load(Ordering::Relaxed) < UNKEPT_RUN {
+            return false;
+        }
+        // Drawn, not counted: a count of the thread's requests comes round in step with clients
+        // that ask in a pattern, and one route of two would then never be the one that asks.
+        DRAWN.with(|drawn| {
+            let next = draw(drawn.get());
+            drawn.set(next);
+            next >> 24 != 0
+        })
+    }
+
+    /// The route's request was given a kept body: the route has bodies worth asking for.
+    #[inline]
+    pub(crate) fn found(&self) {
+        self.made(true);
+    }
+
+    /// The route made an answer for a request that found nothing kept, and it was kept or not.
+    fn made(&self, kept: bool) {
+        let run = self.0.load(Ordering::Relaxed);
+        if kept {
+            if run != 0 {
+                self.0.store(0, Ordering::Relaxed);
+            }
+        } else {
+            self.counted(run);
+        }
+    }
+
+    /// One more answer not kept, after a run read as `run`. Counted from that run alone: where
+    /// an answer was kept or given since it was read, the run it ended stays ended. Two
+    /// requests at once may count as one.
+    fn counted(&self, run: u8) {
+        if run < UNKEPT_RUN {
+            let _ = self.0.compare_exchange(run, run + 1, Ordering::Relaxed, Ordering::Relaxed);
+        }
+    }
+
+    /// How many requests of a route that left the store out this thread leaves to their
+    /// handlers before one asks, set to `left` for a test that counts them.
+    #[cfg(all(test, feature = "compress"))]
+    pub(crate) fn leaves_next(left: usize) {
+        while Self::left_before_one_asks() != left {
+            DRAWN.set(draw(DRAWN.get()));
+        }
+    }
+
+    /// How many requests this thread leaves before one asks, as its draws stand.
+    #[cfg(test)]
+    fn left_before_one_asks() -> usize {
+        let mut next = draw(DRAWN.get());
+        let mut left = 0;
+        while next >> 24 != 0 {
+            next = draw(next);
+            left += 1;
+        }
+        left
+    }
+}
+
+/// The draw after `last` (xorshift, Marsaglia 2003): every number but zero comes round once
+/// before any comes twice, and its top byte is zero for one in 256 of them.
+#[inline]
+fn draw(mut last: u32) -> u32 {
+    last ^= last << 13;
+    last ^= last >> 17;
+    last ^= last << 5;
+    last
+}
+
+/// What became of one request that found nothing kept, told to its route when this goes: its
+/// answer was kept, or it was not, whatever the reason and also where the handler never
+/// answered. A request for a URL not asked for before in a full store has none
+/// ([`Asked::missed`]): what was refused there is the URL, before any answer, and counting it
+/// would let a walk over new URLs make a route leave that has bodies kept.
+struct Told(Option<Arc<Unkept>>, bool);
+
+impl Drop for Told {
+    fn drop(&mut self) {
+        if let Some(route) = &self.0 {
+            route.made(self.1);
+        }
+    }
+}
+
+/// Whether the app compresses a `200` of `length` bytes under these headers for a request that
+/// accepts a coding (1,024 bytes or more of a type worth it, in a build that compresses): a
+/// whole body is kept only then. Kept, it saves its handler, its writing and its compression,
+/// and a body the app does not compress saves so little of the first two on the benchmark's
+/// JSON that a handler which does next to nothing is slower kept than made.
+fn compresses(headers: &HeaderMap, length: u64) -> bool {
+    #[cfg(feature = "compress")]
+    return crate::compress::compresses(headers, length);
+    #[cfg(not(feature = "compress"))]
+    {
+        let _ = (headers, length);
+        false
+    }
+}
 
 /// How many words of marks ([`Store::asked`]) a store of `bound` bytes has, made when it first
 /// fills: a mark is one bit, and there is one for every 32 bytes of the bound, rounded up to a
@@ -261,7 +442,7 @@ struct Place {
 
 #[derive(Default)]
 struct Inner {
-    /// By path and query, the copies for each `Host` and `Accept-Language`.
+    /// By path and query, the copies for each `Host`, `Accept-Language` and way of asking.
     at: HashMap<Box<str>, Vec<Arc<Entry>>>,
     /// Every entry, in the place the clock's hand finds it: one not used since the hand last
     /// passed is the next to go when the bound is passed.
@@ -276,8 +457,11 @@ pub(crate) struct Entry {
     place: Place,
     written: Written,
     host: Option<HeaderValue>,
-    /// The `Accept-Language` it was asked with, when its `Vary` names the header.
+    /// The `Accept-Language` it was asked with, when its `Vary` names the header or its handler
+    /// read the language the header asks for.
     language: Option<Option<HeaderValue>>,
+    /// Asked for as data (`Accept: application/json` first): what [`Mode`] its handler saw.
+    data: bool,
     made: Instant,
     /// Its lifetime, in seconds.
     lifetime: u64,
@@ -389,21 +573,23 @@ impl Entry {
         self.age(now) < self.lifetime && self.written.stands(store)
     }
 
-    fn is_for(&self, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> bool {
-        self.host.as_ref() == host && self.language.as_ref().is_none_or(|kept| kept.as_ref() == language)
+    fn is_for(&self, host: Option<&HeaderValue>, language: Option<&HeaderValue>, data: bool) -> bool {
+        self.data == data && self.host.as_ref() == host && self.language.as_ref().is_none_or(|kept| kept.as_ref() == language)
     }
 }
 
 impl Store {
     /// Whether keeping an answer may have to drop a page: the bytes kept are within the largest
     /// answer that is kept ([`SHARE`]) of the bound. The pages that no longer stand count too,
-    /// since nothing removes them until room is made, so a store that filled once stays full.
+    /// since most stay until room is made: a store that filled once is seldom not full again,
+    /// and when it is, answers are kept the first time until it fills.
     fn full(&self) -> bool {
         self.bytes.load(Ordering::Relaxed) > self.bound - self.bound / SHARE
     }
 
     /// Whether the URL `at` (a path and query), asked for with `host` in any language, was asked
-    /// for before by a request no kept answer stood for, in a full store; and marks it.
+    /// for before by a request no kept answer stood for, in a full store, since the marks were
+    /// last cleared; and marks it.
     ///
     /// A mark is one bit, found by a hash of the URL, and no other URL unsets it. So a URL
     /// asked for before is known, and one not asked for before is taken for known when its
@@ -495,11 +681,17 @@ impl Answers {
     }
 
     /// The answer kept for a request, while it stands, with its age in seconds.
-    fn find(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>) -> Option<(Arc<Entry>, u64)> {
+    fn find(
+        &self,
+        at: &str,
+        host: Option<&HeaderValue>,
+        language: Option<&HeaderValue>,
+        data: bool,
+    ) -> Option<(Arc<Entry>, u64)> {
         let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
         // The copy that stands: one that no longer does is in no other's way until it goes.
-        let entry = inner.at.get(at)?.iter().find(|entry| entry.is_for(host, language) && entry.stands(&self.0, now))?;
+        let entry = inner.at.get(at)?.iter().find(|entry| entry.is_for(host, language, data) && entry.stands(&self.0, now))?;
         let age = entry.age(now);
         // Stored only when it changes: a page read often is marked once for each pass of the hand.
         if !entry.used.load(Ordering::Relaxed) {
@@ -526,7 +718,10 @@ impl Answers {
         // one seen often; else the oldest.
         let mut replaced: Vec<_> = copies
             .iter()
-            .filter(|copy| (copy.host == entry.host && copy.language == entry.language) || !copy.stands(store, now))
+            .filter(|copy| {
+                (copy.host == entry.host && copy.language == entry.language && copy.data == entry.data)
+                    || !copy.stands(store, now)
+            })
             .cloned()
             .collect();
         if replaced.is_empty() && copies.len() >= COPIES {
@@ -564,28 +759,36 @@ impl Answers {
     }
 }
 
-/// A request a kept answer can stand for: a `GET` for the whole document that shows nothing
-/// about who is asking, read as the handler would see it (after the app's middleware).
+/// A request a kept answer can stand for: a `GET` that shows nothing about who is asking, for
+/// the whole document where the route answers a page, read as the handler would see it (after
+/// the app's middleware).
 pub(crate) struct Asked<'a> {
     answers: &'a Answers,
+    signal: &'a crate::Signal,
     at: &'a str,
     host: Option<&'a HeaderValue>,
     language: Option<&'a HeaderValue>,
+    data: bool,
 }
 
-/// What a request's headers say of whether a kept answer can stand for it, and the two its key
-/// is made of.
+/// What a request's headers say of whether a kept answer can stand for it, and what of them its
+/// key is made of.
 struct Sent<'a> {
     host: Option<&'a HeaderValue>,
     language: Option<&'a HeaderValue>,
+    /// A data client asks: a whole body is kept for it apart from the one a browser is given.
+    data: bool,
 }
 
 impl<'a> Sent<'a> {
-    /// `None` where the headers show something the page could differ by beside its key: a
+    /// `None` where the headers show something the answer could differ by beside its key: a
     /// cookie but the time zone's, an `Authorization`, what the runtime asks for (`corten`,
-    /// whatever it says), a data client's JSON asked for first, a notice the page sends back
-    /// when it is read again, where a stream stopped, a body.
-    fn read(headers: &'a HeaderMap) -> Option<Self> {
+    /// whatever it says), a notice the page sends back when it is read again, where a stream
+    /// stopped, a body; and, of a page, a data client's JSON asked for first, which is another
+    /// answer at the same URL. A whole body is its route's one answer, so a data client's
+    /// request is kept too, apart: a handler that takes `Req` can read which of the two asked
+    /// (`req.mode`).
+    fn read(headers: &'a HeaderMap, shape: Shape) -> Option<Self> {
         // By their names and first, since they are what most requests a page is not kept for
         // carry: a session's cookie, and the runtime's header on a navigation inside the app.
         if crate::cache::Credentials::read(headers).personal(|| headers.contains_key(header::AUTHORIZATION))
@@ -594,20 +797,25 @@ impl<'a> Sent<'a> {
             return None;
         }
         // The rest in one pass over the headers, where each would be a lookup by its name.
-        let (mut host, mut language, mut accepted) = (None, None, false);
-        // The document a browser loads and not a data client's JSON, by the rule for a request's
-        // mode ([`Mode::said`]) with no `corten` header, as none was found above.
-        let document = |accept: Option<&'a HeaderValue>| Mode::said(None, || accept).0 == (Mode::Document, false);
+        let (mut host, mut language, mut data) = (None, None, None);
+        // Who asks, by the rule for a request's mode ([`Mode::said`]) with no `corten` header,
+        // as none was found above: a browser for the document, or a data client where the route
+        // answers a whole body.
+        let asks = |accept: Option<&'a HeaderValue>| match (Mode::said(None, || accept).0, shape) {
+            ((Mode::Document, false), _) => Some(false),
+            ((Mode::Data, false), Shape::Body) => Some(true),
+            _ => None,
+        };
         for (name, value) in headers {
             // The first line of each, which is what a lookup gives.
             if name == header::HOST {
                 host = host.or(Some(value));
             } else if name == header::ACCEPT {
-                // A data client's request leaves here, as it left before the rest was read.
-                if !accepted && !document(Some(value)) {
-                    return None;
+                // A request no kept answer stands for leaves here, as it left before the rest
+                // was read.
+                if data.is_none() {
+                    data = Some(asks(Some(value))?);
                 }
-                accepted = true;
             } else if name == header::ACCEPT_LANGUAGE {
                 language = language.or(Some(value));
             } else if name == header::CONTENT_LENGTH
@@ -618,12 +826,16 @@ impl<'a> Sent<'a> {
                 return None;
             }
         }
-        (accepted || document(None)).then_some(Sent { host, language })
+        let data = match data {
+            Some(data) => data,
+            None => asks(None)?,
+        };
+        Some(Sent { host, language, data })
     }
 }
 
 impl<'a> Asked<'a> {
-    pub(crate) fn of(req: &'a Request) -> Option<Self> {
+    pub(crate) fn of(req: &'a Request, shape: Shape) -> Option<Self> {
         if *req.method() != http::Method::GET {
             return None;
         }
@@ -634,7 +846,7 @@ impl<'a> Asked<'a> {
         if signal.is_personal() || signal.is_error_page() {
             return None;
         }
-        let Sent { host, language } = Sent::read(req.headers())?;
+        let Sent { host, language, data } = Sent::read(req.headers(), shape)?;
         // In origin form: a URL that names its own host is a proxy's.
         if req.uri().authority().is_some() {
             return None;
@@ -647,12 +859,17 @@ impl<'a> Asked<'a> {
             return None;
         }
         let at = at.as_str();
-        Some(Asked { answers, at, host, language })
+        Some(Asked { answers, signal, at, host, language, data })
     }
 
     /// The kept answer for this request, as its handler gave it, with its age.
     pub(crate) fn find(&self) -> Option<Response> {
-        let (entry, age) = self.answers.find(self.at, self.host, self.language)?;
+        let (entry, age) = self.answers.find(self.at, self.host, self.language, self.data)?;
+        // Kept for the language it was asked in: the answer names `Accept-Language` as it leaves
+        // the app, whatever `Vary` a middleware puts on it after this (`crate::page::vary_on_language`).
+        if entry.language.is_some() {
+            self.signal.ask_language();
+        }
         let mut res = Response::new(Body::from(entry.body.clone()));
         let mut head = with_room(&entry.head);
         // So a cache after this one, the browser's too, does not start the lifetime over.
@@ -672,7 +889,7 @@ impl<'a> Asked<'a> {
     /// meanwhile is seen. None in a full store for a URL not asked for before: keeping its
     /// answer would drop a page for one no one is known to ask for again, so the answer is the
     /// handler's and nothing here is paid for it but the mark it leaves.
-    pub(crate) fn missed(&self, req: &Request) -> Option<Missed> {
+    pub(crate) fn missed(&self, req: &Request, route: Option<Arc<Unkept>>) -> Option<Missed> {
         let store = &*self.answers.0;
         if store.full() && !store.asked(self.host, self.at) {
             return None;
@@ -687,6 +904,8 @@ impl<'a> Asked<'a> {
             // buffer, which a kept one would hold whole.
             host: self.host.and_then(|host| HeaderValue::from_bytes(host.as_bytes()).ok()),
             language: self.language.and_then(|language| HeaderValue::from_bytes(language.as_bytes()).ok()),
+            data: self.data,
+            told: Told(route, false),
         })
     }
 }
@@ -700,19 +919,26 @@ pub(crate) struct Missed {
     at: Box<str>,
     host: Option<HeaderValue>,
     language: Option<HeaderValue>,
+    data: bool,
+    /// Of a route of whole bodies, which is told whether this request's answer was kept.
+    told: Told,
 }
 
 impl Missed {
     /// `res`, kept when it is the same for everyone and for how long: see the module.
-    pub(crate) async fn keep(self, res: Response) -> Response {
-        let shared = self.signal.as_ref().and_then(crate::Signal::shared);
-        let Some(answers) = shared.and_then(|shared| shared.kept.as_ref()) else { return res };
+    pub(crate) async fn keep(self, mut res: Response) -> Response {
+        let Some(signal) = &self.signal else { return res };
+        let Some(answers) = signal.shared().and_then(|shared| shared.kept.as_ref()) else { return res };
         let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else { return res };
-        // Whether the page varies on `Accept-Language`, or on something the key does not cover.
-        let Some(language) = varies(res.headers()) else { return res };
-        // A page in the language the request asked for, in an app whose answers do not say so
-        // (messages read with no `App::messages`): one copy for each `Accept-Language` too.
-        let language = language || self.signal.as_ref().is_some_and(crate::Signal::asked_language);
+        // Whether the page varies on `Accept-Language` (`App::messages`, or a locale negotiated
+        // from it), or on something the key does not cover.
+        let Some(mut language) = varies(res.headers()) else { return res };
+        // A locale negotiated after the page set its headers is named now, so the key below
+        // and the header the app sends agree.
+        if !language && signal.asked_language() {
+            crate::page::add_language(res.headers_mut());
+            language = true;
+        }
         let style = res.extensions().get::<crate::security::StyleBlock>().cloned();
         // Only what is put back on a kept answer: a mark this does not know is not replayed.
         let known = 2 + usize::from(style.is_some());
@@ -733,6 +959,10 @@ impl Missed {
             return res;
         }
         let Some(length) = http_body::Body::size_hint(res.body()).exact() else { return res };
+        // A whole body is kept where the app compresses it.
+        if self.told.0.is_some() && !compresses(res.headers(), length) {
+            return res;
+        }
         let head: usize = res.headers().iter().map(|(name, value)| name.as_str().len() + value.len() + HEADER).sum();
         // The URL is held twice, by the entry and by the map.
         let key = self.at.len() * 2
@@ -751,13 +981,14 @@ impl Missed {
         // A copy of its own length: a page's buffer is sized for the last page rendered, and the
         // bytes made from it hold all of that for as long as they are kept.
         let body = Bytes::copy_from_slice(&body);
-        let Missed { at, host, language: asked, asked: made, written, .. } = self;
+        let Missed { at, host, language: asked, data, asked: made, written, mut told, .. } = self;
         let entry = answers.keep(|place| Entry {
             at,
             place,
             written,
             host,
             language: language.then_some(asked),
+            data,
             made,
             lifetime,
             head: parts.headers.clone(),
@@ -770,6 +1001,7 @@ impl Missed {
             used: AtomicBool::new(false),
             size: AtomicUsize::new(size),
         });
+        told.1 = true;
         // This answer's tag and compression are the kept one's first.
         parts.extensions.insert(Kept(entry));
         Response::from_parts(parts, Body::from(body))
@@ -778,7 +1010,9 @@ impl Missed {
 
 /// Whether an answer with these headers varies on `Accept-Language`; `None` when it varies on
 /// something a kept answer's key does not cover (`*`, a header of the app's), so it is not kept.
-/// `corten` and `accept` choose the page's form, which only the whole document is kept for.
+/// `corten` and `accept` choose the form of a page's answer, which the request was already
+/// asked by: a page is kept for the whole document alone, and a whole body apart for each way
+/// of asking.
 fn varies(headers: &HeaderMap) -> Option<bool> {
     let mut language = false;
     for line in headers.get_all(header::VARY) {
@@ -797,15 +1031,138 @@ fn varies(headers: &HeaderMap) -> Option<bool> {
 mod tests {
     use super::*;
 
+    /// A route that left the store out: `UNKEPT_RUN` answers of which none was kept.
+    fn left() -> Unkept {
+        let route = Unkept::default();
+        for made in 0..UNKEPT_RUN {
+            assert!(!route.leaves(), "after {made} answers");
+            route.made(false);
+        }
+        route
+    }
+
+    /// Of a route that left the store out, about one request in 256 asks all the same, and none
+    /// waits long for its turn: so a route whose bodies grew is found out.
+    #[test]
+    fn about_one_request_in_256_of_a_route_that_left_asks() {
+        let route = left();
+        DRAWN.set(DRAWN_FROM);
+        let (mut asked, mut wait, mut longest) = (0, 0, 0);
+        for _ in 0..1 << 18 {
+            if route.leaves() {
+                wait += 1;
+                longest = longest.max(wait);
+            } else {
+                asked += 1;
+                wait = 0;
+            }
+        }
+        assert!((922..=1126).contains(&asked), "1,024 of 262,144 within a tenth: {asked}");
+        assert!(longest < 4096, "the longest run of requests left: {longest}");
+        // An answer kept, or one given from the store, ends it: every request asks again.
+        route.made(true);
+        assert!((0..1024).all(|_| !route.leaves()));
+        let route = left();
+        route.found();
+        assert!((0..1024).all(|_| !route.leaves()));
+    }
+
+    /// An answer kept or given between a request's read of the run and its count is not lost:
+    /// the run it ended stays ended, where a plain write of the count read would start it at
+    /// its length.
+    #[test]
+    fn a_run_ended_while_a_request_counted_stays_ended() {
+        let route = Unkept::default();
+        for _ in 0..UNKEPT_RUN - 1 {
+            route.made(false);
+        }
+        let read = route.0.load(Ordering::Relaxed);
+        assert_eq!(read, UNKEPT_RUN - 1);
+        route.made(true);
+        route.counted(read);
+        assert_eq!(route.0.load(Ordering::Relaxed), 0);
+        assert!(!route.leaves());
+        // With nothing between, the count read is the one counted from.
+        route.counted(0);
+        assert_eq!(route.0.load(Ordering::Relaxed), 1);
+        // A run stops at its length, however many more answers are not kept.
+        let route = left();
+        for _ in 0..600 {
+            route.made(false);
+        }
+        assert_eq!(route.0.load(Ordering::Relaxed), UNKEPT_RUN);
+    }
+
+    /// The request that asks is drawn: of two routes that left the store out and are asked
+    /// turn about, each gets to ask, where a count of the thread's requests would come round
+    /// to the same one every time.
+    #[test]
+    fn two_routes_asked_turn_about_both_get_to_ask() {
+        let (one, other) = (left(), left());
+        DRAWN.set(DRAWN_FROM);
+        let (mut first, mut second) = (0, 0);
+        for _ in 0..1 << 17 {
+            first += u32::from(!one.leaves());
+            second += u32::from(!other.leaves());
+        }
+        assert!((384..=640).contains(&first) && (384..=640).contains(&second), "512 each within a quarter: {first} {second}");
+    }
+
+    /// Each thread draws for itself: what one has drawn moves no other's turn.
+    #[test]
+    fn each_thread_draws_which_request_asks_for_itself() {
+        let route = left();
+        DRAWN.set(DRAWN_FROM);
+        let fresh = Unkept::left_before_one_asks();
+        let _ = route.leaves();
+        assert_ne!(Unkept::left_before_one_asks(), fresh, "this thread's draws moved on");
+        let other = std::thread::spawn(Unkept::left_before_one_asks).join().expect("the thread");
+        assert_eq!(other, fresh, "another thread's did not");
+    }
+
+    /// Threads that count, end and read a route's run together leave it a run: no more than
+    /// its length, and ended by the next answer kept.
+    #[test]
+    fn a_run_counted_from_many_threads_stays_a_run() {
+        let route = Arc::new(Unkept::default());
+        let threads: Vec<_> = (0..8)
+            .map(|thread| {
+                let route = route.clone();
+                std::thread::spawn(move || {
+                    for turn in 0..20_000_u32 {
+                        match (turn + thread) % 7 {
+                            0 => route.made(true),
+                            1 => route.found(),
+                            2 => drop(route.leaves()),
+                            _ => route.made(false),
+                        }
+                        assert!(route.0.load(Ordering::Relaxed) <= UNKEPT_RUN);
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().expect("the thread");
+        }
+        route.made(true);
+        assert_eq!(route.0.load(Ordering::Relaxed), 0);
+        assert!(!route.leaves());
+    }
+
     /// What [`Sent::read`] reads, by a lookup of each header's name: the rule as the functions
     /// that own each part of it say it.
-    fn by_name(headers: &HeaderMap) -> Option<(Option<&HeaderValue>, Option<&HeaderValue>)> {
+    fn by_name(headers: &HeaderMap, shape: Shape) -> Option<(Option<&HeaderValue>, Option<&HeaderValue>, bool)> {
         if crate::cache::Credentials::read(headers).personal(|| headers.contains_key(header::AUTHORIZATION)) {
             return None;
         }
-        if headers.contains_key(crate::page::MODE_HEADER) || Mode::asked(headers) != (Mode::Document, false) {
+        if headers.contains_key(crate::page::MODE_HEADER) {
             return None;
         }
+        let data = match (Mode::asked(headers), shape) {
+            ((Mode::Document, false), _) => false,
+            ((Mode::Data, false), Shape::Body) => true,
+            _ => return None,
+        };
         let read = [
             crate::page::NOTICE_HEADER,
             header::HeaderName::from_static("last-event-id"),
@@ -815,7 +1172,7 @@ mod tests {
         if read.iter().any(|name| headers.contains_key(name)) {
             return None;
         }
-        Some((headers.get(header::HOST), headers.get(header::ACCEPT_LANGUAGE)))
+        Some((headers.get(header::HOST), headers.get(header::ACCEPT_LANGUAGE), data))
     }
 
     /// Each line of `headers`, in the order a response is written in.
@@ -917,7 +1274,7 @@ mod tests {
             // One the rule does not read, as most of a browser's are.
             (header::USER_AGENT, &[&[], &[b"a browser"]]),
         ];
-        let (mut kept, mut left) = (0, 0);
+        let (mut kept, mut left, mut apart) = (0, 0, 0);
         let mut choice = [0; 11];
         loop {
             for backwards in [false, true] {
@@ -931,12 +1288,17 @@ mod tests {
                         headers.append(sent[at].0.clone(), HeaderValue::from_bytes(line).unwrap());
                     }
                 }
-                let read = Sent::read(&headers).map(|sent| (sent.host, sent.language));
-                assert_eq!(read, by_name(&headers), "{headers:?}");
-                match read {
+                let page = Sent::read(&headers, Shape::Page).map(|sent| (sent.host, sent.language, sent.data));
+                assert_eq!(page, by_name(&headers, Shape::Page), "{headers:?}");
+                match page {
                     Some(_) => kept += 1,
                     None => left += 1,
                 }
+                // A whole body is kept for a data client too, apart, and for no one a page is not.
+                let body = Sent::read(&headers, Shape::Body).map(|sent| (sent.host, sent.language, sent.data));
+                assert_eq!(body, by_name(&headers, Shape::Body), "{headers:?}");
+                assert!(page.is_none() || body == page, "{headers:?}");
+                apart += usize::from(matches!(body, Some((_, _, true))));
             }
             // The next choice of lines, as a number with a digit for each header.
             let Some(at) = (0..sent.len()).find(|&at| choice[at] + 1 < sent[at].1.len()) else { break };
@@ -944,7 +1306,7 @@ mod tests {
             choice[..at].fill(0);
         }
         // Both answers were met, for more than the request with no header at all.
-        assert!(kept > 100 && left > 100, "{kept} {left}");
+        assert!(kept > 100 && left > 100 && apart > 100, "{kept} {left} {apart}");
     }
 
     /// An answer for `at` whose request found the path's writes as they are now.
@@ -957,6 +1319,7 @@ mod tests {
             written,
             host: host.map(HeaderValue::from_static),
             language: None,
+            data: false,
             made: Instant::now(),
             lifetime,
             head: HeaderMap::new(),
@@ -983,6 +1346,7 @@ mod tests {
         while !store.full() {
             answers.keep(entry(&answers, &format!("/kept/{pages}"), None, 60, 1000));
             pages += 1;
+            assert!(pages < 100, "the store never filled");
         }
         let held = answers.bytes();
         assert!(held > BOUND - BOUND / SHARE && held <= BOUND, "{pages} pages hold {held} bytes");
@@ -992,13 +1356,18 @@ mod tests {
         let host = HeaderValue::from_static("a.example");
         assert!(!store.asked(Some(&host), "/items") && store.asked(Some(&host), "/items"), "and so is another host's");
         assert_eq!(store.marks.get().map(|marks| marks.len() * 64), Some(2048));
-        // 2,048 marks: cleared when the 257th is set, so a URL asked for before then is new again.
-        let new = (0..300).filter(|n| !store.asked(None, &format!("/catalog/{n}"))).count();
-        assert!(new > 256, "{new} of 300 URLs were new");
-        assert!(store.marked.load(Ordering::Relaxed) < 100, "the marks were cleared");
-        assert!(store.asked(None, "/catalog/299"), "the last is marked after the clearing");
-        let known = (0..250).filter(|n| store.asked(None, &format!("/catalog/{n}"))).count();
-        assert!(known < 30, "{known} of the 250 asked for before the clearing are known by another's mark");
+        // 2,048 marks: a URL is known while no more than 256 are set, whatever was asked for since.
+        let mut urls = (0..400).map(|n| format!("/catalog/{n}"));
+        while store.marked.load(Ordering::Relaxed) < 256 {
+            store.asked(None, &urls.next().expect("the marks were cleared early"));
+        }
+        assert!(store.asked(None, "/items") && store.asked(None, "/catalog/0"), "known with 256 marks set");
+        // The next new URL clears them all, its own with them.
+        let clearing = urls.find(|url| !store.asked(None, url)).expect("a new URL");
+        assert_eq!(store.marked.load(Ordering::Relaxed), 0);
+        assert!(!store.asked(None, &clearing) && store.asked(None, &clearing), "the one that cleared them is new again");
+        assert!(!store.asked(None, "/items"), "and so is one asked for before");
+        assert_eq!(store.marked.load(Ordering::Relaxed), 2);
     }
 
     /// The bound holds after every answer kept: the one not read since the hand last passed goes
@@ -1013,22 +1382,22 @@ mod tests {
         }
         assert_eq!(answers.bytes(), size * 3);
         // `/a` and `/c` are read; `/b` is not.
-        assert!(answers.find("/a", None, None).is_some() && answers.find("/c", None, None).is_some());
+        assert!(answers.find("/a", None, None, false).is_some() && answers.find("/c", None, None, false).is_some());
         answers.keep(entry(&answers, "/d", None, 60, 1000));
         assert_eq!(answers.bytes(), size * 3, "one went for the new one");
-        assert!(answers.find("/b", None, None).is_none(), "the one not read");
+        assert!(answers.find("/b", None, None, false).is_none(), "the one not read");
         for at in ["/a", "/c", "/d"] {
-            assert!(answers.find(at, None, None).is_some(), "{at}");
+            assert!(answers.find(at, None, None, false).is_some(), "{at}");
         }
         // One past its lifetime is never given, and goes when the hand comes to it: before one
         // that was read since.
         let answers = Answers::new(size * 2).expect("a bound");
         answers.keep(entry(&answers, "/old", None, 0, 1000));
         answers.keep(entry(&answers, "/b", None, 60, 1000));
-        assert!(answers.find("/old", None, None).is_none(), "past its lifetime: never given");
-        assert!(answers.find("/b", None, None).is_some());
+        assert!(answers.find("/old", None, None, false).is_none(), "past its lifetime: never given");
+        assert!(answers.find("/b", None, None, false).is_some());
         answers.keep(entry(&answers, "/c", None, 60, 1000));
-        assert!(answers.find("/b", None, None).is_some() && answers.find("/c", None, None).is_some());
+        assert!(answers.find("/b", None, None, false).is_some() && answers.find("/c", None, None, false).is_some());
         assert_eq!(answers.bytes(), size * 2);
     }
 
@@ -1046,20 +1415,20 @@ mod tests {
         let answers = Answers::new(1 << 20).expect("a bound");
         let (a, b) = (HeaderValue::from_static("a.example"), HeaderValue::from_static("b.example"));
         answers.keep(entry(&answers, "/p", Some("a.example"), 60, 10));
-        assert!(answers.find("/p", Some(&a), None).is_some());
-        assert!(answers.find("/p", Some(&b), None).is_none() && answers.find("/p", None, None).is_none());
+        assert!(answers.find("/p", Some(&a), None, false).is_some());
+        assert!(answers.find("/p", Some(&b), None, false).is_none() && answers.find("/p", None, None, false).is_none());
         answers.keep(entry(&answers, "/p", Some("b.example"), 60, 10));
         answers.keep(entry(&answers, "/p", Some("a.example"), 60, 20));
         assert_eq!(answers.bytes(), 30 + OVERHEAD * 2, "the second for a.example took the first's place");
-        assert_eq!(answers.find("/p", Some(&a), None).expect("kept").0.body.len(), 20);
+        assert_eq!(answers.find("/p", Some(&a), None, false).expect("kept").0.body.len(), 20);
         // More hosts than a URL keeps copies for: the oldest not read since it was kept goes, so
         // the one read stays.
         for n in 0..COPIES {
             let host: &'static str = Box::leak(format!("h{n}.example").into_boxed_str());
             answers.keep(entry(&answers, "/p", Some(host), 60, 10));
         }
-        assert!(answers.find("/p", Some(&b), None).is_none() && answers.find("/p", Some(&a), None).is_some());
-        assert!(answers.find("/p", Some(&HeaderValue::from_static("h0.example")), None).is_none());
+        assert!(answers.find("/p", Some(&b), None, false).is_none() && answers.find("/p", Some(&a), None, false).is_some());
+        assert!(answers.find("/p", Some(&HeaderValue::from_static("h0.example")), None, false).is_none());
         assert_eq!(answers.bytes(), 20 + 10 * (COPIES - 1) + OVERHEAD * COPIES);
         let last = HeaderValue::from_static("h7.example");
         let mut res = Response::new(Body::empty());
@@ -1073,14 +1442,14 @@ mod tests {
         let read_before = entry(&answers, "/q", None, 60, 10);
         // A named post: `?do=save` at its page's path.
         write(&answers, "/p?do=save").answered(&res);
-        assert!(answers.find("/p", Some(&last), None).is_none(), "the path written, whatever the query");
-        assert!(answers.find("/q?x=2", None, None).is_none(), "and the path it redirects to");
-        assert!(answers.find("/made/1", None, None).is_none(), "and the one it says it made, named with this host");
+        assert!(answers.find("/p", Some(&last), None, false).is_none(), "the path written, whatever the query");
+        assert!(answers.find("/q?x=2", None, None, false).is_none(), "and the path it redirects to");
+        assert!(answers.find("/made/1", None, None, false).is_none(), "and the one it says it made, named with this host");
         answers.keep(read_before);
-        assert!(answers.find("/q", None, None).is_none(), "what was read before the write does not stand");
-        assert!(answers.find("/other", None, None).is_some());
+        assert!(answers.find("/q", None, None, false).is_none(), "what was read before the write does not stand");
+        assert!(answers.find("/other", None, None, false).is_some());
         answers.keep(entry(&answers, "/p", Some("h7.example"), 60, 10));
-        assert!(answers.find("/p", Some(&last), None).is_some(), "made after the write, it stands");
+        assert!(answers.find("/p", Some(&last), None, false).is_some(), "made after the write, it stands");
         assert!(Answers::new(0).is_none(), "no bound, none kept");
     }
 
@@ -1090,7 +1459,7 @@ mod tests {
     #[test]
     fn a_write_that_is_dropped_or_fails_late_drops_its_path_s_however_it_is_escaped() {
         let answers = Answers::new(1 << 20).expect("a bound");
-        let kept = |at| answers.find(at, None, None).is_some();
+        let kept = |at| answers.find(at, None, None, false).is_some();
         answers.keep(entry(&answers, "/notes/a%7Eb", None, 60, 10));
         answers.keep(entry(&answers, "/other", None, 60, 10));
         drop(write(&answers, "/notes/a~b"));
@@ -1133,13 +1502,13 @@ mod tests {
         assert!(answers.0.written.get().is_none(), "an app that keeps no page holds no counts");
         answers.keep(entry(&answers, "/p", None, 60, 10));
         assert!(answers.0.written.get().is_some_and(|counts| counts.len() == WRITES));
-        assert!(answers.find("/p", None, None).is_some());
+        assert!(answers.find("/p", None, None, false).is_some());
         early.answered(&res);
-        assert!(answers.find("/p", None, None).is_none(), "it counts where the counts now are");
+        assert!(answers.find("/p", None, None, false).is_none(), "it counts where the counts now are");
         answers.keep(entry(&answers, "/p", None, 60, 10));
-        assert!(answers.find("/p", None, None).is_some());
+        assert!(answers.find("/p", None, None, false).is_some());
         write(&answers, "/p").answered(&res);
-        assert!(answers.find("/p", None, None).is_none());
+        assert!(answers.find("/p", None, None, false).is_none());
     }
 
     /// Threads that keep, read, grow and write at once leave the bytes counted equal to what the
@@ -1157,7 +1526,7 @@ mod tests {
                         match n % 4 {
                             0 | 1 => drop(answers.keep(entry(answers, &at, None, 60, 500 + n % 300))),
                             2 => {
-                                if let Some((found, _)) = answers.find(&at, None, None) {
+                                if let Some((found, _)) = answers.find(&at, None, None, false) {
                                     #[cfg(feature = "compress")]
                                     found.grew(100);
                                     drop(found);
@@ -1195,6 +1564,23 @@ mod tests {
         assert_eq!(on_site("/caf\u{e9}".as_bytes(), None), Some("/caf\u{e9}".as_bytes()), "a path that is not ASCII");
     }
 
+    /// A whole body asked for as data is a copy of its own, replaced by one asked the same way:
+    /// its handler may have read which client asked.
+    #[test]
+    fn a_body_asked_for_as_data_is_a_copy_of_its_own() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        answers.keep(entry(&answers, "/v", None, 60, 10));
+        assert!(answers.find("/v", None, None, false).is_some() && answers.find("/v", None, None, true).is_none());
+        let data = entry(&answers, "/v", None, 60, 20);
+        answers.keep(move |place| Entry { data: true, ..data(place) });
+        assert_eq!(answers.find("/v", None, None, true).expect("kept").0.body.len(), 20);
+        assert_eq!(answers.find("/v", None, None, false).expect("still kept").0.body.len(), 10);
+        let again = entry(&answers, "/v", None, 60, 30);
+        answers.keep(move |place| Entry { data: true, ..again(place) });
+        assert_eq!(answers.find("/v", None, None, true).expect("kept").0.body.len(), 30);
+        assert_eq!(answers.bytes(), 10 + 30 + 2 * OVERHEAD, "the one asked the same way went");
+    }
+
     /// A copy that no longer stands is in no other's way, and goes when its URL is kept again.
     #[test]
     fn a_copy_that_no_longer_stands_is_not_in_another_s_way() {
@@ -1204,8 +1590,8 @@ mod tests {
         answers.keep(entry(&answers, "/p", None, 0, 10));
         let (french, asked) = (entry(&answers, "/p", None, 60, 20), fr.clone());
         answers.keep(move |place| Entry { language: Some(Some(asked)), ..french(place) });
-        assert_eq!(answers.find("/p", None, Some(&fr)).expect("the one that stands").0.body.len(), 20);
-        assert!(answers.find("/p", None, Some(&en)).is_none());
+        assert_eq!(answers.find("/p", None, Some(&fr), false).expect("the one that stands").0.body.len(), 20);
+        assert!(answers.find("/p", None, Some(&en), false).is_none());
         assert_eq!(answers.bytes(), 20 + OVERHEAD, "the one past its lifetime went when the URL was kept again");
     }
 
@@ -1286,7 +1672,7 @@ mod tests {
         let coded = Kept::coded(&extensions, &second.body, Coding::Zstd, || Bytes::from(vec![b'z'; 400]));
         assert_eq!(coded.len(), 400);
         assert_eq!(answers.bytes(), size + 400, "the other page went, and the bound holds");
-        assert!(answers.find("/a", None, None).is_none() && answers.find("/b", None, None).is_some());
+        assert!(answers.find("/a", None, None, false).is_none() && answers.find("/b", None, None, false).is_some());
         assert_eq!(first.size.load(Ordering::Acquire), GONE);
     }
 }

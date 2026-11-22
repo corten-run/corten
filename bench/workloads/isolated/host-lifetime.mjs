@@ -6,8 +6,11 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSy
 import { join, posix } from "node:path";
 import { durable, readRegular, syncDirectory, tree } from "./evidence.mjs";
 import { hostDurableWriter } from "./host-durable-writer.mjs";
+import { hostTerminalClock } from "./host-observation.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { executableReference, participantExecutables } from "./participant-executables.mjs";
+import { browserContainers } from "../../fullstack-browser/contract.mjs";
+import { commandCpuSet as boundCommandCpuSet, cpuRanges, cpuSetWithin, liveApplication, liveGroup, nativeControlPartition } from "./native-roles.mjs";
 
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const serial = (v) => `${JSON.stringify(v)}\n`;
@@ -41,23 +44,52 @@ function readGroup(path, keys = fields) {
     catch (error) { if (error.code === "ENOENT") return [key, null]; throw error; }
   })) };
 }
+const cpusetField = "cpuset.cpus.effective";
+const effectiveCpuSet = (path) => readGroup(path, [cpusetField]).files[cpusetField]?.trim();
+
+function scopeCpuSetMatches(groups, path, cpuset) {
+  return groups?.find((g) => g.path === path)?.files[cpusetField]?.trim() === cpuset;
+}
+
+function participantCpuSetsWithin({ groups, processes }, root, cpuset) {
+  // The root is checked exactly. Each process in a child has its own effective
+  // set, which can be narrower but cannot include a CPU outside its role.
+  const children = new Set(processes.map((p) => groupPath(p.cgroup)));
+  children.delete(root);
+  if (!children.size) return true;
+  const effective = new Map(groups.map((g) => [g.path, g.files[cpusetField]]));
+  return [...children].every((path) => {
+    const actual = effective.get(path);
+    return actual != null && cpuSetWithin(actual, cpuset);
+  });
+}
+
+export function requireNativeCommandCpuSet(cpuset) {
+  assert.equal(process.platform, "linux", "isolated native work requires Linux cgroup v2");
+  const path = groupPath(readFileSync("/proc/self/cgroup", "utf8"));
+  assert.match(path, /\/corten-bench-groups-r[1-9]\d*-[a-f0-9]{16}\.service\/native-\d+-[a-f0-9]{16}$/,
+    "isolated native work requires the delegated native command cgroup");
+  assert.equal(effectiveCpuSet(path), cpuset, "native command effective cpuset differs");
+}
+
+export function requireNativeContainerCpuSet(info, cpuset) {
+  const { Id: id, State: { Pid: pid, Running: running } } = info;
+  assert.match(id, containerId); assert.ok(running && Number.isSafeInteger(pid) && pid > 0);
+  const membership = `/proc/${pid}/cgroup`, cgroup = readFileSync(membership, "utf8"), path = groupPath(cgroup);
+  participantGroup(path, id);
+  assert.equal(effectiveCpuSet(path), cpuset, "native container effective cpuset differs");
+  assert.equal(readFileSync(membership, "utf8"), cgroup, "native container left its cgroup");
+}
+export { requireNativeCommandCpuSet as requireBrowserCommandCpuSet, requireNativeContainerCpuSet as requireBrowserContainerCpuSet };
 function parents(path) {
   const values = [];
   for (;;) { values.push(readGroup(path)); if (path === "/") return values; path = posix.dirname(path); }
 }
 function effectiveControls(files) {
-  const cpu = files["cpu.max"], cpus = files["cpuset.cpus.effective"], memory = files["memory.max"];
+  const cpu = files["cpu.max"], cpus = files[cpusetField], memory = files["memory.max"];
   if (cpu !== null) assert.match(cpu, /^(max|[1-9]\d*) [1-9]\d*\n?$/);
   if (memory !== null) assert.match(memory, /^(max|0|[1-9]\d*)\n?$/);
-  if (cpus !== null) {
-    assert.match(cpus, /^(0|[1-9]\d*)(?:-(0|[1-9]\d*))?(?:,(0|[1-9]\d*)(?:-(0|[1-9]\d*))?)*\n?$/);
-    let previous = -1;
-    for (const range of cpus.trim().split(",")) {
-      const [start, end = start] = range.split("-").map(Number);
-      assert.ok(Number.isSafeInteger(start) && Number.isSafeInteger(end) && start > previous && end >= start);
-      previous = end;
-    }
-  }
+  if (cpus !== null) cpuRanges(cpus);
   return cpu !== null && cpus !== null && memory !== null;
 }
 function executableHash(at, executables) {
@@ -206,7 +238,7 @@ function docker(args) {
   }).trim();
 }
 const containerId = /^[a-f0-9]{64}$/;
-function containerState(info) {
+export function containerState(info) {
   assert.match(info.Id, containerId); assert.match(info.Image, /^sha256:[a-f0-9]{64}$/);
   return { id: info.Id, imageId: info.Image, restartCount: info.RestartCount,
     state: Object.fromEntries(["Status", "Pid", "Running", "Paused", "Restarting", "OOMKilled", "Dead", "ExitCode", "StartedAt", "FinishedAt"].map((k) => [k, info.State[k]])) };
@@ -215,6 +247,28 @@ function participantGroup(path, id) {
   assert.equal(posix.normalize(path), path);
   assert.ok(posix.isAbsolute(path) && !path.split("/").includes(".."));
   assert.ok([id, `docker-${id}.scope`].includes(posix.basename(path)), "Docker PID/cgroup namespace correspondence missing");
+}
+
+/** Boundary sample for short native probes; no executable hashing in the timed window. */
+export function captureNativeCpuScope(info) {
+  const { id, imageId, restartCount, state } = containerState(info);
+  const { Pid, Running, StartedAt, FinishedAt } = state;
+  assert.equal(restartCount, 0);
+  if (!Running) {
+    assert.equal(state.Status, "exited");
+    return { id, imageId, startedAt: StartedAt, finishedAt: FinishedAt, atMs: Date.now() };
+  }
+  assert.ok(Number.isSafeInteger(Pid) && Pid > 0);
+  const proc = "/proc/" + Pid;
+  const startTicks = processIdentity(readFileSync(join(proc, "stat"), "utf8")).startTicks;
+  const path = groupPath(readFileSync(join(proc, "cgroup"), "utf8"));
+  participantGroup(path, id);
+  const keys = ["cgroup.procs", cpusetField];
+  const groups = scopeGroups(path, keys);
+  assert.deepEqual(scopeGroups(path, keys), groups, "native CPU membership changed during the boundary sample");
+  assert.equal(groupPath(readFileSync(join(proc, "cgroup"), "utf8")), path);
+  assert.equal(processIdentity(readFileSync(join(proc, "stat"), "utf8")).startTicks, startTicks);
+  return { id, imageId, startedAt: StartedAt, pid: Pid, startTicks, path, groups, atMs: Date.now() };
 }
 
 /** Actual read-only Linux snapshot. Never reads a PID/path supplied by saved evidence. */
@@ -256,7 +310,7 @@ function browserDocker(excluded, executables, pending) {
   return { inventory, participants, gaps };
 }
 
-/** Own one fresh delegated child cgroup. No budgets, pinning or parent controls are changed. */
+/** Own one fresh delegated child cgroup. Set only the bound command cpuset, never new quotas. */
 export async function beginLifetime({ campaign, binding, invocation, directory, command, pid, signal, startupSignal, onFault }) {
   function checkStartup() {
     signal?.throwIfAborted(); startupSignal?.throwIfAborted();
@@ -274,7 +328,11 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   const controllers = readFileSync(join(root, parent, "cgroup.subtree_control"), "utf8").trim().split(/\s+/);
   assert.ok(["cpu", "cpuset", "memory"].every((key) => controllers.includes(key)), "required accounting controllers must be delegated and enabled");
   const browser = binding.request.group === "fullstack-browser";
-  const excluded = new Set(browser ? docker(["container", "ls", "-aq", "--no-trunc"]).split("\n").filter(Boolean) : []);
+  const commandCpus = boundCommandCpuSet(binding);
+  const liveCpus = commandCpus && liveGroup(binding.request.group) ? nativeControlPartition(binding).cpus : null;
+  const captureDocker = browser || liveCpus !== null;
+  const excluded = new Set(captureDocker ? docker(["container", "ls", "-aq", "--no-trunc"]).split("\n").filter(Boolean) : []);
+  if (liveCpus) assert.equal(excluded.size, 0, "live worker requires a clean Docker inventory");
   for (const id of excluded) assert.match(id, containerId);
   const path = `${parent}/native-${command}-${randomBytes(8).toString("hex")}`;
   mkdirSync(join(root, path)); // Exclusive creation. Never adopt a saved or existing cgroup.
@@ -286,14 +344,20 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   }
   for (const value of startupSignals) value.addEventListener("abort", dispose, { once: true });
   try {
+    if (commandCpus) {
+      writeFileSync(join(root, path, "cpuset.cpus"), commandCpus);
+      assert.equal(effectiveCpuSet(path), commandCpus, "native command effective cpuset differs");
+    }
     mkdirSync(directory, { mode: 0o700 });
     mkdirSync(join(directory, "processes"), { mode: 0o700 });
     context = { schema: "benchmark-isolated-host-lifetime/v1", campaign, group: binding.request.group,
     round: binding.request.round, commit: binding.request.commit, bindingSha256: deploymentSha256(binding), invocation,
     bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), parent, path, command, leaderPid: pid,
-    policy: "observed-inherited-native-defaults; external exclusive-host ownership is separate", ancestors: parents(parent),
+    policy: commandCpus ? `bound-${browser ? "browser" : "native"}-command-cpuset; external exclusive-host ownership is separate`
+      : "observed-inherited-native-defaults; external exclusive-host ownership is separate", ancestors: parents(parent),
     cpuInfo: readFileSync("/proc/cpuinfo", "utf8"), memoryInfo: readFileSync("/proc/meminfo", "utf8"),
-    ...(browser ? { dockerBaseline: [...excluded].sort(), leaderIdentity: processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")) } : {}) };
+    ...(captureDocker ? { dockerBaseline: [...excluded].sort() } : {}),
+    ...(browser || commandCpus ? { leaderIdentity: processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")) } : {}) };
     durable(join(directory, "binding.json"), `${JSON.stringify(context, null, 2)}\n`);
     writer = hostDurableWriter(directory); await writer.ready();
     checkStartup();
@@ -307,7 +371,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   const executables = new Map();
   // Catalog build commands introduce large CLI/plugin executables during live
   // sampling. Pin them now and seal their bytes after the final sample.
-  pending = browser || binding.request.group === "catalog-page" ? participantExecutables() : null;
+  pending = captureDocker || commandCpus || binding.request.group === "catalog-page" ? participantExecutables() : null;
   let samples = 0, observerError = null, attached = false, faultNotified = false;
   const observerFailures = { count: 0, first: null, last: null };
   let sampleOperation, lastSampleAt = null, previousCatalogProcesses = binding.request.group === "catalog-page" ? [] : null;
@@ -339,6 +403,8 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     sampleOperation = "snapshot";
     if (writer.error) throw writer.error;
     const observed = snapshot(path, executables, pending, lastSampleAt, timing, previousCatalogProcesses), initial = [], keys = new Set();
+    if (commandCpus) assert.ok(scopeCpuSetMatches(observed.groups, path, commandCpus)
+      && participantCpuSetsWithin(observed, path, commandCpus), "native command effective cpuset differs");
     const processes = observed.processes;
     // Keep initial raw PID/start/executable/type observations once. Every live
     // sample independently re-reads those identities and records their references;
@@ -350,7 +416,12 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       return key;
     });
     sampleOperation = "docker-inventory";
-    if (browser) observed.docker = browserDocker(excluded, executables, pending);
+    if (captureDocker) observed.docker = browserDocker(excluded, executables, pending);
+    if (liveCpus) for (const { kernel } of observed.docker.participants) if (kernel) {
+      const path = groupPath(kernel.cgroup);
+      assert.ok(scopeCpuSetMatches(kernel.groups, path, liveCpus.application)
+        && participantCpuSetsWithin(kernel, path, liveCpus.application), "native live application effective cpuset differs");
+    }
     sampleOperation = "sample-write";
     writer.enqueue(initial, serial(observed));
     if (binding.request.group === "catalog-page") previousCatalogProcesses = processes;
@@ -372,7 +443,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         checkStartup(); assert.equal(closed, false);
         assert.equal(attached, false); assert.ok(Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid);
         assert.equal(pid, context.leaderPid);
-        if (browser) assert.deepEqual(processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")), context.leaderIdentity);
+        if (context.leaderIdentity) assert.deepEqual(processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")), context.leaderIdentity);
         // Only the just-spawned bootstrap PID from the live supervisor, before its start message.
         writeFileSync(join(root, path, "cgroup.procs"), String(pid)); attached = true; sample();
         checkStartup(); assert.equal(closed, false);
@@ -396,7 +467,7 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     // Explicitly await appends in controls; enqueue/capture is not storage proof.
     drain() { return writer.drain(); },
     get pendingStorage() { return writer.settled; },
-    async finish(result) {
+    async finish(result, retainTerminalClock = false) {
       assert.equal(closed, false); closed = true; clearInterval(timer); releaseStartup();
       let empty = false;
       try { sample(); sampleOperation = "terminal-empty"; empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0"); }
@@ -414,11 +485,14 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
       // an earlier, contradictorily clean command result.
       assert.ok(!signal?.aborted || result.cancelled || result.forced, "host observation cancelled during storage drain");
       const terminal = result.terminal && empty;
+      const terminalClock = retainTerminalClock && terminal && !result.cancelled && !result.forced && observerError === null
+        ? hostTerminalClock() : undefined;
       const staged = join(directory, "terminal.pending.json"), published = join(directory, "terminal.json");
       let identity;
       try {
         durable(staged, `${JSON.stringify({ terminal, attached, empty, samples, observerError, observerFailures,
-          command: result, bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), ancestors: parents(parent) }, null, 2)}\n`);
+          command: result, bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), ancestors: parents(parent),
+          ...(terminalClock ? { terminalClock } : {}) }, null, 2)}\n`);
         identity = lstatSync(staged);
         assert.equal(lstatSync(published, { throwIfNoEntry: false }), undefined);
         renameSync(staged, published); syncDirectory(directory);
@@ -482,6 +556,7 @@ export function inspectLifetime(binding, invocation, directory, expected) {
   const executableProof = before.entries.some((e) => e.path === "executables.json") ? read("executables.json") : null;
   assert.equal(samples.length, terminal.samples); assert.ok(samples.length >= 3);
   let previous = -1, controlsComplete = true; const identities = new Map(), accounting = new Map(), records = new Map();
+  const commandCpus = boundCommandCpuSet(binding);
   for (const sample of samples) {
     assert.ok(Number.isSafeInteger(sample.at) && sample.at >= previous);
     if (previous >= 0 && sample.at - previous > maximumSampleGapMs) controlsComplete = false;
@@ -525,6 +600,7 @@ export function inspectLifetime(binding, invocation, directory, expected) {
       }
     }
     assert.ok(sample.groups.some((g) => g.path === context.path));
+    if (commandCpus && !scopeCpuSetMatches(sample.groups, context.path, commandCpus)) controlsComplete = false;
     const seen = new Set();
     for (const p of sample.processes) {
       const identity = processIdentity(p.stat); assert.ok(!seen.has(identity.pid)); seen.add(identity.pid);
@@ -533,6 +609,7 @@ export function inspectLifetime(binding, invocation, directory, expected) {
       identities.set(key, { ...identity, executableSha256: p.executableSha256, type: p.type });
     }
     assert.equal(seen.size, members.size);
+    if (commandCpus && !participantCpuSetsWithin(sample, context.path, commandCpus)) controlsComplete = false;
   }
   assert.deepEqual(samples[0].processes, []);
   assert.ok(isDeepStrictEqual(tree(directory), before), "host lifetime evidence mutated during inspection");
@@ -544,12 +621,68 @@ export function inspectLifetime(binding, invocation, directory, expected) {
     unforced: !terminal.command.cancelled && !terminal.command.forced,
     leader: [...identities.values()].some((p) => p.pid === context.leaderPid) };
   const complete = Object.values(checks).every(Boolean);
+  if (terminal.terminalClock !== undefined) {
+    assert.equal(context.group, "localized-marketplace");
+    assert.equal(terminal.terminalClock.bootId, context.bootId);
+  }
   return { status: complete ? "verified" : "blocked", cleanupComplete: complete, context,
-    samples, identities: [...identities.values()], manifestSha256: before.sha256, checks };
+    samples, identities: [...identities.values()], manifestSha256: before.sha256, checks,
+    ...(complete && terminal.terminalClock ? { terminalClock: terminal.terminalClock } : {}) };
 }
 
-export function inspectBrowserParticipants(subject, observation) {
+export function inspectBrowserParticipants(subject, observation, cpus) {
   assert.equal(subject.schema, "native-browser-host-subject/v2");
+  return inspectContainerParticipants(subject, observation, cpus, browserContainers);
+}
+
+export function inspectLiveActors(binding, observation, tools, participants, windows) {
+  assert.ok(liveGroup(binding.request.group));
+  const { cpus } = nativeControlPartition(binding);
+  if (observation.status !== "verified" || !observation.cleanupComplete) return false;
+  const { context, samples } = observation;
+  if (!Array.isArray(context.dockerBaseline) || context.dockerBaseline.length || !participants.length) return false;
+  const leader = context.leaderIdentity;
+  if (!leader || leader.pid !== context.leaderPid) return false;
+  assert.deepEqual(Object.keys(tools).sort(), ["browser", "node"]);
+  for (const hash of Object.values(tools)) assert.match(hash, /^[a-f0-9]{64}$/);
+  if (samples.some((s) => !scopeCpuSetMatches(s.groups, context.path, cpus.browser)
+    || !participantCpuSetsWithin(s, context.path, cpus.browser))) return false;
+  const executionWindow = { startedAt: samples[0].at, endedAt: samples.at(-1).at };
+  const byApp = new Map();
+  let previousEnd = executionWindow.startedAt;
+  for (const p of participants) {
+    assert.equal(p.role, "application"); assert.ok(binding.selection.apps.includes(p.app) && !byApp.has(p.app));
+    if (!p.window || p.window.startedAt < previousEnd || p.window.endedAt > executionWindow.endedAt) return false;
+    previousEnd = p.window.endedAt;
+    byApp.set(p.app, p);
+  }
+  if (!inspectContainerParticipants({ executionWindow, participants }, observation, cpus, { application: liveApplication })) return false;
+  const observedBrowser = (s) => {
+    const processes = s.processes.map((p) => ({ ...p, ...processIdentity(p.stat) }));
+    return processes.some((p) => p.pid === leader.pid && p.startTicks === leader.startTicks && p.executableSha256 === tools.node)
+      && processes.some((p) => p.type === "--type=renderer" && p.executableSha256 === tools.browser);
+  };
+  const observed = new Set(), previous = new Map();
+  let lastSample = -1;
+  for (const { app, startedAt, endedAt, renderer } of windows) {
+    const p = byApp.get(app);
+    if (!p || startedAt < p.window.startedAt || endedAt > p.window.endedAt || startedAt < (previous.get(app) ?? 0)) return false;
+    if (!(Number.isSafeInteger(startedAt) && Number.isSafeInteger(endedAt) && endedAt > startedAt)) return false;
+    previous.set(app, endedAt);
+    const begin = renderer === null ? startedAt : renderer?.startedAt;
+    const end = renderer === null ? endedAt : renderer?.endedAt;
+    if (!(Number.isSafeInteger(begin) && Number.isSafeInteger(end) && begin >= startedAt && end <= endedAt && end > begin)) return false;
+    const index = samples.findIndex((s, i) => i > lastSample && s.at >= begin && s.at < end
+      && (renderer === null || observedBrowser(s))
+      && s.docker.participants.some((r) => r.container.id === p.id && r.kernel?.at >= begin && r.kernel.at < end));
+    if (index < 0) return false;
+    lastSample = index;
+    observed.add(app);
+  }
+  return byApp.size === observed.size;
+}
+
+function inspectContainerParticipants(subject, observation, cpus, containerBudgets) {
   assert.ok(Array.isArray(subject.participants));
   const ids = new Set(), { samples } = observation;
   const baseline = new Set(observation.context.dockerBaseline);
@@ -585,8 +718,13 @@ export function inspectBrowserParticipants(subject, observation) {
   for (const p of subject.participants) {
     assert.match(p.imageId, /^sha256:[a-f0-9]{64}$/);
     assert.ok(["application", "upstream", "artifact"].includes(p.role));
+    if (cpus && p.role !== "artifact") assert.ok(Object.hasOwn(containerBudgets, p.role), "unexpected native container role");
     assert.equal(p.terminal.id, p.id); assert.equal(p.terminal.imageId, p.imageId);
     assert.equal(p.terminal.restartCount, 0);
+    if (cpus && p.role !== "artifact") {
+      const { cpu, memoryBytes } = containerBudgets[p.role], limits = p.terminal.limits;
+      if (limits.CpusetCpus !== cpus[p.role] || limits.NanoCpus !== cpu * 1000000000 || limits.Memory !== memoryBytes) return false;
+    }
     for (const key of ["Paused", "Restarting", "Dead"]) assert.equal(p.terminal.state[key], false);
     if (p.window === null) {
       assert.equal(p.terminal.restartCount, 0);
@@ -709,6 +847,7 @@ export function inspectBrowserParticipants(subject, observation) {
       assert.ok(Number.isSafeInteger(limits.Memory) && limits.Memory > 0);
       assert.equal(controls["memory.max"].trim(), String(limits.Memory));
       if (limits.CpusetCpus) assert.equal(controls["cpuset.cpus.effective"].trim(), limits.CpusetCpus);
+      if (cpus && !participantCpuSetsWithin(k, path, cpus[p.role])) return false;
     }
   }
   return true;
@@ -717,10 +856,11 @@ export function inspectBrowserParticipants(subject, observation) {
 export function composeHostProof(binding, native, observation) {
   const incomplete = { resources: "blocked", cleanupComplete: false, blockers: ["actual-host-subject-proof-incomplete"] };
   if (observation.status !== "verified") return incomplete;
-  // No native client OS caps exist. Preserve inherited whole-host controls, rather
-  // than inventing a finite quota or requiring an unapproved isolated partition.
-  // Exclusive ownership of that host remains the live controller's responsibility.
-  const browser = binding.request.group === "fullstack-browser";
+  // Keep inherited cpu.max/memory.max; pinned placement is not a new quota.
+  const group = binding.request.group, browser = group === "fullstack-browser";
+  const commandCpus = boundCommandCpuSet(binding), browserCpus = browser && commandCpus && binding.resources.browserCpus;
+  if (commandCpus && observation.samples.some((s) => !scopeCpuSetMatches(s.groups, observation.context.path, commandCpus)
+      || !participantCpuSetsWithin(s, observation.context.path, commandCpus))) return incomplete;
   if (binding.request.group !== "client-heavy" && !browser) return { resources: native.resources,
     cleanupComplete: observation.cleanupComplete && native.cleanupComplete,
     blockers: native.resources === "verified" && native.cleanupComplete ? [] : incomplete.blockers,
@@ -737,24 +877,34 @@ export function composeHostProof(binding, native, observation) {
     assert.equal(observation.context.leaderIdentity.pid, observation.context.leaderPid);
   }
   assert.ok(Array.isArray(subject.processWindows));
-  if (!subject.processWindows.length && (!browser || native.qualificationPassed || native.outcomes.some((r) => r.outcome !== "failed"))) return incomplete;
+  if (!subject.processWindows.length && (browserCpus || !browser || native.qualificationPassed || native.outcomes.some((r) => r.outcome !== "failed"))) return incomplete;
   if (browser && (!native.cleanupComplete || !Array.isArray(observation.context.dockerBaseline)
-    || !inspectBrowserParticipants(subject, observation))) return incomplete;
+    || !inspectBrowserParticipants(subject, observation, browserCpus))) return incomplete;
+  const leader = observation.context.leaderIdentity;
+  if (commandCpus && leader?.pid !== observation.context.leaderPid) return incomplete;
   for (const window of subject.processWindows) {
     assert.ok((browser ? ["browser"] : ["compiler", "browser"]).includes(window.kind));
     assert.ok(Number.isFinite(window.startedAt) && Number.isFinite(window.endedAt) && window.endedAt >= window.startedAt);
     assert.ok(window.startedAt >= subject.executionWindow.startedAt && window.endedAt <= subject.executionWindow.endedAt);
+    const timedContainers = browserCpus ? [
+      subject.participants.find((p) => p.role === "application" && p.app === window.app && p.case === window.case),
+      subject.participants.find((p) => p.role === "upstream"),
+    ] : [];
+    if (timedContainers.some((p) => !p?.window || p.window.startedAt > window.startedAt || p.window.endedAt < window.endedAt)) return incomplete;
     const found = samples.some((s) => {
       if (s.at < window.startedAt || s.at > window.endedAt) return false;
+      if (!timedContainers.every((p) => s.docker.participants.some((r) => r.container.id === p.id && r.kernel
+        && r.kernel.at >= window.startedAt && r.kernel.at <= window.endedAt))) return false;
       const processes = s.processes.map((p) => ({ ...p, ...processIdentity(p.stat) }));
       const node = processes.some((p) => p.executableSha256 === subject.toolIdentities.node
-        && (!browser || p.pid === observation.context.leaderPid && p.startTicks === observation.context.leaderIdentity.startTicks));
+        && (!(browser || commandCpus) || p.pid === leader.pid && p.startTicks === leader.startTicks));
       return node && (window.kind === "compiler" ? processes.some((p) => /^rustc/.test(p.comm))
         : processes.some((p) => p.executableSha256 === subject.toolIdentities.browser && p.type === "--type=renderer"));
     });
     if (!found) return incomplete;
   }
-  return { resources: "verified", cleanupComplete: true, blockers: [], policy: "actual-inherited-native-host-controls",
+  return { resources: "verified", cleanupComplete: true, blockers: [], policy: browserCpus ? "observed-browser-cpu-partition"
+    : commandCpus ? "observed-client-cpu-partition" : "actual-inherited-native-host-controls",
     nativeSubjectSha256: subject.subjectSha256, nativeFilesSha256: subject.filesSha256,
     observationManifestSha256: observation.manifestSha256 };
 }

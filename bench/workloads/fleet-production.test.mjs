@@ -1,7 +1,7 @@
 // Offline composition acceptance: real snapshot Worker -> productionMain -> controller.
 // Only credential consumption and external Git/HTTPS/SSH/SCP responses are fake.
 import assert from "node:assert/strict";
-import { fork } from "node:child_process";
+import { execFileSync, fork } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
@@ -12,6 +12,8 @@ import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { providerTransport } from "./cloud-provider.mjs";
+import { productionPlan } from "./cloud-production.mjs";
+import { inspectCampaign } from "./cloud-validation.mjs";
 import { bootstrapWorkspaceScript, captureSshOwner, installSshIngress, savedLoadLayout, verifySshIngress } from "./cloud-contract.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { groupNames } from "./registry.mjs";
@@ -19,6 +21,24 @@ import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
+const checkout = fs.realpathSync(".");
+const checkoutCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim();
+function roleCheckFor(fixtureCommit, sourceCommit) {
+  // Reuse the real result for identical inputs within this fixture/worker so
+  // role replay does not consume the offline monitor's peer-overlap window.
+  const checked = new Map();
+  return async ({ round, commit: measured, group, mode }, interrupted) => {
+    assert.equal(measured, fixtureCommit);
+    assert.ok(!interrupted?.());
+    const key = JSON.stringify([round, group, mode]);
+    if (!checked.has(key)) {
+      const report = await inspectCampaign({ action: "actor-role-preflight", round, commit: sourceCommit,
+        group: group ?? null, mode: mode ?? null }, { interrupted });
+      checked.set(key, report);
+    }
+    return checked.get(key);
+  };
+}
 
 function fixture(t, mode = "success") {
   t.after(() => {
@@ -41,18 +61,21 @@ function fixture(t, mode = "success") {
     const target = path.join(repo, file); fs.mkdirSync(path.dirname(target), { recursive: true });
     let source = committed.get(file);
     if (file === "bench/workloads/cloud-validation-snapshot.mjs") {
-      // The validator captures installed HEAD on import, even for detach. Fake
-      // only that Git boundary, not the validator or its snapshot checks.
-      assert.equal(source.split("readGit = spawnSync").length, 3, "review eager Git seam when validation changes");
-      source = source.replaceAll("readGit = spawnSync", `readGit = () => ({ status: 0, stdout: '${commit}\\n' })`);
+      // The synthetic controller tree has no Git repository. Use the same real
+      // validation checkout (and commit) as the parent-side role check.
+      const before = 'const checkout = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), "../.."));';
+      assert.equal(source.split(before).length, 2, "review validation checkout seam");
+      source = source.replace(before, `const checkout = ${JSON.stringify(checkout)};`);
     }
     if (file === "bench/workloads/cloud-production.mjs") {
       // Change defaults only. The actual productionMain body, approval gates,
       // transport, controller and worker protocol remain the production code.
       const before = "spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted";
       const after = "spawn = synthetic.spawn, streamSpawn = synthetic.streamSpawn, providerFactory = synthetic.providerFactory, repo = synthetic.repo, inspect, sleep = synthetic.sleep, interrupted";
+      const roleDefault = "compiler, roleCheck, remainingAdmission = false";
       assert.equal(source.split(before).length, 2, "review fixture injection when production signature changes");
-      source = source.replace(before, after) + `\nimport * as syntheticFs from 'node:fs';
+      assert.equal(source.split(roleDefault).length, 2, "review role-check fixture default");
+      source = source.replace(before, after).replace(roleDefault, "compiler, roleCheck = syntheticRoleCheck, remainingAdmission = false") + `\nimport * as syntheticFs from 'node:fs';
 import * as syntheticPath from 'node:path';
 import { workerData as syntheticData } from 'node:worker_threads';
 import { fork as syntheticFork } from 'node:child_process';
@@ -63,6 +86,7 @@ import { bootstrapMarker as syntheticMarker, bootstrapReadScript as syntheticRea
 import { bootstrapWorkspaceScript } from './cloud-contract.mjs';
 const syntheticArgs = syntheticData.args;
 const syntheticGroup = syntheticArgs[syntheticArgs.indexOf('--group') + 1];
+const syntheticRoleCheck = (${roleCheckFor.toString()})(${JSON.stringify(commit)}, ${JSON.stringify(checkoutCommit)});
 const synthetic = (${syntheticDependencies.toString()})({
   repo: ${JSON.stringify(repo)}, trace: ${JSON.stringify(trace)}, hosts: ${JSON.stringify(hosts)},
   stateDir: syntheticArgs[syntheticArgs.indexOf('--state-dir') + 1], group: syntheticGroup,
@@ -90,7 +114,8 @@ const synthetic = (${syntheticDependencies.toString()})({
     if (argv[0] === "show") return { status: 0, stdout: committed.get(argv[1].slice(41)) };
     return h.run(binary, argv, 60000);
   };
-  const deps = { repo: h.repo, spawn, WorkerClass: SnapshotWorker, write: (value) => output.push(JSON.parse(value)) };
+  const roleCheck = roleCheckFor(commit, checkoutCommit), deps = { repo: h.repo, spawn, WorkerClass: SnapshotWorker, write: (value) => output.push(JSON.parse(value)),
+    plan: (options, deps) => productionPlan(options, { ...deps, roleCheck }) };
   deps.catalogProvider = syntheticCatalogProvider(syntheticPlacement([mode === "overlap" ? "sfo2" : "sfo3"]));
   const args = ["r21", "--fleet-root", h.base];
   const saved = (group = groupNames[0]) => JSON.parse(fs.readFileSync(path.join(h.base, group, "groups-r21/state.json")));
@@ -131,6 +156,7 @@ test("captured production composition ignores arbitrary hints, binds POST identi
     assert.equal(uploads.length, 3);
     assert.deepEqual(saved.control.sealed, ["bootstrap"]);
     assert.equal(saved.control.monitor.phase, "closed");
+    assert.equal(saved.launchHostKeySha256, fileHash(path.join(p.h.base, group, "groups-r21/known_hosts")));
     assert.equal(events.filter((row) => row.group === group && row.boundary === "monitor").length, 1);
     const firstSsh = events.filter((row) => row.group === group && row.boundary === "ssh").slice(0, 3);
     assert.ok(firstSsh.every((row) => row.options.input === "set -euo pipefail\ntrue\n"));
@@ -185,7 +211,7 @@ test("captured production composition ignores arbitrary hints, binds POST identi
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
 });
 
-test("remaining approval still needs pinned c-8, not the deleted catalog host's size, and dispatches once", { timeout: 60000 }, async (t) => {
+test("remaining approval moves from sfo2 to lon1 through captured workers and dispatches once", { timeout: 60000 }, async (t) => {
   const p = fixture(t, "overlap");
   assert.equal(await fleetMain(await p.prepare(), p.deps), 3);
   const state = p.saved(), group = groupNames[0], campaign = `r21-${state.token}`;
@@ -209,43 +235,46 @@ test("remaining approval still needs pinned c-8, not the deleted catalog host's 
     archiveSha256: fileHash(path.join(local, "results.tgz")), evidenceOutcome: "validated", exitCode: 0,
     validation: { status: "verified", campaign, collectionIntegrity: "manifest-verified" } });
   fs.writeFileSync(path.join(local, "state.json"), JSON.stringify(state));
+  fs.writeFileSync(p.hosts, "[]"); // The synthetic provider no longer has the catalog host.
   // Only this code-only stand-in substitutes the native replay result. Child
   // admission still uses actual captured production/controller/provider workers.
   // The synthetic archive cannot establish native readiness or paid authority.
   p.deps.verify = async (fleet, group, { interrupted }) => ({
     ...await verifyCollectedGroup(fleet, group, { inspect: async () => report, interrupted }), evidenceMode: "native-replay" });
   const args = ["r21", "--fleet-root", p.h.base, "--admit-remaining"];
-  assert.equal(await fleetMain([...args, "--print-approval"], p.deps), 3);
-  const preview = p.output.at(-1), approval = preview.approvalSha256;
-  assert.equal(preview.subject.jobs[0].outcome, "verified");
-  for (const job of preview.subject.jobs.slice(1)) assert.equal(job.subject.options.group, job.group);
-  const approved = [...args, "--approve-reviewed-merged-ready", approval];
-  const pinnedCatalog = (region) => {
-    const catalog = syntheticPlacement([region]);
+  const remainingCatalog = (regions) => {
+    const catalog = syntheticPlacement(regions);
     catalog.sizes.pop();
     catalog.regions[0].sizes = catalog.regions[0].sizes.filter((size) => size !== "c-16");
     return syntheticCatalogProvider(catalog);
   };
-  p.deps.catalogProvider = pinnedCatalog("sfo3");
-  await assert.rejects(fleetMain(approved, p.deps), /reserved fleet placement not advertised: c-8\/sfo2/);
+  p.deps.catalogProvider = remainingCatalog(["lon1", "blr1"]);
+  assert.equal(await fleetMain([...args, "--print-approval"], p.deps), 3);
+  const preview = p.output.at(-1), approval = preview.approvalSha256;
+  assert.equal(preview.subject.jobs[0].outcome, "verified");
+  assert.equal(preview.subject.remainingRegion, "lon1");
+  for (const job of preview.subject.jobs.slice(1)) assert.equal(job.subject.options.group, job.group);
+  const approved = [...args, "--approve-reviewed-merged-ready", approval];
+  p.deps.catalogProvider = remainingCatalog(["blr1"]);
+  await assert.rejects(fleetMain(approved, p.deps), /fleet-exact-approval-required/);
   assert.equal(fs.existsSync(path.join(p.h.base, "remaining-intent.json")), false);
   assert.equal(p.workers.length, 1);
   assert.equal(p.events().filter((row) => row.method === "POST").length, 1);
-  p.deps.catalogProvider = pinnedCatalog("sfo2");
+  p.deps.catalogProvider = remainingCatalog(["lon1"]);
   assert.equal(await fleetMain(approved, p.deps), 3, JSON.stringify(p.output.at(-1)));
   assert.equal(p.workers.length, groupNames.length);
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "pending"));
   const events = p.events(), posts = events.filter((row) => row.method === "POST");
   assert.deepEqual(posts.map((row) => row.group), groupNames);
   assert.deepEqual(posts.map(({ body }) => [body.size, body.region]),
-    [["c-16", "sfo2"], ...groupNames.slice(1).map(() => ["c-8", "sfo2"])]);
+    [["c-16", "sfo2"], ...groupNames.slice(1).map(() => ["c-8", "lon1"])]);
   const ids = new Set(), ips = new Set();
   for (const group of groupNames) {
     const saved = p.saved(group); ids.add(saved.id); ips.add(saved.ip);
     assert.equal(saved.group, group); assert.equal(saved.status, group === groupNames[0] ? "collected" : "running");
-    assert.equal(saved.host.region, "sfo2");
+    assert.equal(saved.host.region, group === groupNames[0] ? "sfo2" : "lon1");
     const job = events.find((row) => row.group === group && row.boundary === "upload" && row.to === "/bench/job.sh");
-    assert.equal(job.content.includes("--placement 'dedicated-sfo2'"), group !== groupNames[0]);
+    assert.equal(job.content.includes("--placement 'dedicated-lon1'"), group !== groupNames[0]);
     const start = events.findIndex((row) => row.group === group && row.boundary === "provider-child-start");
     const exit = events.findIndex((row) => row.group === group && row.boundary === "provider-child-exit");
     assert.ok(start >= 0 && exit > start);

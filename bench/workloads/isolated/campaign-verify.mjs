@@ -11,13 +11,13 @@ import { executionGroups, inspectNative } from "./native-replay.mjs";
 import { inspectLifetime, composeHostProof } from "./host-lifetime.mjs";
 import { commandResult, composePhase } from "./composition.mjs";
 import { registrySchema } from "../registry.mjs";
-import { alternateFleetMode } from "../cloud-contract.mjs";
-import { verifyHostBoundary } from "./host-observation.mjs";
+import { alternateCampaignPlacements } from "./contract.mjs";
+import { verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { verifyControlAdmission } from "./control-admission.mjs";
-import { apparatusProof, verifyStreamAudit, verifyStreamDrain, verifyStreamSeal } from "./control-stream.mjs";
+import { apparatusProof, nativeControlPartition, verifyStreamAudit, verifyStreamDrain, verifyStreamSeal } from "./control-stream.mjs";
 
 export async function validateCampaign(input) {
   try {
@@ -120,16 +120,13 @@ export async function validateCampaign(input) {
         if (status.executionVersion === 5) {
           assert.deepEqual(hostBefore.controlApparatus?.registration, apparatus);
           const after = read(`${id}/${entry.path}/host-after.json`);
-          const cpus = Object.fromEntries(Object.entries(recorded.binding.resources.expectedCpus ?? {}).map(([role, value]) => [role, value.cpuset]));
+          const { cpus, roles } = nativeControlPartition(recorded.binding);
           for (const observation of [hostBefore, after]) {
-            const sample = observation.controlApparatus.sample; apparatusProof(apparatus.binding, apparatus, sample, cpus);
+            const sample = observation.controlApparatus.sample; apparatusProof(apparatus.binding, apparatus, sample, cpus, roles);
             if (streamSeal) assert.ok(BigInt(sample.monoNs) <= BigInt(streamSeal.sealedMonoNs));
           }
         }
         if (controlHost) for (const field of ["hostname", "bootId"]) assert.equal(hostBefore[field], controlHost[field]);
-        try { boundary = verifyHostBoundary(hostBefore, read(`${id}/${entry.path}/host-after.json`)); }
-        catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
-        if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.ok(isDeepStrictEqual(status.outcomes[index].cleanup, boundary), "cleanup boundary differs"); }
       }
       if (currentExecution) for (const [commandIndex, result] of recorded.results.entries()) {
         // An intent is already forbidden advancement, even if its exit is absent.
@@ -151,6 +148,23 @@ export async function validateCampaign(input) {
         }
         hostObservations[commandIndex] = observation;
         if (observation.status !== "verified") blockers.push(`${group}/${phase}: host observations incomplete`);
+      }
+      if (hostBefore) {
+        try {
+          const after = read(`${id}/${entry.path}/host-after.json`);
+          const settlePath = `${entry.path}/host-after-settled.json`;
+          if (subtree.entries.some((e) => e.path === settlePath)) {
+            const lifetime = hostObservations.at(recorded.results.length - 1);
+            assert.ok(status.executionVersion === 5 && group === "localized-marketplace" && phase === "timing"
+              && recorded.results.length === recorded.invocations.length && lifetime?.status === "verified"
+              && lifetime.cleanupComplete && lifetime.terminalClock, "udev settle lacks sealed terminal marketplace lifetime");
+            const settled = read(`${id}/${settlePath}`);
+            if (streamSeal) assert.ok(BigInt(settled.controlApparatus.sample.monoNs) <= BigInt(streamSeal.sealedMonoNs));
+            boundary = verifySettledHostBoundary(hostBefore, after, settled, lifetime.terminalClock);
+          } else boundary = verifyHostBoundary(hostBefore, after);
+        }
+        catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
+        if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.ok(isDeepStrictEqual(status.outcomes[index].cleanup, boundary), "cleanup boundary differs"); }
       }
       const manifestEntry = subtree.entries.find((e) => e.path === `${entry.path}/native-manifest.json`);
       if (!manifestEntry) {
@@ -283,7 +297,8 @@ export async function validateCampaign(input) {
     const complete = currentExecution && status.state === "finished" && collectionEntry && !replay.incomplete && !replay.pending.length
       && verifiedGroups.length === plan.order.length && verifiedGroups.every((g, i) => g.group === plan.order[i]) && !blockers.length;
     const loadLayout = groupScoped ? plan.bindings[0].resources.requestedCpuEnv?.CATALOG_LOAD_LAYOUT : undefined;
-    const placement = groupScoped && plan.bindings[0].campaignMode === alternateFleetMode ? alternateFleetMode : undefined;
+    const mode = groupScoped ? plan.bindings[0].campaignMode : undefined;
+    const placement = alternateCampaignPlacements.includes(mode) ? mode : undefined;
     const common = { schema: groupScoped ? "benchmark-isolated-group-campaign-inspection/v1" : "benchmark-isolated-campaign-inspection/v1", scope: "intrinsic-evidence",
       round, commit, campaign: id, campaignSha256: plan.campaignSha256, sourceSha256: plan.sourceSha256,
       ...(loadLayout ? { loadLayout } : {}),

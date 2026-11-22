@@ -866,8 +866,15 @@ mod layout_reads {
                 </html>
             })
         };
-        let routes =
-            Table::new().route("/", get(move |req: Req| page(req, true))).route("/plain", get(move |req: Req| page(req, false)));
+        // Marked for shared caches by hand: the key the layout draws keeps the page private.
+        let public = move |req: Req, read: bool| async move {
+            Ok::<_, crate::Error>((crate::cache::Cache::public(std::time::Duration::from_secs(60)), page(req, read).await?))
+        };
+        let routes = Table::new()
+            .route("/", get(move |req: Req| page(req, true)))
+            .route("/plain", get(move |req: Req| page(req, false)))
+            .route("/public", get(move |req: Req| public(req, true)))
+            .route("/public-plain", get(move |req: Req| public(req, false)));
         let router = App::new(Routes::from(routes)).layout_read(SignOut).router();
         // A browser's request, which names a tag it has, so it is answered with one.
         let get = |router: Router, uri: &'static str| async move {
@@ -879,8 +886,13 @@ mod layout_reads {
         let (status, headers, body) = get(router.clone(), "/").await;
         assert!(status == StatusCode::OK && body.contains("name=\"submit\""), "{body}");
         assert!(!headers.contains_key("etag"), "a key drawn by the layout makes the page unrepeatable: {headers:?}");
-        let (_, headers, _) = get(router, "/plain").await;
+        let (_, headers, _) = get(router.clone(), "/plain").await;
         assert!(headers.contains_key("etag"), "{headers:?}");
+        let (status, headers, body) = get(router.clone(), "/public").await;
+        assert!(status == StatusCode::OK && body.contains("name=\"submit\""), "{body}");
+        assert_eq!(headers["cache-control"], "private, no-cache", "a key drawn by the layout keeps the page private");
+        let (_, headers, _) = get(router, "/public-plain").await;
+        assert_eq!(headers["cache-control"], "public, max-age=60", "{headers:?}");
     }
 
     /// Middleware that puts a value on the request, as a pool's connection would be.
@@ -1906,6 +1918,22 @@ mod layout_reads {
         let (_, again, same) = call_with(router, "GET", "/public", None, None).await;
         assert!(!first.contains_key(http::header::AGE) && again.contains_key(http::header::AGE), "{again:?}");
         assert!(same == body && body.contains("<header>Cart </header>") && !body.contains("corten-later"), "{same}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    /// A `Public` text answer in such an app has no places: it is kept as its handler gave it,
+    /// where the app compresses it, and starts no read.
+    #[tokio::test]
+    async fn a_public_body_is_kept_in_an_app_with_layout_reads() {
+        let count = CartCount::default();
+        let words = || async { crate::Public::new(Duration::from_secs(60), "plain words ".repeat(100)) };
+        let routes = Table::new().route("/words", crate::route::get(words).0);
+        let router = App::new(Routes::from(routes)).layout_read(count.clone()).router();
+        let (_, first, body) = call_with(router.clone(), "GET", "/words", None, None).await;
+        let (_, again, same) = call_with(router, "GET", "/words", None, None).await;
+        assert!(!first.contains_key(http::header::AGE), "{first:?}");
+        assert_eq!(again.contains_key(http::header::AGE), cfg!(feature = "compress"), "{again:?}");
+        assert!(same == body && body == "plain words ".repeat(100), "{same}");
         assert_eq!(count.started.load(Ordering::SeqCst), 0);
     }
 

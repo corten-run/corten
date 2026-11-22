@@ -985,7 +985,7 @@ before it (a route that says `unstaged` goes through none;
    has answered. Either way the page is filled with their values before its answer goes back out
    through 5: a middleware sees the filled page, and the time it measures around `next`
    includes the reads' wait ([design Choice 20](../design.md#choice-layout-reads)).
-   A `Public` page the app has kept is given here in the handler's place
+   A `Public` page, JSON or text answer the app has kept is given here in the handler's place
    ([Caching](#the-pages-the-app-keeps)): stages 1 to 5 ran for the request as for any other,
    and 7 and 8 follow.
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
@@ -1228,9 +1228,10 @@ answer whose own script must run is a page, not an unstaged route's. Its answer 
 `Cache-Control` unless the handler sets one, so a shared cache may keep it by its own rules
 ([Caching](#caching) describes the stages' rules, which it does not meet): an answer that changes
 says so (`NoStore`, `Public`), as the figure above does. One that sets a cookie is `private,
-no-cache` (`no-store` when it says one), whatever caching it says, and loses a CDN's own
-`CDN-Cache-Control`, `Cloudflare-CDN-Cache-Control` and `Surrogate-Control`, so no shared cache
-hands one visitor's cookie to another.
+no-cache` (`no-store` when it says one), whatever caching it says, and loses any
+`*-cache-control` header and the other caching headers a CDN reads first that [Caching](#caching)
+lists (`Surrogate-Control`, `Edge-Control`, ...), so no shared cache hands one visitor's cookie
+to another.
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
 or a plain 501 with none when no route in the app has a handler for the method ([error
 pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
@@ -1394,7 +1395,22 @@ but an unstaged one):
 | a full document, no `Cookie` or `Authorization`, nothing read a caller | as asked, plus `Vary: cookie` |
 | a request with a `Cookie` or `Authorization`, or one whose handler or middleware read a caller | `private, no-cache` |
 | a client navigation, a form answer or a data client's JSON from a page route | `private`, same lifetime: only the document is shared |
-| a response that sets a cookie, or HTML with the request's nonce | `private, no-cache`, logged under `corten dev` |
+| a response that sets a cookie, HTML with the request's nonce, or a page that draws a form's new submit key (`SubmitKey::field`) | `private, no-cache`, logged under `corten dev` |
+
+A page that draws a submit key also goes out without the caching headers a CDN or proxy reads
+before `Cache-Control` that a middleware wrote, even when its `Cache-Control` already says
+`private` or `no-store`: `CDN-Cache-Control` (RFC 9213), `Cloudflare-CDN-Cache-Control`,
+`Vercel-CDN-Cache-Control`, `Surrogate-Control`, Akamai's `Edge-Control` and nginx's
+`X-Accel-Expires`. A `no-store` on it goes out `private, no-store`: some CDNs ignore a bare
+`no-store`, and none keeps a `private` answer. Those names, matched exactly, are the whole list
+(a `Public` answer cannot set one either). Keeping a page with a form out of a shared cache by
+any other means is the deployment's: a name its CDN is configured to read (RFC 9213 allows any),
+a layer around the app (`App::layer`, which runs after Corten settles the answer), and an edge
+rule that caches whatever the origin says. The key's render marks the answer: a page, a patch,
+the layout's reads, and a `Rendered` placed in one. A live stream's fragments are text rendered
+after its headers went out and carry no mark, so a stream that may draw a key is not `Public`,
+says `Cache-Control: private` itself and carries none of those headers
+([live data](live-data.md)).
 
 A `Public` answer cannot set a cookie the way a private one does: the page inside
 `Public<HtmlResult>` is made for everyone (`HtmlResponse<ForAll>`), and `with_cookie` on it does
@@ -1412,7 +1428,7 @@ except that the last row applies to it, and a caller read makes it private. An e
 so, so a public answer cannot read a credential through one by accident. An `App::api` route has one form only, so its public responses
 stay public for clients without credentials. A cache in front of the app must key on `Vary`
 (`corten`, `accept`, `accept-encoding`, `cookie` on an answer to a request without one, and
-`accept-language` with `App::messages`, unless the handler took the page's locale from its URL); the [deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
+`accept-language` with `App::messages`, unless the handler took the page's locale from its URL, and on any other answer whose handler, error page or middleware read messages in the language the header asks for (`req.t()`) before the answer left the app: a page, built before or after the read, a screen's JSON, an `App::api` answer, a redirect, the error page of a refused cross-site write). Messages read while a streamed body is written come after its headers: negotiate before answering, or keep that answer out of shared caches. A middleware may change the request's `Accept-Language` only before any extractor that reads the request runs: a `Req` keeps the header as it was when extracted, with `App::messages` the locale first chosen holds for the whole request, and a kept page is keyed on the header the handler sees, so once any `Req` has been extracted, leave the header alone. An answer that depends on another header the middleware read needs that header in `Vary` from the middleware, or a private policy. The [deploy guide](deploy.md#caching) names the setting for nginx, Cloudflare and CloudFront.
 A `Public` page in an app with several locales is one copy per `Accept-Language` string in a cache that keys on it, and one language for everyone in one that ignores `Vary`: put its locale in its URL ([Views](views.md#a-locale-in-the-url)), so the cache keys on the URL alone.
 `NoStore<..>` keeps an answer out of every cache, the browser's back/forward cache included:
 `async fn statement(req: Req) -> NoStore<HtmlResult>`. A failure it returns is not kept either:
@@ -1443,9 +1459,11 @@ shared cache keep the rest, or `no-store=1`) or inside a quoted value does not c
 ignore the `no-store`), which is left as written unless the answer is personal. A `no-store`
 goes out where every reader sees it: several lines are joined into one, and beside a quoted value
 or a byte that is not text it goes out alone (its other directives dropped, so no reader can find
-anything else). A personal answer (it sets a cookie, read a caller, has the CSP nonce, or is a
-`Cache` answer to a request with credentials) whose header does not count goes out
-`private, no-cache`, or `no-store` if any reader could find one in its header.
+anything else). A personal answer (it sets a cookie, read a caller, has the CSP nonce, draws a
+form's new submit key, or is a `Cache` answer to a request with credentials) whose header does
+not count goes out
+`private, no-cache`, or `no-store` if any reader could find one in its header (`private,
+no-store` for a page that draws a submit key).
 
 An answer at a URL that names its content (a hash of its bytes, as an uploaded picture's can be)
 never changes there. `Public::immutable(answer)` sends it as Corten's versioned files are sent,
@@ -1477,8 +1495,8 @@ server's answer, sent as it came) is not. Corten names `XRobotsTag`, `Link` and
 corten::answer::Header for ContentLocation { const NAME: &'static str = "content-location"; }`.
 Which names a public answer may set is checked when the app builds (`cargo build` and `cargo
 test`; `cargo check` does not evaluate it): `set-cookie` (the answer would be one visitor's), the
-headers Corten sets itself (`cache-control`, a CDN's `cdn-cache-control` and
-`surrogate-control`, which it would obey over Corten's, `vary`, the encoding and length, the
+headers Corten sets itself (`cache-control`, any `*-cache-control` and the other caching headers
+a CDN would obey over Corten's that [Caching](#caching) lists, `vary`, the encoding and length, the
 security headers, CORS's `access-control-*`, `corten-*`), those the answer has (`content-type`,
 `location`, `content-disposition`) and the connection's (`transfer-encoding`) do not compile. Headers are added to a
 success or a redirect; an error is the error page, without them.
@@ -1488,8 +1506,8 @@ mistake, the runtime loads the URL as a whole page instead of swapping it in.
 
 ### The pages the app keeps
 
-The app is the first shared cache of its own `Public` pages. The whole document a `Public`
-page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
+The app is the first shared cache of its own `Public` pages, and of its `Public` JSON and
+text (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
 such request in the handler's place until the answer's shared lifetime ends: `s-maxage` where
 the answer has `.shared(..)`, else `max_age`. So a `Public` page's handler does not run for
 every request, and what it read may be that old when a visitor sees it, as it already may be
@@ -1519,15 +1537,16 @@ else a page could differ by, and the answer nothing made for one request:
 | | Kept and given again | The handler answers |
 |---|---|---|
 | the handler | takes only Corten's own inputs for a page | takes an extractor of the app's own |
-| the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
+| the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
-| the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound |
-| what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key, a `Vary` of the app's own |
+| the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
+| what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
-with `req.t()` without it) it is also kept for the `Accept-Language` it was asked with, as the
-header was sent, so `fr` and `fr-FR` are two copies of one page; a page whose locale is in its
+with `req.t()` without it, before or after the page was built) it is also kept for the `Accept-Language` it was asked with, as the
+header was sent, so `fr` and `fr-FR` are two copies of one page, and a copy given for it names
+`accept-language` in `Vary` as it leaves the app, whatever `Vary` a middleware put on it; a page whose locale is in its
 URL ([Views](views.md#a-locale-in-the-url)) is one. A URL has at most eight copies, and a new
 one takes the place of one not read since it was kept or since room was last made (the oldest
 of those, else the oldest of all), so a way of asking seen once does not push out one seen
@@ -1569,14 +1588,42 @@ page stands is the app's to say. Give a page whose changes must show at once a s
 `App::kept_answers(bytes)` sets how much is kept: 32 MiB unless set, and `0` keeps none. What is
 counted is each page's key, headers and body and each compressed form made of it, with an
 allowance for what holds them. Past the bound, a page not read since room was last made goes
-first. Nothing is kept under `corten dev`,
-so a change shows on the next load. An app's tests keep pages as a deploy does (`App::test`,
+first. With room, every page is kept the first time it is made. Once the kept pages are within
+an eighth of the bound, keeping one may drop another, so a page is kept only when its URL was
+asked for before: a crawler's first walk over more URLs than there is room for, or searches no
+one repeats, are answered by the handler and all but a few of them take no kept page's room.
+The app remembers the URLs asked for as bits in a table, not as a list, and forgets them all
+once an eighth of the bits are set (after 131,072 new URLs at 32 MiB), so a crawler's second
+walk over the same URLs is kept as the first was before this rule. The price is one more run
+of a page's handler: in a full store the answer to the first request for a URL the app does
+not remember is not kept, whether the page is new, or was kept while there was room or before
+the bits were last cleared and has since passed its lifetime or been dropped. A store that has filled mostly stays full, since a page past its lifetime keeps
+its room until another needs it. Nothing is kept under `corten dev`,
+so a change shows on the next load. An app with no `Public` page keeps nothing whatever the
+bound, and its writes are not counted, so it pays nothing for pages it cannot keep. An app's tests keep pages as a deploy does (`App::test`,
 `App::router`): a test that changes what a `Public` page shows other than by a write through the
 app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page
 only in the instance that answered it, and a restart starts empty.
 
-`Public` text, JSON and `Media` are not kept, and neither is anything that is not `Public`: a
+A `Public` route that answers JSON (`Public<JsonResult<T>>`) or text is kept the same way: its
+whole body, under every rule above and by the same key (the language too, where the handler
+reads it with `req.t()` or `req.lang()`), with each coding's bytes made once and, outside an API
+(whose answers are not tagged), the tag's hash. What it saves is the handler with what it reads, the writing of the JSON, the
+hash and the compression. Such a route has one answer at its URL, where a page route has the
+document, its swap and its data, so a data client's request (`Accept: application/json` first) is
+kept too, as a copy apart from a request that does not ask for JSON first: a handler that takes
+`Req` can read which of the two asked. What an API adds for the site that asks
+(`Access-Control-Allow-Origin`) is written for each request and is no part of what is kept, so no
+site is sent another's. A write drops it as it drops a page: `PUT /api/items/7` drops what is
+kept for `GET /api/items/7`, and not the list at `/api/items`, which shows the change when its
+lifetime ends.
+
+A file (`Media`), a sitemap or `robots.txt` (`seo::File`), a relay, a live stream and a feed are
+not kept: each is its handler's for every request, and so is JSON the app holds as bytes
+(`Json<json::Raw>`) in a build with the `compress` feature, which already keeps its compressed
+forms. One file is kept: a file of a known size that a page route
+answers in its page's place (`PageOr<Media>`), as that page would be. Neither is anything that is not `Public`: a
 page for one visitor runs its handler for every request, because a key that had to cover the
 caller is where a mistake shows one user's page to another. Cache the data such a page reads in
 the app, where it knows when the data changes.
@@ -1584,7 +1631,7 @@ the app, where it knows when the data changes.
 A page route's answer to a `GET` or `HEAD` (the page, a navigation's swap, a patch read again, a
 data client's JSON, a `Media` file) carries a weak `ETag` made from the body it rendered, its type
 and its `corten-*` headers, and a request whose `If-None-Match` names it is answered `304 Not
-Modified`: the answer is still rendered (unless it is a page the app kept), but not compressed
+Modified`: the answer is still made (unless it is one the app kept), but not compressed
 or sent. The browser keeps a `private,
 no-cache` page and asks before reusing it, so this is what lets it reuse its copy: on a page loaded
 again by a typed URL or a link without the runtime (every browser), and on a reload and the
