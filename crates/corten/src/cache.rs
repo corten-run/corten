@@ -170,9 +170,9 @@ impl Cache {
         .unwrap_or_else(|_| public(max_age, shared, stale, if_error))
     }
 
-    /// The header made for this answer alone, as main made each one before a thread held them:
-    /// for an unstaged route's answer ([`Unstaged`]), which no [`settle`] reads. Held, or made
-    /// as one that is, it would cost such an answer more than this, and save it nothing.
+    /// The header made for this answer alone, from a `Vec`, as every one was before a thread held
+    /// them: for an unstaged route's answer ([`Unstaged`]), which no [`settle`] reads. Held, or
+    /// made as one that is, it would cost such an answer more than this and save it nothing.
     #[inline(never)]
     fn made(self) -> HeaderValue {
         let Kind::Public { max_age, shared, stale, if_error } = self.kind else {
