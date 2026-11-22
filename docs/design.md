@@ -7509,8 +7509,8 @@ rules something out.
     goes first. This is the one account of that case, which the guide and the changelog refer to.
     That first request is the handler's as with nothing kept: it leaves its mark, takes no part
     in the table, and no other request waits for it. It is not free for that: merged with main at
-    `0ac0b52bf`, that request ran 62 instructions (0.3%) more than on main (below); at the earlier
-    merge with main's kept bodies it ran 236 more, which the annotated runs put in glibc's
+    `a0eeeacca`, that request ran 59 instructions (0.3%) more than on main (below), and 62 at
+    `0ac0b52bf`; at the earlier merge with main's kept bodies it ran 236 more, which the annotated runs put in glibc's
     `malloc` and in no step of this change's own, a cause reasoned and not measured. The requests that miss the URL while it is
     made find its mark, so they are its second request and meet in the table as any others do:
     the first of them makes the page and the rest wait for that one. From there a request the
@@ -7809,6 +7809,14 @@ rules something out.
     build's rounds within 28 instructions of each other. The gap for a new URL in a full store
     narrowed mostly on main's side: main's count rose 156 from `04c209fca` to `0ac0b52bf` and
     this change's fell 18. Why was not annotated.
+    Merged with main at `a0eeeacca` (which keeps a `Public` file where the app compresses it, by
+    the rule for any body; `950bbcdce` against `a0eeeacca` with this change's fixture, counted
+    the same way), a new URL in a full store ran 22,937 instructions against 22,877 at the median
+    (59 more, 0.3%), a page made and kept with room 36,159 against 34,928 (1,231 more, 3.5%), a
+    write and the page made again 46,773 against 44,849 (1,924 more, 4.3%), a kept page given
+    again 19,517 against 19,520 and a page for one visitor 18,183 against 18,183, each build's
+    rounds within 35 instructions of each other, and each median within 9 of the same build's at
+    `0ac0b52bf`. The fixture's routes are pages, so no kept file or body is counted here.
     What a write pays for its count, under callgrind (valgrind 3.24.0, rustc 1.99.1, release with
     debuginfo) on an app with one route whose `GET` and `POST` each answer text, sent
     `POST /items/7/edit` in process with `oneshot`, as (instructions at 1,200 writes less those at
@@ -8043,6 +8051,8 @@ rules something out.
     `04c209fca` counted the same way, and annotated beside `c23881059` and `687c75b63`.
     2026-11-22, merged with main at `0ac0b52bf`, rustc 1.100.0, release builds of `6dc25952d` and
     `0ac0b52bf` counted the same way.
+    2026-11-22, merged with main at `a0eeeacca`, rustc 1.100.0, release builds of `950bbcdce` and
+    `a0eeeacca` counted the same way.
     2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
     benchmark) and `05ead69a7` (this change's `8db0885c7` with them), kept under the tag
     `evidence/kept-file-1794`; 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
