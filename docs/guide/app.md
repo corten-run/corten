@@ -1537,7 +1537,11 @@ otherwise is no larger, as on a page that repeats long runs of text, where zstd 
 It is not made for a page written to or past its lifetime by the time the thread comes to it. It
 counts toward the bound like the page's other forms, but takes only the room the bound has left:
 no page is dropped for it, so in a store at its bound a page has it only when there was room for
-it then ([design Choice 70](../design.md#choice-kept-pages) has the levels measured). On the catalog benchmark's page, marked
+it then, and a page it found no room for is not tried again. So the smaller form is best effort,
+never a promise: the thread comes to a kept page's job only when no held JSON waits, so held JSON
+compressed without a pause can keep it waiting for as long as that lasts, past the page's
+lifetime, and a store at its bound makes it only when room is free
+([design Choice 70](../design.md#choice-kept-pages) has the levels measured). On the catalog benchmark's page, marked
 `Public` for a minute, a kept page took 14.5% fewer CPU cycles a request where nothing is compressed
 and 46.3% fewer where each answer is, at the medians of 12 paired rounds
 ([design Choice 70](../design.md#choice-kept-pages) has the rounds and what they did not resolve).

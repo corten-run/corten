@@ -6,7 +6,10 @@
 //! uncompressed request) and `REQUESTS=1200`, and again with `REQUESTS=200`; subtract the totals
 //! and divide by 1,000. `hit` is a kept page given again, asked for twice and then left two
 //! seconds before the count, so what is made for it after its answers is there; `made` a page made
-//! and kept, at a query not asked for before. Every answer's status, whether it was a kept one and
+//! and kept, at a query not asked for before. `KEPT_BOUND` sets the app's bound, and `KEPT_FILL`
+//! other pages kept before a `hit` (the page at other queries, uncompressed, each asked for twice):
+//! a bound that leaves room for the page and its zstd but not its brotli 5 counts a hit whose
+//! brotli was refused. Every answer's status, whether it was a kept one and
 //! its coding are checked, and its body: a kept one's is the bytes the first was given (the same
 //! allocation), a made one's the same bytes, and the first decodes to the page uncompressed. The
 //! URLs are made before the loop, which allocates only for each request and its body. The coding
@@ -105,7 +108,13 @@ fn request_cost() {
     let case = std::env::var("KEPT_CASE").unwrap_or_else(|_| "hit".into());
     let accept = std::env::var("KEPT_ACCEPT").unwrap_or_else(|_| "gzip, deflate, br, zstd".into());
     let requests = std::env::var("REQUESTS").map_or(200, |value| value.parse::<usize>().unwrap());
-    let router = App::new(url::router()).dev(false).router();
+    let fill = std::env::var("KEPT_FILL").map_or(0, |value| value.parse::<usize>().unwrap());
+    let app = App::new(url::router()).dev(false);
+    let router = match std::env::var("KEPT_BOUND") {
+        Ok(bound) => app.kept_answers(bound.parse().unwrap()),
+        Err(_) => app,
+    }
+    .router();
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
         let send = |uri: &str, accept: &str| {
             let req = get(uri, accept);
@@ -125,6 +134,10 @@ fn request_cost() {
         // The page uncompressed, at a URL of its own: the handler does not read the query.
         let (_, _, page) = send("/record?uncompressed", "identity").await;
         if hit {
+            let fills: Vec<String> = (0..fill).map(|n| format!("/record?fill={n}")).collect();
+            for uri in fills.iter().chain(&fills) {
+                send(uri, "identity").await;
+            }
             send("/record", &accept).await;
             send("/record", &accept).await;
             tokio::time::sleep(Duration::from_secs(2)).await;

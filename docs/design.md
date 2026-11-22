@@ -7333,7 +7333,10 @@ rules something out.
     takes a held value's place in its queue nor makes it wait for more than the one job running.
     The job holds the page weakly while it waits, and makes and counts it only while the page
     still stands, asked again under the store's lock when the bytes are put with it; a full queue
-    leaves it to the next such answer. From then on a client that ranks brotli as high as any
+    leaves it to the next such answer, and once queued no answer writes to the page's count again.
+    So it is best effort: held values compressed without a pause keep it waiting for as long as
+    that lasts, past the page's lifetime, and a job that finds no room is not tried again for that
+    page. From then on a client that ranks brotli as high as any
     coding, as a browser that also takes zstd does, gets it in the place of zstd 1, unless the form
     already made for the coding it would get otherwise is no larger: the levels' and codings' sizes
     are not in the same order on every page (a review's probe with Node's brotli 1.2.0 and zstd
@@ -7385,7 +7388,9 @@ rules something out.
     same bytes; making room for it as for the page's other forms, by dropping the pages the clock
     finds, which let a write that landed while the thread put it in drop a page that stood for one
     that no longer did; its job in the queue held values wait in, where a burst of kept pages kept
-    a held value out or made it wait behind all of them; off unless asked for, which leaves the
+    a held value out or made it wait behind all of them; a turn for a kept page after so many held
+    values, which would make a held value wait behind a page's encoding for a form the page does
+    without; off unless asked for, which leaves the
     cost on every app that already said its
     pages are public; a page for one visitor kept by caller, where a mistake in the key shows
     one user's page to another ([architecture](architecture.md#what-belongs-in-the-framework));

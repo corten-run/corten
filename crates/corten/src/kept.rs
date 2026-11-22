@@ -66,6 +66,8 @@ use std::collections::HashMap;
 use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 #[cfg(feature = "compress")]
+use std::sync::atomic::AtomicU8;
+#[cfg(feature = "compress")]
 use std::sync::Weak;
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use std::time::Instant;
@@ -104,6 +106,12 @@ const FORM: usize = 24;
 
 /// An entry's size once it is no longer kept: nothing made for it counts from then on.
 const GONE: usize = usize::MAX;
+
+/// Where a kept page's brotli at [`Level::Kept`] stands ([`Coded::promotion`]) once its job is
+/// taken by the queue, after which no answer changes it: below this, the answers that could use
+/// it so far.
+#[cfg(feature = "compress")]
+const QUEUED: u8 = 2;
 
 /// Room for the names the stages after the handler add to a kept answer's head, so it does not
 /// grow as they are written: `Age`, the tag, the security headers, the reporting endpoints and
@@ -325,10 +333,11 @@ pub(crate) struct Entry {
 struct Coded {
     now: [OnceLock<Bytes>; 3],
     brotli: OnceLock<Bytes>,
-    /// The answers to a client that ranks brotli as high as any coding before `brotli` was made:
-    /// the second queues it, and a later one again when the queue was full.
-    asked: AtomicU32,
-    started: AtomicBool,
+    /// The answers to a client that ranks brotli as high as any coding before `brotli` was made,
+    /// up to [`QUEUED`]: the second queues it, and a later one again when the queue was full.
+    /// Once queued it is not written again, while the job waits, once it made the bytes and once
+    /// it found no room for them, so an answer to a page that does without them only reads it.
+    promotion: AtomicU8,
 }
 
 /// On a response whose body is a kept answer's: the stages after the handler find the body's
@@ -393,19 +402,27 @@ impl Kept {
             // for once is compressed once. The job holds the page weakly while it waits its
             // turn, so its bytes are not held for it, and one that no longer stands by then is
             // skipped (`Entry::make_brotli`).
-            if coded.asked.fetch_add(1, Ordering::Relaxed) >= 1 && !coded.started.swap(true, Ordering::AcqRel) {
-                let page = Arc::downgrade(entry);
-                let made = crate::compress::later(
-                    Turn::Kept,
-                    Box::new(move || {
-                        if let Some(entry) = page.upgrade() {
-                            entry.make_brotli();
+            let mut now = coded.promotion.load(Ordering::Acquire);
+            while now < QUEUED {
+                match coded.promotion.compare_exchange_weak(now, now + 1, Ordering::AcqRel, Ordering::Acquire) {
+                    Ok(_) if now + 1 == QUEUED => {
+                        let page = Arc::downgrade(entry);
+                        let made = crate::compress::later(
+                            Turn::Kept,
+                            Box::new(move || {
+                                if let Some(entry) = page.upgrade() {
+                                    entry.make_brotli();
+                                }
+                            }),
+                        );
+                        if !made {
+                            // Full, or no thread to be had: the next such answer asks again.
+                            coded.promotion.store(QUEUED - 1, Ordering::Release);
                         }
-                    }),
-                );
-                if !made {
-                    // Full, or no thread to be had: a later answer asks again.
-                    coded.started.store(false, Ordering::Release);
+                        break;
+                    }
+                    Ok(_) => break,
+                    Err(actual) => now = actual,
                 }
             }
         }
@@ -1434,19 +1451,18 @@ mod tests {
         }
         let zstd = kept.coded.now[Coding::Zstd as usize].get().expect("made once").clone();
         let before = answers.bytes();
-        assert!(!kept.coded.started.load(Ordering::Acquire), "no client that takes brotli has asked");
+        assert_eq!(kept.coded.promotion.load(Ordering::Acquire), 0, "no client that takes brotli has asked");
         // The first answer to a browser is zstd 1, as it was made, and starts nothing.
         let first = Kept::coded(&extensions, &kept.body, browser, Coding::Zstd, || unreachable!("made already"));
         assert_eq!(first, (zstd.clone(), Coding::Zstd));
-        assert!(!kept.coded.started.load(Ordering::Acquire), "made for one request, never compressed twice");
+        assert_eq!(kept.coded.promotion.load(Ordering::Acquire), 1, "made for one request, never compressed twice");
         // The second is too, and brotli is made after it.
         let second = Kept::coded(&extensions, &kept.body, browser, Coding::Zstd, || unreachable!("made already"));
         assert_eq!(second, (zstd.clone(), Coding::Zstd), "the request does not wait for brotli");
-        let started = Instant::now();
-        while answers.bytes() == before {
-            assert!(started.elapsed() < std::time::Duration::from_secs(10), "brotli was not made");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        assert_eq!(kept.coded.promotion.load(Ordering::Acquire), QUEUED, "the thread took the job");
+        // The thread runs the kept pages' jobs in turn, so one queued after it is done once the
+        // brotli is put with the page and counted, not when the room for it is taken.
+        queued_before_done().recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
         let brotli = kept.coded.brotli.get().expect("made").clone();
         assert_eq!(brotli, crate::compress::encode(Coding::Brotli, &kept.body, Level::Kept));
         assert_eq!(answers.bytes(), before + brotli.len() + FORM, "and counted");
@@ -1467,6 +1483,9 @@ mod tests {
         let given = Kept::coded(&extensions, &kept.body, accepts("gzip"), Coding::Gzip, || fast(Coding::Gzip));
         assert_eq!(given.1, Coding::Gzip);
         assert_eq!(answers.bytes(), before + brotli.len() + given.0.len() + FORM * 2);
+        // Dropped, the page gives back all it counted for, its brotli with the rest.
+        answers.0.drop_entry(&mut answers.0.inner.write().unwrap(), &kept);
+        assert_eq!(answers.bytes(), 0);
     }
 
     /// The bound holds for what is made after a page is kept too: a coded form that takes the
@@ -1551,7 +1570,7 @@ mod tests {
             for _ in 0..2 {
                 Kept::coded(&extensions, &stale.body, accepts("br"), Coding::Brotli, || Bytes::from_static(b"fast"));
             }
-            assert!(stale.coded.started.load(Ordering::Acquire), "{ended}: queued");
+            assert_eq!(stale.coded.promotion.load(Ordering::Acquire), QUEUED, "{ended}: queued");
             let done = queued_before_done();
             // A page that stands, with less room left beside it than the brotli would take.
             let other = bound - answers.bytes() - OVERHEAD - 16;
@@ -1574,6 +1593,9 @@ mod tests {
             done.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
             assert!(stale.coded.brotli.get().is_none(), "{ended}: not made");
             assert_eq!(answers.bytes(), before, "{ended}: nor counted");
+            // Nor queued again: a later answer finds it was, and writes nothing.
+            Kept::coded(&extensions, &stale.body, accepts("br"), Coding::Brotli, || unreachable!("{ended}: made already"));
+            assert_eq!(stale.coded.promotion.load(Ordering::Acquire), QUEUED, "{ended}");
             assert!(answers.find("/c", None, None).is_some(), "{ended}: the page that stands is kept");
             // The page kept in its place, of other bytes, is made and given its own brotli, in
             // room the other page leaves.
