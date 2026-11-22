@@ -18,6 +18,8 @@ const docker = (...args) => {
   assert.equal(result.status, 0, result.stderr);
   return (args[0] === "logs" ? result.stdout + result.stderr : result.stdout).trim();
 };
+const imageId = docker("image", "inspect", "--format", "{{.Id}}", image);
+console.log(`Checking Leptos marketplace image ${imageId}`);
 const folder = await mkdtemp(join(tmpdir(), "leptos-marketplace-"));
 const fixture = records();
 const record = "/api/marketplace/item_1";
@@ -33,15 +35,14 @@ try {
   await writeFixtures(folder, { "marketplace.json": fixture });
   for (const source of ["fixture", "api"]) {
     const before = reads;
-    const name = `leptos-marketplace-${process.pid}-${source}`;
-    docker("run", "-d", "--pull=never", "--name", name, "--cpus", "1", "--memory", "512m", "-p", "127.0.0.1::8080",
-      "--label", "agent.owner=codex", "--label", "agent.task=leptos-marketplace-production",
+    const container = docker("create", "--pull=never", "--cpus", "1", "--memory", "512m", "-p", "127.0.0.1::8080",
       ...(process.platform === "linux" ? ["--add-host", "host.docker.internal:host-gateway"] : []),
       "-v", `${folder}:/fixtures:ro`, "-e", "PROFILE=matched", "-e", `HOSTS=${site}`,
       "-e", `MARKETPLACE_SOURCE=${source}`, "-e", "MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json",
-      "-e", `API_BASE=http://host.docker.internal:${upstream.address().port}`, image);
+      "-e", `API_BASE=http://host.docker.internal:${upstream.address().port}`, imageId);
     try {
-      const base = containerBase(docker, name);
+      docker("start", container);
+      const base = containerBase(docker, container);
       const request = (path, method = "GET", host = site) => collectBoundedResponse(base, undefined, path, { host }, method);
       // Wait on a source-independent control, not on one of the cells under test.
       let ready = false;
@@ -51,7 +52,7 @@ try {
         if (alerts?.status === 200) { ready = true; break; }
         await delay(100);
       }
-      if (!ready) throw startupFailure(docker, name);
+      if (!ready) throw startupFailure(docker, container);
 
       const wrongMethod = await request(record, "POST");
       assert.equal(wrongMethod.status, 405, `${source}: json405`);
@@ -65,10 +66,10 @@ try {
 
       assert.equal((await request(record)).status, 200, `${source}: configured host still serves the record`);
       assert.equal(reads - before, source === "api" ? 1 : 0, `${source}: verify the actual source`);
-      console.log(`PASS leptos ${source}: json405, host policy, liveness`);
     } finally {
-      docker("rm", "-f", "-v", name);
+      docker("rm", "-f", "-v", container);
     }
+    console.log(`PASS leptos ${source}: json405, host policy, liveness`);
   }
 } finally {
   upstream.close();

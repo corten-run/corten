@@ -28,12 +28,12 @@ Deployments that rewrite Host must allow the authority seen by Leptos. Set
 `GET /health/live` reports that the process is serving HTTP, independently of the
 marketplace source. It is not a readiness check.
 
-The focused native check uses the same built image in matched mode with a mounted
-fixture and with a separate HTTP upstream. For example, after Catalog Contract's
-Leptos build has produced `cb-catalog-leptos`:
+Catalog Contract runs the focused native check against its `cb-marketplace-leptos`
+image in matched mode with a mounted fixture and with a separate HTTP upstream.
+To repeat it with that image already built:
 
 ```sh
-node bench/fullstack/apps/leptos/check-marketplace-production.mjs cb-catalog-leptos
+node bench/fullstack/apps/leptos/check-marketplace-production.mjs cb-marketplace-leptos
 ```
 
 This check covers the three HTTP cells, not full production qualification, other
