@@ -60,6 +60,9 @@ pub(super) mod unstaged_url {
 
     #[route("/shared-page", get = unstaged_shared_page)]
     pub struct SharedPage;
+
+    #[route("/parks", get = unstaged_parks, unstaged)]
+    pub struct Parks;
 }
 
 async fn unstaged_ping() -> &'static str {
@@ -171,6 +174,18 @@ async fn unstaged_shared_page(req: Req) -> crate::Public<HtmlResult> {
     crate::Public::new(std::time::Duration::from_secs(3_000_002), req.test_page_for("Page", html! { <p>"shared"</p> }))
 }
 
+/// Told when [`unstaged_parks`] is about to wait.
+static PARKING: tokio::sync::Notify = tokio::sync::Notify::const_new();
+/// What lets [`unstaged_parks`] go on.
+static GO_ON: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// A figure for everyone that waits before it answers, under numbers no other test's answer has.
+async fn unstaged_parks() -> crate::Public<&'static str> {
+    PARKING.notify_one();
+    GO_ON.notified().await;
+    crate::Public::new(std::time::Duration::from_secs(3_000_003), "parked")
+}
+
 /// What the app's router sends for its `Public` page, asked for with a cookie and without, from
 /// inside an unstaged handler.
 async fn unstaged_asks_the_app() -> String {
@@ -272,12 +287,18 @@ async fn an_unstaged_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!(headers["content-security-policy"], "sandbox");
     // A link to it is not fetched ahead of a click.
     assert_eq!(html! { <a href={unstaged_url::Picture}>"P"</a> }.to_html(), r#"<a href="/picture" data-no-prefetch>P</a>"#);
-    // A panic is a plain 500, and the next request is served.
+    // A panic is a plain 500, and the next request is served. The thread is the unstaged route's
+    // no longer: a staged `Public` page after it has its header held, as a staged one's is.
+    let page = crate::cache::Cache::public(std::time::Duration::from_secs(3_000_002));
+    assert!(!crate::cache::held(page), "nothing here has asked for the page yet");
     let (status, headers, body) = call_with(router.clone(), "GET", "/boom", None, Some("text/html")).await;
     assert_eq!((status, body.as_str()), (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"));
     assert_eq!(headers["x-content-type-options"], "nosniff");
     let (status, _, _) = call_with(router.clone(), "GET", "/ping", None, None).await;
     assert_eq!(status, StatusCode::OK);
+    let (status, headers, _) = call_with(router.clone(), "GET", "/shared-page", None, None).await;
+    assert_eq!((status, &headers["cache-control"]), (StatusCode::OK, &"public, max-age=3000002".parse().unwrap()));
+    assert!(crate::cache::held(page), "the panic left the thread unstaged");
     // A path that does not parse is the extractor's own rejection, not the error page.
     let (status, headers, _) = call_with(router.clone(), "GET", "/raw/seven", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -361,6 +382,32 @@ async fn an_unstaged_public_answer_s_header_is_its_own() {
     assert_eq!(headers["cache-control"], "public, max-age=3000002");
     let page = crate::cache::Cache::public(std::time::Duration::from_secs(3_000_002));
     assert!(crate::cache::held(page), "a staged one's is held");
+}
+
+/// The thread is an unstaged route's only while its handler is polled, not while it waits: a
+/// staged `Public` page answered on the same thread meanwhile has its header held, as a staged
+/// one's is, and the unstaged answer made after the wait is still its own.
+#[tokio::test]
+async fn a_staged_answer_made_while_an_unstaged_handler_waits_is_held() {
+    let router = App::new(unstaged_url::router()).router();
+    let page = crate::cache::Cache::public(std::time::Duration::from_secs(3_000_002));
+    let parks = crate::cache::Cache::public(std::time::Duration::from_secs(3_000_003));
+    assert!(!crate::cache::held(page) && !crate::cache::held(parks), "a thread of its own");
+    let waiting = call_with(router.clone(), "GET", "/parks", None, None);
+    let meanwhile = async {
+        PARKING.notified().await;
+        let (status, headers, _) = call_with(router.clone(), "GET", "/shared-page", None, None).await;
+        let held = crate::cache::held(page);
+        GO_ON.notify_one();
+        (status, headers, held)
+    };
+    // One task on one thread: the page is answered between two polls of the waiting handler.
+    let ((status, parked, body), (page_status, headers, held)) = tokio::join!(waiting, meanwhile);
+    assert_eq!((page_status, &headers["cache-control"]), (StatusCode::OK, &"public, max-age=3000002".parse().unwrap()));
+    assert!(held, "the page answered while the unstaged handler waited is held as a staged one's");
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "parked"));
+    assert_eq!(parked["cache-control"], "public, max-age=3000003");
+    assert!(!crate::cache::held(parks), "the unstaged answer made after its wait is its own");
 }
 
 /// Beside an unstaged route every other route keeps its stages: an area's pages and its unknown URLs,

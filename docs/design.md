@@ -7654,9 +7654,10 @@ rules something out.
     the `Public` page in an app that keeps none took 1.26% fewer cycles a request (one-sided 95%
     bound 1.05% fewer) on 2.15% fewer user instructions; that page with five 96-byte policies in
     turn behind a middleware of the app's 2.00% fewer (bound 1.96% fewer) on 4.83% fewer; a kept
-    page 0.51% more (bound 0.69%) on 2.48% fewer; and the page for one visitor, whose code the
-    change does not touch, 1.27% more (bound 1.44%) on 0.03% more, what two builds' layouts
-    differ by. An unstaged route answering 84 bytes of JSON as text with the five policies in
+    page 0.51% more (bound 0.69%) on 2.48% fewer; and the page for one visitor, where the change
+    adds only `settle`'s look for the mark before it finds no header, 1.27% more (bound 1.44%) on
+    0.03% more, which this run does not divide between that look and the two builds' layouts.
+    An unstaged route answering 84 bytes of JSON as text with the five policies in
     turn, each answer's chosen by a counter of the server's so that it is never one of the four
     the thread made last, took 5.74% more (bound 6.21%; user cycles 8.84% more, kernel 4.16%) on
     0.81% more instructions (103.5), 107,183 requests a second against 113,291: no `settle` runs
@@ -7669,10 +7670,12 @@ rules something out.
     first-level instruction-cache misses (1,057 against 1,000; 34 in functions whose
     instructions changed), 4.6 more data reads and 4.9 more writes missed, none at the last
     level, and 10 more indirect branches mispredicted; with one policy, its header held for
-    every answer, 534 fewer instructions and 22 more instruction-cache misses. The same source
-    as main's built under another name moved those misses by 8 on that route and by 15 on the
-    page for one visitor, and the conditional branches mispredicted by 18, so the 57 is the
-    change's and the branches are not. Callgrind does not count what an atomic count of
+    every answer, 534 fewer instructions and 22 more instruction-cache misses. Main's source
+    built under another name, a control for layout alone, moved those misses by 8 on that route
+    and by 15 on the page for one visitor, and the conditional branches mispredicted by 18: the
+    57 is more than that control moved and the branches are within it, and how much of the 57 is
+    layout and how much the work the change added is not divided. Callgrind does not count what
+    an atomic count of
     references costs (the miss made four more than main's answer), and nothing here explains
     the kernel's 4.16%. An unstaged route's answer now has its header made as main makes it, and
     held by nothing (`a5577a2eb`): while a thread runs an unstaged route's handler
@@ -7682,13 +7685,30 @@ rules something out.
     unstaged route with five policies took 13,490 instructions against 13,538 and with one
     13,493 against 13,525, data misses 87.9 and 86.6 against 88.4 and 87.4, none at the last
     level, 84 conditional and 26 indirect branches mispredicted against 92 and 37, and 1,031 and
-    1,032 instruction-cache misses against 1,000: its header is main's work in a function of its
-    own (`Cache::made`, which calls the digits' rather than taking them in, about five lines
-    more), and the same code built under another name counted 1,012 and main's 1,008, so that
-    difference is not resolved. The `Public` page in an app that keeps none took 896 fewer instructions (42,453
+    1,032 instruction-cache misses against 1,000, 31 and 32 more where main's source built under
+    another name moved 8. Its header is main's work in a function of its own (`Cache::made`,
+    which calls the digits' rather than taking them in, about five lines more). A variant that
+    behaves the same with that function and the guard moved and renamed, which is not the
+    measured source, counted 1,012 on both, 19 and 20 fewer than the measured source at about its
+    instructions (13,499 and 13,487): where the code is placed moves this count by more than
+    main's control did. These counts do not say how much of the 31 is layout and how much executed
+    work, nor what either costs in cycles. The `Public` page in an app that keeps none took 896
+    fewer instructions (42,453
     against 43,350), a kept page 589 fewer, the page with five policies behind a middleware
     2,193 fewer and with one 2,854 fewer, each with 6 to 39 fewer instruction-cache misses, and
-    the page for one visitor 8 more. Set aside, counted the same way on the unstaged route with
+    the page for one visitor, whose `settle` now looks for the mark, 8 more and 7 fewer
+    instruction-cache misses.
+    Whether this costs any of these answers cycles is for a quiet-host run to show, declared
+    before it runs: `7dd30d739`'s code (the same as `a5577a2eb`'s) against `a0eeeacca`, paired
+    turns in alternating order with every turn on a freshly started build, `perf stat` on the
+    server, for the page for one visitor, the `Public` page in an app that keeps none, a kept
+    page, the page with five policies behind a middleware, and the unstaged route with five
+    policies and with one. It passes when the one-sided 95% upper bound of the paired change in
+    user plus kernel cycles a request is under +1% for every one of the six.
+    **Result of that run: not yet measured.** (Record here, for each of the six: the bound and
+    median, best and range by pair, the user and kernel split, perf's running percentages, user
+    instruction-cache misses, the answers checked and any failed request.)
+    Set aside, counted the same way on the unstaged route with
     five policies and with one, each against main: a thread that stops looking in its four
     after eight misses in a row, but for one call in 64, 10 more instructions and 517 fewer, with
     7.5 and 4.2 more data reads missed; each header made from a `Vec` as main makes it and held
@@ -7795,8 +7815,9 @@ rules something out.
     more from one start to the next; a miss kept with room in memory the store has used
     before (room made by a write or by a page's lifetime ending), in cycles; a store read
     from more
-    than one core; an unstaged route's `Public` answer in cycles since its header is made as
-    main makes it (counted only under callgrind), and how often a thread's staged answers go
+    than one core; any of these answers in cycles since an unstaged route's header is made as
+    main makes it (counted only under callgrind; the quiet-host run declared above is pending),
+    and how often a thread's staged answers go
     through more than four sets of numbers, whose headers it makes again (both rotating
     workloads counted above averaged fewer a request than main's); and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
@@ -7843,16 +7864,17 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; an app
     is found finishing work again and again on the `Signal` of a write from before its first
     answer that may be kept, which empties its store each time, so such a write should keep
-    its path to count by; a quiet host's cycles show an unstaged route's `Public` answer costing
-    more than main's, its header made as main's is; or an app
+    its path to count by; the quiet-host run declared above finds the one-sided 95% bound at +1%
+    or more for any of its six answers; or an app
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
     Last checked: 2026-11-22, a `Public` mark in cycles, `699f6436f` against `e7e89add8` on a
     quiet cloud host with eight dedicated CPUs (Xeon Platinum 8280, Linux 6.12.117, `wrk` 4.1.0,
     rustc 1.100.0), 100 pairs of 3 s turns, and under callgrind with cache and branch simulation
-    (valgrind 3.19.0, rustc 1.99.1) `fbe9af660` and `a5577a2eb` against `a0eeeacca` and
-    against that source built under another name, each count the mean of four starts at
+    (valgrind 3.19.0, rustc 1.99.1) `fbe9af660` and `a5577a2eb` against `a0eeeacca`, against
+    that source built under another name, and against a variant of `a5577a2eb` with `Cache::made`
+    and its guard moved and renamed, each count the mean of four starts at
     (2,200 requests less 200) over 2,000, and the four set aside on `fbe9af660`'s tree;
     2026-11-21, what a `Public` mark costs before anything is kept, `9cfb17038`
     against `e7e89add8` with the probe added, with rustc 1.99.1: each count the difference of a
