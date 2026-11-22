@@ -237,8 +237,10 @@ impl Chooser {
         Self { plain, actions, patches }
     }
 
-    /// The handler of the post `req` names, if the page has one.
-    #[inline]
+    /// The handler of the post `req` names, if the page has one. Always inlined: left a call of its
+    /// own beside both callers, it cost a named post 19 instructions more (callgrind, release,
+    /// `tests::actions::what_a_page_with_posts_costs`).
+    #[inline(always)]
     fn choose(&self, req: &Request) -> Option<&Route> {
         match named(req.uri().query()) {
             Named::None => self.plain.as_ref(),
