@@ -41,6 +41,7 @@ export const validationPaths = Object.freeze([
   "bench/fullstack-browser/capture.mjs",
   "bench/fullstack-browser/cell-records.mjs",
   "bench/fullstack-browser/contract.mjs",
+  "bench/fullstack-browser/document-navigation.mjs",
   "bench/fullstack-browser/json-records.mjs",
   "bench/fullstack-browser/ledger.mjs",
   "bench/fullstack-browser/lifecycle.mjs",
