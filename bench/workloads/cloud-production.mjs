@@ -16,7 +16,7 @@ import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { ownedR21, r21Validator } from "./cloud-sealed-collection.mjs";
 import { continuationIndexSha256, readFleet, readGroup, readLaunchIntent, readRemainingIntent,
-  recheckContinuationPeers, recheckContinuationProofs } from "./fleet-verify.mjs";
+  recheckContinuationPeers, recheckIndexedLaunchCustody } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
@@ -249,6 +249,12 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   };
   if (stagedSibling) assert.ok(remainingAdmission, "only fleet admission may launch a v5 sibling");
   const admission = manifest && !preview ? readAdmission() : undefined;
+  const unconfirmed = manifest?.single ? admission?.subject.continuation.unconfirmed ?? [] : [];
+  const historicalIds = new Set(unconfirmed.map(({ accountId, id }) => {
+    assert.equal(accountId, manifest.provider.accountId, "historical custody requires the same provider account");
+    return full(id, /[1-9]\d*/, "historical custody requires a bound host ID");
+  }));
+  let historicalHostsAbsent;
   const deps = { repo, run, compiler, roleCheck, interrupted, remainingPlacement: admission?.placement };
   const plan = await productionPlan(options, deps);
   if (preview) {
@@ -268,9 +274,11 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     assert.equal(job.approvalSha256, approval, "child approval differs from consumed fleet admission");
     assert.deepEqual(job.subject, plan.subject);
     if (beforeCreate && manifest.single) {
-      const { verified, peers } = current.subject.continuation;
-      if (beforeCreate === true) recheckContinuationProofs(verified);
-      return recheckContinuationPeers(dirname(current.fleetRoot), manifest.single.indexSha256, manifest.provider, options.group, peers);
+      if (historicalIds.size) assert.equal(historicalHostsAbsent, true, "unconfirmed historical host not proved absent from the account census");
+      const root = dirname(current.fleetRoot), { indexSha256, indexedCustody, peers } = current.subject.continuation;
+      const currentPeers = recheckContinuationPeers(root, indexSha256, manifest.provider, options.group, peers);
+      if (beforeCreate === true) recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
+      return currentPeers;
     }
   });
   checkFleetAdmission?.();
@@ -313,7 +321,16 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       await authorizeLocked();
       entered = true;
     }
-    return run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration);
+    const result = await run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration);
+    // Use the controller's complete, account-bracketed pre-create list, not
+    // just the rows that still carry their original benchmark name or tags.
+    if (historicalIds.size && historicalHostsAbsent === undefined && binary === "doctl"
+        && argv[0] === "compute" && argv[1] === "droplet" && argv[2] === "list") {
+      const rows = JSON.parse(result.stdout);
+      assert.ok(Array.isArray(rows));
+      historicalHostsAbsent = !rows.some(({ id }) => historicalIds.has(String(id)));
+    }
+    return result;
   };
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
