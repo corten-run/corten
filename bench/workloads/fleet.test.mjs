@@ -173,7 +173,7 @@ test("independent prepare names its admission or reservation stage without expos
 test("independent prepare reports only a fixed placement stage and safe provider diagnostics", async (t) => {
   for (const [fault, diagnostic] of [
     ["transport-setup", "transport-setup"],
-    ["first-account-read", "first-account-read"],
+    ["first-account-read", "first-account-read-or-worker-start"],
     ["first-account-identity", "first-account-identity"],
     ["catalog-denied", "catalog-read; catalog-http (HTTP 403)"],
     ["catalog-validation", "catalog-validation"],

@@ -809,19 +809,24 @@ const catalogFailure = (diagnostic) => (error) => {
   return true;
 };
 
-test("prepare CLI distinguishes actual provider catalog validation from a disconnect during the read", { timeout: 15000 }, async (t) => {
+test("prepare CLI distinguishes provider startup, catalog validation and disconnect during the catalog read", { timeout: 15000 }, async (t) => {
   for (const [mode, diagnostic] of [
+    ["startup-refusal", "first-account-read-or-worker-start; transport-close-failed; custody-uncertain"],
     ["catalog-shape", "catalog-validation; catalog-response"],
     ["catalog-disconnect", "catalog-read; transport-close-failed; custody-uncertain"],
   ]) await t.test(mode, async (t) => {
     const p = fixture(t), exitCode = realCatalog(p, mode), errors = [];
-    const disconnected = mode === "catalog-disconnect";
+    const disconnected = mode !== "catalog-shape";
     assert.equal(await fleetCli(p.prepareArgs, { ...p.deps, writeError: (line) => errors.push(line) }), 2);
     assert.deepEqual(errors, [`fleet-placement-preflight-failed: ${diagnostic}`]);
     assert.equal(exitCode(), disconnected ? 2 : 0);
     assert.deepEqual(fs.readdirSync(p.h.base), disconnected ? [".fleet-operation.lock"] : []);
     assert.deepEqual(p.events().filter((row) => row.boundary === "provider").map((row) => [row.method, row.path]),
-      [["GET", "/v2/account"], ["GET", "/v2/sizes?page=1&per_page=200"]]);
+      mode === "startup-refusal" ? [] : [["GET", "/v2/account"], ["GET", "/v2/sizes?page=1&per_page=200"]]);
+    if (mode === "startup-refusal") {
+      assert.ok(p.events().some((row) => row.boundary === "before-provider-boot"));
+      assert.ok(!p.events().some((row) => row.boundary === "synthetic-credential"));
+    }
     assert.equal(p.workers.length, 0);
   });
 });

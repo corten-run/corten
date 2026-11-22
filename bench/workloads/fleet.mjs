@@ -79,7 +79,7 @@ async function readPlacement(provider, { repo, interrupted, catalogProvider }, r
       return run([...args, "--context", provider.context], 60000, allowFail);
     };
     const account = async (position) => {
-      stage = `${position}-account-read`;
+      stage = position === "first" ? "first-account-read-or-worker-start" : "second-account-read";
       const result = await read(["account", "get", "--output", "json"]);
       assert.equal(result.status, 0, "fleet catalog account read failed");
       stage = `${position}-account-identity`;

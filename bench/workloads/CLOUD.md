@@ -159,8 +159,10 @@ and its children recheck only the exact `c-8` placement bound into the reviewed
 remaining approval. Those checks refuse a missing pair; they never substitute
 another region after approval.
 `fleet-placement-preflight-failed: STAGE` identifies the failed placement check:
-transport setup or close, either account read or identity check, catalog read or
-validation, the final controller checkpoint, or region selection. Only a safe
+transport construction or close, either account read or identity check, catalog read or
+validation, the checkpoint before region selection, or region selection itself.
+The first account read also starts the worker and waits for its handshake:
+`first-account-read-or-worker-start` does not mean a request was sent. Only a safe
 provider code and HTTP status may follow the stage, with fixed flags if transport
 close also failed or custody is uncertain. No account data or response body is
 printed. Inspect the failed check rather than editing any manifest. An
