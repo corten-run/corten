@@ -10,7 +10,7 @@ import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { fleetCreateMode, requireStagedFleet, stagedFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
-import { failedNativePolicy, failedNativeRoots, launchHostKey, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
+import { failedNativePolicy, failedNativeRoots, groupedPreplanFailure, launchHostKey, settledBootstrap, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
@@ -126,13 +126,29 @@ export async function productionPlan(options, { repo = checkout, run, compiler =
       assert.notEqual(head, saved.commit); await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
       recovery = { measuredCommit: saved.commit, wait: mixedWait, policy: "one-owned-mixed-wait-cancel-no-audit-no-delete" };
     } else if (options.retireFailedNative) {
-      const roots = failedNativeRoots(saved);
       assert.notEqual(saved.commit, head, "merged repair controller required");
       await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
-      if (saved.group === "mixed-production") verifyMixedSignal(join(physicalRequest, `groups-${options.round}`), saved);
-      else assert.ok(saved.archiveSha256 && saved.evidenceSha256 && saved.evidence && saved.fullGroupQualified === false, "preserved failed evidence required");
-      recovery = { measuredCommit: saved.commit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256, roots,
-        policy: failedNativePolicy(saved) };
+      const local = join(physicalRequest, `groups-${options.round}`);
+      if (stagedFleet(saved.fleet) && saved.fleet.single) {
+        // A successor must use the launch's output paths and generated remote job.
+        for (const path of ["bench/workloads/registry.mjs", "bench/workloads/cloud-contract.mjs", "bench/workloads/cloud-remote.mjs"])
+          assert.ok((await run("git", ["show", `${saved.commit}:${path}`])).stdout === loadedSources.get(path),
+            "measured group layout or remote job differs");
+        assert.ok(saved.fullGroupQualified === false && !saved.collectedAt && !saved.validation && !saved.evidenceOutcome,
+          "only unqualified failure evidence can retire");
+        const grouped = groupedPreplanFailure(local, saved);
+        const { stagedChildIntent } = await import("./fleet.mjs");
+        recovery = { policy: "grouped-preplan-failure-custody-only", measuredCommit: saved.commit, hostId: saved.id,
+          group: saved.group, unit: saved.unit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256,
+          launchHostKeySha256: saved.launchHostKeySha256, bootId: grouped.host.bootId, roots: grouped.roots,
+          intent: stagedChildIntent(physicalRequest, saved), fleetSha256: saved.fleet.fleetSha256 };
+      } else {
+        const roots = failedNativeRoots(saved);
+        if (saved.group === "mixed-production") verifyMixedSignal(local, saved);
+        else assert.ok(saved.archiveSha256 && saved.evidenceSha256 && saved.evidence && saved.fullGroupQualified === false, "preserved failed evidence required");
+        recovery = { measuredCommit: saved.commit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256, roots,
+          policy: failedNativePolicy(saved) };
+      }
     } else {
       assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
       if (options.collect && saved.launchHostKeySha256 !== undefined) {
@@ -302,7 +318,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       reservationSha256: plan.subject.reservationSha256, knownHostsSha256: plan.subject.recovery.knownHostsSha256,
     } }), ...(options.retireFailedNative || options.cancelMixedWait || options.r21MeasuredCheckout ? {
       recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256,
-        ...(options.r21MeasuredCheckout ? plan.subject.recovery : {}) },
+        ...(options.r21MeasuredCheckout || plan.subject.recovery?.policy === "grouped-preplan-failure-custody-only" ? plan.subject.recovery : {}) },
     } : {}) });
   let result;
   stage = options.detach ? "controller-launch" : options.collect ? "controller-collect" : options.cancelMixedWait ? "controller-cancellation" : options.retireFailedNative ? "controller-retirement" : "controller-audit";

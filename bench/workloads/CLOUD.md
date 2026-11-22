@@ -699,6 +699,23 @@ proof. Preview and exact approval bind both source identities, exact reservation
 bytes, original evidence hashes, physical state root and fixed custody roots.
 This exception does not permit a source override for collection, audit or launch.
 
+An independent group can also fail after the wrapper invokes native entry but
+before it saves a campaign plan. In this case ordinary collection preserves the
+wrapper archive; it cannot produce a benchmark result. Use a separate
+`--retire-failed-native --print-approval` from a clean, merged descendant. The
+preview must bind the consumed launch intent, reservation, launch key, registered
+boot, original archive and extraction, and the output roots for the measured
+group. The measured registry and remote-job definitions must still match.
+
+This path requires a revoked monitor with a settled local owner, wrapper exit
+2, an empty archived campaign directory, and the final failure line from the
+measured job's native-entry command. An empty directory **alone** is not proof
+that the application wrote nothing. Before retiring the exact host, the
+controller checks the unit is idle, saves the campaign and native output roots
+(including evidence of absence), verifies the local copies, and checks the
+host and roots again. A changed or live host is retained. Neither the wrapper
+archive nor the later capture qualifies the group or supplies timing results.
+
 The shared `cloud-retirement.mjs:failedNativePolicy` allowlist also admits only the
 exact `catalog-page` attempt measured at
 `dbe1a34c753ee8ef4ac9927484dc3930d36f6e37`, round `r21`, host ID 620052965,
