@@ -227,8 +227,8 @@ export class ResourceAudit {
       const anchor = this.page.locator('header a[href="/"]').first();
       if (!await anchor.count()) throw new Error("No native navigation-away link is available for cleanup");
       evidence.navigation = { via: "native-header-link", path: "/", at: performance.now() };
-      await anchor.click();
-      const deadline = performance.now() + timeoutMs;
+      await anchor.click(this.javaScriptEnabled ? {} : { timeout: timeoutMs });
+      const deadline = (this.javaScriptEnabled ? performance.now() : evidence.navigation.at) + timeoutMs;
       let after;
       while (performance.now() < deadline) {
         try {
@@ -245,6 +245,14 @@ export class ResourceAudit {
       evidence.after = after;
       evidence.retired = this.retired(evidence.before, after);
       if (!evidence.retired?.probeAvailable) {
+        if (evidence.retired && !this.javaScriptEnabled && evidence.before.realm !== after?.realm) {
+          // Commit proves replacement, not completion of the landing document's parser work.
+          await this.page.waitForLoadState("load", { timeout: Math.max(1, deadline - performance.now()) });
+          await network.settle(offset, deadline);
+          const settledAt = performance.now();
+          if (settledAt > deadline) throw new Error("Cleanup landing exceeded the request deadline");
+          evidence.landingSettledAt = settledAt;
+        }
         if (this.lifecycle && evidence.before.realm !== after?.realm) evidence.platformProbe = await this.lifecycle.probeRealm(evidence.before.realm);
         evidence.outcome = "unsupported";
         throw new Error(evidence.retired?.reason ?? "Native navigation did not retire the marketplace scope");

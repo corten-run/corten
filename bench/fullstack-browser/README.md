@@ -615,8 +615,10 @@ observes resource counts, real DOM hashes, requests and errors for the bounded i
 For an ordinary no-JS full-document journey, native CDP destruction and the replacement
 binding can prove retirement instead. The dead realm's DOM, counts and event probe stay null.
 The bounded window requires proved empty long-lived peer and worker populations, reconciled
-request and upstream ledgers, and clean live landing observations. A browser context closing
-is not that proof.
+request and upstream ledgers, and clean live landing observations. Landing parser requests
+must complete within the cleanup deadline and before terminal observation starts. Work that
+fails or arrives after that boundary remains in the ledger and cannot qualify. A browser
+context closing is not that proof.
 
 `lifecycle.mjs` correlates observed instrumentation realms with native default execution
 contexts, frame/loader commits, target discovery and page WebSocket/EventSource receipts.

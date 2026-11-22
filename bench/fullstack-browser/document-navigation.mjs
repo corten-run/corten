@@ -35,7 +35,7 @@ export function replayDocumentNavigation(e, profile, { observationMs, maxCleanup
     need(c.navigation?.via === "native-header-link" && c.navigation.path === "/" && sameScope(c.before, rows.at(-1).resources)
       && sameScope(c.after, c.landingResources) && sameScope(c.after, c.terminalResources), "Cleanup not bound to current and replacement scopes");
     for (const sample of [c.before, c.after, c.landingResources, c.terminalResources]) quiet(sample);
-    need(ordered(rows.at(-1).resources.at, c.before.at, c.navigation.at, c.after.at, c.landingResources.at, b?.terminalStartedAt, b?.endedAt,
+    need(ordered(rows.at(-1).resources.at, c.before.at, c.navigation.at, c.after.at, c.landingSettledAt, c.landingResources.at, b?.terminalStartedAt, b?.endedAt,
       c.terminalResources.at, e.requestLedgerEndedAt)
       && c.after.at - c.navigation.at <= maxCleanupMs && b.endedAt - b.terminalStartedAt >= observationMs
       && c.landingResources.at - c.navigation.at <= maxCleanupMs && c.terminalResources.document?.path === "/", "Unbounded or wrong native cleanup destination/interval");
@@ -46,7 +46,7 @@ export function replayDocumentNavigation(e, profile, { observationMs, maxCleanup
     need(workers.status === "verified" && peer.status === "verified" && peer.applicability === "empty-set",
       `Worker/long-lived peer absence unproved: ${peer.blocked.join("; ")}`);
     const requestClasses = [];
-    function phase({ before, after, at, end, path, method, requests, observer, retirement }) {
+    function phase({ before, after, at, end, path, method, requests, observer, retirement, settled = false }) {
       quiet(after);
       const bindings = j.realms.filter((r) => r.realm === after.realm);
       need(bindings.length === 1, "Replacement resource realm not uniquely bound");
@@ -65,6 +65,8 @@ export function replayDocumentNavigation(e, profile, { observationMs, maxCleanup
       }
       const native = network.requests.filter((r) => r.dispatch.receivedAt >= at && r.dispatch.receivedAt <= end);
       need(native.every((r) => r.dispatch.frame === binding.frame && r.dispatch.loader === binding.loader), "Action contains work from an unrelated loader");
+      if (settled) need(native.every((r) => ordered(r.dispatch.receivedAt, r.terminal.receivedAt, r.body?.receivedAt ?? r.terminal.receivedAt, end)),
+        "Landing request did not finish before cleanup settled");
       const docs = native.filter((r) => r.classification === "document"), final = docs.at(-1);
       need(final?.dispatch.path === path && docs[0]?.dispatch.method === method && final.terminal.event === "Network.loadingFinished"
         && final.dispatch.urlSha256 === documents[0].identityObservation.documentSha256
@@ -100,8 +102,8 @@ export function replayDocumentNavigation(e, profile, { observationMs, maxCleanup
       phase({ before, after: row.resources, at: row.dispatchStartedAt, end: row.resources.at, path: row.action.path,
         method: row.action.input ? "POST" : "GET", requests: row.requests, observer: row.dom.observer, retirement: row.retired });
     }
-    phase({ before: c.before, after: c.after, at: c.navigation.at, end: c.landingResources.at, path: "/", method: "GET",
-      requests: c.requests, observer: c.landingResources.observer, retirement: c.retired });
+    phase({ before: c.before, after: c.after, at: c.navigation.at, end: c.landingSettledAt, path: "/", method: "GET",
+      requests: c.requests, observer: c.landingResources.observer, retirement: c.retired, settled: true });
     need(requestClasses.length === network.requests.length, "Unassigned native requests outside actions/cleanup");
     const assigned = reconcileRequests(e, { outcome: "proved", requests: requestClasses });
     need(assigned.outcome === "reconciled", assigned.reasons.join("; "));

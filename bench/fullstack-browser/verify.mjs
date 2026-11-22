@@ -322,13 +322,13 @@ function receiptChronology(e, windows, block, caseKey) {
   const c = e.nativeCleanup;
   let cleanupEnd = windows.at(-1)?.end ?? baseline ?? origin;
   if (c) {
-    const points = [c.before?.at, c.navigation?.at, c.after?.at, c.detachedAt, c.released?.at, c.probe?.at, c.probe?.afterAt];
+    const points = [c.before?.at, c.navigation?.at, c.after?.at, c.landingSettledAt, c.detachedAt, c.released?.at, c.probe?.at, c.probe?.afterAt];
     points.forEach((v) => time(v, "cleanup", false)); sequence([cleanupEnd, ...points], "Journey/cleanup");
     if (!c.before) block("Cleanup start receipt unavailable");
     if (c.probe) interval(c.probe, "retired DOM probe", "at", "afterAt");
     if (c.platformProbe) {
       const [start, end] = interval(c.platformProbe, "cleanup platform probe", "receivedAt");
-      order(c.after?.at, start, "Cleanup/platform probe"); points.push(end);
+      order(c.landingSettledAt ?? c.after?.at, start, "Cleanup/platform probe"); points.push(end);
     }
     cleanupEnd = Math.max(cleanupEnd, ...points.filter((v) => !missing(v)));
   }

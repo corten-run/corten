@@ -226,10 +226,16 @@ test("native document proof replays the producer's real no-JS receipts and rejec
   const fixture = records(), whole = createBrowserPlan({ records: fixture }).cases.find((p) => p.key === "fixture-en-US-desktop-no-js");
   const profile = { ...whole, steps: whole.steps.slice(0, 2) };
   const assets = '<link rel="stylesheet" href="/site.css"><link rel="modulepreload" href="/blocked.mjs">';
-  let unexpected = false;
+  let unexpected = false, rejectStylesheet = false;
   const app = createServer((req, res) => {
     if (req.url === "/api/alerts") { res.setHeader("content-type", "application/json"); res.end("[]"); return; }
     if (req.url === "/site.css") { res.setHeader("content-type", "text/css"); res.end("body{color:black}"); return; }
+    if (req.url === "/landing.css") {
+      if (rejectStylesheet) res.statusCode = 503;
+      res.setHeader("content-type", "text/css");
+      setTimeout(() => res.end("body{color:black}"), 850);
+      return;
+    }
     if (req.url === "/blocked.mjs") { res.setHeader("content-type", "text/javascript"); res.end("throw new Error('must not run')"); return; }
     res.setHeader("content-type", "text/html");
     const record = fixture[req.url.split("/").at(-1)];
@@ -237,7 +243,7 @@ test("native document proof replays the producer's real no-JS receipts and rejec
       res.end(referenceHtml(record, "en-US").replace(/<base [^>]+>/, assets).replace("<body>", '<body><header><a href="/">Away</a></header>'));
     } else {
       const redirect = unexpected && req.url === "/" ? '<meta http-equiv="refresh" content="0;url=/unexpected">' : "";
-      res.end(`<!doctype html><head>${redirect}${assets}</head><body>Native landing</body>`);
+      res.end(`<!doctype html><head>${redirect}${assets.replace("/site.css", "/landing.css")}</head><body>Native landing</body>`);
     }
   });
   let browser;
@@ -247,6 +253,8 @@ test("native document proof replays the producer's real no-JS receipts and rejec
     const observe = () => runJourney({ browser, app: "react-router", base, profile, records: fixture, readback: { path: "/api/alerts" },
       counters: async () => (await fetch(source + "/__browser/counters")).json() });
     const cell = await observe(), e = cell.evidence;
+    assert.equal(e.nativeCleanup.requests.find((r) => r.path === "/landing.css")?.completed, true,
+      "Record the completed slow landing stylesheet, not its in-flight state at document commit");
     assert.equal(cell.qualificationPassed, false, "apparatus has no marketplace semantic parity");
     assert.equal(e.documentNavigationProof?.outcome, "proved", e.documentNavigationProof?.reason ?? e.failures.join("; "));
     assert.equal(e.steps[1].retired.owned, null);
@@ -265,6 +273,12 @@ test("native document proof replays the producer's real no-JS receipts and rejec
       ["missing unique-context terminal probe", (r) => { r.platformLifecycle.events = r.platformLifecycle.events.filter((v) => v.event !== "unique-context-read-probe"); }],
       ["forged replacement scope", (r) => { r.steps[1].resources.scope = r.steps[0].resources.scope; }],
       ["invented dead realm counts", (r) => { r.nativeCleanup.retired.owned = r.nativeCleanup.before.scopes[0].owned; }],
+      ["missing landing settlement", (r) => { delete r.nativeCleanup.landingSettledAt; }],
+      ["landing settled before its request completion", (r) => {
+        const c = r.nativeCleanup, events = r.platformLifecycle.events;
+        const dispatch = events.find((v) => v.event === "Network.requestWillBeSent" && v.path === "/landing.css");
+        c.landingSettledAt = Math.max(dispatch.receivedAt, c.after.at);
+      }],
       ["missing final checkpoint", (r) => { delete r.nativeCleanup.terminalResources; }],
       ["post-navigation live resource", (r) => { r.nativeCleanup.terminalResources.scopes[0].owned.pendingTasks = 1; }],
       ["missing native target inventory", (r) => { r.platformLifecycle.events = r.platformLifecycle.events.filter((v) => v.event !== "Target.getTargets" || v.phase !== "terminal"); }],
@@ -294,6 +308,11 @@ test("native document proof replays the producer's real no-JS receipts and rejec
       const changed = structuredClone(raw); alter(changed);
       assert.equal(replayDocumentNavigation(changed, profile, settings).outcome, "unknown");
     });
+    rejectStylesheet = true;
+    const badStylesheet = (await observe()).evidence;
+    assert.ok(badStylesheet.requestLedger.some((r) => r.path === "/landing.css" && r.status === 503));
+    assert.notEqual(badStylesheet.documentNavigationProof?.outcome, "proved");
+    rejectStylesheet = false;
     unexpected = true;
     const late = (await observe()).evidence;
     assert.ok(late.requestLedger.some((r) => r.path === "/unexpected" && r.resource === "document"), "real post-navigation request reached Chromium");
