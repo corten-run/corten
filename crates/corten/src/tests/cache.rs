@@ -2902,6 +2902,142 @@ async fn when_the_first_request_is_dropped_or_panics_the_others_make_their_own()
     assert_eq!(runs.count(), 9);
 }
 
+/// The body of [`HeldPage`]: of a known size, held at its first read until its handler's
+/// [`Hold`] lets it through, or a panic there when `panics` is set. `read` says it was read.
+struct HeldBody {
+    hold: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>>,
+    page: Option<bytes::Bytes>,
+    read: Once,
+    panics: bool,
+}
+
+impl http_body::Body for HeldBody {
+    type Data = bytes::Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<bytes::Bytes>, Self::Error>>> {
+        let body = &mut *self;
+        body.read.store(true, std::sync::atomic::Ordering::Release);
+        assert!(!body.panics, "a body that panics as it is read");
+        if let Some(hold) = &mut body.hold {
+            std::task::ready!(hold.as_mut().poll(cx));
+            body.hold = None;
+        }
+        std::task::Poll::Ready(body.page.take().map(|page| Ok(http_body::Frame::data(page))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.page.is_none()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(self.page.as_ref().map_or(0, |page| page.len() as u64))
+    }
+}
+
+/// An answer type of the app's own that says it is a page, kept as one: its body is read whole
+/// only as the app keeps it.
+struct HeldPage(HeldBody);
+
+impl crate::response::IntoResponse for HeldPage {
+    fn into_response(self) -> crate::response::Response {
+        let mut res = crate::response::Response::new(Body::new(self.0));
+        res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
+        res
+    }
+}
+
+impl crate::Answer for HeldPage {
+    const FORMAT: crate::answer::Format = crate::answer::Format::Html;
+    const PAGE: bool = true;
+    type Inputs = crate::answer::AnyInputs;
+    type Rows = crate::answer::NotAFeed;
+    type Kind = AnyAnswer;
+}
+
+impl crate::answer::ForEveryone for HeldPage {
+    type Named = Self;
+
+    fn for_all(self) -> Self {
+        self
+    }
+}
+
+impl crate::answer::Shareable for HeldPage {
+    type ForAll = Self;
+}
+
+/// A request dropped, or whose answer's body panicked, while its body was read to be kept
+/// answered nothing: the page is not remembered as not kept, so the next requests that miss it
+/// together still wait for the first of them.
+#[tokio::test]
+async fn a_request_ended_while_its_body_is_read_leaves_the_page_waited_for() {
+    use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+    let (runs, hold, read, panics, watch) =
+        (Runs::default(), Hold::default(), Once::default(), Once::default(), Watch::default());
+    let page = {
+        let (runs, hold, read, panics) = (runs.clone(), hold.clone(), read.clone(), panics.clone());
+        move || {
+            runs.ran();
+            let body = HeldBody {
+                hold: Some(Box::pin(hold.pass())),
+                page: Some(bytes::Bytes::from_static(b"<!doctype html><p>held</p>")),
+                read: read.clone(),
+                panics: panics.swap(false, Relaxed),
+            };
+            async move { Public::new(Duration::from_secs(60), HeldPage(body)) }
+        }
+    };
+    let routes = Table::new().route("/", crate::route::get(page).0.post(|| async { StatusCode::NO_CONTENT }));
+    let router = App::new(Routes::from(routes)).middleware(watch.clone()).router();
+    // Two requests that miss together: the first makes the page, and the other waits for it.
+    let together = |count: usize| {
+        let (router, runs, hold, watch) = (&router, &runs, &hold, &watch);
+        async move {
+            hold.next(1);
+            let first = sent(router, "GET", "/", &[]);
+            ran(runs, count + 1).await;
+            let other = sent(router, "GET", "/", &[]);
+            watch.admitted(watch.joined() + 1).await;
+            assert_eq!(runs.count(), count + 1, "the other waits");
+            hold.release(1);
+            let (status, headers, made) = first.await.unwrap();
+            assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{headers:?}");
+            let (status, headers, given) = other.await.unwrap();
+            assert!(status == StatusCode::OK && headers.contains_key(header::AGE) && given == made, "{headers:?}");
+            assert_eq!(runs.count(), count + 1);
+        }
+    };
+    let read_once = || {
+        let read = &read;
+        let reached = async move {
+            while !read.swap(false, Acquire) {
+                tokio::task::yield_now().await;
+            }
+        };
+        async move { tokio::time::timeout(Duration::from_secs(10), reached).await.expect("the body was read") }
+    };
+
+    // Dropped while the body it answered is held: its client left, or its deadline passed.
+    hold.next(1);
+    let first = sent(&router, "GET", "/", &[]);
+    read_once().await;
+    first.abort();
+    assert!(first.await.is_err_and(|ended| ended.is_cancelled()));
+    together(1).await;
+
+    // A body that panics as it is read, with no write between it and the requests after.
+    assert_eq!(fetch(&router, "POST", "/", SAME_ORIGIN).await.0, StatusCode::NO_CONTENT);
+    read.store(false, Release);
+    panics.store(true, Release);
+    assert_eq!(fetch(&router, "GET", "/", &[]).await.0, StatusCode::INTERNAL_SERVER_ERROR);
+    read_once().await;
+    together(3).await;
+}
+
 /// A request waiting for another's page waits no longer than its own deadline.
 #[tokio::test(start_paused = true)]
 async fn a_request_waits_for_another_s_page_no_longer_than_its_deadline() {
@@ -3137,6 +3273,40 @@ async fn a_request_after_another_write_makes_the_page_again_without_waiting() {
     assert_eq!(given, after, "the page made after the write, never the one read before it");
     assert_eq!(fetch(&router, "GET", "/", &[]).await.2, after, "which is still the one kept");
     assert_eq!(held.runs.count(), 3);
+}
+
+/// Before the app has made an answer it may keep there is no count by path to change, and a
+/// write still parts the requests that miss a page before it from those after: the first
+/// request after it makes the page again rather than wait for one read before it, and the one
+/// that waited for that earlier page is given the page made after the write.
+#[tokio::test]
+async fn a_write_before_the_counts_parts_the_requests_that_miss_on_either_side() {
+    let (held, watch) = (Held::default(), Watch::default());
+    let router = App::new(Routes::from(held_routes(&held))).middleware(watch.clone()).router();
+    held.hold.next(1);
+    let first = sent(&router, "GET", "/", &[]);
+    ran(&held.runs, 1).await;
+    let waiting = sent(&router, "GET", "/", &[]);
+    watch.admitted(1).await;
+    assert_eq!(fetch(&router, "POST", "/", SAME_ORIGIN).await.0, StatusCode::NO_CONTENT);
+    assert!(!watch.answers().counts_by_path(), "the write found no counts by path");
+    let (status, headers, after) = at_once(&router, "GET", "/", &[]).await;
+    assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "made again: {headers:?}");
+    assert!(text(&after).contains("<p>write 1 in en</p>"), "{}", text(&after));
+    assert_eq!(watch.joined(), 1, "it did not wait for the page read before the write");
+    assert!(watch.answers().counts_by_path());
+    let (_, headers, again) = fetch(&router, "GET", "/", &[]).await;
+    assert!(headers.contains_key(header::AGE) && again == after, "and kept: {headers:?}");
+    held.hold.release(1);
+    let (status, headers, before) = first.await.unwrap();
+    assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{headers:?}");
+    assert!(text(&before).contains("<p>write 0 in en</p>"), "the first request's own page: {}", text(&before));
+    let (status, headers, given) = waiting.await.unwrap();
+    assert!(status == StatusCode::OK && headers.contains_key(header::AGE), "{headers:?}");
+    assert_eq!(given, after, "the page made after the write, never the one read before it");
+    let (_, headers, still) = fetch(&router, "GET", "/", &[]).await;
+    assert!(headers.contains_key(header::AGE) && still == after, "which is still the one kept: {headers:?}");
+    assert_eq!((held.runs.count(), watch.joined()), (2, 1));
 }
 
 /// A page kept in one language does not end the wait for the page being made in another: a

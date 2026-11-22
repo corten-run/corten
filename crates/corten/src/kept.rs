@@ -1015,6 +1015,12 @@ impl Answers {
         self.0.joined.load(Ordering::Acquire)
     }
 
+    /// Whether writes are counted by path yet: from the first answer that may be kept.
+    #[cfg(test)]
+    pub(crate) fn counts_by_path(&self) -> bool {
+        self.0.written.get().is_some()
+    }
+
     /// Holds the next request that comes to `at` there, until the test lets it go on. A test
     /// that holds one runs on more than one thread.
     #[cfg(test)]
@@ -1396,7 +1402,8 @@ struct Leading {
 
 impl Drop for Leading {
     /// Answered or dropped: the requests waiting for it look again. A page answered and not kept,
-    /// with no write to its path since its handler read, is remembered as not kept.
+    /// with no write to its path since its handler read, is remembered as not kept; one dropped
+    /// or panicking before its answer was whole (while its body was read) is not.
     fn drop(&mut self) {
         let not_kept = (self.answered && self.written.stands(&self.store)).then(Instant::now);
         let waiting = self.store.flights.table().ended(self.key, not_kept);
@@ -1437,7 +1444,7 @@ impl Missed {
     /// `res`, kept when it is the same for everyone and for how long: see the module. The
     /// requests waiting for it look again once it is kept, or not.
     pub(crate) async fn keep(mut self, mut res: Response) -> Response {
-        // Until it is kept below.
+        // Until it is kept below, but while its body is read.
         if let Some(leading) = &mut self.leading {
             leading.answered = true;
         }
@@ -1517,8 +1524,18 @@ impl Missed {
             return res;
         }
         let (mut parts, body) = res.into_parts();
+        // A request dropped (its client left, its deadline passed) or panicking while the body is
+        // read answered nothing, so its page is not remembered as not kept: its body may be one
+        // the app keeps the next time. One that could not be read was answered, an error.
+        if let Some(leading) = &mut self.leading {
+            leading.answered = false;
+        }
+        let read = crate::body::to_bytes(body, usize::MAX).await;
+        if let Some(leading) = &mut self.leading {
+            leading.answered = true;
+        }
         // Exact size: one held `Bytes`.
-        let Ok(body) = crate::body::to_bytes(body, usize::MAX).await else {
+        let Ok(body) = read else {
             // A body of an exact size that could not be read: not a page to send as it is.
             return crate::response::IntoResponse::into_response(StatusCode::INTERNAL_SERVER_ERROR);
         };
