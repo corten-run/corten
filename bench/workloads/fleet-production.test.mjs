@@ -260,7 +260,19 @@ test("captured production composition ignores arbitrary hints, binds POST identi
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
 });
 
-test("continuation replays catalog, creates only the next whole group, and does not reallocate it after collection", { timeout: 60000 }, async (t) => {
+function unusedRetirement(root, fleet, group) {
+  const local = path.join(root, group, `groups-${fleet.round}`), ms = Date.now(), at = new Date(ms).toISOString();
+  const state = { ...reservation({ round: fleet.round, commit: fleet.commit, token: fleet.jobs[0].token, group, fleet }),
+    provider: fleet.provider, fullGroupQualified: false, status: "retired", createIntentAt: at, deletionIntentAt: at, destroyedAt: at,
+    id: "997", ip: "192.0.2.10" };
+  const observation = JSON.stringify({ schema: "benchmark-unused-host/v1", hostId: state.id, unit: state.unit, observedAtMs: ms, unused: true });
+  const proof = JSON.stringify(unusedEvidence(observation, state, unusedHostScript(state), ms, ms));
+  fs.mkdirSync(local, { recursive: true });
+  fs.writeFileSync(path.join(local, "unused-host.json"), proof);
+  fs.writeFileSync(path.join(local, "state.json"), JSON.stringify({ ...state, retirement: { kind: "unused", evidenceSha256: digest(proof) } }));
+}
+
+test("continuation schedules around pinned catalog and retired JSON without replaying either", { timeout: 60000 }, async (t) => {
   const p = fixture(t), before = new Map(), catalog = "catalog-page", json = "json-api", next = "localized-marketplace";
   const retained = path.join(p.h.temp, "retained"), index = path.join(p.h.base, "index.json");
   const history = fleetPlan({ round: "r20", commit: "b".repeat(40), token: "f".repeat(16), sshKey: "42", provider: { accountId, context },
@@ -307,7 +319,7 @@ test("continuation replays catalog, creates only the next whole group, and does 
     fleet: oldFleet, selection: { ...history.selection, groups: [oldCatalog] },
     provider: history.provider, fullGroupQualified: false, createIntentAt: at, id: "900", ip: "192.0.2.200" };
   const oldArchive = collected(retained, oldFleet, catalog, saved, at), oldBytes = fs.readFileSync(oldArchive), oldTree = treeHash(retained);
-  fs.writeFileSync(index, JSON.stringify([{ root: retained, checkout: p.h.repo, round: history.round, commit: history.commit,
+  fs.writeFileSync(index, JSON.stringify([{ root: retained, checkout: path.join(p.h.temp, "missing-measured-checkout"), round: history.round, commit: history.commit,
     archives: { [catalog]: saved.archiveSha256 } }]));
   p.deps.inspect = async ({ folder, round, commit }) => {
     const report = before.get(folder); assert.equal(report?.round, round); assert.equal(report?.commit, commit); return report;
@@ -320,6 +332,11 @@ test("continuation replays catalog, creates only the next whole group, and does 
   assert.equal(initial.groups.filter((row) => row.result).length, 1);
   assert.equal(initial.eligibleToRun.length, groupNames.length - 1);
   assert.ok(!initial.eligibleToRun.includes(catalog));
+  const replay = p.deps.inspect;
+  fs.appendFileSync(oldArchive, "changed");
+  await assert.rejects(inspectContinuation(p.h.base, p.deps), /retained catalog-page/);
+  let admissionReplay = 0;
+  p.deps.inspect = () => { admissionReplay++; assert.fail("admission must not replay another group"); };
   await assert.rejects(fleetMain(prepare(catalog), p.deps), /already verified/);
   assert.deepEqual(p.events(), []);
   const onlyC8 = syntheticPlacement(["sfo3"]); onlyC8.sizes.pop(); onlyC8.regions[0].sizes = [];
@@ -327,34 +344,44 @@ test("continuation replays catalog, creates only the next whole group, and does 
   assert.equal(await fleetMain(prepare(json), p.deps), 3);
   await assert.rejects(fleetMain(["r21", "--fleet-root", path.join(p.h.base, json), "--detach", "--print-approval"], p.deps), /use continuation detach/);
   assert.equal(await preview(json), 3);
+  const jsonApproval = p.output.at(-1).approvalSha256;
+  p.deps.main = async () => 2; // Consume a real-shaped independent intent without creating anything.
+  assert.equal(await detached(json, jsonApproval), 2);
+  delete p.deps.main;
+  const jsonRoot = path.join(p.h.base, json), jsonFleet = readFleet(jsonRoot, "r21").manifest;
+  unusedRetirement(jsonRoot, jsonFleet, json);
+  const reused = path.join(jsonRoot, ".fleet-operation.lock");
+  fs.writeFileSync(reused, JSON.stringify({ pid: process.pid, approvalSha256: jsonApproval }));
+  const retainedJson = treeHash(jsonRoot);
+  const beforePreview = p.events().length;
+  assert.equal(await fleetMain(prepare(next), p.deps), 3);
+  assert.equal(await preview(next), 3);
   const { approvalSha256, subject } = p.output.at(-1);
-  assert.deepEqual(subject.jobs.map((job) => job.group), [json]);
-  assert.deepEqual(subject.fleet.selection.groups, [history.selection.groups.find(({ group }) => group === json)]);
-  fs.appendFileSync(oldArchive, "changed");
-  await assert.rejects(detached(json, approvalSha256), /retained catalog-page/);
-  assert.equal(p.events().filter((row) => row.method === "POST").length, 0);
+  assert.deepEqual(subject.jobs.map((job) => job.group), [next]);
+  assert.deepEqual(subject.fleet.selection.groups, [history.selection.groups.find(({ group }) => group === next)]);
+  assert.deepEqual(subject.continuation.verified, []);
+  assert.equal(p.events().length, beforePreview, "prepare/preview have no child/provider mutation path");
+  assert.ok(!fs.existsSync(path.join(p.h.base, next, "launch-intent.json")));
+  delete p.deps.inspect; // There is no measured checkout to load and the old archive is still corrupt.
+  assert.equal(await preview(next), 3);
+  assert.equal(p.output.at(-1).approvalSha256, approvalSha256);
+  assert.equal(await detached(next, approvalSha256), 3, JSON.stringify(p.output.at(-1)));
+  assert.equal(admissionReplay, 0);
+  assert.equal(treeHash(jsonRoot), retainedJson, "scheduler did not change the retired slot or its reused-PID lock");
+  assert.deepEqual(p.events().filter((row) => row.method === "POST").map(({ group, body }) => [group, body.size]), [[next, "c-8"]]);
+  await assert.rejects(detached(next, approvalSha256), /unresolved custody|already attempted/);
+  fs.unlinkSync(reused); // Historical lock interpretation is a separate report-only concern.
   fs.writeFileSync(oldArchive, oldBytes);
-  const statePath = path.join(retained, catalog, "groups-r20/state.json");
-  const originalState = fs.readFileSync(statePath);
-  fs.writeFileSync(statePath, JSON.stringify({ ...saved, destroyedAt: undefined }));
-  await assert.rejects(detached(json, approvalSha256), /retained catalog-page/);
-  const extracted = path.join(retained, catalog, "groups-r20", saved.evidence), host = path.join(extracted, "host.txt");
-  fs.writeFileSync(host, "changed!!\n");
-  fs.writeFileSync(statePath, JSON.stringify({ ...saved, evidenceSha256: treeHash(extracted) }));
-  assert.equal(fileHash(oldArchive), saved.archiveSha256);
-  await assert.rejects(detached(json, approvalSha256), /retained catalog-page/);
-  fs.writeFileSync(host, "synthetic\n");
-  fs.writeFileSync(statePath, originalState);
-  assert.equal(await detached(json, approvalSha256), 3, JSON.stringify(p.output.at(-1)));
-  await assert.rejects(detached(json, approvalSha256), /unresolved custody|already attempted/);
-  const job = path.join(p.h.base, json), fleet = readFleet(job, "r21").manifest;
-  const jsonState = JSON.parse(fs.readFileSync(path.join(job, json, "groups-r21/state.json")));
+  p.deps.inspect = replay;
+  const job = path.join(p.h.base, next), fleet = readFleet(job, "r21").manifest;
+  const state = JSON.parse(fs.readFileSync(path.join(job, next, "groups-r21/state.json")));
   const at2 = "2026-11-21T00:00:00.000Z";
-  collected(job, fleet, json, jsonState, at2); fs.writeFileSync(p.hosts, "[]");
+  collected(job, fleet, next, state, at2); fs.writeFileSync(p.hosts, "[]");
   const report = (await inspectContinuation(p.h.base, { repo: p.h.repo, inspect: p.deps.inspect })).report;
   assert.equal(report.status, "incomplete"); assert.equal(report.publishableBaseline, false);
   assert.deepEqual(report.groups.map(({ group }) => group), groupNames);
-  for (const [i, [round, measuredCommit, date, group]] of [["r20", history.commit, at, catalog], ["r21", commit, at2, json]].entries()) {
+  for (const [round, measuredCommit, date, group] of [["r20", history.commit, at, catalog], ["r21", commit, at2, next]]) {
+    const i = groupNames.indexOf(group);
     assert.equal(report.groups[i].outcome, "verified", JSON.stringify(report.groups[i]));
     const result = report.groups[i].result;
     assert.deepEqual([result.round, result.commit, result.campaignCreatedAt, result.baseEffectiveOptions], [round, measuredCommit, date, { fixture: group }]);
@@ -362,15 +389,33 @@ test("continuation replays catalog, creates only the next whole group, and does 
   assert.equal(report.groups[0].result.matchesCurrentContract, false);
   assert.deepEqual(report.groups[0].result.selection, oldCatalog);
   assert.equal(report.groups[0].result.archiveSha256, saved.archiveSha256);
-  assert.equal(report.groups[1].result.matchesCurrentContract, true);
+  assert.equal(report.groups[groupNames.indexOf(next)].result.matchesCurrentContract, true);
   assert.equal(report.groups[0].result.appOutcomes.find((app) => app.app === "express").comparisonEligible, false);
-  await assert.rejects(fleetMain(prepare(json), p.deps), /already verified/);
-  assert.equal(await fleetMain(prepare(next), p.deps), 3); assert.equal(await preview(next), 3);
-  assert.equal(await detached(next, p.output.at(-1).approvalSha256), 3, JSON.stringify(p.output.at(-1)));
-  assert.deepEqual(p.events().filter((row) => row.method === "POST").map(({ group, body }) => [group, body.size]), [[json, "c-8"], [next, "c-8"]]);
+  await assert.rejects(fleetMain(prepare(next), p.deps), /already verified/);
+  const pending = "hardening", historical = path.join(retained, catalog, "groups-r20", "state.json");
+  const original = fs.readFileSync(historical), unconfirmed = { ...saved, destroyedAt: undefined };
+  fs.writeFileSync(historical, JSON.stringify(unconfirmed));
+  try {
+    await assert.rejects(fleetMain(prepare(pending).map((part) => part === accountId ? "user:foreign" : part), p.deps), /same provider account/);
+    assert.equal(await fleetMain(prepare(pending), p.deps), 3);
+    assert.equal(await preview(pending), 3);
+    const approval = p.output.at(-1);
+    assert.deepEqual(approval.subject.continuation.unconfirmed, [{ group: catalog, round: history.round, accountId,
+      manifestSha256: fileHash(path.join(retained, "fleet-r20.json")), stateSha256: fileHash(historical), id: saved.id }]);
+    const beforeCensus = p.events().length;
+    fs.writeFileSync(historical, JSON.stringify({ ...unconfirmed, id: "901" }));
+    await assert.rejects(detached(pending, approval.approvalSha256), /exact-approval-required/);
+    assert.equal(p.events().length, beforeCensus, "changed historical identity cannot reach provider");
+    fs.writeFileSync(historical, JSON.stringify(unconfirmed));
+    fs.writeFileSync(p.hosts, JSON.stringify([{ id: Number(saved.id), name: saved.name, tags: [] }]));
+    assert.equal(await detached(pending, approval.approvalSha256), 2);
+    const trace = p.events().slice(beforeCensus).filter(({ boundary }) => boundary === "provider");
+    assert.deepEqual(trace.map(({ method, path }) => [method, path]), [["GET", "/v2/account"], ["GET", "/v2/droplets?page=1&per_page=200"]]);
+    assert.equal(p.saved(path.join(pending, pending)).createIntentAt, undefined);
+  } finally { fs.writeFileSync(historical, original); fs.writeFileSync(p.hosts, "[]"); }
   const fork = path.join(p.h.temp, "incomplete-reindex"); fs.mkdirSync(fork);
   fs.writeFileSync(path.join(fork, "index.json"), JSON.stringify([{ root: job, checkout: p.h.repo, round: fleet.round, commit,
-    archives: { [json]: report.groups[1].result.archiveSha256 } }]));
+    archives: { [next]: report.groups[groupNames.indexOf(next)].result.archiveSha256 } }]));
   await assert.rejects(inspectContinuation(fork, { repo: p.h.repo, inspect: p.deps.inspect }), /stay in their original continuation root/);
   assert.equal(treeHash(retained), oldTree, "historical bytes untouched");
 });

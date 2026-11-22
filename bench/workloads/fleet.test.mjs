@@ -148,12 +148,26 @@ async function independentDetach(t) {
   return { p, root, index, approved, errors, cli, notDispatched };
 }
 
-test("independent detach names invalid replay without leaking the exception", async (t) => {
+test("independent detach names invalid admission without leaking the exception", async (t) => {
   const f = await independentDetach(t);
   writeFileSync(f.index, "SYNTHETIC_PRIVATE_INDEX");
   assert.equal(await f.cli(), 2);
-  assert.deepEqual(f.errors, ["fleet-operation-failed: continuation-replay"]);
+  assert.deepEqual(f.errors, ["fleet-operation-failed: continuation-admission"]);
   f.notDispatched();
+});
+
+test("independent prepare names its admission or reservation stage without exposing inputs", async (t) => {
+  const p = continuationFixture(t), errors = [];
+  const args = ["r21", "--continuation-root", p.h.base, "--group", p.group, "--prepare", "--commit",
+    commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
+  const cli = () => fleetCli(args, { ...p.deps, writeError: (line) => errors.push(line) });
+  writeFileSync(p.index, "SYNTHETIC_PRIVATE_INDEX");
+  assert.equal(await cli(), 2);
+  writeFileSync(p.index, "[]"); p.flags.head = "b".repeat(40);
+  assert.equal(await cli(), 2);
+  assert.deepEqual(errors, ["fleet-operation-failed: continuation-admission", "fleet-operation-failed: prepare-reservation"]);
+  assert.equal(existsSync(p.old), false);
+  assert.deepEqual(p.children, []);
 });
 
 test("independent detach names the pre-intent stage and preserves placement diagnostics", async (t) => {
