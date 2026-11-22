@@ -16,7 +16,7 @@ export function semanticRequestKey(r) {
 }
 
 // Recompute from raw rows, never from an earlier positive qualification flag.
-export function reconcileRequests(evidence, navigation = null) {
+export function reconcileRequests(evidence, navigation = null, jsNavigation = null) {
   const result = { outcome: "unknown", reasons: [], assignments: [] };
   try {
     const alternate = navigation?.outcome === "proved";
@@ -50,7 +50,8 @@ export function reconcileRequests(evidence, navigation = null) {
     assert.ok(Array.isArray(evidence.steps), "Native step request assignments unavailable");
     for (const row of evidence.steps) include(row.requests, row.action.id);
     include(evidence.nativeCleanup?.requests, "cleanup-navigation");
-    if (!alternate) include(evidence.nativeCleanup?.probe?.requests, "retired-event-probe");
+    if (!alternate && !(jsNavigation?.outcome === "proved" && jsNavigation.cleanup))
+      include(evidence.nativeCleanup?.probe?.requests, "retired-event-probe");
     for (const id of final.keys()) assert.ok(assigned.has(id), `Unassigned final native request ${id}`);
     assert.deepEqual(evidence.networkFailures, [], "Final network observer errors remain or were not retained");
     assert.deepEqual(evidence.runtimeErrors, [], "Final browser errors remain or were not retained");

@@ -10,7 +10,7 @@ import { alertsFromReadback, candidates, nativeFailures, parseOptions, retainedF
 import { exportBrowserCaptures } from "./capture.mjs";
 import { recordSchema, cellReader, cellRecordName } from "./cell-records.mjs";
 import { reconcileNativeNetwork, reconcileRequests } from "./ledger.mjs";
-import { cleanupObserved, replayDocumentNavigation } from "./document-navigation.mjs";
+import { cleanupObserved, replayDocumentNavigation, replayJSReplacement } from "./document-navigation.mjs";
 import { reconcileUpstream } from "./upstream.mjs";
 import { classifyNoJSRequests, replacedRealm, validatePlatformRetirement } from "./lifecycle.mjs";
 import { navigationDestination, writeDestination } from "./navigation.mjs";
@@ -539,7 +539,14 @@ function replayCell(cell, profile, app, summary, records, block, endpoints, nati
     same(e.documentNavigationProof, navigation, "Stored document navigation proof differs from native receipts");
     if (navigation.outcome !== "proved") block(`Native document navigation unproved: ${navigation.reason}`);
   }
-  const replaced = navigation?.outcome === "proved";
+  const jsNavigation = e.jsDocumentNavigationProof === undefined ? null : replayJSReplacement(e, profile, settings);
+  if (jsNavigation) {
+    same(e.jsDocumentNavigationProof, jsNavigation, "Stored JS document replacement proof differs from native receipts");
+    if (jsNavigation.outcome !== "proved") block(`Native JS document replacement unproved: ${jsNavigation.reason}`);
+  }
+  if (profile.js && cell.outcome === "captured" && e.steps.some((row) => row.retired?.owned === null))
+    need(jsNavigation?.outcome === "proved", "Captured JS replacement lacks native proof");
+  const replaced = navigation?.outcome === "proved" || jsNavigation?.outcome === "proved" && jsNavigation.cleanup;
   if (c !== null && c !== undefined) need(object(c) && ["observed", "failed", "unsupported"].includes(c.outcome) && list(c.failures), "Malformed native cleanup outcome");
   if (c?.before && c.after) { resource(c.before); resource(c.after); same(c.retired, retired(c.before, c.released ?? c.after), "Cleanup retirement differs from raw ledger"); }
   if (c?.released) resource(c.released);
@@ -558,7 +565,7 @@ function replayCell(cell, profile, app, summary, records, block, endpoints, nati
       && finite(c.probe.at) && c.probe.afterAt - c.probe.at >= settings.observationMs, "Claimed cleanup lacks bounded unchanged-DOM evidence");
     same(c.probe.requests, [], "Cleanup probe emitted requests"); same(c.probe.errors, [], "Cleanup probe emitted errors");
   }
-  const requestProof = reconcileRequests(e, navigation);
+  const requestProof = reconcileRequests(e, navigation, jsNavigation);
   if (e.requestLedger !== undefined) requests(e.requestLedger); else block("Final raw browser request ledger unavailable");
   if (e.requestLedgerEndedAt === null || e.requestLedgerEndedAt === undefined) block("Final browser request ledger boundary unavailable");
   else need(finite(e.requestLedgerEndedAt) && e.requestLedgerEndedAt >= latestObservation, "Final browser request boundary predates retained observations or is malformed");
