@@ -254,7 +254,8 @@ and sent `Vary: Accept`, nginx fetched JSON for the JSON request by default and 
 HTML with `Vary` ignored. The runtime loads a navigation answered with a document as a whole
 page, so it still works, more slowly; a data client gets HTML where it asked for JSON.
 
-The app keeps its own `Public` pages too ([the pages the app keeps](app.md#the-pages-the-app-keeps)),
+The app keeps its own `Public` pages too, and its `Public` JSON and text of a size it compresses
+([the pages the app keeps](app.md#the-pages-the-app-keeps)),
 so a cache in front may be sent one the app made earlier. Such an answer carries `Age`, and a cache
 that follows RFC 9111 counts its own lifetime from when the page was made rather than from when it
 fetched it: a page is never shown past its lifetime because two caches each kept it for the whole
@@ -263,10 +264,10 @@ already stale, as it does from any CDN, and the browser asks again each time; th
 costs the app neither the render nor the compression. A purge at the cache in front does not
 reach the app: the cache is sent the kept page again until its lifetime ends or a write through
 the app drops it, so a page that must change at once on a purge takes a short lifetime in the app
-and a long one nowhere. The pages are held in the process's memory, 32 MiB of them unless
-`App::kept_answers` says otherwise, with 256 KiB beside them once a `Public` page is asked for
-and 128 KiB more once they fill it (a 256th of the bound, or up to a 128th where that is not a
-power of two).
+and a long one nowhere. What is kept is held in the process's memory, 32 MiB of it unless
+`App::kept_answers` says otherwise, with 256 KiB beside it once an answer it may keep
+is asked for and 128 KiB more once they fill it (a 256th of the bound, or up to a 128th
+where that is not a power of two).
 The bound counts the bytes asked of the allocator, and an allocator holds more than it is asked
 for when pages come and go: the benchmark app's resident memory settled 35 MiB above where it
 began with jemalloc and 58 MiB above with glibc's allocator
