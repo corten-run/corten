@@ -88,19 +88,21 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
   try { result.comparisonKeys = { current: comparisonKey(current), baseline: comparisonKey(baseline) }; }
   catch (error) { warn(error.message); }
   const timedProfiles = current.measurement.profiles;
-  if (!isDeepStrictEqual(timedProfiles, baseline.measurement.profiles)) {
-    warn("Incompatible timed profile matrices (rotating versus per-locale pages); no deltas.");
-    return result;
-  }
   const now = roundIdentity(current.round), old = roundIdentity(baseline.round);
   // A lost capability is an observed investigation even when the changed admitted set
   // forbids performance deltas. It is not a claim about cause or statistical regression.
   if (now.kind === "official" && old.kind === "official" && old.number < now.number && current.options.group &&
     isDeepStrictEqual(measurementOptions(current.options), measurementOptions(baseline.options)) &&
-    isDeepStrictEqual(current.measurement, baseline.measurement) && current.fixtureSha256 === baseline.fixtureSha256) {
+    isDeepStrictEqual(current.measurement.featureProfile, baseline.measurement.featureProfile) &&
+    isDeepStrictEqual(current.measurement.qualificationSettings, baseline.measurement.qualificationSettings) &&
+    current.fixtureSha256 === baseline.fixtureSha256) {
     for (const app of current.options.apps) if (admitted(baseline.apps[app]) && !admitted(current.apps[app])) {
       result.qualificationLosses.push({ app, missing: Object.fromEntries(["fixture", "api"].map((source) => [source, current.apps[app].qualification[source].missing])) });
     }
+  }
+  if (!isDeepStrictEqual(timedProfiles, baseline.measurement.profiles)) {
+    warn("Incompatible timed profile matrices (rotating versus per-locale pages); no deltas.");
+    return result;
   }
   if (now.kind !== "official" || old.kind !== "official" || old.number >= now.number) warn("Comparison requires an earlier official marketplace-v2 r17+ baseline; development, legacy r16 and catalog rounds have no deltas.");
   const same = (label, a, b) => { if (!isDeepStrictEqual(a, b)) warn(`Incompatible ${label}; no deltas.`); };

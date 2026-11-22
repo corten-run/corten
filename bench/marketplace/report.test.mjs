@@ -69,6 +69,14 @@ test("historical named groups require exact evidence and compare only with the s
   const loss = compare({ ...excluded, round: "r25", options: { ...excluded.options, round: "r25" } }, s);
   assert.equal(loss.compatible, false);
   assert.equal(loss.qualificationLosses[0].app, "nextjs");
+  const rotating = grouped("production", "r26");
+  const candidate = rotating.apps.nextjs;
+  candidate.qualification.api = qualification(unsupported, "api");
+  candidate.runs = {}; candidate.phases = {};
+  const transition = compare(rotating, s);
+  assert.deepEqual(transition.rows, []);
+  assert.equal(transition.compatible, false);
+  assert.deepEqual(transition.qualificationLosses, loss.qualificationLosses);
   const forged = structuredClone(excluded); forged.apps.nextjs.qualification.api.eligible = true;
   assert.throws(() => validateSummary(forged));
   const lone = structuredClone(s);
