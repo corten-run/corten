@@ -7348,9 +7348,9 @@ rules something out.
     PNG of 1 MiB 47.7% fewer; one of 1,024 bytes, the least kept, took the same (below).
     Once kept, a body is given to a request that accepts
     no coding too, which gets no tag and so saves nothing by it where its handler makes
-    nothing: that request pays for asking the store, and the kernel runs the same path slower
-    after it (below): 1.5% to 5.0% more cycles in the four
-    cases run, over the 3% set before the run in two of them (below). A body's size is known only once it is made, so a route whose bodies are
+    nothing: that request pays for asking the store, 1.3% more cycles for a PNG of 8,000 bytes
+    and 3.0% more for one of 1,024 as the means of ten placements of the same code, where one
+    placement of it gave 1.5% to 5.0% (below). A body's size is known only once it is made, so a route whose bodies are
     all too small would ask the store and have each refused: after 64 answers in a row of
     which none was kept, with none between given from the store, the route's requests are its
     handler's as before, but for about one in 256, drawn on each thread, which asks and so
@@ -7975,12 +7975,85 @@ rules something out.
     at that price, on the bet below that clients naming a coding are most of what asks for
     an app's `Public` bodies. The app's resident memory, about 10 MB, was at most 352 kB more
     with a body kept, and 1,270 kB more with the 1 MiB file kept, its second copy.
+    Two cuts to what a kept answer given again costs followed (`a0267d8a6`). Its `Age` was
+    made from the number, two allocations for every answer; it is a slice of a table of the
+    numbers under 10,000 in decimal, 38,890 bytes of the binary, and an older answer's is made
+    as before. And the answer carried the cache's mark as an extension of its own beside the
+    one for what was kept, an allocation and a place in the map; the mark is read from what
+    was kept. A kept PNG given again makes 25 allocations where it made 28 (its handler's
+    answer makes 31). Under callgrind on one connection, with a browser's twelve header lines
+    and no coding named, a kept PNG of 8,000 bytes took 37,412 instructions a request where it
+    took 38,736, one of 1,024 bytes 37,412 where 38,766 and a kept page 41,235 where 42,542;
+    the PNG's URL with a session's cookie, which its handler answers, 38,881 where 38,873. A
+    page asked for with the runtime's header, which the store does not answer either, counted
+    67,787 where 67,050, all of it the allocator's (58,515 against 58,509 outside it), whose
+    own count moves by that much between builds that allocate alike, with the state its bins
+    are left in. With the three headers the load sends, the kept PNG of 8,000 bytes took
+    25,603 where main's took 26,148 and its handler 25,633. A third cut was counted and not
+    made: finding `Authorization`, the cookie and the runtime's header in the one pass over
+    the headers, where each is a lookup by its name before the pass. For `Authorization` it
+    spared every other request about 120 instructions and cost a request that carries one
+    after a browser's headers 611 (its asking 926 where 315), since that request no longer
+    leaves before the pass, and the same holds for the other two; the three lookups stay.
+    In cycles the cuts are not shown to be a gain, and of the eight margins set before their
+    first run two were missed. That run was of three builds (main's `7a275ef15`, the cuts, and
+    the cuts with no body kept, so its handler answers), six starts of eight pairs of turns,
+    those with `compress` on a c-8 with a Xeon Platinum 8358 and those without on one with a
+    Xeon Platinum 8280. Against its handler, held to 3% more: a kept PNG of 8,000 bytes 39,690
+    cycles a request against 38,694, 2.7% more (2.1% to 3.1% by start), and one of 1,024 bytes
+    38,686 against 35,911, 6.0% more (0.9% to 11.5%), which missed; without `compress` the PNG
+    of 8,000 bytes 48,559 against 48,012, 0.0% (0.7% fewer to 2.6% more), and the CSV 49,745
+    against 48,990, 2.5% more (0.4% to 4.9%). Against main, held to 1% more: the kept PNG of
+    8,000 bytes 39,757 against 39,721, 0.3% more (0.8% fewer to 2.6% more), and a kept page
+    43,903 against 42,792, 3.2% more (1.2% to 4.1%, more in 39 of 48 pairs), which missed;
+    without `compress` 48,260 against 48,864, 1.3% fewer (3.5% fewer to 1.4% more), and
+    49,877 against 51,556, 2.9% fewer (9.5% to 1.1% fewer). The same build against itself:
+    0.1% more (1.7% fewer to 1.7% more by start) and 1.6% fewer (2.3% fewer to 2.1% more). The
+    cuts ran 496 to 968 fewer user instructions a request than main in all four. The binaries
+    of the two misses, on another c-8 with the 8280 (three starts): the kept page 0.4% more
+    than main, and the PNG of 1,024 bytes 2.1% more than its handler. No request failed in
+    the 1,231 turns, and perf counted all of every turn. The table is read-only data, which
+    the linker puts before the code, so every function of the cuts' binary sits 38,320 bytes
+    after its place in main's. So the three were each built again with a block of bytes no
+    request runs in the crate's code, of 40, 1,000, 3,100, 12,000 and 40,000 bytes, and run on
+    one host of each CPU, one start of eight pairs for each comparison, with how it would be
+    read set out before any was run: the cuts dearer than main at nine of a case's ten with a
+    mean over 1% would be the cuts' cost, a sign that changes across the ten or a mean within
+    the spread of main against main would be where the code sits; and the price against the
+    handler would be the mean of a case's ten, held to the same 3%. The cuts against main, the
+    mean of the ten: a kept page 1.3% fewer cycles (5.1% fewer to 3.3% more, more in 2 of the
+    10), the PNG of 1,024 bytes 0.9% fewer (3.7% fewer to 0.8% more, more in 3) and the one of
+    8,000 bytes 0.3% fewer (6.8% fewer to 3.8% more, more in 5), on 477, 524 and 522 fewer
+    user instructions. Main with a block of each other size against main with the 40, eight
+    for each case: 0.1% more (1.6% fewer to 2.2% more), 0.4% more (2.7% fewer to 4.0% more)
+    and 1.3% fewer (4.5% fewer to 0.6% more), on user instructions within 65 of each other at
+    the mean. So a pair of builds differs by where its code sits and how it started by as much
+    as these cuts are worth, the two misses above are not shown to be the cuts', and neither
+    is a gain in cycles: what is shown is the instructions. A kept body against its handler,
+    the mean of the ten: the PNG of 8,000 bytes 1.3% more (1.2% fewer to 4.0% more, more in 9
+    of the 10; user cycles 237 more and kernel 301 more, on 334 more user instructions and 20
+    more of the kernel's), which met the 3%; the one of 1,024 bytes 3.0% more (3.024%; 0.3%
+    fewer to 7.8% more, more in 9; 3.6% on the 8358 and 2.5% on the 8280; user cycles 809 more
+    and kernel 355 more, on 424 and 55 more instructions), which missed it by that. That is
+    the price of a kept body to a request that names no coding as it stands, where the 1.5% to
+    5.0% above were each one placement. The kernel's part goes with the placement as the
+    user's does, from 261 fewer cycles a request to 1,447 more at 1,024 bytes (316 fewer to
+    848 more at 8,000), with 229 more of its instructions where it was most. No request failed in the 1,184 turns, and perf
+    counted all of every turn. A profile of cycles by symbol on the 8280 (the PNG of 1,024
+    bytes, three sampled turns of each build) put about 1,300 cycles a request in the ask and
+    what it adds (402 finding the answer and making its head, 212 reading the request, 155
+    reading `Accept`, 131 the URL's hash) against about as many in what the handler and its
+    answer would have taken, and the rest in no one place.
     Not measured: a file kept for a handler that reads it from a disk, a database or a store
     of objects, where the read is what a kept file saves; a body between 1,024 and 8,000
     bytes, under 1,024 or over 1 MiB; a store that kept pictures or downloads fill, where
     pages are turned out for them; a picture asked for with `gzip` alone; a request with a
     cookie for a body route in a build without `compress`, which now passes the stage that
-    asks; the kernel's part of the price with no coding on a load whose threads do not sleep; a new URL for every request for a
+    asks; the kernel's part of the price with no coding on a load whose threads do not sleep;
+    the cuts of `a0267d8a6` in cycles apart from where a build's code sits, a pair of builds
+    having differed by more than they are worth, and at more than one placement without
+    `compress`; a kept answer older than 9,999 seconds, whose `Age` is made from the number;
+    a browser's twelve header lines under load, which sends three; a new URL for every request for a
     file, which takes the path a body's does above; a body kept for a handler that waits on a database or another service,
     where the wait and not the compression is what a kept body saves (the benchmark's handler
     reads memory, and the rule for bodies is drawn from it); a route of a few large bodies
@@ -8056,7 +8129,12 @@ rules something out.
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-22 for a body kept whatever its type and its build, `e133aae42` (main's
+    Last checked: 2026-11-22 for the cuts to a kept answer given again, `7794749ad` (main's
+    `7a275ef15` with five file routes and a kept page in the catalog benchmark) and `0a2dc9b32`
+    (this change's `a0267d8a6` with them), and for where the code sits `abbd6113f`, `9f628467d`
+    and `ba72c5f23` (those two, and the second with no body kept, each with a block of bytes
+    whose size is set when it is built), kept under the tag `evidence/cheaper-ask-1925`;
+    2026-11-22 for a body kept whatever its type and its build, `e133aae42` (main's
     `090b3048e` with five file routes in the catalog benchmark) and `af70bde86` (this change's
     `86be6a024` with them), kept under the tag `evidence/keep-any-body-1877`; 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
     benchmark) and `05ead69a7` (this change's `8db0885c7` with them), kept under the tag
