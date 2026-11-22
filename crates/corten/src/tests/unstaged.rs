@@ -51,6 +51,15 @@ pub(super) mod unstaged_url {
     pub struct Feed<'a> {
         pub name: &'a str,
     }
+
+    #[route("/figure", get = unstaged_public_figure, unstaged)]
+    pub struct Figure;
+
+    #[route("/asks-the-app", get = unstaged_asks_the_app, unstaged)]
+    pub struct AsksTheApp;
+
+    #[route("/shared-page", get = unstaged_shared_page)]
+    pub struct SharedPage;
 }
 
 async fn unstaged_ping() -> &'static str {
@@ -150,6 +159,29 @@ static SITEMAPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize
 async fn unstaged_sitemap() -> crate::Public<crate::seo::File> {
     SITEMAPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     crate::seo::sitemap((0..40).map(|_| crate::seo::SitemapUrl { loc: "https://example.com/cards/7", lastmod: None }))
+}
+
+/// A figure for everyone, under numbers no other test's answer has.
+async fn unstaged_public_figure() -> crate::Public<&'static str> {
+    crate::Public::new(std::time::Duration::from_secs(3_000_001), "42")
+}
+
+/// A page for everyone, beside the unstaged routes.
+async fn unstaged_shared_page(req: Req) -> crate::Public<HtmlResult> {
+    crate::Public::new(std::time::Duration::from_secs(3_000_002), req.test_page_for("Page", html! { <p>"shared"</p> }))
+}
+
+/// What the app's router sends for its `Public` page, asked for with a cookie and without, from
+/// inside an unstaged handler.
+async fn unstaged_asks_the_app() -> String {
+    let router = App::new(unstaged_url::router()).router();
+    let mut sent = Vec::new();
+    for cookie in [&[("cookie", "a=b")][..], &[]] {
+        let (status, headers, _) = call_with_any(router.clone(), "GET", "/shared-page", cookie).await;
+        assert_eq!(status, StatusCode::OK);
+        sent.push(headers["cache-control"].to_str().unwrap().to_owned());
+    }
+    sent.join(" | ")
 }
 
 async fn unstaged_page(req: Req) -> HtmlResult {
@@ -308,6 +340,27 @@ async fn an_unstaged_route_s_file_is_not_kept() {
         assert_eq!(headers["content-security-policy"], "sandbox");
     }
     assert_eq!(SITEMAPS.load(Ordering::Relaxed) - before, 2);
+}
+
+/// An unstaged route's `Public` answer goes out with its header, made for that answer alone: no
+/// stage reads it, so the thread holds none for its numbers. A staged page asked for from inside
+/// such a handler is still settled: with a cookie it goes out private.
+#[tokio::test]
+async fn an_unstaged_public_answer_s_header_is_its_own() {
+    let router = App::new(unstaged_url::router()).router();
+    for _ in 0..2 {
+        let (status, headers, body) = call_with(router.clone(), "GET", "/figure", None, None).await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, "42"));
+        assert_eq!(headers["cache-control"], "public, max-age=3000001");
+    }
+    let figure = crate::cache::Cache::public(std::time::Duration::from_secs(3_000_001));
+    assert!(!crate::cache::held(figure), "the thread holds no header for an unstaged answer");
+    let (status, _, body) = call_with(router.clone(), "GET", "/asks-the-app", None, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "private, no-cache | public, max-age=3000002"));
+    let (_, headers, _) = call_with(router, "GET", "/shared-page", None, None).await;
+    assert_eq!(headers["cache-control"], "public, max-age=3000002");
+    let page = crate::cache::Cache::public(std::time::Duration::from_secs(3_000_002));
+    assert!(crate::cache::held(page), "a staged one's is held");
 }
 
 /// Beside an unstaged route every other route keeps its stages: an area's pages and its unknown URLs,
