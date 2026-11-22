@@ -1857,6 +1857,18 @@ rules something out.
     are known and accepted (Stands on): the one can be told which answers to retry and the other
     replaced by an alert built from access logs, so neither alone reopens it.
 
+    The router's own `404`, `405` and `501` mark the request as the router's on its signal, so the
+    error page in their place is never shared ([caching](guide/app.md#caching)): a mark in the
+    answer's extensions allocated the empty map on the bare `404` and, with its settlement after
+    the page, cost 1,336 instructions a request on the default missing-route probe
+    (`tests::cache::what_settling_a_page_costs`, `SETTLE_CASE=missing`: 19,421.7 against main
+    `e7e89add8`'s 18,085.6), where the signal's bit and settling the page's few headers as they are
+    carried cost 364 (18,449.5), and an app's own error page the same (`custom`: 18,783.9 against
+    18,420.3). A probe whose middleware writes the CDN caching headers is cheaper than main
+    (25,662.1 against 27,559.5), but main sends those headers, so that pair is not like for like.
+    This probe is not the harness this Choice's 404 counts against axum come from, so it says
+    nothing about the axum bound in Revisit when.
+
     Last checked: 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`; 2026-11-06,
     the `original-uri` runs on `fa597483`; 2026-11-06, rustc 1.99.1's error for an argument no
     request fills, held by `crates/corten/tests/handler_message.rs` at `84d33d0b`; 2026-11-08,
@@ -1907,7 +1919,10 @@ rules something out.
     the 2-second case's rounds each, plain and TLS, at `ee411b38e`; 2026-11-20, the 2-second
     case at `5596df8b5` with the reading pattern varied, five rounds each: even 2 KiB reads
     every 125 ms from the socket over TLS and plain kept, tokio-rustls cut, 16 KiB a second
-    over plain cut, `curl --limit-rate 16K` (7.88.1) over plain and TLS cut.
+    over plain cut, `curl --limit-rate 16K` (7.88.1) over plain and TLS cut; 2026-11-22, the
+    router's `404` with and without an error page of the app's under callgrind (release,
+    jemalloc, three rounds alternating the builds, every run within 1.5 of the others) at
+    `d9dbf11d2` and `7935404da` against main `e7e89add8`.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
