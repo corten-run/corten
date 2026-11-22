@@ -1724,7 +1724,12 @@ rules something out.
     against 17,023.9), 115 more than `f02560816`. With the six CDN caching headers written on
     it, the named post's `400` costs 993 more than `f02560816` (27,025.3 against 26,032.5), as
     those headers are now taken out as the answer goes out, after the security headers are
-    added, so the header map grows to hold them all first.
+    added, so the header map grows to hold them all first. At `57f2138a4`, which merged main
+    `7a275ef15`, the counts against that main are the same: the `404` 853 (18,964.7 against
+    18,111.5; `custom` 854) and the `400` 694 (17,718.0 against 17,023.9). With the CDN headers
+    the `400` costs 2,139 (27,032.2 against 24,893.2), 7 more than at `696d96a71`: by
+    function, `memcmp` called from `cache::drop_cdn_caching` as many times as before, taking
+    more instructions a call.
 
     Stands on: platform (RFC 9110 9.1: an origin server SHOULD answer `501` to a method it does
     not recognize or implement, and every server implements `GET` and `HEAD`; 15.5.6: `405` is
@@ -1987,7 +1992,10 @@ rules something out.
     `2e8d9bafc`; 2026-11-22, the router's `404`, with and without the app's error page, and the
     named post's `400` at `696d96a71` against main `153be9116` and `f02560816` (three rounds
     alternating the three builds, every run within 1.5 of the others), and the `404` and the
-    `400` by function against `f02560816`.
+    `400` by function against `f02560816`; 2026-11-22, the same and the `400` with the CDN
+    headers at `57f2138a4` against main `7a275ef15` (three rounds alternating the two builds,
+    every run within 2.2 of the others), and the `400` with the CDN headers by function against
+    `696d96a71`.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -2233,7 +2241,8 @@ rules something out.
     head merged with that main (`f02560816`, 16,538.6): by function against it, `page::run` 26
     fewer without the count, `page_or_error` 9 and `middleware::handle` 7 fewer, the dispatch
     future's drop glue 1 fewer, `cache::settle` 7 more for reading the mark, and the stage future
-    1 more. The late layout poller
+    1 more. After the merge of main `7a275ef15`, the same 100 at `57f2138a4` against it (16,504.7
+    against 16,404.6). The late layout poller
     lives in the existing late-write box, so it neither enlarges the ordinary future nor adds
     a box to a late-eligible write.
     The stages read the incoming request's mode, credentials, validators, and the host and
@@ -2396,7 +2405,8 @@ rules something out.
     `unstaged`: 6,405 at `ab6f8d3a2` against 6,394 for main `564034b86`, the same at `9e2002468`
     against main `e7e89add8`, and 6,403.5 to 6,405.0 at `4630a2ff2` against 6,390.7 to 6,395.1 for
     main `cf4435c91`, and 6,402.0 at `402a11a08` against 6,389.9 to 6,391.4 for main `56e9b6b66`, and 6,400.9 to
-    6,401.0 at `696d96a71` against 6,389.9 to 6,390.0 for main `153be9116`;
+    6,401.0 at `696d96a71` against 6,389.9 to 6,390.0 for main `153be9116`, and 6,398.8 to 6,401.0
+    at `57f2138a4` against 6,387.8 to 6,390.0 for main `7a275ef15`;
     the `service_fn` control 3,083 to 3,088 in each build), which takes it to about 109
     over 6,932.
     Correctness comes first (the README's Values), so the check stays. Removing the CDN headers as
@@ -2573,7 +2583,9 @@ rules something out.
     measurement.
 
     Last checked: 2026-11-22, the plain page, the unstaged route and the `service_fn` control in
-    `tests::cache::what_settling_a_page_costs` at `696d96a71` against main `153be9116` and
+    `tests::cache::what_settling_a_page_costs` at `57f2138a4` against main `7a275ef15`, which it
+    merged (three rounds alternating the two builds, every run within 2.2 of the others);
+    2026-11-22, the same at `696d96a71` against main `153be9116` and
     round 7's head merged with it (`f02560816`), three rounds alternating the three builds (every
     run within 1.5 of the others), and the plain page by function against both; 2026-11-22, the
     unstaged route and the `service_fn` control at `402a11a08` against main `56e9b6b66`
