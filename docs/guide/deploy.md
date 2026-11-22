@@ -748,6 +748,11 @@ logger: it cannot see the host check, a later error page or a `304`.
 
 ## Benchmark Hosts
 
+In the [full-stack browser group](../../bench/fullstack-browser/LIFECYCLE.md#script-disabled-full-document-journeys),
+ordinary no-JS document navigation can prove that the old realm was destroyed. This is a
+functional evidence path, not a timing comparison. Parser assets and blocked script preloads
+remain in the report, and the dead realm's unavailable resource counts are not reported as zero.
+
 Before allocating a benchmark host, use the **Benchmark Evidence** workflow on
 the merged source. If its replay checks passed but the push skipped native Linux,
 run the workflow on `main` with `native_only=true`. Otherwise a manual run

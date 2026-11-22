@@ -524,6 +524,14 @@ active attempt is refused; leave its evidence and locks in place and use the
 existing recovery procedure. Run the report after collection to select another
 missing group.
 
+If a standalone group was prepared but never launched, use the same prepare
+command in the same continuation root with an explicitly higher round and a
+different measured commit. This works only when the previous slot physically
+contains its one original manifest and nothing else: no intent, lock, child
+state, receipts or other files. Prepare only reads provider placement and leaves
+the old bytes and verified groups intact. Once the new attempt is prepared,
+only its round can be previewed or launched; an older approval cannot dispatch.
+
 The report is an index of independently publishable group results, with each
 group's actual round, commit, dates, archive, attempts and `baseEffectiveOptions`.
 Those options describe the base binding; for JSON, actual prepare and timing
