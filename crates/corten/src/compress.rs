@@ -17,8 +17,9 @@
 //! every read takes 162 µs (zstd 1) to 634 µs (brotli 1), and gives 5,655 bytes against 6,577
 //! with zstd 1 (a Linux container on a busy desktop, five runs, medians). brotli 11 would take
 //! about 194 ms (one run on Windows), too long for a value that changes while the app runs.
-//! A page the app keeps ([`crate::kept`]) has each coding made once at the per-request level, by
-//! the first request that asks for it, and brotli 5 made on that same thread, queued on its second
+//! An answer the app keeps ([`crate::kept`]: a page, or a whole JSON or text body) has each coding
+//! made once at the per-request level, by the first request that asks for it, and brotli 5 made on
+//! that same thread, queued on its second
 //! compressed answer to a client that ranks brotli first, when no held value waits: from then on
 //! such a client gets brotli 5 in the place of zstd 1 when it is smaller, 18% fewer bytes on a
 //! 4.4 KB page, and no request waits for it ([`Level::Kept`]).
@@ -541,6 +542,14 @@ pub(crate) fn varies(content_type: &str, headers: &HeaderMap) -> bool {
         && !headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("no-transform"))
 }
 
+/// Whether [`finish`] compresses a buffered `200` of `length` bytes under these headers, for a
+/// request that accepts a coding: what the app keeps a whole body by ([`crate::kept`], which
+/// has left out an answer with a coding or a range of its own before it asks).
+pub(crate) fn compresses(headers: &HeaderMap, length: u64) -> bool {
+    let content_type = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
+    length >= MIN_SIZE && varies(content_type, headers)
+}
+
 /// Adds `accept-encoding` to `Vary`, so a cache keeps one copy per coding.
 pub(crate) fn vary(headers: &mut HeaderMap) {
     let already = headers
@@ -685,16 +694,16 @@ const QUEUE: usize = 64;
 /// Which of the queues of the thread that compresses held values a job waits in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Turn {
-    /// A held value's forms ([`Level::Held`]): before any kept page's.
+    /// A held value's forms ([`Level::Held`]): before any kept answer's.
     Held,
-    /// A kept page's brotli ([`Level::Kept`]): when no held value waits.
+    /// A kept answer's brotli ([`Level::Kept`]): when no held value waits.
     Kept,
 }
 
 /// A thread that compresses off the request, and the jobs that wait for it: held values in the
-/// order they were asked for, then kept pages' brotli in theirs, each in a bounded queue of its
+/// order they were asked for, then kept answers' brotli in theirs, each in a bounded queue of its
 /// own. So a burst of documents read twice at once is compressed one at a time, not on a thread
-/// each, and a burst of kept pages neither keeps a held value out of its queue nor makes it wait
+/// each, and a burst of kept answers neither keeps a held value out of its queue nor makes it wait
 /// for more than the one job running.
 struct Worker {
     waiting: Mutex<[VecDeque<Job>; 2]>,
@@ -743,7 +752,7 @@ impl Worker {
     }
 }
 
-/// The one thread that compresses held values ([`Level::Held`]) and kept pages' brotli
+/// The one thread that compresses held values ([`Level::Held`]) and kept answers' brotli
 /// ([`Level::Kept`]). `None` when the thread could not be started.
 fn worker() -> Option<&'static Worker> {
     static WORKER: OnceLock<Option<Arc<Worker>>> = OnceLock::new();
@@ -817,6 +826,26 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_str(value).unwrap());
         headers
+    }
+
+    /// What the app keeps a whole body by is what `finish` compresses: the size it starts at,
+    /// a type worth compressing, and no `no-transform`.
+    #[test]
+    fn a_body_is_one_the_app_compresses_by_its_size_its_type_and_no_transform() {
+        let of = |content_type: &'static str, cache: Option<&'static str>| {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+            if let Some(cache) = cache {
+                headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+            }
+            headers
+        };
+        let json = of("application/json", Some("public, max-age=60"));
+        assert!(compresses(&json, MIN_SIZE) && compresses(&json, MIN_SIZE + 1) && !compresses(&json, MIN_SIZE - 1));
+        assert!(compresses(&of("text/plain; charset=utf-8", None), MIN_SIZE));
+        assert!(!compresses(&of("image/png", None), 1 << 20), "a type that is compressed already");
+        assert!(!compresses(&of("application/json", Some("public, max-age=60, no-transform")), 1 << 20));
+        assert!(!compresses(&HeaderMap::new(), 1 << 20), "no type at all");
     }
 
     #[test]

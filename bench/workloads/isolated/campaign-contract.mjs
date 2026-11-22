@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { alternateCampaignPlacements, bindExecution } from "./contract.mjs";
-import { campaignRounds, groupNames, jsonPreparationRound, nativeArtifactRoot } from "../registry.mjs";
+import { campaignRounds, groupNames, jsonPreparationInvocation, jsonPreparationRound, nativeArtifactRoot } from "../registry.mjs";
 import { catalogFleetPlacement } from "../cloud-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { parseArgs } from "../../json-api/contract.mjs";
@@ -75,11 +75,11 @@ export function jsonPhase(plan, phase, receiptPath) {
   const binding = plan.bindings.find((b) => b.request.group === "json-api");
   assert.ok(binding); assert.ok(["prepare", "timing"].includes(phase));
   const round = phase === "prepare" ? jsonPreparationRound(plan.round) : binding.request.round;
-  const argv = ["bench/json-api/run.mjs", round, "--group", "json-api"];
-  if (phase === "prepare") argv.push("--build", "--check-only");
-  else { assert.equal(typeof receiptPath, "string"); argv.push("--receipts", receiptPath); }
+  if (phase === "timing") assert.equal(typeof receiptPath, "string");
+  const invocation = phase === "prepare" ? jsonPreparationInvocation(plan.round)
+    : { executable: "node", argv: ["bench/json-api/run.mjs", round, "--group", "json-api", "--receipts", receiptPath] };
   return freeze({ ...binding, request: { ...binding.request, round },
-    execution: { ...binding.execution, invocation: { executable: "node", argv }, effectiveOptions: parseArgs(argv.slice(1)) },
+    execution: { ...binding.execution, invocation, effectiveOptions: parseArgs(invocation.argv.slice(1)) },
     validation: { ...binding.validation, artifactRoot: nativeArtifactRoot("json-api", round) } });
 }
 

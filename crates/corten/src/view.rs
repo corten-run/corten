@@ -1848,7 +1848,7 @@ impl Rendered {
     /// Renders `view`, keeping what its render noted ([`crate::Req::rendered`]).
     pub(crate) fn new(view: impl Render) -> Self {
         // Rendered inside a page's render, the page keeps what it drew before.
-        let outer = crate::form::DREW_KEY.replace(false);
+        let drawing = crate::form::Drawing::start();
         #[cfg(debug_assertions)]
         let ((((html, components), modules), vars), hints) = crate::form::collect_hints(|| {
             crate::style::capture_vars(|| crate::script::collect(|| crate::style::collect(|| view.to_html())))
@@ -1856,8 +1856,7 @@ impl Rendered {
         #[cfg(not(debug_assertions))]
         let (((html, components), modules), vars) =
             crate::style::capture_vars(|| crate::script::collect(|| crate::style::collect(|| view.to_html())));
-        let drew_key = crate::form::DREW_KEY.get();
-        crate::form::DREW_KEY.set(outer || drew_key);
+        let drew_key = drawing.drew();
         Rendered {
             html,
             vars,

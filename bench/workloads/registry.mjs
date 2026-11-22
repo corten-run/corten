@@ -59,6 +59,9 @@ export function campaignRounds(round) {
       : ["live-delivery", "recoverable-live"].includes(group) ? round : `w${n}`]));
 }
 export const jsonPreparationRound = (round) => `j${2 * Number(round.slice(1))}`;
+export const jsonPreparationInvocation = (round) => ({
+  executable: "node", argv: ["bench/json-api/run.mjs", jsonPreparationRound(round), "--group", "json-api", "--build", "--check-only"],
+});
 export function nativeArtifactRoot(group, round) {
   const directory = group === "catalog-page" ? "catalog" : group === "localized-marketplace" ? "marketplace" : group;
   return group === "client-heavy" ? `bench/client-heavy/work/${round}`

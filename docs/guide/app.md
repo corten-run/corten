@@ -33,7 +33,7 @@ not remove that requirement.
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the request's deadline (its area's or API's where that sets one; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the grace and the deadline of every route whose requests should finish |
 | Logs | errors, warnings and other `tracing` events at `INFO` and above to stdout, one line each, as `tracing-subscriber`'s `fmt()` writes them without targets (`2026-11-06T21:20:29.018154Z  WARN corten: ...`), in its colors when stdout is a terminal and `NO_COLOR` is unset; control characters other than a tab are escaped in every field, so request text cannot start a line of its own or send the terminal a command; spans are not printed (feature `log`, a subscriber of Corten's own with no dependency) | set your own `tracing` subscriber first (`tracing_subscriber::fmt().init()` for spans, filters such as `RUST_LOG` or JSON lines); `serve` then leaves it alone |
 | Access logs | off, also in the app `corten new` writes | `.access_log(true)`: one `INFO` event per response, target `corten::access`, after every stage and app layer, at a measured cost ([below](#access-logs)) |
-| Compression | pages per request (zstd, brotli, gzip), a kept page's brotli once at level 5 after its second answer ([Caching](#the-pages-the-app-keeps)), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd, else gzip, never brotli, which Playwright's WebKit on Windows holds back; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
+| Compression | pages per request (zstd, brotli, gzip), a kept page's or JSON or text body's brotli once at level 5 after its second answer ([Caching](#the-pages-the-app-keeps)), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd, else gzip, never brotli, which Playwright's WebKit on Windows holds back; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
 | Installable app | off | `.pwa(Pwa::new(manifest))`: manifest, generated service worker, offline page; `.network_only("/auth/")` for paths whose answers the worker never caches or replaces with the offline page (sign-in, checkout, an OAuth callback), where a GET navigation still reaches the server once: the worker answers it with the request navigation preload already sent, or leaves it to a browser without navigation preload ([design Choice 56](../design.md#choice-network-only-preload)) |
 | A route outside all of the above | none: every route gets every default here | `unstaged` on one route's `#[route(..)]`: no same-origin check, middleware, security headers, cache rule, deadline or error page, for an answer the same for everyone who can reach it; the host check stays ([below](#a-route-outside-the-stages)) |
 | Languages | none | `.messages::<Msg>()`: `req.t()` and `req.lang()` follow `Accept-Language`, or the locale a page's URL names (a `Locale<Msg>` route field the handler gives `req.set_locale`, [Views](views.md#a-locale-in-the-url)); each page says its locale in `Content-Language` |
@@ -985,7 +985,7 @@ before it (a route that says `unstaged` goes through none;
    has answered. Either way the page is filled with their values before its answer goes back out
    through 5: a middleware sees the filled page, and the time it measures around `next`
    includes the reads' wait ([design Choice 20](../design.md#choice-layout-reads)).
-   A `Public` page the app has kept is given here in the handler's place
+   A `Public` page, JSON or text answer the app has kept is given here in the handler's place
    ([Caching](#the-pages-the-app-keeps)): stages 1 to 5 ran for the request as for any other,
    and 7 and 8 follow.
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
@@ -1506,8 +1506,8 @@ mistake, the runtime loads the URL as a whole page instead of swapping it in.
 
 ### The pages the app keeps
 
-The app is the first shared cache of its own `Public` pages. The whole document a `Public`
-page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
+The app is the first shared cache of its own `Public` pages, and of its `Public` JSON and
+text where it compresses them (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
 such request in the handler's place until the answer's shared lifetime ends: `s-maxage` where
 the answer has `.shared(..)`, else `max_age`. So a `Public` page's handler does not run for
 every request, and what it read may be that old when a visitor sees it, as it already may be
@@ -1558,10 +1558,10 @@ else a page could differ by, and the answer nothing made for one request:
 | | Kept and given again | The handler answers |
 |---|---|---|
 | the handler | takes only Corten's own inputs for a page | takes an extractor of the app's own |
-| the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
+| the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
-| what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key, a `Vary` of the app's own |
+| what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read
@@ -1620,14 +1620,44 @@ of a page's handler: in a full store the answer to the first request for a URL t
 not remember is not kept, whether the page is new, or was kept while there was room or before
 the bits were last cleared and has since passed its lifetime or been dropped. A store that has filled mostly stays full, since a page past its lifetime keeps
 its room until another needs it. Nothing is kept under `corten dev`,
-so a change shows on the next load. An app with no `Public` page keeps nothing whatever the
-bound, and its writes are not counted, so it pays nothing for pages it cannot keep. An app's tests keep pages as a deploy does (`App::test`,
+so a change shows on the next load. An app with no `Public` page, and no `Public` JSON or text route in a build with `compress`, keeps nothing whatever the
+bound, and its writes are not counted, so it pays nothing for pages it cannot keep; one whose `Public` JSON or text
+is all too small to keep still holds a store there, since a body's size is known only when it is made. An app's tests keep pages as a deploy does (`App::test`,
 `App::router`): a test that changes what a `Public` page shows other than by a write through the
 app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page
 only in the instance that answered it, and a restart starts empty.
 
-`Public` text, JSON and `Media` are not kept, and neither is anything that is not `Public`: a
+A `Public` route that answers JSON (`Public<JsonResult<T>>`) or text is kept the same way where
+the app compresses the answer: its whole body, when that is 1,024 bytes or more and the build has
+the `compress` feature, under every rule above and by the same key (the language too, where the
+handler reads it with `req.t()` or `req.lang()`), with each coding's bytes made once, its brotli
+at level 5 made after its second answer to a client that ranks brotli first as a page's is, and,
+outside an API (whose answers are not tagged), the tag's hash. What it saves is the handler with what it
+reads, the writing of the JSON, the hash and the compression, and once kept it is given to a
+request that accepts no coding as well. A smaller body, and any body in a build without
+`compress`, is its handler's for every request: on the benchmark, whose handler reads only
+memory, keeping one cost more than making it
+([design Choice 70](../design.md#choice-kept-pages)). A route whose bodies are all under the size
+stops asking the store after 64 answers in a row of which none was kept (one left out for another
+reason, a failure or a form's submit key, counts too, so 64 failures in a row from a route with
+bodies kept make it leave as well), but for about one request in 256, so it
+costs a load and a draw more than it did before bodies were kept and is found out if its bodies grow; a route
+where fewer than about one request in twelve is for a body large enough leaves the store out more
+often than not. While it does, a body it kept earlier is made again for each request, and the kept
+one may be given after a newer one, within its lifetime. Such a route has one answer at its URL, where a page route has the
+document, its swap and its data, so a data client's request (`Accept: application/json` first) is
+kept too, as a copy apart from a request that does not ask for JSON first: a handler that takes
+`Req` can read which of the two asked. What an API adds for the site that asks
+(`Access-Control-Allow-Origin`) is written for each request and is no part of what is kept, so no
+site is sent another's. A write drops it as it drops a page: `PUT /api/items/7` drops what is
+kept for `GET /api/items/7`, and not the list at `/api/items`, which shows the change when its
+lifetime ends.
+
+A file (`Media`), a sitemap or `robots.txt` (`seo::File`), a relay, a live stream and a feed are
+not kept: each is its handler's for every request, and so is JSON the app holds as bytes
+(`Json<json::Raw>`), which already keeps its compressed forms. One file is kept: a file of a known size that a page route
+answers in its page's place (`PageOr<Media>`), as that page would be. Nothing that is not `Public` is kept either: a
 page for one visitor runs its handler for every request, because a key that had to cover the
 caller is where a mistake shows one user's page to another. Cache the data such a page reads in
 the app, where it knows when the data changes.
@@ -1635,7 +1665,7 @@ the app, where it knows when the data changes.
 A page route's answer to a `GET` or `HEAD` (the page, a navigation's swap, a patch read again, a
 data client's JSON, a `Media` file) carries a weak `ETag` made from the body it rendered, its type
 and its `corten-*` headers, and a request whose `If-None-Match` names it is answered `304 Not
-Modified`: the answer is still rendered (unless it is a page the app kept), but not compressed
+Modified`: the answer is still made (unless it is one the app kept), but not compressed
 or sent. The browser keeps a `private,
 no-cache` page and asks before reusing it, so this is what lets it reuse its copy: on a page loaded
 again by a typed URL or a link without the runtime (every browser), and on a reload and the
