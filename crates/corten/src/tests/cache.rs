@@ -3124,7 +3124,7 @@ async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
 async fn a_kept_body_past_the_brotli_bound_keeps_the_form_made_for_its_coding() {
     use crate::compress::Turn;
     use crate::kept::BROTLI_MAX;
-    assert_eq!(BROTLI_MAX, 32 * 1024, "the bound Choice 70 and the guide give");
+    assert_eq!(BROTLI_MAX, 32 * 1024, "the bound docs/design.md#choice-kept-pages and the guide give");
     let minute = Duration::from_secs(60);
     let runs = Runs::default();
     let text = |length: usize, runs: Runs| {
