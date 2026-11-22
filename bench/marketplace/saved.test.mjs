@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { passPlan, stageAggregate, timedProfiles } from "./run-contract.mjs";
 import { boundedFeatureProfile, featureProfile } from "./feature-contract.mjs";
-import { sampleStats } from "../catalog/stats.mjs";
+import { sampleStats, summarizeSamples } from "../catalog/stats.mjs";
 
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 const invalid = (fn) => assert.throws(fn, (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID");
@@ -147,9 +147,14 @@ test("native replay admits the producer's decimal sum overshoot, not an inconsis
   setAppMean(102.90000000000005);
   assert.throws(() => validateSummary(s), /missing\/invalid measurement/);
   setAppMean(stats[container].memAvgMiB);
-  phase.upstream.samples = 1001;
+  const constantHistory = (count) => summarizeSamples(Array(count).fill({ cpu: 100, mem: 100.8 }));
+  const atLimit = constantHistory(1000), overLimit = constantHistory(1001);
+  for (const v of [atLimit, overLimit]) assert.ok(v.memAvgMiB > v.memMaxMiB);
+  Object.assign(phase.upstream, atLimit);
+  validateSummary(s);
+  Object.assign(phase.upstream, overLimit);
   assert.throws(() => validateSummary(s), /missing\/invalid measurement/);
-  phase.upstream.samples = stats[upstream].samples;
+  Object.assign(phase.upstream, stats[upstream]);
 
   // Even when both saved summaries agree and the number is within the rounding
   // envelope, the exact mean still has to agree with the raw Docker samples.
