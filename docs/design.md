@@ -7647,16 +7647,18 @@ rules something out.
     each within the margin; a kept page, each build started once, took 1.80% more with a bound of
     2.02% more (from 5.37% fewer to 5.25% more; user 2.56% more, kernel 0.92% more) on 0.19% more
     instructions (24,247 against 24,202), and the page not `Public` 1.51% more with a bound of
-    1.67% more on 0.02% more, which missed it. So with one start a build four of the six cases met
-    the margin and two missed it. Those two were run again on that host with every turn on a newly
+    1.67% more on 0.02% more, which missed it. So the first run met the margin on four of the six
+    cases; the two new URLs already started a build afresh each turn, and of the four started
+    once a build, two met it and two missed it. Those two were run again on that host with every turn on a newly
     started build, 100 pairs each, and met it: a kept page took 0.31% more with a bound of 0.90%
     more (from 8.08% fewer to 10.63% more; user 1.06% more, kernel 0.47% fewer) on 0.19% more
     instructions (24,235 against 24,190), and the page not `Public` 0.54% more with a bound of
     0.86% more (from 10.13% fewer to 6.34% more) on 0.01% more. The rerun is another protocol, not
     a repeat, and does not clear the first run's misses. As a judgment, not a result of either
-    run, the fresh-start run is taken as the merge gate for these two: one start measures
-    one placement of the code in memory, which differs from build to build and deploy to deploy,
-    while a hundred starts average over placements as deployments meet them; and the page not
+    run, the fresh-start run is taken as the merge gate for these two: one start is one
+    process of each build, while a hundred starts sample a hundred under the same probe, so the
+    result leans less on one pair of starts (that the code's placement in memory differs from
+    start to start is a plausible reason for the one-start differences, not one these runs show); and the page not
     `Public`, whose code this change does not touch, missed by a like amount. Whether a long-lived
     process of this build is slower on a kept page neither run resolves, and neither shows a gain
     there, where 0.19% more instructions stand. With the change a new URL took 30,522 user and
@@ -7849,7 +7851,7 @@ rules something out.
     kept page in those rounds is the rule, two builds of the same code having differed by
     more from one start to the next; a miss kept with room in memory the store has used
     before (room made by a write or by a page's lifetime ending), in cycles; the cuts of
-    `1f248f657` and `eb20c55bb` in cycles under glibc, and the merge `63ec8bd65` in cycles;
+    `1f248f657` and `eb20c55bb` in cycles under glibc;
     pages of more than 8 KiB, whose copy callgrind counts a byte at a time (glibc's `memcpy` uses
     `rep movsb` there), and from 16 KiB, where
     jemalloc's classes are whole pages and a shrink need not move the page; a store read
