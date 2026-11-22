@@ -373,7 +373,7 @@ test("continuation appends authorized retries after no-create and retirement whi
     provider: fleet.provider, fullGroupQualified: false });
   for (const status of ["creating", "reserved"]) {
     fs.writeFileSync(statePath, JSON.stringify({ ...saved(fleet), status, createIntentAt: new Date().toISOString() }));
-    await assert.rejects(prepare("r20", group), /unresolved custody/);
+    await assert.rejects(prepare("r20", group), status === "creating" ? /unresolved custody/ : /reserved host already has create intent/);
   }
   fs.writeFileSync(statePath, JSON.stringify(saved(fleet)));
   const oldTree = treeHash(oldSlot);

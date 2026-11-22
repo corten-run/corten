@@ -61,7 +61,6 @@ const acceptable = (row) => ["missing", "prepared", "verified"].includes(row.out
 function notCreated(fleet, saved, lock) {
   if (!fleet.manifest.single || lock !== null || !present(join(fleet.root, "launch-intent.json"))) return false;
   if (saved.outcome !== "missing" && (saved.state?.status !== "reserved" || saved.outcome !== "ambiguous"
-      || saved.state.createIntentAt || saved.state.id || saved.state.ip
       || present(join(saved.stateRoot, ".groups-launch.lock")) || present(join(saved.local, "stream-recovery.lock")))) return false;
   readLaunchIntent(fleet);
   // Create requires a durable binding before any provider dispatch. A settled
