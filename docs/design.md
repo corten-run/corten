@@ -7501,23 +7501,44 @@ rules something out.
     (valgrind 3.24.0, rustc 1.100.0, a probe app serving a `Public` page of 5,208 bytes over one
     keep-alive connection with a browser's fifteen headers, `Accept-Language` among them, a new
     URL each request and a bound of 1 GiB that no run fills, the count for 1,300 requests less
-    that for 300 over 1,000, three rounds alternating the builds whose counts agreed within 60
-    instructions), under glibc 2.41 and under the template's allocator, Debian's libjemalloc2
-    5.3.0 put in with `LD_PRELOAD`: on main's `92a745a63` such a request ran 105,053
-    instructions under glibc and 98,547 under jemalloc, against 91,734 and 85,980 with the store
-    off. Hashing the path and query once for the table, by keys of the store's own, for the
-    lookup and the keeping (`1f248f657`; the count of writes and a full store's mark hash it on
-    their own), and holding a kept copy's URL, `Host` and, for a page that varies on it,
-    `Accept-Language` in one allocation, made from the request's own bytes when the page is kept
-    (`eb20c55bb`), took 103,491 under glibc and 97,508 under jemalloc, 1.5% and 1.1% fewer; for a
-    page of 7,635 bytes 116,556 against 118,243 and 113,061 against 114,210. The allocator was
-    called 49 times a request against 52 under both, `memcpy` 88 times against 90, and the minor
-    page faults fell from 1.641 to 1.617 a request under glibc and from 1.884 to 1.877 under
-    jemalloc. A kept page took 60,665 instructions against 60,602 under glibc and 54,621 against
-    54,597 under jemalloc (for the larger page 60,912 against 60,556 under glibc, of which
-    `_int_malloc` and the chunks it unlinks and consolidates are 303 with the heap laid out
-    otherwise, and 54,827 against 54,787 under jemalloc), and the store off, a page not
-    `Public` and a write the same to within 5. The steps between, under jemalloc at 5,208 bytes:
+    that for 300 over 1,000, three rounds alternating the builds, given as the median of the
+    three and their range), under glibc 2.41 and under the template's allocator, Debian's
+    libjemalloc2 5.3.0 put in with `LD_PRELOAD`. The table's key is the hash of the path and
+    query, taken once by keys of the store's own for the lookup and the keeping (`1f248f657`;
+    the count of writes and a full store's mark hash it on their own), and a kept copy's URL,
+    `Host` and, for an answer that varies on it, `Accept-Language` are held in one allocation
+    made from the request's bytes when the answer is kept (`eb20c55bb`). A miss that is not kept
+    never builds that key: until then it holds the request's URL and header values by handles
+    that copy none of their bytes, though the first clone of a header a middleware made for
+    itself may allocate the count of its holders. A kept body is found and keyed the same way,
+    with the way it was asked for compared beside its key. The bound counts a copy's URL once,
+    where it counted it twice (by the entry and by the table's key), so under the same bound an
+    answer with a long URL near its share is kept where it was not, and the store reaches the
+    point where it is full a little later; which answers may be kept is otherwise the same. On
+    main's `04c209fca` a page made and kept ran 104,982 instructions under glibc (104,980 to
+    104,982) and 98,538 under jemalloc (98,538 to 98,541), against 91,761 and 85,995 with the
+    store off; with this change (`b573520d1`) 103,336 (103,336 to 103,341) and 97,519 (97,516 to
+    97,564), 1.6% and 1.0% fewer, and fewer in each pair by 1,639 to 1,647 and 974 to 1,025. For
+    a page of 7,635 bytes it ran 116,620 against 118,251 and 113,066 against 114,261, fewer by
+    1,625 to 1,636 and 1,082 to 1,318; for a JSON body made and kept (the page's words as one
+    string, in a build with `compress`, sent to the browser's codings in 2,191 bytes) 204,576
+    against 206,249 and 198,337 against 199,548, fewer by 1,672 to 1,673 and 1,202 to 1,220. The
+    allocator was called 49 times a request against 52 under both, `memcpy` 86 times against 88,
+    and the minor page faults fell from 1.641 to 1.618 a request under glibc and from 1.884 to
+    1.877 under jemalloc. A kept page took 60,645 instructions against 60,640 under glibc, and
+    under jemalloc 54,678 (54,677 to 54,684) against 54,635 (54,596 to 54,643), where main's
+    runs differ by more than the two builds, so what a kept page of 5,208 bytes costs under
+    jemalloc is not resolved. For the larger page it took 61,020 against 61,026 under glibc and,
+    under jemalloc, 54,872 (54,867 to 54,875) against 54,830 (54,825 to 54,832), 35 to 50 more in
+    each pair; in the round before (`eb20c55bb` against `92a745a63`) that page's runs under
+    jemalloc ranged from 54,809 to 54,861, more than the 40 between the builds, and its cost was
+    not resolved there. A kept JSON body took 59,196 (59,195 to 59,196) against 59,075 (59,071 to
+    59,077) under glibc, 118 to 124 more in each pair, of which the store's own lookup
+    (`Asked::of` and `Asked::find`) is 36 by function and the rest glibc's `_int_malloc` and the
+    chunks it unlinks under `Extensions::insert`, with the heap laid out otherwise; and 53,673
+    against 53,634 under jemalloc, 38 to 48 more. The store off, a page not `Public` and a write
+    differed by 6 or less at the medians under both.
+    The steps between, under jemalloc at 5,208 bytes and on main's `92a745a63`:
     hashing once took 809 off; the key in one allocation made for the miss (`3278beb10`) 553
     more off, but it held and counted an `Accept-Language` the page did not vary on, so a page
     near its share of the bound was not kept for a client that sent a long one; making it only
@@ -7712,7 +7733,9 @@ rules something out.
     page made and kept with room at `df1856704` under glibc, and at `92a745a63`, `bfb957ebb`, `1f248f657`, `3278beb10`, `09170f7ec` and `eb20c55bb` under
     glibc and under jemalloc, for pages of 5,208 to 7,979 bytes, under callgrind as above in
     `rust:1-trixie`, with the faults counted from `/proc/self/stat` over 5,000 requests and the
-    calls to the allocator from callgrind's call counts; 2026-11-21, the
+    calls to the allocator from callgrind's call counts; 2026-11-21, a page and a JSON body made
+    and kept with room at `b573520d1` against `04c209fca` under glibc and under jemalloc, as
+    above, the JSON in a build with the `json` and `compress` features; 2026-11-21, the
     historical pair `30b39d455` and `45489ced9`, by callgrind alone; 2026-11-21, the rule for a full store with rustc 1.100.0: each count the
     difference of a run of 1,300 requests and one of 300 under callgrind, a new URL each, of
     which the first 28 or so fill a bound of 256 KiB, and for the second request the
