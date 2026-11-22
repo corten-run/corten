@@ -173,7 +173,9 @@ pub enum Shape {
 /// asking the store ([`Unkept`]).
 const UNKEPT_RUN: u8 = 64;
 
-/// Where each thread's draws start ([`Unkept::leaves`]): any number but zero.
+/// Where each thread's draws start ([`Unkept::leaves`]): any number but zero. Every thread
+/// starts here, so each leaves its first 364 requests for routes that left the store out to
+/// their handlers before one asks, once in the life of a thread.
 const DRAWN_FROM: u32 = 0x9E37_79B9;
 
 thread_local! {
