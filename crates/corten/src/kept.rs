@@ -1748,10 +1748,10 @@ mod tests {
         keep("/a", Some(hosts[COPIES]), 10);
         assert_eq!(answers.bytes(), 20 + 10 * COPIES + OVERHEAD * (COPIES + 1), "one went for the new one");
         assert_eq!(answers.found(7, "/b", None, None, false).expect("still kept").0.body.len(), 20);
-        let host = |n: usize| HeaderValue::from_static(hosts[n]);
-        assert!(answers.found(7, "/a", Some(&host(0)), None, false).is_none(), "the oldest /a not read");
-        for n in 1..=COPIES {
-            assert!(answers.found(7, "/a", Some(&host(n)), None, false).is_some(), "{}", hosts[n]);
+        let found = |host| answers.found(7, "/a", Some(&HeaderValue::from_static(host)), None, false);
+        assert!(found(hosts[0]).is_none(), "the oldest /a not read");
+        for &host in &hosts[1..] {
+            assert!(found(host).is_some(), "{host}");
         }
     }
 
