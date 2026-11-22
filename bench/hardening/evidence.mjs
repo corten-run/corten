@@ -8,6 +8,7 @@ import { validateBudget, phases } from "./plan.mjs";
 import { verifyContainerCommands, requireCommandAcknowledgement } from "./lifecycle.mjs";
 import { qualificationSettings, featureProfile } from "../marketplace/feature-contract.mjs";
 import { edgeOffset, nginxConf } from "../fullstack/edge.mjs";
+import { nativeBuildArchiveArgs } from "../mixed-production/build-context.mjs";
 import { cpuSetWithin, hardeningCpuGate, hardeningGateMs, hardeningRoleCpu } from "../workloads/isolated/native-roles.mjs";
 
 export const proxyConfig = () => nginxConf([["target", { port: 8080 - edgeOffset }]], 1);
@@ -628,8 +629,9 @@ export function verifyRunInputs(folder, summary) {
   for (const [app, build] of Object.entries(summary.builds ?? {})) {
     assert.match(app, /^[a-z][a-z0-9-]*$/); assert.ok(summary.cells.some((c) => c.app === app));
     const prefix = app === "corten" ? "" : `bench/fullstack/apps/${app}/`, expected = contextFiles(app);
-    const archive = sourceGit(repository, ["archive", "--format=tar", `${summary.commit}${prefix ? `:${prefix.slice(0, -1)}` : ""}`]);
-    assert.equal(build.contextSha256, digest(archive)); assert.equal(digest(body(`${app}-build-context.tar`)), build.contextSha256);
+    const archive = sourceGit(repository, nativeBuildArchiveArgs(summary.commit, app));
+    assert.equal(build.contextSha256, digest(archive), "native build-context archive differs from committed inputs");
+    assert.equal(digest(body(`${app}-build-context.tar`)), build.contextSha256);
     const actual = savedFiles(join(folder, `${app}-build-context`)).map(({ path, sha256 }) => ({ path: prefix + path, sha256 }));
     assert.deepEqual(actual, expected.map(({ path, sha256 }) => ({ path, sha256 })).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
     assert.deepEqual(build.files, expected);

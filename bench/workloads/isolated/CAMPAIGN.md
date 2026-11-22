@@ -206,9 +206,11 @@ processes' own effective sets, including child cgroups. It does not claim a trac
 of every short-lived process. Mixed production shares the throughput roles for its
 measured stage only; its separate functional capture has no pinning proof.
 
-Hardening is blocked before create pending an isolated adapter for its existing
-benign service and dependency-recovery actors. This also blocks a bundled launch
-that includes the unsupported group. Connection-flood resistance: not measured.
+The fixed hardening adapter replays the bounded native service and dependency-recovery
+results. The isolated recipe requires the bound CPU gate and its declared budgets and
+CPU sets. A complete result still requires the native matrix, exact build archives,
+effective CPU and process receipts, and clean terminal boundaries. Passing replay does
+not authorize launch or establish a throughput ranking. Connection-flood resistance: not measured.
 
 ## Kernel lifetime observations
 
@@ -370,17 +372,22 @@ or campaign readiness. The v2 native adapter/producer integration remains a sepa
 
 ## Post-command udev settle
 
-In supervised localized-marketplace timing only, a first-after inventory containing
-new sleeping children of the same baseline `systemd-udevd` can trigger one five-second wait
-and one more host observation after the marketplace command and its kernel observation are
-terminal. The Linux start ticks must place every new non-kernel identity strictly after the
-cutoff in the sealed command-lifetime record. Both the uptime and the monotonic apparatus
-samples must support the wait. Cancellation keeps the first-after inventory and skips the
-second census. Exact cgroup, parent PID/start identity and matching executable path,
-device and inode are required, not just the worker name. Saved replay checks all the sealed
-observations by the same rules. A worker or replacement still present, uncertain timing or
-ownership, a new login, benchmark process, or changed Docker baseline still stops sequencing. This does not rerun or
-alter a measured window, prove the host was quiet, or repair historical evidence.
+Supervised JSON preparation and localized-marketplace timing can take one additional
+host observation if the first-after inventory contains only new sleeping children of
+the same baseline `systemd-udevd`. The last command must have sealed terminal and empty
+lifetime evidence before the five-second wait begins. For untimed JSON preparation,
+the Linux start ticks must place each worker strictly after the pre-phase census
+cutoff. Marketplace timing still requires birth strictly after the sealed terminal
+cutoff; other timing phases do not use this rule.
+
+Both uptime and the monotonic apparatus samples must support the wait. Cancellation
+keeps the first-after inventory and skips the second census. Exact cgroup, parent
+PID/start identity and matching executable path, device and inode are required, not
+just the worker name. Saved replay uses the same rule and requires cleanup proof
+before accepting JSON audit readiness. A surviving or replacement worker, uncertain
+timing or ownership, a new login or benchmark process, or a changed Docker baseline
+still stops sequencing. This does not alter a measured window, prove the host was
+quiet, or repair historical evidence.
 
 ## Awaitable intrinsic API
 
@@ -404,12 +411,10 @@ Native dispatcher imports are fixed: catalog verify.mjs validateSaved, JSON stri
 inspectJson/inspectEvidence, marketplace validate.mjs validateSaved (returns the replayed
 summary, not a status envelope), and the six fixed isolated adapters' inspectSaved. No
 caller supplies a verifier. Native assertions/diagnostics are reduced to fixed public codes.
-The current imported browser/client and live/recovery adapters still report genuine producer
-gaps. Mixed/hardening adapters and reviewed native proofs must be routed by their owners;
-their absence is not silently replaced by a summary-only pass. Full actual all-nine
-execution, renewed source/build audits and dependency proofs have not been performed by
-this checkpoint. The local delegated-Linux fixture exercises actual collector lifetimes,
-not a complete campaign or provider ownership.
+Missing or incomplete producer proof remains blocked; a summary alone is not a substitute
+for native replay. Full actual all-nine execution, renewed source/build audits and
+dependency proofs have not been performed by this checkpoint. The local delegated-Linux
+fixture exercises actual collector lifetimes, not a complete campaign or provider ownership.
 
 ## JSON build, audit wait, then timing
 

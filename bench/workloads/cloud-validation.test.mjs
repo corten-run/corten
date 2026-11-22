@@ -269,9 +269,11 @@ test("semver snapshot pins same-read library bytes before actual worker executio
 
 test("only named replay dependencies extend the worker source budget", { timeout: 15000 }, async (t) => {
   const paths = validationPaths.filter((path) => path === "bench/catalog/cgroup.mjs" || path === "bench/typescript.mjs" || path === "bench/fullstack/edge.mjs"
+    || path === "bench/fullstack-browser/document-navigation.mjs"
     || path === "bench/workloads/isolated/native-roles.mjs" || /^bench\/hardening\/(?:bounded-requests\.mjs$|dependency-recovery-)/.test(path));
   assert.deepEqual(paths, [
     "bench/catalog/cgroup.mjs",
+    "bench/fullstack-browser/document-navigation.mjs",
     "bench/fullstack/edge.mjs",
     "bench/hardening/bounded-requests.mjs",
     "bench/hardening/dependency-recovery-capture.mjs",
@@ -284,10 +286,10 @@ test("only named replay dependencies extend the worker source budget", { timeout
   const task = validationTask(h.input, { snapshot, WorkerClass: class extends Worker {
     constructor(entry, options) {
       // Inject below the exact parent manifest check to exercise the worker's own bound. The
-      // replay never imports the role entry, so only its named slot, not a generic extra
+      // fixture never imports document-navigation, so only its named slot, not a generic extra
       // one, keeps an unused path in its place from fitting.
       options.workerData.sources = options.workerData.sources.map((row) =>
-        row.path === "bench/workloads/isolated/native-roles.mjs" ? { ...row, path: "bench/hardening/unlisted-control.mjs" } : row);
+        row.path === "bench/fullstack-browser/document-navigation.mjs" ? { ...row, path: "bench/hardening/unlisted-control.mjs" } : row);
       super(entry, options);
     }
   } });
@@ -499,6 +501,29 @@ test("unchanged native campaign API evaluates captured real sources and rejects 
   assert.deepEqual(await h.inspect(h.input), {
     status: "invalid", controllerReady: false, qualified: false, deletionAuthorized: false, error: "saved-campaign-invalid",
   });
+});
+
+test("browser saved replay imports only the committed document-navigation helper in the sealed worker", { timeout: 15000 }, async (t) => {
+  const path = "bench/fullstack-browser/document-navigation.mjs";
+  const h = await fakeNative(t, `import {validateSaved} from "../../fullstack-browser/verify.mjs";
+    export async function validateCampaign(input) {
+      const r = await validateSaved(input);
+      return { outcome: r.outcome, diagnostics: r.invalid.length };
+    }`, { realGraph: true });
+  const snapshot = captureValidation(h.input.commit, { root: h.repo });
+  const marker = join(h.input.folder, "unapproved-browser-navigation");
+  writeFileSync(join(h.repo, path), `import {writeFileSync} from "node:fs";
+    writeFileSync(${JSON.stringify(marker)}, "unapproved"); export function replayDocumentNavigation() {} export function cleanupObserved() {}`);
+  const good = await h.inspect(h.input);
+  assert.deepEqual(good, { outcome: "invalid", diagnostics: 1 });
+  const task = validationTask(h.input, { snapshot, WorkerClass: class extends Worker {
+    constructor(entry, options) {
+      options.workerData.sources = options.workerData.sources.filter((row) => row.path !== path);
+      super(entry, options);
+    }
+  } });
+  await assert.rejects(task.result, /validation unavailable/);
+  assert.equal(existsSync(marker), false);
 });
 
 test("native replay uses captured observer writer bytes rather than a replaced checkout module", { timeout: 15000 }, async (t) => {

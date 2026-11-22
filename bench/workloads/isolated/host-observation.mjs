@@ -157,27 +157,35 @@ const executableOf = (p) => {
 };
 const isUdevDaemon = (p) => p && !p.kernelThread && p.comm === "systemd-udevd" && p.parentPid === 1 && p.cgroup === udevCgroup;
 
-// No filtering of raw evidence. Only a cohort entirely attributable to the
-// existing daemon and born strictly after the terminal tick earns another read.
-export function udevSettleCandidates(before, after, terminal) {
+export function udevSettlePolicy(group, phase) {
+  if (group === "json-api" && phase === "prepare") return "preparation";
+  if (group === "localized-marketplace" && phase === "timing") return "post-terminal";
+  return null;
+}
+
+// Only a cohort entirely attributable to the existing daemon earns another
+// read. Untimed preparation can use the baseline cutoff; timing cannot.
+export function udevSettleCandidates(before, after, terminal, policy = "post-terminal") {
+  assert.ok(policy === "post-terminal" || policy === "preparation");
   const remaining = newHostProcesses(before, after);
   if (!remaining.length || !terminal || terminal.bootId !== before.bootId || terminal.ticksPerSecond !== 100) return null;
   const start = t(before.uptime), end = t(terminal.uptime), first = t(after.uptime);
   if (start === null || end === null || first === null || !(start < end && end < first)) return null;
   const startMono = apparatusTime(before), endMono = monotonic(terminal.monoNs), firstMono = apparatusTime(after);
   if (startMono === null || endMono === null || firstMono === null || !(startMono < endMono && endMono < firstMono)) return null;
+  const cutoff = policy === "preparation" ? start : end;
   const baseline = processInventory(before), observed = processInventory(after), workers = remaining.map((p) => observed.get(p.pid));
   const daemon = observed.get(workers[0].parentPid), original = baseline.get(daemon?.pid);
   const exe = executableOf(daemon);
   if (!isUdevDaemon(original) || !isUdevDaemon(daemon) || !sameProcess(original, daemon) || !exe || executableOf(original) !== exe) return null;
   if (!workers.every((p) => !p.kernelThread && p.parentPid === daemon.pid && p.comm === "(udev-worker)" && p.state === "S"
-    && p.cgroup === udevCgroup && executableOf(p) === exe && BigInt(p.startTicks) > end && BigInt(p.startTicks) <= first)) return null;
+    && p.cgroup === udevCgroup && executableOf(p) === exe && BigInt(p.startTicks) > cutoff && BigInt(p.startTicks) <= first)) return null;
   return { daemon, workers };
 }
 
-export function verifySettledHostBoundary(before, after, settled, terminal) {
+export function verifySettledHostBoundary(before, after, settled, terminal, policy) {
   assert.deepEqual(after.terminalClock, terminal, "terminal clock differs from the sealed first boundary");
-  const candidates = udevSettleCandidates(before, after, terminal);
+  const candidates = udevSettleCandidates(before, after, terminal, policy);
   assert.ok(candidates, "initial host boundary is not eligible for udev settling");
   const first = t(after.uptime), last = t(settled.uptime);
   // Allow the procfs clock's 10 ms rounding at the lower edge, but no second retry.
