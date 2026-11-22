@@ -7708,6 +7708,21 @@ rules something out.
     count of writes and the second look took about 1,800 a request, the future that keeps the
     answer and its allocation about 860, and the answer's checks before the refusal most of the
     rest.
+    Merged with main's kept bodies (`0f96e95d0` against main's `04c209fca` with this change's
+    fixture, the same five cases in 3 rounds that alternated the builds), a new URL in a full
+    store ran 22,963 instructions against 22,727 at the median (236 more, 1.0%), a page made and
+    kept with room 36,151 against 34,911 (3.6% more), a write and the page made again 46,736
+    against 44,793 (4.3% more), a kept page given again 19,512 against 19,514 and a page for one
+    visitor 18,183 against 18,183, each build's rounds within 54 instructions of each other.
+    Before the merge the change added 928 and 1,237 to the second and third (above); it now adds
+    1,240 and 1,943. By callgrind's annotated runs of `c23881059` and `0f96e95d0` (737 apart on
+    the third, 240 on a new URL in a full store), the third's growth is the future that keeps the
+    page, which now holds main's watch for a submit key, 137 of its own, glibc's `malloc` 412,
+    `memcpy` 38 and the hash of whether a data client asked 34; a new URL in a full store's is
+    `malloc` (`_int_malloc` and `unlink_chunk`) 222 and main's own change to the lookup 18, with
+    no other function 15 apart. That `malloc` takes its slower path more often because its state
+    after the larger futures of earlier requests differs is reasoned from where the counts fall,
+    not measured.
     What a write pays for its count, under callgrind (valgrind 3.24.0, rustc 1.99.1, release with
     debuginfo) on an app with one route whose `GET` and `POST` each answer text, sent
     `POST /items/7/edit` in process with `oneshot`, as (instructions at 1,200 writes less those at
@@ -7842,6 +7857,8 @@ rules something out.
     1.100.0, release builds of `9d0bd5e47` and `564034b86` counted the same way.
     2026-11-21, those counts removed and the signal taken from what was asked, rustc 1.100.0,
     release builds of `c23881059`, `f8b49d2e0` and `687c75b63` counted the same way.
+    2026-11-21, merged with main's kept bodies, rustc 1.100.0, release builds of `0f96e95d0` and
+    `04c209fca` counted the same way, and annotated beside `c23881059` and `687c75b63`.
     2026-11-21 for a kept body, `c26cbdb5a` (main's `564034b86` with the catalog
     benchmark's JSON route marked `Public` for a minute and two routes that make nothing, of 2
     bytes and of 2,000) against `69c8fb1bf` (the same on this change), built with rustc 1.99.1
