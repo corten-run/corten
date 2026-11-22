@@ -494,6 +494,13 @@ impl Written {
         store.early.load(Ordering::Acquire) == self.early
             && store.written.get().is_none_or(|counts| counts[self.count].load(Ordering::Acquire) == self.was)
     }
+
+    /// The writes the request found, at its path and those that found no counts, as one number:
+    /// two requests with a write between them find different ones, before the counts by path
+    /// are made too.
+    fn found(self) -> u64 {
+        u64::from(self.was) | (u64::from(self.early) << 32)
+    }
 }
 
 /// A request that may change what its path shows (a method that is not safe), from before its
@@ -713,8 +720,8 @@ impl Table {
 
 impl Flights {
     /// The key of the copy asked for at `at` with this `Host` and `Accept-Language`, as data or
-    /// not, by requests that found the path's count of writes at `was`.
-    fn key(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>, data: bool, was: u32) -> u64 {
+    /// not, by requests that found the writes at `found` ([`Written::found`]).
+    fn key(&self, at: &str, host: Option<&HeaderValue>, language: Option<&HeaderValue>, data: bool, found: u64) -> u64 {
         let mut hasher = self.keys.build_hasher();
         hasher.write(at.as_bytes());
         // Where each part ends, so no two ways of asking read as one (a part sent empty is not
@@ -730,7 +737,7 @@ impl Flights {
         hasher.write_u64(ends);
         hasher.write_u8(u8::from(data));
         // The writes the requests found: unknown to anyone who does not know the hash.
-        hasher.finish() ^ u64::from(was).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        hasher.finish() ^ found.wrapping_mul(0x9e37_79b9_7f4a_7c15)
     }
 
     fn table(&self) -> std::sync::MutexGuard<'_, Table> {
@@ -1284,7 +1291,7 @@ impl<'a> Asked<'a> {
         }
         let asked = Instant::now();
         let written = Written::of(store, self.at);
-        let key = store.flights.key(self.at, self.host, self.language, self.data, written.was);
+        let key = store.flights.key(self.at, self.host, self.language, self.data, written.found());
         let admitted = store.flights.table().admit(key, asked);
         // Each looks again once it holds or has joined the page being made: one kept between its
         // first look and then (by the request it would wait for, or for every language by
@@ -1314,7 +1321,7 @@ impl<'a> Asked<'a> {
     pub(crate) fn missed_again(&self, req: &Request, route: Option<Arc<Unkept>>) -> Missed {
         let (store, asked) = (&self.answers.0, Instant::now());
         let written = Written::of(store, self.at);
-        let key = store.flights.key(self.at, self.host, self.language, self.data, written.was);
+        let key = store.flights.key(self.at, self.host, self.language, self.data, written.found());
         self.missing(req, asked, written, None, Some(key), route)
     }
 
