@@ -1929,9 +1929,9 @@ async fn a_panic_in_finished_work_is_the_handlers() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "the server goes on after it");
 }
 
-/// A `2xx` to `CONNECT` is a tunnel, so the router sends it with no body and without the
-/// `Content-Length` or `Transfer-Encoding` the handler wrote (RFC 9110 9.3.6, #1915); a refusal
-/// keeps its body and its length.
+/// A `2xx` to `CONNECT` is a tunnel, so the router sends it with no body, whatever the handler
+/// wrote, and without any `Content-Length` or `Transfer-Encoding` it said (RFC 9110 9.3.6,
+/// #1915); a refusal keeps its body and its length.
 #[tokio::test]
 async fn a_connect_answered_with_success_has_no_body() {
     let routes = Table::new().route(
@@ -1941,12 +1941,21 @@ async fn a_connect_answered_with_success_has_no_body() {
             if req.headers().contains_key("x-refuse") {
                 return (StatusCode::FORBIDDEN, [(header::CONTENT_LENGTH, "6")], "tunnel").into_response();
             }
+            if req.headers().contains_key("x-unframed") {
+                return (StatusCode::OK, "tunnel").into_response();
+            }
             (StatusCode::OK, [(header::CONTENT_LENGTH, "6"), (header::TRANSFER_ENCODING, "chunked")], "tunnel").into_response()
         }),
     );
     let (status, headers, body) = call(routes.clone(), "CONNECT", None).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, ""));
     assert!(!headers.contains_key(header::CONTENT_LENGTH) && !headers.contains_key(header::TRANSFER_ENCODING), "{headers:?}");
+    // A body with neither framing header is emptied for its size alone.
+    let req = Request::builder().method("CONNECT").uri("/").header("x-unframed", "1").body(Body::empty()).unwrap();
+    let res = Router::from(routes.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(!res.headers().contains_key(header::CONTENT_LENGTH) && !res.headers().contains_key(header::TRANSFER_ENCODING));
+    assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), "");
     let req = Request::builder().method("CONNECT").uri("/").header("x-refuse", "1").body(Body::empty()).unwrap();
     let res = Router::from(routes).oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
