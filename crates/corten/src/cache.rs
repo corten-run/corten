@@ -543,7 +543,21 @@ pub(crate) fn settle_refused(res: &mut Response) {
 /// page set itself. A `Cache-Control` it set is the default (`private, no-store` where it names
 /// `no-store`); without one, [`settle`] gives it the default.
 pub(crate) fn settle_unshared_page(headers: &mut HeaderMap) {
-    drop_cdn_caching(headers);
+    // One pass over the page's names, a few: the usual page set neither, and a lookup by name
+    // costs more than the pass.
+    let (mut cdn, mut cache) = (false, false);
+    for name in headers.keys() {
+        cdn |= CDN_CACHING.contains(&name.as_str());
+        cache |= *name == header::CACHE_CONTROL;
+    }
+    if cdn {
+        for name in &CDN_HEADERS {
+            headers.remove(name);
+        }
+    }
+    if !cache {
+        return;
+    }
     if let header::Entry::Occupied(mut entry) = headers.entry(header::CACHE_CONTROL) {
         let no_store = entry.iter().any(|line| mentions_no_store(line.as_bytes()));
         entry.insert(if no_store { PRIVATE_NO_STORE } else { PRIVATE });

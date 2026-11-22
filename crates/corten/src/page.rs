@@ -3619,10 +3619,10 @@ async fn errors_rendered<S: crate::app::Steps>(
     let dispatch = |pending| within_deadline(pending, next, deadline);
     if json {
         let shape = api.and_then(|mount| mount.errors.as_ref());
-        // An extractor's refusal may be a redirect, which `json_failure` leaves as it is.
-        return unanswered_settled(
-            crate::api::json_failure(run(pending, dispatch, deadline, signal).await, shared.dev, shape).await,
-        );
+        let res = crate::api::json_failure(run(pending, dispatch, deadline, signal).await, shared.dev, shape).await;
+        // An extractor's refusal may be a redirect, which `json_failure` leaves as it is. A `2xx`
+        // is an answer, and costs no lookup.
+        return if res.status().is_success() { res } else { unanswered_settled(res) };
     }
     if shared.layout_reads.is_empty() || mode.swaps() {
         return page_or_error(shared, pending, dispatch, deadline, signal, page).await;
@@ -3702,8 +3702,9 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     let error = status.is_client_error() || status.is_server_error();
     if !error || res.extensions().get::<crate::answer::Relayed>().is_some() || res.extensions().get::<AsIs>().is_some() {
         // An extractor's refusal goes out as it was made (a redirect, a relayed failure), and is
-        // still never shared.
-        return unanswered_settled(res);
+        // still never shared. A `2xx` is an answer, whoever made it, as one a handler builds by
+        // hand is: the page every request gets pays no lookup for the mark.
+        return if status.is_success() { res } else { unanswered_settled(res) };
     }
     // A JSON route answers every failure as JSON, a path that did not parse included.
     if res.extensions().get::<crate::answer::Answered>().is_some() {
