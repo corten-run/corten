@@ -2877,7 +2877,10 @@ rules something out.
     does it and terser goes; or terser's output fails a smoke test in a supported engine that
     esbuild's alone passes.
 
-    Last checked: 2026-11-20, terser 5.51.3 with esbuild 0.28.2 on `3efd3266d` builds all eight
+    Last checked: 2026-11-22, terser 5.51.4 with esbuild 0.28.2 on `a0eeeacca` builds every file in
+    `crates/corten/js/dist/` byte for byte as 5.51.3 does there (`git status` clean after
+    `npm run build:js`), the release dropping only source maps from terser's own package;
+    2026-11-20, terser 5.51.3 with esbuild 0.28.2 on `3efd3266d` builds all eight
     files byte for byte as 5.51.2 does there (the same SHA-256 each), so the move changes no
     shipped byte, and the build gives terser no input source map, so 5.51.3's source-map change
     does not apply; 2026-11-10, sizes on `21f9fab3` with esbuild 0.28.2

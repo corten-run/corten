@@ -88,6 +88,38 @@ export async function rewriteArtifact(f, app, index, change) {
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
   const { inspectSaved } = await import("./live-delivery.mjs");
+  test("official replay preserves a cancelled attempt's failure and marks the remaining cases unattempted", async (t) => {
+    const f = await syntheticFixture(t, "live-delivery", { allRegistered: true });
+    const [first, ...later] = f.plan.apps;
+    for (const app of f.plan.apps) {
+      const name = `${app}-artifacts.json`;
+      const manifest = JSON.parse(await readFile(join(f.folder, name), "utf8"));
+      for (const { file } of manifest.files.slice(app === first ? 1 : 0)) await rm(join(f.folder, file));
+      if (app === first) {
+        manifest.files.length = 1;
+        await f.json(name, manifest);
+      } else {
+        await rm(join(f.folder, name));
+        const cell = f.ledger.cells.find((r) => r.app === app);
+        delete cell.artifact;
+        Object.assign(cell, { parity: "not-run", reason: "Cancelled before adapter started" });
+      }
+    }
+    f.ledger.cancelled = true;
+    await f.json("coverage.json", f.ledger);
+    const r = await inspectSaved(f.binding, f.folder);
+    assert.equal(r.status, "blocked"); assert.equal(r.attemptComplete, false);
+    assert.equal(r.cleanupComplete, false);
+    assert.deepEqual(r.outcomes, [{ app: first, outcome: "failed" }, ...later.map((app) => ({ app, outcome: "not-run" }))]);
+    assert.ok(r.blockers.includes("native-live-run-cancelled"));
+    const native = await verifyRound(f.folder);
+    assert.deepEqual(native.inspected, [`${first}-${f.plan.scenarios[0]}.json.gz`]);
+    assert.deepEqual(native.notAttempted[first], { scenarios: f.plan.scenarios.slice(1), clients: [] });
+    delete f.ledger.cancelled;
+    await f.json("coverage.json", f.ledger);
+    assert.equal((await inspectSaved(f.binding, f.folder)).status, "invalid");
+  });
+
   for (const group of ["live-delivery", "recoverable-live"]) test(`${group}: current registered matrix binds native HTTP code without qualifying failed targets`, async (t) => {
     const f = await syntheticFixture(t, group, { allRegistered: true });
     const { inspectLiveSaved } = await import("./live-delivery.mjs");

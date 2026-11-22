@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
-import { verifyRound } from "../../../live/verify.mjs";
+import { retainedPrefix, verifyRound } from "../../../live/verify.mjs";
 import { groupNames } from "../../registry.mjs";
 import { deploymentSha256 } from "../../deployments.mjs";
 import { campaignSchema, groupCampaignSchema } from "../campaign-contract.mjs";
@@ -178,6 +178,8 @@ export async function inspectLiveSaved(binding, folder, group) {
       result.blockers = [...missing]; return result;
     }
     const plan = await json("plan.json"), ledger = await json("coverage.json");
+    const cancelled = ledger.cancelled === true;
+    if (cancelled) missing.add("native-live-run-cancelled");
     const actorFiles = [...names].filter((name) => name.endsWith("-host-actor.json"));
     assert.equal(plan.isolated ?? false, options.isolated ?? false, "live isolation differs from binding");
     const actors = options.isolated ? { tools: null, participants: [], windows: [] } : null;
@@ -212,7 +214,7 @@ export async function inspectLiveSaved(binding, folder, group) {
     clock(plan.startedAt);
     const provenance = new Map();
     const legacyMeasurements = new Set();
-    let allAttempted = true, failed = false, failedEvidenceComplete = true;
+    let allAttempted = !cancelled, failed = false, failedEvidenceComplete = true;
     for (const [index, entry] of plan.inventory.entries()) {
       const app = apps[index], cell = ledger.cells[index], outcome = result.outcomes[index];
       assert.equal(entry.app, app); assert.equal(cell.implementation, entry.implementation);
@@ -234,7 +236,8 @@ export async function inspectLiveSaved(binding, folder, group) {
       if (names.has(manifestName)) {
         assert.ok(supported); assert.equal(cell.artifact, manifestName);
         const manifest = await json(manifestName); assert.equal(manifest.app, app); assert.equal(manifest.group, group);
-        assert.deepEqual(manifest.files.map((f) => f.file), settings.scenarios.map((s) => `${app}-${s}.json.gz`));
+        retainedPrefix(manifest.files, settings.scenarios.map((s) => `${app}-${s}.json.gz`),
+          cancelled || startup, "incomplete native scenarios");
         for (const [i, file] of manifest.files.entries()) {
           const bytes = await readFile(join(folder, file.file)); assert.equal(digest(bytes), file.sha256);
           const a = JSON.parse(gunzipSync(bytes, { maxOutputLength: 32 * 1024 * 1024 }));
@@ -247,20 +250,27 @@ export async function inspectLiveSaved(binding, folder, group) {
           }
           retained.push(a);
         }
+        if (retained.length < settings.scenarios.length) {
+          allAttempted = false; missing.add(`native-scenarios-not-run:${app}`);
+        }
       } else {
         if (cell.artifact !== undefined) {
           assert.equal(cell.artifact, manifestName); missing.add(`native-scenario-manifest-missing:${app}`);
         }
         if (supported && !startup) { allAttempted = false; missing.add(`native-scenarios-not-run:${app}`); }
       }
-      const qualificationPassed = retained.length > 0 && retained.every((a) => a.schema === "native-live-evidence/v1");
+      const qualificationPassed = retained.length === settings.scenarios.length && retained.every((a) => a.schema === "native-live-evidence/v1");
       if (retained.some((a) => a.schema === "native-live-failure/v1")) { failed = true; outcome.outcome = "failed"; }
       if (!supported) { assert.equal(retained.length, 0); assert.equal(startup, null); outcome.outcome = "unsupported"; missing.add(`native-port-unsupported:${app}`); }
       if (names.has(measurementName)) {
         assert.ok(options.measure && qualificationPassed); assert.equal(cell.measurementArtifact, measurementName);
         const measured = await json(measurementName);
         assert.equal(measured.app, app); assert.equal(measured.group, group); assert.deepEqual(measured.profile, settings.measurement);
-        assert.deepEqual(measured.files.map((f) => f.file), settings.measurement.clients.map((n) => `${app}-fanout-${n}.json.gz`));
+        retainedPrefix(measured.files, settings.measurement.clients.map((n) => `${app}-fanout-${n}.json.gz`),
+          cancelled || startup, "incomplete native measurements");
+        if (measured.files.length < settings.measurement.clients.length) {
+          allAttempted = false; missing.add(`native-measurements-not-run:${app}`);
+        }
         for (const file of measured.files) {
           const bytes = await readFile(join(folder, file.file)); assert.equal(digest(bytes), file.sha256);
           const a = JSON.parse(gunzipSync(bytes, { maxOutputLength: 32 * 1024 * 1024 }));
@@ -308,7 +318,8 @@ export async function inspectLiveSaved(binding, folder, group) {
     if (actorFiles.length) {
       // A native startup/harness failure can leave a container receipt before
       // any replayable browser work. Keep its failure, never clear resources.
-      assert.ok(actorFiles.every((name) => apps.some((app) => name === `${app}-host-actor.json` && names.has(`${app}-failure.json`))),
+      assert.ok(actorFiles.every((name) => apps.some((app, i) => name === `${app}-host-actor.json`
+        && (names.has(`${app}-failure.json`) || (cancelled && ledger.cells[i].reason === "Cancelled before first scenario")))),
         "unbound native live actor receipt");
       missing.add("native-live-actor-without-browser-evidence");
     }
@@ -330,7 +341,7 @@ export async function inspectLiveSaved(binding, folder, group) {
     for (const row of result.outcomes) if (row.outcome === "not-run" && native.passed.includes(row.app)
       && (!options.measure || native.measured.includes(row.app))) row.outcome = "passed";
     const passed = result.outcomes.every((r) => r.outcome === "passed");
-    if (passed) { assert.deepEqual(native.missing, []); assert.deepEqual(native.unqualified, []); assert.equal(native.readyForLoad, true); }
+    if (passed) { assert.deepEqual(native.missing, []); assert.deepEqual(native.unqualified, []); assert.equal(native.readyForLoad, !cancelled); }
     resourceStage = true;
     for (const p of provenance.values()) {
       assert.deepEqual(p.container, { nanoCpus: binding.resources.app.cpu * 1e9,
