@@ -623,10 +623,19 @@ ${observeRootManager}
   done'
 ` : "";
   const requireIdleUserManager = (stage) => `bootstrap_stage=${stage}
-timeout 15 bash -ec '
+timeout 15 bash -e -o pipefail -c '
     test -f "$1" && test ! -L "$1" || exit 1
     test -f "$2" && test ! -L "$2" || exit 1
     cmp -s -- "$2" <(printf "%s\\n" "[Unit]" "$3")
+    # The condition must be mandatory (not a trigger), negated and in the loaded unit.
+    busctl --json=short get-property org.freedesktop.systemd1 /org/freedesktop/systemd1/unit/user_400_2eservice org.freedesktop.systemd1.Unit Conditions |
+      python3 -I -c "
+import json, sys
+reply = json.load(sys.stdin)
+expected = [\\"ConditionPathExists\\", False, True, sys.argv[1]]
+sys.exit(not (reply[\\"type\\"] == \\"a(sbbsi)\\" and any(row[:4] == expected for row in reply[\\"data\\"])))
+" "\${3#ConditionPathExists=!}" ||
+      { echo "root-manager: effective binding condition missing" >&2; exit 1; }
 ${observeRootManager}
     test "$state" = inactive && test "$main_pid" = 0
 ' root-manager '${marker}' '${rootManagerDropIn}' 'ConditionPathExists=!${marker}'

@@ -457,7 +457,7 @@ test("first official group waits for the bound common bootstrap marker, not nati
 });
 
 test("dedicated startup leaves an SSH-free manager drain window before polling or registering", async (t) => {
-  for (const mode of ["quiet", "busy", "cancelled", "install-failed"]) {
+  for (const mode of ["quiet", "busy", "cancelled", "cancelled-at-start", "install-failed"]) {
     const h = harness(t, { active: true }), group = "recoverable-live";
     const values = input(); values.provider = { accountId, context }; values.tokens = { [group]: values.tokens[group] };
     const fleet = join(h.temp, "fleet.json");
@@ -495,7 +495,7 @@ test("dedicated startup leaves an SSH-free manager drain window before polling o
       assert.ok(installed && !started);
       assert.equal(h.saved().control.ledger.at(-1).localTerminal, true);
       elapsed += ms;
-      if (mode === "cancelled") h.flags.cancelled = true;
+      if (mode === "cancelled" || mode === "cancelled-at-start" && elapsed === 120_000) h.flags.cancelled = true;
     } }, options);
     const launch = task.launch();
     try {
@@ -511,7 +511,7 @@ test("dedicated startup leaves an SSH-free manager drain window before polling o
       assert.deepEqual(h.saved().control.sealed, ["bootstrap"]);
     } else {
       await assert.rejects(launch, { busy: /ended before running admission/, cancelled: /controller cancelled/,
-        "install-failed": /control process failed/ }[mode]);
+        "cancelled-at-start": /controller cancelled/, "install-failed": /control process failed/ }[mode]);
       assert.equal(h.saved().bootstrapReady, undefined);
       assert.equal(h.saved().control.monitor.phase, "pending");
       assert.equal(!!h.saved().preBootstrapTerminal, mode === "busy");
@@ -519,7 +519,7 @@ test("dedicated startup leaves an SSH-free manager drain window before polling o
     assert.equal(started, mode === "quiet" || mode === "busy");
     if (!started) {
       assert.equal(h.saved().status, "preparing");
-      assert.equal(elapsed, mode === "cancelled" ? 1000 : 0);
+      assert.equal(elapsed, { cancelled: 1000, "cancelled-at-start": 120_000, "install-failed": 0 }[mode]);
     }
     assert.equal(h.creates, 1);
     assert.equal(h.deletes, 0);

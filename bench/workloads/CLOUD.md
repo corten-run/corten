@@ -1402,14 +1402,15 @@ other user process from native cleanup evidence.
 On dedicated group hosts, the benchmark and Docker run as system services.
 Root SSH still needs a normal logind session, but not a separate user manager.
 For new dedicated reservations, the controller installs a runtime systemd
-drop-in with the job unit and waits for systemd to reload it. The drop-in skips new starts of
-`user@0.service` while the host's control binding exists. It does not stop
+drop-in with the job unit and waits for systemd to reload it. The drop-in skips
+new starts of `user@0.service` while the host's control binding exists. It does not stop
 the current manager or change SSH or PAM. After installation is acknowledged,
 the controller opens no SSH connections for two minutes to let the manager
-exit naturally. Only then does it start the job. The job checks the policy and
-requires an inactive manager with no main PID before waiting for cloud-init,
-and checks both again before native entry. Saved reservations without `quietBootstrap` still
-regenerate their original job, with the drain check near native entry.
+exit naturally. Only then does it start the job. The job checks the installed
+and effective policy and requires an inactive manager with no main PID before
+waiting for cloud-init and again before native entry. Saved reservations without
+`quietBootstrap` still regenerate their original job, with the drain check near
+native entry.
 The run log records which property it is querying and the observed state and
 main PID, so a busy manager can be distinguished from a stalled query.
 If it stays busy the group fails setup, without terminating anyone's work.
