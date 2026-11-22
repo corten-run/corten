@@ -12,16 +12,28 @@
 //! asks for the last URL they asked for, which must be given kept where its page was made (and
 //! not where nothing is kept): the same one request at both counts. For `full` that URL is asked
 //! for twice, its second request keeping the page and its third given it.
+//!
+//! A new URL whose mark is another's is taken for known and its page kept, with an answer the
+//! client cannot tell from a refused one. So `full` counts only URLs the store refuses: a first
+//! pass over [`CANDIDATES`] new URLs, in a second store filled the same way, asks for each twice
+//! in a row and keeps those whose second request is not given the page (it made the page, so the
+//! first was refused); a URL taken for known was kept the first time and given the second. The
+//! counted requests ask for those URLs in the same order, so each sets the marks it set there and
+//! is refused as it was. The pass is the same at both counts, so the subtraction leaves it out.
 
 use std::time::Duration;
 
 use corten::{
     http::{Body, Request, StatusCode},
     prelude::*,
-    App, Public,
+    App, Public, Router,
 };
 use http_body_util::BodyExt;
 use tower::ServiceExt;
+
+/// The new URLs the first pass of `full` asks for, of which the counted requests take those the
+/// store refused: about 7 in 1,300 share a mark at 131,072 marks.
+const CANDIDATES: usize = 1300;
 
 #[corten::routes]
 mod url {
@@ -66,49 +78,77 @@ fn get(uri: &str) -> Request {
         .unwrap()
 }
 
+/// One request's answer: its status, whether it was a kept one (it has an `Age`), and its body.
+async fn send(router: &Router, req: Request) -> (StatusCode, bool, bytes::Bytes) {
+    let res = router.clone().oneshot(req).await.unwrap();
+    let (status, given) = (res.status(), res.headers().contains_key("age"));
+    (status, given, res.into_body().collect().await.unwrap().to_bytes())
+}
+
+/// An app whose store of 4 MiB (131,072 marks) is full, made the same way each time, with the
+/// page at `/kept`, asked for first: then each new URL is asked for twice until the second is no
+/// longer given the page the first made.
+async fn filled() -> (Router, bytes::Bytes) {
+    let router = App::new(url::router()).dev(false).kept_answers(4 << 20).router();
+    let (status, given, body) = send(&router, get("/kept")).await;
+    assert!(status == StatusCode::OK && !given);
+    let mut filled = 0;
+    loop {
+        let at = format!("/kept?fill={filled}");
+        send(&router, get(&at)).await;
+        if !send(&router, get(&at)).await.1 {
+            break;
+        }
+        filled += 1;
+        assert!(filled < 10_000, "the store never filled");
+    }
+    (router, body)
+}
+
+/// Of [`CANDIDATES`] new URLs asked for in order in a full store, those it refused, in that order;
+/// those it took for known are named on standard error.
+async fn refused() -> Vec<String> {
+    let (router, _) = filled().await;
+    let (mut refused, mut known) = (Vec::new(), Vec::new());
+    for n in 0..CANDIDATES {
+        let at = format!("/kept?n={n}");
+        let (status, given, _) = send(&router, get(&at)).await;
+        assert!(status == StatusCode::OK && !given, "{at}");
+        if send(&router, get(&at)).await.1 {
+            known.push(at);
+        } else {
+            refused.push(at);
+        }
+    }
+    eprintln!("full: {} of {CANDIDATES} new URLs refused; taken for known: {known:?}", refused.len());
+    refused
+}
+
 #[test]
 #[ignore = "measure the release test binary under Callgrind"]
 fn request_cost() {
     let case = std::env::var("KEPT_CASE").unwrap_or_else(|_| "hit".into());
     let requests = std::env::var("REQUESTS").map_or(200, |value| value.parse::<usize>().unwrap());
-    let mut app = App::new(url::router()).dev(false);
-    if case == "full" {
-        // 131,072 marks, so that few of the new URLs counted are taken for known and kept.
-        app = app.kept_answers(4 << 20);
-    }
-    let router = app.router();
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
-        // One answer each, outside the counted loop: the body every answer is checked against.
-        let send = |req: Request| {
-            let router = router.clone();
-            async move {
-                let res = router.oneshot(req).await.unwrap();
-                let (status, given) = (res.status(), res.headers().contains_key("age"));
-                (status, given, res.into_body().collect().await.unwrap().to_bytes())
-            }
-        };
+        let full = if case == "full" { refused().await } else { Vec::new() };
+        assert!(case != "full" || full.len() >= requests, "{} of {CANDIDATES} new URLs refused", full.len());
         let path = if case == "plain" { "/plain" } else { "/kept" };
-        let (status, given, body) = send(get(path)).await;
-        assert!(status == StatusCode::OK && !given, "{case}");
+        // One answer, outside the counted loop: the body every answer is checked against.
+        let (router, body) = if case == "full" {
+            filled().await
+        } else {
+            let router = App::new(url::router()).dev(false).router();
+            let (status, given, body) = send(&router, get(path)).await;
+            assert!(status == StatusCode::OK && !given, "{case}");
+            (router, body)
+        };
+        let send = |req: Request| send(&router, req);
         assert!(std::str::from_utf8(&body).unwrap().contains("<main><p>Kept cost fixture</p></main>"));
-        if case == "full" {
-            // Each new URL asked for twice, until the second is no longer given the page the first
-            // made: the store is full.
-            let mut filled = 0;
-            loop {
-                let at = format!("/kept?fill={filled}");
-                send(get(&at)).await;
-                if !send(get(&at)).await.1 {
-                    break;
-                }
-                filled += 1;
-                assert!(filled < 10_000, "the store never filled");
-            }
-        }
         for n in 0..requests {
             let (expected, answer) = match case.as_str() {
                 "hit" => (true, send(get("/kept")).await),
-                "made" | "full" => (false, send(get(&format!("/kept?n={n}"))).await),
+                "made" => (false, send(get(&format!("/kept?n={n}"))).await),
+                "full" => (false, send(get(&full[n])).await),
                 "again" => {
                     let write = Request::post("/kept")
                         .header("host", "localhost")
@@ -125,7 +165,8 @@ fn request_cost() {
             assert_eq!(answer, (StatusCode::OK, expected, body.clone()), "{case} {n}");
         }
         let last = match case.as_str() {
-            "made" | "full" => format!("/kept?n={}", requests.saturating_sub(1)),
+            "made" => format!("/kept?n={}", requests.saturating_sub(1)),
+            "full" => full[requests.saturating_sub(1)].clone(),
             _ => path.to_owned(),
         };
         if case == "full" {

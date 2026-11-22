@@ -3104,6 +3104,74 @@ async fn requests_that_miss_a_new_url_in_a_full_store_together_run_its_handler_t
     assert_eq!(held.runs.count(), runs + 2);
 }
 
+/// The request for a new URL that clears a full store's marks (an eighth of them set) keeps its
+/// own: those that miss the URL while it is made are still its second request, so its handler
+/// runs twice, as for any other new URL.
+#[tokio::test]
+async fn a_new_url_whose_first_request_clears_the_marks_keeps_its_own() {
+    let (held, watch) = (Held::default(), Watch::default());
+    let router = filled(&held, &watch).await;
+    let (runs, joined) = (held.runs.count(), watch.joined());
+    watch.answers().clears_marks_next();
+    held.hold.next(2);
+    let first = sent(&router, "GET", "/?n=clears", &[]);
+    ran(&held.runs, runs + 1).await;
+    assert_eq!(watch.answers().making(), 0, "the first is made for no other request");
+    let others: Vec<_> = (0..3).map(|_| sent(&router, "GET", "/?n=clears", &[])).collect();
+    ran(&held.runs, runs + 2).await;
+    watch.admitted(joined + 2).await;
+    assert_eq!(held.runs.count(), runs + 2, "the second makes the page, and the others wait for it");
+    held.hold.release(2);
+    let (status, headers, body) = first.await.unwrap();
+    assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{headers:?}");
+    let mut given = 0;
+    for other in others {
+        let (status, headers, same) = other.await.unwrap();
+        assert!(status == StatusCode::OK && same == body, "{headers:?}");
+        given += usize::from(headers.contains_key(header::AGE));
+    }
+    assert_eq!(given, 2, "the two that waited were given the second's page");
+    assert_eq!(held.runs.count(), runs + 2);
+}
+
+/// Marks that other URLs clear while a new URL's first request is made forget that URL too: the
+/// next request for it is a first again. So requests that miss a new URL in a full store together
+/// run its handler at most twice, and once more for each time the marks are cleared meanwhile.
+#[tokio::test]
+async fn marks_cleared_while_a_new_url_is_made_let_its_handler_run_once_more() {
+    let (held, watch) = (Held::default(), Watch::default());
+    let router = filled(&held, &watch).await;
+    let (runs, joined) = (held.runs.count(), watch.joined());
+    held.hold.next(1);
+    let first = sent(&router, "GET", "/?n=forgotten", &[]);
+    ran(&held.runs, runs + 1).await;
+    // Another new URL clears the marks, this one's with them.
+    watch.answers().clears_marks_next();
+    assert_eq!(at_once(&router, "GET", "/?n=another", &[]).await.0, StatusCode::OK);
+    held.hold.next(2);
+    let second = sent(&router, "GET", "/?n=forgotten", &[]);
+    ran(&held.runs, runs + 3).await;
+    assert_eq!(watch.answers().making(), 0, "the second is a first again, made for no other request");
+    let others: Vec<_> = (0..3).map(|_| sent(&router, "GET", "/?n=forgotten", &[])).collect();
+    ran(&held.runs, runs + 4).await;
+    watch.admitted(joined + 2).await;
+    assert_eq!(held.runs.count(), runs + 4, "a third run, which makes the page for the others");
+    held.hold.release(3);
+    for request in [first, second] {
+        let (status, headers, _) = request.await.unwrap();
+        assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{headers:?}");
+    }
+    let mut given = 0;
+    for other in others {
+        let (status, headers, _) = other.await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        given += usize::from(headers.contains_key(header::AGE));
+    }
+    assert_eq!(given, 2, "the two that waited were given the third's page");
+    assert!(fetch(&router, "GET", "/?n=forgotten", &[]).await.1.contains_key(header::AGE), "and it is kept");
+    assert_eq!(held.runs.count(), runs + 4);
+}
+
 /// Requests that miss a page whose lifetime ended together run its handler once.
 #[tokio::test]
 async fn requests_that_miss_a_page_past_its_lifetime_together_run_its_handler_once() {
@@ -3313,6 +3381,55 @@ async fn a_page_kept_after_one_that_was_not_is_waited_for_when_it_is_made_again(
         assert!(status == StatusCode::OK && headers.contains_key(header::AGE) && same == body, "{headers:?}");
     }
     assert_eq!(held.runs.count(), 3);
+}
+
+/// A page kept for every language (its `Vary` does not name `Accept-Language`) is kept for the
+/// requests in each, so it ends what is remembered of the page not kept in another language,
+/// whether that page failed while it was kept or before: once the copy's lifetime ends, the
+/// requests in that language that miss it together wait for one handler again.
+#[tokio::test]
+async fn a_page_kept_for_every_language_ends_its_not_kept_in_another() {
+    use std::sync::atomic::Ordering::Relaxed;
+    const FR: &[(&str, &str)] = &[("accept-language", "fr")];
+    const EN: &[(&str, &str)] = &[("accept-language", "en")];
+    let (held, watch) = (Held::default(), Watch::default());
+    let router = App::new(Routes::from(held_routes(&held))).middleware(watch.clone()).router();
+    for meanwhile in [true, false] {
+        held.fails.store(true, Relaxed);
+        let french = if meanwhile {
+            held.hold.next(1);
+            let runs = held.runs.count();
+            let french = sent(&router, "GET", "/brief", FR);
+            ran(&held.runs, runs + 1).await;
+            Some(french)
+        } else {
+            assert_eq!(fetch(&router, "GET", "/brief", FR).await.0, StatusCode::NOT_FOUND, "the French page fails");
+            None
+        };
+        let (status, headers, _) = fetch(&router, "GET", "/brief", EN).await;
+        assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{meanwhile}: {headers:?}");
+        assert!(fetch(&router, "GET", "/brief", FR).await.1.contains_key(header::AGE), "{meanwhile}: kept for French too");
+        if let Some(french) = french {
+            held.hold.release(1);
+            assert_eq!(french.await.unwrap().0, StatusCode::NOT_FOUND, "the French page fails meanwhile");
+        }
+        // Its lifetime of a second ends.
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        let (runs, joined) = (held.runs.count(), watch.joined());
+        held.hold.next(1);
+        let first = sent(&router, "GET", "/brief", FR);
+        ran(&held.runs, runs + 1).await;
+        let other = sent(&router, "GET", "/brief", FR);
+        watch.admitted(joined + 1).await;
+        assert_eq!(held.runs.count(), runs + 1, "{meanwhile}: the other waits");
+        held.hold.release(1);
+        let (status, headers, body) = first.await.unwrap();
+        assert!(status == StatusCode::OK && !headers.contains_key(header::AGE), "{meanwhile}: {headers:?}");
+        let (status, headers, same) = other.await.unwrap();
+        assert!(status == StatusCode::OK && headers.contains_key(header::AGE) && same == body, "{meanwhile}: {headers:?}");
+        // And that copy's lifetime ends before the next round.
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+    }
 }
 
 /// What settling a page's caching costs a request: `SETTLE_REQUESTS` (200) full-document `GET`s

@@ -1949,3 +1949,36 @@ async fn a_kept_page_is_sent_with_the_date_it_is_sent_on() {
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
 }
+
+/// A page with more than one `Date` line is not kept: a `Date` is one date (RFC 9110, 6.6.1), and
+/// a second line is not one a recipient may join to the first (5.3), so neither says how old the
+/// page is. Each answer is its handler's, with both lines.
+#[tokio::test]
+async fn a_page_with_more_than_one_date_is_not_kept() {
+    use std::time::{Duration, SystemTime};
+    let dated = |first: Option<&'static str>| {
+        move |req: Req| async move {
+            let earlier = first.map_or_else(|| http_date(SystemTime::now() - Duration::from_secs(30)), str::to_owned);
+            let later = http_date(SystemTime::now() - Duration::from_secs(10));
+            let page = req.test_page_for("Dated", html! { <p>"dated"</p> }).map(|mut page| {
+                for date in [earlier, later] {
+                    page.headers_mut().append(http::header::DATE, http::HeaderValue::from_str(&date).unwrap());
+                }
+                page
+            });
+            Public::new(Duration::from_secs(60), page)
+        }
+    };
+    let routes = Table::new()
+        .route("/", crate::route::get(dated(None)).0)
+        .route("/malformed", crate::route::get(dated(Some("yesterday"))).0);
+    let router = App::new(Routes::from(routes)).router();
+    for uri in ["/", "/malformed"] {
+        for _ in 0..2 {
+            let res = router.clone().oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), StatusCode::OK, "{uri}");
+            assert_eq!(res.headers().get_all(http::header::DATE).iter().count(), 2, "{uri}: {:?}", res.headers());
+            assert!(!res.headers().contains_key(http::header::AGE), "{uri}: made each time: {:?}", res.headers());
+        }
+    }
+}
