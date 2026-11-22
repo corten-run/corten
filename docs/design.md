@@ -7456,7 +7456,15 @@ rules something out.
     alone 29,428 (29,428 to 29,429) against 29,264 (29,263 to 29,264), +164; a page made and kept
     145,939 (145,939 to 145,940) against 145,868 (145,863 to 145,873), +71, made uncompressed 45,399
     (45,396 to 45,405) against 45,610 (45,609 to 45,618), -211, and made in gzip 625,777 (625,777
-    to 625,778) against 625,781 (625,780 to 625,785). One thread's count does not show what the
+    to 625,778) against 625,781 (625,780 to 625,785). A hit asks whether its client ranks brotli
+    first of the coding already negotiated for it, so it reads a weight only when zstd won and
+    brotli may tie it (`141a63084` against `d8169356a`, this change without it merged with main, and
+    main's `687c75b63`, counted the same way in three rounds, the bodies identical byte for byte
+    to `d8169356a`'s): the browser's hit ran 29,656 (29,654 to 29,656) against 29,663 and 29,507,
+    the hit whose brotli found no room 29,782 (29,780 to 29,782) against 29,788 (29,788 to
+    29,789) and 29,535 (29,535 to 29,536), and gzip alone 29,420 against 29,428 and 29,263: 6 to 8
+    fewer, which does not account for the rest of the difference from main, +149, +247 and +157.
+    One thread's count does not show what the
     two writes cost where several cores answer the same page, which no run here measured. Answers
     whose work this change leaves alike, or adds a few comparisons to, differ by -211 to +254, so
     these counts move with something beside that work; it is the allocator's in part: with
