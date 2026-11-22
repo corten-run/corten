@@ -1,0 +1,3 @@
+- The live benchmark opens Chromium separately for each adapter. A lost browser stays a
+  [reported case failure](https://github.com/corten-run/corten/issues/1900) instead of also
+  failing later adapters before their pages open.

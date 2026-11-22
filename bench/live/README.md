@@ -138,6 +138,13 @@ not standalone production latency/efficiency numbers. Each app container has one
 has a 45-second hard deadline (180 seconds for the larger explicit native-feed fixture),
 individual waits are bounded, startup is bounded, and owned containers are removed
 in `finally`. The local browser runs outside that app budget and is explicitly inventoried.
+Chromium is owned by one adapter at a time: it starts after the app is ready and closes before
+the next adapter. A disconnect remains a case failure with its browser stage, not an app crash
+or a retried success. A cancellation stops the run instead of opening another browser.
+
+The focused lifecycle test in `parity.test.mjs` uses bundled Chromium, the ASP.NET and Express
+browser clients, and one loopback update per client. It deliberately closes the first browser
+and verifies the next adapter's journey independently, without starting the apps or measuring fan-out.
 
 Each final detach closes the real EventSource and waits for the native subscription, writer
 task and queue to reach zero. The independent post-detach write is acknowledged, followed

@@ -104,14 +104,28 @@ export function select(group, requested) {
   return apps;
 }
 
+export async function openAdapterBrowser(chromium, signal) {
+  signal.throwIfAborted();
+  const browser = await chromium.launch({ headless: true, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+  let closing;
+  const close = () => closing ??= browser.close();
+  const cancel = () => { close().catch(() => {}); };
+  signal.addEventListener("abort", cancel, { once: true });
+  if (signal.aborted) cancel();
+  return { browser, async close() {
+    signal.removeEventListener("abort", cancel);
+    await close();
+  } };
+}
+
 export async function browserJourney(browser, base, workload, settings, port = {}, recordRenderer) {
-  const context = await browser.newContext();
-  const deadline = setTimeout(() => { context.close().catch(() => {}); }, workload.eventCount > 24 ? 180000 : 45000);
-  let page;
+  let context, deadline, page, failure;
   let configuration;
   const controls = [];
   const network = [], failures = [], observations = [];
   try {
+    context = await browser.newContext();
+    deadline = setTimeout(() => { context.close().catch(() => {}); }, workload.eventCount > 24 ? 180000 : 45000);
     page = await context.newPage();
     recordRenderer?.(true);
     page.setDefaultTimeout(15000);
@@ -190,11 +204,20 @@ export async function browserJourney(browser, base, workload, settings, port = {
         navigation: performance.getEntriesByType("navigation").map((r) => r.toJSON()),
       }), Boolean(recordRenderer)) };
   } catch (error) {
+    failure = error;
     error.evidence = { configuration, controls, capture: { schema: liveCaptureSchema, contract: liveContracts[settings.group],
       records: page ? await page.evaluate(() => window.liveApp?.records ?? []).catch(() => []) : [] }, network, failures,
-      html: page ? await captureHtml(page, port.wire).catch(() => "") : "" };
+      html: page ? await captureHtml(page, port.wire).catch(() => "") : "",
+      ...(browser.isConnected?.() === false ? { browserFailure: { stage: context ? "journey" : "new-context", disconnected: true } } : {}) };
     throw error;
-  } finally { recordRenderer?.(false); clearTimeout(deadline); await context.close(); }
+  } finally {
+    recordRenderer?.(false); clearTimeout(deadline);
+    try { await context?.close(); }
+    catch (error) {
+      if (!failure) throw error;
+      failure.evidence.contextCloseError = error.message;
+    }
+  }
 }
 
 export function verifyArtifact(artifact, expected) {
@@ -291,16 +314,18 @@ export async function run({ group, out, apps: requested, build = false, round, p
   await writeFile(join(out, "plan.json"), JSON.stringify(plan, null, 2));
   await writeFile(join(out, "source.diff.gz"), gzipSync(diff));
   const cells = [];
-  let browser;
+  const stop = new AbortController(), { signal } = stop;
+  const handlers = ["SIGINT", "SIGTERM", "SIGHUP"].map((name) => [name, () => stop.abort(new Error(`native live runner cancelled (${name})`))]);
+  for (const [name, handler] of handlers) process.on(name, handler);
+  let wroteActorTools = false;
   try {
     const { chromium } = await import("playwright");
-    browser = await chromium.launch({ headless: true });
-    if (isolated) await writeFile(join(out, "host-actor-tools.json"), JSON.stringify(await actorTools(browser)), { flag: "wx" });
     for (const app of apps) {
+      signal.throwIfAborted();
       const port = portFor(app, profile);
       if (!port) continue;
       const name = `parity-live-${randomUUID()}`, context = join(here, "apps", port.directory);
-      let ownedId, actorStart;
+      let ownedId, actorStart, launched;
       const docker = (args) => command("docker", args);
       const cases = [], files = [], qualified = [];
       try {
@@ -309,6 +334,7 @@ export async function run({ group, out, apps: requested, build = false, round, p
           cargo: hash(await readFile(join(root, "Cargo.toml"))), lock: hash(await readFile(join(root, "Cargo.lock"))),
         } : sources(context);
         const sourceHashes = await appSources();
+        signal.throwIfAborted();
         const sourceSha256 = hash(JSON.stringify(sourceHashes));
         const existing = spawnSync("docker", ["image", "inspect", port.image], { encoding: "utf8", timeout: 15000 });
         const existingImage = existing.status === 0 ? JSON.parse(existing.stdout)[0] : undefined;
@@ -318,6 +344,7 @@ export async function run({ group, out, apps: requested, build = false, round, p
         const built = JSON.parse(command("docker", ["image", "inspect", port.image]))[0];
         const imageId = built.Id, imageSourceSha256 = built.Config.Labels?.["bench.live.source-sha256"];
         assert.equal(imageSourceSha256, sourceSha256, "stale/unbound native image: rerun with --build");
+        signal.throwIfAborted();
         ownedId = docker(["run", "-d", "--name", name, "--label", "agent.owner=codex", "--label", `agent.task=${taskLabel}`,
           "--cpus", "1", "--memory", "1g", "--memory-swap", "1g",
           ...(isolated ? ["--cpuset-cpus", liveActorCpus.application] : []), "-p", "127.0.0.1::8080", imageId]);
@@ -330,7 +357,8 @@ export async function run({ group, out, apps: requested, build = false, round, p
         const base = `http://127.0.0.1:${hostPort}`;
         let up = false;
         for (let i = 0; i < 150; i++) {
-          try { const r = await fetch(`${base}/parity/resources`, { signal: AbortSignal.timeout(1000) }); if (r.ok) { up = true; break; } } catch {}
+          signal.throwIfAborted();
+          try { const r = await fetch(`${base}/parity/resources`, { signal: AbortSignal.any([signal, AbortSignal.timeout(1000)]) }); if (r.ok) { up = true; break; } } catch {}
           await sleep(100);
         }
         assert.ok(up, "native app did not start within 15s");
@@ -342,7 +370,15 @@ export async function run({ group, out, apps: requested, build = false, round, p
           processInventory: docker(["top", ownedId, "-eo", "pid,ppid,comm"]), container: {
             nanoCpus: inspect.HostConfig.NanoCpus, memory: inspect.HostConfig.Memory, memorySwap: inspect.HostConfig.MemorySwap,
           } };
+        launched = await openAdapterBrowser(chromium, signal);
+        const { browser } = launched;
+        signal.throwIfAborted();
+        if (isolated && !wroteActorTools) {
+          await writeFile(join(out, "host-actor-tools.json"), JSON.stringify(await actorTools(browser)), { flag: "wx" });
+          wroteActorTools = true;
+        }
         for (const scenario of scenarios(group)) {
+          signal.throwIfAborted();
           const settings = settingsFor(group, scenario, profile), file = `${app}-${scenario}.json.gz`;
           let artifact;
           const actor = beginActorWindow(isolated);
@@ -384,6 +420,7 @@ export async function run({ group, out, apps: requested, build = false, round, p
             return { ...kernelObservation(receipt.stdout), receipt };
           };
           for (const clients of fanoutProfile.clients) {
+            signal.throwIfAborted();
             let a;
             const actor = beginActorWindow(isolated);
             try {
@@ -394,6 +431,7 @@ export async function run({ group, out, apps: requested, build = false, round, p
             } catch (error) {
               measurement = "failed";
               a = { schema: "native-live-fanout-failure/v1", app, group, clients, provenance, qualification: files, error: error.message, ...error.evidence };
+              if (!browser.isConnected()) a.browserFailure = { stage: "fanout", disconnected: true };
               console.error(`${app}/fanout-${clients}: ${error.message}`);
             }
             actor.finish(a);
@@ -411,16 +449,20 @@ export async function run({ group, out, apps: requested, build = false, round, p
         cells.push({ app, case: group === "live-delivery" ? "delivery" : "recovery", implementation: "implemented", parity: "failed", measurement: "not-run", reason: error.message });
       } finally {
         try {
-          if (actorStart !== undefined) {
-            const endedAt = Date.now(), info = inspectOwnedLiveContainer(docker, ownedId);
-            const actor = appActor(info, app, { startedAt: actorStart, endedAt });
-            await writeFile(join(out, `${app}-host-actor.json`), JSON.stringify(actor), { flag: "wx" });
+          try { await launched?.close(); }
+          finally {
+            if (actorStart !== undefined) {
+              const endedAt = Date.now(), info = inspectOwnedLiveContainer(docker, ownedId);
+              const actor = appActor(info, app, { startedAt: actorStart, endedAt });
+              await writeFile(join(out, `${app}-host-actor.json`), JSON.stringify(actor), { flag: "wx" });
+            }
           }
         } finally { if (ownedId) removeOwnedLiveContainer(docker, ownedId); }
       }
     }
+    signal.throwIfAborted();
   } finally {
-    await browser?.close();
+    for (const [name, handler] of handlers) process.off(name, handler);
     const rows = inventory(group, profile).map((entry) => cells.find((c) => c.app === entry.app) ?? {
       app: entry.app, case: group === "live-delivery" ? "delivery" : "recovery", implementation: entry.implementation,
       parity: "not-run", measurement: "not-run", reason: entry.reason,
