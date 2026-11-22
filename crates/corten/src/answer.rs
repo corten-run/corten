@@ -2557,7 +2557,7 @@ impl AllUnstaged for () {}
 
 /// Whether an answer's [`Answer::Inputs`] are those of one that is the same for everyone, whatever
 /// its handler reads: known from the answer's type alone, so a route's watch for a submit key
-/// (`router::Watching`) is chosen with no value at hand.
+/// ([`Made`]) is chosen when the crate compiles.
 #[doc(hidden)]
 pub trait Shares {
     /// The answer is the same for everyone ([`Public`], the only one with [`AnonymousInputs`]).
@@ -2695,6 +2695,13 @@ impl<H: Clone, O> Clone for Endpoint<H, O> {
 /// A JSON route's failure marked as one, which the stages leave as it is.
 #[inline]
 fn marked<O: Answer>(mut res: Response) -> Response {
+    mark::<O>(&mut res);
+    res
+}
+
+/// [`marked`], in place.
+#[inline]
+fn mark<O: Answer>(res: &mut Response) {
     // A constant: an HTML route's check compiles away.
     if matches!(O::FORMAT, Format::Json) && (res.status().is_client_error() || res.status().is_server_error()) {
         res.extensions_mut().insert(Answered);
@@ -2705,7 +2712,54 @@ fn marked<O: Answer>(mut res: Response) -> Response {
     if !O::PAGE && res.extensions().get::<crate::layout::Pending>().is_some() {
         res.extensions_mut().insert(crate::layout::NotAPageAnswer);
     }
-    res
+}
+
+pin_project_lite::pin_project! {
+    /// A route's answer as its handler makes it, [`marked`]. A `Public` one ([`Shares`], a
+    /// constant of the answer's type, so no other route's request does any of this) is watched for
+    /// a form's new submit key drawn in the handler's polls however it was rendered (into JSON or
+    /// text, into a file, or to a string placed in a page as markup) ([`crate::form::KeyWatch`]):
+    /// an answer whose handler drew one is the request's alone ([`crate::cache::Unrepeatable`]),
+    /// so no cache gives it to another visitor and the app does not keep it. A page's render marks
+    /// a key it drew itself; this sees the rest. The answer is marked where it is polled to, and
+    /// the watch is held beside the handler's work, so neither is moved again.
+    pub(crate) struct Made<F, O> {
+        #[pin]
+        made: F,
+        watch: crate::form::KeyWatch,
+        answer: PhantomData<fn() -> O>,
+    }
+}
+
+impl<F: Future<Output = Response>, O: Answer> Future for Made<F, O>
+where
+    O::Inputs: Shares,
+{
+    type Output = Response;
+
+    #[inline]
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Response> {
+        let this = self.project();
+        let shared = <O::Inputs as Shares>::SHARED;
+        let mut polled = if shared { this.watch.poll(this.made, cx) } else { this.made.poll(cx) };
+        if let std::task::Poll::Ready(res) = &mut polled {
+            mark::<O>(res);
+            if shared && this.watch.drew() {
+                drew_key(res);
+            }
+        }
+        polled
+    }
+}
+
+/// Marks an answer whose handler drew a form's new submit key as the request's alone, where the
+/// page's render did not: a second insert into a full map would grow it.
+#[cold]
+#[inline(never)]
+fn drew_key(res: &mut Response) {
+    if res.extensions().get::<crate::cache::Unrepeatable>().is_none() {
+        res.extensions_mut().insert(crate::cache::Unrepeatable);
+    }
 }
 
 impl<H, T, S, O> Handler<T, S> for Endpoint<H, O>
@@ -2717,7 +2771,6 @@ where
     T: 'static,
 {
     const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
-    const SHARED: bool = <O::Inputs as Shares>::SHARED;
 
     fn keeps(&self) -> Option<crate::kept::Shape> {
         if !(self.shared && self.keyed) {
@@ -2762,7 +2815,11 @@ where
                 futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>),
             )) as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>)
         } else {
-            futures_util::future::Either::Left(futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>))
+            futures_util::future::Either::Left(Made::<_, O> {
+                made: self.handler.call(req, state),
+                watch: Default::default(),
+                answer: PhantomData,
+            })
         }
     }
 }

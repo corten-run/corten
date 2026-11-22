@@ -72,50 +72,6 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
     }
 }
 
-/// A handler whose answer is the same for everyone (`Public`), watched ([`Marking`]). Only such
-/// a route is wrapped, which its types say ([`Handler::SHARED`]), so no other route's request
-/// pays for it.
-struct Watching<H, T, S>(Handled<H, T, S>);
-
-impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint for Watching<H, T, S> {
-    #[inline]
-    fn call(&self, req: Request) -> Answering {
-        Box::pin(Marking { answer: self.0.handler.clone().call(req, self.0.state.clone()), watch: Default::default() })
-    }
-
-    fn action_patches(&self) -> bool {
-        H::ACTION_PATCHES
-    }
-}
-
-pin_project_lite::pin_project! {
-    /// A `Public` route's answer, watched for a form's new submit key drawn in the handler's
-    /// polls however it was rendered (into JSON or text, into a file, or to a string placed in a
-    /// page as markup) ([`crate::form::KeyWatch`]): one that holds a key is the request's alone
-    /// (`cache::Unrepeatable`), so no cache gives it to another visitor and the app does not keep
-    /// it. A page's render marks a key it drew itself; this sees the rest.
-    struct Marking<F> {
-        #[pin]
-        answer: F,
-        watch: crate::form::KeyWatch,
-    }
-}
-
-impl<F: Future<Output = Response>> Future for Marking<F> {
-    type Output = Response;
-
-    #[inline]
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Response> {
-        let this = self.project();
-        let Poll::Ready(mut res) = this.watch.poll(this.answer, cx) else { return Poll::Pending };
-        // A page's render marks one it drew, and a second insert into a full map grows it.
-        if this.watch.drew() && res.extensions().get::<crate::cache::Unrepeatable>().is_none() {
-            res.extensions_mut().insert(crate::cache::Unrepeatable);
-        }
-        Poll::Ready(res)
-    }
-}
-
 /// An answer that is a status alone: the router's `404` and `405`.
 struct Status(StatusCode);
 
@@ -195,8 +151,8 @@ impl Endpoint for Keeping {
                 None => res,
             };
             // An answer with a form's new submit key is this request's alone: marked by the
-            // render that drew it (a page's, the layout's reads') or by the watch around the
-            // handler (`Marking`), which sees one rendered any other way.
+            // render that drew it (a page's, the layout's reads') or by the watch every `Public`
+            // route's handler runs under (`answer::Made`), which sees one rendered any other way.
             if res.extensions().get::<crate::cache::Unrepeatable>().is_some() {
                 return res;
             }
@@ -338,10 +294,7 @@ impl<S: Clone + Send + Sync + 'static> Slot<S> {
         // Known when the route is made, so no other route's requests ask.
         let keeps = handler.keeps();
         Slot::Unbound(Arc::new(move |state| {
-            let handled = Handled { handler: handler.clone(), state, types: PhantomData };
-            // Known from the route's types, so a route that is not `Public` has no watched form
-            // built at all, and its handler's call is made in one place.
-            let handled: Route = if H::SHARED { Arc::new(Watching(handled)) } else { Arc::new(handled) };
+            let handled: Route = Arc::new(Handled { handler: handler.clone(), state, types: PhantomData });
             match keeps {
                 Some(shape) => {
                     let unkept = (shape == crate::kept::Shape::Body).then(Default::default);

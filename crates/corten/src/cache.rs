@@ -500,7 +500,7 @@ static TAG_KEY: std::sync::LazyLock<std::hash::RandomState> = std::sync::LazyLoc
 /// visitor or reuse it unasked ([`settle`]), and the app does not keep it ([`crate::kept`]).
 /// The render that draws the key sets it on a page, a patch or the layout's reads, and the watch
 /// around a `Public` route's handler sets it on any answer whose handler drew one, rendered to a
-/// string included (`router::Watching`).
+/// string included (`answer::Made`).
 #[derive(Clone, Copy)]
 pub(crate) struct Unrepeatable;
 
