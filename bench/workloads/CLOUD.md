@@ -273,6 +273,16 @@ If native validation finished but sealing or later collection failed, raw
 exit 2 permits custody only. The collector keeps both archives, leaves the host
 in place and returns 3. It does not create a retirement intent.
 
+On Windows, after SSH acknowledges the bootstrap seal, the controller can
+briefly retry a local rename that reports `EPERM`. It rechecks the same staged
+file, canonical state and owner locks before retrying. It never repeats SSH or
+uses an abandoned temporary file, and stops on cancellation or deadline.
+If the monitor already settled with a terminal receipt, the controller can
+record it from the unchanged canonical ledger. A later collection still
+requires the normal closure, lease and remote checks. If the filesystem also
+refuses the final state replacement, the staged files and owner locks stay in
+place and ordinary collection can still refuse. Do not promote either stage.
+
 Use the per-child command above if an invalid monitor left locks behind. The
 foreground controller writes the invalid status without reusing an interrupted
 state write's temporary file. If the bootstrap seal completed just before that
@@ -283,9 +293,12 @@ local stream closure, lease expiry and an absent original owner PID. It uses
 the separate stream recovery lock and checks the registered boot and exact
 started unit. Read-only fleet inspection can verify a saved retirement behind
 those retained child locks, but not while their owner or a recovery collector
-may still be active. An unchanged root batch lock with a dead owner is reported
-as retained, not as changed evidence. A live, unrecognized or changing root
-lock is busy. Inspection never clears a lock or makes a locked fleet complete.
+may still be active. A root batch lock whose owner is gone is reported as
+retained, not as changed evidence. On Windows, reports can also replay when
+the OS proves the process now using that PID started after the unchanged lock
+was written. This does not authorize admission, collection or deletion. A
+live, unrecognized or changing root lock is busy. Inspection never clears a
+lock or makes a locked fleet complete.
 Live or uncertain
 custody is preserved. The shared failed-native procedure below checks the
 download, rehashes the remote data, renews the idle-host proof and records a
@@ -481,18 +494,24 @@ node bench/workloads/fleet.mjs NEW_ROUND --continuation-root ABSOLUTE_ROOT --gro
 
 The first command is read-only and providerless (`0` all groups verified, `1`
 incomplete, `2` invalid). Its `eligibleToRun` is a local selection, not provider
-availability or authorization. The remaining commands are the normal official
-prepare, exact preview and approved launch for one complete group. Prepare reads
-provider placement but does not allocate. The selected group runs the normal
+availability or authorization. You do not have to run the full report before
+starting the next group. Prepare, preview and launch check whether the **selected
+group** can run and whether any existing host conflicts with that launch. A
+saved result keeps its group off the launch list; it does not certify the
+result for publication. For example, starting marketplace does not require
+reopening the catalog page's results archive. Run the full report before
+publishing: it checks each group's evidence at the commit it actually measured.
+
+Prepare reads provider placement but does not allocate. The selected group runs the normal
 staged first-host checks, native phases and terminal monitor. For JSON that
 includes its prepare and timing phases and the independently reviewed audit
 between them. There is no extra setup host and no `--admit-remaining` action.
 The continuation does not grant approval; the existing exact merged-source,
 native readiness, independent review and operator approval requirements apply.
 
-If independent detach refuses before writing intent, `fleet-operation-failed`
-can name the failing stage: `continuation-replay` (including custody and
-eligibility), `initial-plan` or `locked-plan` (including exact approval checks),
+If prepare or detach refuses before writing intent, `fleet-operation-failed`
+can name the failing stage: `continuation-admission` (including custody and
+eligibility), `prepare-reservation`, `initial-plan` or `locked-plan` (including exact approval checks),
 or `final-pre-intent-recheck`. These labels identify the check, not its cause or
 whether locks were released. Placement keeps its separate
 `fleet-placement-preflight-failed` diagnostic. Inspect saved intent and custody
@@ -698,6 +717,23 @@ commit must descend from that source and pass the existing fresh merged-main
 proof. Preview and exact approval bind both source identities, exact reservation
 bytes, original evidence hashes, physical state root and fixed custody roots.
 This exception does not permit a source override for collection, audit or launch.
+
+An independent group can also fail after the wrapper invokes native entry but
+before it saves a campaign plan. In this case ordinary collection preserves the
+wrapper archive; it cannot produce a benchmark result. Use a separate
+`--retire-failed-native --print-approval` from a clean, merged descendant. The
+preview must bind the consumed launch intent, reservation, launch key, registered
+boot, original archive and extraction, and the output roots for the measured
+group. The measured registry and remote-job definitions must still match.
+
+This path requires a revoked monitor with a settled local owner, wrapper exit
+2, an empty archived campaign directory, and the final failure line from the
+measured job's native-entry command. An empty directory **alone** is not proof
+that the application wrote nothing. Before retiring the exact host, the
+controller checks the unit is idle, saves the campaign and native output roots
+(including evidence of absence), verifies the local copies, and checks the
+host and roots again. A changed or live host is retained. Neither the wrapper
+archive nor the later capture qualifies the group or supplies timing results.
 
 The shared `cloud-retirement.mjs:failedNativePolicy` allowlist also admits only the
 exact `catalog-page` attempt measured at

@@ -1,5 +1,6 @@
 // Read-only fleet inventory. Receipts are diagnostics, never evidence authority.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -9,7 +10,8 @@ import { livePeerLease, streamRecoveryReady } from "./cloud-control-stream.mjs";
 import { digest, fileHash, physical, regular, resolveStateRoot, treeHash, verifyArchiveTree } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { localCompiler, localCompilerMissing } from "./cloud-validation-snapshot.mjs";
-import { retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+import { readRetainedInvalidLocks, retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyFailedNativeRetirement,
+  verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function fleetRoot(path, repo) {
@@ -23,19 +25,102 @@ export function fleetRoot(path, repo) {
   return root;
 }
 export function present(path) { return lstatSync(path, { throwIfNoEntry: false }) !== undefined; }
+export function fleetBatchLock(root) {
+  const path = join(root, ".fleet-operation.lock");
+  return present(path) ? regular(path, 1024) : null;
+}
+function batchLock(bytes) {
+  const { pid, approvalSha256, ...rest } = JSON.parse(bytes);
+  assert.deepEqual(rest, {});
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+  full(approvalSha256, /[a-f0-9]{64}/, "fleet lock approval");
+  return { pid, approvalSha256 };
+}
 // For inspection only. A dead original batch owner does not unlock the fleet.
 export function fleetLockSnapshot(root) {
-  const path = join(root, ".fleet-operation.lock");
   try {
-    if (!present(path)) return null;
-    const bytes = regular(path, 1024), { pid, approvalSha256, ...rest } = JSON.parse(bytes);
-    assert.deepEqual(rest, {});
-    assert.ok(Number.isSafeInteger(pid) && pid > 0);
-    full(approvalSha256, /[a-f0-9]{64}/, "fleet lock approval");
+    const bytes = fleetBatchLock(root);
+    if (!bytes) return null;
+    const { pid } = batchLock(bytes);
     try { process.kill(pid, 0); }
     catch (error) { if (error.code === "ESRCH") return digest(bytes); }
   } catch { /* Unreadable, foreign and prepare locks are not settled batch locks. */ }
   return "busy";
+}
+
+export function windowsProcessStart(pid) {
+  const root = process.env.SystemRoot;
+  if (process.platform !== "win32" || !root || !/^[a-z]:[\\/]/i.test(root)
+      || !Number.isSafeInteger(pid) || pid <= 0 || pid > 0x7fffffff) return;
+  const result = spawnSync(join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+    ["-NoProfile", "-NonInteractive", "-Command",
+      `$ErrorActionPreference = 'Stop'; ([DateTimeOffset]([Diagnostics.Process]::GetProcessById(${pid}).StartTime)).ToUnixTimeMilliseconds()`],
+    { windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 5000, maxBuffer: 4096 });
+  if (!result.error && result.status === 0 && !result.stderr && /^[1-9]\d{0,14}$/.test(result.stdout.trim())) return Number(result.stdout.trim());
+}
+
+function lockEvidence(path) {
+  const meta = () => lstatSync(path, { bigint: true });
+  const identity = (s) => [s.dev, s.ino, s.nlink, s.size, s.birthtimeNs, s.mtimeNs, s.ctimeNs];
+  const before = meta(), bytes = regular(path, 1024), stamp = identity(before);
+  assert.deepEqual(identity(meta()), stamp, "lock changed during read");
+  return { bytes, stamp, sha256: digest(bytes), at: Math.max(...[before.birthtimeMs, before.mtimeMs, before.ctimeMs].map(Number)),
+    dated: before.birthtimeMs > 0n && before.mtimeMs > 0n && before.ctimeMs > 0n };
+}
+
+function stillSame(first, last) {
+  return first.sha256 === last.sha256 && first.stamp.every((v, i) => v === last.stamp[i]);
+}
+
+// This proof is only for reports, never for acquiring or releasing custody.
+function reportOwner(pid, locks, processStart, recordedAt = 0) {
+  try { process.kill(pid, 0); }
+  catch (error) { return error.code === "ESRCH" ? "absent" : "busy"; }
+  if (!locks.every((lock) => lock.dated)) return "busy";
+  const started = processStart(pid);
+  return Number.isSafeInteger(started) && started <= Date.now()
+    && started > Math.max(recordedAt, ...locks.map((lock) => lock.at)) ? "reused" : "busy";
+}
+
+export function reportBatch(fleet, processStart = windowsProcessStart) {
+  const path = join(fleet.root, ".fleet-operation.lock");
+  try {
+    if (!present(path)) return null;
+    const lock = lockEvidence(path), { pid, approvalSha256 } = batchLock(lock.bytes);
+    const owner = reportOwner(pid, [lock], processStart);
+    if (owner === "busy") return "busy";
+    // A reused PID does not make a foreign approval a historical launch.
+    if (owner === "reused") {
+      const launch = readLaunchIntent(fleet);
+      // The legacy reader binds a specific sibling; the batch hash covers the entire intent.
+      if (launch.approvalSha256 !== approvalSha256)
+        assert.equal(readRemainingIntent(fleet, fleet.manifest.jobs[1]?.group).approvalSha256, approvalSha256, "foreign fleet lock approval");
+    }
+    return stillSame(lock, lockEvidence(path)) ? lock : "busy";
+  } catch { return "busy"; }
+}
+
+export function sameReportBatch(first, last) {
+  if (first === null || first === "busy" || last === null || last === "busy") return first === last;
+  return stillSame(first, last);
+}
+
+function reportChild(local, state, processStart) {
+  const locks = [];
+  const { pid, at } = readRetainedInvalidLocks(local, state, (path) => {
+    const lock = lockEvidence(path);
+    locks.push({ ...lock, path });
+    return lock.bytes;
+  });
+  const owner = reportOwner(pid, locks, processStart, Date.parse(at));
+  if (owner === "busy" || owner === "reused" && !locks.every((lock) => lock.at <= Date.parse(state.destroyedAt))) return;
+  return locks;
+}
+
+function sameChildLocks(local, locks) {
+  try {
+    return !present(join(local, "stream-recovery.lock")) && locks.every((lock) => stillSame(lock, lockEvidence(lock.path)));
+  } catch { return false; }
 }
 
 export function readFleet(root, round, { priorSelection = false } = {}) {
@@ -222,13 +307,27 @@ export function recheckCollectedGroup(fleet, snapshot) {
   const { group, ...hashes } = snapshot;
   assert.deepEqual(evidenceSnapshot(job), hashes, "group-evidence-changed");
 }
-export function recheckContinuationProofs(proofs) {
-  assert.ok(Array.isArray(proofs) && proofs.length <= selection().groups.length);
-  for (const { root, round, manifestSha256, ...snapshot } of proofs) {
-    const fleet = readFleet(root, round, { priorSelection: true });
+// Launch custody is ordered by the exact index, separate from replay evidence.
+// In particular the worker must see a newly acquired staged batch lock even
+// after the independent parent has consumed its own launch intent.
+export function recheckIndexedLaunchCustody(root, indexSha256, custody) {
+  const bytes = continuationIndex(root);
+  assert.equal(digest(bytes), indexSha256, "continuation index changed");
+  const entries = JSON.parse(bytes);
+  assert.ok(Array.isArray(entries) && entries.length <= 64 && Array.isArray(custody) && entries.length === custody.length,
+    "indexed launch custody must cover the continuation index");
+  for (const [i, entry] of entries.entries()) {
+    const { root: saved, manifestSha256, lock, launch, remaining, requireDeadOwner } = custody[i];
+    const fleet = readFleet(fleetRoot(entry.root), entry.round, { priorSelection: true });
+    assert.equal(fleet.root, saved, "continuation source root changed");
+    assert.ok(!fleet.manifest.single && fleet.manifest.commit === entry.commit);
     assert.equal(fleet.manifestSha256, manifestSha256, "continuation manifest changed");
-    assert.notEqual(fleetLockSnapshot(root), "busy", "continuation source busy");
-    recheckCollectedGroup(fleet, snapshot);
+    if (lock !== null) full(lock, /[a-f0-9]{64}/, "indexed fleet lock digest");
+    const batch = requireDeadOwner ? undefined : fleetBatchLock(saved);
+    assert.equal(requireDeadOwner ? fleetLockSnapshot(saved) : batch && digest(batch), lock, "continuation source lock changed");
+    const intent = (file, read) => stagedFleet(fleet.manifest) && present(join(saved, file)) ? read(fleet).sha256 : undefined;
+    assert.equal(intent("launch-intent.json", readLaunchIntent), launch, "historical launch intent changed");
+    assert.equal(intent("remaining-intent.json", readRemainingIntent), remaining, "historical remaining intent changed");
   }
 }
 export async function verifyCollectedGroup(fleet, group, { inspect, start, details, bindArchive, interrupted = () => false } = {}) {
@@ -269,9 +368,10 @@ export async function verifyCollectedGroup(fleet, group, { inspect, start, detai
   return { evidenceMode: inspect ? "synthetic-inspection" : "native-replay", row, snapshot };
 }
 
-// inspect and compiler are in-process synthetic TEST seams only. The CLI never accepts code,
+// inspect, compiler and processStart are in-process TEST seams only. The CLI never accepts code,
 // module paths, reports or commands from JSON. Default replay imports fixed code.
-export async function verifyFleet({ root, round, commit }, { inspect, start, details, bindArchive, priorSelection, interrupted = () => false, compiler = localCompiler } = {}) {
+export async function verifyFleet({ root, round, commit }, { inspect, start, details, bindArchive, priorSelection, interrupted = () => false,
+  compiler = localCompiler, processStart = windowsProcessStart, retainCheck } = {}) {
   const base = { schema: "benchmark-group-fleet-inspection/v1", scope: "intrinsic-evidence", status: "incomplete",
     evidenceMode: inspect ? "synthetic-inspection" : "native-replay", nativeReadiness: false,
     publishableBaseline: false, comparisonScope: "within-group-host-only" };
@@ -284,7 +384,7 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
   } catch { return { ...base, error: "fleet-invalid", groups: [] }; }
   const result = { ...base, round, commit, fleetSha256: fleet.manifest.fleetSha256,
     manifestSha256: fleet.manifestSha256, selection: fleet.manifest.selection, groups: [] };
-  const lock = fleetLockSnapshot(fleet.root);
+  const lock = reportBatch(fleet, processStart);
   const busy = () => ({ ...result, fleetLock: "busy", error: "fleet-operation-busy", groups: [] });
   if (lock === "busy") return busy();
   if (lock !== null) result.fleetLock = "retained";
@@ -315,17 +415,24 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
       const s = job.state;
       // Read-only exception: a fully verified retirement may keep the original
       // invalid monitor locks. Do not make that child available for fleet work.
-      const safelyRetained = () => !present(join(job.local, "stream-recovery.lock")) && !retainedInvalidOwner(job.local, s);
-      const retained = job.outcome === "busy" && s.status === "retired" && s.retirement.kind === "native-failed"
-        && s.control?.monitor?.phase === "invalid" && s.launchHostKeySha256 !== undefined && safelyRetained();
+      const noRecovery = () => !present(join(job.local, "stream-recovery.lock"));
+      const retainedCandidate = job.outcome === "busy" && s.status === "retired" && s.retirement.kind === "native-failed"
+        && s.control?.monitor?.phase === "invalid" && s.launchHostKeySha256 !== undefined && noRecovery();
+      const historicalLocks = retainedCandidate && s.destroyedAt ? reportChild(job.local, s, processStart) : undefined;
+      const retained = retainedCandidate && (s.destroyedAt ? !!historicalLocks : !retainedInvalidOwner(job.local, s));
       if (job.outcome !== "available" && !retained) { add({ group, outcome: job.outcome }); continue; }
       if (s.status === "retired") {
         if (s.retirement.kind === "native-failed") {
           if (present(join(job.local, "stream-recovery.lock"))) { add({ group, outcome: "busy" }); continue; }
-          verifyFailedNativeRetirement(job.local, s);
+          const historicalCheck = historicalLocks && (() => {
+            assert.ok(sameChildLocks(job.local, historicalLocks), "historical child locks changed");
+          });
+          if (historicalCheck) verifyHistoricalFailedNativeRetirement(job.local, s, historicalCheck);
+          else verifyFailedNativeRetirement(job.local, s);
           assert.equal(digest(regular(join(job.local, "state.json"), 1024 * 1024)), job.stateSha256, "retirement changed during verification");
-          if (retained) assert.ok(safelyRetained(), "retained lock owner changed during verification");
-          retirements.push({ group, index: result.groups.length, stateSha256: job.stateSha256, retained });
+          if (historicalCheck) historicalCheck();
+          else if (retained) assert.ok(noRecovery() && !retainedInvalidOwner(job.local, s), "retained lock owner changed during verification");
+          retirements.push({ group, index: result.groups.length, stateSha256: job.stateSha256, retained, historicalLocks, historicalCheck });
           add({ group, outcome: s.destroyedAt ? "native-failed-retired" : "cleanup-pending", id: s.id }); continue;
         }
         const setup = s.retirement.kind === "setup-failed";
@@ -362,19 +469,21 @@ export async function verifyFleet({ root, round, commit }, { inspect, start, det
   } catch { evidenceError = "fleet-evidence-changed-or-duplicated"; }
   // A later sibling's replay may have overlapped failed-host recovery. Rebind
   // the status to the verified state and receipt, not the earlier display row.
-  for (const { group, index, stateSha256, retained } of retirements) {
+  for (const { group, index, stateSha256, retained, historicalLocks, historicalCheck } of retirements) {
     try {
       const job = readGroup(fleet, group);
       if (present(join(job.local, "stream-recovery.lock"))
-          || (job.outcome === "busy" && (!retained || retainedInvalidOwner(job.local, job.state)))) {
+          || (job.outcome === "busy" && (!retained || (historicalLocks
+            ? !sameChildLocks(job.local, historicalLocks) : retainedInvalidOwner(job.local, job.state))))) {
         result.groups[index] = { group, outcome: "busy" }; continue;
       }
       assert.equal(job.outcome, retained ? "busy" : "available");
       assert.equal(job.stateSha256, stateSha256);
       assert.equal(digest(regular(join(job.local, "failed-native-host.json"))), job.state.retirement.evidenceSha256);
+      if (historicalCheck) retainCheck?.(historicalCheck);
     } catch { result.groups[index] = { group, outcome: "uncertain", error: "group-retirement-changed" }; }
   }
-  if (fleetLockSnapshot(fleet.root) !== lock) return { ...busy(), ...(evidenceError ? { evidenceError } : {}) };
+  if (!sameReportBatch(lock, reportBatch(fleet, processStart))) return { ...busy(), ...(evidenceError ? { evidenceError } : {}) };
   if (evidenceError) return { ...result, error: evidenceError };
   if (!fleet.manifest.single && lock === null && result.groups.every((g) => g.outcome === "verified")) result.status = "verified";
   return result;

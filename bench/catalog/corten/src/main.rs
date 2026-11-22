@@ -25,6 +25,11 @@ mod routes {
     #[route("/files/large.png", get = large)]
     pub struct Large;
 
+    #[route("/kept/{id}", get = kept)]
+    pub struct Kept<'a> {
+        pub id: &'a str,
+    }
+
     #[route("/catalog/{id}", get = show)]
     pub struct Catalog<'a> {
         pub id: &'a str,
@@ -64,6 +69,16 @@ async fn home(req: Req) -> HtmlResult {
 async fn show(req: Req, State(source): State<Source>, Params(at): Params<routes::Catalog<'_>>) -> HtmlResult {
     let record = source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?;
     req.page(views::document(&req, &record.title, views::record(&record, at.query.field.as_deref().unwrap_or(""))))
+}
+
+/// The record's page, the same for everyone for a minute.
+async fn kept(req: Req, State(source): State<Source>, Params(at): Params<routes::Kept<'_>>) -> corten::Public<HtmlResult> {
+    let page = async {
+        let record = source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?;
+        req.page(views::document(&req, &record.title, views::record(&record, "")))
+    }
+    .await;
+    corten::Public::new(std::time::Duration::from_secs(60), page)
 }
 
 /// A sitemap of 500 URLs, written for each request.
