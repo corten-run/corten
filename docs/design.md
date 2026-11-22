@@ -7977,7 +7977,7 @@ rules something out.
     miss, among them one kept with room in memory the store has used before (room made by a
     write or by a page's lifetime ending), and the time of requests that miss together against
     main's, on a quiet host or with a real source; this change merged with main's counts by
-    path made late (`250e4b81c`), counted only before that merge; how often an app's first
+    path made late (`250e4b81c`) and its later mains, counted in instructions and not in cycles; how often an app's first
     requests for a URL in a full store meet
     another, and what the second run of its handler costs a source then; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
