@@ -199,10 +199,11 @@ test("continuation prepare cannot supersede physical signs of an attempt", async
     ["child", (p) => mkdirSync(join(p.old, p.group)), /unresolved custody/],
     ...["creating", "running"].map((status) => [status, (p) => {
       const fleet = readFleet(p.old, "r21").manifest, local = join(p.old, p.group, "groups-r21");
+      const at = "2026-11-20T12:00:00.000Z";
       mkdirSync(local, { recursive: true });
       writeFileSync(join(local, "state.json"), JSON.stringify({
-        ...reservation({ round: fleet.round, commit, token: fleet.jobs[0].token, group: p.group, fleet }),
-        provider: fleet.provider, fullGroupQualified: false, status, createIntentAt: "2026-11-20T12:00:00Z",
+        ...reservation({ round: fleet.round, commit, token: fleet.jobs[0].token, group: p.group, fleet }, at),
+        provider: fleet.provider, fullGroupQualified: false, status, createIntentAt: at,
         ...(status === "running" ? { id: "123", ip: "192.0.2.10" } : {}),
       }));
     }, /unresolved custody/]),
