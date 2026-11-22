@@ -958,6 +958,28 @@ fewer), and the rest is axum's route lookup by id and its futures around the sta
 allocator every request in process costs 1,791 to 4,135 less. An unstaged route's checks have
 since moved from its handler to the router, which runs them around it, costing 71 to 86 more ([below](#a-route-outside-the-stages)).
 
+A text or bytes answer (`String`, `&'static str`, `Bytes`, `Media`) used to make its header map
+with its `Content-Type`, with room for six headers, and the security headers grew it on every
+request. It now starts with room for the twelve the app can add, as a page's and JSON's maps
+already did, and `Vary: Accept-Encoding` is added through the map's entry, where it was joined
+with the answer's other `Vary` lines into a string first. Counted with `crates/corten/tests/router_cost.rs`
+(callgrind, release build, in-process `oneshot`, the difference between 1,200 and 200 requests
+over 1,000, three runs each, which differed by at most 1; before at `9201e6dd0`, after at
+`6880099e4`):
+
+| Request | Before, glibc | After, glibc | Before, jemalloc | After, jemalloc |
+|---|---|---|---|---|
+| text from a route with a parameter | 13,042 | 12,575 | 11,472 | 10,651 |
+| text answering a `POST` | 13,736 | 13,103 | 11,851 | 11,036 |
+| unknown URL, HTML 404 page | 17,684 | 17,656 | 15,325 | 15,297 |
+
+Under load the server's user and kernel cycles per request fell by 2.0% on `GET`s alone and 1.9%
+with `POST`s among them (medians of eight alternating pairs at the same two commits; 24 cores
+serving 4,096 keep-alive connections from a load generator on the host's other 24), nearly all
+of it user time. A text answer from an [`unstaged`](#a-route-outside-the-stages) route gets the
+same room and none of those headers, so it costs more than it did (counted the same way): 121
+instructions with jemalloc and 394 with glibc, whose thread cache does not hold a block that large.
+
 ## Your own middleware
 
 Every request goes through the same stages in the same order, outside in, each needing the one
