@@ -7525,10 +7525,11 @@ rules something out.
     against 206,249 and 198,337 against 199,548, fewer by 1,672 to 1,673 and 1,202 to 1,220. The
     allocator was called 49 times a request against 52 under both, `memcpy` 86 times against 88,
     and the minor page faults fell from 1.641 to 1.618 a request under glibc and from 1.884 to
-    1.877 under jemalloc. A kept page took 60,645 instructions against 60,640 under glibc, and
-    under jemalloc 54,678 (54,677 to 54,684) against 54,635 (54,596 to 54,643), where main's
-    runs differ by more than the two builds, so what a kept page of 5,208 bytes costs under
-    jemalloc is not resolved. For the larger page it took 61,020 against 61,026 under glibc and,
+    1.877 under jemalloc. A kept page took 60,645 instructions (60,644 to 60,646) against 60,640
+    (60,639 to 60,645) under glibc, 0 to 6 more in each pair, and under jemalloc 54,678 (54,677
+    to 54,684) against 54,635 (54,596 to 54,643); under both, main's runs differ by more than
+    the two builds, so what a kept page of 5,208 bytes costs is not resolved under either
+    allocator. For the larger page it took 61,020 against 61,026 under glibc and,
     under jemalloc, 54,872 (54,867 to 54,875) against 54,830 (54,825 to 54,832), 35 to 50 more in
     each pair; in the round before (`eb20c55bb` against `92a745a63`) that page's runs under
     jemalloc ranged from 54,809 to 54,861, more than the 40 between the builds, and its cost was

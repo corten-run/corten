@@ -1711,7 +1711,8 @@ mod tests {
     }
 
     /// Two URLs with the same hash share a place in the table and are told apart by the URL each
-    /// copy holds: neither is found for the other, takes the other's place or goes with it.
+    /// copy holds: neither is found for the other, takes the other's place or goes with it, and
+    /// the copies one URL keeps are counted, and give way, among its own.
     #[test]
     fn urls_that_share_a_hash_are_told_apart() {
         let answers = Answers::new(1 << 20).expect("a bound");
@@ -1730,6 +1731,28 @@ mod tests {
         assert!(answers.found(7, "/a", None, None, false).is_none());
         assert_eq!(answers.found(7, "/b", None, None, false).expect("still kept").0.body.len(), 30);
         assert_eq!(answers.bytes(), 30 + OVERHEAD);
+
+        // `/b`, never read, then a copy of `/a` for as many hosts as a URL keeps: none is in
+        // `/b`'s way. One more `/a` takes an `/a`'s place, not the unread `/b`'s.
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let keep = |at: &str, host, body| {
+            let make = entry(&answers, at, host, 60, body);
+            answers.keep(move |place| Entry { hash: 7, ..make(place) })
+        };
+        let hosts: Vec<&'static str> = (0..=COPIES).map(|n| &*Box::leak(format!("h{n}.example").into_boxed_str())).collect();
+        keep("/b", None, 20);
+        for &host in &hosts[..COPIES] {
+            keep("/a", Some(host), 10);
+        }
+        assert_eq!(answers.bytes(), 20 + 10 * COPIES + OVERHEAD * (COPIES + 1), "no copy went");
+        keep("/a", Some(hosts[COPIES]), 10);
+        assert_eq!(answers.bytes(), 20 + 10 * COPIES + OVERHEAD * (COPIES + 1), "one went for the new one");
+        assert_eq!(answers.found(7, "/b", None, None, false).expect("still kept").0.body.len(), 20);
+        let host = |n: usize| HeaderValue::from_static(hosts[n]);
+        assert!(answers.found(7, "/a", Some(&host(0)), None, false).is_none(), "the oldest /a not read");
+        for n in 1..=COPIES {
+            assert!(answers.found(7, "/a", Some(&host(n)), None, false).is_some(), "{}", hosts[n]);
+        }
     }
 
     /// A key reads back the URL, `Host` and `Accept-Language` it was made of, each apart, in one
