@@ -542,8 +542,9 @@ always reports `readyForLoad: false`: no standalone formatting test certifies a 
 
 If the Next.js image fails to build, check `build-nextjs.log` first. Its locked
 `npm ci` step logs package fetches and npm warnings/errors, including extraction
-failures, without a full npm trace. Each fetch attempt is limited to 60 seconds.
-The install gets TERM after 10 minutes (KILL after another 10 seconds if needed).
+failures, without a full npm trace. The step sets npm's `fetch-timeout` to 60
+seconds; the deadline for the whole install is 10 minutes (TERM, then KILL after
+another 10 seconds if needed).
 An install that ultimately fails is a setup failure, not a timing result. This
 step is included when `bench/fullstack/docker-rebuild.mjs` times a cold image
 build. The separate dependency timing in `bench/fullstack/builds.mjs` is unchanged.
