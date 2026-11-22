@@ -263,9 +263,10 @@ fn handle(route: Option<crate::router::Route>, signal: &crate::Signal, req: Requ
     // A whole document in an app with layout reads: the route's page is filled before the app's
     // middleware sees it.
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
-    let answer = match route {
-        Some(route) => Either::Left(route.answer(req, signal)),
-        None => Either::Right(crate::router::Unrouted::new(IntoResponse::into_response(http::StatusCode::NOT_FOUND), signal)),
+    // Boxed either way: a route's answer already is, and the rare 404 keeps the future a pointer.
+    let answer: crate::router::Answering = match route {
+        Some(route) => route.answer(req, signal),
+        None => Box::pin(crate::router::Unrouted::new(IntoResponse::into_response(http::StatusCode::NOT_FOUND), signal)),
     };
     match here {
         None => Either::Left(answer),
