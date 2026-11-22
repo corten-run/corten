@@ -13,7 +13,7 @@ import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-sealed-collection.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
-import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, launchHostKey, setupEvidence,
+import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
   settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
   verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
@@ -30,7 +30,7 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit,
-  unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission,
+  authorizeRecovery = authorizeAudit, unusedBootstrapApproval, approvedFleetSha256, remainingAdmission = false, remainingPlacement, checkFleetAdmission,
   renameBootstrapSeal = process.platform === "win32" ? renameSync : undefined, monotonicNow = () => performance.now() } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
   if (mergedHead !== "origin/main") full(mergedHead, /[a-f0-9]{40}/, "exact observed main commit required");
@@ -51,6 +51,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   mkdirSync(requested, { recursive: true, mode: 0o700 });
   const base = realpathSync(requested); physical(base);
   const local = join(base, `groups-${options.round}`), statePath = join(local, "state.json"), archive = join(local, "results.tgz");
+  const recoveryLock = "stream-recovery.lock", groupedPreplan = recoveryApproval?.policy === "grouped-preplan-failure-custody-only";
   let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor, verifyBootstrapPublication;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
@@ -229,7 +230,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   }
   const transport = async (binary, args, timeout, allowFail) => {
     await own(); assert.ok(state.id && state.ip, "bound host required");
-    const mixedRecovery = state.group === "mixed-production" && (options.cancelMixedWait || options.retireFailedNative);
+    const mixedRecovery = state.group === "mixed-production" && (options.cancelMixedWait || options.retireFailedNative && !groupedPreplan);
     const pinnedKey = mixedRecovery ? mixedWait.knownHostsSha256 : options.r21MeasuredCheckout ? recoveryApproval.knownHostsSha256 : undefined;
     if (pinnedKey) assert.equal(fileHash(join(local, "known_hosts")), pinnedKey, "native host keys changed");
     if (existsSync(join(local, "known_hosts"))) regular(join(local, "known_hosts"), 1024 * 1024);
@@ -389,13 +390,17 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       await sleep(Math.min(30000, remaining()));
     }
   }
-  async function locked(fn, recovery = false, name = recovery ? "stream-recovery.lock" : "operation.lock") {
+  async function locked(fn, recovery = false, name = recovery ? recoveryLock : "operation.lock") {
     boundary(); const lock = join(local, name);
     if (recovery) assert.ok(existsSync(join(local, "operation.lock")), "original uncertain monitor custody required");
     durable(lock, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`);
     preserveOperationLock = false;
     try {
       state = read(); check();
+      // A closed reservation can have no retained launch owner. Competing
+      // ordinary operations must still exclude its explicit stream recovery.
+      if (name === "operation.lock" && state.fleet?.single)
+        assert.ok(!lstatSync(join(local, recoveryLock), { throwIfNoEntry: false }), "stream recovery already holds custody");
       if (recovery) assert.equal(state.control?.monitor?.phase, "invalid", "only irrevocably failed monitoring can recover");
       return await fn();
     }
@@ -556,20 +561,41 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   async function retireNativeFailure(controllerCommit, grouped) {
     const { retirementAllowed } = failedNativeArchive(local, state, grouped);
-    const originalPath = join(local, "failed-native-reservation.json");
-    const original = regular(existsSync(originalPath) ? originalPath : statePath, 1024 * 1024);
-    verifyFailedNativeReservation(state, JSON.parse(original), grouped);
-    if (!existsSync(originalPath)) durable(originalPath, original);
-    const capturePath = join(local, "failed-native-capture.json"), custodyArchive = join(local, "failed-native-results.tgz");
+    const originalPath = join(local, "failed-native-reservation.json"), capturePath = join(local, "failed-native-capture.json"),
+      custodyArchive = join(local, "failed-native-results.tgz");
+    const present = grouped?.preplan ? (path) => lstatSync(path, { throwIfNoEntry: false }) !== undefined : existsSync;
+    const preserved = present(originalPath), captured = present(capturePath), original = regular(preserved ? originalPath : statePath, 1024 * 1024);
+    if (grouped?.preplan) {
+      if (captured) assert.ok(preserved, "captured preimage missing; preserve custody");
+      assert.equal(digest(original), recoveryApproval.preservedReservationSha256, "approved preserved reservation changed before custody");
+    }
+    const parsed = JSON.parse(original), prior = grouped?.preplan ? controllerState(parsed, options.round) : parsed;
+    verifyFailedNativeReservation(state, prior, grouped);
+    const probeTimeout = 11 * 60000;
     let capture;
-    if (existsSync(capturePath)) {
+    if (captured) {
+      if (!preserved) durable(originalPath, original);
       capture = verifyFailedNativeCustody(local, state, JSON.parse(regular(capturePath)), grouped);
       assert.equal(capture.controllerCommit, controllerCommit, "custody controller source changed");
     } else {
-      assert.ok(!existsSync(custodyArchive) && !existsSync(`${custodyArchive}.download`), "unrecorded custody retained; no automatic adoption");
-      const script = failedNativeScript(state, null, null, grouped), startedAtMs = Date.now();
-      const raw = (await ssh(script, 11 * 60000)).stdout, finishedAtMs = Date.now();
-      const observation = failedNativeObservation(raw, state, startedAtMs, finishedAtMs, grouped);
+      assert.ok(!present(custodyArchive) && !present(`${custodyArchive}.download`) && (!grouped?.preplan
+        || !present(`${custodyArchive}.synced`) && !present(join(local, "failed-native-host.json"))
+          && !readdirSync(local).some((name) => name.startsWith("custody-"))), "unrecorded custody retained; no automatic adoption");
+      const script = failedNativeScript(state, null, null, grouped);
+      if (grouped?.preplan) {
+        const appended = state.control.ledger.slice(prior.control.ledger.length), requestSha256 = digest(`set -euo pipefail\n${script}\n`);
+        // The preserved prefix is exact. Before a capture exists, only a
+        // positively settled refusal of this very probe permits another try.
+        assert.ok((appended.length || recoveryApproval.preservedReservationSha256 === recoveryApproval.reservationSha256)
+          && appended.every(({ request, localTerminal, code }) => localTerminal && code > 0 && code < 255
+            && request.epoch === "collection" && request.invocation.channel === "ssh"
+            && request.invocation.deadlineMs === probeTimeout && request.invocation.requestSha256 === requestSha256),
+        "only a settled first custody probe refusal may extend the preserved reservation");
+      }
+      if (!preserved) durable(originalPath, original);
+      const startedAtMs = Date.now(), result = await ssh(script, probeTimeout, grouped?.preplan === true), finishedAtMs = Date.now();
+      if (grouped?.preplan) assert.ok(result.status === 0 && !result.error, "preplan custody probe refused; preserve host and evidence");
+      const observation = failedNativeObservation(result.stdout, state, startedAtMs, finishedAtMs, grouped);
       const download = `${custodyArchive}.download`; durable(download, "");
       await scp(`root@${state.ip}:/bench/failed-native-custody.tgz`, download);
       durableCopy(download, `${custodyArchive}.synced`, observation.archiveSha256);
@@ -577,6 +603,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       const extracted = mkdtempSync(join(local, "custody-"));
       const hash = await extractArchive(custodyArchive, extracted, observation.archiveSha256); check();
       capture = { schema: "benchmark-failed-native-custody/v1", measuredCommit: state.commit, controllerCommit,
+        ...(grouped?.preplan ? { scope: "grouped-preplan", launchIntentSha256: recoveryApproval.intent.launch } : {}),
         reservationSha256: digest(original), scriptSha256: digest(script), observation, startedAtMs, finishedAtMs,
         evidence: basename(extracted), evidenceSha256: hash };
       verifyFailedNativeCustody(local, state, capture, grouped); durable(capturePath, `${JSON.stringify(capture, null, 2)}\n`);
@@ -942,17 +969,43 @@ else ${pack}; fi` : pack, 11 * 60000);
       return locked(async () => {
         assert.ok(recoveryApproval, "source-bound production recovery approval required");
         full(recoveryApproval.controllerCommit, /[a-f0-9]{40}/, "merged repair source required");
+        let grouped;
+        if (groupedPreplan) {
+          assert.equal(typeof authorizeRecovery, "function", "locked production recovery approval required");
+          const lockedApproval = await authorizeRecovery(); check();
+          const { controllerCommit, reservationSha256, ...recovery } = recoveryApproval;
+          assert.deepEqual({ controllerCommit: lockedApproval.controllerCommit, reservationSha256: lockedApproval.reservationSha256,
+            recovery: lockedApproval.recovery }, { controllerCommit, reservationSha256, recovery }, "locked recovery approval changed");
+          const bytes = regular(statePath, 1024 * 1024);
+          assert.equal(digest(bytes), reservationSha256, "locked recovery reservation changed");
+          state = controllerState(JSON.parse(bytes), options.round);
+          assert.ok(stagedFleet(state.fleet) && state.fleet.single?.group === state.group, "staged single-group recovery required");
+          grouped = groupedPreplanFailure(local, state);
+          assert.equal(grouped.preplan, true);
+          if (state.control.monitor.phase === "closed" && [join(local, "operation.lock"), join(base, ".groups-launch.lock")]
+            .some((path) => lstatSync(path, { throwIfNoEntry: false }))) {
+            assert.ok(!retainedInvalidOwner(local, state), "original monitor owner is still live or uncertain");
+          }
+          assert.deepEqual({ ...recovery, measuredCommit: state.commit, hostId: state.id, group: state.group, unit: state.unit,
+            archiveSha256: state.archiveSha256, evidenceSha256: state.evidenceSha256, launchHostKeySha256: state.launchHostKeySha256,
+            bootId: grouped.host.bootId, roots: grouped.roots, fleetSha256: state.fleet.fleetSha256 }, recovery, "approved preplan custody binding changed");
+        } else {
+          assert.ok(!state.fleet?.single, "single-group recovery requires the explicit preplan policy");
+          assert.equal(digest(regular(statePath, 1024 * 1024)), recoveryApproval.reservationSha256, "locked recovery reservation changed");
+        }
         assert.notEqual(recoveryApproval.controllerCommit, state.commit, "repair source must be distinct from measured source");
-        assert.equal(digest(regular(statePath, 1024 * 1024)), recoveryApproval.reservationSha256, "locked recovery reservation changed");
         if (state.status === "retired") {
           assert.equal(state.retirement.kind, "native-failed");
-          verifyFailedNativeRetirement(local, state);
+          const record = verifyFailedNativeRetirement(local, state);
+          assert.equal(record.capture.scope === "grouped-preplan", groupedPreplan, "retired recovery scope differs");
+          if (groupedPreplan) assert.equal(record.capture.reservationSha256, recoveryApproval.preservedReservationSha256,
+            "approved preserved reservation differs from retirement");
           await confirmDeleted();
           state.destroyedAt ??= new Date().toISOString(); save(); return 1;
         }
         assert.ok(["starting", "running"].includes(state.status) && !state.deletionIntentAt && !state.collectedAt
           && !state.validation && !state.evidenceOutcome && state.createIntentAt, "only an unqualified failed native reservation can recover");
-        if (state.group === "mixed-production") {
+        if (!groupedPreplan && state.group === "mixed-production") {
           verifyMixedSignal(local, state);
           assert.equal(fileHash(join(local, "known_hosts")), mixedWait.knownHostsSha256, "saved native host key view changed");
           if (!await unit()) return 3; // Observe once, never stop or repack the unit.
@@ -973,8 +1026,8 @@ else ${pack}; fi` : pack, 11 * 60000);
             state.evidence = basename(extracted); state.evidenceSha256 = hash; save();
           }
         }
-        return retireNativeFailure(recoveryApproval.controllerCommit);
-      });
+        return retireNativeFailure(recoveryApproval.controllerCommit, grouped);
+      }, false, groupedPreplan ? recoveryLock : undefined);
     },
     async deliverAudit() {
       assert.ok(options.deliverAudit, "audit delivery options required");

@@ -1,6 +1,6 @@
 // Retirement evidence is separate from benchmark qualification. No operations on import.
 import assert from "node:assert/strict";
-import { lstatSync, readdirSync } from "node:fs";
+import { lstatSync, opendirSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { digest, evidenceEnvelope, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
@@ -144,14 +144,50 @@ export function groupedFailure(local, state) {
     roots: ["/bench/campaign", ...Object.values(phases).map(path => `/bench/repo/${path}`)] };
 }
 
-export function failedNativeArchive(local, state, grouped) {
-  const roots = grouped?.roots ?? failedNativeRoots(state);
-  let retirementAllowed = true;
+function preplanGroup(local, state) {
+  const grouped = groupedFailure(local, state);
+  assert.ok(stagedFleet(state.fleet) && state.fleet.single?.group === state.group, "staged single-group reservation required");
+  assert.equal(grouped.terminal.kind, "invalid", "an archived campaign is required for a sealed result");
+  return { ...grouped, preplan: true };
+}
+
+function originalFailedWrapper(local, state) {
   assert.equal(fileHash(join(local, "results.tgz")), state.archiveSha256, "original failed archive changed");
   const extracted = join(local, state.evidence); physical(extracted);
   assert.equal(treeHash(extracted), state.evidenceSha256, "original failed extraction changed");
   assert.ok(regular(join(extracted, "exit-code"), 16).equals(Buffer.from("2\n")), "custody requires the saved failure exit, not a successful report");
   const folder = join(extracted, "campaign"); physical(folder);
+  return { extracted, folder };
+}
+
+function verifyPreplanArchive({ extracted, folder }, state) {
+  const dir = opendirSync(folder);
+  try { assert.ok(dir.readSync() === null, "preplan failure requires an empty archived campaign"); }
+  finally { dir.closeSync(); }
+  const job = remoteFiles(state)["job.sh"].split("\n");
+  const stage = job.lastIndexOf("bootstrap_stage=native-entry");
+  assert.ok(stage >= 0 && job[stage + 1]?.startsWith("node 'bench/workloads/isolated/campaign-entry.mjs' "), "native-entry source differs");
+  const line = Buffer.from(`benchmark job failed: stage=native-entry line=${stage + 2} exit=2\n`);
+  const log = regular(join(extracted, "run.log"));
+  const start = log.length - line.length;
+  assert.ok(start >= 0 && (start === 0 || log[start - 1] === 10) && log.subarray(start).equals(line), "source-bound final native-entry failure required");
+}
+
+export function groupedPreplanFailure(local, state) {
+  const grouped = preplanGroup(local, state);
+  verifyPreplanArchive(originalFailedWrapper(local, state), state);
+  return grouped;
+}
+
+export function failedNativeArchive(local, state, grouped) {
+  const roots = grouped?.roots ?? failedNativeRoots(state);
+  let retirementAllowed = true;
+  const wrapper = originalFailedWrapper(local, state), { folder } = wrapper;
+  if (grouped?.preplan === true) {
+    assert.ok(isDeepStrictEqual(grouped, preplanGroup(local, state)), "grouped preplan identity differs");
+    verifyPreplanArchive(wrapper, state);
+    return { roots, retirementAllowed };
+  }
   const names = readdirSync(folder), campaigns = names.filter((name) => new RegExp(`^${state.round}-[a-f0-9]{16}$`).test(name));
   assert.equal(campaigns.length, 1, "one original failed campaign required");
   assert.ok(names.every((name) => name === campaigns[0] || name === ".host-attempt.json"), "unknown campaign root");
@@ -449,7 +485,7 @@ def inventory(path, key='', admitted=False):
 # Validate and hash every node's metadata before reading any evidence payload.
 all_roots = c['roots'] + ['/bench/run.log', '/bench/host.txt', '/bench/exit-code', '/bench/results.tgz']
 inventories = [inventory(path) for path in all_roots]
-assert inventories[0] is not None and all(rows is not None for rows in inventories[len(c['roots']):])
+assert ${grouped?.preplan === true ? "" : "inventories[0] is not None and "}all(rows is not None for rows in inventories[len(c['roots']):])
 metadata_bytes = encoded(inventories)
 metadata_sha = sha(metadata_bytes)
 def consume(path, row, callback):
@@ -571,7 +607,7 @@ export function failedNativeObservation(raw, state, startedAtMs, finishedAtMs, g
       assert.ok(Number.isSafeInteger(root.bytes) && root.bytes >= 0 && root.bytes <= evidenceEnvelope.content);
     }
   }
-  assert.equal(observation.roots[0].present, true);
+  if (grouped?.preplan !== true) assert.equal(observation.roots[0].present, true);
   assert.ok(observation.roots.slice(roots.length).every((root) => root.present));
   assert.ok(Number.isSafeInteger(startedAtMs) && Number.isSafeInteger(finishedAtMs) && finishedAtMs >= startedAtMs
     && finishedAtMs - startedAtMs <= 660000, "custody observation exceeded its local window");
@@ -598,12 +634,24 @@ export function verifyFailedNativeReservation(state, prior, grouped) {
 }
 
 export function verifyFailedNativeCustody(local, state, capture, grouped, requireRetirement = false) {
+  const preplan = Object.hasOwn(capture, "scope");
+  if (preplan) assert.ok(capture.scope === "grouped-preplan", "unknown custody scope");
+  if (preplan && grouped === undefined) grouped = preplanGroup(local, state);
+  assert.equal(grouped?.preplan === true, preplan, "custody preplan scope differs");
   const { retirementAllowed } = failedNativeArchive(local, state, grouped);
   if (requireRetirement) assert.ok(retirementAllowed, "ambiguous native outcome permits custody only");
   assert.equal(capture.schema, "benchmark-failed-native-custody/v1");
   assert.equal(capture.measuredCommit, state.commit);
   assert.match(capture.controllerCommit, /^[a-f0-9]{40}$/);
-  assert.equal(capture.controllerCommit === state.commit, !!grouped, "custody controller scope differs");
+  assert.equal(capture.controllerCommit === state.commit, !!grouped && !preplan, "custody controller scope differs");
+  if (preplan) {
+    const expected = capture.launchIntentSha256;
+    assert.ok(Object.hasOwn(capture, "launchIntentSha256") && typeof expected === "string" && /^[a-f0-9]{64}$/.test(expected),
+      "preplan launch intent digest required");
+    // The capture binds the same raw fleet-root bytes as production approval.
+    const launch = join(dirname(dirname(local)), "launch-intent.json");
+    assert.equal(fileHash(launch, 1024 * 1024), expected, "preplan launch intent changed");
+  }
   assert.match(capture.reservationSha256, /^[a-f0-9]{64}$/);
   const original = regular(join(local, "failed-native-reservation.json"), 1024 * 1024);
   assert.equal(digest(original), capture.reservationSha256);
@@ -625,7 +673,8 @@ export function verifyFailedNativeCustody(local, state, capture, grouped, requir
   }
   for (const name of ["run.log", "host.txt", "exit-code"])
     assert.equal(fileHash(join(extracted, name)), fileHash(join(local, state.evidence, name)), "failed metadata changed");
-  assert.equal(treeHash(join(extracted, "campaign", "root-0")), treeHash(join(local, state.evidence, "campaign")), "original campaign changed before custody");
+  if (observation.roots[0].present)
+    assert.equal(treeHash(join(extracted, "campaign", "root-0")), treeHash(join(local, state.evidence, "campaign")), "original campaign changed before custody");
   if (!grouped && state.group === "mixed-production") {
     verifyMixedCancellation(local, state);
     assert.equal(capture.observation.roots[2].present, true, "remote cancellation intent missing");
@@ -652,9 +701,10 @@ export function verifyFailedNativeRetirement(local, state, expectedSha256 = stat
   const record = JSON.parse(bytes);
   assert.deepEqual(Object.keys(record).sort(), ["capture", "confirmation", "finishedAtMs", "rehash", "schema", "scriptSha256", "startedAtMs"].sort());
   assert.equal(record.schema, "benchmark-failed-native-retirement/v1");
-  // Ordinary collection runs at the measured commit. The historical action
-  // requires a distinct, explicitly approved repair source.
-  const grouped = record.capture.controllerCommit === state.commit ? groupedFailure(local, state) : undefined;
+  // The explicit scope distinguishes grouped successor custody from historical
+  // recovery; ordinary grouped receipts still replay at the measured commit.
+  const grouped = record.capture.scope === "grouped-preplan" ? preplanGroup(local, state)
+    : record.capture.controllerCommit === state.commit ? groupedFailure(local, state) : undefined;
   verifyFailedNativeCustody(local, state, record.capture, grouped, true);
   assert.deepEqual(Object.keys(record.rehash).sort(), ["finishedAtMs", "observation", "scriptSha256", "startedAtMs"]);
   const rehash = failedNativeObservation(JSON.stringify(record.rehash.observation), state, record.rehash.startedAtMs, record.rehash.finishedAtMs, grouped);
