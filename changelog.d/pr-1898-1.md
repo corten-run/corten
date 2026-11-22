@@ -1,0 +1,1 @@
+- The Leptos marketplace benchmark returns problem JSON for unsupported record methods and, in its matched profile, checks configured hosts and serves a liveness endpoint ([#1306 Benchmark parity: Leptos in approved workload groups](https://github.com/corten-run/corten/issues/1306)).
