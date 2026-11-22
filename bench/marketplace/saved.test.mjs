@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { summaryFixture, writeSavedFixture } from "./saved-fixture.mjs";
-import { validateSummary } from "./report.mjs";
+import { report, validateSummary } from "./report.mjs";
 import { validateSaved } from "./validate.mjs";
 import { containerReceipt, evidenceVersion, imageReceipt, sourceTree } from "./raw-contract.mjs";
-import { execFileSync, spawnSync } from "node:child_process";
+import childProcess, { execFileSync, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
+import { PassThrough } from "node:stream";
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +15,7 @@ import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { passPlan, stageAggregate, timedProfiles } from "./run-contract.mjs";
 import { boundedFeatureProfile, featureProfile } from "./feature-contract.mjs";
+import { sampleStats, summarizeSamples } from "../catalog/stats.mjs";
 
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 const invalid = (fn) => assert.throws(fn, (e) => e.code === "MARKETPLACE_EVIDENCE_INVALID");
@@ -82,6 +86,87 @@ test("complete native fixture replays every raw profile, pass, phase, gate and c
   const command = spawnSync(process.execPath, ["bench/marketplace/validate.mjs", folder, "r17", commit], { encoding: "utf8", timeout: 30000 });
   assert.equal(command.status, 0, command.stderr); assert.match(command.stdout, /raw saved evidence valid/);
   assert.deepEqual(hashes(), before, "saved validation must not write evidence");
+});
+
+test("native replay admits the producer's decimal sum overshoot, not an inconsistent mean", async (t) => {
+  const folder = temporary(t), args = { folder, round: "r17", commit };
+  const s = writeSavedFixture(folder, commit, sourceTree(commit));
+  const app = s.apps.corten, key = "api-neutral-json", runs = app.runs[key];
+  const phase = runs[0].phases.sat64;
+  const log = join(folder, "api/corten/p1-neutral-json/sat64-stats.log");
+  const fixture = JSON.parse(readFileSync(`${log}.json`)).samples;
+  const names = Object.keys(fixture), upstream = names.find((name) => name.endsWith("-upstream"));
+  const container = names.find((name) => name !== upstream), start = fixture[upstream][0].t;
+  for (const [name, mem] of [[container, 102.9], [upstream, 100.9]]) {
+    fixture[name] = Array.from({ length: 31 }, (_, i) => ({ t: start + i * 350, cpu: 100, mem }));
+  }
+  const rows = names.flatMap((Name) => fixture[Name].map((p) => ({ ...p, Name }))).sort((a, b) => a.t - b.t);
+  const fake = new EventEmitter();
+  fake.stdout = new PassThrough(); fake.stderr = new PassThrough();
+  fake.kill = () => { setImmediate(() => fake.emit("close", 0)); return true; };
+  const spawn = t.mock.method(childProcess, "spawn", () => fake);
+  let now = start;
+  const clock = t.mock.method(Date, "now", () => now);
+  syncBuiltinESMExports();
+  let stats;
+  try {
+    const sampler = sampleStats(names, log, 10);
+    for (const { Name, t, cpu, mem } of rows) {
+      now = t;
+      fake.stdout.write(JSON.stringify({ Name, CPUPerc: `${cpu}%`, MemUsage: `${mem}MiB / ${Name === upstream ? "512MiB" : "1GiB"}` }) + "\n");
+    }
+    stats = await sampler.stop();
+  } finally {
+    spawn.mock.restore(); clock.mock.restore(); syncBuiltinESMExports();
+  }
+  assert.equal(stats[upstream].memAvgMiB, 100.90000000000003);
+  assert.equal(stats[upstream].memMaxMiB, 100.9);
+  assert.equal(stats[container].memAvgMiB, 102.90000000000006);
+  assert.equal(stats[container].memMaxMiB, 102.9);
+  const saved = JSON.parse(readFileSync(`${log}.json`));
+  const writeSummary = () => writeFileSync(join(folder, "summary.json"), JSON.stringify(s));
+  const write = (avg) => {
+    saved.summary[upstream] = { ...stats[upstream], memAvgMiB: avg };
+    Object.assign(phase.upstream, saved.summary[upstream]);
+    writeFileSync(`${log}.json`, JSON.stringify(saved));
+    writeSummary();
+  };
+  Object.assign(phase.upstream, stats[upstream]);
+  Object.assign(phase, stats[container]);
+  const setAppMean = (mean) => {
+    phase.memAvgMiB = mean;
+    app.phases[key].sat64 = stageAggregate(runs, "sat64", 3);
+  };
+  setAppMean(stats[container].memAvgMiB);
+  writeSummary();
+  assert.deepEqual(validateSaved(args), s);
+  assert.match(report(s), /Marketplace v2 r17/);
+  setAppMean(102.90000000000003);
+  validateSummary(s);
+  // The adjacent sums round to .03 and .06, skipping .05 despite the peak bound.
+  setAppMean(102.90000000000005);
+  assert.throws(() => validateSummary(s), /missing\/invalid measurement/);
+  setAppMean(stats[container].memAvgMiB);
+  const constantHistory = (count) => summarizeSamples(Array(count).fill({ cpu: 100, mem: 100.8 }));
+  const atLimit = constantHistory(1000), overLimit = constantHistory(1001);
+  for (const v of [atLimit, overLimit]) assert.ok(v.memAvgMiB > v.memMaxMiB);
+  Object.assign(phase.upstream, atLimit);
+  validateSummary(s);
+  Object.assign(phase.upstream, overLimit);
+  assert.throws(() => validateSummary(s), /missing\/invalid measurement/);
+  Object.assign(phase.upstream, stats[upstream]);
+
+  // Even when both saved summaries agree and the number is within the rounding
+  // envelope, the exact mean still has to agree with the raw Docker samples.
+  write(100.90000000000002);
+  validateSummary(s);
+  assert.throws(() => validateSaved(args), /stats aggregate differs from raw history/);
+
+  for (const bad of [100.90000000000005, 101, 0, -1, Infinity, NaN, undefined]) {
+    write(bad);
+    assert.throws(() => validateSummary(s), /missing\/invalid measurement/);
+    invalid(() => validateSaved(args));
+  }
 });
 
 test("historical native evidence replays, but the two profiles' raw receipts cannot mix", (t) => {

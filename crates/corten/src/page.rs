@@ -1110,7 +1110,7 @@ pub(crate) struct Shared {
     /// The values only the layout shows ([`crate::App::layout_read`]), started for each request
     /// for a whole document.
     pub layout_reads: Box<[Arc<dyn crate::layout::Erased>]>,
-    /// The `Public` pages, JSON and text the app keeps to give again ([`crate::App::kept_answers`]); none under
+    /// The `Public` pages, JSON, text and files the app keeps to give again ([`crate::App::kept_answers`]); none under
     /// `corten dev`, or with a bound of 0.
     pub kept: Option<crate::kept::Answers>,
 }

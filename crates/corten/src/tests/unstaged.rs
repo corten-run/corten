@@ -29,6 +29,9 @@ pub(super) mod unstaged_url {
     #[route("/framed", get = unstaged_framed, unstaged)]
     pub struct Framed;
 
+    #[route("/sitemap.xml", get = unstaged_sitemap, unstaged)]
+    pub struct Sitemap;
+
     #[route("/cookie", get = unstaged_cookie, unstaged)]
     pub struct Cookie;
 
@@ -169,6 +172,15 @@ async fn unstaged_shared_cookie() -> crate::response::Response {
 /// A picture that can run script, as an uploaded SVG can.
 async fn unstaged_picture() -> crate::Media {
     crate::Media::new("image/svg+xml", r#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#)
+}
+
+/// How many times the sitemap was written.
+static SITEMAPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A sitemap for everyone, of a size the app keeps from a route with stages.
+async fn unstaged_sitemap() -> crate::Public<crate::seo::File> {
+    SITEMAPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    crate::seo::sitemap((0..40).map(|_| crate::seo::SitemapUrl { loc: "https://example.com/cards/7", lastmod: None }))
 }
 
 async fn unstaged_page(req: Req) -> HtmlResult {
@@ -330,6 +342,23 @@ async fn an_unstaged_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(headers.contains_key("content-security-policy"), "an unknown URL is still answered inside the stages");
     assert!(body.contains("<html"), "with the error page: {body}");
+}
+
+/// An unstaged route meets no stage, and the app keeps nothing for it: a file for everyone there,
+/// which a route with stages would have kept, is its handler's for every request.
+#[tokio::test]
+async fn an_unstaged_route_s_file_is_not_kept() {
+    use std::sync::atomic::Ordering;
+    let router = App::new(unstaged_url::router()).router();
+    let before = SITEMAPS.load(Ordering::Relaxed);
+    for _ in 0..2 {
+        let (status, headers, body) = call_with(router.clone(), "GET", "/sitemap.xml", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.len() >= 1024 && !headers.contains_key("age"), "{headers:?}");
+        assert_eq!(headers["cache-control"], "public, max-age=3600");
+        assert_eq!(headers["content-security-policy"], "sandbox");
+    }
+    assert_eq!(SITEMAPS.load(Ordering::Relaxed) - before, 2);
 }
 
 /// Beside an unstaged route every other route keeps its stages: an area's pages and its unknown URLs,
