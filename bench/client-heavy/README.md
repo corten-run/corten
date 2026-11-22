@@ -175,12 +175,13 @@ bytes in `evidence/blobs/<sha256>`. Node and browser dependency trees receive th
 same before/after byte snapshots. Missing, unsafe-linked, oversized or unreadable
 inputs explicitly block proof; partial snapshots do not mean coverage.
 The collector bounds each tree to 40,000 entries, 32 levels, 128 MiB per file and
-1 GiB of unique saved blobs. The observed browser executable alone may be up to
-512 MiB (Linux headless-shell exceeds 128 MiB); other inputs retain the 128 MiB
-bound. Offline replay checks `browser.json` before reading oversized bytes; only
-its exact executable blob receives the exception, not unreferenced blobs, other
-references or ordinary files. Replay enforces 1 GiB of unique blobs and 2 GiB of
-total saved files. External configuration is not copied or authenticated;
+1 GiB of unique saved blobs. The observed Node and browser executables have
+separate caps of 192 MiB and 512 MiB; the NodeSource 26.13.1 amd64 executable and
+Linux headless-shell exceed 128 MiB. Offline replay checks `evidence/node.json`
+and `evidence/browser.json` before reading oversized bytes, then checks the exact
+blob length and SHA-256. No other reference gets a higher bound. Replay enforces
+1 GiB of unique blobs and 2 GiB of total saved files. External configuration is
+not copied or authenticated;
 only selected inherited configuration variable names are recorded, not their values.
 
 For the two npm install trees, collection uses a closed-install policy. Only

@@ -72,9 +72,10 @@ export class Evidence {
     await writeFile(join(this.out, path), json(value));
   }
   async blob(bytes, fileBytes = this.limits.fileBytes) {
+    assert.ok(bytes.length <= fileBytes, "evidence-byte-limit");
     const sha = sha256(bytes);
     if (!this.blobs.has(sha)) {
-      assert.ok(bytes.length <= fileBytes && this.bytes + bytes.length <= this.limits.bytes, "evidence-byte-limit");
+      assert.ok(this.bytes + bytes.length <= this.limits.bytes, "evidence-byte-limit");
       const path = join(this.out, "evidence/blobs", sha);
       await mkdir(dirname(path), { recursive: true }); await writeFile(path, bytes, { flag: "wx" });
       this.blobs.add(sha); this.bytes += bytes.length;

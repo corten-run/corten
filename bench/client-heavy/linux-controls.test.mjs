@@ -11,11 +11,11 @@ import { createHash } from "node:crypto";
 import { Evidence, sha256 } from "./evidence.mjs";
 import { npmClosure } from "./build-replay.mjs";
 import { installLayout } from "./install-layout.mjs";
-import { launchBrowser, browserIdentity } from "./launch.mjs";
+import { launchBrowser, browserIdentity, nodeIdentity } from "./launch.mjs";
 import { verifyHostProof } from "./host-proof.mjs";
 import { hostFixture } from "./host-fixture.mjs";
 import { snapshot } from "./verify.mjs";
-import { artifactProfile } from "./verify-v2.mjs";
+import { artifactProfile, replayToolIdentity } from "./verify-v2.mjs";
 
 const enabled = process.platform === "linux" && process.env.CLIENT_LINUX_CONTROLS === "1";
 async function fileHash(path) {
@@ -26,6 +26,18 @@ async function fixture(t) {
   t.after(async () => { const r = relative(tmpdir(), root); assert.ok(r && !isAbsolute(r) && !r.startsWith("..")); await rm(root, { recursive: true, force: true }); });
   return { root, out, e: new Evidence(root, out) };
 }
+
+test("Linux Node identity replays the actual process image", { skip: !enabled, timeout: 60000 }, async (t) => {
+  const f = await fixture(t), image = await realpath("/proc/self/exe"), identity = await nodeIdentity(f.e);
+  await f.e.save("evidence/node.json", identity);
+  assert.equal(identity.version, process.version);
+  assert.equal(identity.executablePath, image);
+  assert.equal(identity.executable.bytes, (await lstat(image)).size);
+  assert.equal(identity.executable.sha256, await fileHash(image));
+  await f.e.seal({ group: "client-heavy", round: "linux-control", commit: "a".repeat(40) });
+  assert.deepEqual(replayToolIdentity(await snapshot(f.out, artifactProfile), "node"), identity);
+  t.diagnostic(JSON.stringify({ version: identity.version, bytes: identity.executable.bytes, sha256: identity.executable.sha256 }));
+});
 
 test("Linux ordinary npm install closes before/after including bin symlinks and esbuild hardlinks", { skip: !enabled, timeout: 180000 }, async (t) => {
   const f = await fixture(t);
@@ -80,6 +92,6 @@ test("Linux headless launch hashes the owned process image, not full Chromium; w
   assert.equal(files.get(identity.executable.blob).length, identity.executable.bytes);
   // Removing the checked browser role must remove its exceptional size bound.
   await rm(join(f.out, "evidence/browser.json"));
-  await assert.rejects(snapshot(f.out, artifactProfile), /oversized-blob-not-browser-executable/);
+  await assert.rejects(snapshot(f.out, artifactProfile), /oversized-blob-not-tool-executable/);
   t.diagnostic(JSON.stringify({ stages, sealedFiles: subject.files.length }));
 });

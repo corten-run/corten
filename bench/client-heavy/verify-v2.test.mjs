@@ -243,26 +243,26 @@ test("native v2 CLI completes verified and blocked replay with exact exit codes"
   });
 });
 
-test("oversized blobs require the checked browser executable reference", async (t) => {
+test("oversized blobs require a checked tool executable reference", async (t) => {
   const f = await fixture(t), browserPath = "evidence/browser.json", nodePath = "evidence/node.json";
   const browser = JSON.parse(await readFile(join(f.folder, browserPath))), node = JSON.parse(await readFile(join(f.folder, nodePath)));
   const ref = await f.e.blob(Buffer.alloc(128 * 1024 ** 2 + 1), 512 * 1024 ** 2);
-  for (const role of ["unreferenced", "nonbrowser", "other-reference"]) await t.test(role, async () => {
+  for (const role of ["unreferenced", "other-reference"]) await t.test(role, async () => {
     await f.saveJson(browserPath, browser); await f.saveJson(nodePath, node);
     const path = "evidence/configuration-after.json";
     await f.saveJson(path, role === "other-reference" ? { names: ["PATH"], oversized: ref } : { names: ["PATH"] });
-    if (role === "nonbrowser") await f.saveJson(nodePath, { ...node, executable: ref });
     await f.seal(); const r = await f.validate(); assert.equal(r.status, "invalid", JSON.stringify(r.errors));
-    assert.ok(r.errors.some((e) => e.at === "artifacts" && e.reason === "oversized-blob-not-browser-executable"), JSON.stringify(r.errors));
+    assert.ok(r.errors.some((e) => e.at === "artifacts" && e.reason === "oversized-blob-not-tool-executable"), JSON.stringify(r.errors));
   });
   await f.saveJson("evidence/configuration-after.json", { names: ["PATH"] });
   await f.saveJson(nodePath, node); await f.saveJson(browserPath, { ...browser, executable: ref });
   await f.seal(); const good = await f.validate(); assert.equal(good.status, "verified", JSON.stringify(good.errors));
   assert.equal(good.readyForLoad, false);
-  // Sharing the allowed browser blob does not enlarge another reference's bound.
+  await f.saveJson(browserPath, browser);
   await f.saveJson(nodePath, { ...node, executable: ref }); await f.seal();
-  const shared = await f.validate(); assert.equal(shared.status, "invalid");
-  assert.ok(shared.errors.some((e) => e.at === nodePath && e.reason === "invalid-blob-reference"));
+  const capturedNode = await f.validate(); assert.equal(capturedNode.status, "verified", JSON.stringify(capturedNode.errors));
+  assert.equal(capturedNode.toolIdentities.node, ref.sha256);
+  assert.equal(capturedNode.readyForLoad, false);
 });
 
 test("raw relative compiler input binds the metadata root package, not repository cwd", async (t) => {
