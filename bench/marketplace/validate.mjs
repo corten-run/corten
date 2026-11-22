@@ -9,7 +9,7 @@ import { admitted } from "./feature-contract.mjs";
 import { qualificationValidator, validateSummary } from "./report.mjs";
 import { imageProvenance, inventory, loadPhases, parseArgs, passPlan, phaseEnd, readLoadSummary, readOutcome, resultSchema, roundIdentity, sources, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 import { validateLoadExecution } from "./load-evidence.mjs";
-import { evidenceVersion, k6Image, loadEnvironment, nodeImage, sourceTree, upstreamInterpretation } from "./raw-contract.mjs";
+import { evidenceVersion, k6Image, loadEnvironment, maxStatsSamples, nodeImage, sourceTree, upstreamInterpretation } from "./raw-contract.mjs";
 import { savedFiles } from "./saved-files.mjs";
 import { verifyK6Provenance } from "../load-tool.mjs";
 
@@ -322,7 +322,7 @@ function replay({ folder, round, commit }) {
             // Samples can burst beyond quota; only the whole host is a bound.
             const cpu = parseFloat(p.CPUPerc);
             assert.ok(Number.isFinite(cpu) && cpu <= onlineCpus.size * 100 + 0.005, "sampled CPU exceeds physical host capacity");
-            assert.ok(history[p.Name].length < 1000, "stats log exceeds sample bound");
+            assert.ok(history[p.Name].length < maxStatsSamples, "stats log exceeds sample bound");
             const c = p.Name === coldApp.name ? raw.app : raw.upstream, parts = p.MemUsage.split("/");
             assert.equal(parts.length, 2, "memory display missing its limit");
             const usage = displayedMemory(parts[0]), limit = displayedMemory(parts[1]), expected = c.memoryBytes / 2 ** 20;
@@ -333,7 +333,7 @@ function replay({ folder, round, commit }) {
           const stats = {};
           for (const name of participants) {
             const samples = sampled.samples[name];
-            assert.ok(Array.isArray(samples) && samples.length > 0 && samples.length <= 1000, "invalid/bounded stats history required");
+            assert.ok(Array.isArray(samples) && samples.length > 0 && samples.length <= maxStatsSamples, "invalid/bounded stats history required");
             assert.deepEqual(samples.map(({ cpu, mem }) => ({ cpu, mem })), history[name], "stats history differs from raw Docker samples");
             let last = start;
             for (const p of samples) { assert.ok(Number.isSafeInteger(p.t) && p.t >= last && p.t <= end && p.cpu >= 0 && p.mem > 0, "invalid stats clock/value"); last = p.t; }

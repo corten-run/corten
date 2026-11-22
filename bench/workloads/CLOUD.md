@@ -486,6 +486,15 @@ between them. There is no extra setup host and no `--admit-remaining` action.
 The continuation does not grant approval; the existing exact merged-source,
 native readiness, independent review and operator approval requirements apply.
 
+If independent detach refuses before writing intent, `fleet-operation-failed`
+can name the failing stage: `continuation-replay` (including custody and
+eligibility), `initial-plan` or `locked-plan` (including exact approval checks),
+or `final-pre-intent-recheck`. These labels identify the check, not its cause or
+whether locks were released. Placement keeps its separate
+`fleet-placement-preflight-failed` diagnostic. Inspect saved intent and custody
+before deciding what to do next; an unlabeled failure does not establish that
+intent was never written.
+
 Different groups can run concurrently in the same continuation root. Prepare
 and allocation are serialized through a shared lock. As soon as the launched
 host has sealed bootstrap, entered the native campaign and renewed its
@@ -514,6 +523,14 @@ prepared sibling. Do not move attempts to a new index or root. An ambiguous or
 active attempt is refused; leave its evidence and locks in place and use the
 existing recovery procedure. Run the report after collection to select another
 missing group.
+
+If a standalone group was prepared but never launched, use the same prepare
+command in the same continuation root with an explicitly higher round and a
+different measured commit. This works only when the previous slot physically
+contains its one original manifest and nothing else: no intent, lock, child
+state, receipts or other files. Prepare only reads provider placement and leaves
+the old bytes and verified groups intact. Once the new attempt is prepared,
+only its round can be previewed or launched; an older approval cannot dispatch.
 
 The report is an index of independently publishable group results, with each
 group's actual round, commit, dates, archive, attempts and `baseEffectiveOptions`.

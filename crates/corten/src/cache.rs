@@ -44,7 +44,7 @@
 //! [`crate::live`] stream's fragments are text rendered after its headers went out, so they carry
 //! no such mark.
 //!
-//! The app is the first shared cache of its own `Public` pages, JSON and text: the whole document
+//! The app is the first shared cache of its own `Public` pages, JSON, text and files: the whole document
 //! or body one made for a request without credentials is kept for its shared lifetime and given
 //! again in the handler's place ([`crate::App::kept_answers`], `docs/design.md#choice-kept-pages`), and goes out through
 //! the same checks as the handler's own answer.

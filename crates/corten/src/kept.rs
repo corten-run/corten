@@ -1,4 +1,4 @@
-//! The answers the app keeps to send again: pages, and whole bodies of JSON or text.
+//! The answers the app keeps to send again: pages, and whole bodies of JSON, text or a file.
 //!
 //! A page whose route says its answer is the same for everyone ([`crate::Public`]) is one every
 //! shared cache may keep for the lifetime it names. The app is the first of them: it keeps the
@@ -37,7 +37,8 @@
 //! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
 //! and no value made for this request alone, and varies on nothing but what the key covers.
 //!
-//! A `Public` route whose answer is JSON (`Json<T>`, `JsonResult<T>`) or text is kept the same
+//! A `Public` route whose answer is JSON (`Json<T>`, `JsonResult<T>`), text or a file (`Media`,
+//! a sitemap or `robots.txt` of [`crate::seo`]) is kept the same
 //! way, under the same rules and by the same key, where the app compresses the answer: its
 //! whole body, of 1,024 bytes or more, in a build with the `compress` feature, for a `GET` that
 //! shows nothing about who is asking ([`Shape::Body`]). A kept body saves its handler, its
@@ -57,7 +58,12 @@
 //! other way, on the thread that runs it (`form::watched`). JSON the app holds as bytes
 //! (`json::Raw`) carries its own compressed forms in a build that compresses, a mark this does
 //! not replay, so it is its handler's for every request, which costs it no writing and no
-//! compression. Any other answer (a file, a relay, a
+//! compression. A file is kept by its type as text is, so a picture of a type the app does not
+//! compress (PNG, JPEG, WebP) is its handler's for every request, and so are a file sent as a
+//! stream (`Media::stream`), which has no body to hold, and one at a URL that names its content
+//! (`Public::immutable`), which says no lifetime the app keeps it for and is left to the caches
+//! that keep it for a year. A kept file is sent with the headers its handler gave it, its
+//! `Content-Disposition` among them. Any other answer (a relay, a
 //! stream, a feed, a status alone) is its handler's for every request, but for what a page route
 //! answers in a page's place: a file of a known size from a route that says it answers a page
 //! or a file (`PageOr`), and an answer type of the app's own that says it is a page, are kept
@@ -74,7 +80,8 @@
 //! A write that went through also drops what is kept at the place on this site its
 //! answer names (`Location`, `Content-Location`; RFC 9111 section 4.4). A page whose handler
 //! was reading while a write went through is not kept. Nothing else drops a page before its
-//! lifetime ends: the lifetime is how stale the app said the page may be. Off under `corten dev`,
+//! lifetime ends, but a write from before the app counted writes by path (below): the lifetime
+//! is how stale the app said the page may be. Off under `corten dev`,
 //! and in an app with no route that keeps a page, whose writes are then not counted. The
 //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
 //! the compressed forms made for it, with an allowance for what holds them; the body, the key
@@ -86,6 +93,14 @@
 //! reader by then, or be made under `Signal::finish`. One that lands later (a task the handler
 //! started and did not wait for, a store whose readers lag its writers) can leave the page as
 //! it was until its lifetime ends.
+//!
+//! Writes are counted by path once the app has made an answer it may keep, and not before: an
+//! app can have a store and keep nothing in it (its `Public` text is all too small, which is
+//! known only as each answer is made), and until then a write reads nothing of its path and
+//! adds one to a count of all such writes. An answer stands only while that count is as its
+//! request found it, so a write that began before the counts by path were made and ends after
+//! drops every answer kept by then, at whatever path, and so does work it left
+//! ([`crate::Signal::finish`]) each time some ends: nothing of its path was read to count by.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -159,11 +174,12 @@ fn with_room(head: &HeaderMap) -> HeaderMap {
 }
 
 /// The counts of writes, one for the paths whose hash names it: enough of them (256 KiB, made
-/// when the first page is asked for) that an app's writes seldom share a count with a kept page.
+/// with the first answer that may be kept) that an app's writes seldom share a count with a
+/// kept page.
 const WRITES: usize = 1 << 16;
 
 /// What a route that is kept answers, known when the app compiles: a page, kept as the whole
-/// document a browser loads, or a whole body (JSON, text), kept for whoever asks. Public in a
+/// document a browser loads, or a whole body (JSON, text, a file), kept for whoever asks. Public in a
 /// private module, as the `Handler` whose `keeps` names it is: an app cannot name it.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Shape {
@@ -186,8 +202,9 @@ thread_local! {
 }
 
 /// A route of whole bodies, by what became of the answers it made last. A body is kept where
-/// the app compresses it ([`compresses`]), which its size decides and no type shows, so a route
-/// whose bodies are all under that size would ask the store, find nothing, and have every
+/// the app compresses it ([`compresses`]), which its size and its media type decide and no type
+/// of the route's shows, so a route whose bodies are all under that size, or all pictures the app
+/// does not compress, streams or files their URLs name, would ask the store, find nothing, and have every
 /// answer refused: about as much again as a handler that answers a constant costs. After
 /// [`UNKEPT_RUN`] answers in a row of which none was kept, and with none between given from
 /// the store, the route's requests are its handler's, as they were before the app kept
@@ -333,6 +350,13 @@ struct Store {
     /// whatever its query, and a page whose handler was reading while the write was made is not
     /// kept, without a lock or a search.
     written: OnceLock<Box<[AtomicU32]>>,
+    /// The writes that found no counts to count in ([`Answers::writing`]), all together: none
+    /// are made until an answer that may be kept is ([`Missed::keep`]), so an app that keeps
+    /// nothing pays for no count by path. An answer stands only while this is as its request
+    /// found it too, so such a write that ends after an answer was kept drops it, and every
+    /// other one: only the writes under way when the counts are made, and work they left,
+    /// can.
+    early: AtomicU32,
     /// One bit for each mark of a URL asked for since the store filled ([`Store::asked`]).
     marks: OnceLock<Box<[AtomicU64]>>,
     /// How many of the marks are set.
@@ -377,36 +401,44 @@ impl Hasher for Prehashed {
 struct Written {
     count: usize,
     was: u32,
+    /// [`Store::early`] as the request found it.
+    early: u32,
 }
 
 impl Written {
-    /// The count for `at` (a path, with or without a query) as it is now.
-    /// The counts are made here, before the first page's handler runs: a write answered before
-    /// then found none to count in, and what it wrote is there for that handler to read.
+    /// The count for `at` (a path, with or without a query) as it is now: 0 while there are no
+    /// counts, which start at 0 when they are made. The writes that find none are read first,
+    /// so one that ends after this is seen whichever it turns out to be.
     fn of(store: &Store, at: &str) -> Self {
         let count = count_of(at.split(['?', '#']).next().unwrap_or(at).as_bytes());
-        let counts = store.written.get_or_init(|| (0..WRITES).map(|_| AtomicU32::new(0)).collect());
-        Written { count, was: counts[count].load(Ordering::Acquire) }
+        let early = store.early.load(Ordering::Acquire);
+        let was = store.written.get().map_or(0, |counts| counts[count].load(Ordering::Acquire));
+        Written { count, was, early }
     }
 
-    /// No write to the path since. The counts are there, since [`Written::of`] made them.
+    /// No write to the path since, and none that found no counts. With no counts yet, every
+    /// write since was one of those.
     fn stands(self, store: &Store) -> bool {
-        store.written.get().is_some_and(|counts| counts[self.count].load(Ordering::Acquire) == self.was)
+        store.early.load(Ordering::Acquire) == self.early
+            && store.written.get().is_none_or(|counts| counts[self.count].load(Ordering::Acquire) == self.was)
     }
 }
 
 /// A request that may change what its path shows (a method that is not safe), from before its
-/// handler can start until it is answered or dropped: its path's count goes up either way.
+/// handler can start until it is answered or dropped: it is counted either way, for its path
+/// or, where it found no counts by path, with the others like it.
 pub(crate) struct Writing<'a> {
     answers: &'a Answers,
-    count: usize,
-    host: Option<HeaderValue>,
+    /// The path's count and the request's `Host`; none for a write that found no counts to
+    /// count in, which is counted with the others like it ([`Store::early`]).
+    counted: Option<(usize, Option<HeaderValue>)>,
     answered: bool,
 }
 
 impl Writing<'_> {
     /// The write was answered: counts it for its path and for the places on this site its answer
-    /// names (RFC 9111 section 4.4), so nothing kept there stands. Its path counts whatever the
+    /// names (RFC 9111 section 4.4), so nothing kept there stands; one that found no counts by
+    /// path is counted for every path at once. Its path counts whatever the
     /// answer: a handler that answered `4xx` or `5xx`, or passed its deadline (a `503`, or a
     /// `408` while it waited for the body), may have written first, and its status does not say
     /// (work it left under `Signal::finish` counts again when it ends). That holds for the
@@ -415,12 +447,17 @@ impl Writing<'_> {
     /// count only for a write that did not fail.
     pub(crate) fn answered(mut self, res: &Response) {
         self.answered = true;
-        self.answers.count(self.count);
+        let Some((count, host)) = &self.counted else {
+            // Whatever it wrote and wherever its answer points: nothing stands across it.
+            self.answers.early();
+            return;
+        };
+        self.answers.count(*count);
         if res.status().is_client_error() || res.status().is_server_error() {
             return;
         }
         for name in [header::LOCATION, header::CONTENT_LOCATION, crate::page::LOCATION_HEADER] {
-            let to = res.headers().get(name).and_then(|to| on_site(to.as_bytes(), self.host.as_ref()));
+            let to = res.headers().get(name).and_then(|to| on_site(to.as_bytes(), host.as_ref()));
             if let Some(path) = to {
                 self.answers.count(count_of(path));
             }
@@ -432,7 +469,10 @@ impl Drop for Writing<'_> {
     /// Dropped before its answer (the client left): what its handler wrote by then is written.
     fn drop(&mut self) {
         if !self.answered {
-            self.answers.count(self.count);
+            match &self.counted {
+                Some((count, _)) => self.answers.count(*count),
+                None => self.answers.early(),
+            }
         }
     }
 }
@@ -754,6 +794,7 @@ impl Answers {
                 bound,
                 bytes: AtomicUsize::new(0),
                 written: OnceLock::new(),
+                early: AtomicU32::new(0),
                 marks: OnceLock::new(),
                 marked: AtomicUsize::new(0),
                 keys: RandomState::new(),
@@ -849,20 +890,39 @@ impl Answers {
 
     /// A request that may change what its path shows is about to reach its handler. `signal` is
     /// told which count is the path's, for work that outlives the request ([`crate::Signal::finish`]).
+    ///
+    /// With no counts yet (no answer that may be kept was made), nothing of the path is read:
+    /// the write is counted with the others like it when it ends.
     pub(crate) fn writing(&self, req: &Request, signal: &crate::Signal) -> Writing<'_> {
+        if self.0.written.get().is_none() {
+            signal.writes_early();
+            return Writing { answers: self, counted: None, answered: false };
+        }
         let count = count_of(req.uri().path().as_bytes());
         signal.writes(count);
-        Writing { answers: self, count, host: req.headers().get(header::HOST).cloned(), answered: false }
+        Writing { answers: self, counted: Some((count, req.headers().get(header::HOST).cloned())), answered: false }
     }
 
     /// Counts a write to the paths `count` is for, so no page kept for them stands: every
     /// query's (a named post is `?do=name` at its page's path) and one whose handler has yet to
     /// answer.
     pub(crate) fn count(&self, count: usize) {
-        // With no page asked for yet there is none to drop.
+        // Only a write that found the counts has one to name.
         if let Some(counts) = self.0.written.get() {
             counts[count].fetch_add(1, Ordering::AcqRel);
         }
+    }
+
+    /// Counts a write that found no counts when it began ([`Store::early`]), or work it left
+    /// that has ended: no answer made or kept across it stands.
+    pub(crate) fn early(&self) {
+        self.0.early.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// The counts of writes by path, made by the first answer that may be kept, kept or not: a
+    /// write that began before them is counted with the others like it, and one after, by path.
+    fn counts(&self) {
+        self.0.written.get_or_init(|| (0..WRITES).map(|_| AtomicU32::new(0)).collect());
     }
 }
 
@@ -1064,8 +1124,6 @@ impl Missed {
             || res.headers().contains_key(header::ETAG)
             || self.nonce.as_ref().is_some_and(|slot| slot.taken().is_some())
             || self.signal.as_ref().is_none_or(crate::Signal::is_personal)
-            // A write to the path while the handler read: the page may show what was there before.
-            || !self.written.stands(&answers.0)
             // Made over a time longer than it lasts: it would never be given.
             || self.asked.elapsed().as_secs() >= lifetime
         {
@@ -1081,6 +1139,13 @@ impl Missed {
         let sent = self.language.as_ref().filter(|_| language);
         let size = Key::length(self.at.as_str(), self.host.as_ref(), sent) + head + OVERHEAD + length as usize;
         if length == 0 || size > answers.0.bound / SHARE {
+            return res;
+        }
+        // An answer that may be kept: writes are counted by path from here on, whether or not
+        // this one is kept, so an app whose writes never pause still comes to keep its pages.
+        answers.counts();
+        // A write while the handler read: the page may show what was there before.
+        if !self.written.stands(&answers.0) {
             return res;
         }
         let (mut parts, body) = res.into_parts();
@@ -1424,8 +1489,10 @@ mod tests {
         assert!(kept > 100 && left > 100 && apart > 100, "{kept} {left} {apart}");
     }
 
-    /// An answer for `at` whose request found the path's writes as they are now.
+    /// An answer for `at` whose request found the path's writes as they are now: one that may
+    /// be kept, so the counts are made, as [`Missed::keep`] makes them.
     fn entry(answers: &Answers, at: &str, host: Option<&'static str>, lifetime: u64, body: usize) -> impl FnOnce(Place) -> Entry {
+        answers.counts();
         let (hash, written) = (answers.0.keys.hash_one(at), Written::of(&answers.0, at));
         let key = Key::new(at, host.map(HeaderValue::from_static).as_ref(), None);
         move |place| Entry {
@@ -1604,26 +1671,145 @@ mod tests {
         assert_ne!(count_of(b"/files/a%2Fb"), count_of(b"/files/a/b"));
     }
 
-    /// The counts of writes are made when the first page is asked for: a write before then finds
-    /// none, and what it wrote is there for that page's handler.
+    /// The counts of writes by path are made with the first answer that may be kept, not with
+    /// the first asked for. A write before then reads nothing of its path and is counted with
+    /// the others like it, however it ends: a request that asked before one ended has no answer
+    /// that stands, and one that began before the counts and ends after answers were kept drops
+    /// them all. From then on a write drops its own path's.
     #[test]
-    fn the_counts_of_writes_are_made_with_the_first_page_asked_for() {
+    fn the_counts_of_writes_are_made_with_the_first_answer_that_may_be_kept() {
         let answers = Answers::new(1 << 20).expect("a bound");
         let res = Response::new(Body::empty());
-        write(&answers, "/p").answered(&res);
+        let kept = |at| answers.find(at, None, None, false).is_some();
+        // A request that asks, as often as it likes, makes no counts.
+        let asked = Written::of(&answers.0, "/q");
+        assert!(asked.stands(&answers.0) && answers.0.written.get().is_none());
+        let signal = crate::Signal::default();
+        let req = http::Request::builder().method("POST").uri("/p").body(Body::empty()).expect("a request");
+        let early = answers.writing(&req, &signal);
+        assert!(early.counted.is_none() && signal.counts_a_write(), "nothing of its path is read, and it is a write");
+        assert!(asked.stands(&answers.0), "a write under way has written nothing a status could tell of");
+        early.answered(&res);
+        assert!(!asked.stands(&answers.0), "answered at another path: no counts say which");
+        let asked = Written::of(&answers.0, "/q");
         drop(write(&answers, "/p"));
+        assert!(!asked.stands(&answers.0), "dropped before its answer");
+        assert!(Written::of(&answers.0, "/q").stands(&answers.0), "a request that asks after it reads what it wrote");
+        assert_eq!(answers.0.early.load(Ordering::Acquire), 2);
+        assert!(answers.0.written.get().is_none(), "an app that keeps nothing holds no counts");
+
         // One that began before the counts were made and is answered after.
         let early = write(&answers, "/p");
-        assert!(answers.0.written.get().is_none(), "an app that keeps no page holds no counts");
         answers.keep(entry(&answers, "/p", None, 60, 10));
+        answers.keep(entry(&answers, "/other", None, 60, 10));
         assert!(answers.0.written.get().is_some_and(|counts| counts.len() == WRITES));
-        assert!(answers.find("/p", None, None, false).is_some());
+        assert!(kept("/p") && kept("/other"));
+        let later = write(&answers, "/p");
+        assert!(later.counted.is_some(), "a write that finds the counts is counted by its path");
         early.answered(&res);
-        assert!(answers.find("/p", None, None, false).is_none(), "it counts where the counts now are");
+        assert!(!kept("/p") && !kept("/other"), "it read no path, so no answer stands across it");
         answers.keep(entry(&answers, "/p", None, 60, 10));
-        assert!(answers.find("/p", None, None, false).is_some());
-        write(&answers, "/p").answered(&res);
-        assert!(answers.find("/p", None, None, false).is_none());
+        answers.keep(entry(&answers, "/other", None, 60, 10));
+        later.answered(&res);
+        assert!(!kept("/p") && kept("/other"), "by path from here on");
+        assert_eq!(answers.0.early.load(Ordering::Acquire), 3);
+    }
+
+    /// A write that ends after a request asked is seen by that request, whichever way the write
+    /// was counted and whenever the counts by path came to be: at its own path always, and at
+    /// every other when it found no counts. One thread writes freely and makes the counts part
+    /// of the way through, no sooner than a turn the round names; another writes in turn with
+    /// one that asks, which asks before each of its writes begins and looks once it has ended.
+    /// So every one of those writes is checked at its path, and those of the turns before the
+    /// counts at another, whatever the scheduler does; the turn the counts are made in is the
+    /// one that races them.
+    #[test]
+    fn a_write_that_ends_as_the_counts_are_made_is_seen_by_who_asked_before() {
+        /// Lets the other side of the turns go on if this one ends early, as a failed check does.
+        struct Open<'a>(&'a AtomicUsize);
+        impl Drop for Open<'_> {
+            fn drop(&mut self) {
+                self.0.store(usize::MAX, Ordering::SeqCst);
+            }
+        }
+        const WRITES_EACH: usize = 40;
+        let (mut early, mut by_path) = (0, 0);
+        for round in 0..200_usize {
+            // The turn the counts wait for: the writes of the turns before it find none.
+            let turn = 2 + round % 4;
+            let answers = Answers::new(1 << 20).expect("a bound");
+            // The turn the asker opened, the turn the writer ended, and how that write counted.
+            let (asked, ended, found_none) = (AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0));
+            let (answers, asked, ended, found_none) = (&answers, &asked, &ended, &found_none);
+            // Asked before any write: the free writer's first finds no counts and ends after it.
+            let first = Written::of(&answers.0, "/q");
+            let (modes, elsewhere) = std::thread::scope(|scope| {
+                let free = scope.spawn(move || {
+                    let mut modes = (0, 0);
+                    for n in 0..WRITES_EACH {
+                        if n == 1 + round % (WRITES_EACH - 2) {
+                            while asked.load(Ordering::SeqCst) < turn {
+                                std::thread::yield_now();
+                            }
+                            answers.counts();
+                        }
+                        let write = write(answers, "/p");
+                        match write.counted {
+                            None => modes.0 += 1,
+                            Some(_) => modes.1 += 1,
+                        }
+                        write.answered(&Response::new(Body::empty()));
+                        std::thread::yield_now();
+                    }
+                    modes
+                });
+                let turned = scope.spawn(move || {
+                    let _open = Open(ended);
+                    let mut modes = (0, 0);
+                    for n in 1..=WRITES_EACH {
+                        while asked.load(Ordering::SeqCst) < n {
+                            std::thread::yield_now();
+                        }
+                        let write = write(answers, "/p");
+                        match write.counted {
+                            None => modes.0 += 1,
+                            Some(_) => modes.1 += 1,
+                        }
+                        found_none.store(usize::from(write.counted.is_none()), Ordering::SeqCst);
+                        write.answered(&Response::new(Body::empty()));
+                        ended.store(n, Ordering::SeqCst);
+                    }
+                    modes
+                });
+                let asker = scope.spawn(move || {
+                    let _open = Open(asked);
+                    let mut elsewhere = 0;
+                    for n in 1..=WRITES_EACH {
+                        let (here, there) = (Written::of(&answers.0, "/p"), Written::of(&answers.0, "/q"));
+                        asked.store(n, Ordering::SeqCst);
+                        while ended.load(Ordering::SeqCst) < n {
+                            std::thread::yield_now();
+                        }
+                        // Its write began after this asked, and has ended.
+                        assert!(!here.stands(&answers.0), "a write ended at the path since the request asked");
+                        if found_none.load(Ordering::SeqCst) == 1 {
+                            assert!(!there.stands(&answers.0), "a write that found no counts ended since");
+                            elsewhere += 1;
+                        }
+                    }
+                    elsewhere
+                });
+                let (free, turned, asker) = (free.join(), turned.join(), asker.join());
+                let (free, turned) = (free.expect("the free writer"), turned.expect("the writer in turn"));
+                ((free.0 + turned.0, free.1 + turned.1), asker.expect("the one that asks"))
+            });
+            assert!(!first.stands(&answers.0), "a write that found no counts ended since the round's first request");
+            assert!(elsewhere >= turn - 1, "the writes of the turns before the counts found none: {elsewhere}");
+            early += modes.0;
+            by_path += modes.1;
+        }
+        // Both ways of counting were met.
+        assert!(early > 0 && by_path > 0, "{early} {by_path}");
     }
 
     /// Threads that keep, read, grow and write at once leave the bytes counted equal to what the
