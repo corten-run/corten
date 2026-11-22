@@ -3413,6 +3413,7 @@ function liveStatus(el, status) {
   el.dispatchEvent(new Event("corten-status", { bubbles: true }));
 }
 
+/** The fields `<corten-live>` declares, writable. @typedef {{ source: EventSource | null, applied: Promise<void> }} LiveFields */
 customElements.define(
   "corten-live",
   class extends HTMLElement {
@@ -3433,7 +3434,9 @@ customElements.define(
       // reconnecting (the browser retries), closed (it gave up) or ended (the server finished), and
       // `stale-since` is when a live stream dropped, until it is live again. Each change of
       // `status` dispatches `corten-status`.
-      const source = (this.source = new EventSource(url));
+      // Its fields are written through `LiveFields`, not `this`: checked JavaScript takes a property a
+      // method sets first as declared (docs/design.md#choice-handlers-checked-where-called).
+      const source = (/** @type {LiveFields} */ (this).source = new EventSource(url));
       liveStatus(this, "connecting");
       source.addEventListener("open", () => {
         this.removeAttribute("stale-since");
@@ -3449,7 +3452,7 @@ customElements.define(
         // The origin the stream came from, after any redirect: another's fragment is not drawn, nor
         // an event a script dispatched.
         if (!event.isTrusted || origin !== location.origin) return console.error("corten: <corten-live> draws only fragments its stream brought from this origin, not", event.isTrusted ? origin : "an event a script dispatched");
-        this.applied = this.applied.then(() => apply(data, undefined, null)).catch(reportError);
+        /** @type {LiveFields} */ (this).applied = this.applied.then(() => apply(data, undefined, null)).catch(reportError);
       });
       // The server's stream finished: stay as it is instead of reconnecting.
       source.addEventListener("end", () => {
