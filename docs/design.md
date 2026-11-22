@@ -7628,7 +7628,7 @@ rules something out.
     from more
     than one core; what the fewer instructions for a `Public` answer are in cycles, and how
     often a thread's answers go through more than four sets of numbers, whose headers it makes
-    again (each such answer counted above took fewer than main's); and the
+    again (both rotating workloads counted above averaged fewer a request than main's); and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
