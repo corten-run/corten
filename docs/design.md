@@ -7623,6 +7623,14 @@ rules something out.
     is now a byte shorter in zstd): the browser's hit ran 29,699 (29,697 to 29,699) for 542 bytes
     against 29,560 (29,560 to 29,561) for 637, +139 (+0.47%), the hit whose brotli found no room
     29,838 against 29,566, +272 (+0.92%), and gzip alone 29,359 against 29,312, +47 (+0.16%).
+    The bound on a body's size (`dff0545ad` against `cde42e710`, this change before it, and
+    main's `a0eeeacca`, the same three rounds with the three builds' order turned about, the
+    answers' codings and sizes the same as before it): the browser's hit ran 29,704 against 29,704
+    and 29,565, the hit whose brotli found no room 29,844 (29,843 to 29,844) against 29,843 and
+    29,571, gzip alone 29,364 (29,363 to 29,364) against 29,364 and 29,317, the kept JSON body
+    29,452 (29,452 to 29,453) against 29,453 (29,453 to 29,454) and 29,680, and a page made and
+    kept 146,065 (146,065 to 146,068) against 146,061 (146,061 to 146,065) and 146,068 (146,065 to
+    146,069): within 4 instructions of the change before it on each.
     One thread's count does not show what the
     two writes cost where several cores answer the same page, which no run here measured. Answers
     whose work this change leaves alike, or adds a few comparisons to, differ by -211 to +254 in
@@ -7693,7 +7701,7 @@ rules something out.
     and, with no diagnostic run of its own, to the refused page's; the measured regression is not
     yet explained or ruled out.
     The test is a second run on the quiet host of this change's code as of `50105442c` (the
-    commits after it change tests and documentation only) against main's `a0eeeacca`, with every
+    commits after it up to `cde42e710` change tests, comments and documentation only) against main's `a0eeeacca`, with every
     turn on a newly started build, 100 pairs a workload, the order turned about each pair and the
     workloads and margin of the first: this change merges only if the one-sided 95% bound on the
     median change within a pair in user plus kernel cycles a request is under +1% on both the
@@ -7726,6 +7734,9 @@ rules something out.
     starts, its host and the commits on both sides, so it does not say which, if any, accounts for
     them. As declared, a bound under +1% on all four clears the gate, with `refused`'s setup
     verified only as far as above; it shows neither a lower cost nor that layout was the cause.
+    Neither run measures `dff0545ad`, which adds the bound on a body's size: an answer given
+    again runs the same code for a body of up to 32 KiB, and a page made and kept one comparison
+    more, but the binary differs, so both runs stay results for their own commits.
     Neither run on a quiet host counted user first-level instruction-cache misses, which
     CONTRIBUTING.md asks for as a diagnostic when code is added or moved and makes no exception
     for; this is recorded as one. Each turn counted `cycles:u`, `cycles:k` and `instructions:u`
@@ -8094,8 +8105,9 @@ rules something out.
     preloaded; 2026-11-22, the same brotli 5 under load at `50105442c` against `a0eeeacca` on a
     second quiet host (Xeon Platinum 8358, Linux 6.12.117, rustc 1.100.0, jemalloc 5.3.0
     preloaded), every turn on a newly started build; 2026-11-22, how long a held value waits
-    behind a kept brotli 5, by the probe above at `cde42e710` and `a0eeeacca` with the same
-    rustc, brotli and zstd.
+    behind a kept brotli 5, by the probe above at `cde42e710` and `a0eeeacca` with rustc 1.99.1
+    and the same brotli and zstd, and the bound's counts at `dff0545ad` under callgrind (valgrind
+    3.24.0) with rustc 1.100.0 in rust:1-trixie.
 
 ## Rules
 
