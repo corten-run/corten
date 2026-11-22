@@ -2016,7 +2016,10 @@ async fn an_accept_language_a_page_does_not_vary_on_does_not_count_against_it() 
         Public::new(Duration::from_secs(60), req.test_page_for("Lang", html! { <p>"in "{lang}</p> }))
     };
     let two = |bound| {
-        App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).messages::<LongMsg>().kept_answers(bound).router()
+        App::new(Routes::from(Table::new().route("/", crate::route::get(page).0)))
+            .messages::<LongMsg>()
+            .kept_answers(bound)
+            .router()
     };
     let bound = least(two).await;
     assert!(!kept(two(bound), &long).await, "a page that varies on the header is kept with it, and it counts");

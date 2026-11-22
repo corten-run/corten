@@ -7323,8 +7323,9 @@ rules something out.
 
     Not chosen: in front of the middleware, for the reasons above, though it would save the
     stages too; holding a page's whole render buffer, which is an eighth larger than the page
-    and as large as the last page rendered (above); asking the marks whether or not the store has room, which spares the copy
-    for every URL asked for once and makes the second visitor of every page wait for its
+    and as large as the last page rendered, or asking the allocator to shrink it to the page,
+    which jemalloc does by moving the page for most lengths (above); asking the marks whether
+    or not the store has room, which spares the copy for every URL asked for once and makes the second visitor of every page wait for its
     handler in an app whose pages all fit; a mark that holds part of a hash of its URL, which
     another URL takes, so that the rule fails toward an answer that is not kept and a store
     with more pages than marks forgets them; a mark that ages (an answer kept only when its
@@ -7426,33 +7427,53 @@ rules something out.
     count of faults does not depend on), and a full store spends 31,863 cycles in the
     kernel.
     What a page made and kept with room asks of the process was then cut, under callgrind
-    (valgrind 3.24.0, glibc 2.41, rustc 1.100.0, a probe app serving a `Public` page of 5,208
-    bytes over one keep-alive connection with a browser's fifteen headers, a new URL each
-    request and a bound of 1 GiB that no run fills, the count for 1,300 requests less that for
-    300 over 1,000, three rounds alternating the builds whose counts agreed within 10
-    instructions): on main's `564034b86` such a request ran 105,049 instructions against 91,739
-    with the store off, 13,310 more. Holding the body in the buffer its handler made, cut to its
-    length (`84e0a0ec6`), where it had been copied to an allocation of its own, took 104,830;
-    hashing the URL once, for the table and for each lookup (`1f248f657`), 103,257; and the URL,
-    `Host` and `Accept-Language` in one allocation made for the miss (`df1856704`), 102,340, 2.6%
-    fewer than main and 10,601 more than the store off. The allocator was called 48 times a
-    request and `realloc` once, against 52 on main and 38 with the store off, `memcpy` 85 times
-    against 90, and the minor page faults fell from 1.641 to 1.617 a request with the URL held
-    once; callgrind's simulated last level missed 102.3 times against 104.2, which is the store
-    touching memory for the first time, what not copying does not change. A kept page took
-    60,707 instructions against 60,604 (+0.17%, most of it in `_int_malloc` with the heap laid
-    out otherwise), and the store off, a page not `Public` and a write the same to within 10. Of the 10,601, by function, about 4,500 are the allocator's
+    (valgrind 3.24.0, rustc 1.100.0, a probe app serving a `Public` page of 5,208 bytes over one
+    keep-alive connection with a browser's fifteen headers, `Accept-Language` among them, a new
+    URL each request and a bound of 1 GiB that no run fills, the count for 1,300 requests less
+    that for 300 over 1,000, three rounds alternating the builds whose counts agreed within 60
+    instructions), under glibc 2.41 and under the template's allocator, Debian's libjemalloc2
+    5.3.0 put in with `LD_PRELOAD`: on main's `92a745a63` such a request ran 105,053
+    instructions under glibc and 98,547 under jemalloc, against 91,734 and 85,980 with the store
+    off. Hashing the path and query once for the table, by keys of the store's own, for the
+    lookup and the keeping (`1f248f657`; the count of writes and a full store's mark hash it on
+    their own), and holding a kept copy's URL, `Host` and, for a page that varies on it,
+    `Accept-Language` in one allocation, made from the request's own bytes when the page is kept
+    (`eb20c55bb`), took 103,491 under glibc and 97,508 under jemalloc, 1.5% and 1.1% fewer; for a
+    page of 7,635 bytes 116,556 against 118,243 and 113,061 against 114,210. The allocator was
+    called 49 times a request against 52 under both, `memcpy` 88 times against 90, and the minor
+    page faults fell from 1.641 to 1.617 a request under glibc and from 1.884 to 1.877 under
+    jemalloc. A kept page took 60,665 instructions against 60,602 under glibc and 54,621 against
+    54,597 under jemalloc (for the larger page 60,912 against 60,556 under glibc, of which
+    `_int_malloc` and the chunks it unlinks and consolidates are 303 with the heap laid out
+    otherwise, and 54,827 against 54,787 under jemalloc), and the store off, a page not
+    `Public` and a write the same to within 5. The steps between, under jemalloc at 5,208 bytes:
+    hashing once took 809 off; the key in one allocation made for the miss (`3278beb10`) 553
+    more, but it held and counted an `Accept-Language` the page did not vary on, so a page near
+    its share of the bound was not kept for a client that sent a long one; made when the page is
+    kept (`09170f7ec`) it gives 336 of those back, in moving the request's URL and header values,
+    whose bytes it shares until then, with the answer's future; and copying the page, where
+    those steps had shrunk its buffer, 190 (below). At `df1856704` such a request ran 10,601
+    instructions more than with the store off under glibc, of which, by function, about 4,500
+    are the allocator's
     (ten more allocations and a `realloc`, among them the entry, its key, the URL's list in the
     table, a copy of the head for the answer sent and the mark on it, in a heap the store
     grows, `_int_malloc` alone 1,592), about 2,300 the store reading the request and the answer
     (the headers it is asked with, `Vary`, what an answer must not carry, the head's size), 900
     putting the entry in its place under the lock, 500 `memcpy` and the rest the URL's hashes.
     Holding the handler's whole buffer and counting its capacity was tried first (on
-    `6c8c27b55`): a page's buffer is sized for the last page rendered and an eighth more, so a uniform page holds an eighth it does not use, and its faults rose from
-    1.65 to 1.81 a request; cut to its length, glibc gives the rest back where it is, so the
-    bytes are not copied, where an allocator that cannot shrink in place copies them as before.
-    Hashing a path for its count of writes by the table's keyed hash too, so that a lookup and a
-    write share one hash, cost a kept page 125 to 156 instructions more, and was left out.
+    `6c8c27b55`): a page's buffer is sized for the last page rendered and an eighth more, so a
+    uniform page holds an eighth it does not use, and its faults rose from 1.65 to 1.81 a
+    request. Asking the allocator to shrink the buffer to the page's length instead of copying
+    the page (at `bfb957ebb`) saved 220 to 648 instructions under glibc, which shrinks a chunk
+    where it is, for pages of 5,208 to 7,979 bytes; under jemalloc it saved 162 and 223 where
+    the page and its buffer are in one size class (5,208 and 6,247 bytes), where jemalloc leaves
+    the buffer as it is, and cost 497 to 665 more for the seven other lengths tried, from 5,555
+    to 7,979 bytes, where jemalloc moves the page to an allocation of the smaller class: the
+    copy again, with the lookups of a `realloc` around it. With jemalloc's classes a seventh to
+    a quarter apart, a buffer an eighth larger than its page is in the next class for more than
+    half of all lengths, so the page is copied, as before. Hashing a path for its count of
+    writes by the table's keyed hash too, so that a lookup and a write share one hash, cost a
+    kept page 125 to 156 instructions more, and was left out.
     By simulation from these counts (`bench/catalog/sim-kept-store.mjs` at `16f2f5480`: the
     store's clock with and without the rule, 5,461 pages of 6 KiB in 32 MiB, four million
     requests of which the second two million are counted, drawn from a Zipf law over the
@@ -7501,8 +7522,9 @@ rules something out.
     kept page in those rounds is the rule, two builds of the same code having differed by
     more from one start to the next; a miss kept with room in memory the store has used
     before (room made by a write or by a page's lifetime ending), in cycles; the cuts of
-    `84e0a0ec6` to `df1856704` in cycles, and the first under an allocator that copies a buffer
-    it shrinks; a store read
+    `1f248f657` and `eb20c55bb` in cycles; pages of more than 8 KiB, whose copy callgrind counts
+    a byte at a time (glibc's `memcpy` uses `rep movsb` there), and from 16 KiB, where
+    jemalloc's classes are whole pages and a shrink need not move the page; a store read
     from more
     than one core; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
@@ -7530,7 +7552,9 @@ rules something out.
     repeated walks turn an app's store over, so a mark should age; an app must drop a page for a
     change made by a task, another instance or a purge; the stages around the handler
     become most of a kept page's cost on a measured app, so a place further out is worth its
-    rules; a multi-core measurement shows requests waiting on the store's lock; writes no
+    rules; a multi-core measurement shows requests waiting on the store's lock; a count of
+    cycles under jemalloc shows shrinking a page's buffer beating the copy for the page lengths
+    apps send, those over 16 KiB above all; writes no
     handler takes (a scanner's `POST /`) make kept pages again often enough to show, so the
     router's own refusals are worth leaving out where the request met no middleware; or the
     connection speaks HTTP/2, where a request's target carries its authority.
@@ -7541,9 +7565,10 @@ rules something out.
     running, started once on one CPU, loaded in turn for three seconds each by `wrk` with 64
     connections on two other CPUs, the order of the two turned about from each pair to the next,
     the app's cycles counted by `perf stat` over each turn and divided by the requests answered; 2026-11-21, a
-    page made and kept with room at `564034b86`, `84e0a0ec6`, `1f248f657` and `df1856704`, under
-    callgrind as above in `rust:1-trixie`, with the faults counted from `/proc/self/stat` over
-    5,000 requests and the calls to the allocator from callgrind's call counts; 2026-11-21, the
+    page made and kept with room at `df1856704` under glibc, and at `92a745a63`, `bfb957ebb`, `1f248f657`, `3278beb10`, `09170f7ec` and `eb20c55bb` under
+    glibc and under jemalloc, for pages of 5,208 to 7,979 bytes, under callgrind as above in
+    `rust:1-trixie`, with the faults counted from `/proc/self/stat` over 5,000 requests and the
+    calls to the allocator from callgrind's call counts; 2026-11-21, the
     historical pair `30b39d455` and `45489ced9`, by callgrind alone; 2026-11-21, the rule for a full store with rustc 1.100.0: each count the
     difference of a run of 1,300 requests and one of 300 under callgrind, a new URL each, of
     which the first 28 or so fill a bound of 256 KiB, and for the second request the
