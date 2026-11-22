@@ -17,7 +17,7 @@
 //! every read takes 162 µs (zstd 1) to 634 µs (brotli 1), and gives 5,655 bytes against 6,577
 //! with zstd 1 (a Linux container on a busy desktop, five runs, medians). brotli 11 would take
 //! about 194 ms (one run on Windows), too long for a value that changes while the app runs.
-//! An answer the app keeps ([`crate::kept`]: a page, or a whole JSON or text body) has each coding
+//! An answer the app keeps ([`crate::kept`]: a page, or a whole JSON, text or file body) has each coding
 //! made once at the per-request level, by the first request that asks for it. Its brotli 5 is
 //! made by no request but by the thread that compresses held JSON, when no held value waits:
 //! each kept copy's second compressed answer to a client that ranks brotli as high as any coding

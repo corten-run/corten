@@ -2902,7 +2902,7 @@ async fn a_public_json_or_text_answer_is_kept_and_given_again() {
     assert!(status == StatusCode::NOT_MODIFIED && none.is_empty() && texts.count() == 1);
 }
 
-/// A kept JSON or text body's compressed forms are a kept page's: given brotli made at
+/// A kept JSON, text or file body's compressed forms are a kept page's: given brotli made at
 /// `Level::Kept` after its second answer to a client that takes brotli, by no request, so a
 /// browser gets it once it is made with the same tag, and one that takes only gzip gets what was
 /// made for gzip. Its brotli is queued on that second answer exactly: not on the handler's, which
@@ -2925,7 +2925,16 @@ async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
         text_ran.ran();
         async move { Public::new(minute, (0..60).map(|n| format!("line {n} of the kept text\n")).collect::<String>()) }
     };
-    let routes = Table::new().route("/items", crate::route::get(items).0).route("/text", crate::route::get(text).0);
+    let file_ran = runs.clone();
+    let file = move || {
+        file_ran.ran();
+        let rows: String = (0..120u32).map(|n| format!("card {n},{}\n", n * 7919 % 1000)).collect();
+        async move { Public::new(minute, crate::Media::new("text/csv", rows)) }
+    };
+    let routes = Table::new()
+        .route("/items", crate::route::get(items).0)
+        .route("/text", crate::route::get(text).0)
+        .route("/cards.csv", crate::route::get(file).0);
     let router = App::new(Routes::from(routes)).router();
     let browser = [("accept-encoding", "gzip, deflate, br, zstd")];
     let data = [("accept-encoding", "gzip, deflate, br, zstd"), ("accept", "application/json")];
@@ -2939,7 +2948,8 @@ async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
         }
         true
     })));
-    for (path, asked) in [("/items", &browser[..]), ("/text", &browser[..]), ("/items", &data[..])] {
+    let asked = [("/items", &browser[..]), ("/text", &browser[..]), ("/cards.csv", &browser[..]), ("/items", &data[..])];
+    for (path, asked) in asked {
         let ran = runs.count();
         let before = queued.get();
         let (_, first, fast) = fetch(&router, "GET", path, asked).await;

@@ -7470,7 +7470,7 @@ rules something out.
     stays at 1 for the few clients that take nothing else. Made on the request that makes the
     copy, brotli 5 would add 1.01 million instructions to it where zstd 1 adds 0.12 million.
 
-    A kept JSON or text body is bytes made once and sent many times too, and its compressed
+    A kept JSON, text or file body is bytes made once and sent many times too, and its compressed
     forms are kept the same way, so it gets its brotli 5 by the same rule and in the same queue:
     one rule for whatever the store keeps. JSON the app holds as bytes (`json::Raw`), whose
     forms are the held values that queue goes after, is never kept, so no answer has a job in
@@ -7503,7 +7503,7 @@ rules something out.
     that no longer did; its job in the queue held values wait in, where a burst of kept pages kept
     a held value out or made it wait behind all of them; a turn for a kept page after so many held
     values, which would make a held value wait behind a page's encoding for a form the page does
-    without; leaving a kept JSON or text body at the per-request level, a second rule for what
+    without; leaving a kept JSON, text or file body at the per-request level, a second rule for what
     the store keeps that no measurement asked for; off unless asked for, which leaves the
     cost on every app that already said its
     pages are public; a page for one visitor kept by caller, where a mistake in the key shows
@@ -7596,7 +7596,51 @@ rules something out.
     made uncompressed -168. At `0d96aa8b3` against `68ce3f1e6` callgrind's caller trees showed
     both builds calling `malloc` 31 times for each answer given again in a browser's codings.
     What changes the allocator's paths (the entry's added fields, the sizes of what is held, or
-    another difference in layout or warm-up) these runs do not separate. The levels'
+    another difference in layout or warm-up) these runs do not separate.
+    Under load on a quiet cloud host (Xeon Platinum 8280, Linux 6.12.117, rustc 1.100.0; a probe
+    app serving a record page of about 6 KB and the JSON body of `tests/kept_coding_cost.rs` on
+    jemalloc, as `corten new`'s Dockerfile runs an app, built at `5d72a9315` and at main's `e7e89add8`; one start of each build, 100
+    pairs of 3 s turns of `wrk` with 64 connections with the order turned about, `perf stat` on
+    the app's process; the commits after `5d72a9315` change tests and comments), cycles a request
+    changed at the median of the pairs by -1.12% for a kept page given again to a browser (1,634
+    bytes of brotli 5 against 1,818 of zstd 1; one-sided 95% bound -0.94%), -0.99% for it in gzip
+    alone (bound -0.80%), +1.00% where its brotli found no room (bound +1.14%) and +2.84% for the
+    kept JSON body given to a data client with a browser's codings (280 bytes of brotli 5 against
+    328 of zstd 1; bound +3.05%; user cycles +4.95%, kernel +0.84%; 66,567 requests a second
+    against 68,255), with user instructions within 0.04% in each. The margin set before the run,
+    a bound under +1%, was met for the first two and not for the last two; two other changes'
+    builds in the same run, which leave the path measured as it was, read +1.07% and +1.27% with
+    their instructions flat. The JSON body's 5% more user cycles at the same instructions is not
+    this change's work, by what follows (the same two commits built as on that host, callgrind
+    with its cache and branch simulation, valgrind 3.24.0, and `perf stat` on a Comet Lake
+    workstation under Docker Desktop that ran other work). Given that body 2,000 times on 64
+    connections once it was warm, the app ran 31,602 instructions an answer against 31,623, and
+    the function that gives the kept bytes (`compress::finish`, with `Kept::coded` in it) 713
+    against 724, with 8 conditional and 2 indirect mispredictions against 12 and 7 and 4.5
+    first-level data misses against 4.3: the brotli bytes go to the socket unread, no lock is
+    taken, and the thread that made them ran nothing while the answers were counted. The app's
+    simulated first-level data misses were 330 against 310 an answer and its instruction misses
+    1,811 against 1,798, with its mispredictions the same (284 and 81 against 287 and 84) and none
+    at the last level; the 20 more data misses fall in code this change does not touch
+    (`malloc`, `free`, `httparse`, `Asked::find`, the stages' run and the tag, 2 to 5 each),
+    and come to the same, 327 against 305, when the body is asked for in zstd alone and no brotli
+    is ever made. In process (`tests/kept_coding_cost.rs` with `KEPT_ROUTE=json`) it was 166
+    against 156, and 21 more mispredictions, 10 of them in `compress::negotiate`, whose code is
+    the same in both. A base given this change's larger entry (600 bytes for 552, one of
+    jemalloc's size classes for both) took 309. Relinked with its functions in three other orders
+    (LLD's `--shuffle-sections`) or its constants in three others, or run with its stack moved
+    by eight steps of 512 bytes or with eight sizes of a preloaded library's thread-local data, the base took 293
+    to 327 and this change 312 to 344: a difference of the two builds' layout, which moves either
+    by as much and which none of these removes. On the workstation's counters, in eight starts
+    of both builds (116 pairs of 3 s turns), this change's user cycles for that answer were
+    -0.42% at the pooled median (-3.27% to +4.40% by start) with user instructions -0.05%, its
+    first-level load misses +4.6% (+3.0% to +5.8% by start), its mispredictions -0.9% and its
+    page walks 13.0 an answer as the base's; the same binary started twice differed by -0.94% to
+    +3.77% by start (first-level load misses +0.9%), and the base relinked in other orders by
+    +0.2% to +4.5% against it. So the JSON body's cost on the quiet host, one start of each
+    build, is inside what a layout and a start move, and the change makes no difference in code
+    for it.
+    The levels'
     bytes and instructions above are a probe's that compresses as `compress::encode` does, whose
     level-1 bytes matched the app's answers, on the catalog benchmark's ten record pages and
     card-market's twelve demo item pages as served at `b5324cbae`, its instructions by callgrind
@@ -7948,7 +7992,10 @@ rules something out.
     reads a weight only when zstd won, on `ae3634e49` and `04c209fca` for a kept page and a kept
     JSON body, and with fast bins off on `9831ef711` and `564034b86`, in
     rust:1-trixie with glibc's allocator, and `tests/kept_memory.rs` at `9831ef711`, with all
-    features and with none.
+    features and with none. 2026-11-22, a kept page's and JSON body's brotli 5 under load on the
+    quiet host at `5d72a9315` against `e7e89add8`, and the JSON body's layout under callgrind and
+    a workstation's counters on the same commits, rustc 1.100.0 in rust:1-trixie, jemalloc 5.3.0
+    preloaded.
 
 ## Rules
 
