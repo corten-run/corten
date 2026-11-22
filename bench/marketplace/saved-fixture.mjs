@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
-import { cpuSettings, passPlan, resultSchema, sources, stageAggregate, timedProfiles } from "./run-contract.mjs";
+import { cpuSettings, inventory, passPlan, resultSchema, sources, stageAggregate, timedProfiles } from "./run-contract.mjs";
 import { boundedFeatureProfile, boundedQualificationSettings, featureProfile, produceBoundedQualification, qualification, qualificationSettings } from "./feature-contract.mjs";
 import { boundedQualificationProbes, qualificationProbes } from "./qualification-fixture.mjs";
 import { splitApps } from "./run-contract.mjs";
@@ -25,7 +25,7 @@ export function summaryFixture(commit, { historical = false } = {}) {
       upstream: "Synthetic", cpuWindow: "Synthetic", coldClock: "Synthetic", featureProfile: historical ? featureProfile : boundedFeatureProfile,
       qualificationSettings: historical ? qualificationSettings : boundedQualificationSettings } };
   for (const app of apps) {
-    const a = s.apps[app] = { imageId: `sha256:${"b".repeat(64)}`, builtCommit: commit, builtDirty: false, checks: {}, runs: {}, phases: {},
+    const a = s.apps[app] = { label: inventory[app].label, imageId: `sha256:${"b".repeat(64)}`, builtCommit: commit, builtDirty: false, checks: {}, runs: {}, phases: {},
       qualification: Object.fromEntries(sources.map((source) => [source, historical ? qualification(qualificationProbes(), source)
         : produceBoundedQualification(boundedQualificationProbes(source), source)])) };
     for (const source of sources) a.checks[source] = { workload, source, jsonRecords: 500, pages: 264,

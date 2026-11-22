@@ -985,7 +985,7 @@ before it (a route that says `unstaged` goes through none;
    has answered. Either way the page is filled with their values before its answer goes back out
    through 5: a middleware sees the filled page, and the time it measures around `next`
    includes the reads' wait ([design Choice 20](../design.md#choice-layout-reads)).
-   A `Public` page, JSON or text answer the app has kept is given here in the handler's place
+   A `Public` page, JSON, text or file the app has kept is given here in the handler's place
    ([Caching](#the-pages-the-app-keeps)): stages 1 to 5 ran for the request as for any other,
    and 7 and 8 follow.
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
@@ -1506,8 +1506,8 @@ mistake, the runtime loads the URL as a whole page instead of swapping it in.
 
 ### The pages the app keeps
 
-The app is the first shared cache of its own `Public` pages, and of its `Public` JSON and
-text where it compresses them (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
+The app is the first shared cache of its own `Public` pages, and of its `Public` JSON,
+text and files where it compresses them (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
 such request in the handler's place until the answer's shared lifetime ends: `s-maxage` where
 the answer has `.shared(..)`, else `max_age`. So a `Public` page's handler does not run for
 every request, and what it read may be that old when a visitor sees it, as it already may be
@@ -1599,7 +1599,8 @@ wait for, a database whose readers lag its writer) can leave the page as it was 
 lifetime ends.
 
 Nothing else is meant to drop a page before its lifetime ends (a write to another path does
-once in 65,536 times, where two paths share a count). A write to another path does not drop the
+once in 65,536 times, where two paths share a count, and so does one that began before the app
+had made any answer it may keep, below). A write to another path does not drop the
 list, and neither does a change made outside a request to the app (a task, a script, another
 instance): the page shows it when its lifetime ends, which is what the lifetime says. Purging a
 CDN in front does not purge the app, which gives the CDN the kept page again with its `Age`.
@@ -1620,9 +1621,13 @@ of a page's handler: in a full store the answer to the first request for a URL t
 not remember is not kept, whether the page is new, or was kept while there was room or before
 the bits were last cleared and has since passed its lifetime or been dropped. A store that has filled mostly stays full, since a page past its lifetime keeps
 its room until another needs it. Nothing is kept under `corten dev`,
-so a change shows on the next load. An app with no `Public` page, and no `Public` JSON or text route in a build with `compress`, keeps nothing whatever the
-bound, and its writes are not counted, so it pays nothing for pages it cannot keep; one whose `Public` JSON or text
-is all too small to keep still holds a store there, since a body's size is known only when it is made. An app's tests keep pages as a deploy does (`App::test`,
+so a change shows on the next load. An app with no `Public` page, and no `Public` JSON, text or file route in a build with `compress`, keeps nothing whatever the
+bound, and its writes are not counted, so it pays nothing for pages it cannot keep; one whose `Public` JSON, text and files
+are all too small to keep, or of a type it does not compress (a picture, a stream, a file at a URL that names its content), still holds a store there, since a body's size and type are known only when it is made, and
+pays for no count by path: writes are counted by path from the first answer the app may keep,
+and until then all together, so a write that was under way when that first answer was made drops
+every answer kept by the time it ends, and so does work it left (`signal.finish`) each time
+some ends. An app's tests keep pages as a deploy does (`App::test`,
 `App::router`): a test that changes what a `Public` page shows other than by a write through the
 app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page
@@ -1654,10 +1659,16 @@ site is sent another's. A write drops it as it drops a page: `PUT /api/items/7` 
 kept for `GET /api/items/7`, and not the list at `/api/items`, which shows the change when its
 lifetime ends.
 
-A file (`Media`), a sitemap or `robots.txt` (`seo::File`), a relay, a live stream and a feed are
-not kept: each is its handler's for every request, and so is JSON the app holds as bytes
-(`Json<json::Raw>`), which already keeps its compressed forms. One file is kept: a file of a known size that a page route
-answers in its page's place (`PageOr<Media>`), as that page would be. Nothing that is not `Public` is kept either: a
+A file (`Media`), a sitemap and `robots.txt` (`seo::File`) are kept as text is: where the app
+compresses them, so a CSV, an SVG or a sitemap of 1,024 bytes or more is kept, with the headers
+its handler gave it (its type, its file name), and a PNG, a JPEG or a short `robots.txt` is its
+handler's for every request. A file sent as a stream (`Media::stream`) has no body to hold, and
+one at a URL that names its content (`Public::immutable`) is left to the caches that keep it for
+a year, so neither is kept. A file of a known size that a page route answers in its page's place
+(`PageOr<Media>`) is kept as that page would be, whatever its type.
+
+A relay, a live stream and a feed are not kept: each is its handler's for every request, and so
+is JSON the app holds as bytes (`Json<json::Raw>`), which already keeps its compressed forms. Nothing that is not `Public` is kept either: a
 page for one visitor runs its handler for every request, because a key that had to cover the
 caller is where a mistake shows one user's page to another. Cache the data such a page reads in
 the app, where it knows when the data changes.

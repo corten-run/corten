@@ -11,6 +11,15 @@ function candidate(expression, prefix = "", componentPrefix = "") {
     base, action: base + "/marketplace/fr-FR/item_2", recordId: "item_2", locale: "fr-FR" };
 }
 
+test("dispatch binds the native alert route and keeps the historical record route readable", () => {
+  assert.equal(discoverReactEndpoint([candidate(`fetch(${endpoint},{method:"POST"})`)])?.path, "/api/marketplace/item_2");
+  const alert = '"/api/marketplace/"+r.id+"/alerts?locale="+l';
+  assert.equal(discoverReactEndpoint([candidate(`fetch(${alert},{method:"POST"})`)])?.path, "/api/marketplace/item_2/alerts");
+  for (const path of ["/api/marketplace/item_1/alerts", "/api/marketplace/item_2/other"]) {
+    assert.equal(discoverReactEndpoint([candidate(`fetch("${path}?locale="+l,{method:"POST"})`)]), null);
+  }
+});
+
 test("dispatch evaluation: every fetch argument and option must be supported", async (t) => {
   for (const [name, options, extra = "", prefix = "", componentPrefix = ""] of [
     ["body call", '{method:"POST",body:unknown()}'],

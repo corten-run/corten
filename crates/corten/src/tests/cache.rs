@@ -1569,7 +1569,7 @@ async fn a_write_drops_the_pages_kept_at_its_path() {
 }
 
 /// What a write's handler finds: whether the app has a store of kept pages, and whether the
-/// write is counted for its path.
+/// write is counted, for its path or with the writes from before the app counts by path.
 async fn store_and_count(signal: crate::Signal) -> String {
     let store = signal.shared().is_some_and(|shared| shared.kept.is_some());
     format!("store={store} counted={}", signal.counts_a_write())
@@ -1612,6 +1612,10 @@ async fn only_an_app_with_a_public_page_counts_its_writes() {
     let body = App::new(Routes::from(edit().route("/words", crate::route::get(words).0))).router();
     let kept = cfg!(feature = "compress");
     assert_eq!(write(body).await, format!("store={kept} counted={kept}"), "a Public body alone");
+    // A file is a whole body too, kept or not: which is known only as each is made.
+    let file = || async { Public::new(Duration::from_secs(60), crate::Media::new("image/png", &[0x89u8; 4][..])) };
+    let filed = App::new(Routes::from(edit().route("/mark.png", crate::route::get(file).0))).router();
+    assert_eq!(write(filed).await, format!("store={kept} counted={kept}"), "a Public file alone");
 }
 
 static COUNTER_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -1754,7 +1758,8 @@ fn a_handler_s_inputs_say_whether_its_page_can_be_kept() {
 }
 
 /// A page whose handler was reading while a write to its path went through may show what was
-/// there before: it is sent, and not kept.
+/// there before: it is sent, and not kept. The write here is counted by its path, another page
+/// having been kept before it.
 #[tokio::test]
 async fn a_page_made_while_a_write_went_through_is_not_kept() {
     let (runs, written) = (Runs::default(), std::sync::Arc::new(tokio::sync::Notify::new()));
@@ -1769,8 +1774,12 @@ async fn a_page_made_while_a_write_went_through_is_not_kept() {
             Public::new(Duration::from_secs(60), req.test_page_for("Slow", html! { <p>"slow"</p> }))
         }
     };
-    let routes = Table::new().route("/", crate::route::get(page).0.post(|| async { StatusCode::NO_CONTENT }));
+    let other =
+        |req: Req| async move { Public::new(Duration::from_secs(60), req.test_page_for("Other", html! { <p>"other"</p> })) };
+    let how = |signal: crate::Signal| async move { signal.counted_as() };
+    let routes = Table::new().route("/", crate::route::get(page).0.post(how)).route("/other", crate::route::get(other).0);
     let router = App::new(Routes::from(routes)).router();
+    fetch(&router, "GET", "/other", &[]).await;
     let reading = tokio::spawn({
         let router = router.clone();
         async move { fetch(&router, "GET", "/", &[]).await }
@@ -1778,8 +1787,8 @@ async fn a_page_made_while_a_write_went_through_is_not_kept() {
     while runs.count() == 0 {
         tokio::task::yield_now().await;
     }
-    let (status, _, _) = fetch(&router, "POST", "/", &[("sec-fetch-site", "same-origin")]).await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, counted) = fetch(&router, "POST", "/", &[("sec-fetch-site", "same-origin")]).await;
+    assert_eq!((status, &counted[..]), (StatusCode::OK, &b"path"[..]));
     written.notify_one();
     let (status, headers, _) = reading.await.unwrap();
     assert!(status == StatusCode::OK && !headers.contains_key(header::AGE));
@@ -1787,6 +1796,175 @@ async fn a_page_made_while_a_write_went_through_is_not_kept() {
     assert!(runs.count() == 2 && !headers.contains_key(header::AGE), "made again after the write: {headers:?}");
     let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
     assert!(runs.count() == 2 && headers.contains_key(header::AGE), "and that one is kept");
+}
+
+/// An app counts its writes by path once it has made an answer it may keep. Until then a write
+/// reads nothing of its path and is counted with the others like it: an answer the app does not
+/// keep makes no counts, however often it is asked for, and a page whose handler read while such
+/// a write went through, at any path, is sent and not kept. Once the counts are there a write
+/// drops only what is kept at its own path.
+#[tokio::test]
+async fn a_write_is_counted_by_path_once_an_answer_may_be_kept() {
+    let same_origin = [("sec-fetch-site", "same-origin")];
+    let (runs, written) = (Runs::default(), std::sync::Arc::new(tokio::sync::Notify::new()));
+    let (counted, wait) = (runs.clone(), written.clone());
+    let page = move |req: Req| {
+        counted.ran();
+        let (first, wait) = (counted.count() == 1, wait.clone());
+        async move {
+            if first {
+                wait.notified().await;
+            }
+            Public::new(Duration::from_secs(60), req.test_page_for("Slow", html! { <p>"slow"</p> }))
+        }
+    };
+    // A body too small for any build to keep.
+    let words = || async { Public::new(Duration::from_secs(60), "words") };
+    let how = |signal: crate::Signal| async move { signal.counted_as() };
+    let routes = Table::new()
+        .route("/", crate::route::get(page).0)
+        .route("/words", crate::route::get(words).0)
+        .route("/items/{id}/edit", crate::router::post(how));
+    let router = App::new(Routes::from(routes)).router();
+    let write = |router: Router| async move {
+        let (status, _, body) = fetch(&router, "POST", "/items/7/edit", &same_origin).await;
+        assert_eq!(status, StatusCode::OK);
+        String::from_utf8(body.to_vec()).unwrap()
+    };
+    assert_eq!(write(router.clone()).await, "early", "nothing asked for yet");
+    for _ in 0..3 {
+        assert!(!fetch(&router, "GET", "/words", &[]).await.1.contains_key(header::AGE));
+    }
+    assert_eq!(write(router.clone()).await, "early", "an answer the app does not keep makes no counts");
+
+    let reading = tokio::spawn({
+        let router = router.clone();
+        async move { fetch(&router, "GET", "/", &[]).await }
+    });
+    while runs.count() == 0 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(write(router.clone()).await, "early", "a page asked for and not yet made makes none either");
+    written.notify_one();
+    let (status, headers, _) = reading.await.unwrap();
+    assert!(status == StatusCode::OK && !headers.contains_key(header::AGE));
+    // The page was not kept, and it made the counts all the same: an app whose writes never
+    // pause would otherwise never come to count them by path.
+    assert_eq!(write(router.clone()).await, "path", "an answer that may be kept was made");
+    let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
+    assert!(runs.count() == 2 && !headers.contains_key(header::AGE), "its handler read across a write: {headers:?}");
+    assert_eq!(write(router.clone()).await, "path");
+    let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
+    assert!(runs.count() == 2 && headers.contains_key(header::AGE), "a write at another path leaves it: {headers:?}");
+
+    // An answer too large for the store makes no counts: none is made for what cannot be kept.
+    let small = kept_routes(&Runs::default()).route("/items/{id}/edit", crate::router::post(how));
+    let small = App::new(Routes::from(small)).kept_answers(4096).router();
+    fetch(&small, "GET", "/", &[]).await;
+    assert!(!fetch(&small, "GET", "/", &[]).await.1.contains_key(header::AGE), "larger than an eighth of the bound");
+    assert_eq!(write(small).await, "early");
+}
+
+/// A write that began before the app counted writes by path read nothing of its path, so its
+/// answer drops every page kept since it began, at whatever path. One that begins after is
+/// counted by its path and drops no other's.
+#[tokio::test]
+async fn a_write_from_before_the_counts_drops_every_page_kept_since() {
+    let (runs, writes, release) = (Runs::default(), Runs::default(), std::sync::Arc::new(tokio::sync::Notify::new()));
+    let counted = runs.clone();
+    let page = move |req: Req| {
+        counted.ran();
+        async move { Public::new(Duration::from_secs(60), req.test_page_for("Notes", html! { <p>"notes"</p> })) }
+    };
+    let (began, wait) = (writes.clone(), release.clone());
+    let slow = move || {
+        let (began, wait) = (began.clone(), wait.clone());
+        async move {
+            began.ran();
+            wait.notified().await;
+            StatusCode::NO_CONTENT
+        }
+    };
+    let routes = Table::new()
+        .route("/notes", crate::route::get(page.clone()).0)
+        .route("/list", crate::route::get(page).0)
+        .route("/save", crate::router::post(slow));
+    let router = App::new(Routes::from(routes)).router();
+    let kept = |path: &'static str| {
+        let router = router.clone();
+        async move { fetch(&router, "GET", path, &[]).await.1.contains_key(header::AGE) }
+    };
+    let save = || {
+        let router = router.clone();
+        async move { fetch(&router, "POST", "/save", &[("sec-fetch-site", "same-origin")]).await.0 }
+    };
+    let writing = tokio::spawn(save());
+    while writes.count() == 0 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!kept("/notes").await && kept("/notes").await && !kept("/list").await && kept("/list").await);
+    assert_eq!(runs.count(), 2);
+    release.notify_one();
+    assert_eq!(writing.await.unwrap(), StatusCode::NO_CONTENT);
+    assert!(!kept("/notes").await && !kept("/list").await, "what its handler may have changed is not known by path");
+    assert!(kept("/notes").await && kept("/list").await);
+    assert_eq!(runs.count(), 4);
+    // The next write to that path finds the counts.
+    release.notify_one();
+    assert_eq!(save().await, StatusCode::NO_CONTENT);
+    assert!(kept("/notes").await && kept("/list").await, "a write at another path");
+    assert_eq!(runs.count(), 4);
+}
+
+/// Work a write left behind (`signal.finish`) counts as the write was counted. One that began
+/// before the app counted writes by path, whose client then left, drops what was kept by the
+/// time its work ends, at whatever path.
+#[tokio::test]
+async fn work_left_by_a_write_from_before_the_counts_drops_what_was_kept_since() {
+    let (runs, writes, release) = (Runs::default(), Runs::default(), std::sync::Arc::new(tokio::sync::Notify::new()));
+    let counted = runs.clone();
+    let page = move |req: Req| {
+        counted.ran();
+        async move { Public::new(Duration::from_secs(60), req.test_page_for("Notes", html! { <p>"notes"</p> })) }
+    };
+    let (began, wait) = (writes.clone(), release.clone());
+    let slow = move |signal: crate::Signal| {
+        let (began, wait) = (began.clone(), wait.clone());
+        async move {
+            let work = move |_| async move {
+                began.ran();
+                wait.notified().await;
+            };
+            signal.finish(work).await;
+            StatusCode::NO_CONTENT
+        }
+    };
+    let routes = Table::new().route("/notes", crate::route::get(page).0).route("/save", crate::router::post(slow));
+    let router = App::new(Routes::from(routes)).router();
+    let kept = |router: Router| async move { fetch(&router, "GET", "/notes", &[]).await.1.contains_key(header::AGE) };
+
+    // The write begins before anything is asked for, and its client leaves.
+    let writing = tokio::spawn({
+        let router = router.clone();
+        async move { fetch(&router, "POST", "/save", &[("sec-fetch-site", "same-origin")]).await }
+    });
+    while writes.count() == 0 {
+        tokio::task::yield_now().await;
+    }
+    writing.abort();
+    assert!(writing.await.is_err_and(|ended| ended.is_cancelled()));
+    assert!(!kept(router.clone()).await && kept(router.clone()).await, "a page made after the client left is kept");
+    assert_eq!(runs.count(), 1);
+    // Its work runs to its end, and what it wrote since then counts.
+    release.notify_one();
+    let dropped = async {
+        while kept(router.clone()).await {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), dropped).await.expect("the work's end drops the page");
+    assert!(kept(router.clone()).await, "and the page made after it is kept");
+    assert_eq!(runs.count(), 2);
 }
 
 static SHELF_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -1837,7 +2015,8 @@ impl<S: Send + Sync> crate::extract::FromRequestParts<S> for Device {
 impl crate::answer::Anonymous for Device {}
 
 /// What is not kept: an answer that is not for everyone, sets a cookie, drew this request's
-/// nonce, failed, is not a page or a whole body (a file, a status alone), has no lifetime or is
+/// nonce, failed, is not a page or a whole body (a status alone), is a body the app does not
+/// compress (a picture, a short text), has no lifetime or is
 /// too large for the bound; one whose handler takes an input of the app's own; and nothing in an
 /// app that keeps none, or under `corten dev`.
 #[tokio::test]
@@ -1898,7 +2077,7 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
             .route("/long", typed(move || async move { Public::new(minute, "text ".repeat(300)) }).0)
             .route(
                 "/file",
-                typed(move || async move { Public::new(minute, Ok::<_, Error>(Media::new("image/png", &b"\x89PNG"[..]))) }).0,
+                typed(move || async move { Public::new(minute, Ok::<_, Error>(Media::new("image/png", &[0x89u8; 2048][..]))) }).0,
             )
             .route("/status", typed(move || async move { Public::new(minute, StatusCode::OK) }).0)
             .route(
@@ -1956,7 +2135,7 @@ async fn an_answer_is_kept_only_when_it_is_the_same_for_everyone_for_a_while() {
         ("/now", "no lifetime"),
         ("/moved", "a redirect"),
         ("/text", "a whole body too small for the app to compress"),
-        ("/file", "a file, which is neither a page nor a whole body its type names"),
+        ("/file", "a file of a type the app does not compress"),
         ("/status", "a status alone has no body to keep"),
         ("/keyed", "a submit key drawn for this request"),
         ("/placed", "a submit key drawn before the page's render and placed in it as markup"),
@@ -2592,11 +2771,11 @@ async fn a_kept_page_keeps_the_hash_its_policy_allows_its_style_block_by() {
     assert_eq!(again[header::CONTENT_SECURITY_POLICY], policy);
 }
 
-// ---- The whole bodies the app keeps: JSON and text ----
+// ---- The whole bodies the app keeps: JSON, text and files ----
 
-/// Which answers are kept as a whole body is known when the app compiles: JSON and text, in a
-/// `Result` or not. A page is kept as a page, and a file, a relay or a status is its handler's
-/// for every request.
+/// Which answers may be kept as a whole body is known when the app compiles: JSON, text and a
+/// file, in a `Result` or not. A page is kept as a page, and a relay or a status is its
+/// handler's for every request.
 #[test]
 fn an_answer_s_type_says_whether_its_body_is_kept() {
     use crate::answer::Answer;
@@ -2607,7 +2786,11 @@ fn an_answer_s_type_says_whether_its_body_is_kept() {
     assert!(whole::<Public<String>>() && whole::<Public<crate::Result<&'static str>>>());
     #[cfg(feature = "json")]
     assert!(whole::<Json<u32>>() && whole::<JsonResult<u32>>() && whole::<Public<JsonResult<u32>>>());
-    assert!(!whole::<StatusCode>() && !whole::<Media>() && !whole::<Public<crate::Result<Media>>>());
+    assert!(whole::<Media>() && whole::<crate::Result<Media>>() && whole::<Public<crate::Result<Media>>>());
+    assert!(
+        whole::<crate::seo::File>() && whole::<Public<crate::seo::File>>() && whole::<crate::Result<Public<crate::seo::File>>>()
+    );
+    assert!(!whole::<StatusCode>() && !whole::<NoStore<Media>>());
     assert!(!whole::<crate::Relay>() && !whole::<HtmlResult>() && !whole::<Public<HtmlResult>>());
     assert!(!whole::<NoStore<String>>(), "an answer no cache may store");
     // Bytes the app holds keep their own compressed forms where the build compresses, which is
@@ -2835,6 +3018,165 @@ async fn a_whole_body_is_kept_from_the_size_the_app_compresses() {
             #[cfg(feature = "compress")]
             assert_eq!(again.contains_key(header::CONTENT_ENCODING), path == "/at" && !asked.is_empty(), "{path}: {again:?}");
         }
+    }
+}
+
+/// A file is a whole body too. A sitemap, and a `Media` of a type the app compresses, are kept
+/// from the size it compresses, and the kept one is sent with what its handler said of it: its
+/// type, its file name, how long caches keep it. A picture of a type the app does not compress,
+/// a `robots.txt` under that size, a file sent as a stream, which has no body to hold, and a
+/// file at a URL that names its content (`Public::immutable`), which has no lifetime to keep it
+/// for, are their handlers' for every request, and so is every file in a build that does not
+/// compress.
+#[tokio::test]
+async fn a_file_is_kept_where_the_app_compresses_it() {
+    use crate::seo;
+    let minute = Duration::from_secs(60);
+    let runs = Runs::default();
+    let csv = || "sku,qty\n".repeat(200);
+    let (sitemap, robots, cards, mark, picture, export) =
+        (runs.clone(), runs.clone(), runs.clone(), runs.clone(), runs.clone(), runs.clone());
+    let (paged, chart, tagged, crawlers, flaky) = (runs.clone(), runs.clone(), runs.clone(), runs.clone(), runs.clone());
+    let svg = || format!("<svg>{}</svg>", "<g/>".repeat(300));
+    // A file with a tag of its handler's own, which the app leaves as it is and does not keep.
+    struct ETag;
+    impl crate::answer::Header for ETag {
+        const NAME: &'static str = "etag";
+    }
+    let tagged = move || {
+        tagged.ran();
+        let file = crate::Media::new("text/csv", csv());
+        async move { Public::new(minute, file).header::<ETag>(HeaderValue::from_static("\"v1\"")) }
+    };
+    // A `robots.txt` large enough to compress.
+    let crawlers = move || {
+        crawlers.ran();
+        async move { seo::robots(&["/account/"; 120], None) }
+    };
+    // A file whose handler fails the first time it is asked.
+    let asked = Runs::default();
+    let flaky = move || {
+        flaky.ran();
+        asked.ran();
+        let failed = asked.count() == 1;
+        let file = if failed { Err(Error::not_found()) } else { Ok(crate::Media::new("text/csv", csv())) };
+        async move { Public::new(minute, file) }
+    };
+    // A sitemap's page, which may not be there: the answer `seo`'s own example gives.
+    let paged = move || {
+        paged.ran();
+        let urls = (0..40).map(|_| seo::SitemapUrl { loc: "https://example.com/cards/7", lastmod: None });
+        async move { Ok::<_, Error>(seo::sitemap(urls)) }
+    };
+    let chart = move || {
+        chart.ran();
+        async move { Public::new(minute, crate::Media::new("image/svg+xml", svg())) }
+    };
+    let sitemap = move || {
+        sitemap.ran();
+        async move { seo::sitemap((0..40).map(|_| seo::SitemapUrl { loc: "https://example.com/cards/7", lastmod: None })) }
+    };
+    let robots = move || {
+        robots.ran();
+        async move { seo::robots(&["/account/"], None) }
+    };
+    let cards = move || {
+        cards.ran();
+        async move { Public::new(minute, crate::Media::new("text/csv", csv()).attachment("cards.csv")) }
+    };
+    let mark = move || {
+        mark.ran();
+        async move { Public::immutable(crate::Media::new("image/svg+xml", svg())) }
+    };
+    let picture = move || {
+        picture.ran();
+        async move { Public::new(minute, crate::Media::new("image/png", vec![0x89; 4096])) }
+    };
+    let export = move || {
+        export.ran();
+        let chunks = futures_util::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from(csv()))]);
+        async move { Public::new(minute, crate::Media::stream_sized("text/csv", csv().len() as u64, chunks)) }
+    };
+    let routes = Table::new()
+        .route("/sitemap.xml", crate::route::get(sitemap).0)
+        .route("/robots.txt", crate::route::get(robots).0)
+        .route("/sitemap/2.xml", crate::route::get(paged).0)
+        .route("/cards.csv", crate::route::get(cards).0.post(|| async { StatusCode::NO_CONTENT }))
+        .route("/chart.svg", crate::route::get(chart).0)
+        .route("/tagged.csv", crate::route::get(tagged).0)
+        .route("/crawlers/robots.txt", crate::route::get(crawlers).0)
+        .route("/flaky.csv", crate::route::get(flaky).0)
+        .route("/mark.svg", crate::route::get(mark).0)
+        .route("/picture.png", crate::route::get(picture).0)
+        .route("/export.csv", crate::route::get(export).0);
+    let router = App::new(Routes::from(routes)).router();
+    for (path, kept) in [
+        ("/sitemap.xml", true),
+        ("/robots.txt", false),
+        ("/sitemap/2.xml", true),
+        ("/cards.csv", true),
+        ("/chart.svg", true),
+        ("/tagged.csv", false),
+        ("/crawlers/robots.txt", true),
+        ("/mark.svg", false),
+        ("/picture.png", false),
+        ("/export.csv", false),
+    ] {
+        let kept = kept && cfg!(feature = "compress");
+        let before = runs.count();
+        let (status, first, body) = fetch(&router, "GET", path, &[]).await;
+        let (_, again, same) = fetch(&router, "GET", path, &[]).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(again.contains_key(header::AGE), kept, "{path}: {again:?}");
+        assert_eq!(runs.count() - before, if kept { 1 } else { 2 }, "{path}");
+        assert_eq!(body, same, "{path}");
+        // Every header of the answer its handler made is on the kept one.
+        for (name, value) in first.iter().filter(|(name, _)| *name != header::DATE) {
+            assert!(again.get_all(name).iter().any(|sent| sent == value), "{path}: {name}: {value:?} in {again:?}");
+        }
+    }
+    let (_, cards, _) = fetch(&router, "GET", "/cards.csv", &[("accept-encoding", "gzip")]).await;
+    assert_eq!(cards[header::CONTENT_TYPE], "text/csv");
+    assert_eq!(cards[header::CONTENT_DISPOSITION], "attachment; filename=\"cards.csv\"");
+    assert_eq!(cards[header::CACHE_CONTROL], "public, max-age=60");
+    #[cfg(feature = "compress")]
+    assert_eq!((cards.contains_key(header::AGE), &cards[header::CONTENT_ENCODING]), (true, &HeaderValue::from_static("gzip")));
+    // A file's key is its URL with its query, and a request with a cookie is its handler's.
+    let before = runs.count();
+    let (_, other, _) = fetch(&router, "GET", "/cards.csv?page=2", &[]).await;
+    let (_, again, _) = fetch(&router, "GET", "/cards.csv?page=2", &[]).await;
+    let (_, known, _) = fetch(&router, "GET", "/cards.csv", &[("cookie", "sid=1")]).await;
+    assert_eq!((other.contains_key(header::AGE), known.contains_key(header::AGE)), (false, false));
+    assert_eq!(again.contains_key(header::AGE), cfg!(feature = "compress"));
+    assert_eq!(runs.count() - before, if cfg!(feature = "compress") { 2 } else { 3 });
+    // A handler that failed is asked again, and what it then makes is kept.
+    let before = runs.count();
+    let (failed, first, _) = fetch(&router, "GET", "/flaky.csv", &[]).await;
+    let (made, second, _) = fetch(&router, "GET", "/flaky.csv", &[]).await;
+    let (_, third, _) = fetch(&router, "GET", "/flaky.csv", &[]).await;
+    assert_eq!((failed, made), (StatusCode::NOT_FOUND, StatusCode::OK));
+    assert_eq!((first.contains_key(header::AGE), second.contains_key(header::AGE)), (false, false));
+    assert_eq!(third.contains_key(header::AGE), cfg!(feature = "compress"));
+    assert_eq!(runs.count() - before, if cfg!(feature = "compress") { 2 } else { 3 });
+    let (_, mark, _) = fetch(&router, "GET", "/mark.svg", &[]).await;
+    assert_eq!(mark[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
+    assert_eq!(mark[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    // A kept file is a kept answer in every other way: its tag answers `304`, a `HEAD` is its
+    // handler's, and a write to its path drops it.
+    #[cfg(feature = "compress")]
+    {
+        let named = [("accept-encoding", "gzip"), ("if-none-match", cards[header::ETAG].to_str().unwrap())];
+        let before = runs.count();
+        let (status, unchanged, body) = fetch(&router, "GET", "/cards.csv", &named).await;
+        assert_eq!((status, body.len(), runs.count() - before), (StatusCode::NOT_MODIFIED, 0, 0), "{unchanged:?}");
+        let (status, head, _) = fetch(&router, "HEAD", "/cards.csv", &[]).await;
+        assert_eq!((status, head.contains_key(header::AGE), runs.count() - before), (StatusCode::OK, false, 1));
+        let (status, ..) = fetch(&router, "POST", "/cards.csv", &[("sec-fetch-site", "same-origin")]).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_, made, _) = fetch(&router, "GET", "/cards.csv", &[]).await;
+        assert_eq!((made.contains_key(header::AGE), runs.count() - before), (false, 2), "made again after the write");
+        let (_, kept, _) = fetch(&router, "GET", "/cards.csv", &[]).await;
+        assert_eq!((kept.contains_key(header::AGE), runs.count() - before), (true, 2), "and kept again");
     }
 }
 

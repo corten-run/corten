@@ -1,0 +1,1 @@
+- Independent grouped benchmark detach now names the stage of a pre-intent refusal without printing private details. [#1886 Mixed-production r29 stops before host creation with only fleet-operation-failed](https://github.com/corten-run/corten/issues/1886)

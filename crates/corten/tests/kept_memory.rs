@@ -17,7 +17,7 @@ use tokio::{
 /// The bound the app is given, and more pages than it has room for.
 const BOUND: usize = 4 << 20;
 const PAGES: usize = 3000;
-/// The counts of writes: 65,536 of four bytes, made once with the first page asked for and held
+/// The counts of writes: 65,536 of four bytes, made once with the first page kept and held
 /// beside the bound.
 const COUNTS: usize = 4 << 16;
 /// The marks of the URLs asked for: a bit for every 32 bytes of the bound, made once when the
@@ -225,7 +225,7 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
             // The counts are made here, inside what is counted, or taking them off below is wrong.
             if (n, asked) == (0, 0) {
                 let first = LIVE.load(Ordering::Relaxed).saturating_sub(before);
-                assert!(first >= COUNTS, "the first page asked for took {first} bytes: the counts were made before it");
+                assert!(first >= COUNTS, "the first page kept took {first} bytes: the counts were made before it");
             }
         }
     }
