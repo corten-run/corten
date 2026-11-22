@@ -132,6 +132,8 @@ function fixture(t, group, flags = {}) {
 for (const group of ["fullstack-browser", "json-api"]) {
   test(`ordinary collection retires ${group} only after wrapper and complete failed native custody`, async (t) => {
     const f = fixture(t, group);
+    const abandoned = join(f.h.local, "state.json.tmp");
+    if (group === "fullstack-browser") writeFileSync(abandoned, "abandoned pre-revocation state", { flag: "wx" });
     assert.equal(await f.task().collect(), 1);
     const s = f.h.saved();
     assert.equal(s.status, "retired"); assert.equal(s.retirement.kind, "native-failed"); assert.ok(s.destroyedAt);
@@ -147,6 +149,7 @@ for (const group of ["fullstack-browser", "json-api"]) {
     assert.equal(f.probes, 3); assert.equal(f.h.deletes, 1);
     assert.equal(readFileSync(f.sibling, "utf8"), "sibling stays locked");
     if (group === "fullstack-browser") {
+      assert.equal(readFileSync(abandoned, "utf8"), "abandoned pre-revocation state");
       assert.equal(readFileSync(join(f.h.local, "operation.lock"), "utf8"), retainedOperation);
       assert.equal(readFileSync(join(f.h.base, ".groups-launch.lock"), "utf8"), retainedLaunch);
     }
