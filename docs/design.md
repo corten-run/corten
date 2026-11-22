@@ -7245,12 +7245,12 @@ rules something out.
     full (the bytes kept within an eighth of the bound, which is the largest answer that is
     kept), keeping an answer may drop another page, and an answer is kept then only when its
     URL (host, path and query) was asked for before, as far back as the marks below go. A URL
-    asked for once paid for a copy of its body, its head and its key and a turn under the
+    asked for once paid for holding its body, a copy of its head and its key and a turn under the
     store's lock, and took the room of a page that may be asked for again: a crawler walking
     more URLs than the bound has room for, or searches no one repeats, turned the store over
     for pages no one is given. So in a full store a request no kept answer stands for leaves
     a mark for its URL, and its answer is kept when the mark was there already; otherwise the
-    answer is the handler's and is not copied. With room nothing is asked of the marks and
+    answer is the handler's and is not kept. With room nothing is asked of the marks and
     none are made: an app whose kept pages stay under seven eighths of the bound, those past
     their lifetime counted, keeps them as it did. It is the doorkeeper of TinyLFU (Einziger,
     Friedman and Manes, "TinyLFU: A Highly Efficient Cache Admission Policy", ACM
@@ -7303,7 +7303,7 @@ rules something out.
     them out by a mark the router set was tried and left a page stale in that case. The price is
     that any client can have a kept page made again: one write to a path drops every copy kept
     there (each query, host and language), and each is made again by the next request for it.
-    Each costs what the page cost before the app kept pages and the copy into the store. Only
+    Each costs what the page cost before the app kept pages and the keeping of it. Only
     a write that does not reach the app's middleware is not counted: one another site sent, one
     for a host the app does not answer, or one a layer in front (`App::layer`) answered
     itself. A write that went through also drops the place on
@@ -7322,7 +7322,8 @@ rules something out.
     to say, and a reload is not a reason to render it.
 
     Not chosen: in front of the middleware, for the reasons above, though it would save the
-    stages too; asking the marks whether or not the store has room, which spares the copy
+    stages too; holding a page's whole render buffer, which is an eighth larger than the page
+    and as large as the last page rendered (above); asking the marks whether or not the store has room, which spares the copy
     for every URL asked for once and makes the second visitor of every page wait for its
     handler in an app whose pages all fit; a mark that holds part of a hash of its URL, which
     another URL takes, so that the rule fails toward an answer that is not kept and a store
@@ -7424,7 +7425,32 @@ rules something out.
     store 0.03 at most (counted by `perf stat` on a machine that ran other work, which a
     count of faults does not depend on), and a full store spends 31,863 cycles in the
     kernel.
-    By simulation from these counts (`bench/catalog/sim-kept-store.mjs` at `16f2f5480`: the
+    What a page made and kept with room asks of the process was then cut, under callgrind
+    (valgrind 3.24.0, glibc 2.41, rustc 1.100.0, a probe app serving a `Public` page of 5,208
+    bytes over one keep-alive connection with a browser's fifteen headers, a new URL each
+    request and a bound of 1 GiB that no run fills, the count for 1,300 requests less that for
+    300 over 1,000, three rounds alternating the builds whose counts agreed within 10
+    instructions): on main's `564034b86` such a request ran 105,049 instructions against 91,739
+    with the store off, 13,310 more. Holding the body in the buffer its handler made, cut to its
+    length (`84e0a0ec6`), where it had been copied to an allocation of its own, took 104,830;
+    hashing the URL once, for the table and for each lookup (`1f248f657`), 103,257; and the URL,
+    `Host` and `Accept-Language` in one allocation made for the miss (`df1856704`), 102,340, 2.6%
+    fewer than main and 10,601 more than the store off. The allocator was called 48 times a
+    request and `realloc` once, against 52 on main and 38 with the store off, `memcpy` 85 times
+    against 90, and the minor page faults fell from 1.641 to 1.617 a request with the URL held
+    once; callgrind's simulated last level missed 102.3 times against 104.2, which is the store
+    touching memory for the first time, what not copying does not change. A kept page took
+    60,707 instructions against 60,604 (+0.17%), and the store off, a page not `Public` and a
+    write the same to within 10. The rest of the 10,601 is the store's own: the entry, its key,
+    its place in the table and the slots, a copy of the head for the answer sent (a `HeaderMap`
+    and a value it shares), the mark on the answer, the tag's hash kept with the page, and
+    freeing each when it goes. Holding the handler's whole buffer and counting its capacity was
+    tried first (on `6c8c27b55`): a page's buffer is sized for the last page rendered and an
+    eighth more, so a uniform page holds an eighth it does not use, and its faults rose from
+    1.65 to 1.81 a request; cut to its length, glibc gives the rest back where it is, so the
+    bytes are not copied, where an allocator that cannot shrink in place copies them as before.
+    Hashing a path for its count of writes by the table's keyed hash too, so that a lookup and a
+    write share one hash, cost a kept page 125 to 156 instructions more, and was left out.    By simulation from these counts (`bench/catalog/sim-kept-store.mjs` at `16f2f5480`: the
     store's clock with and without the rule, 5,461 pages of 6 KiB in 32 MiB, four million
     requests of which the second two million are counted, drawn from a Zipf law over the
     app's URLs): over 4,000 URLs, which fit, with three requests in ten from a crawler
@@ -7471,7 +7497,9 @@ rules something out.
     spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
     kept page in those rounds is the rule, two builds of the same code having differed by
     more from one start to the next; a miss kept with room in memory the store has used
-    before (room made by a write or by a page's lifetime ending), in cycles; a store read
+    before (room made by a write or by a page's lifetime ending), in cycles; the cuts of
+    `84e0a0ec6` to `df1856704` in cycles, and the first under an allocator that copies a buffer
+    it shrinks; a store read
     from more
     than one core; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
@@ -7509,7 +7537,10 @@ rules something out.
     on a dedicated 8-CPU cloud host (Xeon Platinum 8358, one thread a core) with nothing else
     running, started once on one CPU, loaded in turn for three seconds each by `wrk` with 64
     connections on two other CPUs, the order of the two turned about from each pair to the next,
-    the app's cycles counted by `perf stat` over each turn and divided by the requests answered; 2026-11-21, the
+    the app's cycles counted by `perf stat` over each turn and divided by the requests answered; 2026-11-21, a
+    page made and kept with room at `564034b86`, `84e0a0ec6`, `1f248f657` and `df1856704`, under
+    callgrind as above in `rust:1-trixie`, with the faults counted from `/proc/self/stat` over
+    5,000 requests and the calls to the allocator from callgrind's call counts; 2026-11-21, the
     historical pair `30b39d455` and `45489ced9`, by callgrind alone; 2026-11-21, the rule for a full store with rustc 1.100.0: each count the
     difference of a run of 1,300 requests and one of 300 under callgrind, a new URL each, of
     which the first 28 or so fill a bound of 256 KiB, and for the second request the
