@@ -993,8 +993,8 @@ impl KeptAnswers {
     ///     }
     /// }
     ///
-    /// async fn items(req: Req) -> Public<HtmlResult> {
-    ///     Public::new(Duration::from_secs(600), req.page(html! { <main>"The items"</main> }))
+    /// async fn items() -> Public<&'static str> {
+    ///     Public::new(Duration::from_secs(600), "the items")
     /// }
     ///
     /// async fn edit(at: Params<url::Edit>) -> String {

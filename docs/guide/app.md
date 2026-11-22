@@ -1579,11 +1579,42 @@ be saved under `signal.finish`. One that lands later (a task the handler started
 wait for, a database whose readers lag its writer) can leave the page as it was until its
 lifetime ends.
 
+A write at one path that changes the page at another (a form at `/items/7/edit` whose answer is
+a patch, while the list at `/items` shows the item), and a change made outside a request (a
+task, a job a handler started and did not wait for), say which pages changed with
+`KeptAnswers`. A handler takes it as an argument; a task gets it from the app before it is
+served:
+
+```rust,ignore
+async fn save(kept: KeptAnswers, at: Params<url::Edit>, Form(edit): Form<ItemEdit>) -> HtmlResult<Patches> {
+    let item = items.save(at.id, &edit).await?; // committed
+    kept.changed(&url::Items);
+    // ... the patch that shows the saved item
+}
+
+let app = App::new(url::router(items.clone()));
+let kept = app.kept();
+let app = app.task("reprice", move |signal| reprice(items, kept, signal));
+```
+
+`changed` takes the page as a link does, by its route (or a place on one, or a checked
+`Local`), so a path that is not a route of the app's does not compile, and drops what is kept at
+its path as a write there does: every query, and the copy kept for each host, language and way
+of asking. It is counted when it is called, so call it once the change is there for readers:
+after the commit, or at the end of work the handler left (`signal.finish`). A page whose
+handler was reading when it was called is sent and not kept, so a page made from what was there
+before is never given after the call. It names one path: a job that changed items 7 and 9 names
+each page, `url::Item { id: 7 }` and `url::Item { id: 9 }`, and there is no call for every page
+of a route at once. It reaches this process alone
+([design Limit 35](../design.md#limit-kept-drop-reach)): another instance behind the load
+balancer and a CDN in front keep their copies for the page's lifetime. With no store (under
+`corten dev`, with `kept_answers(0)`, in an app with no `Public` page) it does nothing.
+
 Nothing else is meant to drop a page before its lifetime ends (a write to another path does
 once in 65,536 times, where two paths share a count, and so does one that began before the app
-had made any answer it may keep, below). A write to another path does not drop the
-list, and neither does a change made outside a request to the app (a task, a script, another
-instance): the page shows it when its lifetime ends, which is what the lifetime says. Purging a
+had made any answer it may keep, below). A write to another path that does not call `changed`
+leaves the list kept, and so does a change made in another instance or by a script outside the
+app: the page shows it when its lifetime ends, which is what the lifetime says. Purging a
 CDN in front does not purge the app, which gives the CDN the kept page again with its `Age`.
 A request's own `Cache-Control: no-cache` (a hard reload) gets the kept page too: how long a
 page stands is the app's to say. Give a page whose changes must show at once a short lifetime.
@@ -1615,7 +1646,8 @@ some ends. An app's tests keep pages as a deploy does (`App::test`,
 `App::router`): a test that changes what a `Public` page shows other than by a write through the
 app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a load balancer can
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page
-only in the instance that answered it, and a restart starts empty.
+only in the instance that answered it and `changed` only in the one that called it, and a
+restart starts empty.
 
 A `Public` route that answers JSON (`Public<JsonResult<T>>`) or text is kept the same way where
 the app compresses the answer: its whole body, when that is 1,024 bytes or more and the build has

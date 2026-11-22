@@ -263,8 +263,9 @@ of it. With `.shared(..)` longer than `max_age`, a page older than `max_age` rea
 already stale, as it does from any CDN, and the browser asks again each time; the `304` it gets
 costs the app neither the render nor the compression. A purge at the cache in front does not
 reach the app: the cache is sent the kept page again until its lifetime ends or a write through
-the app drops it, so a page that must change at once on a purge takes a short lifetime in the app
-and a long one nowhere. What is kept is held in the process's memory, 32 MiB of it unless
+the app, or the app's own `KeptAnswers::changed`, drops it in the instance that answers the
+cache. An app that purges its CDN when its data changes calls `changed` for the same pages
+first, in each instance, or gives the page a short lifetime in the app and a long one nowhere. What is kept is held in the process's memory, 32 MiB of it unless
 `App::kept_answers` says otherwise, with 256 KiB beside it once it has made an answer
 it may keep and 128 KiB more once they fill it (a 256th of the bound, or up to a 128th
 where that is not a power of two).

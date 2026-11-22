@@ -7448,12 +7448,28 @@ rules something out.
     lock and searches nothing, and a page whose handler was reading while the write went
     through is not kept. There are 65,536 counts (256 KiB, made with the first answer the app may keep,
     so an app that makes none holds none), and a write to another path drops a
-    given kept page early once in 65,536 times, which costs that page a render. Nothing else
-    drops a page before its lifetime ends, but a write from before the counts were made
-    (below): not a change made by a task
-    or another instance, a purge at a CDN in front (which is given the kept page again with
-    its `Age`), or a request's `Cache-Control: no-cache`. How long a page stands is the app's
-    to say, and a reload is not a reason to render it.
+    given kept page early once in 65,536 times, which costs that page a render.
+
+    A change no write to a page's path says (a form at `/items/7/edit` whose answer is a patch,
+    while the list at `/items` shows the item; a task; a job a handler left) is the app's to name
+    ([#1795 A write at another URL cannot drop a kept page](https://github.com/corten-run/corten/issues/1795)):
+    `KeptAnswers::changed(&url::Items)` counts a write to the page's path, as the place a
+    write's answer names is counted, so it drops what a write there drops, every query, `Host`,
+    language and way of asking, and a page whose handler was reading when it was called is sent
+    and not kept, which is what lets the drop win over a page made from what was there before,
+    however the two interleave. Before the counts are made it counts as a write that found none.
+    A handler takes `KeptAnswers` as an argument and a task takes it from the app
+    (`App::kept`) before the router is made, which gives it the store; it is one handle for
+    both, the only way work outside a request reaches the store. The page is named as a link
+    is, by a type of `OnSite` (a route, a place on one, a `#[derive(Href)]` enum of those, a
+    checked `Local`), so a path written as text does not compile. It is counted when it is
+    called, so the app calls it once its change is there for readers, as a write is counted
+    when it is answered. It reaches the process that called it alone
+    ([Limit 35](#limit-kept-drop-reach)). Nothing else drops a page before its lifetime ends,
+    but a write from before the counts were made (below): not a change in another instance, a
+    purge at a CDN in front (which is given the kept page again with its `Age`), or a
+    request's `Cache-Control: no-cache`. How long a page stands is the app's to say, and a
+    reload is not a reason to render it.
 
     Not chosen: in front of the middleware, for the reasons above, though it would save the
     stages too; holding a page's whole render buffer, which is an eighth larger than the page
@@ -7478,8 +7494,16 @@ rules something out.
     honoring a request's `no-cache`; removing a written path's pages by a search of the store or
     a second index by path, which a write would pay for under the store's lock; a sweep that
     removes pages as their lifetimes end, since a page that no longer stands is replaced when it
-    is next asked for and goes when room is made; and, left for changes of their own, a call
-    that drops a page for a change no write to its path made, a way for an extractor of the
+    is next asked for and goes when room is made; for a change the app names, a header on a
+    write's answer listing more places (a format of Corten's own where the answer's `Location`
+    and `Content-Location` say what RFC 9111 has a cache drop, and out of reach of a task, which
+    has no answer), a method of `Req` (a task has none, so it would need the handle too, a
+    second way), dropping a route's every page by its pattern (a count for each route that every
+    kept page would read beside its path's, for an app that can name each record it changed),
+    taking the dropped copies out of the store at once (the search under the store's lock a
+    write does not make either; a copy that no longer stands goes first when room is made), a
+    drop of every kept page, and reaching other instances ([Limit 35](#limit-kept-drop-reach));
+    and, left for changes of their own, a way for an extractor of the
     app's own to say it reads only the URL, a `Public` file of a type the app does not compress kept for the hash of its tag (which is 20,347 of the 61,024 instructions the PNG's request costs below with a coding named, by callgrind's count for the hash's function in `73f38661f`, at the price of a second copy of bytes the app may hold; [#1877 The tag's hash is a third of a request for a file the app does not compress: about 2.5 instructions a byte, made again for every answer that is not kept](https://github.com/corten-run/corten/issues/1877) has the ways to make the hash cheaper for every answer), every `Public` body kept whatever its size and its build
     (what this first did, for the 3.9% and at the price of the 13.8% below), a size of the store's own apart
     from the compressor's (no round supports one), a way for a route to say its bodies are
@@ -7873,6 +7897,21 @@ rules something out.
     resident memory, about 10 MB, differed by at most 124 kB either way. A kept file is held as a copy
     of its own, so bytes the app holds are held twice while the copy is kept, with each coded
     form made of them.
+    What the app's naming a change costs the requests that do not name one, under callgrind
+    (valgrind 3.24.0, rustc 1.100.0, release, the default features) with the request-cost
+    harness (`crates/corten/tests/router_cost.rs`, as (instructions at 1,200 requests less those
+    at 200) over 1,000), `05c3d412f` (this change) against main's `dc24029c4` with that commit's
+    harness, five rounds alternating the builds, given as the median and range of the five: a
+    kept page given again took 15,335.3 (15,335.3 to 15,335.5) against 15,331.1 (15,329.9 to
+    15,331.1); a new URL for each request, made and kept with room (`ROUTER_TARGET=new`, which
+    this change adds), 28,513.7 (28,512.5 to 28,514.5) against 28,517.9 (28,512.9 to 28,520.3);
+    a write with a page kept at another path 14,652.1 (14,652.1 to 14,652.2) against 14,652.8
+    (14,651.7 to 14,652.9); and a route that keeps nothing 12,629.0 (12,629.0 to 12,629.1)
+    against 12,627.0 (12,626.9 to 12,627.0). No request runs code this change adds. By function,
+    in the last round, the kept page's 4.6 more and the other route's 2.1 more are all in glibc's
+    `memcmp` itself, and no function of Corten's or the standard library's differs by half an
+    instruction a request; why `memcmp` differs was not found. What `changed` costs (a link
+    written, a path hashed, an atomic add) was not counted: it runs only when the app calls it.
     Not measured: a file kept for a handler that reads it from a disk, a database or a store
     of objects, where the read is what a kept file saves; a new URL for every request for a
     file, which takes the path a body's does above; a body kept for a handler that waits on a database or another service,
@@ -7901,12 +7940,16 @@ rules something out.
     document's `GET` without credentials, its URL, its `Host` and, for its language,
     `Accept-Language`, which is the key, and of a body's `GET` those and whether JSON was asked
     for first, which is in its key too; the stages after the handler read the request and the
-    answer and nothing the handler held, so they treat a kept answer as its own); bet (an app that
+    answer and nothing the handler held, so they treat a kept answer as its own; `changed` drops
+    what a write to the path drops, since both add to the path's count, which every kept answer
+    is checked against before it is given); bet (an app that
     marks a page `Public` means the lifetime it wrote also with no CDN in front, and the hour
     `seo` writes for a sitemap or `robots.txt` where it wrote none, and does in its
     handler nothing that must happen for every request; markup with a form's new submit key is rendered by the handler itself on the thread that
     runs it, not by a task it spawned, one it handed a render to, or a thread of its own; no app finishes work again and again on the
-    `Signal` of a write from before its first answer that may be kept); value (fast and proven fast; standards
+    `Signal` of a write from before its first answer that may be kept; an app that changes what
+    a page shows other than by a write to its path calls `changed` once the change is there for
+    readers, and knows each path it changed); value (fast and proven fast; standards
     first, the app being a shared cache as RFC 9111 describes one; mistakes fail at compile time,
     what may be kept being known from the route's types, and which of a body route's answers
     are, as each is made; good defaults, easy overrides, with one
@@ -7917,7 +7960,10 @@ rules something out.
     app does not compress (small ones, ones of a type it leaves as it is, as a feed's
     `application/rss+xml`, a PDF or a picture is, or any in a build without `compress`) waits on a
     database or another service, so keeping them would save more than asking costs and the
-    rule should be the route's to widen; an app's page route answers pictures or small files
+    rule should be the route's to widen; an app must drop a page in every instance at once, or for a
+    purge, so a drop should reach past the process that is told
+    ([Limit 35](#limit-kept-drop-reach)); an app must drop every page of a route at once and
+    cannot name each, so a route's pattern should be counted; an app's page route answers pictures or small files
     in its page's place (`PageOr`) often enough that keeping them, which the page's rule does
     whatever their type, costs more than their handler saves, so a file there should be kept
     by the rule for a file; apps report a sitemap or `robots.txt` an hour behind their data
@@ -7927,8 +7973,7 @@ rules something out.
     is full; an app's pages are made twice in a full store at a cost above the copies saved
     (its URLs are each asked for a few times together, the spread where the simulation's
     rule loses), so which request keeps a page should be the app's to say; a crawler's
-    repeated walks turn an app's store over, so a mark should age; an app must drop a page for a
-    change made by a task, another instance or a purge; the stages around the handler
+    repeated walks turn an app's store over, so a mark should age; the stages around the handler
     become most of a kept page's cost on a measured app, so a place further out is worth its
     rules; a multi-core measurement shows requests waiting on the store's lock; a count of
     cycles under jemalloc shows shrinking a page's buffer beating the copy for the page lengths
@@ -7941,7 +7986,9 @@ rules something out.
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
+    Last checked: 2026-11-22 for a change the app names (`KeptAnswers::changed`), by the tests
+    beside it and, for what it costs the requests that do not name one, the request-cost
+    harness's counts under callgrind at `05c3d412f` against `dc24029c4` (above); 2026-11-21 for a kept file, `73f38661f` (main's `e7e89add8` with three file routes in the catalog
     benchmark) and `05ead69a7` (this change's `8db0885c7` with them), kept under the tag
     `evidence/kept-file-1794`; 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
     request-cost harness's write cases and two routes in the catalog benchmark) for the counts,
@@ -8807,3 +8854,16 @@ by design; where it is known, a limit says what would lift it or why it is so.
     sequence. Revisit when deployments need raw stream ordering
     ([#1657 Measure JetStream atomic batch publish for the cluster relay, so a disconnect cannot store a feed's later patches without the earlier ones](https://github.com/corten-run/corten/issues/1657));
     see [Choice 63](#choice-cluster-feed-subjects) for other criteria.
+
+35. <a id="limit-kept-drop-reach"></a>A kept page is dropped only in the process that was told.
+    A write drops what the app keeps at its path and at the place its answer names, and
+    `KeptAnswers::changed` what it keeps at the path it names, in the process that answered the
+    write or made the call ([Choice 70](#choice-kept-pages)). Another instance of the app
+    behind the same load balancer, and a CDN or proxy in front, keep their copies until the
+    lifetime the page was sent with ends, so after a change two instances can show a page up to
+    a lifetime apart, as two edges of a CDN can. Reaching them takes a message between the
+    instances (the app's own, or a feed on `corten-cluster` whose handler calls `changed` in
+    each) and the CDN's own purge, both of which differ by deploy. A page that must change
+    everywhere at once takes a short lifetime. Revisit when apps that run several instances
+    show they need one drop to reach all of them, and a channel the framework already has can
+    carry it.
