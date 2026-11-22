@@ -7519,11 +7519,11 @@ rules something out.
     otherwise, and 54,827 against 54,787 under jemalloc), and the store off, a page not
     `Public` and a write the same to within 5. The steps between, under jemalloc at 5,208 bytes:
     hashing once took 809 off; the key in one allocation made for the miss (`3278beb10`) 553
-    more, but it held and counted an `Accept-Language` the page did not vary on, so a page near
-    its share of the bound was not kept for a client that sent a long one; made when the page is
-    kept (`09170f7ec`) it gives 336 of those back, in moving the request's URL and header values,
-    whose bytes it shares until then, with the answer's future; and copying the page, where
-    those steps had shrunk its buffer, 190 (below). At `df1856704` such a request ran 10,601
+    more off, but it held and counted an `Accept-Language` the page did not vary on, so a page
+    near its share of the bound was not kept for a client that sent a long one; making it only
+    when the page is kept (`09170f7ec`) put 336 of those back, in moving the request's URL and
+    header values, whose bytes it shares until then, with the answer's future; and copying the
+    page again, where those steps had shrunk its buffer, put back 190 more (below). At `df1856704` such a request ran 10,601
     instructions more than with the store off under glibc, of which, by function, about 4,500
     are the allocator's
     (ten more allocations and a `realloc`, among them the entry, its key, the URL's list in the

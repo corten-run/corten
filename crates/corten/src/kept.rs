@@ -79,7 +79,8 @@
 //! bound is [`crate::App::kept_answers`], and counts each page's bytes, its headers, its key and
 //! the compressed forms made for it, with an allowance for what holds them; the body, the key
 //! and each compressed form are held in allocations of their own size
-//! (`tests/kept_memory.rs` holds the count to what the allocator is asked for).
+//! (`tests/kept_memory.rs` holds the count to what the allocator is asked for). The key is
+//! built when an answer is kept, so a miss that is not kept never builds it ([`Key`]).
 //!
 //! A write is counted when it is answered or dropped, so what it changes must be there for a
 //! reader by then, or be made under `Signal::finish`. One that lands later (a task the handler
@@ -483,7 +484,10 @@ struct Inner {
 /// What a copy is kept for, in one allocation: its URL (the path and query), the `Host` it was
 /// asked with and, when its `Vary` names the header, the `Accept-Language`, as they were sent. A
 /// copy of its own, made once the answer is to be kept: a request's URL and header values are
-/// slices of the connection's read buffer, which a kept one would hold whole.
+/// slices of the connection's read buffer, which a kept one would hold whole. A miss that is not
+/// kept never builds it; until then the request's URL and header values are held by handles that
+/// copy none of their bytes, though the first clone of a header a middleware made for itself may
+/// allocate the count of its holders.
 struct Key {
     /// The URL, then the `Host` and the `Accept-Language` that were sent.
     bytes: Box<[u8]>,

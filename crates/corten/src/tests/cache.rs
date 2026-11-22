@@ -2089,6 +2089,39 @@ async fn an_accept_language_a_page_does_not_vary_on_does_not_count_against_it() 
     assert!(kept(two(bound + long.len() * 8), &long).await, "and kept with the room for it");
 }
 
+/// A kept copy's URL counts once against its share of the bound: for the same page asked for at
+/// two URLs whose queries differ by `n` bytes, the least bound that keeps it differs by `n` bytes
+/// of its share (an eighth), `8 * n`. A URL counted twice, by the entry and by the table, would
+/// make it `16 * n`.
+#[tokio::test]
+async fn a_kept_url_counts_once_against_its_share_of_the_bound() {
+    /// Whether the page at `at` is kept under `bound`, asked for twice.
+    async fn kept(bound: usize, at: &str) -> bool {
+        let router = App::new(Routes::from(kept_routes(&Runs::default()))).kept_answers(bound).router();
+        fetch(&router, "GET", at, &[]).await;
+        fetch(&router, "GET", at, &[]).await.1.contains_key(header::AGE)
+    }
+    /// The least bound, a multiple of its share's eight, that keeps the page at `at`.
+    async fn least(at: &str) -> usize {
+        let (mut low, mut high) = (0, 1 << 16);
+        assert!(kept(high * 8, at).await, "kept at {at} under a bound of {}", high * 8);
+        while low + 1 < high {
+            let mid = (low + high) / 2;
+            if kept(mid * 8, at).await {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        high * 8
+    }
+    let short = least("/?q=a").await;
+    for n in [1, 37, 300] {
+        let at = format!("/?q=a{}", "b".repeat(n));
+        assert_eq!(least(&at).await - short, 8 * n, "a query {n} bytes longer");
+    }
+}
+
 /// Messages read with no `App::messages` are in the language `Accept-Language` asks for, so the
 /// answer's `Vary` names the header, for a cache in front as for the app's own: in the document
 /// and in a navigation's swap, and on the kept copy. A page of the same app that reads none does
