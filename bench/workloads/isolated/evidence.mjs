@@ -59,6 +59,24 @@ export function durable(path, bytes) {
   try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
   syncDirectory(dirname(path));
 }
+export function publishDurable(path, bytes) {
+  const staged = `${path}.pending`;
+  durable(staged, bytes);
+  const identity = lstatSync(staged);
+  assert.equal(lstatSync(path, { throwIfNoEntry: false }), undefined, "evidence publication already exists");
+  try {
+    renameSync(staged, path); syncDirectory(dirname(path));
+  } catch (error) {
+    // Withdraw only this publication if directory sync did not complete.
+    try {
+      const current = lstatSync(path, { throwIfNoEntry: false });
+      if (current?.dev === identity.dev && current.ino === identity.ino && !lstatSync(staged, { throwIfNoEntry: false })) {
+        renameSync(path, staged); syncDirectory(dirname(path));
+      }
+    } catch { /* Leave unproven evidence in place. */ }
+    throw error;
+  }
+}
 export function syncDirectory(path) {
   if (process.platform === "win32") return;
   const fd = openSync(path, "r"); try { fsyncSync(fd); } finally { closeSync(fd); }

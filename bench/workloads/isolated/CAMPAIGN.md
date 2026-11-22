@@ -185,7 +185,8 @@ Status includes uncollectedNativeRoots. A terminal command's entire native tree 
 even when subsequent host cleanup/source observations fail. The live reservation records both
 the checkout-relative original and the campaign-relative transferDestination before any move.
 Both remain pending until the durable phase seal; an interrupted transfer may have bytes at
-either path but cannot qualify. If terminal ownership or safe collection cannot be established,
+either path but cannot qualify. A staged seal left by a write failure is not a journal event.
+If terminal ownership or safe collection cannot be established,
 the parent must retain the host for inspection/terminal-safe collection, not delete it merely
 because the campaign logs or partial archive were saved.
 

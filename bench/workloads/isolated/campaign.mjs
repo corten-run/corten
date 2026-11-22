@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { validateCampaign, freeze, jsonPhase, mixedPhase } from "./campaign-contract.mjs";
 import { verifyWorkingSources } from "./worker.mjs";
-import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, readRegular, syncDirectory, transferEvidence, tree } from "./evidence.mjs";
+import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, publishDurable, readRegular, syncDirectory, transferEvidence, tree } from "./evidence.mjs";
 import { supervise } from "./process.mjs";
 import { observeHost, udevSettleCandidates, udevSettleMs, udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
@@ -40,14 +40,15 @@ export function createCampaign({ authorize }) {
     for (const file of c.files) assert.equal(digest(readRegular(join(c.directory, file.path))), file.sha256, "campaign record/log mutated");
     return c;
   }
-  function save(c, path, value) {
-    own(c.handle); const bytes = json(value); durable(join(c.directory, path), bytes);
+  function save(c, path, value, write = durable) {
+    own(c.handle); const bytes = json(value); write(join(c.directory, path), bytes);
     c.files.push({ path, sha256: digest(bytes) });
   }
   function event(c, kind, data = {}) {
     const value = { schema: "benchmark-isolated-campaign-event/v1", sequence: c.sequence, campaign: c.handle.id,
       round: c.plan.round, campaignSha256: c.plan.campaignSha256, at: new Date().toISOString(), kind, ...data, status: status(c) };
-    save(c, `${String(value.sequence).padStart(5, "0")}-${kind}.json`, value);
+    save(c, `${String(value.sequence).padStart(5, "0")}-${kind}.json`, value,
+      kind === "phase-sealed" && data.transferDestination ? publishDurable : durable);
     c.sequence++;
   }
   function verifyPhases(c) {

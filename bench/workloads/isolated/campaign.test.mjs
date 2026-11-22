@@ -652,32 +652,50 @@ test("live output is not transferred without proven command cleanup", async () =
   assert.equal(s.campaign.status(h).uncollectedNativeRoots.length, 1);
 });
 
-for (const failure of ["moved bytes", "phase seal"]) test(`live transfer keeps both pending paths after I/O failure reading or sealing ${failure}`, async (t) => {
+for (const failure of ["moved bytes", "seal open", "seal file sync", "seal directory sync"]) test(`live transfer keeps both pending paths after I/O failure: ${failure}`,
+  { skip: failure === "seal directory sync" && process.platform === "win32" }, async (t) => {
   const group = "recoverable-live", s = setupLiveOutput(group, 0), h = await begin(s);
   const transferDestination = `00-${group}-timing/native`, native = join(h.directory, transferDestination);
   const expected = [{ group, phase: "timing", artifactRoot: s.plan.bindings[0].validation.artifactRoot, transferDestination }];
-  const open = fs.openSync;
+  const open = fs.openSync, fsync = fs.fsyncSync;
   let faulted = false;
-  const injected = t.mock.method(fs, "openSync", (path, ...args) => {
-    const target = failure === "moved bytes" ? path === join(native, "coverage.json") : String(path).endsWith("-phase-sealed.json");
-    if (!faulted && target) {
-      faulted = true;
-      assert.equal(existsSync(s.original), false);
-      assert.equal(existsSync(join(native, "coverage.json")), true);
-      throw Object.assign(new Error("injected transfer EIO"), { code: "EIO" });
+  let sealPath, targetFd;
+  const fail = () => {
+    faulted = true;
+    assert.equal(existsSync(s.original), false);
+    assert.equal(existsSync(join(native, "coverage.json")), true);
+    throw Object.assign(new Error("injected transfer EIO"), { code: "EIO" });
+  };
+  const injectedOpen = t.mock.method(fs, "openSync", (path, ...args) => {
+    if (!faulted && failure === "moved bytes" && path === join(native, "coverage.json")) fail();
+    const seal = /-phase-sealed\.json(?:\.pending)?$/.test(path);
+    if (seal && !faulted) {
+      sealPath = path;
+      if (failure === "seal open") fail();
     }
-    return open(path, ...args);
+    const fd = open(path, ...args);
+    if ((failure === "seal file sync" && seal)
+      || (failure === "seal directory sync" && path === h.directory && sealPath && existsSync(sealPath.replace(/\.pending$/, ""))))
+      targetFd = fd;
+    return fd;
+  });
+  const injectedSync = t.mock.method(fs, "fsyncSync", (fd) => {
+    if (!faulted && fd === targetFd) {
+      const writtenSeal = failure === "seal file sync" ? sealPath : sealPath.replace(/\.pending$/, "");
+      assert.equal(JSON.parse(readFileSync(writtenSeal)).kind, "phase-sealed");
+      fail();
+    }
+    return fsync(fd);
   });
   syncBuiltinESMExports();
   try { await assert.rejects(s.campaign.advance(h), { code: "EIO", message: "injected transfer EIO" }); }
-  finally { injected.mock.restore(); syncBuiltinESMExports(); }
+  finally { injectedOpen.mock.restore(); injectedSync.mock.restore(); syncBuiltinESMExports(); }
   assert.equal(faulted, true);
   assert.deepEqual(evidence.tree(native), liveOutput.generatedTree);
   const journal = (kind) => join(h.directory, fs.readdirSync(h.directory).find((name) => name.endsWith(`-${kind}.json`)));
   const reservation = JSON.parse(readFileSync(journal("native-output-reserved")));
   assert.deepEqual(reservation.status.uncollectedNativeRoots, expected);
   assert.equal(reservation.transferDestination, transferDestination);
-  assert.ok(!fs.readdirSync(h.directory).some((name) => name.endsWith("-phase-sealed.json")));
   const resultPath = join(h.directory, "campaign-result.json"), result = JSON.parse(readFileSync(resultPath));
   assert.equal(result.status.state, "preserved-uncertain");
   assert.deepEqual(result.status.uncollectedNativeRoots, expected);
@@ -688,6 +706,7 @@ for (const failure of ["moved bytes", "phase seal"]) test(`live transfer keeps b
   assert.equal(saved.collectionIntegrity, "unsealed-partial");
   assert.equal(saved.deletionAuthorized, false);
   assert.deepEqual(saved.uncollectedNativeRoots, expected);
+  assert.ok(!fs.readdirSync(h.directory).some((name) => name.endsWith("-phase-sealed.json")));
 
   // Editing both terminal copies cannot hide the move or direct recovery elsewhere.
   const haltedPath = journal("halted"), halted = JSON.parse(readFileSync(haltedPath));
