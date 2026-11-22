@@ -10,6 +10,12 @@ mod routes {
     #[route("/", get = home)]
     pub struct Home;
 
+    #[route("/save", post = save)]
+    pub struct Save;
+
+    #[route("/words", get = words)]
+    pub struct Words;
+
     #[route("/catalog/{id}", get = show)]
     pub struct Catalog<'a> {
         pub id: &'a str,
@@ -33,6 +39,16 @@ mod api {
 #[route(query)]
 pub struct CatalogQuery {
     pub field: Option<String>,
+}
+
+/// A write that saves nothing.
+async fn save() -> &'static str {
+    "saved"
+}
+
+/// A `Public` text too small for the app to keep.
+async fn words() -> corten::Public<&'static str> {
+    corten::Public::new(std::time::Duration::from_secs(60), "words")
 }
 
 async fn home(req: Req) -> HtmlResult {
