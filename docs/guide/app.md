@@ -1466,7 +1466,8 @@ lets it be shared, as for a refused write: it goes out `private, no-cache` (`pri
 when a middleware's header or its own names `no-store`), with none of the CDN caching headers
 above, whoever wrote them. The same holds for the error page in place of the router's own answer
 to a request no handler takes (the 404 of an unknown URL, the 405 of a method the route lacks,
-the 501 of one no route has), the PWA's offline page included, which its service worker keeps
+the 501 of one no route has, the 400 of a post whose `do` names none of the page's posts or
+names two), the PWA's offline page included, which its service worker keeps
 whatever its `Cache-Control` says; a handler's own 404 is its answer, under the rules above. Nor
 is the router's own failure shared as it is or as JSON (an API's 404 for a path under its prefix
 that a route outside it matched included), whatever a middleware wrote into it; an answer that is
@@ -1479,7 +1480,8 @@ or as JSON. Nor is a `Refused` in any form, whoever returns it (an extractor, a 
 middleware turning a request away), whatever status a middleware gives it after (a redirect, a
 `200`), nor a panic's or the deadline's failure as JSON; a response a middleware makes in a
 refusal's place is its own. A refusal made in a task the handler spawned is seen this way only
-while it is still a failure. An unstaged route's `NoStore`
+while it is still a failure; one made by a middleware that asks another app of Corten's for an
+answer inline, or by that app, is seen whatever the middleware then sends. An unstaged route's `NoStore`
 answer goes out `private, no-store` with none of them either
 ([a route outside the stages](#a-route-outside-the-stages)). A handler
 cannot mark an answer public any other way: a response it builds by hand is not an answer a route
@@ -3092,7 +3094,7 @@ of its lines and however a cache could find it): the failure said nothing may ke
 error page goes out `no-store`. It is `private, no-store` for `NoStore` and `no_store`, whatever a
 middleware made of the failure's header, and on a page Corten never lets be shared
 ([Caching](#caching): in place of a failure no handler answered, a refusal, or the router's own
-404, 405 or 501), where a `no-store` written by hand goes out so as well and none of the failure's
+404, 405, 501 or a named post's 400), where a `no-store` written by hand goes out so as well and none of the failure's
 CDN caching headers is kept. On the page for a handler's own failure, a `no-store` written by hand
 goes out bare unless the page is personal.
 

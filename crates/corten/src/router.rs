@@ -197,7 +197,8 @@ impl Endpoint for Keeping {
 /// so the body, a multipart upload's too, is still the chosen handler's to read, under its limit.
 /// A name the page has no post for, a post that names none where the page has no plain `post`,
 /// and a post that names two are a `400`: the address is the app's own, so the request is at
-/// fault, and no other handler is tried in its place.
+/// fault, and no other handler is tried in its place. No handler answers that `400`, so in an
+/// app's stages it is marked as the router's own, as [`Status`] marks its `404`.
 struct Chooser {
     plain: Option<Route>,
     actions: Box<[(&'static str, Route)]>,
@@ -207,14 +208,20 @@ struct Chooser {
 impl Endpoint for Chooser {
     #[inline]
     fn call(&self, req: Request) -> Answering {
-        let chosen = match named(req.uri().query()) {
-            Named::None => self.plain.as_ref(),
-            Named::One(name) => self.actions.iter().find(|(own, _)| *own == name.as_ref()).map(|(_, route)| route),
-            Named::Twice => None,
-        };
-        match chosen {
+        match self.choose(&req) {
             Some(route) => route.call(req),
             None => self.refuse(req.uri().query()),
+        }
+    }
+
+    #[inline]
+    fn answer(&self, req: Request, signal: &crate::Signal) -> Answering {
+        match self.choose(&req) {
+            Some(route) => route.answer(req, signal),
+            None => {
+                signal.mark_unrouted();
+                self.refuse(req.uri().query())
+            }
         }
     }
 
@@ -228,6 +235,16 @@ impl Chooser {
         // A mixed chooser stays eligible without reading the query before dispatch.
         let patches = plain.iter().chain(actions.iter().map(|(_, route)| route)).all(|route| route.action_patches());
         Self { plain, actions, patches }
+    }
+
+    /// The handler of the post `req` names, if the page has one.
+    #[inline]
+    fn choose(&self, req: &Request) -> Option<&Route> {
+        match named(req.uri().query()) {
+            Named::None => self.plain.as_ref(),
+            Named::One(name) => self.actions.iter().find(|(own, _)| *own == name.as_ref()).map(|(_, route)| route),
+            Named::Twice => None,
+        }
     }
 
     /// The `400` for a post no handler of the page's is for, its text written for a developer
@@ -261,6 +278,11 @@ impl Endpoint for Posts {
     fn call(&self, mut req: Request) -> Answering {
         req.extensions_mut().insert(HasPosts);
         self.inner.call(req)
+    }
+
+    fn answer(&self, mut req: Request, signal: &crate::Signal) -> Answering {
+        req.extensions_mut().insert(HasPosts);
+        self.inner.answer(req, signal)
     }
 
     fn action_patches(&self) -> bool {

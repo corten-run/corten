@@ -757,19 +757,22 @@ pub(crate) fn unanswered(mut res: Response) -> Response {
 }
 
 thread_local! {
-    /// Set where a refusal's mark is made ([`unanswered`], a typed [`crate::Refused`]): read and
-    /// cleared after each poll of the request's stages ([`run`]), which puts it on the request's
-    /// signal ([`crate::Signal::mark_refusal`]). The code that makes a refusal (an extractor, a
-    /// handler, a middleware) holds no signal of the framework's, and a middleware may have given
-    /// the handler a request without the one it had, so the mark goes by the thread the poll runs
-    /// on, as a drawn submit key's does (`crate::form::watched`).
-    static REFUSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// How many refusals' marks were made on this thread ([`unanswered`], a typed
+    /// [`crate::Refused`]): read before and after each poll of the request's stages ([`run`]),
+    /// which puts the mark on the request's signal ([`crate::Signal::mark_refusal`]) when the count
+    /// moved. The code that makes a refusal (an extractor, a handler, a middleware) holds no signal
+    /// of the framework's, and a middleware may have given the handler a request without the one it
+    /// had, so the mark goes by the thread the poll runs on, as a drawn submit key's does
+    /// (`crate::form::watched`). A count, never cleared, so stages polled inside the poll (a
+    /// middleware that asks another Corten app for an answer inline) see the refusals made in
+    /// theirs without taking this one's, and this one sees theirs too.
+    static REFUSALS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-/// A refusal's mark is being made on this thread ([`REFUSING`]).
+/// A refusal's mark is being made on this thread ([`REFUSALS`]).
 #[cold]
 pub(crate) fn refusing() {
-    REFUSING.set(true);
+    REFUSALS.set(REFUSALS.get().wrapping_add(1));
 }
 
 /// A typed refusal ([`crate::Refused`], from an extractor, a handler or a middleware: a sign-in, a
@@ -3955,6 +3958,7 @@ async fn run<'r, F: Future<Output = Result<Response, Late>>>(
     // and answering a timeout, stays inside the panic catch.
     let mut fut = pin!(dispatch(pending));
     let outcome = std::future::poll_fn(|cx| {
+        let refusals = REFUSALS.get();
         let polled = std::panic::catch_unwind(AssertUnwindSafe(|| {
             fut.as_mut()
                 .poll(cx)
@@ -3963,10 +3967,10 @@ async fn run<'r, F: Future<Output = Result<Response, Late>>>(
         // A refusal made in this poll, on this thread: its mark goes on the request's signal. One
         // made on another thread (a task the handler spawned) is not seen here; its failure is
         // still looked at as it goes out, an answer that is not a failure only when one was seen.
-        // A mark left on this thread by a refusal made outside a request's stages only makes the
-        // next request polled here look at its answer: the marks it settles by are on the answer.
-        if REFUSING.get() {
-            REFUSING.set(false);
+        // One made in another request's stages polled inside this poll (a middleware that asks
+        // another Corten app for an answer inline) counts here too: such a middleware may relay
+        // that answer, and the marks it settles by are on the answer.
+        if REFUSALS.get() != refusals {
             signal.mark_refusal();
         }
         match polled {
