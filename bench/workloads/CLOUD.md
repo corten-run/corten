@@ -486,7 +486,7 @@ If a standalone group failed before native entry and its collector recorded the
 archive but not deletion, an unrelated group can use that same census. Its
 launch approval includes the stopped host's original ID: even a renamed or
 retagged host still present in the account prevents creation. An active cleanup
-blocks admission. This does not retire the failed group, retry it, or publish a result.
+blocks admission. This does not retire or retry the failed group, or publish a result.
 
 When retrying a group on a new host, a proved Windows PID reuse on a destroyed
 host does not make its old monitor active again. Preparation reads the original
@@ -563,6 +563,18 @@ prepared sibling. Do not move attempts to a new index or root. An ambiguous or
 active attempt is refused; leave its evidence and locks in place and use the
 existing recovery procedure. Run the report after collection to select another
 missing group.
+
+If the operator independently confirmed external deletion of a standalone host
+whose setup stopped before native entry, continue with the same commands, a
+higher round, and a different reviewed merged commit. The report shows
+`setup-failed-needs-census` when the original terminal observation, launch
+intent, nonzero setup exit and campaign-free archive are preserved and no owner
+lock remains. This is local eligibility, not a retirement receipt or a result.
+The new reservation leaves the old attempt untouched. Its approval binds the
+old host ID and evidence; immediately before create, the worker checks the
+old ID is absent from the full census in the same account (even if the host was
+renamed), and rechecks the original locks and evidence. Do not interpret prepare
+or preview as proof of provider absence.
 
 If a standalone group was prepared but never launched, use the same prepare
 command in the same continuation root with an explicitly higher round and a

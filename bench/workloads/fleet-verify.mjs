@@ -311,23 +311,32 @@ function evidenceSnapshot(job) {
 
 // Absence of an old ID in the provider account is necessary but not sufficient:
 // the terminal attempt named in the approval must still be idle and unchanged.
-export function recheckSetupSibling(root, selectedGroup, row) {
-  assert.equal(dirname(row.root), root, "setup sibling belongs to another continuation");
+export function recheckSetupAttempt(root, row, successor) {
+  assert.equal(dirname(row.root), root, "setup attempt belongs to another continuation");
   const idleAttempt = () => {
     const fleet = readFleet(row.root, row.round, { priorSelection: true });
-    assert.ok(fleet.manifest.single?.group === row.group && row.group !== selectedGroup);
+    assert.equal(fleet.manifest.single?.group, row.group);
+    if (successor?.single?.group === row.group) {
+      assert.ok(Number(successor.round.slice(1)) > Number(row.round.slice(1)), "failed setup requires a higher round");
+      assert.notEqual(successor.commit, fleet.manifest.commit, "retry after failed setup requires a different measured commit");
+    }
     assert.equal(fleet.manifest.provider.accountId, row.accountId);
     assert.equal(fleet.manifestSha256, row.manifestSha256);
     assert.equal(readLaunchIntent(fleet).sha256, row.launch);
     const saved = readGroup(fleet, row.group);
-    assert.equal(saved.stateSha256, row.stateSha256, "setup sibling reservation changed");
+    assert.equal(saved.stateSha256, row.stateSha256, "setup attempt reservation changed");
     assert.ok(saved.state?.preBootstrapTerminal && saved.state.status === "starting" && saved.state.id === row.id);
     assert.ok(saved.outcome === "available" && !present(join(fleet.root, ".fleet-operation.lock"))
       && !present(join(saved.stateRoot, ".groups-launch.lock")) && !present(join(saved.local, "stream-recovery.lock")),
-    "setup sibling recovery started");
+    "setup attempt recovery started");
     return saved;
   };
-  evidenceSnapshot(idleAttempt());
+  const saved = idleAttempt();
+  evidenceSnapshot(saved);
+  const extracted = join(saved.local, saved.state.evidence), campaign = join(extracted, "campaign");
+  const marker = full(regular(join(extracted, "exit-code"), 16).toString("utf8"), /[1-9]\d{0,2}\n/, "nonzero setup exit");
+  assert.ok(Number(marker.trim()) <= 255, "invalid setup exit");
+  if (present(campaign)) { physical(campaign); assert.deepEqual(readdirSync(campaign), [], "setup attempt entered the campaign"); }
   idleAttempt(); // Hashing the archive/tree may overlap the start of collection.
   return idleAttempt;
 }
