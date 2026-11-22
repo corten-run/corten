@@ -1,6 +1,8 @@
 // Synthetic retained OS records test replay only, never real host qualification.
 import assert from "node:assert/strict";
-import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { closeSync, copyFileSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, posix, resolve, sep } from "node:path";
@@ -10,7 +12,7 @@ import { definition } from "../registry.mjs";
 import { browserCpus } from "../../fullstack-browser/contract.mjs";
 import { participantSnapshot, replayExecution } from "../../fullstack-browser/native-execution.mjs";
 import { composeHostProof, inspectLifetime, processIdentity, inspectBrowserParticipants, inspectLiveActors, resolveParticipantExecutables } from "./host-lifetime.mjs";
-import { executableIdentity, executableReference, hashExecutableDescriptor } from "./participant-executables.mjs";
+import { executableIdentity, executableReference, hashExecutableDescriptor, participantExecutables } from "./participant-executables.mjs";
 import { jsonPhase } from "./campaign-contract.mjs";
 
 const campaign = "r17-0123456789abcdef", command = 0, pid = 100;
@@ -43,6 +45,43 @@ test("deferred executable digest binds the original sampled inode and rejects mu
     writeFileSync(file, "mutated executable bytes");
     assert.throws(() => hashExecutableDescriptor(fd, identity));
   } finally { closeSync(fd); }
+});
+
+for (const mode of ["intact", "target removed", "changed with mtime restored"]) test(`real inherited executable descriptor: ${mode}`, {
+  skip: process.platform !== "linux" && "requires Linux /proc executable descriptors", timeout: 15000,
+}, async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "isolated-inherited-executable-"));
+  t.after(() => { assert.ok(resolve(directory).startsWith(resolve(tmpdir()) + sep)); rmSync(directory, { recursive: true }); });
+  const target = join(directory, "target"), image = join(target, "image"), stamp = 1_700_000_000;
+  mkdirSync(target);
+  copyFileSync("/bin/cat", image); utimesSync(image, stamp, stamp);
+  const digest = (bytes) => createHash("sha256").update(bytes).digest("hex"), original = digest(readFileSync(image));
+  const child = spawn(image, [], { timeout: 5000 });
+  const closed = once(child, "close"), pending = participantExecutables();
+  let fd;
+  try {
+    await once(child, "spawn");
+    const { executableRef, executableIdentity: sampled } = pending.capture(child.pid);
+    fd = openSync(`/proc/${child.pid}/exe`, "r");
+    child.stdin.end(); assert.deepEqual(await closed, [0, null]);
+    if (mode === "changed with mtime restored") {
+      const bytes = readFileSync(image); bytes[bytes.length - 1] ^= 1;
+      writeFileSync(image, bytes); utimesSync(image, stamp, stamp);
+    }
+    if (mode !== "intact") rmSync(target, { recursive: true });
+    const actual = executableIdentity(fd), changed = mode === "changed with mtime restored";
+    assert.equal(digest(readFileSync(fd)) === original, !changed);
+    if (mode === "intact") assert.deepEqual(pending.finish().executables, [{ ref: executableRef, identity: sampled, sha256: original }]);
+    else {
+      assert.notEqual(actual.ctimeNs, sampled.ctimeNs);
+      assert.deepEqual({ ...actual, ctimeNs: sampled.ctimeNs }, sampled);
+      assert.throws(() => pending.finish(), { operation: "executable-hash-before", code: "identity-ctime", executableRef });
+    }
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await closed;
+    pending.close(); if (fd !== undefined) closeSync(fd);
+  }
 });
 
 test("sealed deferred executable records replay without rewriting sample timestamps", (t) => {

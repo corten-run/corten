@@ -266,6 +266,7 @@ async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs
         sha256: createHash("sha256").update(original.readFileSync(options.stdio[i + 3])).digest("hex") })));
     });
     t.mock.method(fs, "openSync", (path, ...args) => {
+      if (f.failProofWrite && path === join(directory, "executables.json") && args[0] === "wx") throw missing("ENOSPC");
       if (!/^\/proc\/\d+\/exe$/.test(String(path))) return original.openSync(path, ...args);
       f.override(String(path), "open");
       const fd = original.openSync(executableFor(path), ...args); held.add(fd); return fd;
@@ -679,15 +680,16 @@ test("a future sample write failure keeps admitted captures owned until sticky f
   assert.equal(f.held.size, 0);
 });
 
-test("failed lifetime finish retains executable-proof failure evidence and closes its pending descriptors", async (t) => {
-  const f = await fixture(t, [], true); assert.equal(f.held.size, 1); f.failHash = true;
-  await assert.rejects(f.finish); // No executable proof may be fabricated to make replay pass.
+for (const [fault, operation, code] of [["failHash", "executable-hash-helper", "EIO"],
+  ["failProofWrite", "executable-proof-publish", "ENOSPC"]]) test(`failed lifetime finish retains ${operation} and closes its descriptors`, async (t) => {
+  const f = await fixture(t, [], true); assert.equal(f.held.size, 1); f[fault] = true;
+  await assert.rejects(f.finish, { message: `host-executable-proof-incomplete: ${operation}: ${code}` });
   assert.equal(f.held.size, 0); assert.throws(f.proof, { code: "ENOENT" });
   assert.equal(f.terminal.observerError, "host-executable-proof-incomplete");
   assert.equal(f.terminal.observerFailures.count, 1);
   assert.equal(f.terminal.observerFailures.first.phase, "executables");
-  assert.equal(f.terminal.observerFailures.first.operation, "executable-proof");
-  assert.equal(f.terminal.observerFailures.first.code, "EIO");
+  assert.equal(f.terminal.observerFailures.first.operation, operation);
+  assert.equal(f.terminal.observerFailures.first.code, code);
 });
 
 for (const operation of ["stat", "exe"]) test(`full snapshot recovers from six consecutive exited-PID ${operation} races`, async (t) => {
