@@ -507,24 +507,41 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   async function retireNativeFailure(controllerCommit, grouped) {
     const { retirementAllowed } = failedNativeArchive(local, state, grouped);
-    const originalPath = join(local, "failed-native-reservation.json"), capturePath = join(local, "failed-native-capture.json");
-    const preserved = existsSync(originalPath), original = regular(preserved ? originalPath : statePath, 1024 * 1024);
+    const originalPath = join(local, "failed-native-reservation.json"), capturePath = join(local, "failed-native-capture.json"),
+      custodyArchive = join(local, "failed-native-results.tgz");
+    const present = grouped?.preplan ? (path) => lstatSync(path, { throwIfNoEntry: false }) !== undefined : existsSync;
+    const preserved = present(originalPath), captured = present(capturePath), original = regular(preserved ? originalPath : statePath, 1024 * 1024);
     if (grouped?.preplan) {
-      if (existsSync(capturePath)) assert.ok(preserved, "captured preimage missing; preserve custody");
-      else assert.equal(digest(original), recoveryApproval.reservationSha256, "approved preimage changed before custody");
+      if (captured) assert.ok(preserved, "captured preimage missing; preserve custody");
+      assert.equal(digest(original), recoveryApproval.preservedReservationSha256, "approved preserved reservation changed before custody");
     }
-    verifyFailedNativeReservation(state, JSON.parse(original), grouped);
-    if (!preserved) durable(originalPath, original);
-    const custodyArchive = join(local, "failed-native-results.tgz");
+    const parsed = JSON.parse(original), prior = grouped?.preplan ? controllerState(parsed, options.round) : parsed;
+    verifyFailedNativeReservation(state, prior, grouped);
+    const probeTimeout = 11 * 60000;
     let capture;
-    if (existsSync(capturePath)) {
+    if (captured) {
+      if (!preserved) durable(originalPath, original);
       capture = verifyFailedNativeCustody(local, state, JSON.parse(regular(capturePath)), grouped);
       assert.equal(capture.controllerCommit, controllerCommit, "custody controller source changed");
     } else {
-      assert.ok(!existsSync(custodyArchive) && !existsSync(`${custodyArchive}.download`), "unrecorded custody retained; no automatic adoption");
-      const script = failedNativeScript(state, null, null, grouped), startedAtMs = Date.now();
-      const raw = (await ssh(script, 11 * 60000)).stdout, finishedAtMs = Date.now();
-      const observation = failedNativeObservation(raw, state, startedAtMs, finishedAtMs, grouped);
+      assert.ok(!present(custodyArchive) && !present(`${custodyArchive}.download`) && (!grouped?.preplan
+        || !present(`${custodyArchive}.synced`) && !present(join(local, "failed-native-host.json"))
+          && !readdirSync(local).some((name) => name.startsWith("custody-"))), "unrecorded custody retained; no automatic adoption");
+      const script = failedNativeScript(state, null, null, grouped);
+      if (grouped?.preplan) {
+        const appended = state.control.ledger.slice(prior.control.ledger.length), requestSha256 = digest(`set -euo pipefail\n${script}\n`);
+        // The preserved prefix is exact. Before a capture exists, only a
+        // positively settled refusal of this very probe permits another try.
+        assert.ok((appended.length || recoveryApproval.preservedReservationSha256 === recoveryApproval.reservationSha256)
+          && appended.every(({ request, localTerminal, code }) => localTerminal && code > 0 && code < 255
+            && request.epoch === "collection" && request.invocation.channel === "ssh"
+            && request.invocation.deadlineMs === probeTimeout && request.invocation.requestSha256 === requestSha256),
+        "only a settled first custody probe refusal may extend the preserved reservation");
+      }
+      if (!preserved) durable(originalPath, original);
+      const startedAtMs = Date.now(), result = await ssh(script, probeTimeout, grouped?.preplan === true), finishedAtMs = Date.now();
+      if (grouped?.preplan) assert.ok(result.status === 0 && !result.error, "preplan custody probe refused; preserve host and evidence");
+      const observation = failedNativeObservation(result.stdout, state, startedAtMs, finishedAtMs, grouped);
       const download = `${custodyArchive}.download`; durable(download, "");
       await scp(`root@${state.ip}:/bench/failed-native-custody.tgz`, download);
       durableCopy(download, `${custodyArchive}.synced`, observation.archiveSha256);
@@ -532,7 +549,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       const extracted = mkdtempSync(join(local, "custody-"));
       const hash = await extractArchive(custodyArchive, extracted, observation.archiveSha256); check();
       capture = { schema: "benchmark-failed-native-custody/v1", measuredCommit: state.commit, controllerCommit,
-        ...(grouped?.preplan ? { scope: "grouped-preplan" } : {}),
+        ...(grouped?.preplan ? { scope: "grouped-preplan", launchIntentSha256: recoveryApproval.intent.launch } : {}),
         reservationSha256: digest(original), scriptSha256: digest(script), observation, startedAtMs, finishedAtMs,
         evidence: basename(extracted), evidenceSha256: hash };
       verifyFailedNativeCustody(local, state, capture, grouped); durable(capturePath, `${JSON.stringify(capture, null, 2)}\n`);
@@ -917,6 +934,8 @@ else ${pack}; fi` : pack, 11 * 60000);
           assert.equal(state.retirement.kind, "native-failed");
           const record = verifyFailedNativeRetirement(local, state);
           assert.equal(record.capture.scope === "grouped-preplan", groupedPreplan, "retired recovery scope differs");
+          if (groupedPreplan) assert.equal(record.capture.reservationSha256, recoveryApproval.preservedReservationSha256,
+            "approved preserved reservation differs from retirement");
           await confirmDeleted();
           state.destroyedAt ??= new Date().toISOString(); save(); return 1;
         }

@@ -9,6 +9,7 @@ import { digest, extractArchive, treeHash } from "./cloud-local.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { remoteFiles } from "./cloud-remote.mjs";
 import { verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
+import { shellTransport } from "./cloud-transport.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { fleetChildOptions, readFleet, readGroup, verifyFleet } from "./fleet-verify.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
@@ -124,6 +125,11 @@ function fixture(t, group, flags = {}) {
       assert.ok(args.includes("StrictHostKeyChecking=yes"));
       assert.ok(outputRoots.every((root) => script.includes(`/bench/repo/${root}`)));
       assert.ok(script.includes(reg.host.bootId));
+      if (flags.refuseFirstProbe && probes === 1) {
+        const id = rest[3].request.invocation.id;
+        return shellTransport({ repo: h.repo, spawn: () => ({ status: 1, stdout: "",
+          stderr: `CORTEN_CONTROL ${id} ${"a".repeat(64)}\nCORTEN_RESULT ${id} 1\n` }) })(binary, args, ...rest);
+      }
       if (flags.busyFence && probes === 3) return { status: 1, stdout: "" };
       return { status: 0, stdout: JSON.stringify({ schema: "benchmark-failed-native-host/v1", custody: true,
         historicalAccountingQualified: false, hostId: saved.id, unit: saved.unit, roots, metadataSha256,
@@ -202,6 +208,7 @@ test("preplan preview binds preserved wrapper, measured registry and consumed si
   assert.deepEqual(plan.missing, []);
   assert.equal(recovery.policy, "grouped-preplan-failure-custody-only");
   assert.equal(reservationSha256, digest(readFileSync(f.h.statePath)));
+  assert.equal(recovery.preservedReservationSha256, reservationSha256);
   assert.equal(recovery.archiveSha256, digest(f.wrapper));
   assert.equal(recovery.intent.launch, digest(readFileSync(f.intentPath)));
   await assert.rejects(f.preview(true), /measured group layout or remote job differs/);
@@ -220,7 +227,8 @@ test("explicit preplan retirement preserves the preimage and reconciles a lost d
   const preserved = join(f.h.local, "failed-native-reservation.json");
   const unbound = Buffer.concat([preimage, Buffer.from("\n")]);
   writeFileSync(preserved, unbound, { flag: "wx" });
-  await assert.rejects(f.retire(plan), /approved preimage changed before custody/);
+  await assert.rejects(f.retire(plan), /locked action changed after approval/);
+  await assert.rejects(f.retire(await f.preview()), /settled first custody probe refusal/);
   assert.deepEqual(readFileSync(preserved), unbound);
   unlinkSync(preserved);
   assert.deepEqual(f.h.calls, []);
@@ -263,6 +271,47 @@ test("explicit preplan recovery preserves a live original owner or an uncertain 
   assert.equal(f.h.calls.length, calls);
   assert.equal(f.h.deletes, 1);
   assert.deepEqual(readFileSync(lock), lockBytes);
+});
+
+test("preplan retirement can reapprove a settled first-probe refusal without adopting partial custody", async (t) => {
+  const f = await preplanFixture(t, { refuseFirstProbe: true });
+  await f.preserveWrapper();
+  const prior = readFileSync(f.h.statePath), initial = await f.preview();
+  const original = join(f.h.local, "failed-native-reservation.json"), capture = join(f.h.local, "failed-native-capture.json");
+  await assert.rejects(f.retire(initial), /preplan custody probe refused/);
+  const refused = readFileSync(f.h.statePath), last = f.h.saved().control.ledger.at(-1);
+  assert.equal(last.localTerminal, true); assert.equal(last.code, 1);
+  assert.deepEqual(readFileSync(original), prior);
+  assert.ok(!existsSync(capture));
+  assert.equal(f.probes, 1); assert.equal(f.downloads, 0); assert.equal(f.h.deletes, 0);
+  await assert.rejects(f.retire(initial), /locked action changed after approval/);
+  const retry = await f.preview();
+  assert.notEqual(retry.approvalSha256, initial.approvalSha256);
+  assert.equal(retry.subject.reservationSha256, digest(refused));
+  assert.equal(retry.subject.recovery.preservedReservationSha256, digest(prior));
+
+  f.h.change(s => {
+    const start = s.control.ledger[0].request.invocation;
+    start.deadlineMs++;
+    s.control.ledger[1].request.seal[0].sha256 = digest(JSON.stringify(start));
+  });
+  await assert.rejects(f.retire(await f.preview()), /original measured reservation changed/);
+  for (const alter of [row => { row.request.invocation.requestSha256 = "e".repeat(64); }, row => { row.code = 0; }]) {
+    writeFileSync(f.h.statePath, refused);
+    f.h.change(s => alter(s.control.ledger.at(-1)));
+    await assert.rejects(f.retire(await f.preview()), /settled first custody probe refusal/);
+  }
+  writeFileSync(f.h.statePath, refused);
+  const partial = join(f.h.local, "failed-native-results.tgz.synced");
+  writeFileSync(partial, "unexplained partial capture", { flag: "wx" });
+  await assert.rejects(f.retire(retry), /unrecorded custody retained/);
+  assert.equal(readFileSync(partial, "utf8"), "unexplained partial capture");
+  unlinkSync(partial);
+  assert.equal(f.probes, 1); assert.equal(f.downloads, 0); assert.equal(f.h.deletes, 0);
+  assert.equal(await f.retire(retry), 1);
+  assert.deepEqual(readFileSync(original), prior);
+  assert.equal(JSON.parse(readFileSync(capture)).launchIntentSha256, retry.subject.recovery.intent.launch);
+  assert.equal(f.probes, 4); assert.equal(f.downloads, 1); assert.equal(f.h.deletes, 1);
 });
 
 for (const group of ["fullstack-browser", "json-api"]) {
