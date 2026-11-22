@@ -177,7 +177,9 @@ inputs explicitly block proof; partial snapshots do not mean coverage.
 The collector bounds each tree to 40,000 entries, 32 levels, 128 MiB per file and
 1 GiB of unique saved blobs. The observed Node and browser executables have
 separate caps of 192 MiB and 512 MiB; the NodeSource 26.13.1 amd64 executable and
-Linux headless-shell exceed 128 MiB. Offline replay checks `evidence/node.json`
+Linux headless-shell exceed 128 MiB. On Linux the file descriptor being read
+must match the inode pinned through the running process's `/proc` executable.
+Offline replay checks `evidence/node.json`
 and `evidence/browser.json` before reading oversized bytes, then checks the exact
 blob length and SHA-256. No other reference gets a higher bound. Replay enforces
 1 GiB of unique blobs and 2 GiB of total saved files. External configuration is

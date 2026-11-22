@@ -1,17 +1,18 @@
 // Opt-in real Linux apparatus controls. No framework qualification or Rust build.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, readFile, writeFile, rm, realpath, lstat } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rm, realpath, lstat, copyFile, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, isAbsolute } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
 import { createRequire } from "node:module";
 import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
 import { Evidence, sha256 } from "./evidence.mjs";
 import { npmClosure } from "./build-replay.mjs";
 import { installLayout } from "./install-layout.mjs";
-import { launchBrowser, browserIdentity, nodeIdentity } from "./launch.mjs";
+import { launchBrowser, browserIdentity, captureExecutable, nodeIdentity } from "./launch.mjs";
 import { verifyHostProof } from "./host-proof.mjs";
 import { hostFixture } from "./host-fixture.mjs";
 import { snapshot } from "./verify.mjs";
@@ -37,6 +38,40 @@ test("Linux Node identity replays the actual process image", { skip: !enabled, t
   await f.e.seal({ group: "client-heavy", round: "linux-control", commit: "a".repeat(40) });
   assert.deepEqual(replayToolIdentity(await snapshot(f.out, artifactProfile), "node"), identity);
   t.diagnostic(JSON.stringify({ version: identity.version, bytes: identity.executable.bytes, sha256: identity.executable.sha256 }));
+});
+
+test("Linux process-image capture rejects a same-path replacement after the pathname check", { skip: !enabled, timeout: 10000 }, async (t) => {
+  const f = await fixture(t), path = join(f.root, "live-image"), original = join(f.root, "original-image");
+  const replacement = join(f.root, "replacement-image");
+  assert.ok((await lstat(await realpath("/bin/sleep"))).size <= 1024 ** 2);
+  await copyFile("/bin/sleep", path);
+  const different = await readFile(path);
+  different[different.length - 1] ^= 1;
+  await writeFile(replacement, different); // Same size, different inode and bytes; never executed.
+  const child = spawn(path, ["30"], { stdio: "ignore" });
+  await once(child, "spawn");
+  const closed = once(child, "close");
+  try {
+    const proc = `/proc/${child.pid}/exe`;
+    const identity = await captureExecutable(f.e, "node", path, proc);
+    assert.equal(identity.executable.sha256, await fileHash(proc));
+
+    // Insert a deterministic race between the producer's pathname check and
+    // its actual read. The live process still holds the moved original inode.
+    const read = f.e.file.bind(f.e);
+    f.e.file = async (...args) => {
+      await rename(path, original);
+      await rename(replacement, path);
+      return read(...args);
+    };
+    await assert.rejects(captureExecutable(f.e, "node", path, proc), /process-image-differs/);
+    assert.equal(await realpath(proc), original);
+    assert.equal(f.e.blobs.size, 1);
+
+    await rename(original, path);
+    f.e.file = read;
+    assert.deepEqual(await captureExecutable(f.e, "node", path, proc), identity);
+  } finally { child.kill("SIGKILL"); await closed; }
 });
 
 test("Linux ordinary npm install closes before/after including bin symlinks and esbuild hardlinks", { skip: !enabled, timeout: 180000 }, async (t) => {

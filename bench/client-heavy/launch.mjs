@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { realpath } from "node:fs/promises";
+import { open, realpath } from "node:fs/promises";
 import { dirname, basename } from "node:path";
 
 export const launchOptions = Object.freeze({ headless: true, args: Object.freeze(["--renderer-process-limit=1"]) });
@@ -7,10 +7,14 @@ export const executableBytes = Object.freeze({ node: 192 * 1024 ** 2, browser: 5
 
 export async function captureExecutable(evidence, name, requestedExecutable, linuxImage) {
   const executablePath = await realpath(requestedExecutable);
-  if (process.platform === "linux" && linuxImage !== undefined)
-    assert.equal(await realpath(linuxImage), executablePath, `${name}-process-image-differs`);
-  return { requestedExecutable, executablePath,
-    executable: await evidence.file(dirname(executablePath), basename(executablePath), executableBytes[name]) };
+  // Follow the kernel's executable link intentionally and keep its inode pinned
+  // while the regular-file reader opens, checks and reads its own descriptor.
+  const processImage = process.platform === "linux" && linuxImage !== undefined ? await open(linuxImage, "r") : undefined;
+  try {
+    if (processImage) assert.equal(await realpath(linuxImage), executablePath, `${name}-process-image-differs`);
+    return { requestedExecutable, executablePath,
+      executable: await evidence.file(dirname(executablePath), basename(executablePath), executableBytes[name], processImage) };
+  } finally { await processImage?.close(); }
 }
 
 export async function nodeIdentity(evidence) {
