@@ -2454,7 +2454,9 @@ mod tests {
                 page.make_brotli();
                 LOCKING.take().is_none()
             });
-            let held = at_lock.recv_timeout(std::time::Duration::from_secs(10)).expect("the bytes were made while the writer held the lock");
+            let held = at_lock
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the bytes were made while the writer held the lock");
             assert!(held, "and the lock was held when the job asked for it");
             assert!(page.coded.brotli.get().is_none(), "and are not put in while it holds it");
             drop(writer);
