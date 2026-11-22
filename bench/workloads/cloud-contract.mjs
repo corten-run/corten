@@ -195,16 +195,26 @@ export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, st
     : `reserved fleet placement not advertised: c-8/${reservedRegion}`);
   return options[0];
 }
-export function assertFleetCensus(droplets, plan, remainingRegion) {
+export function assertFleetCensus(droplets, plan, remainingRegion, peers = []) {
   validateLaunchFleet(plan); assert.ok(Array.isArray(droplets));
+  const peerRows = new Set(peers.map((s) => {
+    assert.ok(plan.single && s.fleet.single?.indexSha256 === plan.single.indexSha256
+      && s.group !== plan.single.group && s.provider.accountId === plan.provider.accountId,
+      "peer belongs to a different reservation or account");
+    const d = ownedDroplet(droplets, s, { priorSelection: true });
+    assert.equal(d.networks.v4.filter((n) => n.type === "public").length, 1, "ambiguous peer public address");
+    return d;
+  }));
+  assert.equal(peerRows.size, peers.length, "duplicate peer host identity");
   const names = new Set(), ids = new Set();
   for (const d of droplets) {
     if (!d.name?.startsWith("corten-bench-groups-") && !d.tags?.includes(tags[0])) continue;
     const job = plan.jobs.find((row) => row.name === d.name);
-    assert.ok(job, "foreign benchmark host blocks fleet launch");
+    assert.ok(job || peerRows.has(d), "foreign benchmark host blocks fleet launch");
     full(String(d.id), /[1-9]\d*/, "droplet ID");
     assert.ok(!names.has(d.name) && !ids.has(String(d.id)), "duplicate fleet host identity");
     names.add(d.name); ids.add(String(d.id));
+    if (!job) continue; // Already bound to its exact owned state above.
     for (const tag of [...tags, job.tag]) assert.ok(d.tags?.includes(tag), "fleet ownership tag differs");
     const placement = jobHost(plan, job, remainingRegion);
     assert.equal(d.size_slug ?? d.size?.slug, placement.size); assert.equal(d.region?.slug, placement.region);
@@ -332,8 +342,8 @@ export function validateState(s, round, options) {
   }
   return s;
 }
-export function ownedDroplet(droplets, s) {
-  validateState(s, s.round);
+export function ownedDroplet(droplets, s, options) {
+  validateState(s, s.round, options);
   assert.ok(Array.isArray(droplets));
   const matches = droplets.filter((d) => s.id ? String(d.id) === s.id : d.name === s.name && d.tags?.includes(s.tag));
   assert.equal(matches.length, 1, "owned droplet missing or ambiguous; preserve reservation");

@@ -486,10 +486,25 @@ between them. There is no extra setup host and no `--admit-remaining` action.
 The continuation does not grant approval; the existing exact merged-source,
 native readiness, independent review and operator approval requirements apply.
 
+Different groups can run concurrently in the same continuation root. Prepare
+and allocation are serialized through a shared lock. As soon as the launched
+host has sealed bootstrap, entered the native campaign and renewed its
+registered supervisor lease, the shared lock is released. Leave that detach
+process running: it still owns its host monitor and attempt lock. Use a separate
+terminal for the next group's normal prepare and exact approval. The preview
+binds any running peers; the create census rechecks their signed-in account,
+owned identities, tags, addresses and placements. The exact target placement
+and free account capacity still have to pass. An unknown or unconfirmed
+benchmark host, a lost lease or changed peer refuses dispatch, not cleanup.
+An earlier controller that did not record peer leases cannot be treated as a
+running peer. Never clear a lock or recreate a group to force overlap.
+
 For collection or audit delivery use the ordinary per-host commands at the
 measured checkout. For the first attempt use state root
 `ABSOLUTE_ROOT/json-api/json-api`. For a retry use the reported `attemptRoot`
 plus the group name, for example `ABSOLUTE_ROOT/json-api--r26/json-api`.
+Collect a terminal host with its own approval and existing custody checks; it
+does not wait for a sibling's measurement or deletion.
 There is no automatic retry. After a proven `not-created` attempt or confirmed
 retirement without a verified result, the report marks that group `retryable`.
 Repeat the same prepare, preview and approved detach commands in the **same

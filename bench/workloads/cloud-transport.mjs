@@ -47,7 +47,7 @@ export function shellTransport({ repo, spawn = spawnSync, streamSpawn, sealExec 
       });
       const argv = ["-F", "none", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-o", "ControlMaster=no", "-o", "ControlPath=none", ...fixedArgs, command];
       return import("./cloud-control-stream.mjs").then(({ openControlStream }) => openControlStream({ repo, argv,
-        env: { ...environments.get("ssh") }, expected: control.expected, local: control.local, interrupted: control.interrupted,
+        env: { ...environments.get("ssh") }, expected: control.expected, local: control.local, interrupted: control.interrupted, peerLease: control.peerLease,
         ...(streamSpawn ? { launch: streamSpawn } : {}) }));
     }
     let argv = [...args], input, executable = binary;

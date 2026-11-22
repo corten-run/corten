@@ -29,7 +29,8 @@ serveProviderWorker({
     assert.equal(credential, "SYNTHETIC_FLEET_CREDENTIAL");
     record({ boundary: "provider", method, path, body });
     if (path === "/v2/account") return mode === "provider-failure" ? { status: 403, value: null }
-      : { status: 200, value: { account: { uuid: userId, droplet_limit: 20 } } };
+      : { status: 200, value: { account: { uuid: userId,
+        droplet_limit: existsSync(hostsPath + ".limit") ? Number(readFileSync(hostsPath + ".limit", "utf8")) : 20 } } };
     if (method === "GET" && path === "/v2/sizes?page=1&per_page=200") {
       if (mode === "catalog-disconnect") process.exit(2);
       if (mode === "catalog-denial") return { status: 403, value: { private: credential } };

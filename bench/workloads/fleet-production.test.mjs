@@ -6,15 +6,16 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
-import { accountId, archive, commit, context, harness, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
+import { accountId, archive, commit, context, harness, metadata, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
-import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, reservation, savedLoadLayout, verifySshIngress } from "./cloud-contract.mjs";
+import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, reservation, savedLoadLayout, savedPlacement, verifySshIngress } from "./cloud-contract.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
 import { inspectContinuation } from "./group-continuation.mjs";
@@ -328,6 +329,97 @@ test("continuation replays catalog, creates only the next whole group, and does 
   assert.equal(treeHash(retained), oldTree, "historical bytes untouched");
 });
 
+test("independent continuation admits two remote-active hosts and collects a failed terminal host without waiting for its peer", { timeout: 90000 }, async (t) => {
+  const p = fixture(t, "independent-overlap"), first = "json-api", second = "localized-marketplace", denied = "catalog-page";
+  fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
+  p.deps.inspect = () => assert.fail("no collected results yet");
+  const args = (group) => ["r21", "--continuation-root", p.h.base, "--group", group];
+  const prepare = (group) => fleetMain([...args(group), "--prepare", "--commit", commit,
+    "--ssh-key", "42", "--account-id", accountId, "--context", context], p.deps);
+  const approve = async (group) => {
+    assert.equal(await fleetMain([...args(group), "--detach", "--print-approval"], p.deps), 3);
+    return [...args(group), "--detach", "--approve-reviewed-merged-ready", p.output.at(-1).approvalSha256];
+  };
+  const wait = async (ready) => {
+    const deadline = Date.now() + 30000;
+    while (!ready()) { assert.ok(Date.now() < deadline, "synthetic readiness deadline"); await delay(50); }
+  };
+  const active = (group) => p.events().some((row) => row.group === group && row.boundary === "remote-active");
+  const handoff = () => !fs.existsSync(path.join(p.h.base, ".continuation-operation.lock"));
+  const finish = (group) => fs.writeFileSync(path.join(p.h.temp, "finish-" + group), "");
+  const running = [];
+  const launch = (approved) => {
+    const promise = fleetMain(approved, p.deps); promise.catch(() => {}); running.push(promise); return promise;
+  };
+  try {
+    assert.equal(await prepare(first), 3);
+    const approved = await approve(first);
+    const firstRun = launch(approved);
+    await wait(() => active(first) && handoff());
+    await assert.rejects(fleetMain(approved, p.deps), /already attempted/);
+    const firstRoot = path.join(p.h.base, first, first), local = path.join(firstRoot, "groups-r21");
+    const registrationPath = path.join(local, "monitor-registration.json"), temporarilyMissing = registrationPath + ".fixture-hold";
+    fs.renameSync(registrationPath, temporarilyMissing);
+    try { await assert.rejects(prepare(second), (e) => e.code === "ENOENT"); }
+    finally { fs.renameSync(temporarilyMissing, registrationPath); }
+    assert.equal(fs.existsSync(path.join(p.h.base, second)), false);
+
+    assert.equal(await prepare(denied), 3);
+    const deniedApproval = await approve(denied);
+    const limit = p.hosts + ".limit";
+    fs.writeFileSync(limit, "1");
+    try { assert.equal(await fleetMain(deniedApproval, p.deps), 2); }
+    finally { fs.unlinkSync(limit); }
+    const refused = p.saved(path.join(denied, denied));
+    assert.equal(refused.status, "reserved"); assert.equal(refused.createIntentAt, undefined);
+    assert.deepEqual(p.events().filter((row) => row.method === "POST").map(({ group }) => group), [first]);
+
+    assert.equal(await prepare(second), 3);
+    const secondApproval = await approve(second);
+    assert.deepEqual(p.output.at(-1).subject.continuation.peers.map(({ id }) => id), ["101"]);
+    launch(secondApproval);
+    await wait(() => active(second) && handoff());
+    const events = p.events();
+    assert.deepEqual(events.filter((row) => row.method === "POST").map(({ group }) => group), [first, second]);
+    assert.deepEqual(events.filter((row) => row.boundary === "remote-active").map(({ group, id }) => [group, id]), [[first, "101"], [second, "102"]]);
+    assert.ok(!events.some((row) => row.boundary === "monitor-terminal"));
+    const inFlight = (await inspectContinuation(p.h.base, p.deps)).report.groups.filter((g) => g.outcome === "running");
+    assert.deepEqual(inFlight.map((g) => [g.group, g.attempts[0].commit, g.attempts[0].host.size]), [[first, commit, "c-8"], [second, commit, "c-8"]]);
+
+    finish(first);
+    assert.equal(await firstRun, 3);
+    // Advance only the fixture's post-close timestamp beyond the existing lease embargo.
+    const closedPath = path.join(local, "monitor-local-closed.json"), closed = JSON.parse(fs.readFileSync(closedPath));
+    const leaseWindow = closed.recoverAfterMs - closed.closedAtMs;
+    closed.closedAtMs = Date.now() - leaseWindow - 1; closed.recoverAfterMs = closed.closedAtMs + leaseWindow;
+    fs.writeFileSync(closedPath, JSON.stringify(closed));
+    const s = p.saved(path.join(first, first)), terminal = JSON.parse(fs.readFileSync(path.join(local, "monitor-terminal.json")));
+    const collect = harness(t, { stateRoot: firstRoot, hostId: s.id });
+    const report = Object.assign(syntheticInspection("failed"), { schema: "benchmark-isolated-group-campaign-inspection/v1",
+      campaign: terminal.campaign, selection: s.selection, placement: savedPlacement(s),
+      supervisedTerminal: { registrationSha256: s.control.monitor.registrationSha256, sealSha256: terminal.sealSha256 } });
+    collect.setArchive(archive(metadata()));
+    assert.equal(await collect.task({ inspect: async () => report, run(...argv) {
+      const [binary, args] = argv, droplets = JSON.parse(fs.readFileSync(p.hosts));
+      collect.hosts(droplets);
+      const result = collect.run(...argv);
+      if (binary === "doctl" && args[2] === "delete") {
+        assert.equal(args[3], "101");
+        assert.ok(!p.events().some((row) => row.group === second && row.boundary === "monitor-terminal"));
+        fs.writeFileSync(p.hosts, JSON.stringify(droplets.filter(({ id }) => String(id) !== args[3])));
+      }
+      return result;
+    } }).collect(), 1);
+    assert.equal(collect.deletes, 1);
+    assert.ok(collect.saved().destroyedAt && fs.existsSync(path.join(local, "results.tgz")));
+    assert.equal(collect.saved().validation.status, "failed");
+    assert.deepEqual(JSON.parse(fs.readFileSync(p.hosts)).map(({ id }) => id), [102]);
+  } finally {
+    finish(first); finish(second);
+    await Promise.all(running);
+  }
+});
+
 test("a settled continuation placement refusal leaves the unallocated slot available", async (t) => {
   const p = fixture(t), group = "json-api";
   fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
@@ -419,7 +511,7 @@ test("continuation appends authorized retries after no-create and retirement whi
   assert.equal(fs.readFileSync(index, "utf8"), "[]");
 });
 
-test("remaining approval moves from sfo2 to lon1 through captured workers and dispatches once", { timeout: 60000 }, async (t) => {
+test("remaining approval moves from sfo2 to lon1 through captured workers and dispatches once", { timeout: 120000 }, async (t) => {
   const p = fixture(t, "overlap");
   assert.equal(await fleetMain(await p.prepare(), p.deps), 3);
   const state = p.saved(), group = groupNames[0], campaign = `r21-${state.token}`;

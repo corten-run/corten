@@ -77,7 +77,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     const expected = JSON.parse(Buffer.from(argv.at(-1).split(" ").at(-1), "hex"));
     record({ boundary: "monitor", argv, options: { shell: options.shell, windowsHide: options.windowsHide } });
     const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
-    let sequence = 0, closed = false;
+    let sequence = 0, challenge = 0, challengedAt = 0, closed = false;
     const frame = (kind, payload) => child.stdout.write(JSON.stringify({ schema: "benchmark-control-frame/v1",
       sequence: ++sequence, id: expected.id, kind, payload }) + "\n");
     const close = (code) => { if (!closed) { closed = true; clearInterval(timer); child.emit("close", code, null); } };
@@ -89,13 +89,21 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
       record({ boundary: "monitor-registered" });
       frame("registered", { ...registration, ...expected, host: { ...registration.host, hostname: state().name } });
       frame("progress", { state: "active" });
+      record({ boundary: "remote-active", id: state().id });
     });
-    const deadline = Date.now() + 5000, timer = setInterval(() => {
-      const peer = !config.holdUntilGroup || fs.existsSync(path.join(path.dirname(config.stateDir), config.holdUntilGroup, "groups-r21/monitor-registration.json"));
+    const independent = config.mode === "independent-overlap", held = independent || !!config.holdUntilGroup;
+    // A real peer keeps answering its monitor while provisioning the next
+    // group. Model that rather than letting a slow test machine expire it.
+    const deadline = Date.now() + (independent ? 90000 : held ? 30000 : 5000), timer = setInterval(() => {
+      const peer = independent ? fs.existsSync(path.join(path.dirname(config.hosts), "finish-" + config.group))
+        : !config.holdUntilGroup || fs.existsSync(path.join(path.dirname(config.stateDir), config.holdUntilGroup, "groups-r21/monitor-registration.json"));
       if (peer && state().control.sealed.includes("bootstrap")) {
         clearInterval(timer); record({ boundary: "monitor-terminal" }); frame("terminal", { id: expected.id, nativeTerminal: true,
           campaign: `${expected.binding.round}-${expected.binding.token}`, sealSha256: "f".repeat(64) });
       } else if (Date.now() > deadline) close(255);
+      else if (held && sequence && Date.now() - challengedAt >= 250) {
+        frame("challenge", { nonce: "a".repeat(32), sequence: ++challenge }); challengedAt = Date.now();
+      }
     }, 10);
     return child;
   };
@@ -107,7 +115,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
         if (binary !== fs.realpathSync(process.execPath) || argv[0] !== "--input-type=module" || argv[1] !== "-"
           || argv[2] !== path.join(config.repo, "bench/workloads/cloud-provider-worker.mjs")) throw new Error("fixed provider launch required");
         const child = fork(path.join(config.repo, "bench/workloads/fleet-provider-test-worker.mjs"),
-          [["ssh-late", "owner-capture-fail"].includes(config.mode) ? "success" : config.mode, config.trace, config.hosts, config.stateDir, config.group, config.userId],
+          [["ssh-late", "owner-capture-fail", "independent-overlap"].includes(config.mode) ? "success" : config.mode, config.trace, config.hosts, config.stateDir, config.group, config.userId],
           { ...options, execArgv: [], env: { ...options.env, NODE_OPTIONS: "--max-old-space-size=64 --max-semi-space-size=4" } });
         record({ boundary: "provider-child-start", pid: child.pid });
         const observe = (direction, message) => record({ boundary: "provider-ipc", direction,
