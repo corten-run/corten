@@ -170,12 +170,71 @@ test("independent prepare names its admission or reservation stage without expos
   assert.deepEqual(p.children, []);
 });
 
+test("independent prepare reports only a fixed placement stage and safe provider diagnostics", async (t) => {
+  for (const [fault, diagnostic] of [
+    ["transport-setup", "transport-setup"],
+    ["first-account-read", "first-account-read"],
+    ["first-account-identity", "first-account-identity"],
+    ["catalog-denied", "catalog-read; catalog-http (HTTP 403)"],
+    ["catalog-validation", "catalog-validation"],
+    ["second-account-read", "second-account-read"],
+    ["second-account-identity", "second-account-identity"],
+    ["region-selection", "region-selection"],
+    ["transport-close", "transport-close"],
+  ]) await t.test(fault, async (t) => {
+    const p = fixture(t), group = "live-delivery", root = join(p.h.base, group), errors = [];
+    const args = ["r42", "--continuation-root", p.h.base, "--group", group, "--prepare", "--commit",
+      commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
+    const writeError = (line) => errors.push(line), normalCatalog = p.deps.catalogProvider;
+    const privateFailure = () => new Error("SYNTHETIC_PRIVATE_PROVIDER_DETAIL");
+    writeFileSync(join(p.h.base, "index.json"), "[]");
+    p.deps.catalogProvider = (options) => {
+      if (fault === "transport-setup") throw privateFailure();
+      const run = normalCatalog(options);
+      let accounts = 0;
+      return Object.assign(async (args) => {
+        if (args[0] === "account") {
+          const name = ++accounts === 1 ? "first" : "second";
+          if (fault === `${name}-account-read`) throw privateFailure();
+          if (fault === `${name}-account-identity`) return { status: 0, stdout: '{"uuid":"SYNTHETIC-PRIVATE-IDENTITY"}' };
+        } else {
+          if (fault === "catalog-denied") return { status: 1, stderr: "SYNTHETIC_PRIVATE_PROVIDER_BODY",
+            providerDiagnostic: { code: "catalog-http", httpStatus: 403 } };
+          if (fault === "catalog-validation") return { status: 0, stdout: "SYNTHETIC_PRIVATE_PROVIDER_BODY" };
+          if (["region-selection", "transport-close"].includes(fault))
+            return { status: 0, stdout: JSON.stringify(syntheticPlacement([])) };
+        }
+        return run(args);
+      }, { close: async () => {
+        await run.close();
+        if (fault === "transport-close") throw Object.assign(privateFailure(), { controlUncertain: true });
+      } });
+    };
+    assert.equal(await fleetCli(args, { ...p.deps, writeError }), 2);
+    assert.deepEqual(errors, [`fleet-placement-preflight-failed: ${diagnostic}`]);
+    const retained = fault === "transport-close";
+    assert.deepEqual(readdirSync(root), retained ? [".fleet-operation.lock"] : []);
+    assert.equal(existsSync(join(p.h.base, ".continuation-operation.lock")), retained);
+    assert.deepEqual(p.children, []);
+    if (fault === "region-selection") {
+      p.deps.catalogProvider = syntheticCatalogProvider(syntheticPlacement(["sfo3"]));
+      assert.equal(await fleetCli(args, { ...p.deps, writeError }), 3);
+      assert.deepEqual(readdirSync(root), ["fleet-r42.json"]);
+      const { manifest } = readFleet(root, "r42");
+      assert.deepEqual(manifest.jobs.map((job) => job.group), [group]);
+      assert.deepEqual(manifest.selection.groups[0].apps, ["corten", "aspnet", "express", "phoenix", "rails", "gin", "drogon", "leptos"]);
+      assert.equal(manifest.host.region, "sfo3");
+      assert.deepEqual(p.children, []);
+    }
+  });
+});
+
 test("independent detach names the pre-intent stage and preserves placement diagnostics", async (t) => {
   for (const [kind, expected] of [
     ["initial", "fleet-operation-failed: initial-plan"],
     ["locked", "fleet-operation-failed: locked-plan"],
     ["recheck", "fleet-operation-failed: final-pre-intent-recheck"],
-    ["placement", "fleet-placement-preflight-failed: catalog-http (HTTP 403)"],
+    ["placement", "fleet-placement-preflight-failed: catalog-read; catalog-http (HTTP 403)"],
   ]) await t.test(kind, async (t) => {
     const f = await independentDetach(t);
     let argv = f.approved;

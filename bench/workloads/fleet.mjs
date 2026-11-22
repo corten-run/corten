@@ -69,28 +69,40 @@ async function exactSource(repo, run) {
   return head;
 }
 
-const placementFailures = new WeakSet();
+const placementFailures = new WeakMap();
 async function readPlacement(provider, { repo, interrupted, catalogProvider }, reservedRegion, scope) {
-  const run = catalogProvider({ repo, interrupted }); // No create mode.
-  const read = async (args, allowFail = false) => {
-    await controlCheckpoint(interrupted);
-    return run([...args, "--context", provider.context], 60000, allowFail);
-  };
-  const account = async () => {
-    const result = await read(["account", "get", "--output", "json"]);
-    assert.equal(result.status, 0, "fleet catalog account read failed");
-    assert.equal(providerAccount(JSON.parse(result.stdout)), provider.accountId, "fleet catalog account differs");
-  };
+  let stage = "transport-setup";
   try {
-    try {
-      await account();
-      const catalog = fleetCatalogResult(await read(fleetCatalogCommand, true));
-      await account();
+    const run = catalogProvider({ repo, interrupted }); // No create mode.
+    const read = async (args, allowFail = false) => {
       await controlCheckpoint(interrupted);
+      return run([...args, "--context", provider.context], 60000, allowFail);
+    };
+    const account = async (position) => {
+      stage = `${position}-account-read`;
+      const result = await read(["account", "get", "--output", "json"]);
+      assert.equal(result.status, 0, "fleet catalog account read failed");
+      stage = `${position}-account-identity`;
+      assert.equal(providerAccount(JSON.parse(result.stdout)), provider.accountId, "fleet catalog account differs");
+    };
+    try {
+      await account("first");
+      stage = "catalog-read";
+      const result = await read(fleetCatalogCommand, true);
+      if (result.status === 0 && !result.error) stage = "catalog-validation";
+      const catalog = fleetCatalogResult(result);
+      await account("second");
+      stage = "placement-checkpoint";
+      await controlCheckpoint(interrupted);
+      stage = "region-selection";
       return fleetRegion(catalog, reservedRegion, scope);
-    } finally { await run.close(); }
+    } finally {
+      try { await run.close(); }
+      catch (error) { stage = "transport-close"; throw error; }
+    }
   } catch (error) {
-    if (error && typeof error === "object") placementFailures.add(error);
+    // Keep the original error for uncertainty/lock handling. Log only this stage and the allowlisted provider diagnostic.
+    if (error && typeof error === "object") placementFailures.set(error, stage);
     throw error;
   }
 }
@@ -599,9 +611,11 @@ export async function fleetCli(args, { writeError = console.error, ...deps } = {
   const preIntentFailures = new Map();
   try { return await fleetMain(args, { ...deps, interrupted: signals.interrupted }, preIntentFailures); }
   catch (error) {
-    if (placementFailures.has(error)) {
+    const placementStage = placementFailures.get(error);
+    if (placementStage) {
       const refusal = providerFailure(error);
-      writeError("fleet-placement-preflight-failed" + (refusal ? `: ${refusal.code}${refusal.httpStatus ? ` (HTTP ${refusal.httpStatus})` : ""}` : ""));
+      writeError(`fleet-placement-preflight-failed: ${placementStage}` +
+        (refusal ? `; ${refusal.code}${refusal.httpStatus ? ` (HTTP ${refusal.httpStatus})` : ""}` : ""));
     } else {
       const stage = preIntentFailures.get(error);
       writeError(stage ? `fleet-operation-failed: ${stage}` : "fleet-operation-failed");
