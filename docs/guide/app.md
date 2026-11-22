@@ -1507,7 +1507,7 @@ mistake, the runtime loads the URL as a whole page instead of swapping it in.
 ### The pages the app keeps
 
 The app is the first shared cache of its own `Public` pages, and of its `Public` JSON,
-text and files where it compresses them (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
+text and files of 1,024 bytes or more (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
 such request in the handler's place until the answer's shared lifetime ends: `s-maxage` where
 the answer has `.shared(..)`, else `max_age`. So a `Public` page's handler does not run for
 every request, and what it read may be that old when a visitor sees it, as it already may be
@@ -1612,15 +1612,15 @@ app sets `.kept_answers(0)`. Each process keeps its own: two instances behind a 
 show versions of a page up to a lifetime apart, as two edges of a CDN do, a write drops the page
 only in the instance that answered it, and a restart starts empty.
 
-A `Public` route that answers JSON (`Public<JsonResult<T>>`) or text is kept the same way where
-the app compresses the answer: its whole body, when that is 1,024 bytes or more and the build has
-the `compress` feature, under every rule above and by the same key (the language too, where the
-handler reads it with `req.t()` or `req.lang()`), with each coding's bytes made once and, outside
-an API (whose answers are not tagged), the tag's hash. What it saves is the handler with what it
+A `Public` route that answers JSON (`Public<JsonResult<T>>`) or text is kept the same way from
+a size: its whole body, when that is 1,024 bytes or more, whatever its type and whether or not the
+build has the `compress` feature, under every rule above and by the same key (the language too, where the
+handler reads it with `req.t()` or `req.lang()`), with, outside
+an API (whose answers are not tagged), the tag's hash made once, and each coding's bytes where the
+app compresses it. What it saves is the handler with what it
 reads, the writing of the JSON, the hash and the compression, and once kept it is given to a
-request that accepts no coding as well. A smaller body, and any body in a build without
-`compress`, is its handler's for every request: on the benchmark, whose handler reads only
-memory, keeping one cost more than making it
+request that accepts no coding as well. A smaller body is its handler's for every request: what
+keeping one saves grows with its size, and what asking for it costs does not
 ([design Choice 70](../design.md#choice-kept-pages)). A route whose bodies are all under the size
 stops asking the store after 64 answers in a row of which none was kept (one left out for another
 reason, a failure or a form's submit key, counts too, so 64 failures in a row from a route with
@@ -1637,13 +1637,18 @@ site is sent another's. A write drops it as it drops a page: `PUT /api/items/7` 
 kept for `GET /api/items/7`, and not the list at `/api/items`, which shows the change when its
 lifetime ends.
 
-A file (`Media`), a sitemap and `robots.txt` (`seo::File`) are kept as text is: where the app
-compresses them, so a CSV, an SVG or a sitemap of 1,024 bytes or more is kept, with the headers
-its handler gave it (its type, its file name), and a PNG, a JPEG or a short `robots.txt` is its
-handler's for every request. A file sent as a stream (`Media::stream`) has no body to hold, and
+A file (`Media`), a sitemap and `robots.txt` (`seo::File`) are kept as text is: from 1,024
+bytes, whatever the type, so a CSV, an SVG, a sitemap, a PNG or a PDF of that size is kept, with the headers
+its handler gave it (its type, its file name), and a short `robots.txt` or a small icon is its
+handler's for every request. A picture is kept as it is, since no coding makes it smaller: what
+keeping it saves is its handler and the hash of its `ETag`, which is otherwise made from the whole
+file for every request that names a coding, as every browser's does. The app holds a second copy
+of a kept file's bytes for its lifetime, within what it keeps in all (`App::kept_answers`), so a
+file larger than an eighth of that (4 MiB unless set) is not kept, and a large file that never
+changes belongs at a URL that names its content. A file sent as a stream (`Media::stream`) has no body to hold, and
 one at a URL that names its content (`Public::immutable`) is left to the caches that keep it for
 a year, so neither is kept. A file of a known size that a page route answers in its page's place
-(`PageOr<Media>`) is kept as that page would be, whatever its type.
+(`PageOr<Media>`) is kept as that page would be, whatever its size.
 
 A relay, a live stream and a feed are not kept: each is its handler's for every request, and so
 is JSON the app holds as bytes (`Json<json::Raw>`), which already keeps its compressed forms. Nothing that is not `Public` is kept either: a

@@ -659,9 +659,8 @@ impl<S: Clone + Send + Sync + 'static> Table<S> {
         self
     }
 
-    /// Whether a route's answer is one the app keeps (`Public`: a page, or a whole body in a
-    /// build that compresses): an app with none has nothing a write could drop, so it counts no
-    /// writes ([`crate::kept`]).
+    /// Whether a route's answer is one the app keeps (`Public`: a page or a whole body): an app
+    /// with none has nothing a write could drop, so it counts no writes ([`crate::kept`]).
     pub(crate) fn keeps(&self) -> bool {
         self.routes.iter().any(|placed| placed.methods.keeps)
     }

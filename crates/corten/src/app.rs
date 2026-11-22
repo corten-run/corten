@@ -945,8 +945,8 @@ impl<M: Middleware> App<M> {
     }
 
     /// How many bytes of [`crate::Public`] answers the app keeps to give again (32 MiB unless
-    /// set; `0` keeps none): pages, and whole bodies of JSON, text or a file where the app
-    /// compresses them (1,024 bytes or more, with the `compress` feature). A route that says its
+    /// set; `0` keeps none): pages, and whole bodies of JSON, text or a file of 1,024 bytes or
+    /// more, whatever their type and the build's features. A route that says its
     /// answer is the same for everyone names one any shared cache may keep for the lifetime it
     /// gives, and the app is the first of them: the whole document, or such a body of a route
     /// that answers JSON, text or a file, made for a `GET` with no cookie or `Authorization` is given to the
