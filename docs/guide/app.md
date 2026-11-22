@@ -1523,9 +1523,9 @@ answer; and a request that names the page's tag gets its `304`. What a kept page
 handler with what it reads, the render, the tag's hash and the compression, since the hash and each
 coding's bytes are made once and stay with the page. A page's bytes are made once and sent many
 times, so its brotli is made once more, at level 5 (a request's is 1), on the thread that
-compresses held JSON, after any held JSON waiting there. That is queued while the app compresses
-the page's second answer to a client that ranks brotli first or ties it for first among the
-codings it takes. An answer the store did not keep (in a full store, the first for a URL not asked
+compresses held JSON, after any held JSON waiting there. That is queued while the app prepares
+the page's second compressed answer to a client that ranks brotli first or ties it for first among
+the codings it takes, before it looks for that answer's own form. An answer the store did not keep (in a full store, the first for a URL not asked
 for before), one that is not compressed (a `304`, a client that takes none, a body too small) or
 one to a client that ranks another coding higher does not count, and when the queue for kept pages
 is full the next answer that counts tries again. Neither answer waits for the encoding: each, and
@@ -1537,14 +1537,19 @@ would get otherwise is no larger, as on a page that repeats long runs of text, w
 smaller. A form not made yet is not made to compare: a page whose second answer went to clients
 that take brotli alone can give its brotli to a browser that ties zstd with it, whose zstd would
 have been smaller.
-It is not made for a page written to or past its lifetime by the time the thread comes to it. It
+It is not made for a page written to or past its lifetime by the time the thread comes to it, and
+is asked again just before its bytes are put in; a write that lands while they are put in can
+still leave them counted for the page, which no request after that write is given. It
 counts toward the bound like the page's other forms, but takes only the room the bound has left:
 nothing is dropped to make room for it when it is put in, so a page keeps it only if it fits in
 the room left then. Once in, its bytes count as the other forms' do: a page or form kept later,
 or at the same moment, that takes the store past its bound drops pages to make room as before. The
 thread encodes it before it asks for that room, so in a store at its bound a page can cost the
 thread the encoding and still not keep the bytes, and a page whose brotli did not fit is not
-tried again. So the smaller form is best effort, never a promise: the thread comes to a kept
+tried again. A page or body past 32 KiB is given none and keeps the form made for each coding:
+the thread cannot stop an encoding it has started, so held JSON queued meanwhile waits for the
+rest of it, which for a 4 MiB body took about 440 ms on a workstation and for 32 KiB about 2 ms.
+So the smaller form is best effort, never a promise: the thread comes to a kept
 page's job only when no held JSON waits, so held JSON compressed without a pause can keep it
 waiting for as long as that lasts, past the page's lifetime
 ([design Choice 70](../design.md#choice-kept-pages) has the levels measured). On the catalog benchmark's page, marked
@@ -1642,7 +1647,7 @@ A `Public` route that answers JSON (`Public<JsonResult<T>>`) or text is kept the
 the app compresses the answer: its whole body, when that is 1,024 bytes or more and the build has
 the `compress` feature, under every rule above and by the same key (the language too, where the
 handler reads it with `req.t()` or `req.lang()`), with each coding's bytes made once, its brotli
-at level 5 made after its second answer to a client that ranks brotli first as a page's is, and,
+at level 5 queued by its second answer to a client that ranks brotli first as a page's is, and,
 outside an API (whose answers are not tagged), the tag's hash. What it saves is the handler with what it
 reads, the writing of the JSON, the hash and the compression, and once kept it is given to a
 request that accepts no coding as well. A smaller body, and any body in a build without

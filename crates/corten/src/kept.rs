@@ -49,7 +49,8 @@
 //! build that does not compress keeps no body, and a route whose bodies are all too small stops
 //! asking ([`Unkept`]). Once kept, a body is given to a request that accepts no coding as well,
 //! and its compressed forms are a page's: each coding made once, and its brotli at a higher level
-//! after its second answer to a client that ranks brotli first, by no request (`Coded`).
+//! queued by its second answer to a client that ranks brotli first and made by no request
+//! (`Coded`).
 //! Which answers are whole bodies is known from the
 //! route's type when the app compiles ([`crate::answer::Answer::WHOLE`], which an answer type of
 //! the app's own cannot claim). Such a route has one answer at its URL, where a page route has
@@ -151,10 +152,19 @@ const FORM: usize = 24;
 const GONE: usize = usize::MAX;
 
 /// Where a kept answer's brotli at [`Level::Kept`] stands ([`Coded::promotion`]) once its job is
-/// taken by the queue, after which no answer changes it: below this, the answers that could use
-/// it so far.
+/// taken by the queue, or from the start for a body past [`BROTLI_MAX`], after which no answer
+/// changes it: below this, the answers that could use it so far.
 #[cfg(feature = "compress")]
 const QUEUED: u8 = 2;
+
+/// The largest kept body given a brotli at [`Level::Kept`]; a larger one keeps the form made for
+/// each coding. Its encoding runs on the thread held values share and cannot be stopped once it
+/// starts, so a held value queued meanwhile waits for the rest of it: at 32 KiB that is 1.8 ms at
+/// the median of 45 (1.6 to 6.2 ms), at 64 KiB 4.3 ms and at the 4 MiB the default bound keeps
+/// 443 ms, where the held value's own forms take 4.2 ms for 4 KB and 42 ms for 79 KB (a Linux
+/// container on a busy desktop, `docs/design.md#choice-kept-pages`).
+#[cfg(feature = "compress")]
+pub(crate) const BROTLI_MAX: usize = 32 << 10;
 
 /// Room for the names the stages after the handler add to a kept answer's head, so it does not
 /// grow as they are written: `Age`, the tag, the security headers, the reporting endpoints and
@@ -549,7 +559,8 @@ pub(crate) struct Entry {
 /// request that asks for that coding, and in brotli at [`Level::Kept`], queued on the second
 /// answer to a client that ranks brotli as high as any coding and made on the thread that
 /// compresses held values, so no request waits for it. From then on such a client gets it, unless
-/// the form made for the coding it takes now is no larger.
+/// the form made for the coding it takes now is no larger. A body past [`BROTLI_MAX`] is given
+/// none.
 #[cfg(feature = "compress")]
 #[derive(Default)]
 struct Coded {
@@ -558,8 +569,19 @@ struct Coded {
     /// The answers to a client that ranks brotli as high as any coding before `brotli` was made,
     /// up to [`QUEUED`]: the second queues it, and a later one again when the queue was full.
     /// Once queued it is not written again, while the job waits, once it made the bytes and once
-    /// it found no room for them, so an answer to a page that does without them only reads it.
+    /// it found no room for them, so an answer to a page that does without them only reads it. A
+    /// body past [`BROTLI_MAX`] starts there, so no answer queues one for it.
     promotion: AtomicU8,
+}
+
+#[cfg(feature = "compress")]
+impl Coded {
+    /// For a body of `length` bytes, which is given a brotli at [`Level::Kept`] only within
+    /// [`BROTLI_MAX`].
+    fn of(length: usize) -> Self {
+        let promotion = AtomicU8::new(if length > BROTLI_MAX { QUEUED } else { 0 });
+        Coded { promotion, ..Coded::default() }
+    }
 }
 
 /// On a response whose body is a kept answer's: the stages after the handler find the body's
@@ -666,10 +688,12 @@ impl Kept {
 
 impl Entry {
     /// Makes its body's brotli at [`Level::Kept`], gives it to the answers from then on and
-    /// counts it, while it is kept and stands: asked before the work, and again when the bytes
-    /// are put with it under the store's lock, which an entry is taken out under. So the brotli
-    /// of a page written to, past its lifetime, replaced or dropped before then is not given or
-    /// counted. A page does without it, so it takes only the room the bound has left and nothing
+    /// counts it, while it is kept and stands: asked before the work, and again under the store's
+    /// lock, which an entry is taken out under, before the bytes are put with it. So the brotli of
+    /// a page written to, past its lifetime, replaced or dropped before the second check is not
+    /// given or counted. A write's count takes no lock, so one that lands after that check can
+    /// leave the bytes put with a page that no longer stands, counted for it until it is replaced
+    /// or dropped; no lookup after the write gives that page. A page does without it, so it takes only the room the bound has left and nothing
     /// is dropped to make room for it when it is put in: a write or the end of a lifetime that
     /// lands once the page was found kept does not make it drop another page. Once in, its bytes
     /// count against what is kept later or at the same moment, which makes room as before. The
@@ -1192,7 +1216,7 @@ impl Missed {
             body: body.clone(),
             hashed: OnceLock::new(),
             #[cfg(feature = "compress")]
-            coded: Default::default(),
+            coded: Coded::of(body.len()),
             used: AtomicBool::new(false),
             size: AtomicUsize::new(size),
         });
@@ -2217,6 +2241,26 @@ mod tests {
             assert!(page.coded.brotli.get().is_none(), "racing {racing}: there is no room for the brotli");
             assert_eq!(answers.bytes(), before, "racing {racing}");
         }
+    }
+
+    /// The thread's two checks are not one with the write: a write that lands after the second,
+    /// while it puts the bytes in, leaves them with a page that no longer stands and counted for
+    /// it where there is room. No lookup after that write gives the page.
+    #[cfg(feature = "compress")]
+    #[test]
+    fn a_write_after_the_brotli_s_second_check_leaves_it_counted_for_a_page_no_lookup_gives() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let body = a_page(0);
+        let page = answers.keep(|place| Entry { body: body.clone(), ..entry(&answers, "/a", None, 60, body.len())(place) });
+        let before = answers.bytes();
+        let store = Answers(answers.0.clone());
+        ADMITTING.set(Some(Box::new(move || store.count(count_of(b"/a")))));
+        page.make_brotli();
+        assert!(ADMITTING.take().is_none(), "the thread came to the brotli's admission");
+        let brotli = page.coded.brotli.get().expect("put with the page");
+        assert_eq!(answers.bytes(), before + brotli.len() + FORM, "and counted for it");
+        assert!(!page.stands(&answers.0, Instant::now()), "written since");
+        assert!(answers.find("/a", None, None, false).is_none(), "no lookup after the write gives it");
     }
 
     /// A page's brotli the queue refused, as a full queue does, is queued by the very next answer

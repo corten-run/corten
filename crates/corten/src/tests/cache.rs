@@ -3033,6 +3033,54 @@ async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
     crate::compress::QUEUEING.take();
 }
 
+/// A kept body past `BROTLI_MAX` is never given a brotli at `Level::Kept`, since a held value
+/// queued while it is made would wait for all of it: no answer queues one, and a browser gets the
+/// form made for its coding every time. One at the bound is queued on its second answer as before.
+#[cfg(feature = "compress")]
+#[tokio::test]
+async fn a_kept_body_past_the_brotli_bound_keeps_the_form_made_for_its_coding() {
+    use crate::compress::Turn;
+    use crate::kept::BROTLI_MAX;
+    let minute = Duration::from_secs(60);
+    let runs = Runs::default();
+    let text = |length: usize, runs: Runs| {
+        move || {
+            runs.ran();
+            let mut text: String = (0..length / 10).map(|n| format!("line {n} of the kept text\n")).collect();
+            text.truncate(length);
+            assert_eq!(text.len(), length);
+            async move { Public::new(minute, text) }
+        }
+    };
+    let routes = Table::new()
+        .route("/at", crate::route::get(text(BROTLI_MAX, runs.clone())).0)
+        .route("/past", crate::route::get(text(BROTLI_MAX + 1, runs.clone())).0);
+    let router = App::new(Routes::from(routes)).router();
+    let browser = [("accept-encoding", "gzip, deflate, br, zstd")];
+    let queued = std::rc::Rc::new(std::cell::Cell::new(0));
+    let count = queued.clone();
+    crate::compress::QUEUEING.set(Some(Box::new(move |turn| {
+        if turn == Turn::Kept {
+            count.set(count.get() + 1);
+        }
+        true
+    })));
+    let (_, first, made) = fetch(&router, "GET", "/past", &browser).await;
+    assert!(!first.contains_key(header::AGE) && first[header::CONTENT_ENCODING] == "zstd", "the handler's answer: {first:?}");
+    for n in 1..6 {
+        let (_, headers, again) = fetch(&router, "GET", "/past", &browser).await;
+        assert!(headers.contains_key(header::AGE), "answer {n}: kept {headers:?}");
+        assert_eq!(headers[header::CONTENT_ENCODING], "zstd", "answer {n}");
+        assert_eq!(again.as_ptr(), made.as_ptr(), "answer {n}: the form made for zstd");
+    }
+    assert_eq!((queued.get(), runs.count()), (0, 1), "no brotli queued past the bound, one run");
+    for n in 0..2 {
+        assert_eq!(fetch(&router, "GET", "/at", &browser).await.1[header::CONTENT_ENCODING], "zstd", "answer {n}");
+    }
+    assert_eq!((queued.get(), runs.count()), (1, 2), "at the bound, queued on its second answer");
+    crate::compress::QUEUEING.take();
+}
+
 /// A whole body is kept where the app compresses it: from 1,024 bytes, in a build that
 /// compresses. One byte under, and in a build that does not, the route is its handler's for
 /// every request. A kept body is given to a request that accepts no coding too.

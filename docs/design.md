@@ -7204,8 +7204,8 @@ rules something out.
     request with an `Age` ([caching](guide/app.md#the-pages-the-app-keeps),
     `crates/corten/src/kept.rs`). The hash of its body and its bytes in each coding are made
     once and stay with it, so the tag and the compression after the handler cost a kept page a
-    lookup, and its brotli is made once more at a higher level after its second answer, by no
-    request (below). It is on unless the app says otherwise, holds at most 32 MiB
+    lookup, and its brotli is made once more at a higher level, queued by its second answer and
+    made by no request (below). It is on unless the app says otherwise, holds at most 32 MiB
     (`App::kept_answers`), and is off under `corten dev`.
 
     It stands at the handler's place, not in front of the app. What makes a kept answer safe to
@@ -7426,18 +7426,27 @@ rules something out.
     more and sends fewer pays for itself where a per-request answer's cannot
     ([#1793 A kept page is compressed at the level a per-request answer is](https://github.com/corten-run/corten/issues/1793)).
     The request that makes the copy is still a visitor's, so nothing more is made on it: while
-    the page's second compressed answer to a client that ranks brotli first or ties it for first
-    is finished (a page asked for once is compressed once, as a held value is), its brotli at level
-    5 is queued for the one thread that already compresses held JSON, in a bounded queue of its
+    the app prepares the page's second compressed answer to a client that ranks brotli first or
+    ties it for first, before it looks for that answer's own form and so possibly before it makes
+    it (a page asked for once is compressed once, as a held value is), its brotli at level 5 is
+    queued for the one thread that already compresses held JSON, in a bounded queue of its
     own that the thread comes to only when no held value waits, so a burst of kept pages neither
     takes a held value's place in its queue nor makes it wait for more than the one job running.
-    The job holds the page weakly while it waits, and makes and counts it only while the page
-    still stands, asked again under the store's lock when the bytes are put with it; a full queue
+    The job holds the page weakly while it waits and asks twice whether the page still stands
+    (within its lifetime, no write to its path counted): before it encodes, and again under the
+    store's lock before the bytes are put with it. A write's count takes no lock (below), so one
+    that lands after the second check, while the thread puts the bytes in, leaves them with a page
+    that no longer stands and counted toward the bound for it, if there was room: no lookup after that
+    write gives the page, and its bytes go when it is replaced or room is made. A full queue
     leaves it to the next such answer, and once queued no answer writes to the page's count again.
     So it is best effort: held values compressed without a pause keep it waiting for as long as
     that lasts, past the page's lifetime, and a job whose bytes find no room is not tried again
-    for that page. From then on a client that ranks brotli as high as any
-    coding, as a browser that also takes zstd does, gets it in the place of zstd 1, unless the form
+    for that page. A body past 32 KiB (`BROTLI_MAX` in `kept.rs`) is given none and keeps the
+    form made for each coding: the thread cannot stop an encoding once it has started it, so a
+    held value queued meanwhile waits for the rest of that one job, and past that size the job
+    takes longer than a small held value's own forms do (below). Once it is made, a client that
+    ranks brotli as high as any coding, as a browser that also takes zstd does, gets it in the
+    place of zstd 1, unless the form
     already made for the coding it would get otherwise is no larger: the levels' and codings' sizes
     are not in the same order on every page (a review's probe with Node's brotli 1.2.0 and zstd
     1.5.7, not Corten's build, encoded a 32,808-byte page that repeats a 640-character block to
@@ -7473,6 +7482,30 @@ rules something out.
     stays at 1 for the few clients that take nothing else. Made on the request that makes the
     copy, brotli 5 would add 1.01 million instructions to it where zstd 1 adds 0.12 million.
 
+    A held value waits behind at most one kept body's brotli 5, the one running when it is
+    queued, and with the bound that is one of at most 32 KiB: on a workstation, brotli 5 of 32 KiB
+    took 1.8 ms at the median of 45 (1.6 to 6.2 ms), and a held 4 KB JSON value's forms, queued
+    just as such a job started, were made 6.5 ms after (3.9 to 20.5) against 4.2 ms (3.7 to 14.4)
+    on an idle thread in the same runs; its requests get the per-request form until then, as
+    before (0.06 ms of zstd 1 each for it, 0.5 ms for a 79 KB value). Without the bound the
+    default store's largest body, about 4 MiB, held it 476 ms (281 to 942) behind a job that alone
+    took 443 ms (247 to 743), and 512 KiB 46 ms (26 to 91) behind 38 ms, where a held value's own
+    forms take 4.2 ms at 4 KB and 42 ms at 79 KB; past 32 KiB the job takes longer than the
+    smaller of those (64 KiB: 4.3 ms, 3.1 to 31). The bodies that bound leaves out gave up 6% to
+    9% of their bytes: brotli 5 against zstd 1 sent 12,852 bytes against 14,170 at 64 KiB, 99,333
+    against 105,463 at 512 KiB and 778,799 against 831,796 at 4 MiB less 2 KiB, where it sends
+    6,628 against 7,402 at 32 KiB and 1,072 against 1,232 at 4 KiB. Those are a probe's in the
+    crate (`cde42e710` and main's `a0eeeacca`, release builds, five alternated runs of 11 in a
+    Linux container held to four CPUs on a desktop that ran other builds throughout, then three
+    runs of 15 of `cde42e710` for the sizes between): it queues a kept body's job as
+    `Entry::make_brotli` makes it (brotli 5, copied to its length), waits for the thread to start
+    it, reads a held value twice as two requests do and times until its forms are made, on
+    synthetic pages (a table of records from a 48-word vocabulary) and a JSON array of items; the
+    timings are a busy desktop's, good for their sizes and ratios, not a cost per request. The
+    bound changes neither the thread nor the encoding, so its result is the 32 KiB case above and,
+    past it, no job: `tests/cache.rs` checks that a body one byte past it queues none however
+    often a browser asks and one at it is queued on its second answer.
+
     A kept JSON, text or file body is bytes made once and sent many times too, and its compressed
     forms are kept the same way, so it gets its brotli 5 by the same rule and in the same queue:
     one rule for whatever the store keeps. JSON the app holds as bytes (`json::Raw`), whose
@@ -7500,8 +7533,10 @@ rules something out.
     clients send; leaving out a write by its status (a `4xx`, a `501`) or by a mark the router
     set on the ones it refuses, each of which left a page stale in a case a review found; a
     kept page's higher level made on the request that makes the copy, which a visitor would wait
-    for, or at brotli 9 to 11, or with brotli's window sized to the page, which took longer for the
-    about the same size; making room for it as for the page's other forms, by dropping the pages the clock
+    for; brotli 9, or brotli's window sized to the page, which took longer for about the same size
+    (brotli 9: 884 and 1,291 bytes against 882 and 1,293); brotli 10 and 11, which do send fewer
+    (104 to 123 bytes fewer than brotli 5 on the record and item pages) but take 20 to 84 times its
+    instructions on the thread held values share; making room for it as for the page's other forms, by dropping the pages the clock
     finds, which let a write that landed while the thread put it in drop a page that stood for one
     that no longer did; its job in the queue held values wait in, where a burst of kept pages kept
     a held value out or made it wait behind all of them; a turn for a kept page after so many held
@@ -7983,7 +8018,9 @@ rules something out.
     handler takes (a scanner's `POST /`) make kept pages again often enough to show, so the
     router's own refusals are worth leaving out where the request met no middleware; a measured
     app's store at its bound keeps most of its answers without their brotli for want of room, or a
-    kept answer's brotli is seen delaying held values on the thread they share, or most clients of a
+    kept answer's brotli is seen delaying held values on the thread they share, or an app's kept
+    bodies past 32 KiB are where most of its bytes go, so the bound on its brotli should move on a
+    measurement of its own, or most clients of a
     measured app prefer zstd to brotli, so a level made after the answer is worth having for zstd;
     the connection speaks HTTP/2, where a request's target carries its authority; an app
     is found finishing work again and again on the `Signal` of a write from before its first
@@ -8056,7 +8093,9 @@ rules something out.
     varied and on a workstation's counters on the same commits, rustc 1.100.0 in rust:1-trixie, jemalloc 5.3.0
     preloaded; 2026-11-22, the same brotli 5 under load at `50105442c` against `a0eeeacca` on a
     second quiet host (Xeon Platinum 8358, Linux 6.12.117, rustc 1.100.0, jemalloc 5.3.0
-    preloaded), every turn on a newly started build.
+    preloaded), every turn on a newly started build; 2026-11-22, how long a held value waits
+    behind a kept brotli 5, by the probe above at `cde42e710` and `a0eeeacca` with the same
+    rustc, brotli and zstd.
 
 ## Rules
 

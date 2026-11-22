@@ -23,7 +23,8 @@
 //! each kept copy's second compressed answer to a client that ranks brotli as high as any coding
 //! queues it there (an answer in no coding, or a 304, does not count, and one the full queue
 //! refused leaves it to the next such answer). It is best effort: it is not made for a copy that
-//! no longer stands, nor kept where the store has no room left for it. Once it is kept, later
+//! no longer stands, nor kept where the store has no room left for it, and a body past 32 KiB is
+//! given none, since a held value queued while it is made would wait for all of it. Once it is kept, later
 //! such answers get it in the place of the form made for their coding when that is larger, 18%
 //! fewer bytes than zstd 1 on a 4.4 KB page ([`Level::Kept`]).
 //!
@@ -188,10 +189,12 @@ pub(crate) enum Level {
     /// and brotli 1 634 µs (444 to 746; 3.14 million) for 7,284, where brotli 2 takes 1,754 µs
     /// (1,516 to 2,153; 12.7 million) for 6,939.
     Held,
-    /// Once per page the app keeps ([`crate::kept`]), after its second answer that could use it,
-    /// on the thread that compresses held values, after them: brotli 5, which a client that ranks
+    /// Once per page the app keeps ([`crate::kept`]), queued by its second answer that could use
+    /// it (before that answer's own form is made), on the thread that compresses held values,
+    /// after them: brotli 5, which a client that ranks
     /// brotli as high as any coding gets in the place of zstd 1, unless a zstd 1 already made is no
-    /// larger (none is made only to compare). On the catalog
+    /// larger (none is made only to compare), for a body of up to 32 KiB (`kept::BROTLI_MAX`).
+    /// On the catalog
     /// benchmark's record page (4,424 bytes) it gives 882 bytes where zstd 1 gives 1,078, and on
     /// card-market's item pages (4,013 bytes on average) 1,293 where zstd 1 gives 1,564; it takes
     /// 1.01 and 1.25 million instructions once (callgrind), where zstd 1 takes 0.12 and 0.16
