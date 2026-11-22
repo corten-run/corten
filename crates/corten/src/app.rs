@@ -2665,6 +2665,9 @@ impl<S: Steps> Layer<S> {
         let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
         let caller = watch.0.is_personal();
         let asked = watch.0.asked_language();
+        // Held by the request, so a middleware's new response in place of the one it was given
+        // still goes out as an answer that drew a form's new submit key.
+        let drew_key = watch.0.key_drawn();
         let mut res = signal::follow(res, watch, self.zoned());
         // Whatever answered (a page, JSON, a redirect, the error page, a middleware after
         // `next`): a locale it negotiated from `Accept-Language` is in its `Vary`.
@@ -2696,6 +2699,9 @@ impl<S: Steps> Layer<S> {
             nonce: nonced,
             dev: self.shared.dev,
         };
+        if drew_key {
+            cache::unrepeatable(&mut res);
+        }
         // Corten's own routes (assets, the runtime) are settled the same way: they say what they
         // are, and anything that does not gets the default.
         cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));

@@ -930,6 +930,7 @@ impl StartHere {
         }
         let mut res = Response::from_parts(head, Body::from(out));
         if drawing.drew() {
+            pending.signal.mark_key_drawn();
             res.extensions_mut().insert(crate::cache::Unrepeatable);
         }
         res

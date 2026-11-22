@@ -45,6 +45,8 @@ const MAX_AGE: Duration = Duration::from_secs(3600);
 pub struct File(Response);
 
 impl IntoResponse for File {
+    const MAY_SHARE: crate::answer::sealed::MayShare = crate::answer::sealed::MayShare::NO;
+
     fn into_response(self) -> Response {
         self.0
     }

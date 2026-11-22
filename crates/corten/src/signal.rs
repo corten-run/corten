@@ -129,9 +129,9 @@ struct Inner {
     /// for the request, for its page and its live part's fragments alike.
     #[cfg(feature = "zones")]
     zone: Option<crate::client::ZoneName>,
-    /// The page rendered the request's notice ([`crate::Req::notice`]), so a navigation's answer
-    /// does not send it to the runtime as well.
-    notice_drawn: AtomicBool,
+    /// What the request's answer drew ([`NOTICE_DRAWN`], [`KEY_DRAWN`]): one byte for both, so
+    /// the signal stays the allocation it was.
+    drawn: AtomicU8,
     /// The request's locale: its index in the app's locales plus one (0 until it is known), with
     /// `CHOSEN` set when the handler chose it from the URL ([`crate::Req::set_locale`]) rather
     /// than `Accept-Language`, which is then negotiated once per request.
@@ -165,6 +165,13 @@ struct Inner {
 /// In [`Signal`]'s `write`: a write that began before the app counted writes by path. No path
 /// has this count, of which there are far fewer.
 const WROTE_EARLY: usize = usize::MAX;
+
+/// [`Inner::drawn`]: the page rendered the request's notice ([`crate::Req::notice`]), so a
+/// navigation's answer does not send it to the runtime as well.
+const NOTICE_DRAWN: u8 = 1;
+/// [`Inner::drawn`]: the answer holds a form's new submit key, drawn for this request: no cache
+/// may give it to another visitor ([`Signal::mark_key_drawn`]).
+const KEY_DRAWN: u8 = 2;
 
 /// [`Inner::late`]: a write eligible for late fill, so a whole page the app's or an area's
 /// middleware makes with `Req` carries the head it was made with.
@@ -525,11 +532,24 @@ impl Signal {
 
     /// The page drew the request's notice.
     pub(crate) fn mark_notice_drawn(&self) {
-        self.0.notice_drawn.store(true, Ordering::Relaxed);
+        self.0.drawn.fetch_or(NOTICE_DRAWN, Ordering::Relaxed);
     }
 
     pub(crate) fn notice_drawn(&self) -> bool {
-        self.0.notice_drawn.load(Ordering::Relaxed)
+        self.0.drawn.load(Ordering::Relaxed) & NOTICE_DRAWN != 0
+    }
+
+    /// The request's answer holds a form's new submit key ([`crate::cache::Unrepeatable`]): a
+    /// page's render that drew one, or the watch around a handler that did (`answer::Made`). Held
+    /// by the request, not the response, so the stages still see it after a middleware made a new
+    /// response of the one it was given, and send it to no shared cache.
+    pub(crate) fn mark_key_drawn(&self) {
+        self.0.drawn.fetch_or(KEY_DRAWN, Ordering::Relaxed);
+    }
+
+    /// Whether the request's answer drew a form's new submit key ([`Signal::mark_key_drawn`]).
+    pub(crate) fn key_drawn(&self) -> bool {
+        self.0.drawn.load(Ordering::Relaxed) & KEY_DRAWN != 0
     }
 
     /// The handler chose the locale at `index` in the app's locales from the URL.

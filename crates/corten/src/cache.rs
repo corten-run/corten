@@ -495,12 +495,26 @@ pub(crate) fn accepts_a_coding(headers: &HeaderMap) -> bool {
 /// make two bodies share a tag.
 static TAG_KEY: std::sync::LazyLock<std::hash::RandomState> = std::sync::LazyLock::new(std::hash::RandomState::new);
 
+/// Marks `res` as an answer that drew a form's new submit key ([`Unrepeatable`]), where the mark
+/// is not on it already: a second insert into a full map would grow it. The stages call it too
+/// where the request says its answer drew one and a middleware made a new response of that
+/// answer, with its body and without its extensions.
+#[cold]
+#[inline(never)]
+pub(crate) fn unrepeatable(res: &mut Response) {
+    if res.extensions().get::<Unrepeatable>().is_none() {
+        res.extensions_mut().insert(Unrepeatable);
+    }
+}
+
 /// Marks an answer whose body holds a value drawn for this request alone (a [`crate::SubmitKey`]'s
 /// new key): its tag would never match, so it is not made; no cache may give it to another
 /// visitor or reuse it unasked ([`settle`]), and the app does not keep it ([`crate::kept`]).
 /// The render that draws the key sets it on a page, a patch or the layout's reads, and the watch
-/// around a `Public` route's handler sets it on any answer whose handler drew one, rendered to a
-/// string included (`answer::Made`).
+/// around the handler of a route whose answer may be `Public` sets it on any answer whose handler
+/// drew one, rendered to a string included (`answer::Made`). Each marks the request's signal too
+/// ([`crate::Signal::mark_key_drawn`]), which the stages read before [`settle`], so a middleware
+/// that rebuilds the response does not take the mark away.
 #[derive(Clone, Copy)]
 pub(crate) struct Unrepeatable;
 

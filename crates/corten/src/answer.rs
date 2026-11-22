@@ -736,6 +736,19 @@ pub(crate) mod sealed {
     /// say yes.
     pub struct Whole(pub(crate) bool);
 
+    /// What [`crate::response::IntoResponse::MAY_SHARE`] says. Only Corten can name it, so only
+    /// Corten's own types say no.
+    pub struct MayShare(pub(crate) bool);
+
+    impl MayShare {
+        /// A type of Corten's that is never [`Public`].
+        pub(crate) const NO: Self = MayShare(false);
+        /// Either of two answers may be.
+        pub(crate) const fn either(one: Self, other: Self) -> Self {
+            MayShare(one.0 || other.0)
+        }
+    }
+
     pub trait Kind {}
     impl Kind for AnyAnswer {}
     impl Kind for Patches {}
@@ -891,6 +904,8 @@ impl<For: SetsCookies, Kind> HtmlResponse<For, Kind> {
 }
 
 impl<For, Kind> IntoResponse for HtmlResponse<For, Kind> {
+    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+
     fn into_response(self) -> Response {
         self.0
     }
@@ -1237,6 +1252,8 @@ impl From<Relay> for JsonResponse {
 
 #[cfg(feature = "json")]
 impl IntoResponse for JsonResponse {
+    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+
     fn into_response(self) -> Response {
         self.0
     }
@@ -1372,6 +1389,8 @@ impl From<crate::Errors> for JsonError {
 
 #[cfg(feature = "json")]
 impl IntoResponse for JsonError {
+    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+
     fn into_response(self) -> Response {
         match self {
             JsonError::Error(error) => error.into_response(),
@@ -1505,6 +1524,8 @@ impl Relay {
 }
 
 impl IntoResponse for Relay {
+    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+
     fn into_response(self) -> Response {
         self.0
     }
@@ -1781,6 +1802,8 @@ impl std::fmt::Display for StreamFailed {
 impl std::error::Error for StreamFailed {}
 
 impl IntoResponse for Media {
+    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+
     fn into_response(self) -> Response {
         self.0
     }
@@ -1895,6 +1918,8 @@ impl<For> From<Relay> for PageOr<Relay, For> {
 }
 
 impl<A: FileAnswer, For> IntoResponse for PageOr<A, For> {
+    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+
     fn into_response(self) -> Response {
         match self {
             PageOr::Page(page) => page.into_response(),
@@ -1947,6 +1972,8 @@ pub(crate) struct Relayed {
 pub struct LiveResponse(pub(crate) Response);
 
 impl IntoResponse for LiveResponse {
+    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+
     fn into_response(self) -> Response {
         self.0
     }
@@ -1970,6 +1997,8 @@ impl<T> Answer for corten_feed::FeedResponse<T> {
 
 #[cfg(feature = "feed")]
 impl<T> IntoResponse for corten_feed::FeedResponse<T> {
+    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+
     fn into_response(self) -> Response {
         self.into_http().map(Body::new)
     }
@@ -2329,6 +2358,8 @@ const fn shared_header(name: &str) -> bool {
 }
 
 impl<A: Shareable> IntoResponse for Public<A> {
+    const MAY_SHARE: sealed::MayShare = sealed::MayShare(true);
+
     fn into_response(self) -> Response {
         let mut res = self.answer.into_response();
         // No layout read's value is drawn in it, however the reads were started.
@@ -2374,6 +2405,8 @@ impl<A> NoStore<A> {
 }
 
 impl<A: IntoResponse> IntoResponse for NoStore<A> {
+    const MAY_SHARE: sealed::MayShare = sealed::MayShare::NO;
+
     fn into_response(self) -> Response {
         let mut res = self.0.into_response();
         Cache::no_store().apply(&mut res);
@@ -2555,29 +2588,17 @@ impl Unstaged for Uri {}
 pub trait AllUnstaged {}
 impl AllUnstaged for () {}
 
-/// Whether an answer's [`Answer::Inputs`] are those of one that is the same for everyone, whatever
-/// its handler reads: known from the answer's type alone, so a route's watch for a submit key
-/// ([`Made`]) is chosen when the crate compiles.
-#[doc(hidden)]
-pub trait Shares {
-    /// The answer is the same for everyone ([`Public`], the only one with [`AnonymousInputs`]).
-    const SHARED: bool = false;
-}
-impl Shares for AnyInputs {}
-impl Shares for AnonymousInputs {
-    const SHARED: bool = true;
-}
-
 /// Whether an answer's [`Answer::Inputs`] allows the handler's arguments.
 #[doc(hidden)]
-pub trait Accepts<Args>: Shares {
-    /// The answer is the same for everyone ([`Shares`]).
-    const SHARED: bool = <Self as Shares>::SHARED;
+pub trait Accepts<Args> {
+    /// The answer is the same for everyone ([`Public`], the only one with [`AnonymousInputs`]).
+    const SHARED: bool = false;
     /// And all its handler reads of a page's request is what the app keeps the page by.
     const KEYED: bool = false;
 }
 impl<A> Accepts<A> for AnyInputs {}
 impl<A: AllAnonymous> Accepts<A> for AnonymousInputs {
+    const SHARED: bool = true;
     const KEYED: bool = A::KEYED;
 }
 
@@ -2694,13 +2715,6 @@ impl<H: Clone, O> Clone for Endpoint<H, O> {
 
 /// A JSON route's failure marked as one, which the stages leave as it is.
 #[inline]
-fn marked<O: Answer>(mut res: Response) -> Response {
-    mark::<O>(&mut res);
-    res
-}
-
-/// [`marked`], in place.
-#[inline]
 fn mark<O: Answer>(res: &mut Response) {
     // A constant: an HTML route's check compiles away.
     if matches!(O::FORMAT, Format::Json) && (res.status().is_client_error() || res.status().is_server_error()) {
@@ -2715,58 +2729,68 @@ fn mark<O: Answer>(res: &mut Response) {
 }
 
 pin_project_lite::pin_project! {
-    /// A route's answer as its handler makes it, [`marked`]. A `Public` one ([`Shares`], a
-    /// constant of the answer's type, so no other route's request does any of this) is watched for
-    /// a form's new submit key drawn in the handler's polls however it was rendered (into JSON or
-    /// text, into a file, or to a string placed in a page as markup) ([`crate::form::KeyWatch`]):
-    /// an answer whose handler drew one is the request's alone ([`crate::cache::Unrepeatable`]),
-    /// so no cache gives it to another visitor and the app does not keep it. A page's render marks
-    /// a key it drew itself; this sees the rest. The answer is marked where it is polled to, and
-    /// the watch is held beside the handler's work, so neither is moved again.
+    /// A route's answer as its handler makes it, [`mark`]ed. One that may be `Public`
+    /// ([`IntoResponse::MAY_SHARE`]: a `Public` answer, or a type of the app's own, which may hold
+    /// one; a constant of the answer's type, so no other route's request does any of this) is
+    /// watched for a form's new submit key drawn in the handler's polls however it was rendered
+    /// (into JSON or text, into a file, or to a string placed in a page as markup)
+    /// ([`crate::form::KeyWatch`]): an answer whose handler drew one is the request's alone
+    /// ([`crate::cache::Unrepeatable`]), so no cache gives it to another visitor and the app does
+    /// not keep it. A page's render marks a key it drew itself; this sees the rest. The answer is
+    /// marked where it is polled to, and the watch is held beside the handler's work, so neither
+    /// is moved again. The request's signal is marked too ([`crate::Signal::mark_key_drawn`]), so
+    /// a middleware that makes a new response of this one does not take the mark away.
     pub(crate) struct Made<F, O> {
         #[pin]
         made: F,
         watch: crate::form::KeyWatch,
+        // The request's signal, for a watched answer only.
+        signal: Option<crate::Signal>,
         answer: PhantomData<fn() -> O>,
     }
 }
 
-impl<F: Future<Output = Response>, O: Answer> Future for Made<F, O>
-where
-    O::Inputs: Shares,
-{
+impl<F: Future<Output = Response>, O: Answer> Made<F, O> {
+    /// `made` as the route's answer: `signal` is the request's, taken only where it is watched.
+    #[inline]
+    fn new(made: F, signal: Option<crate::Signal>) -> Self {
+        Made { made, watch: Default::default(), signal, answer: PhantomData }
+    }
+}
+
+impl<F: Future<Output = Response>, O: Answer> Future for Made<F, O> {
     type Output = Response;
 
     #[inline]
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Response> {
         let this = self.project();
-        let shared = <O::Inputs as Shares>::SHARED;
-        let mut polled = if shared { this.watch.poll(this.made, cx) } else { this.made.poll(cx) };
+        let watched = <O as IntoResponse>::MAY_SHARE.0;
+        let mut polled = if watched { this.watch.poll(this.made, cx) } else { this.made.poll(cx) };
         if let std::task::Poll::Ready(res) = &mut polled {
             mark::<O>(res);
-            if shared && this.watch.drew() {
-                drew_key(res);
+            if watched && this.watch.drew() {
+                drew_key(res, this.signal.as_ref());
             }
         }
         polled
     }
 }
 
-/// Marks an answer whose handler drew a form's new submit key as the request's alone, where the
-/// page's render did not: a second insert into a full map would grow it.
+/// Marks an answer whose handler drew a form's new submit key as the request's alone, and its
+/// request.
 #[cold]
 #[inline(never)]
-fn drew_key(res: &mut Response) {
-    if res.extensions().get::<crate::cache::Unrepeatable>().is_none() {
-        res.extensions_mut().insert(crate::cache::Unrepeatable);
+fn drew_key(res: &mut Response, signal: Option<&crate::Signal>) {
+    if let Some(signal) = signal {
+        signal.mark_key_drawn();
     }
+    crate::cache::unrepeatable(res);
 }
 
 impl<H, T, S, O> Handler<T, S> for Endpoint<H, O>
 where
     H: Handler<T, S>,
     O: Answer + 'static,
-    O::Inputs: Shares,
     S: Send + 'static,
     T: 'static,
 {
@@ -2791,11 +2815,14 @@ where
         if let Some(here) = req.extensions().get::<crate::layout::StartHere>().cloned() {
             here.arrive(&mut req, O::PAGE, self.shared);
         }
+        // An answer that may be `Public` (a constant) is watched for a submit key, which marks
+        // the request's signal: taken here, where the request still holds it.
+        let signal = if <O as IntoResponse>::MAY_SHARE.0 { req.extensions().get::<crate::Signal>().cloned() } else { None };
         // A `Public` answer is the same for everyone: written as for a visitor whose zone is not
         // known, its live part's fragments too.
         #[cfg(feature = "zones")]
         if self.shared {
-            if let Some(signal) = req.extensions().get::<crate::Signal>() {
+            if let Some(signal) = signal.as_ref().or_else(|| req.extensions().get::<crate::Signal>()) {
                 signal.mark_for_everyone();
             }
         }
@@ -2812,14 +2839,10 @@ where
             // Boxed, so every other request's future stays the size it was.
             futures_util::future::Either::Right(Box::pin(crate::layout::fill_after(
                 crate::layout::at_late_route(&req),
-                futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>),
+                Made::<_, O>::new(self.handler.call(req, state), signal),
             )) as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>)
         } else {
-            futures_util::future::Either::Left(Made::<_, O> {
-                made: self.handler.call(req, state),
-                watch: Default::default(),
-                answer: PhantomData,
-            })
+            futures_util::future::Either::Left(Made::<_, O>::new(self.handler.call(req, state), signal))
         }
     }
 }

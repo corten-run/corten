@@ -744,3 +744,60 @@ mod unstaged_assets_url {
 async fn unstaged_asset_ping(_: crate::Params<unstaged_assets_url::File<'_>>) -> &'static str {
     "pong"
 }
+
+/// Unstaged routes whose answers are `Public`, or an answer type of the app's own that may hold one.
+#[crate::routes]
+pub(super) mod unstaged_shared_url {
+    #[route("/shared-keyed", get = unstaged_shared_keyed, unstaged)]
+    pub struct SharedKeyed;
+
+    #[route("/shared-plain", get = unstaged_shared_plain, unstaged)]
+    pub struct SharedPlain;
+
+    #[route("/mixed-keyed", get = unstaged_mixed_keyed, unstaged)]
+    pub struct MixedKeyed;
+}
+
+/// A form's submit key rendered to a string, in an answer that says any cache may keep it.
+async fn unstaged_shared_keyed() -> crate::Public<String> {
+    let field = crate::SubmitKey::field(KeyedWrite::FIELDS.submit).to_html();
+    crate::Public::new(Duration::from_secs(60), field)
+}
+
+async fn unstaged_shared_plain() -> crate::Public<String> {
+    crate::Public::new(Duration::from_secs(60), "plain".to_string())
+}
+
+/// An answer type of the app's own, which says nothing of what it holds: here a `Public` answer.
+struct Wrapped(crate::Public<String>);
+
+impl crate::response::IntoResponse for Wrapped {
+    fn into_response(self) -> crate::response::Response {
+        self.0.into_response()
+    }
+}
+
+async fn unstaged_mixed_keyed() -> Wrapped {
+    Wrapped(unstaged_shared_keyed().await)
+}
+
+/// An unstaged route has no stage to settle its caching, so one whose answer may be `Public` is
+/// watched for a submit key its handler draws, as a staged one is: an answer that holds one goes
+/// out `private, no-cache`, a new key for each request, and one without keeps its lifetime.
+#[tokio::test]
+async fn an_unstaged_public_answer_whose_handler_drew_a_submit_key_is_the_browser_s_alone() {
+    let router = App::new(unstaged_shared_url::router()).router();
+    for path in ["/shared-keyed", "/mixed-keyed"] {
+        let (status, headers, body) = call_with(router.clone(), "GET", path, None, None).await;
+        let (_, again, other) = call_with(router.clone(), "GET", path, None, None).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        for headers in [&headers, &again] {
+            assert_eq!(headers["cache-control"], "private, no-cache", "{path}: {headers:?}");
+            assert_eq!(headers["content-security-policy"], "sandbox", "{path}");
+        }
+        assert!(body.contains("data-submit value=") && body != other, "{path}: a key for each");
+    }
+    let (status, headers, _) = call_with(router.clone(), "GET", "/shared-plain", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["cache-control"], "public, max-age=60");
+}

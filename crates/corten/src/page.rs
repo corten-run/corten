@@ -1283,6 +1283,7 @@ impl Action<'_> {
         let mut res = html_response(status, body, Some(PATCH_HEADER));
         // A form's submit key is new on every render, so this body's tag would never match.
         if drawing.drew() {
+            self.0.signal.mark_key_drawn();
             res.extensions_mut().insert(crate::cache::Unrepeatable);
         }
         Ok(HtmlResponse::new(res))
@@ -1883,6 +1884,7 @@ impl Req {
         }
         // A form's submit key is new on every render, so this body's tag would never match.
         if drawing.drew() {
+            self.signal.mark_key_drawn();
             res.extensions_mut().insert(crate::cache::Unrepeatable);
         }
         Ok(HtmlResponse::new(res))
