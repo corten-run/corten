@@ -71,7 +71,7 @@ async function exactSource(repo, run) {
 
 const placementFailures = new WeakMap();
 async function readPlacement(provider, { repo, interrupted, catalogProvider }, reservedRegion, scope) {
-  let stage = "transport-setup";
+  let stage = "transport-setup", primary, closeFailed = false;
   try {
     const run = catalogProvider({ repo, interrupted }); // No create mode.
     const read = async (args, allowFail = false) => {
@@ -89,20 +89,28 @@ async function readPlacement(provider, { repo, interrupted, catalogProvider }, r
       await account("first");
       stage = "catalog-read";
       const result = await read(fleetCatalogCommand, true);
-      if (result.status === 0 && !result.error) stage = "catalog-validation";
+      if (result.status === 0 && !result.error || result.status === 1 && providerFailure(result)?.code === "catalog-response")
+        stage = "catalog-validation";
       const catalog = fleetCatalogResult(result);
       await account("second");
       stage = "placement-checkpoint";
       await controlCheckpoint(interrupted);
       stage = "region-selection";
       return fleetRegion(catalog, reservedRegion, scope);
+    } catch (error) {
+      primary = { stage, refusal: providerFailure(error) };
+      throw error;
     } finally {
       try { await run.close(); }
-      catch (error) { stage = "transport-close"; throw error; }
+      catch (error) { stage = "transport-close"; closeFailed = true; throw error; }
     }
   } catch (error) {
-    // Keep the original error for uncertainty/lock handling. Log only this stage and the allowlisted provider diagnostic.
-    if (error && typeof error === "object") placementFailures.set(error, stage);
+    // Preserve the exception from the existing try/finally for lock custody, but do not lose the primary stage.
+    if (error && typeof error === "object") placementFailures.set(error, {
+      ...(primary ?? { stage, refusal: providerFailure(error) }),
+      closeFailed: !!primary && closeFailed,
+      uncertain: !!(error.controlUncertain || error.controlTreeUncertain),
+    });
     throw error;
   }
 }
@@ -611,11 +619,12 @@ export async function fleetCli(args, { writeError = console.error, ...deps } = {
   const preIntentFailures = new Map();
   try { return await fleetMain(args, { ...deps, interrupted: signals.interrupted }, preIntentFailures); }
   catch (error) {
-    const placementStage = placementFailures.get(error);
-    if (placementStage) {
-      const refusal = providerFailure(error);
-      writeError(`fleet-placement-preflight-failed: ${placementStage}` +
-        (refusal ? `; ${refusal.code}${refusal.httpStatus ? ` (HTTP ${refusal.httpStatus})` : ""}` : ""));
+    const placement = placementFailures.get(error);
+    if (placement) {
+      const { stage, refusal, closeFailed, uncertain } = placement;
+      writeError(`fleet-placement-preflight-failed: ${stage}` +
+        (refusal ? `; ${refusal.code}${refusal.httpStatus ? ` (HTTP ${refusal.httpStatus})` : ""}` : "") +
+        (closeFailed ? "; transport-close-failed" : "") + (uncertain ? "; custody-uncertain" : ""));
     } else {
       const stage = preIntentFailures.get(error);
       writeError(stage ? `fleet-operation-failed: ${stage}` : "fleet-operation-failed");

@@ -160,8 +160,9 @@ remaining approval. Those checks refuse a missing pair; they never substitute
 another region after approval.
 `fleet-placement-preflight-failed: STAGE` identifies the failed placement check:
 transport setup or close, either account read or identity check, catalog read or
-decode, the final controller checkpoint, or region selection. Only a safe provider
-code and HTTP status may follow the stage; no account data or response body is
+validation, the final controller checkpoint, or region selection. Only a safe
+provider code and HTTP status may follow the stage, with fixed flags if transport
+close also failed or custody is uncertain. No account data or response body is
 printed. Inspect the failed check rather than editing any manifest. An
 acknowledged catalog HTTP denial or a fully received but invalid
 listing stops without a create and releases settled locks. A truncated response,

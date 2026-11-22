@@ -180,7 +180,8 @@ test("independent prepare reports only a fixed placement stage and safe provider
     ["second-account-read", "second-account-read"],
     ["second-account-identity", "second-account-identity"],
     ["region-selection", "region-selection"],
-    ["transport-close", "transport-close"],
+    ["transport-close", "transport-close; custody-uncertain"],
+    ["region-and-close", "region-selection; transport-close-failed; custody-uncertain"],
   ]) await t.test(fault, async (t) => {
     const p = fixture(t), group = "live-delivery", root = join(p.h.base, group), errors = [];
     const args = ["r42", "--continuation-root", p.h.base, "--group", group, "--prepare", "--commit",
@@ -201,18 +202,19 @@ test("independent prepare reports only a fixed placement stage and safe provider
           if (fault === "catalog-denied") return { status: 1, stderr: "SYNTHETIC_PRIVATE_PROVIDER_BODY",
             providerDiagnostic: { code: "catalog-http", httpStatus: 403 } };
           if (fault === "catalog-validation") return { status: 0, stdout: "SYNTHETIC_PRIVATE_PROVIDER_BODY" };
-          if (["region-selection", "transport-close"].includes(fault))
+          if (["region-selection", "region-and-close"].includes(fault))
             return { status: 0, stdout: JSON.stringify(syntheticPlacement([])) };
         }
         return run(args);
       }, { close: async () => {
         await run.close();
-        if (fault === "transport-close") throw Object.assign(privateFailure(), { controlUncertain: true });
+        if (["transport-close", "region-and-close"].includes(fault))
+          throw Object.assign(privateFailure(), { controlUncertain: true });
       } });
     };
     assert.equal(await fleetCli(args, { ...p.deps, writeError }), 2);
     assert.deepEqual(errors, [`fleet-placement-preflight-failed: ${diagnostic}`]);
-    const retained = fault === "transport-close";
+    const retained = ["transport-close", "region-and-close"].includes(fault);
     assert.deepEqual(readdirSync(root), retained ? [".fleet-operation.lock"] : []);
     assert.equal(existsSync(join(p.h.base, ".continuation-operation.lock")), retained);
     assert.deepEqual(p.children, []);
@@ -227,6 +229,18 @@ test("independent prepare reports only a fixed placement stage and safe provider
       assert.deepEqual(p.children, []);
     }
   });
+});
+
+test("placement diagnostics keep the controlling exception and lock custody when close also fails", async (t) => {
+  const p = fixture(t);
+  const readError = Object.freeze(new Error("SYNTHETIC_PRIVATE_READ_FAILURE"));
+  const closeError = Object.freeze(Object.assign(new Error("SYNTHETIC_PRIVATE_CLOSE_FAILURE"), { controlTreeUncertain: true }));
+  p.deps.catalogProvider = () => Object.assign(async () => { throw readError; }, {
+    close: async () => { throw closeError; },
+  });
+  await assert.rejects(fleetMain(p.prepare(), p.deps), (error) => error === closeError);
+  assert.deepEqual(readdirSync(p.h.base), [".fleet-operation.lock"]);
+  assert.deepEqual(p.children, []);
 });
 
 test("independent detach names the pre-intent stage and preserves placement diagnostics", async (t) => {

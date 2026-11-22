@@ -11,7 +11,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
-import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
+import { fleetCli, fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
@@ -808,6 +808,23 @@ const catalogFailure = (diagnostic) => (error) => {
   if (diagnostic) assert.deepEqual(error.providerDiagnostic, diagnostic);
   return true;
 };
+
+test("prepare CLI distinguishes actual provider catalog validation from a disconnect during the read", { timeout: 15000 }, async (t) => {
+  for (const [mode, diagnostic] of [
+    ["catalog-shape", "catalog-validation; catalog-response"],
+    ["catalog-disconnect", "catalog-read; transport-close-failed; custody-uncertain"],
+  ]) await t.test(mode, async (t) => {
+    const p = fixture(t), exitCode = realCatalog(p, mode), errors = [];
+    const disconnected = mode === "catalog-disconnect";
+    assert.equal(await fleetCli(p.prepareArgs, { ...p.deps, writeError: (line) => errors.push(line) }), 2);
+    assert.deepEqual(errors, [`fleet-placement-preflight-failed: ${diagnostic}`]);
+    assert.equal(exitCode(), disconnected ? 2 : 0);
+    assert.deepEqual(fs.readdirSync(p.h.base), disconnected ? [".fleet-operation.lock"] : []);
+    assert.deepEqual(p.events().filter((row) => row.boundary === "provider").map((row) => [row.method, row.path]),
+      [["GET", "/v2/account"], ["GET", "/v2/sizes?page=1&per_page=200"]]);
+    assert.equal(p.workers.length, 0);
+  });
+});
 
 test("prepare can retry a settled invalid listing, but retains the lock on disconnect", { timeout: 15000 }, async (t) => {
   for (const [mode, diagnostic] of [["catalog-shape", refusedCatalog], ["catalog-disconnect", null]]) await t.test(mode, async (t) => {
