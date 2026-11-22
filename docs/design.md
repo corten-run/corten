@@ -1931,8 +1931,7 @@ rules something out.
     router's `404` with and without an error page of the app's under callgrind (release,
     jemalloc, three rounds alternating the builds, every run within 2 of the others) at
     `d9dbf11d2` and `7935404da` against main `e7e89add8`, and at `d7404206d` against main
-    `a0eeeacca`; the same at `4630a2ff2` against main `cf4435c91`, every run within 1.5 of the
-    others.
+    `a0eeeacca`, and at `4630a2ff2` against main `cf4435c91` (every run within 1.5 of the others).
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
