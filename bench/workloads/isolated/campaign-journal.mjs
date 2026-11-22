@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { jsonPhase, mixedPhase } from "./campaign-contract.mjs";
 import { supportedGroups } from "./evidence.mjs";
 import { executionGroups } from "./native-replay.mjs";
+import { liveGroup } from "./native-roles.mjs";
 
 // Recorded authorization/review events constrain order; they confer no authority.
 export function replayJournal(plan, id, events, status) {
@@ -59,8 +60,12 @@ export function replayJournal(plan, id, events, status) {
           assert.equal(event.artifactRoot, binding.validation.artifactRoot);
           const key = `${String(index).padStart(2, "0")}-${event.group}-${event.phase}`;
           assert.equal(phases.has(key), false, "native phase repeated");
+          if (Object.hasOwn(event, "transferDestination")) {
+            assert.ok(liveGroup(event.group) && event.phase === "timing");
+            assert.equal(event.transferDestination, `${key}/native`, "pending transfer destination differs from phase");
+          }
           phase = { key, group: event.group, phase: event.phase, binding, invocations: [...binding.preparation.fixtures, binding.execution.invocation],
-            results: [], logs: [], count: 0 };
+            results: [], logs: [], count: 0, transferDestination: event.transferDestination };
           phases.set(key, phase); break;
         }
         case "command-intent":
@@ -89,6 +94,7 @@ export function replayJournal(plan, id, events, status) {
           assert.equal(phase.sealed, undefined, "phase sealed twice");
           assert.equal(event.group, phase.group); assert.equal(event.phase, phase.phase);
           assert.equal(event.artifactRoot, phase.binding.validation.artifactRoot);
+          assert.equal(event.transferDestination, phase.transferDestination);
           assert.match(event.nativeManifestSha256 ?? "", /^[a-f0-9]{64}$/);
           if ([2, 3, 4, 5].includes(status.executionVersion)) assert.match(event.phaseManifestSha256 ?? "", /^[a-f0-9]{64}$/);
           phase.phaseManifestSha256 = event.phaseManifestSha256;
@@ -157,11 +163,15 @@ export function replayJournal(plan, id, events, status) {
     (["failed", "preserved-uncertain"].includes(r.outcome) || [2, 3, 4, 5].includes(status.executionVersion) && r.outcome === "native-validated")));
   const pending = [], seen = new Set();
   for (const item of status.uncollectedNativeRoots) {
-    assert.deepEqual(Object.keys(item).sort(), ["artifactRoot", "group", "phase"]);
     const recorded = [...phases.values()].find((p) => p.group === item.group && p.phase === item.phase);
-    assert.ok(recorded && !seen.has(recorded.key)); assert.equal(item.artifactRoot, recorded.binding.validation.artifactRoot);
-    seen.add(recorded.key); pending.push({ group: recorded.group, phase: recorded.phase, artifactRoot: recorded.binding.validation.artifactRoot });
+    assert.ok(recorded && !seen.has(recorded.key));
+    const expected = { group: recorded.group, phase: recorded.phase, artifactRoot: recorded.binding.validation.artifactRoot,
+      ...(recorded.transferDestination ? { transferDestination: recorded.transferDestination } : {}) };
+    assert.deepEqual(item, expected);
+    seen.add(recorded.key); pending.push(expected);
   }
+  for (const recorded of phases.values()) if (recorded.transferDestination)
+    assert.equal(seen.has(recorded.key), !recorded.sealed, "transfer must stay pending until its phase seal");
   const incomplete = !!command || [...phases.values()].some((p) => p.results.some((r) => !r.terminal)
     || (p.count < p.invocations.length && p.results.at(-1)?.success !== false));
   if (incomplete) { assert.equal(status.state, "preserved-uncertain"); assert.ok(phase && seen.has(phase.key)); }
