@@ -128,7 +128,7 @@ launch while it is unmerged. For a legacy open PR, finish its legacy validation 
 For running, append output to its log and invoke from the benchmark checkout:
 
 ```sh
-node bench/marketplace/droplet.mjs r17 --state-dir <round-control-directory> --collect
+node bench/marketplace/droplet.mjs r17 --state-dir <round-control-directory> --collect --context <saved-context>
 ```
 
 Poll command completion at most 60 seconds apart, up to 30 minutes. Exit 3 means running:
@@ -144,7 +144,28 @@ The launcher verifies ID, exact name, both shared tags and unique ownership tag,
 terminal unit with Restart=no, before download and again before deletion. It saves and hashes
 complete or partial evidence first. Missing units/SSH failures/identity mismatches fail closed.
 Do not manually delete, restart or power-cycle running rounds, or touch another run's droplet.
-Retry collection after a cleanup failure using the same durable state, not another launch.
+Pass the saved doctl context for the account that launched the round. One credential-bound
+worker checks ownership, dispatches at most one DELETE, and checks for absence. Before
+dispatch the collector flushes the intent containing the exact ID, account and context.
+On POSIX it renames the intent and syncs the control directory. On Windows it uses the
+system Windows PowerShell to publish the intent through a write-through rename on fixed
+local NTFS, with no administrator access required. If durable publication fails, collection
+reports exit 2 without sending DELETE. Keep the archive, state and any staged intent for
+operator review; the host may still be billed.
+
+Before allocating, both launchers exercise the same publisher in a disposable directory on
+the control filesystem. If local storage or Windows execution policy blocks it, launch
+stops before making a provider request. It does not override execution policy.
+
+For up to two minutes the collector looks for an authenticated HTTP 404 on the exact ID,
+checking the saved account before and after the GET. An ID that is still present, even
+without its tags, does not prove deletion. If acknowledgement is lost and the worker cannot
+continue, confirmation stops without marking the host destroyed.
+
+Retry unconfirmed cleanup with `--collect`, the same state and the same context, not another
+launch. Once an intent exists, the collector only verifies the local archive and reads the
+provider. If the ID stays present or an older record lacks the account/context binding,
+preserve the state and evidence for operator review. Do not clear an intent to retry DELETE.
 
 ## Evening Launch
 
@@ -201,7 +222,7 @@ state directory rules as above:
 
 ```sh
 node bench/marketplace/droplet.mjs r17 --droplets 3 --ssh-key <saved-key-id> --state-dir <round-control-directory> --detach
-node bench/marketplace/droplet.mjs r17 --state-dir <round-control-directory> --collect
+node bench/marketplace/droplet.mjs r17 --state-dir <round-control-directory> --collect --context <saved-context>
 ```
 
 Each droplet is a dedicated c-8 with the same pinning, passes, windows and rate. The launch
@@ -212,7 +233,7 @@ process, and never remove a live lock. A lock whose pid is not running is a kill
 collect removes it and collects the stopped launch. The launcher ignores SIGHUP, so a closed
 terminal does not stop it. Exit codes are as above, for the round: 3 while any droplet
 runs (finished droplets are already collected and deleted), 2 for a collection error on any
-droplet or a leftover `corten-marketplace-rN-d*` droplet (reported with its delete command, never
+droplet or a leftover `corten-marketplace-rN-d*` droplet (reported for ownership review, never
 deleted), 1 when a droplet did not finish its part or the parts do not merge, 0 when every
 droplet finished, was deleted and merged into `round/rN/` in the state directory. Exit 2 wins
 over 3: a droplet can still be running when collect exits 2. Then fix what it names and collect
@@ -227,8 +248,13 @@ left doing, and saves it as `launch-stopped.txt` in the state directory; stop a 
 with the `ssh` command it prints, then collect. A droplet whose launch stopped before
 `systemctl start` (`creating` or `preparing`) never ran its round: the launch and collect both
 print what to delete (collect finds a droplet whose create returned no id by name and run tag,
-and checks its ownership tags before printing a `doctl` delete command); run it. A `starting` droplet is collected, never deleted on a
-guess. A split round compares only with a round split the same way, droplet by droplet, so
+and checks its exact ID and ownership tags before printing a `doctl` delete command). A
+`starting` droplet is collected, never deleted on a guess. For an interrupted launch, a
+missing inventory row is not proof of absence. Collection can confirm an exact ID is gone
+only with an authenticated 404 in its saved account. It binds that account when it first
+verifies an owned ID; if it cannot do that and no binding exists, the state remains
+unconfirmed. The final inventory reports extra IDs but does not override exact-ID proof.
+A split round compares only with a round split the same way, droplet by droplet, so
 droplets that land on different CPU models refuse comparison with a baseline whose droplets
 differ (see the README); its report's Between droplets section flags stages where Corten's own
 numbers differ between droplets, and a flagged stage is reported, not hidden. A split splits the
