@@ -118,7 +118,8 @@ struct Inner {
     /// `req.lang()`), so the answer's `Vary` names the header (`crate::page::vary_on_language`).
     asked_language: AtomicBool,
     /// For a request that may change what its path shows, in an app that keeps pages: which of
-    /// the store's counts of writes is its path's, plus one (`crate::kept`).
+    /// the store's counts of writes is its path's, plus one, or [`WROTE_EARLY`] for one that
+    /// found no counts (`crate::kept`).
     write: AtomicUsize,
     /// Its answer is `Public`, the same for everyone: written as for a visitor whose zone is not
     /// known, its live part's fragments too.
@@ -160,6 +161,10 @@ struct Inner {
     /// any more would make every request's signal a larger allocation.
     late: AtomicU8,
 }
+
+/// In [`Signal`]'s `write`: a write that began before the app counted writes by path. No path
+/// has this count, of which there are far fewer.
+const WROTE_EARLY: usize = usize::MAX;
 
 /// [`Inner::late`]: a write eligible for late fill, so a whole page the app's or an area's
 /// middleware makes with `Req` carries the head it was made with.
@@ -600,18 +605,41 @@ impl Signal {
         self.0.write.store(count + 1, Ordering::Relaxed);
     }
 
-    /// Whether the request is counted as a write to its path ([`Signal::writes`]).
+    /// The request may change what its path shows, and the app had no counts by path when it
+    /// began: it is counted with the other writes like it ([`crate::kept`]).
+    pub(crate) fn writes_early(&self) {
+        self.0.write.store(WROTE_EARLY, Ordering::Relaxed);
+    }
+
+    /// Whether the request is counted as a write ([`Signal::writes`], [`Signal::writes_early`]).
     #[cfg(test)]
     pub(crate) fn counts_a_write(&self) -> bool {
         self.0.write.load(Ordering::Relaxed) != 0
     }
 
+    /// How the request is counted as a write: by its path, with the writes that found no
+    /// counts, or not at all.
+    #[cfg(test)]
+    pub(crate) fn counted_as(&self) -> &'static str {
+        match self.0.write.load(Ordering::Relaxed) {
+            0 => "none",
+            WROTE_EARLY => "early",
+            _ => "path",
+        }
+    }
+
     /// Work that outlived the request's handler has ended ([`Signal::finish`]): what it wrote
-    /// after the request was answered or dropped counts as a write to the request's path too.
+    /// after the request was answered or dropped counts as a write to the request's path too,
+    /// in the way the request itself was counted.
     fn wrote(&self) {
-        let Some(count) = self.0.write.load(Ordering::Relaxed).checked_sub(1) else { return };
+        let write = self.0.write.load(Ordering::Relaxed);
+        let Some(count) = write.checked_sub(1) else { return };
         if let Some(kept) = self.shared().and_then(|shared| shared.kept.as_ref()) {
-            kept.count(count);
+            if write == WROTE_EARLY {
+                kept.early();
+            } else {
+                kept.count(count);
+            }
         }
     }
 
