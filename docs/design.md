@@ -7531,8 +7531,10 @@ rules something out.
     to say, and a reload is not a reason to render it.
 
     Not chosen: in front of the middleware, for the reasons above, though it would save the
-    stages too; asking the marks whether or not the store has room, which spares the copy
-    for every URL asked for once and makes the second visitor of every page wait for its
+    stages too; holding a page's whole render buffer, which is an eighth larger than the page
+    and as large as the last page rendered, or asking the allocator to shrink it to the page,
+    which jemalloc does by moving the page for most lengths (above); asking the marks whether
+    or not the store has room, which spares the copy for every URL asked for once and makes the second visitor of every page wait for its
     handler in an app whose pages all fit; a mark that holds part of a hash of its URL, which
     another URL takes, so that the rule fails toward an answer that is not kept and a store
     with more pages than marks forgets them; a mark that ages (an answer kept only when its
@@ -7638,6 +7640,143 @@ rules something out.
     store 0.03 at most (counted by `perf stat` on a machine that ran other work, which a
     count of faults does not depend on), and a full store spends 31,863 cycles in the
     kernel.
+    What a page made and kept with room asks of the process was then cut, under callgrind
+    (valgrind 3.24.0, rustc 1.100.0, a probe app serving a `Public` page of 5,208 bytes over one
+    keep-alive connection with a browser's fifteen headers, `Accept-Language` among them, a new
+    URL each request and a bound of 1 GiB that no run fills, the count for 1,300 requests less
+    that for 300 over 1,000, three rounds alternating the builds, given as the median of the
+    three and their range), under glibc 2.41 and under the template's allocator, Debian's
+    libjemalloc2 5.3.0 put in with `LD_PRELOAD`. The table's key is the hash of the path and
+    query, taken once by keys of the store's own for the lookup and the keeping (`1f248f657`;
+    the count of writes and a full store's mark hash it on their own), and a kept copy's URL,
+    `Host` and, for an answer that varies on it, `Accept-Language` are held in one allocation
+    made from the request's bytes when the answer is kept (`eb20c55bb`). A miss that is not kept
+    never builds that key: until then it holds the request's URL and header values by handles
+    that copy none of their bytes, though the first clone of a header a middleware made for
+    itself may allocate the count of its holders. A kept body is found and keyed the same way,
+    with the way it was asked for compared beside its key. The bound counts a copy's URL once,
+    where it counted it twice (by the entry and by the table's key), so under the same bound an
+    answer with a long URL near its share is kept where it was not, and the store reaches the
+    point where it is full a little later; which answers may be kept is otherwise the same. On
+    main's `a0eeeacca` (which counts a write by path only once an answer may be kept, and keeps
+    files) a page made and kept ran 104,989 instructions under glibc (104,986 to 104,991) and
+    98,549 under jemalloc (98,548 to 98,552), against 91,762 and 85,994 with the store off; with
+    this change merged with it (`63ec8bd65`) 103,343 (103,340 to 103,348) and 97,520 (97,518 to
+    97,525), 1.6% and 1.0% fewer, and fewer in each pair by 1,643 to 1,649 and 1,027 to 1,031.
+    For a page of 7,635 bytes it ran 116,629 against 118,258 and 113,131 against 114,257, fewer
+    by 1,625 to 1,632 and 1,119 to 1,175; for a JSON body made and kept (the page's words as one
+    string, in a build with `compress`, sent to the browser's codings in 2,191 bytes) 204,581
+    against 206,254 and 198,357 against 199,543, fewer by 1,668 to 1,676 and 1,185 to 1,191.
+    Counted the round before the merge (`b573520d1` against `04c209fca`), the allocator was
+    called 49 times a request against 52 under both, `memcpy` 86 times against 88, and the minor
+    page faults fell from 1.641 to 1.618 a request under glibc and from 1.884 to 1.877 under
+    jemalloc. A kept page took 60,650 instructions (60,649 to 60,653) against 60,646 (60,645 to
+    60,647) under glibc, 2 to 8 more in each pair, and under jemalloc 54,681 (54,679 to 54,688)
+    against 54,643 (54,641 to 54,644), 38 to 44 more. In the round before (`b573520d1` against
+    `04c209fca`) main's runs differed by more than the two builds under both allocators, and
+    that cost was not resolved there. For the larger page it took 61,020 (61,017 to 61,021)
+    against 61,033 (61,028 to 61,039) under glibc, 11 to 19 fewer in each pair, and under
+    jemalloc 54,874 in each round against 54,836 (54,836 to 54,838), 36 to 39 more; in an
+    earlier round (`eb20c55bb` against `92a745a63`) that page's runs under jemalloc ranged from
+    54,809 to 54,861, more than the 40 between the builds, and its cost was not resolved there.
+    A kept JSON body took 59,198 (59,193 to 59,198) against 59,077 (59,076 to 59,085) under
+    glibc, 113 to 120 more in each pair, of which the store's own lookup (`Asked::of` and
+    `Asked::find`) was 36 by function at `b573520d1` and the rest glibc's `_int_malloc` and the
+    chunks it unlinks under `Extensions::insert`, with the heap laid out otherwise; and 53,679
+    against 53,639 under jemalloc, 37 to 44 more. The store off, a page not `Public` and a write
+    differed by 7 or less at the medians under both.
+    The steps between, under jemalloc at 5,208 bytes and on main's `92a745a63`:
+    hashing once took 809 off; the key in one allocation made for the miss (`3278beb10`) 553
+    more off, but it held and counted an `Accept-Language` the page did not vary on, so a page
+    near its share of the bound was not kept for a client that sent a long one; making it only
+    when the page is kept (`09170f7ec`) put 336 of those back, in moving the request's URL and
+    header values, whose bytes it shares until then, with the answer's future; and copying the
+    page again, where those steps had shrunk its buffer, put back 190 more (below). At `df1856704` such a request ran 10,601
+    instructions more than with the store off under glibc, of which, by function, about 4,500
+    are the allocator's
+    (ten more allocations and a `realloc`, among them the entry, its key, the URL's list in the
+    table, a copy of the head for the answer sent and the mark on it, in a heap the store
+    grows, `_int_malloc` alone 1,592), about 2,300 the store reading the request and the answer
+    (the headers it is asked with, `Vary`, what an answer must not carry, the head's size), 900
+    putting the entry in its place under the lock, 500 `memcpy` and the rest the URL's hashes.
+    Holding the handler's whole buffer and counting its capacity was tried first (on
+    `6c8c27b55`): a page's buffer is sized for the last page rendered and an eighth more, so a
+    uniform page holds an eighth it does not use, and its faults rose from 1.65 to 1.81 a
+    request. Asking the allocator to shrink the buffer to the page's length instead of copying
+    the page (at `bfb957ebb`) saved 220 to 648 instructions under glibc, which shrinks a chunk
+    where it is, for pages of 5,208 to 7,979 bytes; under jemalloc it saved 162 and 223 where
+    the page and its buffer are in one size class (5,208 and 6,247 bytes), where jemalloc leaves
+    the buffer as it is, and cost 497 to 665 more for the seven other lengths tried, from 5,555
+    to 7,979 bytes, where jemalloc moves the page to an allocation of the smaller class: the
+    copy again, with the lookups of a `realloc` around it. With jemalloc's classes a seventh to
+    a quarter apart, a buffer an eighth larger than its page is in the next class for more than
+    half of all lengths, so the page is copied, as before. Hashing a path for its count of
+    writes by the table's keyed hash too, so that a lookup and a write share one hash, cost a
+    kept page 125 to 156 instructions more, and was left out.
+    In cycles, on a quiet cloud host (a dedicated 8-CPU DigitalOcean c-8 in sfo3, Xeon Platinum
+    8280, one thread a core, Debian 13 with Linux 6.12.117, rustc 1.100.0), `30ff52ca0` (this
+    change before it merged main's [#1883 Count a write by path only once an answer may be kept](https://github.com/corten-run/corten/pull/1883),
+    its code outside tests that of `11824d580`) against main's `e7e89add8`, in a probe app on
+    jemalloc as the template runs it, with the `json` feature: a record page of 6,124 bytes and a
+    JSON body of 1,999 bytes, asked for with no coding. Both builds were pinned to the same CPU, one whose core had no
+    other work, each started once (afresh for each turn where every request is for a new URL, so each turn begins with
+    an empty store that keeps room) and loaded in turn for 3 s by `wrk` with 64 connections on
+    two other CPUs, the order turned about each pair, 100 pairs a case after one not recorded,
+    the app's user and kernel cycles and user instructions counted by `perf stat` and divided by
+    the requests answered. The margin set before the run was the one-sided 95% upper bound on
+    the median change within a pair in cycles a request under +1%, in every case. A new URL
+    each request took 76,458 cycles against 77,205 at the medians, 1.28% fewer at the median of
+    the pairs with a bound of 0.59% fewer (user 2.27% fewer, kernel 0.13% fewer with a bound of
+    0.31% more), on 2.02% fewer user instructions (51,687 against 52,755); a new URL for the
+    JSON body 68,424 against 69,324, 1.37% fewer with a bound of 0.92% fewer (user 2.48% fewer,
+    kernel 0.07% more), on 1.83% fewer instructions (57,081 against 58,146). Kernel cycles, where
+    the faults of memory the store touches first are counted, were about flat; this run did not
+    count the faults themselves again. A kept page took
+    0.51% fewer (bound 0.39% fewer) on 0.19% more instructions (24,244 against 24,198), a kept
+    JSON body 0.01% fewer (bound 0.08% more) on 0.18% more, and the store off 0.58% fewer (bound
+    0.45% fewer) on the same instructions. A page not `Public`, whose code this change does not
+    touch, took 1.07% more, with a bound of 1.18% more, so the margin was not met there, on the
+    same instructions (39,454 against 39,449; user cycles 2.68% more, kernel 0.45% fewer). In
+    the same run on the same host a page not `Public` that another change leaves as it is
+    ([#1865 Send a Public answer's Cache-Control without reading it again or making it per answer](https://github.com/corten-run/corten/pull/1865))
+    took 1.27% more on 0.03% more instructions. So two builds that run the same instructions
+    differed on this host by up to about a hundredth of their cycles, from 0.6% fewer to 1.3%
+    more: the 1.07% is not shown to be a cost of this change, whose instructions there are flat,
+    and is not ruled out as one. The new URLs' 1.3% and 1.4% fewer are about that size, and are
+    claimed only as cycles that went the way of the instructions saved, as their user cycles
+    did. Both builds' answers were compared before each case and were the same once a kept
+    copy's `Age` was masked, and no turn failed. The merge with main after the run (`63ec8bd65`)
+    was counted again by callgrind (above) and, on 2026-11-22, in cycles by the same method on a
+    second quiet host of the same size (Xeon Platinum 8358), `4e87017b9`, whose code is the
+    merge's, against main's `a0eeeacca`, 100 pairs a case, with perf counting every turn for all
+    of it: a new URL took 1.51% fewer cycles at the median of the pairs (bound 1.05% fewer) on
+    1.97% fewer user instructions (51,687 against 52,724), a new URL for the JSON body 2.64% fewer
+    (bound 2.11% fewer) on 1.80% fewer (57,087 against 58,131), a kept JSON body 0.59% fewer (bound
+    0.36% fewer) on 0.18% more, and the store off 0.27% more (bound 0.51% more) on 0.01% more,
+    each within the margin; a kept page, each build started once, took 1.80% more with a bound of
+    2.02% more (from 5.37% fewer to 5.25% more; user 2.56% more, kernel 0.92% more) on 0.19% more
+    instructions (24,247 against 24,202), and the page not `Public` 1.51% more with a bound of
+    1.67% more on 0.02% more, which missed it. So the first run met the margin on four of the six
+    cases; the two new URLs already started a build afresh each turn, and of the four started
+    once a build, two met it and two missed it. Those two were run again on that host with every turn on a newly
+    started build, 100 pairs each, and met it: a kept page took 0.31% more with a bound of 0.90%
+    more (from 8.08% fewer to 10.63% more; user 1.06% more, kernel 0.47% fewer) on 0.19% more
+    instructions (24,235 against 24,190), and the page not `Public` 0.54% more with a bound of
+    0.86% more (from 10.13% fewer to 6.34% more) on 0.01% more. The rerun is another protocol, not
+    a repeat, and does not clear the first run's misses. As a judgment, not a result of either
+    run, the fresh-start run is taken as the merge gate for these two: one start is one
+    process of each build, while a hundred starts sample a hundred under the same probe, so the
+    result leans less on one pair of starts (that the code's placement in memory differs from
+    start to start is a plausible reason for the one-start differences, not one these runs show); and the page not
+    `Public`, whose code this change does not touch, missed by a like amount. Whether a long-lived
+    process of this build is slower on a kept page neither run resolves, and neither shows a gain
+    there, where 0.19% more instructions stand. With the change a new URL took 30,522 user and
+    30,180 kernel cycles at the medians, against 21,165 and 24,579 for the store off in its own
+    turns (main: 31,198 and 30,383, against 20,801 and 24,795), so what a page asked for once still
+    costs over the store off is in user cycles as well as the kernel's. The faults counted earlier
+    (1.6 a request where the store off takes none, above) make first touches of memory a likely
+    part of it, not a measured one: these runs counted neither page faults nor first-level
+    instruction-cache misses, so that no turn's counters were multiplexed.
     By simulation from these counts (`bench/catalog/sim-kept-store.mjs` at `16f2f5480`: the
     store's clock with and without the rule, 5,461 pages of 6 KiB in 32 MiB, four million
     requests of which the second two million are counted, drawn from a Zipf law over the
@@ -7820,7 +7959,11 @@ rules something out.
     spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
     kept page in those rounds is the rule, two builds of the same code having differed by
     more from one start to the next; a miss kept with room in memory the store has used
-    before (room made by a write or by a page's lifetime ending), in cycles; a store read
+    before (room made by a write or by a page's lifetime ending), in cycles; the cuts of
+    `1f248f657` and `eb20c55bb` in cycles under glibc;
+    pages of more than 8 KiB, whose copy callgrind counts a byte at a time (glibc's `memcpy` uses
+    `rep movsb` there), and from 16 KiB, where
+    jemalloc's classes are whole pages and a shrink need not move the page; a store read
     from more
     than one core; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
@@ -7862,7 +8005,9 @@ rules something out.
     repeated walks turn an app's store over, so a mark should age; an app must drop a page for a
     change made by a task, another instance or a purge; the stages around the handler
     become most of a kept page's cost on a measured app, so a place further out is worth its
-    rules; a multi-core measurement shows requests waiting on the store's lock; writes no
+    rules; a multi-core measurement shows requests waiting on the store's lock; a count of
+    cycles under jemalloc shows shrinking a page's buffer beating the copy for the page lengths
+    apps send, those over 16 KiB above all; writes no
     handler takes (a scanner's `POST /`) make kept pages again often enough to show, so the
     router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; an app
     is found finishing work again and again on the `Signal` of a write from before its first
@@ -7896,7 +8041,18 @@ rules something out.
     on a dedicated 8-CPU cloud host (Xeon Platinum 8358, one thread a core) with nothing else
     running, started once on one CPU, loaded in turn for three seconds each by `wrk` with 64
     connections on two other CPUs, the order of the two turned about from each pair to the next,
-    the app's cycles counted by `perf stat` over each turn and divided by the requests answered; 2026-11-21, the
+    the app's cycles counted by `perf stat` over each turn and divided by the requests answered; 2026-11-21, a
+    page made and kept with room at `df1856704` under glibc, and at `92a745a63`, `bfb957ebb`, `1f248f657`, `3278beb10`, `09170f7ec` and `eb20c55bb` under
+    glibc and under jemalloc, for pages of 5,208 to 7,979 bytes, under callgrind as above in
+    `rust:1-trixie`, with the faults counted from `/proc/self/stat` over 5,000 requests and the
+    calls to the allocator from callgrind's call counts; 2026-11-21, a page and a JSON body made
+    and kept with room at `b573520d1` against `04c209fca` under glibc and under jemalloc, as
+    above, the JSON in a build with the `json` and `compress` features; 2026-11-22, the same at
+    `63ec8bd65` against `a0eeeacca`; 2026-11-22, the cycles of a page and a JSON body at `30ff52ca0`
+    against `e7e89add8` on the quiet host above, with Debian's libjemalloc2 5.3.0 preloaded; 2026-11-22,
+    the cycles of the same at `4e87017b9` against `a0eeeacca` on a second such host (Xeon
+    Platinum 8358, Linux 6.12.117, rustc 1.100.0), once with each build started once and once,
+    for a kept page and a page not `Public`, with every turn on a newly started build; 2026-11-21, the
     historical pair `30b39d455` and `45489ced9`, by callgrind alone; 2026-11-21, the rule for a full store with rustc 1.100.0: each count the
     difference of a run of 1,300 requests and one of 300 under callgrind, a new URL each, of
     which the first 28 or so fill a bound of 256 KiB, and for the second request the
