@@ -7476,10 +7476,13 @@ rules something out.
     it is still the answer's only line, known by the address of its bytes, which the cache mark
     holds so that no other value has them (`a81cf9108`; a line a middleware wrote in its place or
     beside it is read as before); 112 are one mark on a `Public` answer in place of two
-    (`75414d4e6`); and 380 are its header made once on each thread for each set of numbers, in
-    place of an allocation for each answer (`7e65e1da7`), which left a kept page 68 more, all in
-    glibc's allocator. With jemalloc the three took the `Public` page from 37,682 to 36,851 and a
-    kept page from 35,009 to 34,539, and the page for one visitor from 34,898 to 34,913.
+    (`75414d4e6`); and 380 are its header made once on a thread for each set of numbers while
+    they are among the last four that thread made one for (a fifth puts the oldest out, whose
+    header is made again when it is asked for), in place of an allocation for each answer
+    (`7e65e1da7`), which left a kept page 68 more, all in glibc's allocator. The probe's page
+    asks for one set of numbers, so each count is of a header held. With jemalloc the three took
+    the `Public` page from 37,682 to 36,851 and a kept page from 35,009 to 34,539, and the page
+    for one visitor from 34,898 to 34,913.
     Not measured: how the URLs of an app in use are spread,
     so how often one first asked for in a full store is asked for again (the simulation's
     spreads are a law, not a log); whether any of the 0.9% to 1.6% more cycles for a
@@ -7487,7 +7490,9 @@ rules something out.
     more from one start to the next; a miss kept with room in memory the store has used
     before (room made by a write or by a page's lifetime ending), in cycles; a store read
     from more
-    than one core; what those 1,161 fewer instructions for a `Public` page are in cycles; and the
+    than one core; what those 1,161 fewer instructions for a `Public` page are in cycles, and how
+    often a thread's answers go through more than four sets of numbers, whose headers it makes
+    again; and the
     tables that index the pages, which do not shrink when pages go, 8 bytes a slot and a map entry a
     URL, about 3 MB at most beside a 32 MiB bound by their sizes); platform (a shared cache may keep
     an answer for `s-maxage` and else `max-age`, sends its `Age`, and invalidates the target and the
