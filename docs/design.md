@@ -7436,23 +7436,29 @@ rules something out.
     bound, 4,151,648 and 4,164,307 of 4,194,304 in two runs for its page in every coding and its
     brotli 5 where the bound had room for it when the thread came to it (the thread waited for
     before the count; 201 of the 227 newest pages kept were given in brotli in the first and 231
-    of 232 in the second), and 4,050,606 with no compression. A kept page's brotli 5 (`9831ef711`, this
-    change merged with main, against main's `564034b86`, the request counts of
+    of 232 in the second), and 4,050,606 with no compression. A kept page's brotli 5 (`22fddd6da`, this
+    change merged with main, against main's `564034b86` and against `918ba8956`, this change before
+    an answer stopped writing the page's count once its brotli was queued; the request counts of
     `tests/kept_coding_cost.rs` for a page of 3,052 bytes, callgrind's count for 1,200 requests
-    less its count for 200, three alternated rounds, given as the median with the rounds' range,
-    which is at most 8 instructions, each answer's body checked and the two builds' bodies
-    identical byte for byte but for the tied browser's): a kept page given again to a browser's
-    codings ran 29,664 instructions (29,664 to 29,665) for 542 bytes of brotli 5 against 29,509
-    (all three) for 640 of zstd 1, +155 (+0.53%); asked for zstd alone, which this change does not
-    give another form, 28,924 (28,924 to 28,925) against 28,854, +70; given again uncompressed
-    23,841 against 23,832 (23,832 to 23,833), +9, and in gzip alone 29,429 (29,429 to 29,430)
-    against 29,265, +164; a page made and kept 146,105 (146,100 to 146,106) against 146,027
-    (146,024 to 146,029), +78, made uncompressed 45,407 (45,402 to 45,410) against 45,614 (45,612
-    to 45,617), -207, and made in gzip 626,068 (626,068 to 626,076) against 626,062 (626,057 to
-    626,064). Answers whose work this change leaves alike, or adds two comparisons to, differ by
-    -207 to +164, so these counts move with something beside that work; it is the allocator's in
-    part: with
-    glibc's fast bins off (`GLIBC_TUNABLES=glibc.malloc.mxfast=0`, one run each) the browser's
+    less its count for 200, three rounds that turned the builds' order about, given as the median
+    with the rounds' range, which is at most 10 instructions, each answer's body checked and the
+    builds' bodies identical byte for byte but for the tied browser's once its brotli is made): a
+    kept page given again to a browser's codings ran 29,663 instructions (29,662 to 29,663) for 543
+    bytes of brotli 5 against 29,507 (29,507 to 29,508) for 638 of zstd 1, +156 (+0.53%), and
+    29,663 at `918ba8956`; the same page in a store whose bound (38,500 bytes, six other pages kept)
+    left no room for its brotli, so that it is given zstd 1 from then on, 29,789 (29,788 to 29,789)
+    against 29,793 at `918ba8956`, 4 fewer with the two writes gone, and against 29,535 on main,
+    +254; asked for zstd alone, which this change does not give another form, 28,923 against
+    28,852 (28,851 to 28,852), +71; given again uncompressed 23,839 against 23,830, +9, and in gzip
+    alone 29,428 (29,428 to 29,429) against 29,264 (29,263 to 29,264), +164; a page made and kept
+    145,939 (145,939 to 145,940) against 145,868 (145,863 to 145,873), +71, made uncompressed 45,399
+    (45,396 to 45,405) against 45,610 (45,609 to 45,618), -211, and made in gzip 625,777 (625,777
+    to 625,778) against 625,781 (625,780 to 625,785). One thread's count does not show what the
+    two writes cost where several cores answer the same page, which no run here measured. Answers
+    whose work this change leaves alike, or adds a few comparisons to, differ by -211 to +254, so
+    these counts move with something beside that work; it is the allocator's in part: with
+    glibc's fast bins off (`GLIBC_TUNABLES=glibc.malloc.mxfast=0`, one run each, `9831ef711`
+    against `564034b86`) the browser's
     difference is +27 (29,531 against 29,504), zstd's alone +11, gzip's alone -126 and the page
     made uncompressed -168. At `0d96aa8b3` against `68ce3f1e6` callgrind's caller trees showed
     both builds calling `malloc` 31 times for each answer given again in a browser's codings.
@@ -7630,7 +7636,8 @@ rules something out.
     compressed, the tag. The commits after `f7e53a594` up to `24e61b4b0` change which writes count
     and nothing a page's `GET` runs. 2026-11-21, a kept page's brotli 5 with rustc 1.100.0, brotli
     9.1.3, zstd 0.14.4 (libzstd 1.5.7) and flate2 1.1.11 (miniz_oxide 0.9.1): the probe on
-    `b5324cbae`, `tests/kept_coding_cost.rs` under callgrind on `9831ef711` and `564034b86` in
+    `b5324cbae`, `tests/kept_coding_cost.rs` under callgrind (valgrind 3.24.0) on `22fddd6da`,
+    `918ba8956` and `564034b86`, and with fast bins off on `9831ef711` and `564034b86`, in
     rust:1-trixie with glibc's allocator, and `tests/kept_memory.rs` at `9831ef711`, with all
     features and with none.
 
