@@ -1055,7 +1055,7 @@ impl<'a> Asked<'a> {
         Missed {
             asked,
             written,
-            signal: req.extensions().get::<crate::Signal>().cloned(),
+            signal: Some(self.signal.clone()),
             nonce: req.extensions().get::<crate::security::NonceSlot>().cloned(),
             at: self.at.into(),
             // Copies of their own: a request's header values are slices of the connection's read
