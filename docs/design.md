@@ -7219,8 +7219,9 @@ rules something out.
     rule about what may be shared is written twice. Only a route typed `Public` whose answer is
     a page, or JSON or text in a build that compresses, asks the store at all, which is known when the route is made, so no
     other route's `GET` pays for it. A write pays a hash of its path and a count, and only in an
-    app with such a route: whether one has any is known when the router is made, and an app
-    with none makes no store and counts no writes.
+    app with such a route that has made an answer it may keep: whether an app has such a route
+    is known when the router is made, and an app with none makes no store and counts no writes;
+    one that has such a route and has made no such answer pays one add for a write (below).
 
     "Cannot tell who asks" is less than a key needs: an extractor of the app's own may be
     `Anonymous` and read the browser's `User-Agent` or a country header a proxy set. So a page
@@ -7325,8 +7326,21 @@ rules something out.
     and gives up what those would have saved. While a route leaves the store out, a body it
     kept earlier stays, and may be given after a newer one its handler made, within the
     lifetime the route wrote, as two instances may answer. An app whose only `Public` routes
-    answer JSON or text has a store in a build that compresses, and its writes are counted,
+    answer JSON or text has a store in a build that compresses,
     also when every body turns out too small, which is known only as each is made.
+    Its writes are counted by path once it has made an answer it may keep, and not before
+    ([#1874 A write is counted for the app's store before anything is kept: an app whose `Public` routes keep nothing pays about 1,080 instructions a write](https://github.com/corten-run/corten/issues/1874)):
+    a store can stay empty for as long as the app runs, and its writes then paid for counts
+    nothing read. The counts by path are made by the first answer that may be kept, where the
+    first request that asked made them before. Until they are there a write reads nothing of
+    its path and adds one to a count of all such writes when it is answered or dropped, as work
+    it left does when it ends, and an answer stands only while that count is as its request
+    found it. So a write that began before the counts and ends after drops every answer kept
+    by then, once, where a count by path drops its own path's: only a write under way when the
+    first such answer is made can, and what it drops was made while it ran. That first answer
+    makes the counts whether or not it is then kept (a write may have gone through while its
+    handler read), so an app whose writes never pause still comes to keep its pages. A page
+    route pays the same one add until its first page is made.
     Which answers are whole bodies is known
     when the route is made (`Answer::WHOLE`, of a type an app cannot name, as `KEYED` is), so the
     route of a file, a relay, a stream, a feed or an answer type of the app's own asks the store
@@ -7537,6 +7551,19 @@ rules something out.
     workstation, with other builds running, gave +1.5% (bound +2.8%) and is set aside as noise. Historical, a parent and child from
     before main changed the reading of a request's mode that a write runs: 16,292.0 a write at
     `30b39d455` against 15,210.8 at `45489ced9`, and with a `Public` page 16,308.7 against 16,310.7.
+    What a write pays before the counts by path are made, under callgrind (valgrind 3.19.0,
+    rustc 1.99.1, release with line tables, every feature) with the request-cost harness's
+    write cases (`crates/corten/tests/router_cost.rs`: a `POST` sent in process as a form of
+    the same origin sends one, as (instructions at 1,200 requests less those at 200) over
+    1,000, in three rounds that agree to within 2.4), `48ef77477` (this change's `3f86d3992`
+    with two bench routes) against `3d23cf64f` (main's `e7e89add8` with the harness's cases
+    and those routes): in an app whose one `Public` route answers text too small to keep,
+    15,446.1 a write against 16,425.2, 979.0 fewer (6.0%), and 15,221.1 against 16,205.1 once
+    that text had been asked for; with a `Public` page not yet asked for, 15,222.1 against
+    16,201.2; with no `Public` route, 15,357.1 in both. Where the counts are there the change
+    costs a little: a write with a page kept took 16,734.0 against 16,714.0, 19.9 more (0.12%)
+    to find the counts made, and a kept page given again 17,971.3 against 17,966.5, 4.8 more
+    (0.03%) for the second count it reads.
     A kept body, with the catalog benchmark's JSON route marked `Public` for a minute and two
     routes beside it that make nothing, of 2 bytes and of 2,000 (`69c8fb1bf` with this
     change's code against `c26cbdb5a` on main's `564034b86`), counted under callgrind with a
@@ -7633,7 +7660,10 @@ rules something out.
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-21 for a kept body, `c26cbdb5a` (main's `564034b86` with the catalog
+    Last checked: 2026-11-21 for when a write is counted by path, `3d23cf64f` (main's `e7e89add8` with the
+    request-cost harness's write cases and two routes in the catalog benchmark) and `48ef77477`
+    (this change's `3f86d3992` with those routes), kept under the tag
+    `evidence/early-writes-1874`; 2026-11-21 for a kept body, `c26cbdb5a` (main's `564034b86` with the catalog
     benchmark's JSON route marked `Public` for a minute and two routes that make nothing, of 2
     bytes and of 2,000) against `69c8fb1bf` (the same on this change), built with rustc 1.99.1
     with the app's default features, and without them for the build that does not compress:
