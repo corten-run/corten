@@ -7839,26 +7839,46 @@ rules something out.
     own commits only: `dff0545ad` adds the bound on a body's size (an answer given again runs the
     same code for a body of up to 32 KiB, and a page made and kept one comparison more, but the
     binary differs), and main has since changed the kept store's key and lookup and the
-    dependency lock, merged here at `674892046`. The merge candidate is gated by a run of its own,
-    the third: this change merged with main's `153be9116` against that main, the same four
+    dependency lock, merged here at `674892046`. A third run measured that merge (`9d60f9647`, whose
+    production sources are `674892046`'s) against main's `153be9116` (2026-11-22, on a DigitalOcean
+    host of 8 CPUs, a Xeon Platinum 8358, Linux 6.12.117 and rustc 1.100.0): the same four
     workloads with every turn on a newly started build, 100 pairs a workload and the same margin,
-    a one-sided 95% bound under +1% in user plus kernel cycles a request on each; a bound at or
-    above it, or a workload that fails or cannot be used, blocks the merge. In it `refused` is
-    fenced before every timed turn: a second app in the probe's process keeps a page of its own
-    and is asked for it twice, which queues that page's brotli 5 behind the refused page's on the
-    one thread, and the port opens only once that page is given in brotli, so the refused page's
-    job has run; the refused page is then asked for once more and must still be given its kept
-    zstd 1, on every start of both builds. A second pass of 30 pairs a workload counts user
-    first-level instruction-cache misses (`L1-icache-load-misses:u`) with `instructions:u`,
-    apart from the cycles so that neither pass's counters are multiplexed, as a diagnostic held to
-    no margin. That run is prepared and has not run; until it clears the margin this change does
-    not merge. Neither run so far on a quiet host counted user first-level instruction-cache
-    misses, which CONTRIBUTING.md asks for as a diagnostic when code is added or moved: each turn
-    counted `cycles:u`, `cycles:k` and `instructions:u` alone, so that no turn's counters were
-    multiplexed and perf ran all three for the whole of every turn; the simulated instruction
-    misses above (callgrind's, 1,811 against 1,798 an answer) are another measure and do not stand
-    in for them, and the third run's second pass counts them. Each workload's 100 per-pair changes
-    in both runs are listed in the description of
+    set before it ran. In it `refused` was fenced before every timed turn: a second app in the
+    probe's process keeps a page of its own and is asked for it twice, which queues that page's
+    brotli 5 behind the refused page's on the one thread, and the port opened only once that page
+    was given in brotli, so the refused page's job had run; the refused page was then asked for
+    once more and was still given its kept zstd 1, in all 102 starts of each build (at a bound of
+    64,576 bytes calibrated on the head, seven other pages kept first). The median change within a
+    pair in user plus kernel cycles a request, its one-sided 95% bound and range: `browser`
+    -1.24% (bound -0.59%, -9.55% to +4.75%), `gzip` -1.85% (bound -1.42%, -8.42% to +6.58%),
+    `refused` -1.75% (bound -1.39%, -9.77% to +3.95%) and `json-browser` -1.09% (bound -0.33%,
+    -8.10% to +6.86%), with user instructions -0.10% to -0.03% at the median; perf ran every
+    counter for all of every turn and no turn failed. Its second pass of 30 pairs a workload
+    counted user first-level instruction-cache misses (`L1-icache-load-misses:u`) with
+    `instructions:u`, apart from the cycles so that neither pass's counters were multiplexed, as a
+    diagnostic held to no margin: -1.55% at the median a pair for `browser` (bound -0.98%), -2.73%
+    for `gzip` (-2.02%), -2.20% for `refused` (-1.69%) and -2.01% for `json-browser` (-0.17%).
+    Its fence did not fail on a panic the compression thread caught, which would also leave the
+    refused page given its kept zstd 1; no server log of the run printed one (Rust's hook prints a
+    panic the thread catches too), which was checked after the run, not by it. That run is
+    historical as well, a result for its own pins: main has since kept a `Public` whole body of
+    1,024 bytes or more whatever its type (`7a275ef15`), which changes which bodies the store
+    keeps, and this change merged it with conflicts, so the third run does not measure the merge
+    candidate and its bounds are no evidence for it. The merge candidate is gated by a run of its
+    own, the fourth: this change merged with main's `7a275ef15` against that main, with the third
+    run's workloads, starts, fence and margin, a one-sided 95% bound under +1% in user plus kernel
+    cycles a request on each; a bound at or above it, or a workload that fails or cannot be used,
+    blocks the merge. Its fence also fails on any panic in the probe's process before the port
+    opens, one the compression thread caught included, and so does a start whose log prints one;
+    its second pass counts user first-level instruction-cache misses as the third's did, and its
+    third pass times the held value's wait (above). That run is prepared and has not run; until it
+    clears its bounds this change does not merge. The first two runs on a quiet host did not count
+    user first-level instruction-cache misses, which CONTRIBUTING.md asks for as a diagnostic when
+    code is added or moved: each turn counted `cycles:u`, `cycles:k` and `instructions:u` alone,
+    so that no turn's counters were multiplexed and perf ran all three for the whole of every turn;
+    the simulated instruction misses above (callgrind's, 1,811 against 1,798 an answer) are another
+    measure and do not stand in for them, and the third and fourth runs' second passes count them.
+    Each workload's 100 per-pair changes in the three runs are listed in the description of
     [#1846 Send a kept page in brotli 5, made off the request after its second answer](https://github.com/corten-run/corten/pull/1846).
     The levels'
     bytes and instructions above are a probe's that compresses as `compress::encode` does, whose
