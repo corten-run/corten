@@ -571,7 +571,14 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const exit = setupExit(), beforeEntry = !!state.preBootstrapTerminal;
     if (beforeEntry) checkSetupCustody(exit);
     const script = terminalSetupScript(state, exit), startedAtMs = Date.now();
-    const result = await ssh(script, 30000, beforeEntry), finishedAtMs = Date.now();
+    const sequence = state.control?.ledger.length;
+    const result = await ssh(script, 30000, beforeEntry).catch((error) => {
+      // The SSH checkpoint may abort after saving the exit but before handing
+      // back the proof. Leave the lock: the reply was neither accepted nor rejected.
+      const row = beforeEntry && state.control.ledger[sequence];
+      if (row?.localTerminal && row.code === 0) preserveOperationLock = true;
+      throw error;
+    }), finishedAtMs = Date.now();
     if (result.status !== 0 || result.error) refuseSetup("setup-host-proof-refused");
     let evidence;
     try { evidence = setupEvidence(result.stdout, state, script, exit, startedAtMs, finishedAtMs, local); }

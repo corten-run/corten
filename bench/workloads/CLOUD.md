@@ -694,7 +694,9 @@ means the registered terminal host query had an acknowledged nonzero exit, or
 exited zero but returned unusable proof. In the latter case the ledger retains
 code zero and records the proof rejection separately. Neither is a retirement receipt. Do not repeat collection to try
 to replace the missing proof. A missing transport acknowledgement remains
-uncertain; do not clear the locks or fill in a ledger result.
+uncertain. If cancellation leaves an acknowledged exit zero without a proof
+decision, the operation lock stays in place. Do not clear the locks or fill in
+a ledger result.
 
 For operator cleanup, bind the saved reservation to the exact account and numeric
 host ID. Independently establish the identity of the host, a terminal unit with
