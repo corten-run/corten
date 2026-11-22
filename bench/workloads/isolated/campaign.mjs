@@ -11,7 +11,7 @@ import { validateCampaign, freeze, jsonPhase, mixedPhase } from "./campaign-cont
 import { verifyWorkingSources } from "./worker.mjs";
 import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, readRegular, syncDirectory, tree } from "./evidence.mjs";
 import { supervise } from "./process.mjs";
-import { observeHost, udevSettleCandidates, udevSettleMs, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
+import { observeHost, udevSettleCandidates, udevSettleMs, udevSettlePolicy, verifyHostBoundary, verifySettledHostBoundary } from "./host-observation.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { inspectNative } from "./native-replay.mjs";
 import { beginLifetime, composeHostProof, inspectLifetime } from "./host-lifetime.mjs";
@@ -149,7 +149,8 @@ export function createCampaign({ authorize }) {
       c.stream.open(cpus, roles);
     }
     const closeControlWindow = c.control ? beginControlWindow(c.control) : null;
-    const retainUdev = !!c.stream && binding.request.group === "localized-marketplace" && phaseName === "timing";
+    const settlePolicy = c.stream ? udevSettlePolicy(binding.request.group, phaseName) : null;
+    const retainUdev = settlePolicy !== null;
     const before = observeHost(c.stream?.registration, retainUdev); save(c, `${relative}/host-before.json`, before);
     if (c.stream) verifyHostBoundary(before, before);
     const commands = [];
@@ -166,7 +167,7 @@ export function createCampaign({ authorize }) {
       verifyWorkingSources(c.plan.bindings[0]); after = observeHost(c.stream?.registration, retainUdev);
       if (terminalClock) after.terminalClock = terminalClock;
       save(c, `${relative}/host-after.json`, after);
-      if (retainUdev && terminalClock && !signal?.aborted && udevSettleCandidates(before, after, terminalClock)) {
+      if (retainUdev && terminalClock && !signal?.aborted && udevSettleCandidates(before, after, terminalClock, settlePolicy)) {
         await delay(udevSettleMs, undefined, { signal });
         c.stream.check();
         signal?.throwIfAborted();
@@ -186,7 +187,7 @@ export function createCampaign({ authorize }) {
     if (boundaryError) throw boundaryError;
     closeControlWindow?.();
     c.stream?.close();
-    p.cleanup = settled ? verifySettledHostBoundary(before, after, settled, terminalClock) : verifyHostBoundary(before, after);
+    p.cleanup = settled ? verifySettledHostBoundary(before, after, settled, terminalClock, settlePolicy) : verifyHostBoundary(before, after);
     return p;
   }
   function cancelled(c, phase, signal) {
