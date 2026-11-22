@@ -7766,8 +7766,8 @@ rules something out.
     release with all features and counted under callgrind (valgrind 3.24.0, Debian's
     `libjemalloc2`), each count the difference of a run of 1,200 requests and one of 200, eight
     cases in three rounds alternating which build ran first, every round within one instruction
-    of the others; the commits after `0ced821d8` change comments and documents only. Cycles under
-    load were not measured for it; 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
+    of the others, with the commits after `0ced821d8` changing comments and documents only and
+    no cycles under load measured for it; 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
     request-cost harness's write cases and two routes in the catalog benchmark) for the counts,
     and for the run under load its parent `3d23cf64f` and `48ef77477` (this change's
     `3f86d3992` with those routes), kept under the tag `evidence/early-writes-1874`; 2026-11-21 for a kept body, `c26cbdb5a` (main's `564034b86` with the catalog
