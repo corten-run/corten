@@ -241,7 +241,7 @@ impl Accepts {
     }
 
     /// The coding for a body compressed as it is sent: the highest q-value, then the server's order.
-    fn now(self) -> Option<Coding> {
+    pub(crate) fn now(self) -> Option<Coding> {
         self.best(&[Coding::Zstd, Coding::Brotli, Coding::Gzip])
     }
 
@@ -258,11 +258,16 @@ impl Accepts {
         self.best(&[Coding::Brotli, Coding::Gzip]).filter(|c| self.0[*c as usize] == top)
     }
 
-    /// Whether the client ranks brotli as high as any coding it accepts, as `stored` picks it:
-    /// two comparisons, where `stored` ranks every coding.
-    pub(crate) fn ranks_brotli_first(self) -> bool {
-        let [zstd, brotli, gzip] = [Coding::Zstd, Coding::Brotli, Coding::Gzip].map(|coding| self.0[coding as usize]);
-        brotli > 0 && brotli >= zstd && brotli >= gzip
+    /// Whether the client ranks brotli as high as any coding it accepts, as `stored` picks it,
+    /// given `now`, the coding [`Accepts::now`] chose: gzip only when brotli is ranked lower,
+    /// brotli when it is ranked highest, and zstd, ranked first in the server's order, also when
+    /// brotli ties it. So it reads no weight but on a tie, where `stored` ranks every coding.
+    pub(crate) fn ranks_brotli_first(self, now: Coding) -> bool {
+        match now {
+            Coding::Gzip => false,
+            Coding::Brotli => true,
+            Coding::Zstd => self.0[Coding::Brotli as usize] == self.0[Coding::Zstd as usize],
+        }
     }
 
     fn best(self, offered: &[Coding]) -> Option<Coding> {
@@ -823,19 +828,27 @@ mod tests {
         assert_eq!(accepted(&accept("zstd, gzip"), &[Coding::Brotli, Coding::Gzip]), Some(Coding::Gzip));
     }
 
-    /// A kept page's answers ask `ranks_brotli_first`, which is `stored` choosing brotli, for
-    /// every weight each coding may have.
+    /// A kept page's answers ask `ranks_brotli_first` of the coding `now` chose, which is
+    /// `stored` choosing brotli, for every weight each coding may have. (`now` choosing none,
+    /// nothing is compressed and nothing asks.)
     #[test]
     fn ranking_brotli_first_is_storing_brotli() {
         let weights = [0, 1, 500, 999, 1000];
+        let mut asked = 0;
         for zstd in weights {
             for brotli in weights {
                 for gzip in weights {
                     let accepts = Accepts([zstd, brotli, gzip]);
-                    assert_eq!(accepts.ranks_brotli_first(), accepts.stored() == Some(Coding::Brotli), "{:?}", accepts.0);
+                    let Some(now) = accepts.now() else {
+                        assert_eq!(accepts.stored(), None, "{:?}", accepts.0);
+                        continue;
+                    };
+                    asked += 1;
+                    assert_eq!(accepts.ranks_brotli_first(now), accepts.stored() == Some(Coding::Brotli), "{:?}", accepts.0);
                 }
             }
         }
+        assert_eq!(asked, 5 * 5 * 5 - 1, "every weighting but the one that accepts none");
     }
     #[test]
     fn negotiation_ignores_invalid_weights() {

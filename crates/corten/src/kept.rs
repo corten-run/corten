@@ -386,7 +386,8 @@ impl Kept {
         encode: impl FnOnce() -> Bytes,
     ) -> (Bytes, Coding) {
         let Some(entry) = Kept::of(extensions, body) else { return (encode(), coding) };
-        if accepts.ranks_brotli_first() {
+        debug_assert_eq!(accepts.now(), Some(coding), "the coding negotiated for the request");
+        if accepts.ranks_brotli_first(coding) {
             let coded = &entry.coded;
             if let Some(brotli) = coded.brotli.get() {
                 // Unless the form made for the coding it takes now is no larger: the levels' and
