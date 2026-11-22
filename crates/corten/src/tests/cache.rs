@@ -1494,7 +1494,10 @@ async fn a_route_whose_body_is_kept_never_shares_a_refusal() {
         for uri in ["/kept/7", "/kept/7/text"] {
             let (_, first) = asked_for(&router, uri, &[]).await;
             let (status, again) = asked_for(&router, uri, &[]).await;
-            assert!(status == StatusCode::OK && !first.contains_key(header::AGE) && again.contains_key(header::AGE), "{uri}: {again:?}");
+            assert!(
+                status == StatusCode::OK && !first.contains_key(header::AGE) && again.contains_key(header::AGE),
+                "{uri}: {again:?}"
+            );
         }
         for (method, uri, status) in [
             ("GET", "/kept/seven", StatusCode::BAD_REQUEST),
