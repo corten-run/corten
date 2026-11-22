@@ -271,7 +271,9 @@ fn held_alone(lines: &header::OccupiedEntry<'_, HeaderValue>) -> bool {
     let Some(line) = lines.next() else { return false };
     lines.next().is_none()
         && MADE
-            .try_with(|made| made.borrow().headers.iter().flatten().any(|(_, value)| std::ptr::eq(value.as_bytes(), line.as_bytes())))
+            .try_with(|made| {
+                made.borrow().headers.iter().flatten().any(|(_, value)| std::ptr::eq(value.as_bytes(), line.as_bytes()))
+            })
             .unwrap_or(false)
 }
 
