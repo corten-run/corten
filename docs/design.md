@@ -7217,7 +7217,7 @@ rules something out.
     [the request path](guide/app.md#your-own-middleware) says it does, and the security headers,
     `Cache-Control`, the tag and the compression treat a kept page as the handler's answer, so no
     rule about what may be shared is written twice. Only a route typed `Public` whose answer is
-    a page, JSON or text asks the store at all, which is known when the route is made, so no
+    a page, or JSON or text in a build that compresses, asks the store at all, which is known when the route is made, so no
     other route's `GET` pays for it. A write pays a hash of its path and a count, and only in an
     app with such a route: whether one has any is known when the router is made, and an app
     with none makes no store and counts no writes.
@@ -7306,12 +7306,21 @@ rules something out.
     no coding too, which saves that request less. A build that does not compress keeps no body
     and its body routes ask the store nothing, which is known when the route is made. In a
     build that does, a body's size is known only once it is made, so a route whose bodies are
-    all too small would ask the store and have each refused: after 64 such bodies in a row,
-    with none between that was large enough or was given from the store, the route's requests
-    are its handler's as before, but for one in 256 on each thread, which asks and so finds out
-    a route whose bodies grew. A route that answers some of each keeps asking while a body
-    worth keeping comes between; one that answers few of them (fewer than about one in ten,
-    by the run's length) leaves most of the time and gives up what those would have saved.
+    all too small would ask the store and have each refused: after 64 answers in a row of
+    which none was kept, with none between given from the store, the route's requests are its
+    handler's as before, but for about one in 256, drawn on each thread, which asks and so
+    finds out a route whose bodies grew. An answer left out for another reason (a failure, a
+    submit key) counts as one too small does, since asking for it gained as little. The
+    request that asks is drawn and not counted: a count of a thread's requests comes round in
+    step with clients that ask in a pattern, and one route of two would never be the one to
+    ask. A route that answers some of each keeps asking while an answer kept or given comes
+    between; one where fewer than about one request in twelve is for a body worth keeping
+    (reasoned from the run of 64 and the one in 256, not measured) leaves more often than not
+    and gives up what those would have saved. While a route leaves the store out, a body it
+    kept earlier stays, and may be given after a newer one its handler made, within the
+    lifetime the route wrote, as two instances may answer. An app whose only `Public` routes
+    answer JSON or text has a store in a build that compresses, and its writes are counted,
+    also when every body turns out too small, which is known only as each is made.
     Which answers are whole bodies is known
     when the route is made (`Answer::WHOLE`, of a type an app cannot name, as `KEYED` is), so the
     route of a file, a relay, a stream, a feed or an answer type of the app's own asks the store
@@ -7361,8 +7370,8 @@ rules something out.
     Writes are counted by a hash of the path with its escapes decoded, and a kept page stands
     only while the count is the one its request found before its handler ran: a write takes no
     lock and searches nothing, and a page whose handler was reading while the write went
-    through is not kept. There are 65,536 counts (256 KiB, made when the first page is asked
-    for, so an app with no `Public` page holds none), and a write to another path drops a
+    through is not kept. There are 65,536 counts (256 KiB, made when the first answer the app may keep is
+    asked for, so an app with no route that asks the store holds none), and a write to another path drops a
     given kept page early once in 65,536 times, which costs that page a render. Nothing else
     drops a page before its lifetime ends: not a change made by a task
     or another instance, a purge at a CDN in front (which is given the kept page again with

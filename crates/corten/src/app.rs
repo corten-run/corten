@@ -966,8 +966,8 @@ impl<M: Middleware> App<M> {
     /// its page is kept. A write to a page's path drops what is
     /// kept there, whatever it is answered, and so does one that redirects to it; a
     /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
-    /// under `corten dev`, and an app with no `Public` page keeps none and counts no writes,
-    /// whatever the bound. The bytes counted are each page's key, its headers, its body and each
+    /// under `corten dev`, and an app with no `Public` route of a kind it keeps (a page, or JSON
+    /// or text in a build with `compress`) keeps none and counts no writes, whatever the bound. The bytes counted are each page's key, its headers, its body and each
     /// compressed form made of it.
     pub fn kept_answers(mut self, bytes: usize) -> Self {
         self.kept = bytes;
