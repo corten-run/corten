@@ -21,6 +21,20 @@ The request-owned trace is attached before starting the read. Fixture lookups,
 native parsing/serialization, existing POST validation and render-before-append
 ordering are unchanged. Legacy item and catalog pages are outside this change.
 
+With `PROFILE=matched`, the marketplace page, record JSON, alert readback and
+`/health/live` use the configured `HOSTS` list. It accepts comma-separated names
+or IP addresses with optional ports and defaults to `localhost,127.0.0.1,[::1]`.
+An unlisted authority gets 421. The page and JSON send strict CSP and accompanying
+response headers. Existing scripts load from the same origin, and marketplace
+links and forms still work without them. Marketplace source failures return a
+localized HTML 502 or 504 to page clients without changing JSON Problem Details.
+Liveness answers without reading the source. These settings do not apply to
+legacy item, catalog, live-stream or static routes.
+
+The Catalog Contract job invokes `tests/marketplace-matched.mjs` on its existing
+marketplace image with both sources. It uses the shared bounded qualification and
+checks that the normal browser scripts run under CSP. It does not measure load.
+
 With the native dependencies from the Dockerfile installed, run from this directory:
 
 ```sh

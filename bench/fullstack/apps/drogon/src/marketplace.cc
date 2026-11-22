@@ -5,9 +5,14 @@
 #include <drogon/HttpMiddleware.h>
 #include <drogon/utils/Utilities.h>
 #include <json/reader.h>
+#include <arpa/inet.h>
+#include <strings.h>
+#include <algorithm>
+#include <charconv>
 #include <cstdlib>
 #include <fstream>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 
 namespace marketplace {
@@ -27,8 +32,94 @@ Json::Value readFile(const std::string &path) {
  return value;
 }
 using Callback = std::function<void(const drogon::HttpResponsePtr &)>;
+struct Authority {
+ std::string_view host;
+ unsigned port = 0;
+};
+
+std::optional<Authority> authority(std::string_view text) {
+ Authority value;
+ auto colon = text.find(':');
+ if (!text.empty() && text.front() == '[') {
+  const auto end = text.find(']');
+  if (end == text.npos) return std::nullopt;
+  value.host = text.substr(1, end - 1);
+  in6_addr address;
+  if (inet_pton(AF_INET6, std::string(value.host).c_str(), &address) != 1) return std::nullopt;
+  colon = end + 1 == text.size() ? text.npos : end + 1;
+ } else {
+  value.host = text.substr(0, colon);
+  if (!value.host.empty() && value.host.back() == '.') value.host.remove_suffix(1);
+  if (value.host.empty() || value.host.find_first_not_of(
+      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-.") != text.npos) return std::nullopt;
+ }
+ if (colon != text.npos) {
+  if (text[colon] != ':') return std::nullopt;
+  const auto port = text.substr(colon + 1);
+  const auto end = port.data() + port.size();
+  const auto parsed = std::from_chars(port.data(), end, value.port);
+  if (parsed.ec != std::errc{} || parsed.ptr != end || value.port == 0 || value.port > 65535)
+   return std::nullopt;
+ }
+ return value;
+}
+
+class MatchedPolicy : public drogon::HttpMiddleware<MatchedPolicy, false> {
+ const std::string hosts_;
+ std::vector<Authority> allowed_;
+ public:
+ explicit MatchedPolicy(std::string hosts) : hosts_(std::move(hosts)) {
+  std::string_view rest = hosts_;
+  while (true) {
+   const auto comma = rest.find(',');
+   auto value = rest.substr(0, comma);
+   const auto first = value.find_first_not_of(" \t");
+   if (first != value.npos) value = value.substr(first, value.find_last_not_of(" \t") - first + 1);
+   const auto parsed = authority(value);
+   if (!parsed) throw std::runtime_error("HOSTS must list names or IP addresses, with optional ports");
+   allowed_.push_back(*parsed);
+   if (comma == rest.npos) break;
+   rest.remove_prefix(comma + 1);
+  }
+ }
+
+ void invoke(const drogon::HttpRequestPtr &request, drogon::MiddlewareNextCallback &&next,
+             drogon::MiddlewareCallback &&callback) override {
+  const auto requested = authority(request->getHeader("host"));
+  const bool allowed = requested && std::any_of(allowed_.begin(), allowed_.end(), [&](const Authority &host) {
+   return host.host.size() == requested->host.size() &&
+          strncasecmp(host.host.data(), requested->host.data(), host.host.size()) == 0 &&
+          (host.port == 0 || host.port == requested->port);
+  });
+  if (!allowed) {
+   auto response = drogon::HttpResponse::newHttpResponse(drogon::k421MisdirectedRequest, drogon::CT_TEXT_PLAIN);
+   response->addHeader("Cache-Control", "no-store");
+   return callback(response);
+  }
+  next([callback = std::move(callback)](const drogon::HttpResponsePtr &response) {
+   response->addHeader("Content-Security-Policy",
+                       "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; "
+                       "base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+   response->addHeader("X-Content-Type-Options", "nosniff");
+   response->addHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+   response->addHeader("X-Frame-Options", "DENY");
+   response->addHeader("Cross-Origin-Opener-Policy", "same-origin");
+   response->addHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+   callback(response);
+  });
+ }
+};
+
 void error(Callback &callback, drogon::HttpStatusCode status) {
  callback(drogon::HttpResponse::newHttpResponse(status, drogon::CT_TEXT_PLAIN));
+}
+void pageUnavailable(Callback &callback, const std::string &locale, drogon::HttpStatusCode status) {
+ drogon::HttpViewData data;
+ data.insert("locale", locale);
+ auto response = drogon::HttpResponse::newHttpViewResponse("MarketplaceUnavailable", data);
+ response->setStatusCode(status);
+ response->addHeader("Cache-Control", "no-store");
+ callback(response);
 }
 }
 std::string url(const std::string &locale, const std::string &id) {
@@ -71,10 +162,24 @@ void get(const drogon::HttpRequestPtr &caller, const std::string &id, const trac
  }, trace);
 }
 void routes() {
+ const bool matched = env("PROFILE", "") == "matched";
+ std::vector<drogon::internal::HttpConstraint> page{drogon::Get, drogon::Post},
+  json{drogon::HttpOptionsMiddleware::classTypeName()}, read{drogon::Get};
+ if (matched) {
+  const char *hosts = std::getenv("HOSTS");
+  drogon::app().registerMiddleware(std::make_shared<MatchedPolicy>(hosts ? hosts : "localhost,127.0.0.1,[::1]"));
+  for (auto *route : {&page, &json, &read}) route->emplace_back(MatchedPolicy::classTypeName());
+  drogon::app().registerHandler("/health/live", [](const drogon::HttpRequestPtr &, Callback &&callback) {
+   auto response = drogon::HttpResponse::newHttpResponse(drogon::k200OK, drogon::CT_TEXT_PLAIN);
+   response->setBody("ok\n");
+   response->addHeader("Cache-Control", "no-store");
+   callback(response);
+  }, read);
+ }
  drogon::app().registerHandler("/api/alerts", [](const drogon::HttpRequestPtr &request, Callback &&callback) {
   auto response = drogon::HttpResponse::newHttpJsonResponse(alerts.read(request));
   response->addHeader("Cache-Control", "no-store"); callback(response);
- }, {drogon::Get});
+ }, read);
  drogon::app().registerHandler("/api/marketplace/{id}",
   [](const drogon::HttpRequestPtr &request, Callback &&callback, const std::string &id) {
    if (request->method() != drogon::Get && request->method() != drogon::Head)
@@ -105,9 +210,9 @@ void routes() {
      } catch (const std::exception &) { output = record_http::problem(drogon::k502BadGateway); }
      callback(output);
     }, trace_context::Context::capture(request));
-  }, {drogon::HttpOptionsMiddleware::classTypeName()});
+  }, json);
  drogon::app().registerHandler("/marketplace/{locale}/{id}",
-  [](const drogon::HttpRequestPtr &request, Callback &&callback, const std::string &locale, const std::string &id) {
+  [matched](const drogon::HttpRequestPtr &request, Callback &&callback, const std::string &locale, const std::string &id) {
    if (locale != "en-US" && locale != "fr-FR" && locale != "de-DE") return error(callback, drogon::k400BadRequest);
    if (request->method() == drogon::Post) {
     const auto &origin = request->getHeader("origin");
@@ -119,12 +224,13 @@ void routes() {
      return error(callback, drogon::k415UnsupportedMediaType);
    }
    const auto trace = trace_context::Context::capture(request);
-   get(request, id, trace, [request, locale, id, callback = std::move(callback)](RecordPtr record, record_http::Result result) mutable {
+   get(request, id, trace, [matched, request, locale, id, callback = std::move(callback)](RecordPtr record, record_http::Result result) mutable {
     if (result == record_http::Result::Aborted || !request->connected()) return;
-    if (result == record_http::Result::Timeout) return error(callback, drogon::k504GatewayTimeout);
-    if (result != record_http::Result::Ok) return error(callback, drogon::k502BadGateway);
+    if (result != record_http::Result::Ok || (record && request->method() == drogon::Post && (*record)["id"].asString() != id)) {
+     const auto status = result == record_http::Result::Timeout ? drogon::k504GatewayTimeout : drogon::k502BadGateway;
+     return matched ? pageUnavailable(callback, locale, status) : error(callback, status);
+    }
     if (!record) return error(callback, drogon::k404NotFound);
-    if (request->method() == drogon::Post && (*record)["id"].asString() != id) return error(callback, drogon::k502BadGateway);
     auto view = std::make_shared<View>(record, locale, labels[locale], request->getParameter("seller"), request->getParameter("sort"), request->getParameter("offers") == "all");
     view->path = url(locale, (*record)["id"].asString());
     if (view->offersShown < (*record)["offers"].size())
@@ -149,6 +255,6 @@ void routes() {
     }
     response->addHeader("Cache-Control", "no-store"); callback(response);
    }, request->method() == drogon::Post);
-  }, {drogon::Get, drogon::Post});
+  }, page);
 }
 }
