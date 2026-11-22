@@ -4,7 +4,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { archive, harness, metadata } from "./cloud-fixtures.mjs";
-import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
+import { acknowledgedBootstrapSeal, controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 import { reservation, validateState } from "./cloud-contract.mjs";
 import { digest } from "./cloud-local.mjs";
@@ -35,6 +35,45 @@ test("foreground timeout permanently marks the monitor invalid without releasing
   assert.equal(h.saved().control.monitor.phase, "invalid");
   assert.ok(existsSync(join(h.local, "operation.lock"))); assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
   assert.equal(h.deletes, 0); assert.equal(await h.task().collect(), 3);
+});
+
+test("failed seal-state replacement preserves the staging file and records revoked monitoring", async (t) => {
+  const h = harness(t, { active: true, monitorHold: true });
+  const staging = h.statePath + ".tmp";
+  let injected = false;
+  const pending = h.launch({ interrupted() {
+    if (!injected && existsSync(h.statePath)) {
+      const saved = h.saved(), last = saved.control?.ledger.at(-1);
+      if (last?.request.seal && last.code === 0 && last.localTerminal && !saved.control.sealed.length) {
+        injected = true;
+        writeFileSync(staging, "not a reservation", { flag: "wx" });
+      }
+    }
+    return false;
+  } }).launch();
+  const rejected = assert.rejects(pending, (error) => error.controlTreeUncertain === true);
+  rejected.catch(() => {});
+  for (let i = 0; !injected && i < 100; i++) await new Promise(setImmediate);
+  if (!injected) h.flags.completeMonitor?.(false);
+  await rejected;
+  assert.ok(injected, "the fault occurred after the acknowledged bootstrap seal");
+  assert.equal(h.saved().control.monitor.phase, "invalid");
+  assert.deepEqual(h.saved().control.sealed, ["bootstrap"]);
+  const ledger = h.saved().control.ledger;
+  assert.ok(acknowledgedBootstrapSeal(ledger));
+  for (const alter of [
+    (rows) => { rows.at(-1).code = 1; },
+    (rows) => { rows[0].localTerminal = false; },
+    (rows) => { rows.at(-1).request.seal.reverse(); },
+    (rows) => { rows[0].request.invocation.purpose = "collection"; },
+    (rows) => { rows.at(-1).request.seal = undefined; },
+  ]) {
+    const changed = structuredClone(ledger); alter(changed); assert.equal(acknowledgedBootstrapSeal(changed), false);
+  }
+  assert.equal(readFileSync(staging, "utf8"), "not a reservation");
+  assert.ok(existsSync(join(h.local, "operation.lock")));
+  assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
+  assert.equal(h.deletes, 0);
 });
 
 test("routine live collection reads the existing monitor journal without provider calls, SSH or new channels", async (t) => {

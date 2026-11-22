@@ -16,7 +16,7 @@ import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, v
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, launchHostKey, setupEvidence,
   settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
   verifyUnusedEvidence } from "./cloud-retirement.mjs";
-import { controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
+import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { controlCheckpoint, pinnedHostOptions } from "./cloud-transport.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -56,8 +56,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const read = (path = local, round = options.round) => { boundary(path); return controllerState(JSON.parse(regular(join(path, "state.json"), 1024 * 1024)), round); };
   const writeState = (value) => {
     controllerState(value, options.round);
-    durable(`${statePath}.tmp`, `${JSON.stringify(value, null, 2)}\n`);
-    renameSync(`${statePath}.tmp`, statePath); syncDirectory(local);
+    // An interrupted ordinary save can leave its exclusive staging file behind.
+    // Never consume it or let it prevent a failure-only write under retained custody.
+    const staging = value.control?.monitor?.phase === "invalid"
+      ? `${statePath}.revoked-${randomBytes(16).toString("hex")}.tmp` : `${statePath}.tmp`;
+    durable(staging, `${JSON.stringify(value, null, 2)}\n`);
+    renameSync(staging, statePath); syncDirectory(local);
   };
   const save = () => { check(); writeState(state); };
   // Cancellation forbids further work, not recording how the owned monitor ended.
@@ -80,6 +84,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     } else {
       assert.equal(saved.control.monitor.registrationSha256, state.control.monitor.registrationSha256);
       assert.equal(saved.control.monitor.phase, "live");
+    }
+    if (phase === "invalid" && !saved.control.sealed.length && acknowledgedBootstrapSeal(saved.control.ledger)) {
+      saved.control.sealed.push("bootstrap");
     }
     saved.control.monitor.phase = phase; writeState(saved); state = saved;
     if (phase === "closed") preserveOperationLock = alreadyUncertain;
