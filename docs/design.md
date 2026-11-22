@@ -2466,7 +2466,7 @@ rules something out.
     Last checked: 2026-11-21, the unstaged route and the `service_fn` control in
     `tests::cache::what_settling_a_page_costs` on this change against main `564034b86`
     (callgrind, release, jemalloc, three rounds alternating the builds, every run within 0.2 of
-    the others but one control run 2.1 under); 2026-11-20, `staged_page_future_sizes` at `3089d0a97`, after it failed on
+    the others); 2026-11-20, `staged_page_future_sizes` at `3089d0a97`, after it failed on
     main: the stage future grew from 2,632 to 3,008 bytes in a debug build and from 2,176 to
     2,280 in a release one, holding the page snapshot that sharing the staged header reads keeps
     before dispatch, not the request again (the stage owns one request slot, and dispatch takes
