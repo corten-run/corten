@@ -294,10 +294,7 @@ for (const code of ["EIO", "ENOENT", "ERR_ASSERTION", "private-code"]) test(`int
   const marker = "PRIVATE_ERROR_MUST_NOT_BE_RETAINED";
   const injected = Object.assign(new Error(marker), { code, path: marker, syscall: marker, environment: marker });
   let observer, pid, tick, reads = 0;
-  const originalInterval = globalThis.setInterval;
-  const interval = t.mock.method(globalThis, "setInterval", (callback, ...args) => {
-    tick = callback; return originalInterval(callback, ...args);
-  });
+  const interval = t.mock.method(globalThis, "setInterval", (callback) => { tick = callback; return 1; });
   try {
     const result = await supervise(invocation, { cwd: fileURLToPath(new URL("../../../", import.meta.url)), env: process.env, log() {},
       async onStart(value) {
@@ -317,12 +314,15 @@ for (const code of ["EIO", "ENOENT", "ERR_ASSERTION", "private-code"]) test(`int
         syncBuiltinESMExports();
         try { for (let i = 0; i < 20; i++) tick(); }
         finally { fault.mock.restore(); syncBuiltinESMExports(); }
+        // Recover while the attached bootstrap is still waiting for its start message.
+        tick();
       } });
     assert.equal(result.success, true, JSON.stringify(result)); await observer.finish(result);
     const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
     assert.equal(terminal.observerError, "host-observation-gap"); assert.equal(terminal.empty, true);
     const failures = terminal.observerFailures;
     assert.equal(failures.count, 20);
+    assert.equal(terminal.samples, 4, "initial, attach, recovery, and final samples were recorded");
     for (const entry of [failures.first, failures.last]) {
       assert.deepEqual(Object.keys(entry).sort(), ["at", "code", "lastSampleAt", "operation", "phase", "samples"]);
       assert.equal(entry.phase, "interval"); assert.equal(entry.operation, code === "ERR_ASSERTION" ? "process-name-recheck" : "process-stat");

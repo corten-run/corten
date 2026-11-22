@@ -1,0 +1,1 @@
+- Missing benchmark groups in the same continuation can measure on separate droplets at the same time and be collected independently. [#1864 Run independent benchmark groups on separate droplets while their measurements overlap](https://github.com/corten-run/corten/issues/1864)
