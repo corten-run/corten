@@ -1605,9 +1605,11 @@ mod tests {
     /// A write that ends after a request asked is seen by that request, whichever way the write
     /// was counted and whenever the counts by path came to be: at its own path always, and at
     /// every other when it found no counts. One thread writes freely and makes the counts part
-    /// of the way through; another writes in turn with one that asks, which asks before each of
-    /// its writes begins and looks once it has ended, so every one of those writes is checked,
-    /// whatever the scheduler does.
+    /// of the way through, no sooner than a turn the round names; another writes in turn with
+    /// one that asks, which asks before each of its writes begins and looks once it has ended.
+    /// So every one of those writes is checked at its path, and those of the turns before the
+    /// counts at another, whatever the scheduler does; the turn the counts are made in is the
+    /// one that races them.
     #[test]
     fn a_write_that_ends_as_the_counts_are_made_is_seen_by_who_asked_before() {
         /// Lets the other side of the turns go on if this one ends early, as a failed check does.
@@ -1618,8 +1620,10 @@ mod tests {
             }
         }
         const WRITES_EACH: usize = 40;
-        let (mut early, mut by_path, mut seen_elsewhere) = (0, 0, 0);
+        let (mut early, mut by_path) = (0, 0);
         for round in 0..200_usize {
+            // The turn the counts wait for: the writes of the turns before it find none.
+            let turn = 2 + round % 4;
             let answers = Answers::new(1 << 20).expect("a bound");
             // The turn the asker opened, the turn the writer ended, and how that write counted.
             let (asked, ended, found_none) = (AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0));
@@ -1631,6 +1635,9 @@ mod tests {
                     let mut modes = (0, 0);
                     for n in 0..WRITES_EACH {
                         if n == 1 + round % (WRITES_EACH - 2) {
+                            while asked.load(Ordering::SeqCst) < turn {
+                                std::thread::yield_now();
+                            }
                             answers.counts();
                         }
                         let write = write(answers, "/p");
@@ -1684,13 +1691,12 @@ mod tests {
                 ((free.0 + turned.0, free.1 + turned.1), asker.expect("the one that asks"))
             });
             assert!(!first.stands(&answers.0), "a write that found no counts ended since the round's first request");
+            assert!(elsewhere >= turn - 1, "the writes of the turns before the counts found none: {elsewhere}");
             early += modes.0;
             by_path += modes.1;
-            seen_elsewhere += 1 + elsewhere;
         }
-        // Both ways of counting were met, and a write with no counts was looked for at another
-        // path at least once a round.
-        assert!(early > 0 && by_path > 0 && seen_elsewhere >= 200, "{early} {by_path} {seen_elsewhere}");
+        // Both ways of counting were met.
+        assert!(early > 0 && by_path > 0, "{early} {by_path}");
     }
 
     /// Threads that keep, read, grow and write at once leave the bytes counted equal to what the

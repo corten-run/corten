@@ -7610,7 +7610,7 @@ rules something out.
     same work in both, +0.2% (-5.8% to +4.8% by start, 20,687 user instructions against
     20,704). Two builds differ from one start to the next by more than this saves, no
     smallest worthwhile reduction was declared before the run, and perf's running percentage
-    was not recorded, so this claims no fewer cycles: the cycles went the way of the
+    and the user instruction-cache misses were not recorded, so this claims no fewer cycles: the cycles went the way of the
     instructions saved, and do not show the saving on their own. What a
     write with a page kept and a kept page given again pay in cycles for their 20.0 and 5.0
     instructions is not measured, being far under what that run can tell apart.
@@ -7714,7 +7714,8 @@ rules something out.
     answer and nothing the handler held, so they treat a kept answer as its own); bet (an app that
     marks a page `Public` means the lifetime it wrote also with no CDN in front, and does in its
     handler nothing that must happen for every request; markup with a form's new submit key is rendered by the handler itself on the thread that
-    runs it, not by a task it spawned, one it handed a render to, or a thread of its own); value (fast and proven fast; standards
+    runs it, not by a task it spawned, one it handed a render to, or a thread of its own; no app finishes work again and again on the
+    `Signal` of a write from before its first answer that may be kept); value (fast and proven fast; standards
     first, the app being a shared cache as RFC 9111 describes one; mistakes fail at compile time,
     what may be kept being known from the route's types, and which of a body route's answers
     are, as each is made; good defaults, easy overrides, with one
