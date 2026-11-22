@@ -436,15 +436,19 @@ establish a general ranking.
          fourth, all four distinct.
       5. Build: rustc 1.100.0 and LLD 23.1.5; the probe built as the receipt's `build.sh` builds it,
          with the repository's release profile (`opt-level = 3`, thin LTO, one codegen unit),
-         features `json` and `compress`, third-party versions from main's `Cargo.lock`, and zstd
-         linked to the system's `libzstd` (`ZSTD_SYS_USE_PKG_CONFIG=1`).
+         features `json` and `compress`, and zstd linked to the system's `libzstd`
+         (`ZSTD_SYS_USE_PKG_CONFIG=1`); the same third-party crate versions as the receipt's
+         `probe/Cargo.lock` and Debian's `libzstd1` 1.5.7+dfsg-1, so only Corten's own source
+         differs from the calibration's.
       6. Load: `wrk` 4.1.0 with `-t2 -c64` and 3 s turns; every turn, warm-up included, on a
          freshly started build; the two builds' order turned every pair; 100 recorded pairs after
          one that is not; the bound the 59th of the 100 sorted per-pair changes.
 
       Any other negative control, and `plain` on any other setup, gets a floor only from its own
       A/A layout control in the same run, under the run's protocol and measured on each negative
-      control whose miss it would waive. On each such workload it makes three comparisons: main
+      control whose miss it would waive, named in the run's plan before the run and built from the
+      candidate's base commit with the candidate's build inputs. On each such workload it makes
+      three comparisons: main
       against main built twice, and main against main with each of the receipt's two pads (one
       never-called function of 40 bytes, and one of 3,100 bytes, `variants/pad40.diff` and
       `pad3100.diff`). Each is 100 recorded pairs after one that is not, read with the
@@ -461,7 +465,9 @@ establish a general ranking.
       holds every workload to +1%.
 
       1. Each comparison's two builds answer the workload's request with byte-identical status,
-         headers but `Date`, and body, compared with only the `Date` header removed.
+         headers but `Date`, and body, compared with only the `Date` header removed. (The
+         recorded control passed this as its kit compared, with more normalized; the Choice says
+         why that is accepted for its receipt alone.)
       2. Main built twice is byte-identical and meets +1% on that workload.
       3. The pad is present in the padded binary and moved code: the count of function symbols in
          both binaries whose addresses changed is above zero.

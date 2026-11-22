@@ -8162,43 +8162,51 @@ rules something out.
     Platinum 8358 (the exact model, not the family) with one thread a core; Linux 6.12.117 (Debian's
     `6.12.117+deb13-amd64`); jemalloc 5.3.0 by `LD_PRELOAD=libjemalloc.so.2` with
     `MALLOC_CONF=background_thread:true,tcache_max:65536` exactly; the server pinned to one CPU, the
-    load on two others and the driver and `perf` on a fourth, all four distinct; rustc 1.100.0 and LLD
-    23.1.5, with the probe built as the receipt's `build.sh` builds it (the release profile, features
-    `json` and `compress`, main's `Cargo.lock`, zstd linked to the system's `libzstd`); and `wrk` 4.1.0 with `-t2 -c64` and 3 s turns,
-    every turn, warm-up included, on a freshly started build, the builds' order turned every pair,
-    100 recorded pairs after one that is not and the bound the 59th of the 100 sorted per-pair
-    changes. Any VM counts if it matches. A difference in any item, such as another CPU model or each
-    build started once, means no recorded floor. Any other negative control, and `plain` on any other
-    setup, gets a floor only from its own A/A layout control in the same run, under the run's
-    protocol and measured on each negative control whose miss it would waive; one without a
-    qualifying A/A in that run is held to +1%. That control repeats this calibration on each such
-    workload: main built twice and the receipt's same two pads, 100 recorded pairs each, read with
-    the candidate's statistic, the 59th of the 100 sorted changes; a comparison with fewer than 100
-    valid pairs gives no bound and the control no floor. It gives a workload a floor of its larger
-    pad bound there only if that bound is at or below +2%. A larger bound above +2% gives no floor, and is not read as a floor
-    of +2%: that run holds every workload to +1%. The +2% limit leaves room above the +1.62% measured
-    here for a host whose placement costs a little more, and stops a noisy or unlucky layout control
-    from making the gate whatever it measured.
+    load on two others and the driver and `perf` on a fourth, all four distinct; rustc 1.100.0 and
+    LLD 23.1.5, with the probe built as the receipt's `build.sh` builds it (the release profile,
+    features `json` and `compress`, zstd linked to the system's `libzstd`), the same third-party
+    crate versions as the receipt's `probe/Cargo.lock` (main `14471284c`'s) and Debian's `libzstd1`
+    1.5.7+dfsg-1, so that only Corten's own source differs from the calibration's; and `wrk` 4.1.0
+    with `-t2 -c64` and 3 s turns, every turn, warm-up included, on a freshly started build, the
+    builds' order turned every pair, 100 recorded pairs after one that is not and the bound the 59th
+    of the 100 sorted per-pair changes. Any VM counts if it matches. A difference in any item, such
+    as another CPU model or each build started once, means no recorded floor. Any other negative
+    control, and `plain` on any other setup, gets a floor only from its own A/A layout control in
+    the same run, under the run's protocol and measured on each negative control whose miss it would
+    waive; one without a qualifying A/A in that run is held to +1%. That control is named in the
+    run's plan before the run, is built from the candidate's base commit with the candidate's build
+    inputs, and repeats this calibration on each such workload: main built twice and the receipt's same two pads, 100
+    recorded pairs each, read with the candidate's statistic, the 59th of the 100 sorted changes; a
+    comparison with fewer than 100 valid pairs gives no bound and the control no floor. It gives a
+    workload a floor of its larger pad bound there only if that bound is at or below +2%. A larger
+    bound above +2% gives no floor, and is not read as a floor of +2%: that run holds every workload
+    to +1%. The +2% limit leaves room above the +1.62% measured here for a host whose placement
+    costs a little more, and stops a noisy or unlucky layout control from making the gate whatever
+    it measured.
 
     A layout control, the recorded one or a same-run one, gives a floor only if the run records that
     it passes every check: each comparison's two builds answer the workload's request with
-    byte-identical status, headers but `Date`, and body, compared with only `Date` removed; main built twice is byte-identical and
-    meets +1% on that workload; the pad is in the padded binary and moved code (the count of function
-    symbols in both binaries whose addresses changed is above zero); every counter ran 100% of every
-    turn and the load tool reported no error in any turn; and each pad comparison passes the
-    user-instruction screen above, as a candidate must. If any check fails, the control gives no
-    floor and the run holds every workload to +1%: a pad whose answers or instruction count moved
-    measures more than placement, and a floor from it would waive a cost it cannot attribute. The
-    recorded calibration passes each, with one qualification: its comparison also removed carriage
-    returns and masked `Age` and `ETag` values, so what it proved is equality after that
-    normalization. All three comparisons' answers to `/private` (7,098 bytes as compared: status,
-    headers but `Date`, and body; no `Age` or `ETag` was present) were identical. The two builds of main were
-    byte-identical and met +1% at +0.59%. Each pad build held its one added function, which neither
-    main build has, and all 3,402 function symbols it shares with main moved (none in main built
-    twice). All 1,818 counter readings in pass 1's 606 turns, warm-up pairs included, and all 496 in
-    pass 2's 124 ran 100%, and `wrk` reported no connect, read, write, status or timeout error in any
-    of those 730 turns. The pads' user instructions passed the screen: medians of +0.00082% (40
-    bytes) and +0.00008% (3,100 bytes), bounds of +0.00130% and +0.00061%.
+    byte-identical status, headers but `Date`, and body, compared with only `Date` removed; main
+    built twice is byte-identical and meets +1% on that workload; the pad is in the padded binary
+    and moved code (the count of function symbols in both binaries whose addresses changed is above
+    zero); every counter ran 100% of every turn and the load tool reported no error in any turn; and
+    each pad comparison passes the user-instruction screen above, as a candidate must. If any check
+    fails, the control gives no floor and the run holds every workload to +1%: a pad whose answers
+    or instruction count moved measures more than placement, and a floor from it would waive a cost
+    it cannot attribute. The recorded calibration passes checks 2 to 5 as written. It passes the
+    first only as its kit compared, which removed carriage returns and masked `Age` and `ETag`
+    values as well as `Date`: all three comparisons' answers to `/private` were identical after that
+    (7,098 bytes as compared, no `Age` or `ETag` present), and the bytes before it were not kept. It
+    is accepted with that weaker evidence, and only for this receipt, because the two builds of main
+    are one binary and each pad adds a function nothing calls, so no path that writes the answer
+    changed, and the pads' instruction counts agree with that; a later control, recorded or
+    same-run, is held to the comparison as written. The two builds of main were byte-identical and
+    met +1% at +0.59%. Each pad build held its one added function, which neither main build has, and
+    all 3,402 function symbols it shares with main moved (none in main built twice). All 1,818
+    counter readings in pass 1's 606 turns, warm-up pairs included, and all 496 in pass 2's 124 ran
+    100%, and `wrk` reported no connect, read, write, status or timeout error in any of those 730
+    turns. The pads' user instructions passed the screen: medians of +0.00082% (40 bytes) and
+    +0.00008% (3,100 bytes), bounds of +0.00130% and +0.00061%.
 
     The screen is set by the A/A runs. In all three comparisons the count of user instructions
     retired per request changed by at most 0.0102% in any pair (about four of the `plain` page's
