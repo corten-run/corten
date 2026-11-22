@@ -69,28 +69,48 @@ async function exactSource(repo, run) {
   return head;
 }
 
-const placementFailures = new WeakSet();
+const placementFailures = new WeakMap();
 async function readPlacement(provider, { repo, interrupted, catalogProvider }, reservedRegion, scope) {
-  const run = catalogProvider({ repo, interrupted }); // No create mode.
-  const read = async (args, allowFail = false) => {
-    await controlCheckpoint(interrupted);
-    return run([...args, "--context", provider.context], 60000, allowFail);
-  };
-  const account = async () => {
-    const result = await read(["account", "get", "--output", "json"]);
-    assert.equal(result.status, 0, "fleet catalog account read failed");
-    assert.equal(providerAccount(JSON.parse(result.stdout)), provider.accountId, "fleet catalog account differs");
-  };
+  let stage = "transport-setup", primary, closeFailed = false;
   try {
-    try {
-      await account();
-      const catalog = fleetCatalogResult(await read(fleetCatalogCommand, true));
-      await account();
+    const run = catalogProvider({ repo, interrupted }); // No create mode.
+    const read = async (args, allowFail = false) => {
       await controlCheckpoint(interrupted);
+      return run([...args, "--context", provider.context], 60000, allowFail);
+    };
+    const account = async (position) => {
+      stage = position === "first" ? "first-account-read-or-worker-start" : "second-account-read";
+      const result = await read(["account", "get", "--output", "json"]);
+      assert.equal(result.status, 0, "fleet catalog account read failed");
+      stage = `${position}-account-identity`;
+      assert.equal(providerAccount(JSON.parse(result.stdout)), provider.accountId, "fleet catalog account differs");
+    };
+    try {
+      await account("first");
+      stage = "catalog-read";
+      const result = await read(fleetCatalogCommand, true);
+      if (result.status === 0 && !result.error || result.status === 1 && providerFailure(result)?.code === "catalog-response")
+        stage = "catalog-validation";
+      const catalog = fleetCatalogResult(result);
+      await account("second");
+      stage = "placement-checkpoint";
+      await controlCheckpoint(interrupted);
+      stage = "region-selection";
       return fleetRegion(catalog, reservedRegion, scope);
-    } finally { await run.close(); }
+    } catch (error) {
+      primary = { stage, refusal: providerFailure(error) };
+      throw error;
+    } finally {
+      try { await run.close(); }
+      catch (error) { stage = "transport-close"; closeFailed = true; throw error; }
+    }
   } catch (error) {
-    if (error && typeof error === "object") placementFailures.add(error);
+    // Preserve the exception from the existing try/finally for lock custody, but do not lose the primary stage.
+    if (error && typeof error === "object") placementFailures.set(error, {
+      ...(primary ?? { stage, refusal: providerFailure(error) }),
+      closeFailed: !!primary && closeFailed,
+      uncertain: !!(error.controlUncertain || error.controlTreeUncertain),
+    });
     throw error;
   }
 }
@@ -599,9 +619,12 @@ export async function fleetCli(args, { writeError = console.error, ...deps } = {
   const preIntentFailures = new Map();
   try { return await fleetMain(args, { ...deps, interrupted: signals.interrupted }, preIntentFailures); }
   catch (error) {
-    if (placementFailures.has(error)) {
-      const refusal = providerFailure(error);
-      writeError("fleet-placement-preflight-failed" + (refusal ? `: ${refusal.code}${refusal.httpStatus ? ` (HTTP ${refusal.httpStatus})` : ""}` : ""));
+    const placement = placementFailures.get(error);
+    if (placement) {
+      const { stage, refusal, closeFailed, uncertain } = placement;
+      writeError(`fleet-placement-preflight-failed: ${stage}` +
+        (refusal ? `; ${refusal.code}${refusal.httpStatus ? ` (HTTP ${refusal.httpStatus})` : ""}` : "") +
+        (closeFailed ? "; transport-close-failed" : "") + (uncertain ? "; custody-uncertain" : ""));
     } else {
       const stage = preIntentFailures.get(error);
       writeError(stage ? `fleet-operation-failed: ${stage}` : "fleet-operation-failed");

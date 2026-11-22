@@ -1,6 +1,78 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
-import { join, relative, resolve, sep, isAbsolute, posix, win32 } from "node:path";
+import { execFileSync } from "node:child_process";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, realpathSync, renameSync, rmdirSync } from "node:fs";
+import { readdir, readFile, rm } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve, sep, isAbsolute, posix, win32 } from "node:path";
+
+const compilerTargetId = "CORTEN_ISOLATED_COMPILER_TARGET_ID";
+function directoryId(stat) {
+  assert.ok(stat.isDirectory(), "compiler target is not a physical directory");
+  return `${stat.dev}:${stat.ino}`;
+}
+
+/** Exclusive scratch ownership; a held descriptor prevents inode reuse. */
+export function reserveCompilerTarget(target) {
+  const parent = realpathSync(dirname(target));
+  const staging = mkdtempSync(join(parent, ".compiler-owner-")), staged = join(staging, basename(target));
+  const currentId = (path = target) => directoryId(lstatSync(path, { bigint: true }));
+  const exists = (path) => !!lstatSync(path, { throwIfNoEntry: false });
+  let identity, fd;
+  try {
+    mkdirSync(staged, { mode: 0o700 });
+    fd = openSync(staged, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+    identity = directoryId(fstatSync(fd, { bigint: true }));
+    // Pin before publication. POSIX rename can replace an existing empty
+    // directory; mv -n into its fixed parent leaves that name untouched.
+    if (process.platform === "win32") {
+      assert.ok(!exists(target), "compiler target already exists");
+      renameSync(staged, target); // Windows refuses to replace a directory.
+    } else {
+      try { execFileSync("/bin/mv", ["-n", staged, parent], { stdio: "ignore", timeout: 5000 }); }
+      catch (error) {
+        // Some mv -n versions exit 1 rather than 0 on a skipped destination.
+        if (error.status === 1 && !error.code && !error.signal && exists(staged) && exists(target))
+          throw new Error("compiler target already exists", { cause: error });
+        throw error;
+      }
+      assert.ok(!exists(staged), "compiler target already exists");
+    }
+    assert.equal(currentId(), identity, "compiler target replaced during reservation");
+  } catch (error) {
+    if (fd !== undefined) closeSync(fd);
+    if (exists(staged)) rmdirSync(staged);
+    rmdirSync(staging); throw error;
+  }
+  return {
+    env: { [compilerTargetId]: identity },
+    async close(remove) {
+      try {
+        if (remove) {
+          assert.equal(realpathSync(dirname(target)), parent, "compiler target parent changed");
+          assert.equal(currentId(), identity, "compiler target replaced before cleanup");
+          // Never recursively remove a directory at the public build path. Move
+          // it into a private sibling and recheck the pinned inode there first.
+          renameSync(target, staged);
+          assert.equal(currentId(staged), identity, "compiler target replaced during cleanup");
+          await rm(staged, { recursive: true });
+        }
+      } finally {
+        closeSync(fd);
+        if (!exists(staged)) rmdirSync(staging);
+      }
+    },
+  };
+}
+
+export async function withCompilerTarget(target, build) {
+  const delegated = process.env[compilerTargetId];
+  if (delegated !== undefined) {
+    assert.equal(directoryId(lstatSync(target, { bigint: true })), delegated, "compiler target differs from campaign reservation");
+    assert.equal(readdirSync(target).length, 0, "campaign compiler target is not fresh");
+    return build();
+  }
+  const owned = reserveCompilerTarget(target);
+  try { return await build(); } finally { await owned.close(true); }
+}
 
 export function compilerSourcePath(root, input, workingDirectory = root) {
   const api = /^[A-Za-z]:\//.test(root) ? win32 : posix;

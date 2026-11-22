@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
-import { alternateCampaignPlacements, bindExecution } from "./contract.mjs";
+import { alternateCampaignPlacements, bindExecution, clientComparisonRecipe } from "./contract.mjs";
 import { campaignRounds, groupNames, jsonPreparationInvocation, jsonPreparationRound, nativeArtifactRoot } from "../registry.mjs";
 import { catalogFleetPlacement } from "../cloud-contract.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
@@ -37,15 +37,17 @@ export function bindGroupCampaign(input, mode = "dedicated") {
 }
 function bindNativeCampaign(input, order, schema, mode) {
   const rounds = campaignRounds(input.round);
+  const recipes = schema === groupCampaignSchema && order[0] === "client-heavy" && clientComparisonRecipe
+    ? { ...productionRecipes, "client-heavy": clientComparisonRecipe } : productionRecipes;
   const bindings = order.map((group) => bindExecution({ group, round: rounds[group], commit: input.commit,
-    recipe: productionRecipes[group], review: null }, mode));
+    recipe: recipes[group], review: null }, mode));
   const first = bindings[0];
   assert.ok(bindings.every((b) => b.sources.sha256 === first.sources.sha256), "source changed while binding campaign");
   const procedures = ["bench/catalog/README.md", "bench/json-api/README.md", "bench/marketplace/nightly.md",
     "bench/mixed-production/README.md", "bench/fullstack-browser/README.md", "bench/client-heavy/README.md",
     "bench/live/README.md", "bench/recoverable-live/README.md", "bench/hardening/README.md"]
     .map((path) => { const entry = first.sources.files.find((e) => e.path === path); assert.ok(entry, `missing procedure ${path}`); return entry; });
-  const body = { schema, ...input, bindings, procedures, recipes: productionRecipes,
+  const body = { schema, ...input, bindings, procedures, recipes,
     sourceSha256: first.sources.sha256, order: [...order], ready: false, executionAuthorized: false };
   return freeze({ ...body, campaignSha256: deploymentSha256(body) });
 }
