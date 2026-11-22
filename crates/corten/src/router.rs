@@ -151,8 +151,9 @@ impl Endpoint for Keeping {
                 None => res,
             };
             // An answer with a form's new submit key is this request's alone: marked by the
-            // render that drew it (a page's, the layout's reads') or by the watch every `Public`
-            // route's handler runs under (`answer::Made`), which sees one rendered any other way.
+            // render that drew it (a page's, the layout's reads') or by the watch the handler of
+            // every route whose answer may be `Public` runs under (`answer::Made`), which sees one
+            // rendered any other way.
             if res.extensions().get::<crate::cache::Unrepeatable>().is_some() {
                 return res;
             }

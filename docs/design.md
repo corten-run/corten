@@ -7363,28 +7363,56 @@ rules something out.
     form's new submit key is the request's alone: not kept, and sent `private, no-cache` without
     a CDN's caching header, as a page whose render drew the key is. A page's render marks the key it drew; markup rendered any other way (into JSON
     or text, into a file a page route answers, or to a string a page holds as `raw` markup)
-    carries no mark, so every `Public` route's handler is watched (its own polls) for one being
-    drawn, and the watch marks the answer (`cache::Unrepeatable`) as a page's render does. It
-    cannot tell a key placed in the answer from one drawn and dropped, so either makes the answer
-    private.
-    It wraps a route whose answer type is `Public`, known from the route's types when the crate
-    compiles, in every build and whatever the store does (none kept, `corten dev`, a body
-    route that leaves the store out, a build without `compress`); on any other route it compiles
-    away. Held beside the handler's work in the future the route already makes, it adds a read and
-    a reset of a thread's mark around each poll. Measured on 2026-11-22 with `tests::cache::what_settling_a_page_costs`
-    under callgrind (valgrind 3.24.0, rustc 1.100.0, release, all features), the difference of 1,200
-    and 200 requests, three alternated rounds that each gave the same counts, `ab331d0f5` against
-    this change, instructions a request: a `Public` page given from the store 16,870 and 16,870;
-    one made for each request (`kept_answers(0)`) 19,508 and 19,512 (+0.02%); a `Public` JSON
-    body given 15,939 and 15,939, made for each 54,269 and 54,222; a private page 16,733 and 16,684;
-    a `Public` page with a keyed form 22,115 and 22,170 (+0.25%). A first version, a router
-    endpoint around the handler, cost the page made for each request 149 more and the private page
-    24, from a second copy of the answer and a second form of every route's call. A render that reads
+    carries no mark, so the handler of every route whose answer may be `Public` is watched (its
+    own polls) for one being drawn, and the watch marks the answer (`cache::Unrepeatable`) as a
+    page's render does. It cannot tell a key placed in the answer from one drawn and dropped, so
+    either makes the answer private.
+    Which answers may be `Public` is a constant of the answer's type, `IntoResponse::MAY_SHARE`,
+    known when the crate compiles: `Public` says yes; each of Corten's other answers says no, and
+    one that holds another (`Result`, a status or headers before it, `SwitchOr`) says what that
+    one does; a type of the app's own always says yes, since Corten cannot see what its
+    `into_response` makes (an enum with a `Public` variant beside a private one), and its type
+    for the constant is one an app cannot name, so it cannot say no (a `compile_fail` doctest).
+    A raw `Response`, a `Relay` and headers alone say no: the caching their headers say is the
+    app's or the upstream's, as it was. The watch wraps such a route in every build and whatever
+    the store does (none kept, `corten dev`, a body route that leaves the store out, a build
+    without `compress`), staged or `unstaged`: an unstaged route has no stage to settle its
+    caching, so one whose handler drew a key is made `private, no-cache` there, with no caching
+    header a CDN reads first, as one that sets a cookie is; any other unstaged handler is routed
+    as it was, with nothing around it. Refusing `Public` on an unstaged route was not chosen: the
+    guide names it as how an unstaged answer that changes says so, and covering it costs no other
+    unstaged route anything. On any route whose answer cannot be `Public` the watch compiles away.
+    The watch and every render that draws a key also mark the request's signal (a bit in a byte
+    it already had), which the stages read before they settle the answer, so a middleware of the
+    app's that makes a new response of the one it was given, with its body and headers and none
+    of its extensions, does not take the mark away; a layer around the app (`App::layer`) still
+    runs after the answer is settled. Held beside the handler's work in the future the route
+    already makes, the watch adds a read and a reset of a thread's mark around each poll, and a
+    watched route holds the request's signal. A request answered in process from inside a
+    handler (one that polls another route on its own stack) is polled within the outer watch, so
+    a key the inner answer drew marks the outer one private too, even when the handler drops the
+    inner answer: a private answer that could have been shared, never the other way round; the
+    inner request's own answer is marked through its own signal. Measured on 2026-11-22 with
+    `tests::cache::what_settling_a_page_costs` under callgrind (Last checked), instructions a
+    request before and after: a `Public` page given from the store 16,948 and 16,960 (+0.07%);
+    one made for each request (`kept_answers(0)`) 19,581 and 19,627 (+0.23%), the watch and the
+    signal the route holds; a `Public` JSON body given 16,012 and 16,019, made for each 54,343
+    and 54,320; a private page 16,800 and 16,796; a `Public` text body from an unstaged route
+    7,807 and 7,829 (+0.28%); text from an unstaged route that is not `Public` 6,446 and 6,439;
+    and a `Public` page with a keyed form, the one case that draws a key, 22,182 and 22,359
+    (+0.80%), from marking the request too. These are instruction counts, not cycles. A first
+    version, a router endpoint around the handler, cost the page made for each request 149 more
+    and the private page 24, from a second copy of the answer and a second form of every route's
+    call. A render that reads
     the mark for itself (a page's, a patch's, one made with `req.rendered`) leaves a key drawn
     before it for the watch, also when it fails: a field rendered to a string and placed in a
     page as markup. A key drawn outside the handler's polls, or on another thread during one
     (by a task it spawned, a render it handed to a blocking task, a thread of its own), is not
-    seen, and such an answer is kept with it and sent `public`, as its route wrote. Making the
+    seen, and such an answer is kept with it and sent `public`, as its route wrote. Nor is a key
+    drawn as a body is sent after the handler returned (`Media::stream`, a relay's body whose
+    code renders as it is read, a live stream's fragments), one already in bytes the app relays,
+    or one in a feed's rows, snapshot or replay: the guides say such an answer is not `Public`
+    and a per-visitor key never goes in a feed. Making the
     mistake a compile error instead (a key field that renders only into something that carries
     the mark) was looked at and not done
     ([#1863 A `Public` answer with a submit key its handler rendered to a string is sent to shared caches as one any visitor may be given](https://github.com/corten-run/corten/issues/1863)):
@@ -7698,7 +7726,9 @@ rules something out.
     answer and nothing the handler held, so they treat a kept answer as its own); bet (an app that
     marks a page `Public` means the lifetime it wrote also with no CDN in front, and does in its
     handler nothing that must happen for every request; markup with a form's new submit key is rendered by the handler itself on the thread that
-    runs it, not by a task it spawned, one it handed a render to, or a thread of its own; no app finishes work again and again on the
+    runs it before it returns, not by a task it spawned, one it handed a render to, a thread of
+    its own, a body sent after it returned or a feed's rows; an app's own answer type is rare,
+    so the watch its route always runs costs an app little; no app finishes work again and again on the
     `Signal` of a write from before its first answer that may be kept); value (fast and proven fast; standards
     first, the app being a shared cache as RFC 9111 describes one; mistakes fail at compile time,
     what may be kept being known from the route's types; good defaults, easy overrides, with one
@@ -7723,10 +7753,21 @@ rules something out.
     is found finishing work again and again on the `Signal` of a write from before its first
     answer that may be kept, which empties its store each time, so such a write should keep
     its path to count by; or an app
-    is found rendering a form's submit key in a task its `Public` handler spawned or on a
-    thread of the handler's own, which the watch does not see.
+    is found rendering a form's submit key in a task its `Public` handler spawned, on a
+    thread of the handler's own or in a body it streams, which the watch does not see; or an
+    app's own answer type, which is always watched, is found on a hot path where the watch's
+    cost shows, so such a type should be able to say it is never `Public`.
 
-    Last checked: 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
+    Last checked: 2026-11-22 for the watch for a submit key, `0ced821d8` against its merge base
+    with main, `250e4b81c`, each with the same `tests::cache::what_settling_a_page_costs` (the
+    function, its doc and its two unstaged routes as at `0ced821d8`, 4,172 bytes, SHA-256
+    `a1e48f7272d3a4cce21df616f5733ce0deef6d7f471dd6e3d5e31f60b9d63870`, copied into
+    `250e4b81c` unchanged), built with rustc 1.100.0 in
+    release with all features and counted under callgrind (valgrind 3.24.0, Debian's
+    `libjemalloc2`), each count the difference of a run of 1,200 requests and one of 200, eight
+    cases in three rounds alternating which build ran first, every round within one instruction
+    of the others; the commits after `0ced821d8` change comments and documents only. Cycles under
+    load were not measured for it; 2026-11-21 for when a write is counted by path, `1091ae766` (main's `e7e89add8` with the
     request-cost harness's write cases and two routes in the catalog benchmark) for the counts,
     and for the run under load its parent `3d23cf64f` and `48ef77477` (this change's
     `3f86d3992` with those routes), kept under the tag `evidence/early-writes-1874`; 2026-11-21 for a kept body, `c26cbdb5a` (main's `564034b86` with the catalog
@@ -8249,7 +8290,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     on a cache's copy after a `304`. An app value drawn at random for each render (a token in the
     markup) makes a tag that never matches and still costs its hash; Corten skips the hash for its
     own (the nonce, a submit key), which saves time only, and for a key placed as `raw(..)`
-    markup only in a `Public` answer, whose handler is watched for one.
+    markup only in an answer that may be `Public` (`Public`, or a type of the app's own), whose
+    handler is watched for one.
 22. <a id="limit-multipart-overread"></a>A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
     included, so the browser is answered with the form's message rather than a reset connection.
     Each such request holds its connection and searches what it reads for the next boundary, which

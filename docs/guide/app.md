@@ -1231,7 +1231,9 @@ says so (`NoStore`, `Public`), as the figure above does. One that sets a cookie 
 no-cache` (`no-store` when it says one), whatever caching it says, and loses any
 `*-cache-control` header and the other caching headers a CDN reads first that [Caching](#caching)
 lists (`Surrogate-Control`, `Edge-Control`, ...), so no shared cache hands one visitor's cookie
-to another.
+to another. So is a `Public` answer, or one of an answer type of the app's own, whose handler drew
+a form's new submit key ([Caching](#caching)): its handler is watched for one, as a staged
+route's is, and any other unstaged handler runs with nothing around it.
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
 or a plain 501 with none when no route in the app has a handler for the method ([error
 pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
@@ -1395,7 +1397,7 @@ but an unstaged one):
 | a full document, no `Cookie` or `Authorization`, nothing read a caller | as asked, plus `Vary: cookie` |
 | a request with a `Cookie` or `Authorization`, or one whose handler or middleware read a caller | `private, no-cache` |
 | a client navigation, a form answer or a data client's JSON from a page route | `private`, same lifetime: only the document is shared |
-| a response that sets a cookie, HTML with the request's nonce, a page that draws a form's new submit key (`SubmitKey::field`), or a `Public` answer whose handler drew one, however it rendered it | `private, no-cache`, logged under `corten dev` |
+| a response that sets a cookie, HTML with the request's nonce, a page that draws a form's new submit key (`SubmitKey::field`), or a `Public` answer (or an answer type of the app's own) whose handler drew one, however it rendered it | `private, no-cache`, logged under `corten dev` |
 
 A page that draws a submit key also goes out without the caching headers a CDN or proxy reads
 before `Cache-Control` that a middleware wrote, even when its `Cache-Control` already says
@@ -1408,14 +1410,19 @@ any other means is the deployment's: a name its CDN is configured to read (RFC 9
 a layer around the app (`App::layer`, which runs after Corten settles the answer), and an edge
 rule that caches whatever the origin says. The key's render marks the answer: a page, a patch,
 the layout's reads, and a `Rendered` placed in one. A `Public` route's handler is also watched
-for a key it draws any other way, rendered to a string and put in JSON, in text or in a page as
-`raw` markup, and such an answer goes out as a page that draws one does, in every build and
-with or without the app's kept answers. The watch sees what the handler draws itself: a key
-drawn in a task it spawned, a render it handed to a blocking task or a thread of its own is not
-seen, so a `Public` handler draws its forms itself. A live stream's fragments are text rendered
-after its headers went out and carry no mark, so a stream that may draw a key is not `Public`,
-says `Cache-Control: private` itself and carries none of those headers
-([live data](live-data.md)).
+for a key it draws any other way, rendered to a string and put in JSON, in text, in a file or
+relay it made, or in a page as `raw` markup, and such an answer goes out as a page that draws
+one does, in every build, with or without the app's kept answers, and on a route that says
+`unstaged` too. So is the handler of an answer type of the app's own (one that implements
+`Answer`), since it may hold a `Public` answer on one branch. The request keeps the mark, so a
+middleware that makes a new response of the one it was given does not take it away. The watch
+sees what the handler draws itself, before it returns: a key drawn in a task it spawned, a
+render it handed to a blocking task or a thread of its own is not seen, nor is one drawn as a
+body is sent after the handler returned (`Media::stream`, a relay's body, a live stream's
+fragments), nor one already in bytes the app relays or in a feed's rows. So a `Public` handler
+draws its forms itself, an answer whose body may draw a key later is not `Public`, says
+`Cache-Control: private` itself and carries none of those headers ([live data](live-data.md)),
+and a per-visitor key never goes in a feed's rows, snapshot or replay.
 
 A `Public` answer cannot set a cookie the way a private one does: the page inside
 `Public<HtmlResult>` is made for everyone (`HtmlResponse<ForAll>`), and `with_cookie` on it does

@@ -1132,9 +1132,12 @@ no-store`, since some CDNs ignore a bare `no-store`. The render marks the answer
 for: a page, a patch, the layout's reads, and a `Rendered` placed in one. Text carries no mark: a
 live stream's fragment
 (rendered after the stream's headers went out), `Rendered::into_string` and `raw`. A `Public`
-route's handler is watched for a key it draws as text too (in JSON, in text, or placed in a page
-with `raw`), and that answer is sent as a keyed page is; a key drawn by a task the handler
-spawned or on another thread is not seen ([caching](app.md#caching)). A live
+route's handler (and an answer type of the app's own, staged or `unstaged`) is watched for a key
+it draws as text too (in JSON, in text, in a file, or placed in a page with `raw`), and that
+answer is sent as a keyed page is. Only what the handler draws on its own thread before it
+returns is seen: not a key drawn by a task it spawned or on another thread, nor one drawn as a
+body is sent (`Media::stream`, a relay's body, a live stream's fragments), nor one in a feed's
+rows or snapshot, where a per-visitor key never goes ([caching](app.md#caching)). A live
 stream whose fragments may draw a key is never `Public`, says `Cache-Control: private` itself and
 carries no CDN caching header ([live data](live-data.md)). Under `corten dev`, a stream is logged
 when a fragment it gives draws a key and its settled answer has no bare `private` in
