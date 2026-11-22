@@ -199,6 +199,8 @@ Browser process costs are separately retained, outside the server's one-CPU/1-Gi
 Per-level `native-live-fanout/v1` gzip artifacts reference the hashed successful native
 qualification artifacts and retain all browser/application/raw-wire traces, frame samples,
 publication schedule, native resource counts, kernel counters and source/image identity.
+`fanoutJourney` uses the selected adapter's wire binding to capture HTTP and HTML, including
+the same Livewire redaction as correctness journeys. Capture failures remain failed levels.
 `verify.mjs` reopens both qualification and measurements and reconstructs every aggregate.
 Failed or missing qualification never starts measurement. Completed bounded measurement is
 recorded as such, not permanently `not-run`; it does not by itself qualify missing candidates
