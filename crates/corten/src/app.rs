@@ -2670,6 +2670,7 @@ impl<S: Steps> Layer<S> {
         // The signal ends when this future is dropped, then when the response is dropped.
         let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, mount, &mut page).await;
         let caller = watch.0.is_personal();
+        let unrouted = watch.0.is_unrouted();
         let asked = watch.0.asked_language();
         let mut res = signal::follow(res, watch, self.zoned());
         // Whatever answered (a page, JSON, a redirect, the error page, a middleware after
@@ -2700,6 +2701,7 @@ impl<S: Steps> Layer<S> {
             // and not as the runtime fetched it (`corten: page`), whose redirect differs (#1034).
             partial: mount.is_none() && (mode != Mode::Document || fetched),
             nonce: nonced,
+            unrouted,
             dev: self.shared.dev,
         };
         // Corten's own routes (assets, the runtime) are settled the same way: they say what they

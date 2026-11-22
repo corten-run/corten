@@ -596,9 +596,8 @@ impl<S: Send + Sync, T: Identify<S>> FromRequestParts<S> for Caller<T> {
 /// API or a data client, with `WWW-Authenticate` on a 401 and `Retry-After` on a 429.
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
-        // Its mark is on the answer, whatever status a middleware gives it later; the thread's mark
-        // says one was made, so a refusal turned into a `200` is looked at too (`crate::page`).
-        crate::page::refusing();
+        // Never shared in any form, whoever returned it and whatever status a middleware gives it
+        // later: the mark is on the answer ([`crate::cache::Unshared`]).
         match self.0 {
             Why::SignIn(to, message) => {
                 let mut res = StatusCode::UNAUTHORIZED.into_response();
@@ -606,7 +605,7 @@ impl IntoResponse for Refused {
                 if let Some(message) = message {
                     res.extensions_mut().insert(crate::Failed(message));
                 }
-                res
+                crate::cache::unshared(res)
             }
             Why::Refusal { status, message, header } => refused(status, message, header),
             Why::Unavailable(message) => unidentified(&message),
@@ -622,13 +621,13 @@ fn unidentified(message: &str) -> Response {
         .with_status(StatusCode::SERVICE_UNAVAILABLE)
         .into_response();
     res.extensions_mut().insert(crate::page::Cause::Unidentified);
-    res
+    crate::cache::unshared(res)
 }
 
 /// A 401, 403 or 429 for a request without the caller its handler reads, with what the client is
 /// told and the header its status needs (`WWW-Authenticate`, `Retry-After`).
 fn refused(status: StatusCode, message: Option<std::sync::Arc<str>>, header: Option<RefusalHeader>) -> Response {
-    let mut res = status.into_response();
+    let mut res = crate::cache::unshared(status.into_response());
     res.extensions_mut().insert(crate::page::Cause::Refused);
     if let Some(message) = message {
         res.extensions_mut().insert(crate::Failed(message));

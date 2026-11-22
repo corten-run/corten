@@ -112,9 +112,8 @@ struct Inner {
     /// The hashes of the callers it read, mixed: part of the page's key, so a page for someone
     /// else (after signing in or out) is loaded in full.
     callers: AtomicU64,
-    /// The app's error page is answering it ([`ERROR_PAGE`]), the router answered it itself
-    /// ([`UNROUTED`]), and a refusal was made while its stages ran ([`REFUSAL`]): a byte for all
-    /// three, so the allocation stays the size it was.
+    /// The app's error page is answering it ([`ERROR_PAGE`]), and the router answered it itself
+    /// ([`UNROUTED`]): a byte for both, so the allocation stays the size it was.
     failure: AtomicU8,
     /// Something negotiated the request's locale from its `Accept-Language` (`req.t()`,
     /// `req.lang()`), so the answer's `Vary` names the header (`crate::page::vary_on_language`).
@@ -185,9 +184,6 @@ const ERROR_PAGE: u8 = 1;
 /// [`Inner::failure`]: the router's own answer, not a handler's: the `404` of an unknown URL, the
 /// `405` of a method the route lacks, the `501` of one no route has.
 const UNROUTED: u8 = 2;
-/// [`Inner::failure`]: a refusal's mark was made while the request's stages ran (an extractor's
-/// refusal, a typed [`crate::Refused`]), so the answer that goes out is looked at for it.
-const REFUSAL: u8 = 4;
 
 type EarlyHeads = Vec<Arc<http::request::Parts>>;
 
@@ -599,29 +595,17 @@ impl Signal {
         self.0.failure.load(Ordering::Relaxed) & ERROR_PAGE != 0
     }
 
-    /// The router answered the request itself, as no route's handler takes it: kept on the
-    /// request's signal rather than the response, whose extensions the bare `404` would otherwise
-    /// allocate for the mark.
+    /// The router answered the request itself, as no route's handler takes it (`crate::router::Unrouted`,
+    /// as its answer is polled): kept on the request's signal rather than the response, whose
+    /// extensions the bare `404` would otherwise allocate for the mark.
     pub(crate) fn mark_unrouted(&self) {
         self.0.failure.fetch_or(UNROUTED, Ordering::Relaxed);
     }
 
     /// True when the router answered the request itself ([`Signal::mark_unrouted`]): the error
-    /// page in its place is never shared.
+    /// page in its place, and a failure that goes out, are never shared.
     pub(crate) fn is_unrouted(&self) -> bool {
         self.0.failure.load(Ordering::Relaxed) & UNROUTED != 0
-    }
-
-    /// A refusal's mark was made while the request's stages ran (`crate::page::refusing`).
-    pub(crate) fn mark_refusal(&self) {
-        self.0.failure.fetch_or(REFUSAL, Ordering::Relaxed);
-    }
-
-    /// True when a refusal's mark was made while the request's stages ran
-    /// ([`Signal::mark_refusal`]): only then is an answer that is not a failure looked at for one,
-    /// so the page every request gets reads this byte and nothing else.
-    pub(crate) fn made_refusal(&self) -> bool {
-        self.0.failure.load(Ordering::Relaxed) & REFUSAL != 0
     }
 
     /// The request's locale was negotiated from its `Accept-Language`: the answer's `Vary` names

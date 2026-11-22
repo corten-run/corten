@@ -1470,18 +1470,24 @@ the 501 of one no route has, the 400 of a post whose `do` names none of the page
 names two), the PWA's offline page included, which its service worker keeps
 whatever its `Cache-Control` says; a handler's own 404 is its answer, under the rules above. Nor
 is the router's own failure shared as it is or as JSON (an API's 404 for a path under its prefix
-that a route outside it matched included), whatever a middleware wrote into it; an answer that is
-not a failure, which a middleware makes in its place (a redirect, a page), is the middleware's. A
-middleware that passes on a request rebuilt without its extensions changes none of this. A
+that a route outside it matched included), whatever a middleware wrote into it, nor a failure a
+middleware sends in its place once the router has answered; an answer that is not a failure,
+which a middleware makes in its place (a redirect, a page), is the middleware's. A
+middleware that passes on a request rebuilt without its extensions changes none of this; one that
+makes the route's future (`next.run(req)`) and drops it before it answers has answered the
+request itself, so its own failure keeps what it says. A
 request refused before the handler runs is not shared in the other forms it goes out in either,
 whatever the refusal is: a `200` its extractor's rejection chose, a redirect, a relayed failure
 or a sign-in goes out as it was made, a failure as it is to a client that does not ask for HTML,
 or as JSON. Nor is a `Refused` in any form, whoever returns it (an extractor, a handler, a
 middleware turning a request away), whatever status a middleware gives it after (a redirect, a
 `200`), nor a panic's or the deadline's failure as JSON; a response a middleware makes in a
-refusal's place is its own. A refusal made in a task the handler spawned is seen this way only
-while it is still a failure; one made by a middleware that asks another app of Corten's for an
-answer inline, or by that app, is seen whatever the middleware then sends. An unstaged route's `NoStore`
+refusal's place is its own. Corten marks each of these answers where it makes it, and the mark goes
+out with the answer: a refusal made in a task the handler spawned, before the request came in, or
+by another app of Corten's that a middleware asks for an answer inline (the error page or sign-in
+redirect that app drew in a refusal's place included) is never shared, whatever status the
+middleware sends it with. A handler's own failure is its answer, a plain-text one too: the error
+page a browser gets in its place keeps what a middleware wrote, as for its own 404. An unstaged route's `NoStore`
 answer goes out `private, no-store` with none of them either
 ([a route outside the stages](#a-route-outside-the-stages)). A handler
 cannot mark an answer public any other way: a response it builds by hand is not an answer a route

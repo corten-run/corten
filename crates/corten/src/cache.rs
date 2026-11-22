@@ -285,6 +285,9 @@ pub(crate) struct Seen {
     pub partial: bool,
     /// The response's HTML has this request's nonce.
     pub nonce: bool,
+    /// The router answered the request itself ([`crate::Signal::is_unrouted`]): a failure that
+    /// goes out is never shared ([`settle`]).
+    pub unrouted: bool,
     pub dev: bool,
 }
 
@@ -361,6 +364,17 @@ fn sets_cookie(headers: &HeaderMap) -> bool {
 /// CDN reads first ([`CDN_CACHING`]), whatever its `Cache-Control` says, and a `NoStore` one goes
 /// out `private, no-store` whatever a middleware made of its header.
 pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
+    // An answer marked as no handler's own ([`Unshared`]), or a failure after the router answered
+    // the request itself: never shared, whatever it says and whatever status it goes out with. The
+    // usual answer has no extensions, so this is a null check and a flag.
+    let marked = res.extensions().get::<Unshared>().is_some();
+    if marked || (seen.unrouted && (res.status().is_client_error() || res.status().is_server_error())) {
+        if !marked {
+            res.extensions_mut().insert(Unshared);
+        }
+        settle_unshared(res);
+        return;
+    }
     // A page that drew a submit key ([`Unrepeatable`]) is the browser's alone, whatever its
     // `Cache-Control` says: a CDN reads its own header first, so none of those Corten names stays.
     let drew_key = res.extensions().get::<Unrepeatable>().is_some();
@@ -525,43 +539,43 @@ pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
     }
 }
 
-/// Settles a refused write's answer, which goes out without [`settle`], and a refusal or failure no
-/// handler answered that goes out without the error page (as it was made, or as JSON): the default,
-/// whatever it said, and none of the CDN caching headers written on it (it may be about who is
-/// asking). One that names `no-store` goes out `private, no-store`, as [`settle`] gives a personal
-/// one.
-pub(crate) fn settle_refused(res: &mut Response) {
+/// The mark of an answer that is no handler's own, put on it by the code that made it: an
+/// extractor's rejection (`crate::handler`), a typed [`crate::Refused`] whoever returned it, a
+/// handler that panicked or passed its deadline (`crate::page`), the router's own failure as it
+/// goes out ([`settle`]), and the page or redirect Corten draws in the place of any of those. Such
+/// an answer may be about who is asking (the error page can read the request's `Cookie` and
+/// `Authorization` without reading a caller), so it is never shared, in whatever form and with
+/// whatever status it goes out ([`settle`]). The mark stays on the answer: a middleware that
+/// changes the answer (its status, headers or body) keeps it, another Corten app that relays the
+/// answer inline settles it the same way, and an answer a middleware builds in its place is its
+/// own.
+#[derive(Clone, Copy)]
+pub(crate) struct Unshared;
+
+/// `res`, marked [`Unshared`].
+#[cold]
+pub(crate) fn unshared(mut res: Response) -> Response {
+    res.extensions_mut().insert(Unshared);
+    res
+}
+
+/// Settles an [`Unshared`] answer: the default, whatever it said, and none of the CDN caching
+/// headers written on it. One that names `no-store`, or is a `NoStore` answer whatever a
+/// middleware made of its header, goes out `private, no-store`, as [`settle`] gives a personal one.
+#[cold]
+fn settle_unshared(res: &mut Response) {
+    let kept_out = Typed::is_no_store(res);
     let headers = res.headers_mut();
     drop_cdn_caching(headers);
-    let no_store = headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes()));
+    let no_store = kept_out || headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes()));
     headers.insert(header::CACHE_CONTROL, if no_store { PRIVATE_NO_STORE } else { PRIVATE });
 }
 
-/// Settles the error page for a failure no handler answered as [`settle_refused`] does, before the
-/// failure's headers are carried onto it (`crate::page`'s `carried`, which leaves out the CDN
-/// caching headers among them and makes a `no-store` there `private, no-store`): only what the
-/// page set itself. A `Cache-Control` it set is the default (`private, no-store` where it names
-/// `no-store`); without one, [`settle`] gives it the default.
-pub(crate) fn settle_unshared_page(headers: &mut HeaderMap) {
-    // One pass over the page's names, a few: the usual page set neither, and a lookup by name
-    // costs more than the pass.
-    let (mut cdn, mut cache) = (false, false);
-    for name in headers.keys() {
-        cdn |= CDN_CACHING.contains(&name.as_str());
-        cache |= *name == header::CACHE_CONTROL;
-    }
-    if cdn {
-        for name in &CDN_HEADERS {
-            headers.remove(name);
-        }
-    }
-    if !cache {
-        return;
-    }
-    if let header::Entry::Occupied(mut entry) = headers.entry(header::CACHE_CONTROL) {
-        let no_store = entry.iter().any(|line| mentions_no_store(line.as_bytes()));
-        entry.insert(if no_store { PRIVATE_NO_STORE } else { PRIVATE });
-    }
+/// Marks and settles a refused write's answer, which goes out without [`settle`], as `settle` does
+/// an [`Unshared`] one: an app that relays it inline settles it the same way.
+pub(crate) fn settle_refused(res: &mut Response) {
+    res.extensions_mut().insert(Unshared);
+    settle_unshared(res);
 }
 
 /// In a debug build: whether an answer's headers, as sent, let a shared cache keep it: one of
@@ -833,7 +847,7 @@ mod tests {
     }
 
     fn seen() -> Seen {
-        Seen { credentials: false, caller: false, partial: false, nonce: false, dev: false }
+        Seen { credentials: false, caller: false, partial: false, nonce: false, unrouted: false, dev: false }
     }
 
     #[test]

@@ -287,13 +287,13 @@ macro_rules! handlers {
                     $(
                         let $ty = match $ty::from_request_parts(&mut parts, &state).await {
                             Ok(value) => value,
-                            Err(rejection) => return crate::page::unanswered(rejection.into_response()),
+                            Err(rejection) => return crate::cache::unshared(rejection.into_response()),
                         };
                     )*
                     let req = Request::from_parts(parts, body);
                     let $last = match $last::from_request(req, &state).await {
                         Ok(value) => value,
-                        Err(rejection) => return crate::page::unanswered(rejection.into_response()),
+                        Err(rejection) => return crate::cache::unshared(rejection.into_response()),
                     };
                     self($($ty,)* $last,).await.into_response()
                 }

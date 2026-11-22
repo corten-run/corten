@@ -82,10 +82,35 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
     }
 }
 
-/// An answer that is a status alone: the router's `404` and `405`. In an app's stages the request
-/// is marked as the router's own on the signal they hold ([`crate::Signal::mark_unrouted`]), so
-/// the error page in its place is never shared; a mark in the answer's extensions would allocate
-/// the bare `404` a map. A router outside an app has no error page to mark it for.
+/// The router's own answer in an app's stages (`res`), which marks the request as the router's on
+/// the signal the stages hold ([`crate::Signal::mark_unrouted`]) once it is polled to that answer,
+/// not when it is made: a middleware that makes the route's future and drops it unpolled has
+/// answered the request itself. The mark is on the signal, not the answer, whose extensions the
+/// bare `404` would otherwise allocate; the cache rule puts it on a failure as it goes out
+/// ([`crate::cache::settle`]).
+pub(crate) struct Unrouted {
+    res: Option<Response>,
+    signal: crate::Signal,
+}
+
+impl Unrouted {
+    pub(crate) fn new(res: Response, signal: &crate::Signal) -> Self {
+        Unrouted { res: Some(res), signal: signal.clone() }
+    }
+}
+
+impl Future for Unrouted {
+    type Output = Response;
+
+    fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Response> {
+        self.signal.mark_unrouted();
+        Poll::Ready(self.res.take().expect("the router's answer is polled once"))
+    }
+}
+
+/// An answer that is a status alone: the router's `404` and `405`. In an app's stages it marks the
+/// request as the router's own as it answers ([`Unrouted`]), so the error page in its place is
+/// never shared. A router outside an app has no error page to mark it for.
 struct Status(StatusCode);
 
 impl Endpoint for Status {
@@ -93,9 +118,8 @@ impl Endpoint for Status {
         Box::pin(std::future::ready(self.0.into_response()))
     }
 
-    fn answer(&self, req: Request, signal: &crate::Signal) -> Answering {
-        signal.mark_unrouted();
-        self.call(req)
+    fn answer(&self, _: Request, signal: &crate::Signal) -> Answering {
+        Box::pin(Unrouted::new(self.0.into_response(), signal))
     }
 }
 
@@ -104,18 +128,23 @@ impl Endpoint for Status {
 /// the request as the router's own, as [`Status`] marks it.
 struct Unimplemented;
 
+impl Unimplemented {
+    fn response() -> Response {
+        let mut res = StatusCode::NOT_IMPLEMENTED.into_response();
+        res.extensions_mut().insert(crate::page::Cause::UnknownMethod);
+        res
+    }
+}
+
 impl Endpoint for Unimplemented {
     #[cold]
     fn call(&self, _: Request) -> Answering {
-        let mut res = StatusCode::NOT_IMPLEMENTED.into_response();
-        res.extensions_mut().insert(crate::page::Cause::UnknownMethod);
-        Box::pin(std::future::ready(res))
+        Box::pin(std::future::ready(Self::response()))
     }
 
     #[cold]
-    fn answer(&self, req: Request, signal: &crate::Signal) -> Answering {
-        signal.mark_unrouted();
-        self.call(req)
+    fn answer(&self, _: Request, signal: &crate::Signal) -> Answering {
+        Box::pin(Unrouted::new(Self::response(), signal))
     }
 }
 
@@ -210,7 +239,7 @@ impl Endpoint for Chooser {
     fn call(&self, req: Request) -> Answering {
         match self.choose(&req) {
             Some(route) => route.call(req),
-            None => self.refuse(req.uri().query()),
+            None => Box::pin(std::future::ready(self.refuse(req.uri().query()))),
         }
     }
 
@@ -218,10 +247,7 @@ impl Endpoint for Chooser {
     fn answer(&self, req: Request, signal: &crate::Signal) -> Answering {
         match self.choose(&req) {
             Some(route) => route.answer(req, signal),
-            None => {
-                signal.mark_unrouted();
-                self.refuse(req.uri().query())
-            }
+            None => Box::pin(Unrouted::new(self.refuse(req.uri().query()), signal)),
         }
     }
 
@@ -252,14 +278,14 @@ impl Chooser {
     /// The `400` for a post no handler of the page's is for, its text written for a developer
     /// (the error page shows it under `corten dev`).
     #[cold]
-    fn refuse(&self, query: Option<&str>) -> Answering {
+    fn refuse(&self, query: Option<&str>) -> Response {
         let names = self.actions.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ");
         let message = match named(query) {
             Named::None => format!("this post names none of the page's posts ({names}) in its address's do, and the page has no post = .. for one that names none"),
             Named::One(name) => format!("the page has no post named {name:?} (do={name}); its posts are {names}"),
             Named::Twice => format!("this post's address names do twice; it names one of the page's posts ({names})"),
         };
-        Box::pin(std::future::ready((StatusCode::BAD_REQUEST, message).into_response()))
+        (StatusCode::BAD_REQUEST, message).into_response()
     }
 }
 

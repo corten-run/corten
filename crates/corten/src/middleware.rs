@@ -256,8 +256,8 @@ impl Next for Handle<'_> {
 
 /// The route's own future, not an async block around it, which would move the request once more.
 /// No route: a path under a nested API that a route outside it matched, answered with a 404 that
-/// the API writes as its own, which no route's handler answered either, so the request is marked
-/// as the router's own ([`crate::Signal::mark_unrouted`]).
+/// the API writes as its own, which no route's handler answered either, so it marks the request as
+/// the router's own as it answers ([`crate::router::Unrouted`]).
 #[inline]
 fn handle(route: Option<crate::router::Route>, signal: &crate::Signal, req: Request) -> impl Future<Output = Response> + Send {
     // A whole document in an app with layout reads: the route's page is filled before the app's
@@ -265,10 +265,7 @@ fn handle(route: Option<crate::router::Route>, signal: &crate::Signal, req: Requ
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
     let answer = match route {
         Some(route) => Either::Left(route.answer(req, signal)),
-        None => {
-            signal.mark_unrouted();
-            Either::Right(std::future::ready(IntoResponse::into_response(http::StatusCode::NOT_FOUND)))
-        }
+        None => Either::Right(crate::router::Unrouted::new(IntoResponse::into_response(http::StatusCode::NOT_FOUND), signal)),
     };
     match here {
         None => Either::Left(answer),
