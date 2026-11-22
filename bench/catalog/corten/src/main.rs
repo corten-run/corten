@@ -10,11 +10,14 @@ mod routes {
     #[route("/", get = home)]
     pub struct Home;
 
-    #[route("/save", post = save)]
-    pub struct Save;
+    #[route("/files/sitemap.xml", get = sitemap)]
+    pub struct Sitemap;
 
-    #[route("/words", get = words)]
-    pub struct Words;
+    #[route("/files/export.csv", get = export)]
+    pub struct Export;
+
+    #[route("/files/picture.png", get = picture)]
+    pub struct Picture;
 
     #[route("/catalog/{id}", get = show)]
     pub struct Catalog<'a> {
@@ -41,16 +44,6 @@ pub struct CatalogQuery {
     pub field: Option<String>,
 }
 
-/// A write that saves nothing.
-async fn save() -> &'static str {
-    "saved"
-}
-
-/// A `Public` text too small for the app to keep.
-async fn words() -> corten::Public<&'static str> {
-    corten::Public::new(std::time::Duration::from_secs(60), "words")
-}
-
 async fn home(req: Req) -> HtmlResult {
     req.page(views::document(
         &req,
@@ -65,6 +58,39 @@ async fn home(req: Req) -> HtmlResult {
 async fn show(req: Req, State(source): State<Source>, Params(at): Params<routes::Catalog<'_>>) -> HtmlResult {
     let record = source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?;
     req.page(views::document(&req, &record.title, views::record(&record, at.query.field.as_deref().unwrap_or(""))))
+}
+
+/// A sitemap of 500 URLs, written for each request.
+async fn sitemap() -> corten::Public<corten::seo::File> {
+    let urls: Vec<String> = (0..500).map(|i| format!("https://example.com/catalog/record_{i}")).collect();
+    corten::seo::sitemap(urls.iter().map(|loc| corten::seo::SitemapUrl { loc, lastmod: Some("2026-11-01") }))
+}
+
+static CSV: std::sync::LazyLock<corten::http::Bytes> = std::sync::LazyLock::new(|| {
+    corten::http::Bytes::from((0..400).map(|i| format!("{i},card {i},{}\n", i * 7)).collect::<String>())
+});
+
+/// A CSV the app holds: its handler makes nothing.
+async fn export() -> corten::Public<corten::Media> {
+    corten::Public::new(std::time::Duration::from_secs(60), corten::Media::new("text/csv", CSV.clone()))
+}
+
+static PNG: std::sync::LazyLock<corten::http::Bytes> = std::sync::LazyLock::new(|| {
+    let mut state = 0x9E37_79B9u32;
+    let bytes: Vec<u8> = (0..8000)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            (state >> 24) as u8
+        })
+        .collect();
+    corten::http::Bytes::from(bytes)
+});
+
+/// A picture the app holds, of a type no build compresses.
+async fn picture() -> corten::Public<corten::Media> {
+    corten::Public::new(std::time::Duration::from_secs(60), corten::Media::new("image/png", PNG.clone()))
 }
 
 async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>) -> JsonResult<Arc<Record>> {

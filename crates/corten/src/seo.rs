@@ -1,6 +1,8 @@
 //! `robots.txt` and XML sitemaps, written as the search engine protocols define them. Each is the
 //! same for every crawler, so a handler returns it as it comes, `Public<seo::File>`, which shared
-//! caches keep for an hour:
+//! caches keep for an hour, and so does the app, for one of a size it compresses
+//! ([`App::kept_answers`](crate::App::kept_answers)): a sitemap's handler runs once an hour, not
+//! for every crawler, and a URL added since shows when that hour ends.
 //!
 //! ```
 //! use corten::{prelude::*, seo};
@@ -52,6 +54,7 @@ impl IntoResponse for File {
 
 impl Answer for File {
     const FORMAT: Format = Format::Html;
+    const WHOLE: crate::answer::sealed::Whole = crate::answer::sealed::Whole(true);
     type Inputs = AnyInputs;
     type Rows = crate::answer::NotAFeed;
     type Kind = crate::AnyAnswer;
