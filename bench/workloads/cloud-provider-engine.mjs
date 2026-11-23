@@ -9,7 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { debuglog } from "node:util";
 import { url as inspectorUrl } from "node:inspector";
 import { controlCheckpoint, controlEnvironment } from "./cloud-transport.mjs";
-import { fleetCatalogCommand, fleetCatalogSlugs, providerCreateHost } from "./cloud-contract.mjs";
+import { fleetCatalogCommand, fleetCatalogSlugs, preloginUserData, providerCreateHost } from "./cloud-contract.mjs";
 import { providerDiagnostic, providerFailure, unsentDelete } from "./cloud-options.mjs";
 
 const origin = "https://api.digitalocean.com";
@@ -452,7 +452,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         const sshKey = Number(command[11]); assert.ok(positive(sshKey), "bounded numeric SSH key ID required");
         mutationPending = true;
         const result = await call("create", "POST", "/v2/droplets", { name: command[3], size: host.size, region: host.region, image: host.image,
-          ssh_keys: [sshKey], tags: command[13].split(",") }, 202);
+          ssh_keys: [sshKey], tags: command[13].split(","), ...(createMode === "legacy" ? {} : { user_data: preloginUserData }) }, 202);
         code = "create-response";
         if (!positive(result?.droplet?.id)) refuseCreate({ code });
         code = "create-link";
