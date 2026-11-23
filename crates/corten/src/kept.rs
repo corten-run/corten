@@ -125,7 +125,7 @@ use http::{header, HeaderMap, HeaderValue, StatusCode};
 
 use crate::body::Body;
 #[cfg(feature = "compress")]
-use crate::compress::{Accepts, Coding, Level, Turn};
+use crate::compress::{Accepts, Coding, Level, Refused, Turn};
 use crate::handler::Request;
 use crate::page::Mode;
 use crate::response::Response;
@@ -173,9 +173,10 @@ pub(crate) const BROTLI_MAX: usize = 32 << 10;
 /// queued by a page's second answer, it cost a workload whose every URL was asked for twice 110%
 /// more cycles a request. Part of it does not grow with the body (brotli's tables, and about 250
 /// page faults a job under jemalloc), the rest grows with it, and an answer given again costs about
-/// 25,000 instructions whatever its size: for bodies of 1 to 32 KiB, one asked for exactly this
-/// often spends at most about 116 instructions an answer on its brotli (under 0.5%), and one asked
-/// for more spends less (`docs/design.md#choice-kept-pages`).
+/// 25,000 instructions whatever its size: of the 36 bodies of 1 to 32 KiB a probe counted under
+/// callgrind, one asked for exactly this often spent at most about 116 instructions on its brotli
+/// for each of its answers, averaged over all of them (under 0.5%), and one asked for more spends
+/// less (`docs/design.md#choice-kept-pages`). A body or a spread of answers not measured may differ.
 #[cfg(feature = "compress")]
 pub(crate) const fn due(length: usize) -> u32 {
     if length > BROTLI_MAX {
@@ -719,7 +720,8 @@ struct Coded {
     brotli: OnceLock<Bytes>,
     /// The answers to a client that ranks brotli as high as any coding before `brotli` was made,
     /// up to the body's [`due`]: the answer that makes them that many queues it, and the next one
-    /// again when the queue was full. Once queued it is not written again, while the job waits,
+    /// again when the queue was full, but not when the thread could not be started, which is not
+    /// tried again. Once queued, or so refused, it is not written again, while the job waits,
     /// once it made the bytes and once it found no room for them, so an answer to a page that does
     /// without them only reads it. A body past [`BROTLI_MAX`] is due none, so no answer writes it.
     promotion: AtomicU32,
@@ -800,7 +802,7 @@ impl Kept {
                 match coded.promotion.compare_exchange_weak(now, now + 1, Ordering::AcqRel, Ordering::Acquire) {
                     Ok(_) if now + 1 == due => {
                         let page = Arc::downgrade(entry);
-                        let made = crate::compress::later(
+                        let queued = crate::compress::later(
                             Turn::Kept,
                             Box::new(move || {
                                 if let Some(entry) = page.upgrade() {
@@ -808,8 +810,9 @@ impl Kept {
                                 }
                             }),
                         );
-                        if !made {
-                            // Full, or no thread to be had: the next such answer asks again.
+                        if queued == Err(Refused::Full) {
+                            // The next such answer asks again. With no thread to be had none
+                            // would be taken, so the count stays at the due and no answer asks.
                             coded.promotion.store(due - 1, Ordering::Release);
                         }
                         break;
@@ -2374,7 +2377,7 @@ mod tests {
             running.send(()).ok();
             held.recv().ok();
         });
-        assert!(crate::compress::later(Turn::Kept, job), "the thread took the job");
+        assert!(crate::compress::later(Turn::Kept, job).is_ok(), "the thread took the job");
         started.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread reached the job");
         release
     }
@@ -2387,7 +2390,7 @@ mod tests {
         let job = Box::new(move || {
             done.send(()).ok();
         });
-        assert!(crate::compress::later(Turn::Kept, job), "the thread took the job");
+        assert!(crate::compress::later(Turn::Kept, job).is_ok(), "the thread took the job");
         heard
     }
 
@@ -2403,7 +2406,14 @@ mod tests {
             assert_eq!(turn, Turn::Kept);
             let n = count.get();
             count.set(n + 1);
-            *answers.get(n).unwrap_or_else(|| panic!("job {} asked of the queue, where {} were expected", n + 1, answers.len()))
+            let give = *answers
+                .get(n)
+                .unwrap_or_else(|| panic!("job {} asked of the queue, where {} were expected", n + 1, answers.len()));
+            if give {
+                Ok(())
+            } else {
+                Err(Refused::Full)
+            }
         })));
         asked
     }
@@ -2688,6 +2698,164 @@ mod tests {
         assert_eq!(hit(), (brotli, Coding::Brotli));
         crate::compress::QUEUEING.take();
         assert_eq!((asked.get(), promotion()), (0, due), "nor once it is made");
+    }
+
+    /// A page's brotli refused because the compression thread could not be started is not asked
+    /// for again: no thread will be had in this process, so the due answer leaves the count at the
+    /// due, and no later answer asks the queue, makes a job or writes the count.
+    #[cfg(feature = "compress")]
+    #[test]
+    fn a_kept_answer_s_brotli_with_no_thread_to_be_had_is_not_asked_for_again() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let body = a_page(0);
+        let page = answers.keep(|place| Entry { body: body.clone(), ..entry(&answers, "/a", None, 60, body.len())(place) });
+        let mut extensions = http::Extensions::new();
+        extensions.insert(Kept(page.clone()));
+        let hit = || Kept::coded(&extensions, &page.body, accepts("br"), Coding::Brotli, || body.clone());
+        let promotion = || page.coded.promotion.load(Ordering::Acquire);
+        let due = due(body.len());
+        let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+        let count = asked.clone();
+        crate::compress::QUEUEING.set(Some(Box::new(move |turn| {
+            assert_eq!(turn, Turn::Kept);
+            count.set(count.get() + 1);
+            Err(Refused::NoThread)
+        })));
+        for _ in 1..due {
+            hit();
+        }
+        assert_eq!((asked.get(), promotion()), (0, due - 1), "the answers before the due one ask nothing of the queue");
+        hit();
+        assert_eq!((asked.get(), promotion()), (1, due), "the due one asks, and leaves the count at the due");
+        for _ in 0..1000 {
+            assert_eq!(hit(), (body.clone(), Coding::Brotli), "the fast form");
+        }
+        crate::compress::QUEUEING.take();
+        assert_eq!((asked.get(), promotion()), (1, due), "no later answer asks again or writes the count");
+        assert!(page.coded.brotli.get().is_none());
+    }
+
+    /// Answers given at once on several threads that together make a page's due queue its brotli
+    /// once, also with more of them than the due needs: the one whose count makes the due queues
+    /// it, and none past it asks the queue. The compression thread is held, so none of them finds
+    /// the brotli made, and it is made once when the thread is let go.
+    #[cfg(feature = "compress")]
+    #[test]
+    fn answers_that_make_the_due_at_once_queue_one_job() {
+        const NEEDED: u32 = 8;
+        for past in [0, 8] {
+            let answers = Answers::new(1 << 20).expect("a bound");
+            let body = a_page(0);
+            let page = answers.keep(|place| Entry { body: body.clone(), ..entry(&answers, "/a", None, 60, body.len())(place) });
+            let mut extensions = http::Extensions::new();
+            extensions.insert(Kept(page.clone()));
+            let due = due(body.len());
+            // The fast form made first, so the answers below only count; then NEEDED short of the due.
+            Kept::coded(&extensions, &page.body, accepts("br"), Coding::Brotli, || body.clone());
+            page.coded.promotion.store(due - NEEDED, Ordering::Release);
+            let release = hold_the_compression_thread();
+            let asked = Arc::new(AtomicUsize::new(0));
+            let callers = (NEEDED + past) as usize;
+            let start = std::sync::Barrier::new(callers);
+            std::thread::scope(|scope| {
+                let given: Vec<_> = (0..callers)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            let count = asked.clone();
+                            crate::compress::QUEUEING.set(Some(Box::new(move |turn| {
+                                assert_eq!(turn, Turn::Kept);
+                                count.fetch_add(1, Ordering::AcqRel);
+                                Ok(())
+                            })));
+                            start.wait();
+                            let given = Kept::coded(&extensions, &page.body, accepts("br"), Coding::Brotli, || {
+                                unreachable!("made already")
+                            });
+                            crate::compress::QUEUEING.take();
+                            given
+                        })
+                    })
+                    .collect();
+                for given in given {
+                    assert_eq!(given.join().unwrap(), (body.clone(), Coding::Brotli), "{past} past: the fast form");
+                }
+            });
+            assert_eq!(asked.load(Ordering::Acquire), 1, "{past} past: one job asked of the queue");
+            assert_eq!(page.coded.promotion.load(Ordering::Acquire), due, "{past} past");
+            let done = queued_before_done();
+            drop(release);
+            done.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
+            let brotli = page.coded.brotli.get().expect("made").clone();
+            assert_eq!(brotli, crate::compress::encode(Coding::Brotli, &body, Level::Kept), "{past} past");
+        }
+    }
+
+    /// A page's brotli queued and waiting while the page, which still stands, is replaced by a new
+    /// answer at its URL or dropped to make room, with an answer given before still holding it, is
+    /// not made: the job finds it no longer kept before it encodes, and nothing is counted for it.
+    /// The page kept in its place counts its own answers from none: the answer that makes its due
+    /// less one queues nothing, and its due one asks the queue.
+    #[cfg(feature = "compress")]
+    #[test]
+    fn a_kept_answer_s_brotli_waiting_for_a_page_replaced_or_dropped_is_not_made() {
+        for ended in ["replaced", "dropped"] {
+            let answers = Answers::new(1 << 20).expect("a bound");
+            let body = a_page(0);
+            let old = answers.keep(|place| Entry { body: body.clone(), ..entry(&answers, "/a", None, 60, body.len())(place) });
+            // An answer given before, still being sent, holds the page by its extensions.
+            let mut extensions = http::Extensions::new();
+            extensions.insert(Kept(old.clone()));
+            let old_due = due(body.len());
+            let release = hold_the_compression_thread();
+            let asked = the_queue_answers(&[true]);
+            for _ in 0..old_due {
+                Kept::coded(&extensions, &old.body, accepts("br"), Coding::Brotli, || body.clone());
+            }
+            crate::compress::QUEUEING.take();
+            assert_eq!((asked.get(), old.coded.promotion.load(Ordering::Acquire)), (1, old_due), "{ended}: queued");
+            assert!(old.stands(&answers.0, Instant::now()), "{ended}: the page still stands");
+            let fresh_body = a_page(1);
+            let keep_fresh = || {
+                answers
+                    .keep(|place| Entry { body: fresh_body.clone(), ..entry(&answers, "/a", None, 60, fresh_body.len())(place) })
+            };
+            let fresh = if ended == "replaced" {
+                keep_fresh()
+            } else {
+                answers.0.drop_entry(&mut answers.0.inner.write().unwrap(), &old);
+                assert!(answers.find("/a", None, None, false).is_none(), "{ended}: gone from the store");
+                keep_fresh()
+            };
+            assert_eq!(old.size.load(Ordering::Acquire), GONE, "{ended}: no longer kept");
+            assert!(!Arc::ptr_eq(&answers.find("/a", None, None, false).expect("the new page").0, &old), "{ended}");
+            let before = answers.bytes();
+            let done = queued_before_done();
+            drop(release);
+            done.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
+            assert!(old.coded.brotli.get().is_none(), "{ended}: not made");
+            assert_eq!(answers.bytes(), before, "{ended}: nor counted");
+            // Not encoded either: the job run again on this thread stops at the check before it.
+            ENCODING.set(Some(Box::new(|| ())));
+            old.make_brotli();
+            assert!(ENCODING.take().is_some(), "{ended}: the thread stopped before it encoded");
+            // The page kept in its place counts from none.
+            assert_eq!(fresh.coded.promotion.load(Ordering::Acquire), 0, "{ended}: the new page counts from none");
+            let mut extensions = http::Extensions::new();
+            extensions.insert(Kept(fresh.clone()));
+            let fresh_due = due(fresh.body.len());
+            let asked = the_queue_answers(&[false]);
+            for _ in 1..fresh_due {
+                Kept::coded(&extensions, &fresh.body, accepts("br"), Coding::Brotli, || fresh_body.clone());
+            }
+            assert_eq!(
+                (asked.get(), fresh.coded.promotion.load(Ordering::Acquire)),
+                (0, fresh_due - 1),
+                "{ended}: nothing queued before its own due"
+            );
+            Kept::coded(&extensions, &fresh.body, accepts("br"), Coding::Brotli, || unreachable!("made already"));
+            crate::compress::QUEUEING.take();
+            assert_eq!(asked.get(), 1, "{ended}: its own due answer asks the queue");
+        }
     }
 
     /// A page's brotli that the thread made and found no room for in the bound, while the page

@@ -1489,7 +1489,7 @@ async fn an_answer_a_full_store_did_not_keep_does_not_count_toward_its_brotli() 
         let job = Box::new(move || {
             done.send(()).ok();
         });
-        assert!(crate::compress::later(crate::compress::Turn::Kept, job), "the thread took the job");
+        assert!(crate::compress::later(crate::compress::Turn::Kept, job).is_ok(), "the thread took the job");
         heard.recv_timeout(Duration::from_secs(10)).expect("the thread is done");
     };
     drained();
@@ -1505,7 +1505,7 @@ async fn an_answer_a_full_store_did_not_keep_does_not_count_toward_its_brotli() 
         if turn == crate::compress::Turn::Kept {
             count.set(count.get() + 1);
         }
-        true
+        Ok(())
     })));
     let given = |n: u32| {
         let router = router.clone();
@@ -3070,7 +3070,7 @@ async fn a_kept_body_is_given_in_brotli_made_after_its_due_answer() {
         if turn == Turn::Kept {
             count.set(count.get() + 1);
         }
-        true
+        Ok(())
     })));
     let asked = [("/items", &browser[..]), ("/text", &browser[..]), ("/cards.csv", &browser[..]), ("/items", &data[..])];
     for (path, asked) in asked {
@@ -3192,7 +3192,7 @@ async fn a_kept_body_past_the_brotli_bound_keeps_the_form_made_for_its_coding() 
         if turn == Turn::Kept {
             count.set(count.get() + 1);
         }
-        true
+        Ok(())
     })));
     let (_, first, made) = fetch(&router, "GET", "/past", &browser).await;
     assert!(!first.contains_key(header::AGE) && first[header::CONTENT_ENCODING] == "zstd", "the handler's answer: {first:?}");

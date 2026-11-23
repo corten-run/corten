@@ -661,7 +661,7 @@ impl Precompressed {
                 // Files: as many as the app has, each once.
                 Level::Best => std::thread::Builder::new().spawn(job()).is_ok(),
                 // Held values: as many as the app's data, so one worker, a bounded queue.
-                _ => later(Turn::Held, job()),
+                _ => later(Turn::Held, job()).is_ok(),
             };
             if !queued {
                 // Full, or no thread to be had: a later read asks again.
@@ -767,30 +767,43 @@ fn worker() -> Option<&'static Worker> {
     WORKER.get_or_init(Worker::start).as_deref()
 }
 
+/// Why [`later`] did not take a job.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refused {
+    /// That queue is full: a job asked for later may be taken.
+    Full,
+    /// The thread could not be started, which is not tried again: no job will be taken.
+    NoThread,
+}
+
 #[cfg(test)]
 /// What a test has the queue do with each job ([`QUEUEING`]).
-pub(crate) type Queueing = Box<dyn FnMut(Turn) -> bool>;
+pub(crate) type Queueing = Box<dyn FnMut(Turn) -> Result<(), Refused>>;
 
 #[cfg(test)]
 thread_local! {
-    /// Asked by [`later`] on this thread for each job before the queue is: false refuses the job
-    /// as a full queue does, true gives it to the queue. What a test makes the queue do, and how
-    /// it counts the jobs asked for, with no other test's jobs in the way.
+    /// Asked by [`later`] on this thread for each job before the queue is: an error refuses the
+    /// job as a full queue or a thread that could not be started does, `Ok` gives it to the queue.
+    /// What a test makes the queue do, and how it counts the jobs asked for, with no other test's
+    /// jobs in the way.
     pub(crate) static QUEUEING: std::cell::Cell<Option<Queueing>> = const { std::cell::Cell::new(None) };
 }
 
-/// Gives `job` to the thread that compresses held values, in `turn`'s queue. False when it is not
-/// taken: that queue is full, or there is no thread to be had.
-pub(crate) fn later(turn: Turn, job: Job) -> bool {
+/// Gives `job` to the thread that compresses held values, in `turn`'s queue, or says why it was
+/// not taken: that queue is full, or there is no thread to be had.
+pub(crate) fn later(turn: Turn, job: Job) -> Result<(), Refused> {
     #[cfg(test)]
     if let Some(mut queueing) = QUEUEING.take() {
-        let give = queueing(turn);
+        let asked = queueing(turn);
         QUEUEING.set(Some(queueing));
-        if !give {
-            return false;
-        }
+        asked?;
     }
-    worker().is_some_and(|worker| worker.give(turn, job))
+    let worker = worker().ok_or(Refused::NoThread)?;
+    if worker.give(turn, job) {
+        Ok(())
+    } else {
+        Err(Refused::Full)
+    }
 }
 
 /// Sets the headers for a body [`Precompressed::pick`] chose.
@@ -1027,7 +1040,7 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn a_job_that_panics_leaves_the_worker_for_the_next() {
-        assert!(later(Turn::Held, Box::new(|| panic!("corten test: a compression job that fails"))));
+        assert!(later(Turn::Held, Box::new(|| panic!("corten test: a compression job that fails"))).is_ok());
         let held = Arc::new(Precompressed::held(Bytes::from(format!("[{}]", "1,".repeat(2000) + "1"))));
         assert!(Precompressed::stored_held(&held, Coding::Brotli).is_none());
         assert!(Precompressed::stored_held(&held, Coding::Brotli).is_none());
