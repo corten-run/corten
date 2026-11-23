@@ -8012,17 +8012,35 @@ rules something out.
     against 24,601.1 (3.04% fewer), the page with five policies behind a middleware 43,998.7
     against 46,403.9 (5.18% fewer), the unstaged route with five policies 13,551.9 against
     13,544.8 and with one 13,550.0 against 13,552.9, and a kept page whose header is not held
-    24,590.4 against 24,594.2. The quiet-host run is declared before it runs, in place of the
-    third: this change's code as of `e37a8b260` against `7e9a0c715`, the `origin/main` the
-    branch merged, the seven answers above and those two, every turn on a freshly started build,
+    24,590.4 against 24,594.2. With main's `fef1f83de` merged (`83819376a`; that main reserves a
+    text or bytes answer's header map once, which both builds of the two short answers now take),
+    counted the same way against `fef1f83de`: the short `NoStore` answer after four `Public`
+    headers 20,355.5 against 20,333.0 (20,348.3 to 20,357.9 against 20,325.0 to 20,346.6, three
+    rounds), by function `settle` 551 against 516, `Cache::apply` 1 more and the extensions'
+    map 21 fewer, as before; the short immutable image 22,128.1 against 22,123.2 (22,118.3 to
+    22,142.2 against 22,122.7 to 22,133.0), `settle` 1,271 against 1,247; and once each, the
+    page for one visitor 40,071.4 against 40,090.7, the `Public` page in an app that keeps none
+    42,179.4 against 43,249.7 (2.47% fewer), a kept page 23,716.9 against 24,470.3 (3.08% fewer),
+    the page with five policies behind a middleware 43,862.1 against 46,280.7 (5.23% fewer), the
+    unstaged route with five policies 13,665.5 against 13,668.3 and with one 13,663.4 against
+    13,658.3, and a kept page whose header is not held 24,442.9 against 24,452.5. In release
+    builds of card-market from the two, all 83 `corten::json` functions still disassemble to the
+    same 37,540 instructions. The quiet-host run is declared before it runs, in place of the
+    third and of one declared on `e37a8b260` against `7e9a0c715`, which was stopped before its
+    main pass when main changed the answers it measures: this change's code as of `83819376a`
+    against `fef1f83de`, the `origin/main` the branch merged, the seven answers above and those
+    two, every turn on a freshly started build,
     100 pairs after one not recorded, passing when the one-sided 95% upper bound of the paired
     change in user plus kernel cycles a request (the 59th of the 100 sorted changes) is under
     +1% for every one of the nine; none is a negative control and no layout floor applies. Each
     build's dependencies are fixed: its lock is the tree's with the probe's own package added,
     every package from a registry the workspace lock's version and checksum, and it is built
     with `--locked`. The bound is read only from complete evidence: every one of the 100 pairs,
-    one turn a build, every counter at 100% running, every turn's requests counted without an
-    error. Until it passes, this change does not merge. After it, and apart from it, 30 pairs of
+    one turn a build in the declared order, every counter at 100% running and recorded as its
+    turn's one reading, every turn's requests counted without an error, and each pass's outcome
+    recorded once; the margin is applied to the exact ratios, so a bound of exactly +1% is not
+    under it. Before any pair, each answer checked is fetched whole (curl's status and the
+    `Content-Length`) and is the same from both builds. Until it passes, this change does not merge. After it, and apart from it, 30 pairs of
     each in 1 s turns count user first-level instruction-cache misses and user instructions
     alone, to say what the hardware's misses were, not as a condition.
     Set aside, counted the same way on the unstaged route with
@@ -8397,15 +8415,22 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; an app
     is found finishing work again and again on the `Signal` of a write from before its first
     answer that may be kept, which empties its store each time, so such a write should keep
-    its path to count by; the third quiet-host run declared above finds the one-sided 95% bound
-    at +1% or more for any of its seven answers; a measured app's `settle` finds a `Public`
+    its path to count by; the quiet-host run declared above, in place of the third, finds the
+    one-sided 95% bound at +1% or more for any of its nine answers (the page for one visitor, the
+    `Public` page in an app that keeps none, a kept page, the page with five policies behind a
+    middleware, the unstaged route with five policies and with one, a kept page whose header the
+    thread does not hold, and a short `NoStore` answer and a short `Public::immutable` image, each
+    after its thread made four `Public` headers); a measured app's `settle` finds a `Public`
     header its thread does not hold (a kept page given on another worker, or one whose header
     the thread put out going through more than four sets of numbers) on a share of its answers
     that shows, since each such answer pays the look through the four on top of main's read; or an app
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-22, under callgrind as below `e37a8b260` (main's `7e9a0c715` merged)
+    Last checked: 2026-11-22, under callgrind as below `83819376a` (main's `fef1f83de` merged)
+    against `fef1f83de` with rustc 1.100.0, the nine answers (three rounds for the `NoStore`
+    answer and the immutable image), and card-market's `corten::json` functions disassembled in
+    both builds; 2026-11-22, under callgrind as below `e37a8b260` (main's `7e9a0c715` merged)
     against `7e9a0c715` with rustc 1.100.0, a short `NoStore` answer and an immutable image after
     four `Public` headers, and card-market's `corten::json` functions disassembled in both builds;
     2026-11-22, under callgrind as below `3438b72d1` (main's `40aba72e1` merged)
