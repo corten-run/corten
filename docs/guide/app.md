@@ -1535,7 +1535,8 @@ such request in the handler's place until the answer's shared lifetime ends: `s-
 the answer has `.shared(..)`, else `max_age`. So a `Public` page's handler does not run for
 every request, and what it read may be that old when a visitor sees it, as it already may be
 behind a CDN. Count views in a middleware rather than in the handler. A short lifetime bounds how
-old a page's data can be, and a page whose data must never be shown stale is left private. An
+old the kept page's data can be (a browser or CDN may give its copy longer where the page allows
+a stale directive, above), and a page whose data must never be shown stale is left private. An
 answer given again carries `Age`, counted from when the request it was made for reached the
 handler, so a browser and a CDN count the lifetime from when the page was made.
 
@@ -1646,8 +1647,11 @@ leaves the list kept, and so does a change made in another instance or by a scri
 app: the page shows it when its lifetime ends, which is what the lifetime says. Purging a
 CDN in front does not purge the app, which gives the CDN the kept page again with its `Age`.
 A request's own `Cache-Control: no-cache` (a hard reload) gets the kept page too: how long a
-page stands is the app's to say. A short lifetime bounds how long a page can show what was there
-before a change; it does not make the change show in every instance and CDN edge at once. A page
+page stands is the app's to say. A short lifetime bounds how long the app's own store, in any
+instance, can show what was there before a change. A browser or CDN is held to it only when its
+stale-serving policy does not extend it: one that honors the page's `stale-while-revalidate` or
+`stale-if-error` (above) may give its copy for as long past the lifetime as they allow. Nor does
+a short lifetime make the change show in every instance and CDN edge at once. A page
 that must never be given from a stale copy is not `Public`, so no instance or shared cache keeps
 it, and a browser asks the app before it shows its own copy again.
 

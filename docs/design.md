@@ -7463,7 +7463,10 @@ rules something out.
     Writes are counted by a hash of the path with its escapes decoded, and a kept page stands
     only while the count is the one its request found before its handler ran: a write takes no
     lock and searches nothing, and a page whose handler was reading while the write went
-    through is not kept. There are 65,536 counts (256 KiB, made with the first answer the app may keep,
+    through is not kept. The count is read again as the page is kept, under the lock it is kept
+    under, so a page whose body was still being read when the write went through is not kept
+    either, and never takes the place of a copy made since: every copy already kept read its count
+    before that check. There are 65,536 counts (256 KiB, made with the first answer the app may keep,
     so an app that makes none holds none), and a write to another path drops a
     given kept page early once in 65,536 times, which costs that page a render.
 
@@ -7477,7 +7480,9 @@ rules something out.
     however the two interleave. Before the counts are made it counts as a write that found none.
     A handler takes `KeptAnswers` as an argument and a task takes it from the app
     (`App::kept`) before the router is made, which gives it the store; it is one handle for
-    both, the only way work outside a request reaches the store. A `Public` handler cannot take
+    both, the only way work outside a request reaches the store. An app that never calls
+    `App::kept` allocates no handle and adds no check to a request; it holds an empty `OnceLock`,
+    made with the app and read once as the router is made. A `Public` handler cannot take
     it (it is not `Anonymous`): the store answers in that handler's place, so a call there would
     not run for the requests a kept copy answers. The page is named as a link
     is, by a type of `OnSite` (a route, a place on one, a `#[derive(Href)]` enum of those, a
@@ -7956,6 +7961,10 @@ rules something out.
     nothing and for the write with no store), and naming costs 699.0 and, with no store, 263.6.
     The same three rounds run again on this change's later head, whose library is the same, gave
     every median within 3.0 of these.
+    Reading the path's count again as a page is kept, under the store's lock, costs a new URL made
+    and kept 9.4 instructions (23,387.2 against 23,377.8 for `b2d15d5fb`, the head before it, three
+    rounds the same way with jemalloc; by function, in the router's closure that keeps the
+    answer) and a kept page given again nothing (13,211.8 both).
     Paired cycles were measured for the first pair, base `83b3b8772` (main, whose `crates/` is
     `7a275ef15`'s) against head `84de7c1e5` (this change's library apart from doc comments), on a
     c-8 whose CPU is a Xeon Platinum 8280, 100 alternating pairs a workload of 3 s `wrk -t2 -c64`
@@ -8249,7 +8258,10 @@ rules something out.
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-22 for a change the app names (`KeptAnswers::changed`), by the tests
+    Last checked: 2026-11-23 for the count read again as a page is kept, by the test of a page
+    whose body was read across a change and the request-cost harness's counts against
+    `b2d15d5fb`;
+    2026-11-22 for a change the app names (`KeptAnswers::changed`), by the tests
     beside it and, for what it costs a write that names one and the requests that do not, the
     request-cost harness's counts under callgrind at `7673a36fe` against `fef1f83de` and at
     `beea494fd` against `7a275ef15`, and paired cycles of `84de7c1e5` against `83b3b8772` kept under
@@ -9345,11 +9357,15 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `KeptAnswers::changed` what it keeps at the path it names, in the process that answered the
     write or made the call ([Choice 70](#choice-kept-pages)). Another instance of the app
     behind the same load balancer, and a CDN or proxy in front, keep their copies until the
-    lifetime the page was sent with ends, so after a change two instances can show a page up to
-    a lifetime apart, as two edges of a CDN can. Reaching them takes a message between the
+    lifetime the page was sent with ends (a CDN, proxy or browser that honors the page's
+    `stale-while-revalidate` or `stale-if-error` may give its copy for as long past that as they
+    allow), so after a change two instances can show a page up to a lifetime apart, as two edges
+    of a CDN can. Reaching them takes a message between the
     instances (the app's own, or a feed on `corten-cluster` whose handler calls `changed` in
     each) and the CDN's own purge, both of which differ by deploy. A short lifetime bounds how
-    long a copy can stand after a change, but does not make the change show everywhere at once:
+    long the app's own store, in any instance, can give a copy after a change, and how long a
+    browser or CDN can only when its stale-serving policy (`stale-while-revalidate`,
+    `stale-if-error`) does not extend it. It does not make the change show everywhere at once:
     until it ends, instances and edges can still give the old page. Keeping no copy is what does:
     a page that must never be given from a stale copy is not `Public` (it goes out `private,
     no-cache`), so no instance, CDN or proxy holds a copy to drop, and a browser asks the app
