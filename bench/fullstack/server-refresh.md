@@ -108,7 +108,10 @@ baseline, complete group qualification or root framework/image refresh is claime
 
 [#1376 bench/fullstack runs Rails, Phoenix, Gin and Nuxt on releases with published security fixes, so its production comparison is not each framework's supported configuration](https://github.com/corten-run/corten/issues/1376)
 lists published security fixes that the 2026-11-13 refresh predates or did not reach.
-New builds take the patched release in each current line; no minor or major line changes.
+New builds take the patched release in each framework and runtime line; no OS base changes.
+The exception is the live Gin app's four pre-1.0 `golang.org/x` modules (net, crypto, text,
+sys): they cross minor versions on purpose, to the fixed versions the fullstack Gin app
+already uses, so both Gin apps build the same module versions.
 Rounds and groups measured before this change keep the versions their commit and receipts
 record, and nothing here is a performance measurement.
 
@@ -116,7 +119,7 @@ record, and nothing here is a performance measurement.
 | --- | --- | --- |
 | bench/live Gin | x/net 0.51.0 to 0.62.0, x/crypto 0.48.0 to 0.59.0, x/text 0.34.0 to 0.44.0, x/sys 0.41.0 to 0.50.0, quic-go 0.59.0 to 0.59.1 (the fullstack Gin app's versions); Go stays 1.27.4, the newest release | 16 x/net entries, among them GO-2026-6860 and GO-2026-6866; 30 x/crypto entries, among them GO-2026-6355; GO-2026-5970 and GO-2026-6629 (x/text); GO-2026-5024 (x/sys); GO-2026-5676 (quic-go) |
 | Both Phoenix apps | Plug 1.20.3 to 1.20.4, Phoenix 1.8.16 to 1.8.17, LiveView 1.2.13 to 1.2.15; mix.exs floors raised to match | [EEF-CVE-2026-120287](https://osv.dev/vulnerability/EEF-CVE-2026-120287) (multipart length limit), [GHSA-pvfx-rx4x-phrr](https://github.com/phoenixframework/phoenix/security/advisories/GHSA-pvfx-rx4x-phrr), [GHSA-5vmc-qgf8-rw36](https://github.com/phoenixframework/phoenix/security/advisories/GHSA-5vmc-qgf8-rw36), [GHSA-v4p7-3pm2-wq6c](https://github.com/phoenixframework/phoenix_live_view/security/advisories/GHSA-v4p7-3pm2-wq6c) |
-| Both Rails apps | Ruby 4.0.9 to 4.0.10; the image stays Debian 13 | [Regexp and String advisories](https://www.ruby-lang.org/en/news/2026/11/18/multiple-vulnerabilities-in-regexp-and-string/) |
+| Both Rails apps | Ruby 4.0.9 to 4.0.10 (the image stays Debian 13); Rack 3.2.8 to 3.2.9 | [Regexp and String advisories](https://www.ruby-lang.org/en/news/2026/11/18/multiple-vulnerabilities-in-regexp-and-string/); Rack's [3.2.9 security fixes](https://github.com/rack/rack/blob/v3.2.9/CHANGELOG.md): [GHSA-r243-pfwh-7rpx](https://github.com/advisories/GHSA-r243-pfwh-7rpx), [GHSA-58mf-c3jj-277p](https://github.com/advisories/GHSA-58mf-c3jj-277p), [GHSA-mhj6-xc86-54m8](https://github.com/advisories/GHSA-mhj6-xc86-54m8), [GHSA-frgv-948x-h96g](https://github.com/advisories/GHSA-frgv-948x-h96g), [GHSA-f7cc-57h7-qrcg](https://github.com/advisories/GHSA-f7cc-57h7-qrcg) |
 | Spring | Same tags, current digests: Temurin 27.0.1.0.2+1 to 27.0.1.1+4, Maven 3.10.0 and Ubuntu 26.04.1 unchanged | [jdk-27.0.1.1+4](https://github.com/adoptium/temurin27-binaries/releases/tag/jdk-27.0.1.1%2B4), the November Critical Patch Update |
 
 | Image | Published index digest |
@@ -131,7 +134,14 @@ from the images (`ruby -v`, `java -version`, `mvn -v`, `/etc/os-release`). Mix a
 regenerated the locks in the apps' own pinned toolchain images. `mix deps.update` also
 offered telemetry 1.4.3 and, in the fullstack app, websock_adapter 0.7.2; the new releases do
 not require either, so the locks keep 1.4.2 and 0.6.0, and `mix deps.get` in each
-environment leaves the locks unchanged.
+environment leaves the locks unchanged. The LiveView entries are exactly what Mix writes:
+unlocking `phoenix_live_view` and running `mix deps.get` again (Hex 2.7.0) rewrites them
+byte for byte. Hex writes the published requirements in a reduced, equivalent form, so
+`~> 0.6 and >= 0.6.16` (Igniter) reads `>= 0.6.16 and < 1.0.0-0` and
+`~> 3.3 or ~> 4.0 or ~> 4.1` (Phoenix HTML) reads `~> 3.3 or ~> 4.0`. Bundler moved only Rack
+(`bundle update --conservative rack` on the apps' Ruby 4.0.10 image, with each lock's own
+Bundler version). Rack 3.2.9 also rejects an unquoted multipart boundary outside RFC 9110's
+token grammar; browsers quote or generate valid boundaries, and the checks below pass with it.
 
 After the change, an OSV query batch over the live and fullstack Gin `go.mod` files (with
 Go's standard library at 1.27.4), both Phoenix `mix.lock` files and both Rails
