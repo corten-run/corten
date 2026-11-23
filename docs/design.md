@@ -8532,15 +8532,17 @@ rules something out.
     plan declares, each side compiled once and relinked with a never-called pad of a declared size
     first in its code, and must be when a single build lands inside the placement spread.** The
     paired-cycle gate reads one build of each side
-    ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2), and one build's placement moves a
-    touched request's cycles by more than its +1% margin:
+    ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2), and builds of one commit whose code sits at
+    different places have differed in a touched request's cycles by more than its +1% margin:
     [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
     removed about 500 user instructions a kept request and missed +1% on one build, while builds of
     each side with a block of 40 to 40,000 bytes no request runs, ten placements a case on two
     hosts, each one start, put it at 1.3% fewer cycles on a kept page at the mean (from 5.1% fewer
     to 3.3% more by placement) and 0.9% and 0.3% fewer on two kept files (to 6.8% fewer and 3.8%
     more), and main against main with those blocks ran from 4.5% fewer to 4.0% more
-    ([design Choice 70](#choice-kept-pages), tag `evidence/cheaper-ask-1925`). A change of a few
+    ([design Choice 70](#choice-kept-pages), tag `evidence/cheaper-ask-1925`); each of those was
+    one start, so they are differences observed, not what placement alone moves, which the
+    fresh-start A/As below measure. A change of a few
     hundred instructions on a touched request passes or misses by where its code landed, and a floor
     ([design Choice 71](#choice-layout-floor)) is not the answer there, for that Choice's reason: a
     touched workload can cost cycles on flat instructions. So a run's plan may declare, before the
@@ -8572,14 +8574,15 @@ rules something out.
     and A/A beside an A/A on `plain`, against about 35 minutes for three single-build comparisons
     of 100 pairs ([design Choice 71](#choice-layout-floor)'s runs), so it is not the rule for every
     change. Each placement run's A/A records the workload's
-    placement spread here, its lowest and highest placement median. A single-build bound that,
-    less +1%, lands inside that spread does not decide the workload, a pass as much as a miss,
-    since the build's own placement could account for the whole distance to the margin either way;
-    the pull request reads that workload across placements, under a plan written before that run.
-    Nor does a single-build bound that, plus the smallest worthwhile reduction, lands inside the
-    spread decide a CPU-cost win, for the same reason: a placement can make a win as easily as a
-    loss. A single-build bound outside the spread, or on a workload with no recorded spread for the
-    run's setup, is the reading, and a placement run declared after it does not clear its miss.
+    placement spread here, its lowest and highest placement median. One test decides:
+    a single-build bound's distance from its threshold (the bound less +1% for the margin, the
+    bound plus the smallest worthwhile reduction for a CPU-cost win) is inside the spread when it is
+    at or above its lowest and at or below its highest. Inside does not decide the workload, a pass
+    as much as a miss and a win no more than a loss, since the build's own placement could account
+    for the whole distance either way; the pull request reads that workload across placements,
+    under a plan written before that run. Outside, or with no recorded spread for the run's setup,
+    the single-build bound is the reading, and a placement run declared after it does not clear
+    its miss.
     Item 2's other requirements, user L1 instruction-cache misses when a change adds or moves code
     among them, apply to a run read across placements as to any other. So a change whose
     single-build reading this rule leaves decided keeps the cheaper run. That is a rule, not a
@@ -8625,9 +8628,10 @@ rules something out.
 
     The kit for the first run, with its `margin.md`, scripts, sources and results, is tag
     `evidence/ee7b0b41`. Before any turn its `build.sh` stops unless each side's captured link run
-    again without a pad is byte-identical to cargo's binary, every placement has exactly that
-    binary's function symbols and the pad, the pad at the start of `.text`, every function moved
-    and every pair of neighbours still next to each other in order, one pad relinked twice is one
+    again without a pad is byte-identical to cargo's binary, every placement has the same set of
+    function names as that binary (names once ThinLTO's suffixes are stripped) and the pad, the
+    pad at the start of `.text`, and every function whose name occurs once in both binaries moved,
+    each pair of neighbours of those at distinct addresses still next to each other in order, one pad relinked twice is one
     binary and every binary has a SHA-256 of its own; its `verify.sh` then compares every
     placement's answers to `GET /private` and the kept `GET /page` with its unpadded binary's.
     That comparison is weaker than Pull requests now asks, as
@@ -8660,8 +8664,9 @@ rules something out.
     1.48% against 1.34% that a median of 8 pairs would have from the pairs' own spread (3.03%)
     alone; on `kept`: -0.49%, bound +0.02%, -2.98% to +3.33%, t bound +0.05%, 1.44% against 1.26%
     (2.85%). Both resolve +1%, and still do read with the lists' labels swapped, as the rule now
-    asks: bounds of +0.38% on `plain` and +0.90% on `kept` (recomputed from the tag's CSVs; 18 and
-    11 of 30 placement medians above zero, two-sided sign tests p = 0.362 and 0.200).
+    asks: bounds of +0.38% on `plain` and +0.90% on `kept` (recomputed from the tag's CSVs; as recorded, 18 and
+    11 of 30 placement medians above zero, 12 and 19 with the labels swapped, two-sided sign tests
+    p = 0.362 and 0.200).
     [#1955 Give a kept answer again with three fewer allocations](https://github.com/corten-run/corten/pull/1955)
     on `kept`: -0.07%, bound +0.28%, placement medians from
     -3.06% to +3.49%, user instructions -1.52% (placement medians -1.53% to -1.52%), a bound under +1% read across

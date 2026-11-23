@@ -410,8 +410,8 @@ establish a general ranking.
       not named so before the run; a declaration is never added or changed after a run to clear
       its result, and a plan that made +1% decisive before this exception existed stays bound by
       it. This single-build reading and the CPU-win rule above do not decide a touched workload
-      whose single-build bound lands inside its recorded placement spread, or one read across
-      placements; both are decided as described below.
+      whose single-build bound's distance from its threshold is inside its recorded placement
+      spread, or one read across placements; both are decided as described below.
 
       A negative control whose bound is at or above +1% but under the layout floor that applies
       to it may go ahead when its user instructions pass a screen: the median of the paired
@@ -485,9 +485,11 @@ establish a general ranking.
 
       A workload the change touches may instead be read across placements, when the run's plan
       names it before the run with the numbers below
-      ([design Choice 72](docs/design.md#choice-placement-runs)). One build's code placement moves
-      a touched request's cycles by up to about 4% either way, so a single build of each side can
-      pass or miss +1%, or show a CPU-cost win, by where the linker put the code. That Choice
+      ([design Choice 72](docs/design.md#choice-placement-runs)). Builds of one commit whose code
+      sits at different places have differed by up to about 4% in a touched request's cycles
+      either way (one start each, so placement and the process's start were not told apart there),
+      so a single build of each side can pass or miss +1%, or show a CPU-cost win, by where the
+      linker put the code. That Choice
       records a placement spread for a workload (the lowest and highest placement median of its
       A/A across placements, as the Choice prints them to two decimals) and the setup it was
       measured on. A spread applies only to a run that matches that setup in each of: the probe
@@ -496,16 +498,16 @@ establish a general ranking.
       server, the load and the driver with `perf` each pinned to CPUs of their own, `wrk -t2 -c64`
       and 3 s turns) and the CPU model (a Xeon Platinum 8358 for the spreads recorded so far). A
       run that differs in any has no recorded spread for the workload
-      until a placement run on its setup records one. Where a spread applies, either end counting
-      as inside, a single-build bound that, less +1%, lands inside it does not decide the margin,
-      a pass as much as a miss: the pull request reports it as "inside the placement spread: not
-      decided", which does not pass, and reads the workload across placements in a run whose plan
-      is written before that run. A single-build bound that, plus the smallest worthwhile
-      reduction, lands inside it does not decide a CPU-cost win either, since a placement can make
-      a win as easily as a loss: no win is claimed from it. A single-build bound outside the
-      spread, and any single-build bound on a workload with no recorded spread for the run's
-      setup, is the reading by the rules above, binding by policy, not because placement is shown
-      unable to move it. A workload with no single-build bound (a run that failed, too few pairs)
+      until a placement run on its setup records one. The test is one: a single-build bound's
+      distance from its threshold (the bound less +1% for the margin; the bound plus the smallest
+      worthwhile reduction for a CPU-cost win) is **inside** a spread that applies when it is at
+      or above the spread's lowest and at or below its highest, and **outside** otherwise. Inside
+      does not decide, a pass as much as a miss, and a win no more than a loss: the pull request
+      reports it as "inside the placement spread: not decided", which does not pass and claims no
+      win, and reads the workload across placements in a run whose plan is written before that
+      run. Outside, or with no spread that applies to the run's setup, the single-build bound is
+      the reading by the rules above, binding by policy, not because placement is shown unable to
+      move it. A workload with no single-build bound (a run that failed, too few pairs)
       does not pass, as before, and a control the plan declared keeps
       [design Choice 71](docs/design.md#choice-layout-floor)'s rule. Item 2's other requirements
       apply to a run read across placements as to any other: every counter at 100%; the user and
@@ -558,15 +560,15 @@ establish a general ranking.
       fewer than R valid pairs, leaves its comparison with no bound, which does not pass; no
       placement is rerun, replaced or dropped for its result. A layout floor never applies to a
       workload read across placements. A single-build run stays valid, and binding for each
-      workload its plan read that way whose bound, less +1% for the margin or plus the smallest
-      worthwhile reduction for a win, lands outside the recorded spread, or that has no spread that
-      applies (a control
+      workload its plan read that way whose distance from its threshold is outside the spread, by
+      the test above, or that has no spread that applies (a control
       keeps [design Choice 71](docs/design.md#choice-layout-floor)'s rule): a placement
       run declared after it does not clear such a miss. The benefit side may use the same protocol
       if the plan declares it, with its smallest worthwhile reduction, before the run: a CPU-cost
       win then needs the change's upper bound across placements at or below minus that reduction,
       and its A/A's one-sided 95% lower bound (the (K + 1 - j)-th smallest placement median, the
-      11th of 30) above it in both readings. The reading measures the change across the plan's
+      11th of 30) above it in both readings, and the A/A resolved as above: a run whose A/A is
+      not resolved establishes no win either. The reading measures the change across the plan's
       placements, not the release binary, which has a placement of its own: the unpadded build,
       which no comparison the gate reads includes (the first run read it only in a diagnostic).
       A run of K = 30 placements of R = 8 pairs, for the
