@@ -34,13 +34,23 @@ test("browser CI keeps its pinned Playwright base and prepares immutable-source 
 test("benchmark evidence supplies the installed, locked Playwright base explicitly", () => {
   const workflow = parse(readFileSync(new URL("../../.github/workflows/benchmark-evidence.yml", import.meta.url), "utf8"));
   const steps = workflow.jobs.evidence.steps;
-  const build = steps.findIndex((entry) => entry.run?.includes("test-tools.Dockerfile"));
+  const build = steps.findIndex((entry) => entry.run?.includes("evidence-tools.Dockerfile"));
   const install = steps.findIndex((entry) => entry.run === "npm ci");
   // Tool replay also reads the bench package's locked classic TypeScript archive.
   const bench = steps.findIndex((entry) => entry.run === "npm --prefix bench ci");
   assert.ok(install >= 0 && bench > install && bench < build);
   assert.match(steps[build].run, /image="mcr\.microsoft\.com\/playwright:v\$\(node -p 'require\("@playwright\/test\/package\.json"\)\.version'\)-noble"/);
-  assert.match(steps[build].run, /docker build --build-arg PLAYWRIGHT_IMAGE="\$image" -f bench\/workloads\/test-tools\.Dockerfile/);
+  assert.equal(steps[build].env.IMAGE, "${{ needs.git-packages.outputs.image }}");
+  assert.equal(steps[build].env.CHECKSUM, "${{ needs.git-packages.outputs.checksum }}");
+  assert.match(steps[build].run, /test "\$\{checksum%% \*\}" = "\$CHECKSUM"[\s\S]+docker build --pull --build-arg PLAYWRIGHT_IMAGE="\$IMAGE"/);
+  const download = steps.find(entry => entry.uses?.startsWith("actions/download-artifact@"));
+  assert.deepEqual(download.with, { "artifact-ids": "${{ needs.git-packages.outputs.artifact }}", path: "${{ runner.temp }}/packages", "merge-multiple": true });
+  const tools = workflow.jobs["git-packages"].steps;
+  assert.equal(tools.find(entry => entry.uses?.startsWith("actions/cache/save@")).if,
+    "github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'");
+  assert.equal(tools.find(entry => entry.id === "cache").with["restore-keys"], undefined);
+  const dockerfile = readFileSync(new URL("evidence-tools.Dockerfile", import.meta.url), "utf8");
+  assert.match(dockerfile, /RUN --network=none[\s\S]+git --no-replace-objects --no-lazy-fetch -C "\$repo" cat-file blob/);
 });
 
 test("Django qualification checks its Playwright install and resource cleanup without Docker", () => {
