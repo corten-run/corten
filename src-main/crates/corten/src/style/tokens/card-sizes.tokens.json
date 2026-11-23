@@ -1,0 +1,7 @@
+{
+  "card": {
+    "$type": "dimension",
+    "padding": { "$value": { "value": 1.5, "unit": "rem" } },
+    "heading-font-size": { "$value": { "value": 1, "unit": "rem" } }
+  }
+}

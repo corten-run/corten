@@ -1,0 +1,255 @@
+built main
+LIVE what=page config=off body=6124 aged=0 measured=8192 requested_per=0.0 usable_per=0.0 calls_per=28.00
+LIVE what=page config=room body=6124 aged=0 measured=8192 requested_per=7514.5 usable_per=7722.0 calls_per=40.00
+TRACE request 10192 aged=false body=6124: 11 allocations held
+  HELD requested=6124 usable=6144
+      <bytes::bytes::Bytes>::copy_from_slice
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=520 usable=640
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=416 usable=448
+      <http::header::map::HeaderMap as core::clone::Clone>::clone
+      <corten::kept::Missed>::keep::{closure#0}::{closure#4}
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+  HELD requested=128 usable=128
+      <http::header::map::HeaderMap as core::clone::Clone>::clone
+      <corten::kept::Missed>::keep::{closure#0}::{closure#4}
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+  HELD requested=96 usable=96
+      <corten::cache::Cache>::header
+      <corten::cache::Cache>::apply
+      <corten::answer::Public<core::result::Result<corten::answer::HtmlResponse, corten::Error>> as corten::response::IntoResponse>::into_response
+      <allocmap::record as corten::handler::Handler<(corten::handler::private::ViaParts, corten::page::Req), ()>>::call::{closure#0}
+      <futures_util::future::future::map::Map<<allocmap::record as corten::handler::Handler<(corten::handler::private::ViaParts, corten::page::Req), ()>>::call::{closure#0}, corten::answer::marked<corten::answer::Public<core::result::Result<corten::answer::HtmlResponse, corten::Error>>>> as core::future::future::Future>::poll
+  HELD requested=47 usable=48
+      <corten::kept::Key>::new
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=32 usable=32
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=24 usable=32
+      <bytes::bytes::Bytes as core::convert::From<alloc::vec::Vec<u8>>>::from
+      <corten::cache::Cache>::header
+      <corten::cache::Cache>::apply
+      <corten::answer::Public<core::result::Result<corten::answer::HtmlResponse, corten::Error>> as corten::response::IntoResponse>::into_response
+      <allocmap::record as corten::handler::Handler<(corten::handler::private::ViaParts, corten::page::Req), ()>>::call::{closure#0}
+  HELD requested=24 usable=32
+      bytes::bytes::shallow_clone_vec
+      bytes::bytes::promotable_even_clone
+      <bytes::bytes::Bytes as core::clone::Clone>::clone
+      <http::header::value::HeaderValue as core::clone::Clone>::clone
+      <http::header::map::HeaderMap as core::clone::Clone>::clone
+  HELD requested=24 usable=32
+      bytes::bytes::shallow_clone_vec
+      bytes::bytes::promotable_even_clone
+      <bytes::bytes::Bytes as core::clone::Clone>::clone
+      <corten::kept::Missed>::keep::{closure#0}::{closure#4}
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+  HELD requested=16 usable=16
+      <bytes::bytes::Bytes>::copy_from_slice
+      <http::header::value::HeaderValue>::from_str::{closure#0}
+      <http::header::value::HeaderValue>::try_from_generic::<&str, <http::header::value::HeaderValue>::from_str::{closure#0}>
+      <http::header::value::HeaderValue>::from_str
+      corten::page::key_header
+TRACE total requested=7451 usable=7648
+TRACE request 10193 aged=false body=6124: 11 allocations held
+  HELD requested=6124 usable=6144
+      <bytes::bytes::Bytes>::copy_from_slice
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=520 usable=640
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=416 usable=448
+      <http::header::map::HeaderMap as core::clone::Clone>::clone
+      <corten::kept::Missed>::keep::{closure#0}::{closure#4}
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+  HELD requested=128 usable=128
+      <http::header::map::HeaderMap as core::clone::Clone>::clone
+      <corten::kept::Missed>::keep::{closure#0}::{closure#4}
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+  HELD requested=96 usable=96
+      <corten::cache::Cache>::header
+      <corten::cache::Cache>::apply
+      <corten::answer::Public<core::result::Result<corten::answer::HtmlResponse, corten::Error>> as corten::response::IntoResponse>::into_response
+      <allocmap::record as corten::handler::Handler<(corten::handler::private::ViaParts, corten::page::Req), ()>>::call::{closure#0}
+      <futures_util::future::future::map::Map<<allocmap::record as corten::handler::Handler<(corten::handler::private::ViaParts, corten::page::Req), ()>>::call::{closure#0}, corten::answer::marked<corten::answer::Public<core::result::Result<corten::answer::HtmlResponse, corten::Error>>>> as core::future::future::Future>::poll
+  HELD requested=47 usable=48
+      <corten::kept::Key>::new
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=32 usable=32
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=24 usable=32
+      <bytes::bytes::Bytes as core::convert::From<alloc::vec::Vec<u8>>>::from
+      <corten::cache::Cache>::header
+      <corten::cache::Cache>::apply
+      <corten::answer::Public<core::result::Result<corten::answer::HtmlResponse, corten::Error>> as corten::response::IntoResponse>::into_response
+      <allocmap::record as corten::handler::Handler<(corten::handler::private::ViaParts, corten::page::Req), ()>>::call::{closure#0}
+  HELD requested=24 usable=32
+      bytes::bytes::shallow_clone_vec
+      bytes::bytes::promotable_even_clone
+      <bytes::bytes::Bytes as core::clone::Clone>::clone
+      <corten::kept::Missed>::keep::{closure#0}::{closure#4}
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+  HELD requested=24 usable=32
+      bytes::bytes::shallow_clone_vec
+      bytes::bytes::promotable_even_clone
+      <bytes::bytes::Bytes as core::clone::Clone>::clone
+      <http::header::value::HeaderValue as core::clone::Clone>::clone
+      <http::header::map::HeaderMap as core::clone::Clone>::clone
+  HELD requested=16 usable=16
+      <bytes::bytes::Bytes>::copy_from_slice
+      <http::header::value::HeaderValue>::from_str::{closure#0}
+      <http::header::value::HeaderValue>::try_from_generic::<&str, <http::header::value::HeaderValue>::from_str::{closure#0}>
+      <http::header::value::HeaderValue>::from_str
+      corten::page::key_header
+TRACE total requested=7451 usable=7648
+LIVE what=json config=off body=1999 aged=0 measured=8192 requested_per=0.0 usable_per=0.0 calls_per=84.00
+LIVE what=json config=room body=1999 aged=0 measured=8192 requested_per=3080.5 usable_per=3306.0 calls_per=95.00
+TRACE request 10192 aged=false body=1999: 9 allocations held
+  HELD requested=1999 usable=2048
+      <bytes::bytes::Bytes>::copy_from_slice
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=520 usable=640
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=208 usable=224
+      <http::header::map::HeaderMap as core::clone::Clone>::clone
+      <corten::kept::Missed>::keep::{closure#0}::{closure#4}
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+  HELD requested=96 usable=96
+      <corten::cache::Cache>::header
+      <corten::cache::Cache>::apply
+      <corten::answer::Public<core::result::Result<corten::json::Json<alloc::vec::Vec<(alloc::string::String, alloc::string::String)>>, corten::answer::JsonError>> as corten::response::IntoResponse>::into_response
+      <allocmap::records as corten::handler::Handler<((),), ()>>::call::{closure#0}
+      <futures_util::future::future::map::Map<<allocmap::records as corten::handler::Handler<((),), ()>>::call::{closure#0}, corten::answer::marked<corten::answer::Public<core::result::Result<corten::json::Json<alloc::vec::Vec<(alloc::string::String, alloc::string::String)>>, corten::answer::JsonError>>>> as core::future::future::Future>::poll
+  HELD requested=64 usable=64
+      <http::header::map::HeaderMap as core::clone::Clone>::clone
+      <corten::kept::Missed>::keep::{closure#0}::{closure#4}
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+  HELD requested=50 usable=64
+      <corten::kept::Key>::new
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=32 usable=32
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=24 usable=32
+      <bytes::bytes::Bytes as core::convert::From<alloc::vec::Vec<u8>>>::from
+      <corten::cache::Cache>::header
+      <corten::cache::Cache>::apply
+      <corten::answer::Public<core::result::Result<corten::json::Json<alloc::vec::Vec<(alloc::string::String, alloc::string::String)>>, corten::answer::JsonError>> as corten::response::IntoResponse>::into_response
+      <allocmap::records as corten::handler::Handler<((),), ()>>::call::{closure#0}
+  HELD requested=24 usable=32
+      bytes::bytes::shallow_clone_vec
+      bytes::bytes::promotable_even_clone
+      <bytes::bytes::Bytes as core::clone::Clone>::clone
+      <corten::kept::Missed>::keep::{closure#0}::{closure#4}
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+TRACE total requested=3017 usable=3232
+TRACE request 10193 aged=false body=1999: 9 allocations held
+  HELD requested=1999 usable=2048
+      <bytes::bytes::Bytes>::copy_from_slice
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=520 usable=640
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=208 usable=224
+      <http::header::map::HeaderMap as core::clone::Clone>::clone
+      <corten::kept::Missed>::keep::{closure#0}::{closure#4}
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+  HELD requested=96 usable=96
+      <corten::cache::Cache>::header
+      <corten::cache::Cache>::apply
+      <corten::answer::Public<core::result::Result<corten::json::Json<alloc::vec::Vec<(alloc::string::String, alloc::string::String)>>, corten::answer::JsonError>> as corten::response::IntoResponse>::into_response
+      <allocmap::records as corten::handler::Handler<((),), ()>>::call::{closure#0}
+      <futures_util::future::future::map::Map<<allocmap::records as corten::handler::Handler<((),), ()>>::call::{closure#0}, corten::answer::marked<corten::answer::Public<core::result::Result<corten::json::Json<alloc::vec::Vec<(alloc::string::String, alloc::string::String)>>, corten::answer::JsonError>>>> as core::future::future::Future>::poll
+  HELD requested=64 usable=64
+      <http::header::map::HeaderMap as core::clone::Clone>::clone
+      <corten::kept::Missed>::keep::{closure#0}::{closure#4}
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+  HELD requested=50 usable=64
+      <corten::kept::Key>::new
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=32 usable=32
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+      <corten::kept::Missed>::keep::{closure#0}
+      <corten::router::Keeping as corten::router::Endpoint>::call::{closure#1}
+      <futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>> as core::future::future::Future>::poll
+      corten::page::within::<futures_util::future::either::Either<futures_util::future::either::Either<core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>, core::future::ready::Ready<http::response::Response<corten::body::Body>>>, core::pin::Pin<alloc::boxed::Box<dyn core::future::future::Future<Output = http::response::Response<corten::body::Body>> + core::marker::Send>>>>::{closure#0}::{closure#0}
+  HELD requested=24 usable=32
+      bytes::bytes::shallow_clone_vec
+      bytes::bytes::promotable_even_clone
+      <bytes::bytes::Bytes as core::clone::Clone>::clone
+      <corten::kept::Missed>::keep::{closure#0}::{closure#4}
+      <corten::kept::Answers>::keep::<<corten::kept::Missed>::keep::{closure#0}::{closure#4}>
+  HELD requested=24 usable=32
+      <bytes::bytes::Bytes as core::convert::From<alloc::vec::Vec<u8>>>::from
+      <corten::cache::Cache>::header
+      <corten::cache::Cache>::apply
+      <corten::answer::Public<core::result::Result<corten::json::Json<alloc::vec::Vec<(alloc::string::String, alloc::string::String)>>, corten::answer::JsonError>> as corten::response::IntoResponse>::into_response
+      <allocmap::records as corten::handler::Handler<((),), ()>>::call::{closure#0}
+TRACE total requested=3017 usable=3232
+LIVE what=page config=hit body=6124 aged=8291 measured=8192 requested_per=0.0 usable_per=0.0 calls_per=22.00
+LIVE what=json config=hit body=1999 aged=8291 measured=8192 requested_per=0.0 usable_per=0.0 calls_per=27.00

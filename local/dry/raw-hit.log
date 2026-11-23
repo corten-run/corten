@@ -1,0 +1,44 @@
+## pair 1 base
+(no perf)
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     7.12ms    8.58ms  80.13ms   91.09%
+    Req/Sec     5.82k     2.12k   10.63k    66.67%
+  35412 requests in 3.09s, 242.28MB read
+Requests/sec:  11458.24
+Transfer/sec:     78.39MB
+RESULT 35412 0 0 0 0 0
+## pair 1 head
+(no perf)
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     3.96ms    2.74ms  33.64ms   83.27%
+    Req/Sec     8.37k     1.21k   11.08k    66.67%
+  50251 requests in 3.06s, 343.80MB read
+Requests/sec:  16422.63
+Transfer/sec:    112.36MB
+RESULT 50251 0 0 0 0 0
+## pair 2 head
+(no perf)
+Running 3s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     3.66ms    3.22ms  46.11ms   93.51%
+    Req/Sec     9.40k     1.39k   11.56k    71.67%
+  56360 requests in 3.04s, 385.60MB read
+Requests/sec:  18561.97
+Transfer/sec:    126.99MB
+RESULT 56360 0 0 0 0 0
+## pair 2 base
+(no perf)
+Running 3s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     3.92ms    2.68ms  25.61ms   82.17%
+    Req/Sec     8.71k     1.92k   12.21k    73.33%
+  52223 requests in 3.04s, 357.29MB read
+Requests/sec:  17194.88
+Transfer/sec:    117.64MB
+RESULT 52223 0 0 0 0 0

@@ -1,0 +1,12 @@
+round=1 build=main CG config=room requests=40000 aged=0 body=6124 minflt=77011 rss_kb_before=6532 rss_kb_after=311692 minflt_per_request=1.925 rss_bytes_per_request=7812
+round=1 build=main CG config=jroom requests=40000 aged=0 body=1999 minflt=33741 rss_kb_before=6432 rss_kb_after=138628 minflt_per_request=0.844 rss_bytes_per_request=3384
+round=1 build=main CG config=off requests=40000 aged=0 body=6124 minflt=14 rss_kb_before=6480 rss_kb_after=6716 minflt_per_request=0.000 rss_bytes_per_request=6
+round=1 build=head CG config=room requests=40000 aged=0 body=6124 minflt=71634 rss_kb_before=6872 rss_kb_after=290732 minflt_per_request=1.791 rss_bytes_per_request=7267
+round=1 build=head CG config=jroom requests=40000 aged=0 body=1999 minflt=29658 rss_kb_before=6824 rss_kb_after=122912 minflt_per_request=0.741 rss_bytes_per_request=2972
+round=1 build=head CG config=off requests=40000 aged=0 body=6124 minflt=15 rss_kb_before=6648 rss_kb_after=7104 minflt_per_request=0.000 rss_bytes_per_request=12
+round=2 build=head CG config=room requests=40000 aged=0 body=6124 minflt=71635 rss_kb_before=6788 rss_kb_after=290728 minflt_per_request=1.791 rss_bytes_per_request=7269
+round=2 build=head CG config=jroom requests=40000 aged=0 body=1999 minflt=29657 rss_kb_before=6720 rss_kb_after=122772 minflt_per_request=0.741 rss_bytes_per_request=2971
+round=2 build=head CG config=off requests=40000 aged=0 body=6124 minflt=13 rss_kb_before=6768 rss_kb_after=7040 minflt_per_request=0.000 rss_bytes_per_request=7
+round=2 build=main CG config=room requests=40000 aged=0 body=6124 minflt=77011 rss_kb_before=6436 rss_kb_after=311656 minflt_per_request=1.925 rss_bytes_per_request=7814
+round=2 build=main CG config=jroom requests=40000 aged=0 body=1999 minflt=33742 rss_kb_before=6416 rss_kb_after=138616 minflt_per_request=0.844 rss_bytes_per_request=3384
+round=2 build=main CG config=off requests=40000 aged=0 body=6124 minflt=16 rss_kb_before=6480 rss_kb_after=6844 minflt_per_request=0.000 rss_bytes_per_request=9

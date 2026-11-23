@@ -1,0 +1,87 @@
+Mon Nov 23 06:33:54 UTC 2026
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           39 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  12
+On-line CPU(s) list:                     0-11
+Vendor ID:                               GenuineIntel
+Model name:                              Intel(R) Core(TM) i9-10885H CPU @ 2.40GHz
+CPU family:                              6
+Model:                                   165
+Thread(s) per core:                      2
+Core(s) per socket:                      6
+Socket(s):                               1
+Stepping:                                2
+BogoMIPS:                                4800.01
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm arch_perfmon rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow ept vpid ept_ad fsgsbase bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt xsaveopt xsavec xgetbv1 xsaves vnmi md_clear flush_l1d arch_capabilities
+Virtualization:                          VT-x
+Hypervisor vendor:                       Microsoft
+Virtualization type:                     full
+L1d cache:                               192 KiB (6 instances)
+L1i cache:                               192 KiB (6 instances)
+L2 cache:                                1.5 MiB (6 instances)
+L3 cache:                                16 MiB (1 instance)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-11
+Vulnerability Gather data sampling:      Not affected
+Vulnerability Ghostwrite:                Not affected
+Vulnerability Indirect target selection: Mitigation; Aligned branch/return thunks
+Vulnerability Itlb multihit:             KVM: Mitigation: Split huge pages
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Mitigation; Clear CPU buffers; SMT Host state unknown
+Vulnerability Old microcode:             Not affected
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Mitigation; Enhanced IBRS
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI SW loop, KVM SW loop
+Vulnerability Srbds:                     Unknown: Dependent on hypervisor status
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+
+/sys/devices/system/cpu/cpu0/topology/thread_siblings_list:0-1
+/sys/devices/system/cpu/cpu1/topology/thread_siblings_list:0-1
+/sys/devices/system/cpu/cpu10/topology/thread_siblings_list:10-11
+/sys/devices/system/cpu/cpu11/topology/thread_siblings_list:10-11
+/sys/devices/system/cpu/cpu2/topology/thread_siblings_list:2-3
+/sys/devices/system/cpu/cpu3/topology/thread_siblings_list:2-3
+/sys/devices/system/cpu/cpu4/topology/thread_siblings_list:4-5
+/sys/devices/system/cpu/cpu5/topology/thread_siblings_list:4-5
+/sys/devices/system/cpu/cpu6/topology/thread_siblings_list:6-7
+/sys/devices/system/cpu/cpu7/topology/thread_siblings_list:6-7
+/sys/devices/system/cpu/cpu8/topology/thread_siblings_list:8-9
+/sys/devices/system/cpu/cpu9/topology/thread_siblings_list:8-9
+
+perf_event_paranoid 2 nmi_watchdog 1 (runs as root)
+Linux 82b0ad759dde 6.18.58.1-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Tue Oct 27 00:24:11 UTC 2026 x86_64 GNU/Linux
+cmdline: initrd=\initrd.img WSL_ROOT_INIT=1 panic=-1 nr_cpus=12 hv_utils.timesync_implicit=1 printk.devkmsg=on page_reporting.page_reporting_order=5 hv_storvsc.storvsc_max_hw_queues=4 console=hvc0 debug pty.legacy_count=0 WSL_ENABLE_CRASH_DUMP=1
+thp enabled: always [madvise] never
+thp defrag: always defer defer+madvise [madvise] never
+thp khugepaged/defrag: 1
+MemTotal:       24611592 kB
+MemAvailable:   18832424 kB
+ldd (Debian GLIBC 2.41-12+deb13u5) 2.41
+perf version 6.12.118
+wrk debian/4.1.0-4+b1 [epoll] Copyright (C) 2012 Will Glozer
+v20.19.2
+main a02c81e86e6eb81cd6ee5e3815886cb2c4e1a71e; head = main + variants/head.diff, the candidate 41f2d882f1bd8720e6cc7377142fbe89ed3f583c (sha256 b6915ac8f7e7904f1d95edc4c92f39d0a30f2933555c7dd848e513cd443c631b)
+Package: libjemalloc2
+Version: 5.3.0-3
+Package: libzstd1
+Version: 1.5.7+dfsg-1
+Package: libc6
+Version: 2.41-12+deb13u5
+Package: wrk
+Version: 4.1.0-4+b1
+binaries (name, sha256, size):
+main e3560468c552d67066a4a3d724f012eb88bf5e49e56ab335e724fe8138257a3a 4484376 bytes
+head 7bc74f00149cba39100aed1b681c4938152544d82d692aef4a782b0441ae99fd 4486880 bytes
+allocator: jemalloc as the image, LD_PRELOAD=libjemalloc.so.2 MALLOC_CONF=background_thread:true,tcache_max:65536
+L1-icache-load-misses:u diagnostic: not counted (preflight:
+)
+comparisons: room hit plain jroom; 2 recorded pairs each after 0 that is not; 3 s turns; every turn on a fresh start; server CPU 2, wrk CPUs 4,5, driver and perf CPU 7

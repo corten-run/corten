@@ -1,0 +1,5 @@
+pair,version,requests,cycles_u,cycles_k,instructions_u,page_faults,minor_faults,icache_u,minflt,rss_idle_kb,rss_end_kb,hwm_kb,anon_huge_kb,errors
+1,base,34573,,,,,,,67098,7632,273296,273296,0,0
+1,head,31910,,,,,,,57639,7788,236036,236036,0,0
+2,head,34612,,,,,,,62493,7768,255236,255236,0,0
+2,base,33590,,,,,,,65221,7608,265828,265828,0,0

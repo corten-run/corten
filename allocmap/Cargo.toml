@@ -1,0 +1,23 @@
+[package]
+name = "allocmap"
+version = "0.0.0"
+edition = "2021"
+
+# Scratch harness for corten-run/corten#1824 (1824e): what each kept answer leaves allocated, by
+# allocation, with the allocator's usable size (jemalloc's size class when it is preloaded) and
+# where it was made. Built against ../tree (main's tree, or the candidate's), copied in by
+# local/allocmap.sh. Not part of the repository.
+[dependencies]
+corten = { package = "corten-run", path = "../tree/crates/corten", features = ["compress", "json"] }
+http = "1"
+http-body-util = "0.1"
+tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = 1
+
+[workspace]

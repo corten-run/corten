@@ -1,0 +1,28 @@
+[package]
+name = "p1824e"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "probe"
+path = "src/main.rs"
+
+# Features: the template's (the defaults, log, and compress) and json, which /records needs, as the
+# 1846r kit's probe was built. Built against ../work, the tree build.sh lays out for each build
+# (main, or the candidate). Third-party versions come from the tree's Cargo.lock, which pack.ps1
+# copies here. tower and http-body-util only for the in-process `cg` mode (callgrind and fault
+# counts, as tests/router_cost.rs drives the router).
+[dependencies]
+corten = { package = "corten-run", path = "../work/crates/corten", features = ["json", "compress"] }
+http = "1"
+http-body-util = "0.1"
+tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
+tower = { version = "0.5", features = ["util"] }
+
+# The repository's release profile.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[workspace]

@@ -1,0 +1,52 @@
+checked 1 requests: A twice and B the same; 6124 bytes
+room: the warm-up took about 7 s a pair; 100 pairs should take about 12 minutes
+room: pair 10 of 100 done 06:52:20
+room: pair 20 of 100 done 06:53:31
+room: pair 30 of 100 done 06:54:43
+room: pair 40 of 100 done 06:55:54
+room: pair 50 of 100 done 06:57:06
+room: pair 60 of 100 done 06:58:17
+room: pair 70 of 100 done 06:59:29
+room: pair 80 of 100 done 07:00:40
+room: pair 90 of 100 done 07:01:51
+room: pair 100 of 100 done 07:03:03
+room: done, /m/1824e/results/pairs-room.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+hit: the warm-up took about 7 s a pair; 100 pairs should take about 12 minutes
+hit: pair 10 of 100 done 07:04:19
+hit: pair 20 of 100 done 07:05:29
+hit: pair 30 of 100 done 07:06:39
+hit: pair 40 of 100 done 07:07:48
+hit: pair 50 of 100 done 07:08:58
+hit: pair 60 of 100 done 07:10:08
+hit: pair 70 of 100 done 07:11:17
+hit: pair 80 of 100 done 07:12:27
+hit: pair 90 of 100 done 07:13:37
+hit: pair 100 of 100 done 07:14:47
+hit: done, /m/1824e/results/pairs-hit.csv
+checked 1 requests: A twice and B the same; 6124 bytes
+plain: the warm-up took about 7 s a pair; 100 pairs should take about 12 minutes
+plain: pair 10 of 100 done 07:16:03
+plain: pair 20 of 100 done 07:17:13
+plain: pair 30 of 100 done 07:18:23
+plain: pair 40 of 100 done 07:19:32
+plain: pair 50 of 100 done 07:20:42
+plain: pair 60 of 100 done 07:21:52
+plain: pair 70 of 100 done 07:23:01
+plain: pair 80 of 100 done 07:24:11
+plain: pair 90 of 100 done 07:25:21
+plain: pair 100 of 100 done 07:26:30
+plain: done, /m/1824e/results/pairs-plain.csv
+checked 1 requests: A twice and B the same; 1999 bytes
+jroom: the warm-up took about 7 s a pair; 100 pairs should take about 12 minutes
+jroom: pair 10 of 100 done 07:27:49
+jroom: pair 20 of 100 done 07:29:01
+jroom: pair 30 of 100 done 07:30:12
+jroom: pair 40 of 100 done 07:31:23
+jroom: pair 50 of 100 done 07:32:35
+jroom: pair 60 of 100 done 07:33:46
+jroom: pair 70 of 100 done 07:34:57
+jroom: pair 80 of 100 done 07:36:09
+jroom: pair 90 of 100 done 07:37:20
+jroom: pair 100 of 100 done 07:38:32
+jroom: done, /m/1824e/results/pairs-jroom.csv

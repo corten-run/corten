@@ -1,0 +1,22 @@
+## pair w1 base
+(no perf)
+Running 1s test @ http://127.0.0.1:18081/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     5.65ms    4.89ms  33.95ms   86.89%
+    Req/Sec     6.50k     1.92k    8.99k    65.00%
+  13103 requests in 1.04s, 89.65MB read
+Requests/sec:  12649.84
+Transfer/sec:     86.55MB
+RESULT 13103 0 0 0 0 0
+## pair w1 head
+(no perf)
+Running 1s test @ http://127.0.0.1:18082/page
+  2 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     4.22ms    3.71ms  29.70ms   90.58%
+    Req/Sec     8.54k     1.46k   12.53k    75.00%
+  17123 requests in 1.03s, 117.15MB read
+Requests/sec:  16558.76
+Transfer/sec:    113.29MB
+RESULT 17123 0 0 0 0 0

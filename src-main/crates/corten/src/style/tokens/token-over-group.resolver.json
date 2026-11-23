@@ -1,0 +1,6 @@
+{
+  "version": "2025.10",
+  "resolutionOrder": [
+    { "type": "set", "name": "theme", "sources": [{ "$ref": "card-sizes.tokens.json" }, { "$ref": "card-color.tokens.json" }] }
+  ]
+}
