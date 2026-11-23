@@ -70,17 +70,20 @@ test("real current core inspection rejects unsealed synthetic evidence through t
   assert.throws(() => campaignOutcome(report, { round: "r21", commit: currentCommit }, 0));
 });
 
-for (const group of ["client-heavy", "mixed-production"]) test(`collector retains actual core ${group} passed-but-ineligible outcomes`, { skip: !integrated }, async () => {
+for (const [group, historical] of [["client-heavy", false], ["client-heavy", true], ["mixed-production", false]])
+  test(`collector retains actual core ${group}${historical ? " (historical Solid)" : ""} passed-but-ineligible outcomes`, { skip: !integrated }, async () => {
   const { composePhase } = await import("./isolated/composition.mjs");
   const report = syntheticInspection("verified"), row = report.groups.find((r) => r.group === group);
   const apps = row.appOutcomes.map((r) => r.app), failed = group === "mixed-production";
   const sourceInputs = Object.fromEntries(Object.entries(latestStableSources)
-    .map(([key, path]) => [key, readFileSync(new URL(`../../${path}`, import.meta.url))]));
+    .map(([key, path]) => [key, historical
+      ? execFileSync("git", ["show", `6f1bbf0553ec3b60c884bf5855fe8786ca25f1c2:${path}`], { cwd: new URL("../../", import.meta.url) })
+      : readFileSync(new URL(`../../${path}`, import.meta.url))]));
   const latestStable = evaluateLatestStable({ group, ...sourceInputs });
   assert.equal(latestStable.valid, true);
   assert.equal(latestStable.status, failed ? "not-applicable" : "blocked");
   const unsupported = new Set((latestStable.candidates ?? []).filter((r) => r.status === "unsupported").map((r) => r.app));
-  assert.deepEqual([...unsupported], group === "client-heavy" ? ["solid"] : []);
+  assert.deepEqual([...unsupported], historical ? ["solid"] : []);
   const native = { status: failed ? "failed" : "verified", attemptComplete: true, cleanupComplete: true,
     resources: "verified", comparisonEligibleApps: [],
     outcomes: apps.map((app, i) => ({ app, outcome: unsupported.has(app) ? "unsupported" : failed && i === 0 ? "failed" : "passed" })) };

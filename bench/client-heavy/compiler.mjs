@@ -1,8 +1,62 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, realpathSync, renameSync, rmdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync } from "node:fs";
 import { readdir, readFile, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { basename, dirname, join, relative, resolve, sep, isAbsolute, posix, win32 } from "node:path";
+
+export const solidCompilerVersion = "2.0.2";
+const entry = "@solidjs/compiler/index.js";
+const entrySha256 = "5322fd7863ab1e4805583f912b7092d949f5a93ed66bdb974ec803bea9582c7d";
+// Archive SRI and unpacked addon SHA-256 from the official npm releases.
+const bindings = {
+  "darwin-arm64": ["ctgEtzj0R5JDUiyo1wNcSgAyjO2XqNXvyPx6UolK1WK6qStR5KIHz3uIIG68aKrFhnOLTUiwS3hjd4yZWolBpA==", "4ff25630c753554a1f300d3d9ae04f607d15711e9c66e130939aaabe670e3b28"],
+  "darwin-x64": ["iTcLdvzEFF3jfDwnmdpax4q1eVd6Jth0u59BzA++p345feNXFSJvzS/bGE5UrGMe9NsLFFV1IEHkZyEpbSOovw==", "70906741f3cf7d389a92ea411bdbd30ee9faa9a3e72e7d4f3fdc6508d1e0cdfe"],
+  "linux-arm64-gnu": ["DBdg24ud/Eu/+Ns9jgwy0AmyyExhoXn5R14VBkGX9w5lxiI3k/eG21im+hsUkqdwt/Ej0CazauifTdGaEceUzw==", "b2f1907a1fc4fd190b6649c4914b3638a8a52227ff95f22e2aa199fb9019b95e"],
+  "linux-x64-gnu": ["tRbkqVgJH7rOghIFe9j3MRvosx8ueNsGIDAd+XIUQbexhbM7KMCOJnWLmL7J/9PMPmbk34zJYz0fwwFSBp8ULQ==", "4903e9e0f6701cfed6c3fc371fd57ee1c21bd1c2764d7dc81c9d060fe10eaf35"],
+  "win32-x64-msvc": ["5q6RRWRI9y685wzBcteezVifcVz/di9hCEKqruZrBo60qbne13Orl6FOwP8LK4Exls+Ws98UNvznFuz0NhLQTg==", "63136c12a13f2af80e49295d2b72d174b63e8478ae51a2849466710496a46c84"],
+};
+export const solidCompilerArchives = Object.freeze(Object.fromEntries(Object.entries(bindings)
+  .map(([suffix, [integrity]]) => [`@solidjs/compiler-${suffix}`, `sha512-${integrity}`])));
+export const solidRuntimeFiles = Object.freeze({
+  "solid-js/dist/solid.js": "fcd146daf705027d03924cdd55cb9039d57a1c1f83d1609b655f4d2cd03f5ddb",
+  "@solidjs/web/dist/web.js": "27af0627f915a0e0e1bed7aca90a0ab6d750ba78824419e34509021f7eb98dca",
+});
+export function solidCompilerFiles(target, platform) {
+  assert.ok(Object.hasOwn(bindings, target) && target.startsWith(platform + "-"), "unreviewed-solid-compiler-target");
+  return { [entry]: entrySha256, [`@solidjs/compiler-${target}/compiler.${target}.node`]: bindings[target][1] };
+}
+
+export function verifySolidFiles(files, hashFor) {
+  for (const [path, expected] of Object.entries(files)) {
+    assert.equal(hashFor(path), expected, `missing or modified Solid 2 input ${path}; run npm --prefix bench/browser ci`);
+  }
+}
+
+export function solidCompiler(browserPackage) {
+  const { platform, arch, env } = process;
+  assert.ok(!env.SOLID_COMPILER_NATIVE && !env.NAPI_RS_FORCE_WASI, "Solid compiler overrides are not supported");
+  const target = platform + "-" + arch + (platform === "linux" ? "-gnu" : platform === "win32" ? "-msvc" : "");
+  const files = solidCompilerFiles(target, platform);
+  const modules = join(dirname(browserPackage), "node_modules");
+  const fullEntry = join(modules, entry), binding = Object.keys(files)[1], fullBinding = join(modules, binding);
+  verifySolidFiles({ ...files, ...solidRuntimeFiles }, (path) => {
+    const absolute = join(modules, path);
+    return existsSync(absolute) ? createHash("sha256").update(readFileSync(absolute)).digest("hex") : null;
+  });
+  const require = createRequire(browserPackage), fromCompiler = createRequire(fullEntry);
+  assert.equal(require.resolve("@solidjs/compiler"), fullEntry, "Solid compiler escaped bench/browser install");
+  assert.equal(fromCompiler.resolve(`@solidjs/compiler-${target}`), fullBinding, "Solid compiler binding escaped bench/browser install");
+  for (const local of ["compiler.node", `compiler.${target}.node`])
+    assert.ok(!existsSync(join(dirname(fullEntry), local)), "unreviewed local Solid compiler binding");
+  // Preload the verified native addon: the public wrapper must not fall back to WASI.
+  fromCompiler(fullBinding);
+  const { transform } = require(fullEntry);
+  return { target, files, transform(source, filename) {
+    return transform(source, { filename, generate: "dom", moduleName: "@solidjs/web" }).code;
+  } };
+}
 
 const compilerTargetId = "CORTEN_ISOLATED_COMPILER_TARGET_ID";
 function directoryId(stat) {

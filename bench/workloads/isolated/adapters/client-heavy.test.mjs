@@ -1,5 +1,6 @@
 // Synthetic adapter apparatus only. No native build, timing or admission claim.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { registerHooks } from "node:module";
@@ -66,7 +67,8 @@ function fixture(t) {
 function candidateFixture(t, convert = (text) => text, committedText = (text) => text) {
   const f = fixture(t), inputs = {}, checkout = {};
   for (const [key, path] of Object.entries(latestStableSources)) {
-    inputs[key] = committedText(readFileSync(new URL(`../../../../${path}`, import.meta.url)).toString().replaceAll("\r\n", "\n"));
+    const historical = "6f1bbf0553ec3b60c884bf5855fe8786ca25f1c2";
+    inputs[key] = committedText(execFileSync("git", ["show", `${historical}:${path}`], { cwd: new URL("../../../../", import.meta.url) }).toString());
     checkout[key] = convert(inputs[key]); f.source(path, inputs[key], checkout[key]);
   }
   const committed = evaluateLatestStable({ group: "client-heavy", ...inputs }), captured = evaluateLatestStable({ group: "client-heavy", ...checkout });

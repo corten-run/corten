@@ -87,19 +87,32 @@ the exact commit, not a saved eligible flag. Historical native v1/v2 and policy
 v1 retain their old semantics; an old group-wide blocker is not reinterpreted as
 candidate qualification.
 
-The reviewed 2026-11-22 npm registry observation has Solid and `@solidjs/web` 2.0.3
-and Babel core and parser 8.1.3, but the stable `babel-preset-solid` 1.9.19 requires Solid
-`^1.9.16` and Babel `^7.0.0`. Solid remains visible as `unsupported`, reason
-`latest-stable-solid-2-needs-compatible-stable-compiler`, with null qualification
-and no measurement (null in v3, an empty sample array in v4). Its compiler hook
-is not invoked and it has no build artifacts.
-Replay rejects attempted Solid builds/captures, missing or mixed policy, and
-invented unsupported peers. A failed build is never renamed unsupported.
+In the reviewed 2026-11-22 policy, the stable `babel-preset-solid` 1.9.19
+required Solid `^1.9.16` and Babel `^7.0.0`. Attempts bound to that policy
+keep their original `unsupported` Solid row
+(`latest-stable-solid-2-needs-compatible-stable-compiler`), with no build,
+qualification or measurement. Replay rejects attempted builds or captures under
+that disposition. A failed build is never renamed unsupported.
 
-Only Solid's hook loads Babel core. Other candidates retain their own compiler
-and runtime closures; an actual shared consumer of an incompatible package is
-still blocked. The shared browser checkout retains Solid 1.9.19 and Babel core 7.29.13
-for the older browser suite; these are not latest-stable measurements. New builds
+New attempts use Solid and `@solidjs/web` 2.0.3 with the official
+[`@solidjs/compiler` 2.0.2 DOM transform](https://github.com/solidjs/solid/blob/7f86b2dee029a82be946918fcaa248ce52d1a96d/packages/compiler/README.md),
+observed on 2026-11-23. The compiler runs inside the existing esbuild hook;
+neither Babel nor Vite is in this candidate's build. The same
+`npm --prefix bench/browser ci` installs both suites. The historical browser
+builder alone uses the `solid-js-legacy` alias (Solid 1.9.19), Babel 7.29.13
+and the DOM plugin with the old preset's options.
+
+The policy checks the exact published archive entries and compiler dependency and
+runtime peer declarations. The build additionally checks the installed compiler
+entry and the reviewed native binding's bytes, refuses a fallback or compiler
+override, and requires the two reviewed Solid 2 browser runtime entries in the
+esbuild input ledger. Offline replay checks those same identities against the
+browser dependency snapshot and build receipt. This clears the Solid input
+gate, not parity: the same browser asset and operation assertions, keyed DOM
+checks, readiness, timing boundaries and cleanup still apply before comparison.
+No old disposition or performance number changes.
+
+Other candidates retain their own compiler and runtime closures. New builds
 use Remix 3.3.0, Svelte 5.59.1 and Vue and its SFC compiler 3.5.46. The supported
 browser candidate/build roots and Vue's SFC compiler match their observed
 latest stable versions. This is freshness of those explicit

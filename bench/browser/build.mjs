@@ -1,5 +1,5 @@
 // Builds every app into out/<app>/: index.html and one minified app.js (esbuild; Solid's JSX
-// through babel-preset-solid, Svelte and Vue through their own compilers). Prints each app's
+// through the legacy DOM transform, Svelte and Vue through their own compilers). Prints each app's
 // JavaScript size.
 import { build } from "esbuild";
 import { transformAsync } from "@babel/core";
@@ -12,6 +12,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const js = join(here, "..", "..", "crates", "corten", "js");
 const out = join(here, "out");
+const solidLegacy = { "solid-js": "solid-js-legacy" };
 
 /** @param {{ generate: "dom" | "ssr", hydratable?: boolean }} options */
 const solidJsx = (options) => ({
@@ -19,7 +20,14 @@ const solidJsx = (options) => ({
   setup(b) {
     b.onLoad({ filter: /\.jsx$/ }, async (args) => {
       const source = readFileSync(args.path, "utf8");
-      const result = await transformAsync(source, { filename: args.path, cwd: here, presets: [["babel-preset-solid", options]] });
+      // The exact options from babel-preset-solid 1.9.19, without its Solid 1
+      // peer on the install shared with the dedicated Solid 2 candidate.
+      const solid1Options = {
+        moduleName: "solid-js/web", generate: "dom", contextToCustomElements: true, wrapConditionals: true,
+        builtIns: ["For", "Show", "Switch", "Match", "Suspense", "SuspenseList", "Portal", "Index", "Dynamic", "ErrorBoundary"],
+        ...options,
+      };
+      const result = await transformAsync(source, { filename: args.path, cwd: here, plugins: [["babel-plugin-jsx-dom-expressions", solid1Options]] });
       return { contents: result.code, loader: "js" };
     });
   },
@@ -97,6 +105,7 @@ async function server(entry, plugins = [], jsxImportSource = "remix/component") 
   const outfile = join(out, "_server", entry.replace(/[\\/]/g, "_") + ".mjs");
   const define = { "process.env.NODE_ENV": '"production"', ...vueFlags };
   await build({ entryPoints: [join(here, entry)], bundle: true, format: "esm", platform: "node", conditions: ["production"], outfile, plugins, jsx: "automatic", jsxImportSource, define,
+    ...(entry.startsWith("apps/solid/") ? { alias: solidLegacy } : {}),
     // A CommonJS package (react-dom/server) bundled into ESM still requires Node's built-ins.
     banner: { js: 'import { createRequire as __cr } from "node:module"; const require = __cr(import.meta.url);' }, nodePaths: [join(here, "node_modules")], logLevel: "error" });
   return (await import(pathToFileURL(outfile).href)).render;
@@ -183,7 +192,8 @@ for (const app of apps) {
     outfile: join(dir, "app.js"),
     // As Vite builds for production: packages' "production" exports, not runtime dev checks.
     conditions: ["browser", "production"],
-    alias: { "corten/state": join(here, "apps", "shared", "state.js"), "corten/solid": join(here, "apps", "solid-h", "solid.js") },
+    alias: { "corten/state": join(here, "apps", "shared", "state.js"), "corten/solid": join(here, "apps", "solid-h", "solid.js"),
+      ...(["solid", "solid-h", "solid-ssr", "dashboard-solid"].includes(app.name) ? solidLegacy : {}) },
     jsx: "automatic", jsxImportSource: app.jsxImportSource ?? "remix/component",
     define: { "process.env.NODE_ENV": '"production"', ...vueFlags },
     plugins: app.plugins ?? [],
