@@ -345,7 +345,7 @@ impl<T: ToJson> IntoResponse for Json<T> {
     fn into_response(self) -> Response {
         let mut res = self.0.__into_response();
         // Room for the headers `App` adds too, so the map is allocated once.
-        res.headers_mut().reserve(12);
+        res.headers_mut().reserve(crate::response::APP_HEADERS);
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(crate::api::JSON));
         res
     }

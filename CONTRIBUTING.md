@@ -130,6 +130,8 @@ their absence cannot establish framework or host qualification.
 
 `Catalog Contract` runs the harness and Corten parity for framework-only changes; app
 changes run the harness and the affected apps, including consumers of shared drivers.
+The listed fleet-controller files keep the harness, Corten's root-context build and both
+JSON jobs, but do not select unrelated app builds. Benchmark Evidence selection is unchanged.
 Changes to shared benchmark inputs or the workflow, and manual runs, test all 20 parity
 apps and both JSON jobs. A push to `main` is scoped the same way by its push diff, and tests
 everything when its base commit is unknown. This also applies to unknown app directories
