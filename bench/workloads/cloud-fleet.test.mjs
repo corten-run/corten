@@ -593,7 +593,8 @@ test("offline launch acknowledges a handoff, not a timed result; reconnection st
   assert.ok(h.saved().archiveSha256 && h.saved().evidenceSha256); assert.equal(h.deletes, 0);
   assert.ok(h.calls.some((c) => c[0] === "ssh" && c.at(-1).includes(bootId) && c.at(-1).includes("CORTEN_IDLE")));
   // Synthetic replay seam tests only custody dispatch, never the native verifier.
-  const patched = { ...legacy, offlineTerminal: { hostname: launched.name, bootId, token: launched.token,
+  const patched = { ...legacy, offlineIngress: [{ group, phase: "timing", packets: 2, bytes: 120 }],
+    offlineTerminal: { hostname: launched.name, bootId, token: launched.token,
     bootstrapSealSha256: digest(JSON.stringify(launched.control.ledger.at(-1).request.seal)) } };
   assert.equal(launched.group, group);
   h.flags.busyHost = true;
@@ -603,6 +604,46 @@ test("offline launch acknowledges a handoff, not a timed result; reconnection st
   assert.equal(await collect(async () => patched), 1);
   assert.equal(h.deletes, 1); assert.ok(h.saved().destroyedAt);
   assert.equal(h.saved().fullGroupQualified, false);
+});
+
+test("offline code 2 audit expiry permits only bounded exact-host cleanup with sealed failure evidence", async (t) => {
+  const { h, run, launch, group } = offlineFixture(t, { group: "mixed-production" });
+  const launched = await launch();
+  h.setArchive(archive([...metadata().map((entry) => entry.name === "exit-code" ? { ...entry, body: "2\n" } : entry),
+    { name: "campaign/" }, { name: "campaign/fake.json", body: "{}" }]));
+  const report = { ...syntheticInspection("blocked"), schema: "benchmark-isolated-group-campaign-inspection/v1",
+    blockers: ["independent audit expired before timing"], selection: launched.selection, groups: [], offlineIngress: [],
+    offlineAuditExpired: { group, subjectSha256: subject },
+    offlineTerminal: { hostname: launched.name, bootId, token: launched.token,
+      bootstrapSealSha256: digest(JSON.stringify(launched.control.ledger.at(-1).request.seal)) } };
+  const collect = (result) => h.task({ run, inspect: async () => result }).collect();
+  assert.equal(await collect(report), 3);
+  assert.equal(h.deletes, 0);
+  assert.equal(h.saved().archiveSha256, undefined, "running host was not read or deleted");
+  h.flags.active = false; h.flags.expired = true;
+  for (const tamper of [
+    (r) => { delete r.offlineAuditExpired; },
+    (r) => { r.offlineTerminal.bootId = "f".repeat(36); },
+    (r) => { r.collectionIntegrity = "unsealed-partial"; },
+    (r) => { r.status = "verified"; },
+  ]) {
+    const wrong = structuredClone(report); tamper(wrong);
+    await assert.rejects(collect(wrong), /native campaign validation unavailable or invalid/);
+    assert.equal(h.deletes, 0);
+    assert.equal(h.saved().deletionIntentAt, undefined);
+  }
+  h.flags.hook = (bin, args) => {
+    if (bin === "ssh" && args.at(-1).includes("CORTEN_IDLE") && args.at(-1).includes("\nsystemctl show")) h.flags.active = true;
+  };
+  await assert.rejects(collect(report), /idle archive or terminal unit changed/);
+  assert.equal(h.deletes, 0); assert.equal(h.saved().deletionIntentAt, undefined);
+  h.flags.hook = undefined; h.flags.active = false;
+  assert.equal(await collect(report), 1);
+  assert.equal(h.deletes, 1);
+  const saved = h.saved();
+  assert.ok(saved.archiveSha256 && saved.evidenceSha256 && saved.destroyedAt);
+  assert.equal(saved.exitCode, 2); assert.equal(saved.validation.status, "blocked"); assert.equal(saved.fullGroupQualified, false);
+  assert.ok(h.calls.some((c) => c[0] === "ssh" && c.at(-1).includes(bootId) && c.at(-1).includes("populated 0")));
 });
 
 test("a lost offline final acknowledgement never authorizes another launch or collection", async (t) => {

@@ -94,7 +94,7 @@ export async function validateCampaign(input) {
       const initial = read(`${id}/host-initial.json`);
       for (const field of ["hostname", "bootId"]) assert.equal(initial[field], controlHost[field]);
     }
-    if (offline && status.state === "finished") {
+    if (offline && (status.state === "finished" || replay.offlineAuditExpired)) {
       assert.ok(controlHost);
       offlineTerminal = { ...controlHost, token: replay.controlAdmissions.get("bootstrap").binding.token, bootstrapSealSha256 };
     }
@@ -108,6 +108,13 @@ export async function validateCampaign(input) {
       assert.ok(isDeepStrictEqual(collection.status, status), "collection status differs");
     } else assert.equal(status.state, "preserved-uncertain", "finished campaign needs a sealed collection manifest");
     const diagnostics = [], blockers = currentExecution ? [] : ["legacy three-group campaign is not all-nine execution"];
+    if (replay.offlineAuditExpired) {
+      assert.ok(collectionEntry && !replay.incomplete && !replay.pending.length);
+      assert.ok(!subtree.entries.some(({ path }) => /^(json|mixed)-(audit-delivery(?:-pending|-retained)?|native-audits)\.json$/.test(path)),
+        "audit publication may have started");
+      blockers.push("independent audit expired before timing");
+    }
+    const offlineIngress = [];
     const verifiedGroups = [];
     const phaseDirectories = subtree.entries.filter((e) => e.type === "directory" && /^\d{2}-[a-z-]+-(prepare|timing)$/.test(e.path));
     assert.deepEqual(phaseDirectories.map((e) => e.path).sort(), [...replay.phases.keys()].sort(), "native phases do not match journal");
@@ -119,7 +126,7 @@ export async function validateCampaign(input) {
       assert.equal(entry.path, `${String(index).padStart(2, "0")}-${group}-${phase}`);
       assert.ok(groups.includes(group)); assert.ok(phase !== "prepare" || group === "json-api");
       const recorded = replay.phases.get(entry.path), hostObservations = [];
-      let hostBefore, boundary;
+      let hostBefore, boundary, ingress;
       if (currentExecution && recorded.phaseManifestSha256 !== undefined) {
         assert.equal(phaseSnapshot(join(folder, id, entry.path), group === "json-api" && phase === "prepare").sha256,
           recorded.phaseManifestSha256, "phase host/native evidence differs from journal seal");
@@ -127,7 +134,9 @@ export async function validateCampaign(input) {
         if (offline) {
           assert.equal(hostBefore.controlApparatus, undefined);
           nativeControlPartition(recorded.binding);
-          verifyOfflineWindow(read(`${id}/${entry.path}/control-ingress.json`));
+          ingress = verifyOfflineWindow(read(`${id}/${entry.path}/control-ingress.json`));
+          offlineIngress.push({ group, phase, ...ingress });
+          if (phase === "timing" && ingress.packets) blockers.push(`${group}/timing: denied pre-login probe traffic`);
         }
         if (status.executionVersion === 5) {
           assert.deepEqual(hostBefore.controlApparatus?.registration, apparatus);
@@ -210,7 +219,7 @@ export async function validateCampaign(input) {
             read(`${id}/json-audit-subject.json`), read(`${id}/json-native-audits.json`), join(folder, id, "audit-sources")).complete
             : mixedStaging && group === "mixed-production" ? validateMixedRun(binding, native,
               read(`${id}/mixed-audit-subject.json`), read(`${id}/mixed-native-audits.json`)) : true;
-          const derived = composePhase(binding, nativeResult, host, recorded.results, timingAudit);
+          const derived = composePhase(binding, nativeResult, host, recorded.results, timingAudit, ingress?.packets);
           const savedOutcome = status.outcomes[index];
           if (replay.completed.has(group)) {
             for (const field of ["outcome", "nativeStatus", "appOutcomes", "report"]) assert.ok(isDeepStrictEqual(savedOutcome[field], derived[field]), "saved outcome differs");
@@ -322,6 +331,8 @@ export async function validateCampaign(input) {
       ...(placement ? { placement } : {}),
       ...(supervisedTerminal ? { supervisedTerminal } : {}),
       ...(offlineTerminal ? { offlineTerminal } : {}),
+      ...(offline ? { offlineIngress } : {}),
+      ...(replay.offlineAuditExpired ? { offlineAuditExpired: replay.offlineAuditExpired } : {}),
       selection: currentExecution ? { schema: registrySchema, groups: plan.bindings.map((b) => ({ group: b.request.group,
         contractSha256: b.selection.contractSha256, apps: b.selection.apps })) } : undefined, groups: verifiedGroups, blockers,
       collectionIntegrity: collectionEntry && !replay.incomplete && replay.pending.length === 0 ? "manifest-verified" : "unsealed-partial",

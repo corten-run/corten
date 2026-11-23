@@ -10,6 +10,7 @@ import { nativeControlPartition } from "./native-roles.mjs";
 
 export const campaignSchema = "benchmark-isolated-campaign/v1";
 export const groupCampaignSchema = "benchmark-isolated-group-campaign/v1";
+export const auditWaitMs = 24 * 60 * 60 * 1000;
 export const productionRecipes = Object.freeze(Object.fromEntries(groupNames.map((group) => [group,
   group === "localized-marketplace" ? "marketplace-short-window"
     : group === "mixed-production" ? "mixed-production-measure"

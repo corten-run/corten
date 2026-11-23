@@ -6,7 +6,7 @@ import { comparisonProfile } from "../../client-heavy/contract.mjs";
 export const commandResult = (record) => Object.fromEntries(["terminal", "code", "signal", "cancelled", "forced", "error", "success"].map((key) => [key, record[key]]));
 
 /** Apparatus completion is independent of which framework passed its functional gates. */
-export function composePhase(binding, native, host, commands, timingAudit = true) {
+export function composePhase(binding, native, host, commands, timingAudit = true, deniedPreLoginProbes = 0) {
   const expected = binding.preparation.fixtures.length + 1, last = commands.at(-1);
   const browser = binding.request.group === "fullstack-browser";
   const hardening = binding.request.group === "hardening";
@@ -59,12 +59,15 @@ export function composePhase(binding, native, host, commands, timingAudit = true
     || (Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.includes(app));
   const browserAllowsComparison = (app) => !browser || native.qualificationPassed === true && native.expectedExitCode === 0
     && Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.includes(app);
-  return { outcome: complete ? "native-validated" : native.status === "failed" || commands.some((r) => !r.success) ? "failed" : "blocked",
+  const timingBlockedByPreLoginProbes = complete && deniedPreLoginProbes > 0;
+  return { outcome: timingBlockedByPreLoginProbes ? "blocked"
+    : complete ? "native-validated" : native.status === "failed" || commands.some((r) => !r.success) ? "failed" : "blocked",
     nativeStatus: native.status,
     appOutcomes: native.outcomes.map((r) => {
-      const comparisonEligible = complete && policyAllowsComparison(r.app) && r.outcome === "passed"
+      const comparisonEligible = complete && !timingBlockedByPreLoginProbes && policyAllowsComparison(r.app) && r.outcome === "passed"
         && nativeAllowsComparison(r.app) && browserAllowsComparison(r.app);
       return { ...r, comparisonEligible, ...(client && comparisonEligible ? { comparison: native.comparisons[r.app] } : {}) };
     }),
-    report: { qualification: complete ? "native-replay-passed" : "blocked", latestStable: policy ?? null } };
+    report: { qualification: complete && !timingBlockedByPreLoginProbes ? "native-replay-passed" : "blocked", latestStable: policy ?? null,
+      ...(timingBlockedByPreLoginProbes ? { timingBlockedByPreLoginProbes: true } : {}) } };
 }

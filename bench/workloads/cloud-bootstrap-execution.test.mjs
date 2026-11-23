@@ -438,9 +438,9 @@ test("new dedicated reservations check the manager before cloud-init and native 
   assert.equal(quiet.slice(quiet.indexOf("bootstrap_stage=ssh-ingress-verification")),
     original.slice(original.indexOf("bootstrap_stage=ssh-ingress-verification")));
   for (const plain of [state, { ...state, control }, dedicated, { ...dedicated, control: ledger }])
-    assert.throws(() => productionFiles({ ...plain, quietBootstrap: true }), /quiet bootstrap requires a supervised group/);
-  assert.throws(() => productionFiles({ ...saved, quietBootstrap: false }), /quiet bootstrap requires a supervised group/);
-  assert.throws(() => productionFiles({ ...saved, quietBootstrap: "other" }), /quiet bootstrap requires a supervised group/);
+    assert.throws(() => productionFiles({ ...plain, quietBootstrap: true }), /quiet bootstrap requires a registered group/);
+  assert.throws(() => productionFiles({ ...saved, quietBootstrap: false }), /quiet bootstrap requires a registered group/);
+  assert.throws(() => productionFiles({ ...saved, quietBootstrap: "other" }), /quiet bootstrap requires a registered group/);
 });
 
 test("post-start idle evidence distinguishes natural drain, persistent manager and a late proof", {

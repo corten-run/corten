@@ -568,22 +568,29 @@ During every native phase an additional boot-local nftables rule on the guest
 blocks even the allowed peer's SSH packets. The existing owner ingress policy
 still drops other peers. A valid phase retains unchanged rule readbacks and a
 closed guardian window. Fresh TCP SYNs dropped before `sshd` within the guest's
-8-packet burst and 8/minute rate are recorded separately and do not invalidate
-a phase. Excess probes, other SSH packets at the fence, a changed rule, or an
-actual unexpected login/guardian intrusion still refuse the phase. The fence
-reopens at phase end; the service's stop hook removes it on an interrupted
-phase. There is no status listener.
+8-packet burst and 8/minute rate are recorded by phase as packet and byte
+counts. They do not disqualify untimed preparation. Official timing requires
+zero new hits, even when the fence denied them all: their effect on target
+hardware has not been bounded. Such a timing archive is retained as
+unqualified, not as a missing handoff or a native workload failure. Excess
+probes, other SSH packets at the fence, a changed rule, or an actual unexpected
+login/guardian intrusion still refuse the phase. The fence reopens at phase end;
+the service's stop hook removes it on an interrupted phase.
 
-After reconnecting, use the existing [read-only owned-host observation](#independent-native-audits)
-(steps 2 and 3) to discover readiness without estimating duration. Use
+For first qualification, arrange the independent audit rendezvous before
+timing. For JSON's untimed preparation or mixed's pre-build audit wait, use
+the existing [read-only owned-host observation](#independent-native-audits)
+(steps 2 and 3) before any audit delivery is authorized. Use
 `ConnectionAttempts=1` and `ConnectTimeout=3`, at most one observation every
-two minutes, not a continuous poll;
-serialize it with audit delivery and collection. Connection refusal/timeout
-means no observation, not “active” or “terminal”; do not attempt a transfer.
-If the exact unit is active, inspect only the latest journal status for the
-matching review wait. If the exact unit is terminal, use separate collection
-approval. A connect-only check is not an observation of either state, and
-there is no safe permission to open other SSH sessions when it succeeds.
+two minutes, and serialize each observation with delivery and collection.
+Connection refusal/timeout is no observation; do not attempt a transfer.
+Confirm the exact unit and the latest journal event for the matching audit wait.
+Stop all active probes before authorizing delivery, or before handoff for a group
+without an audit wait. During timing, observe only passively or from the provider
+side. There is no status listener or trustworthy out-of-band native completion
+signal in this apparatus: provider instance state alone is not native terminal
+proof. If there is no independently known terminal signal, wait for the planned
+hard runtime bound before attempting collection rather than guessing when timing ends.
 
 JSON still stops after preparation, and mixed still stops before its build,
 for [the independent native audit](#independent-native-audits). Use the existing
@@ -591,9 +598,14 @@ fixed read-only export only at that group's audit wait, drain/close the export
 sessions, and separately approve delivery. The guest waits for the delivered
 audit epoch to drain, replays the exact receipt set and subject, then decides
 whether timing is eligible. A disconnection can delay delivery or collection;
-it cannot open either audit gate.
+it cannot open either audit gate. If the sealed review wait expires after
+24 hours and no audit control or delivery began, the guest writes a failed
+terminal collection manifest and exits 2. This archive contains no qualified
+timing. The separately approved collector can retire that exact quiescent host
+only after replay proves the expiry and the original launch/boot/ownership
+binding; a missing archive or uncertain delivery is not that proof.
 
-After expected completion, reconnect and preview then approve the **separate
+Once timing cannot still be running, reconnect and preview then approve the **separate
 child** collection command below with the measured checkout. A live or
 unreachable unit is not terminal. Collection requires the pinned host/boot,
 unchanged unit and archive, current quiescence, native replay and a fresh

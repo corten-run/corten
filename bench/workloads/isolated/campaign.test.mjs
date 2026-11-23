@@ -32,6 +32,7 @@ let lifetimeStartup;
 let lifetimeRun;
 let admittedHost, admittedApparatus, controlWindows, settleAbort, settleWorkerTicks, settleSurvives, settleNativeFails;
 let liveOutput, compilerScratch;
+let offlineTest;
 const sourceGit = (cwd, ...args) => childProcess.execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
 const sourceStatus = (cwd) => sourceGit(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all");
 mock.module("./control-admission.mjs", { exports: { ...controlAdmission,
@@ -140,10 +141,10 @@ mock.module("./host-lifetime.mjs", { exports: {
       const checks = { accounting: true, terminal: result.terminal, empty: true, observer: true,
         unforced: !result.cancelled && !result.forced, leader: true };
       if (lifetimeFailure?.command === command) Object.assign(checks, lifetimeFailure.checks);
-      if (retainTerminalClock && mode !== "offline-fence") { assert.equal(mode, "udev-settle"); assert.equal(command, 1); assert.equal(observations, 2); }
+      if (retainTerminalClock && !offlineTest) { assert.equal(mode, "udev-settle"); assert.equal(command, 1); assert.equal(observations, 2); }
       if (compilerScratch && command === 1) assert.ok(existsSync(join(compilerScratch.target, "scratch")), "target must exist during descriptor sealing");
       writeFileSync(join(directory, "terminal.json"), JSON.stringify({ ...checks,
-        ...(retainTerminalClock && mode !== "offline-fence" ? { terminalClock: udevClock() } : {}) }));
+        ...(retainTerminalClock && !offlineTest ? { terminalClock: udevClock() } : {}) }));
       if (checks.terminal && checks.empty) settled?.();
       return evidence.tree(directory);
     } };
@@ -259,7 +260,7 @@ const { validateCampaign: validateSavedCampaign } = await import("./campaign-ver
 let round = 100;
 function setup(policy = () => true) {
   admittedHost = null; admittedApparatus = null; controlWindows = []; settleAbort = null;
-  liveOutput = null; compilerScratch = null;
+  liveOutput = null; compilerScratch = null; offlineTest = false;
   round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null; lifetimeStartup = null; lifetimeRun = null;
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
@@ -320,14 +321,14 @@ test("v4 live campaign retains actual bootstrap proof before baseline and bracke
     "rehashed journal/collection cannot substitute for watcher termination");
 });
 
-test("offline native phase fences SSH on support CPU, then replays the archived ingress policy", async (t) => {
+async function offlineCampaign(t, group, packets = 2) {
   t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
   const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
     { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024 });
   assert.equal(result.status, 0, result.stderr);
-  const { binding, admission } = JSON.parse(result.stdout), s = setupGroup("localized-marketplace");
-  s.plan.round = "r21"; admittedHost = admission.host; mode = "offline-fence";
+  const { binding, admission } = JSON.parse(result.stdout), s = setupGroup(group);
+  s.plan.round = "r21"; admittedHost = admission.host; offlineTest = true;
   s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2" }, load: { cpuset: "3-7" } };
   const table = "corten_bench_native", tcpMatch = { match: { op: "==", left: { payload: { protocol: "tcp", field: "dport" } }, right: 22 } };
   const policy = { nftables: [
@@ -355,26 +356,38 @@ test("offline native phase fences SSH on support CPU, then replays the archived 
       if (args[3] === "-f") assert.equal(opts.input, controlAdmission.offlineFenceRules);
       else assert.deepEqual(args.slice(-3), ["table", "inet", table]);
       if (args[3] === "-j" && events.includes("window-close"))
-        policy.nftables[3].rule.expr[3].counter = { packets: 2, bytes: 120 };
+        policy.nftables[3].rule.expr[3].counter = { packets, bytes: 60 * packets };
     }
     return { status: 0, stdout: JSON.stringify(policy) };
   });
   syncBuiltinESMExports();
   const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding, admission, offlineHandoff: true } });
+  return { ...s, binding, admission, events, handle, collection: join(handle.directory, "collection-manifest.json"),
+    validate: () => validateSavedCampaign({ folder: root, round: "r21", commit: s.plan.commit }) };
+}
+
+test("offline timed probe hits preserve evidence but disqualify an otherwise verified native phase", async (t) => {
+  const s = await offlineCampaign(t, "localized-marketplace");
+  const { handle, binding, admission, events, collection, validate } = s;
+  mode = "complete";
   assert.equal(s.campaign.status(handle).executionVersion, 6);
-  assert.equal((await s.campaign.advance(handle)).state, "finished");
+  const status = await s.campaign.advance(handle);
+  assert.equal(status.state, "finished");
+  assert.equal(status.outcomes[0].outcome, "blocked");
+  assert.equal(status.outcomes[0].nativeStatus, "verified");
+  assert.ok(status.outcomes[0].appOutcomes.every(({ comparisonEligible }) => !comparisonEligible));
   assert.deepEqual(events, ["-f", "-j", "window-open", "window-close", "-j", "delete"]);
-  const collection = join(handle.directory, "collection-manifest.json");
   writeFileSync(collection, JSON.stringify(s.campaign.collect(handle)));
-  const validate = () => validateSavedCampaign({ folder: root, round: "r21", commit: s.plan.commit });
   const saved = await validate();
   assert.equal(saved.status, "blocked", JSON.stringify(saved));
+  assert.deepEqual(saved.offlineIngress, [{ group: "localized-marketplace", phase: "timing", packets: 2, bytes: 120 }]);
+  assert.ok(saved.blockers.includes("localized-marketplace/timing: denied pre-login probe traffic"));
   assert.deepEqual(saved.offlineTerminal, { ...admission.host, token: binding.token,
     bootstrapSealSha256: evidence.digest(JSON.stringify(admission.seal.ledger)) });
   const phase = "00-localized-marketplace-timing", raw = join(handle.directory, phase, "control-ingress.json");
   const changed = JSON.parse(readFileSync(raw));
   assert.deepEqual(changed.after.nftables[3].rule.expr[3].counter, { packets: 2, bytes: 120 });
-  assert.doesNotThrow(() => controlAdmission.verifyOfflineWindow(changed));
+  assert.deepEqual(controlAdmission.verifyOfflineWindow(changed), { packets: 2, bytes: 120 });
   for (const mutate of [
     ({ before }) => { before.nftables[3].rule.expr[3].counter = { packets: 3, bytes: 180 }; },
     ({ after }) => { after.nftables[3].rule.handle++; },
@@ -395,6 +408,51 @@ test("offline native phase fences SSH on support CPU, then replays the archived 
   const retained = JSON.parse(readFileSync(collection)), entries = evidence.tree(handle.directory).entries.filter(({ path }) => path !== "collection-manifest.json");
   writeFileSync(collection, JSON.stringify({ ...retained, manifest: { entries, sha256: evidence.digest(JSON.stringify(entries)) } }));
   assert.equal((await validate()).status, "invalid");
+});
+
+test("offline timed phase with zero denied probes remains eligible for ordinary replay", async (t) => {
+  const { campaign, handle, collection, validate } = await offlineCampaign(t, "localized-marketplace", 0);
+  mode = "complete";
+  const status = await campaign.advance(handle);
+  assert.equal(status.outcomes[0].outcome, "native-validated");
+  writeFileSync(collection, JSON.stringify(campaign.collect(handle)));
+  const saved = await validate();
+  assert.equal(saved.status, "verified", JSON.stringify(saved));
+  assert.deepEqual(saved.offlineIngress, [{ group: "localized-marketplace", phase: "timing", packets: 0, bytes: 0 }]);
+});
+
+for (const group of ["json-api", "mixed-production"]) test("offline audit expiry seals only the pre-timing evidence: " + group, async (t) => {
+  const { campaign, handle, collection, validate } = await offlineCampaign(t, group);
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-22T00:00:00Z") });
+  const waiting = await campaign.advance(handle);
+  assert.equal(waiting.state, "blocked-review-needed", "untimed preparation may see denied probes");
+  assert.throws(() => campaign.expireOfflineAudit(handle), /deadline has not expired/);
+  t.mock.timers.tick(contracts.auditWaitMs);
+  const prefix = group === "json-api" ? "json" : "mixed", inbox = join(handle.directory, prefix + "-audit-delivery-pending.json");
+  writeFileSync(inbox, "{}");
+  assert.throws(() => campaign.expireOfflineAudit(handle), /delivery may have started/);
+  fs.unlinkSync(inbox);
+  writeFileSync(collection, JSON.stringify(campaign.expireOfflineAudit(handle)));
+  const result = await validate();
+  assert.equal(result.status, "blocked", JSON.stringify(result));
+  assert.deepEqual(result.groups, []);
+  assert.equal(result.collectionIntegrity, "manifest-verified");
+  assert.equal(result.commandLifecycle, "observed-terminal");
+  assert.deepEqual(result.offlineAuditExpired, { group, subjectSha256: group === "json-api" ? waiting.auditSubjectSha256 : waiting.mixedAuditSubjectSha256 });
+  assert.deepEqual(result.offlineIngress, group === "json-api" ? [{ group, phase: "prepare", packets: 2, bytes: 120 }] : []);
+  const retained = JSON.parse(readFileSync(collection));
+  const reseal = () => {
+    const entries = evidence.tree(handle.directory).entries.filter(({ path }) => path !== "collection-manifest.json");
+    writeFileSync(collection, JSON.stringify({ ...retained, manifest: { entries, sha256: evidence.digest(JSON.stringify(entries)) } }));
+  };
+  writeFileSync(inbox, "{}"); reseal();
+  assert.equal((await validate()).status, "invalid", "rehashing cannot excuse an unsettled audit delivery");
+  fs.unlinkSync(inbox);
+  const expiry = retained.manifest.entries.find(({ path }) => /^\d{5}-offline-audit-expired\.json$/.test(path));
+  const expiryPath = join(handle.directory, expiry.path), terminal = JSON.parse(readFileSync(expiryPath));
+  terminal.at = new Date(Date.parse(terminal.at) - 1).toISOString();
+  writeFileSync(expiryPath, JSON.stringify(terminal)); reseal();
+  assert.equal((await validate()).status, "invalid", "rehashing cannot authorize an early expiry");
 });
 
 test("v5 browser campaign carries the native roles through streamed bookends and saved drain replay", async (t) => {
