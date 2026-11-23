@@ -1222,7 +1222,6 @@ rules something out.
    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 
    The limit was 64 KiB until
-  
    [#1979 Keep brotli's buffers for a long page with a 512 KiB jemalloc thread cache in the starter's image](https://github.com/corten-run/corten/pull/1979),
    which the item page above fits and a longer page does not: brotli 1's buffers grow with the body.
    That met the first condition this Choice then had to revisit it (a run on a quiet Linux host that
@@ -1256,8 +1255,9 @@ rules something out.
    and the 495,521-byte page at 2,550 with 64 KiB against 2,283 with 512 KiB (2,217 to 2,400), 2,267
    with 1 MiB (2,167 to 2,417) and 2,250 on glibc; at 984,641 bytes 64 KiB, 512 KiB, 1 MiB and glibc
    took 4,050 to 4,517. With `gzip, deflate, br, zstd` or `identity` pages of 9,793, 32,501 and
-   202,041 bytes took no fault at 64 KiB, at 1 MiB or on glibc, and with `gzip` alone, flate2's at
-   that commit, 1.61, 2.37 and 7.66 at 64 KiB and none at 1 MiB; 512 KiB was not run with these.
+   202,041 bytes took 0.01 a request or none at 64 KiB, at 512 KiB, at 1 MiB and on glibc, and with
+   `gzip` alone, flate2's at that commit, 1.61, 2.37 and 7.66 at 64 KiB and none at 512 KiB or at
+   1 MiB.
 
    Under load, as paired cycles ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2) with the
    plan written before the run, that one image ran under a 64 KiB and a 512 KiB limit (the app on
@@ -1280,10 +1280,18 @@ rules something out.
    202,041-byte page 17.88% fewer (bound 17.59%), and the 9,793-byte page with bounds of 0.27%,
    0.68% and, with `identity`, 0.57% more; its script compared the answers without excepting the
    `ETag` and reported a difference for the compressed workloads, and a comparison made afterwards
-   found each one's answers the same but `Date` and `ETag`. So the uncompressed page's bound was
-   0.57% in one run and 1.98% in the other, against the same 64 KiB, and an uncompressed page is not
-   shown to be as fast as it was. These are cycles on one runtime, not latency; a client with gzip
-   alone, pages past 496 KB and more than one runtime were not run under load.
+   found each one's answers the same but `Date` and `ETag`. The plan said a no-regression margin
+   that is not met stops the change, so by its own plan this run does not carry the limit: an
+   uncompressed page is not shown to be as fast as it was. A diagnostic declared after that result,
+   which tests nothing against a margin and clears nothing, ran the uncompressed page again over
+   100 pairs each: 512 KiB against 64 KiB took 0.06% more at the median (11.97% fewer to 15.84%
+   more) with a bound of 1.40% more, and 64 KiB against itself under two labels took 1.56% fewer
+   (12.75% fewer to 18.34% more) with a bound of 0.53% fewer, lower under the second label in 65
+   pairs of 100, each on the same instructions. So on that workload this protocol on this host
+   read one setting as 1.56% apart from itself, and its bound there does not hold to 1%; the
+   earlier run's 0.57% stands on the same footing. These are cycles on one runtime, not latency; a
+   client with gzip alone, a long page with a browser's encodings or uncompressed, pages past
+   496 KB and more than one runtime were not run under load.
 
    What a larger limit costs is memory, since a thread's cache keeps buffers its thread used.
    jemalloc 5.3.0 keeps up to 20 objects of a large size class in a thread's cache and trims a cache
@@ -1301,9 +1309,17 @@ rules something out.
 
    So with 512 KiB an app whose brotli pages run to hundreds of KB keeps 24 to 26 MiB more at rest
    on eight CPUs than with 64 KiB, about 3 MiB a CPU and 3 to 6 MiB above what glibc's allocator
-   keeps, and an idle app does not give it back; 1 MiB keeps 14 MiB more than that. On one CPU the
-   9,793-byte page left the app's resident memory at 10.4 to 10.6 MiB at every limit (the rounds'
-   medians). More CPUs, other mixes of pages and an app's other large allocations were not measured.
+   keeps, and an idle app does not give it back; 1 MiB keeps 13 to 17 MiB more than that. On one
+   CPU the 9,793-byte page left the app's resident memory at 10.4 to 10.6 MiB at every limit (the
+   rounds' medians). The limit keeps any buffer of 64 to 512 KiB, not brotli's alone, so a burst in
+   those sizes was run too: eight floods of 2,000 connections that each ask for one of those nine
+   pages with `identity` and read nothing for 5 seconds, so the app holds what the sockets do not
+   take (eight CPUs, three runs, every connection answered). At the highest, a second before a
+   hold ended, the app held 430 to 437 MiB with 64 KiB, 444 to 493 with 512 KiB and 503 to 531 on
+   glibc, and 35 seconds after the last flood 15.5 to 16.5 MiB with 64 KiB, 40.1 to 54.3 with
+   512 KiB and 399 to 426 on glibc: 24 to 39 MiB more than 64 KiB keeps, 3 to 5 MiB a CPU. No run
+   was built to reach the 57 MiB a thread the rule above allows, and none came near it. More CPUs,
+   other mixes of pages and request bodies of those sizes were not measured.
    Eight floods as above on that host and image left 8.9 to 9.7 MiB with 64 KiB (six runs), 9.3 to
    10.3 with 512 KiB (three), 9.4 to 10.0 with 1 MiB (six) and 329 to 354 on glibc (three), and the
    highest held a second before a hold ended was 190 to 205, 181 to 199, 188 to 220 and 335 to 360
@@ -1315,43 +1331,54 @@ rules something out.
    took 11 that the probe's CPU time did not show (their rounds overlap), and kept more memory, so
    the limit stops at 512 KiB; a page of 984,641 bytes took 20 at both.
 
-   The receipt is commit `5b38611b5`, kept under the tag `evidence/thread-cache-1979`: the plans,
-   the scripts as run and every result file but those of a diagnostic that followed the missed
-   margin, which the pull request reports.
+   Not weighed: keeping the encoder's buffers between responses in `compress.rs` and leaving the
+   allocator's limit alone, which would reach an app on its own image and keep no other buffer; it
+   was not built or measured.
+
+   The receipt is commit `a362507a3`, kept under the tag `evidence/thread-cache-1979-diagnostic`:
+   the plans, the scripts as run and every result file. Its parent `5b38611b5`, under
+   `evidence/thread-cache-1979`, is the receipt as it stood before the diagnostic, the bursts and
+   the 512 KiB fault counts with other encodings were run.
 
    Stands on: measured (memory after eight floods, three runs each, seven allocator settings; page
    faults a request, repeatable to 0.1 in every round; idle CPU, three rounds; instructions a
    request under callgrind, five runs each; for the limit, page faults a request by page length and
-   limit, three rounds; cycles under load, 40 and 60 pairs a workload on one host and one runtime;
-   memory after floods on that host, three or six runs a setting, and with eight CPUs, three
-   rounds); measured, noisy (CPU time and throughput in three rounds on a shared desktop, whose
-   rounds moved by up to 2.4 times); platform (Debian 13's `libjemalloc2`, 5.3.0, has
-   `background_thread` off and a 32 KiB `tcache_max` unless set, and takes these option names;
-   jemalloc 5.3.0's `src/tcache.c` and its manual's size classes for what a thread's cache may
-   keep); bet (an app's image is Debian with that package; a page compressed per request is seldom
-   past 200 KB, where this limit stops holding every buffer; an app's container has room for what
-   its threads' caches keep, 3 MiB a CPU here); reasoned (an image package binds only the image,
-   where a `#[global_allocator]` crate compiles C into every build).
+   limit, three rounds; cycles under load, 40 and 60 pairs a workload on one host and one runtime,
+   which met five of the six margins their plan declared and missed the uncompressed page's; memory
+   after floods on that host, three or six runs a setting, with eight CPUs, three rounds, and after
+   bursts of slow readers, three runs); measured, noisy (CPU time and throughput in three rounds on
+   a shared desktop, whose rounds moved by up to 2.4 times); platform (Debian 13's `libjemalloc2`,
+   5.3.0, has `background_thread` off and a 32 KiB `tcache_max` unless set, and takes these option
+   names; jemalloc 5.3.0's `src/tcache.c` and its manual's size classes for what a thread's cache
+   may keep); bet (an app's image is Debian with that package; a page compressed per request is
+   seldom past 200 KB, where this limit stops holding every buffer; an app's container has room for
+   what its threads' caches keep, 3 to 5 MiB a CPU here; enough of an app's long pages go to a
+   client without zstd, which gets brotli, to be worth that memory); reasoned (an image package
+   binds only the image, where a `#[global_allocator]` crate compiles C into every build).
 
    Revisit when: an app is measured to hold more than 5 MiB a CPU at rest above what it holds with a
-   64 KiB limit (3 MiB here, after nine page lengths on eight CPUs); a run under load on a quiet
-   Linux host shows the image's settings taking more cycles a request than glibc's allocator (glibc
-   was not in the cycles runs; the probe's CPU ticks had the two within their rounds for brotli
-   pages from 20 KB with this limit); brotli pages past 200 KB are common enough to want 1 MiB; the
-   brotli encoder or its level changes what it allocates (the table is brotli 1's, of the `brotli`
-   crate 9.1.3); Debian's jemalloc changes its thread cache's default, how many objects a cache
-   keeps or when it trims, or drops `background_thread`; or an allocator Debian ships returns a
-   flood's memory with no settings.
+   64 KiB limit (3 MiB here after brotli pages of nine lengths and up to 4.9 after bursts of slow
+   readers, on eight CPUs); a run that can tell 1% on an uncompressed page shows it taking more
+   cycles a request with this limit than with 64 KiB (the declared run's bound was 1.98% more, by a
+   protocol that read 64 KiB as 1.56% apart from itself); the encoder's buffers are kept in
+   `compress.rs`, which would leave this limit without its reason; a run under load on a quiet Linux
+   host shows the image's settings taking more cycles a request than glibc's allocator (glibc was
+   not in the cycles runs; the probe's CPU ticks had the two within their rounds for brotli pages
+   from 20 KB with this limit); brotli pages past 200 KB are common enough to want 1 MiB; the brotli
+   encoder or its level changes what it allocates (the table is brotli 1's, of the `brotli` crate
+   9.1.3); Debian's jemalloc changes its thread cache's default, how many objects a cache keeps or
+   when it trims, or drops `background_thread`; or an allocator Debian ships returns a flood's
+   memory with no settings.
 
    Last checked: 2026-11-06, the callgrind runs on `547b54ae`, recorded at `b179987a`; 2026-11-08,
    the floods, the page faults and the rounds, images of `81f1f8ef` (but for the tuned image in
    `results/alloc-faults` and `alloc-idle`, a build whose commit was not recorded); 2026-11-19,
    Debian's libjemalloc2 5.3.0 (package 5.3.0-3) in `debian:trixie-slim` on amd64, its defaults
    printed by `MALLOC_CONF=stats_print:true`; 2026-11-23, the limit (the page faults, the cycles,
-   the floods, the memory with eight CPUs and the idle CPU), card-market's image of `bcf4aa073` on a
-   DigitalOcean c-16 with a Xeon Platinum 8280, Linux 6.8.0-149, Docker 29.10.0, perf 6.8.12, `wrk`
-   4.1.0, libjemalloc2 5.3.0 and `brotli` 9.1.3, with jemalloc 5.3.0's `src/tcache.c` and the size
-   classes in jemalloc's manual as they read that day.
+   the floods, the bursts, the memory with eight CPUs and the idle CPU), card-market's image of
+   `bcf4aa073` on a DigitalOcean c-16 with a Xeon Platinum 8280, Linux 6.8.0-149, Docker 29.10.0,
+   perf 6.8.12, `wrk` 4.1.0, libjemalloc2 5.3.0 and `brotli` 9.1.3, with jemalloc 5.3.0's
+   `src/tcache.c` and the size classes in jemalloc's manual as they read that day.
 
 24. <a id="choice-openapi"></a>**An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
    cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
@@ -7309,7 +7336,7 @@ rules something out.
 
     Stands on: measured (the app `corten new` writes, its two binaries built in `rust:1-trixie`
     by the Dockerfile's two commands and run on `debian:trixie-slim` with the image's jemalloc
-    settings: the profiled one took 41,922 fewer cycles a request on the home page at the
+    settings of that day, a 64 KiB thread cache: the profiled one took 41,922 fewer cycles a request on the home page at the
     median of 10 alternated rounds, 32% of the ordinary build's 130,903, and 40,193 fewer where
     each answer is compressed, 22% of 183,102, lower in all 10 rounds of each, from a script of
     500 requests; its image built in 188 seconds with the argument against 69 without, one
@@ -7772,7 +7799,7 @@ rules something out.
     8280, one thread a core, Debian 13 with Linux 6.12.117, rustc 1.100.0), `30ff52ca0` (this
     change before it merged main's [#1883 Count a write by path only once an answer may be kept](https://github.com/corten-run/corten/pull/1883),
     its code outside tests that of `11824d580`) against main's `e7e89add8`, in a probe app on
-    jemalloc as the template runs it, with the `json` feature: a record page of 6,124 bytes and a
+    jemalloc as the template then ran it (a 64 KiB thread cache), with the `json` feature: a record page of 6,124 bytes and a
     JSON body of 1,999 bytes, asked for with no coding. Both builds were pinned to the same CPU, one whose core had no
     other work, each started once (afresh for each turn where every request is for a new URL, so each turn begins with
     an empty store that keeps room) and loaded in turn for 3 s by `wrk` with 64 connections on

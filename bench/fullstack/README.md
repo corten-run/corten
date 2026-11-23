@@ -1219,8 +1219,11 @@ folders':
 All ran on a desktop with other containers running, so the `ab.mjs` rounds moved by up to 2.4
 times between rounds of one image; the fault counts repeat to 0.1 a request. A quiet host has not
 run the `ab.mjs` rounds; one ran the floods and fault counts again for the thread cache's limit on
-2026-11-23, kept under the tag `evidence/thread-cache-1979`
-([design Choice 23](../../docs/design.md#choice-jemalloc-image)).
+2026-11-23, kept under the tag `evidence/thread-cache-1979-diagnostic`
+([design Choice 23](../../docs/design.md#choice-jemalloc-image)). From that change card-market's
+image, which `builds.mjs`, `cost-under-load.sh` and the commands below build, sets a 512 KiB thread
+cache where it set 64 KiB: a result recorded before it ran with 64 KiB, and a comparison across
+that date changes the allocator's setting with the code.
 
 ### Build cost on a desktop (round local-2, 2026-11-03)
 
