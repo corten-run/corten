@@ -149,14 +149,15 @@ impl Cache {
         }
     }
 
-    /// The header, held by the thread where an answer's header can be ([`Cache::held_header`]), and made
-    /// for the answer alone while the thread runs an unstaged route's handler ([`Unstaged`]).
+    /// The header: a `public` one held by the thread where an answer's header can be
+    /// ([`Cache::held_header`]), and made for the answer alone while the thread runs an unstaged
+    /// route's handler ([`Unstaged`]); `no-store`'s and `immutable`'s, which are constants, without
+    /// asking the thread.
     #[inline]
     fn value(self) -> HeaderValue {
-        if UNSTAGED.get() {
-            self.header()
-        } else {
-            self.held_header()
+        match self.kind {
+            Kind::Public { .. } if !UNSTAGED.get() => self.held_header(),
+            _ => self.header(),
         }
     }
 
@@ -194,7 +195,7 @@ impl Cache {
         let mut text = Vec::with_capacity(96);
         let mut push = |name: &str, n: u64| {
             text.extend_from_slice(name.as_bytes());
-            text.extend_from_slice(crate::ascii::digits(n, &mut [0; 20]));
+            text.extend_from_slice(crate::ascii::digits_inlined(n, &mut [0; 20]));
         };
         push("public, max-age=", max_age);
         if let Some(shared) = shared {
@@ -285,7 +286,7 @@ fn public(max_age: u64, shared: Option<u64>, stale: u64, if_error: u64) -> Heade
     let mut text = Text { len: 0, bytes: [0; Text::LONGEST] };
     let mut push = |name: &str, n: u64| {
         text.push(name.as_bytes());
-        text.push(crate::ascii::digits(n, &mut [0; 20]));
+        text.push(crate::ascii::digits_inlined(n, &mut [0; 20]));
     };
     push("public, max-age=", max_age);
     if let Some(shared) = shared {

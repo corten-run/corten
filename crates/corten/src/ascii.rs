@@ -86,9 +86,19 @@ pub(crate) fn pair(n: u8) -> &'static str {
     &PAIRS_TEXT[at..at + 2]
 }
 
-/// The decimal digits of `n`, written at the end of `buf`, two per division.
+/// The decimal digits of `n`, written at the end of `buf`, two per division: the JSON writer's,
+/// which the compiler inlines as it judges.
+#[cfg(feature = "json")]
+#[inline]
+pub(crate) fn digits(n: u64, buf: &mut [u8; 20]) -> &[u8] {
+    digits_inlined(n, buf)
+}
+
+/// The decimal digits of `n`, written at the end of `buf`, inlined into every caller: a
+/// `Cache-Control` header's two writers in `cache`, either of which would otherwise stop the
+/// compiler inlining it into the other.
 #[inline(always)]
-pub(crate) fn digits(mut n: u64, buf: &mut [u8; 20]) -> &[u8] {
+pub(crate) fn digits_inlined(mut n: u64, buf: &mut [u8; 20]) -> &[u8] {
     let mut i = buf.len();
     while n >= 100 {
         let pair = (n % 100) as usize * 2;
@@ -164,6 +174,8 @@ mod tests {
     fn digits_match_display() {
         let mut buf = [0; 20];
         for n in (0..2000).chain([9_999, 10_000, 99_999, 123_456_789, u32::MAX as u64, u64::MAX - 1, u64::MAX]) {
+            assert_eq!(digits_inlined(n, &mut buf), n.to_string().as_bytes());
+            #[cfg(feature = "json")]
             assert_eq!(digits(n, &mut buf), n.to_string().as_bytes());
         }
     }
