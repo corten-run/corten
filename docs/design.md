@@ -7788,6 +7788,19 @@ rules something out.
     workstation, with other builds running, gave +1.5% (bound +2.8%) and is set aside as noise. Historical, a parent and child from
     before main changed the reading of a request's mode that a write runs: 16,292.0 a write at
     `30b39d455` against 15,210.8 at `45489ced9`, and with a `Public` page 16,308.7 against 16,310.7.
+    What giving a page past its lifetime costs the requests that are not given one, under
+    callgrind (valgrind 3.19.0, rustc 1.99.1, release, every feature) with the request-cost
+    harness's `ROUTER_PUBLIC=page`, as (instructions at 1,200 requests less those at 200) over
+    1,000, the median of three rounds, `4564a5aa4` (this change's code) against `13fe3f987`
+    (main's `92bc32678` with the harness's `ROUTER_TARGET=made`): a kept page given again took
+    14,784.0 a request against 14,764.0, 20.0 more (0.14%), in every round; a page made and
+    kept in a store with room (`made`, a new URL each request) took 28,846.4 against 28,794.5,
+    51.9 more (0.18%), its rounds within 3.1 of each other and main's within 6.6. Of an earlier
+    draft's 61 and 559 more, inlining what the lookup and its `Age` lost, putting the stale
+    and held branches in cold functions and holding the windows in 32 bits (the mark is
+    boxed in the answer's extensions, where glibc gives its 16 bytes and 24 the same chunk and
+    32 a larger one) took back all but these. Not counted: a page given stale or held, and the refresh's
+    task, which no harness case asks for; and cycles, left to the paired rounds.
     What a write pays before the counts by path are made, under callgrind (valgrind 3.19.0,
     rustc 1.99.1, release with line tables, every feature) with the request-cost harness's
     write cases (`crates/corten/tests/router_cost.rs`: a `POST` sent in process as a form of
@@ -8263,7 +8276,8 @@ rules something out.
     `stale-if-error`, costs enough to show while its store is down, so a failure should hold off
     the next try; or a refresh is found outliving its window or the app's shutdown grace.
 
-    Last checked: 2026-11-22 for the forms of a kept answer's `Age`, `48df6c67c`, `c25d263a9`,
+    Last checked: 2026-11-23 for a page given past its lifetime, the callgrind rounds above at
+    `4564a5aa4` and `13fe3f987`; 2026-11-22 for the forms of a kept answer's `Age`, `48df6c67c`, `c25d263a9`,
     `77dde53d6` and `09cddd7f1` (this choice's `0a2dc9b32` with each form and the benchmark's
     PNG kept for four hours), and for an older answer's, `9b0f2e6aa` (main's `fef1f83de` with
     the file routes and that lifetime) and `b0bc7ae32` (the buffer past the table on it, not
