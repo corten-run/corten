@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { digest, evidenceEnvelope, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
-import { bootstrapWorkspaceScript, savedLoadLayout, savedPlacement, stagedFleet } from "./cloud-contract.mjs";
+import { bootstrapWorkspaceScript, preloginUserData, savedLoadLayout, savedPlacement, stagedFleet } from "./cloud-contract.mjs";
 import { sealedMonitor, settledMonitor } from "./cloud-control-stream.mjs";
 import { quote } from "./cloud-transport.mjs";
 import { guardianSha256, guardianSource } from "./cloud-control-runtime.mjs";
@@ -274,6 +274,54 @@ function failedNativeArchiveEvidence(local, state, grouped, readGrouped) {
 
 // Only trusted controller code runs remotely. Native files are opened as data,
 // never imported, invoked, followed through links, or promoted to valid evidence.
+const inodeInfo = `def info(s):
+    return [s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns]`;
+const cloudInstanceProof = (prelogin) => `cloud_binding = None
+
+def cloud_instance():
+    global cloud_binding
+    assert re.fullmatch(r'[1-9][0-9]*', host_id)
+    descriptors, entries = [], []
+    def entry(parent, name, flags):
+        before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        fd = os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        descriptors.append(fd)
+        assert info(before) == info(os.fstat(fd))
+        entries.append((parent, name, fd, info(before)))
+        return fd
+    def directory(parent, name):
+        return entry(parent, name, os.O_RDONLY | os.O_DIRECTORY)
+    def data(parent, name, limit):
+        fd = entry(parent, name, os.O_RDONLY)
+        s = os.fstat(fd)
+        assert stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and s.st_size <= limit
+        value = os.read(fd, limit + 1)
+        assert len(value) == s.st_size and info(s) == info(os.fstat(fd))
+        return value
+    try:
+        cloud = directory(None, '/')
+        for name in ['var', 'lib', 'cloud']:
+            cloud = directory(cloud, name)
+        # Read the one supported selector as data through its own pinned inode.
+        # Never traverse it, and never extend opened()'s no-symlink policy.
+        selector = entry(cloud, 'instance', os.O_PATH)
+        s = os.fstat(selector)
+        assert stat.S_ISLNK(s.st_mode) and s.st_nlink == 1
+        assert os.readlink('', dir_fd=selector) == '/var/lib/cloud/instances/' + host_id
+        instance = directory(directory(cloud, 'instances'), host_id)
+        instance_id = data(directory(cloud, 'data'), 'instance-id', 64)
+        assert instance_id in [host_id.encode('ascii'), (host_id + '\\n').encode('ascii')]
+        ${prelogin ? `assert hashlib.sha256(data(instance, 'user-data.txt', ${preloginUserData.length})).hexdigest() == '${digest(preloginUserData)}'` : "assert data(instance, 'user-data.txt', 0) == b''"}
+        for parent, name, fd, before in reversed(entries):
+            assert before == info(os.fstat(fd)) == info(os.stat(name, dir_fd=parent, follow_symlinks=False))
+        binding = [before for parent, name, fd, before in entries]
+        if cloud_binding is not None:
+            assert binding == cloud_binding
+        cloud_binding = binding
+    finally:
+        for fd in reversed(descriptors):
+            os.close(fd)`;
+
 export function failedNativeScript(state, captureSha256 = null, fence = null, grouped) {
   const roots = grouped?.roots ?? failedNativeRoots(state);
   assert.ok(captureSha256 === null || /^[a-f0-9]{64}$/.test(captureSha256));
@@ -299,8 +347,7 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('ascii')
 def sha(data):
     return hashlib.sha256(data).hexdigest()
-def info(s):
-    return [s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns]
+${inodeInfo}
 def opened(path, flags=os.O_RDONLY):
     parts = path.split('/')
     assert parts[0] == '' and all(p not in ['', '.', '..'] for p in parts[1:])
@@ -337,51 +384,7 @@ def small(path, limit):
         return data
     finally:
         os.close(fd)
-cloud_binding = None
-
-def cloud_instance():
-    global cloud_binding
-    assert re.fullmatch(r'[1-9][0-9]*', host_id)
-    descriptors, entries = [], []
-    def entry(parent, name, flags):
-        before = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        fd = os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
-        descriptors.append(fd)
-        assert info(before) == info(os.fstat(fd))
-        entries.append((parent, name, fd, info(before)))
-        return fd
-    def directory(parent, name):
-        return entry(parent, name, os.O_RDONLY | os.O_DIRECTORY)
-    def data(parent, name, limit):
-        fd = entry(parent, name, os.O_RDONLY)
-        s = os.fstat(fd)
-        assert stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and s.st_size <= limit
-        value = os.read(fd, limit + 1)
-        assert len(value) == s.st_size and info(s) == info(os.fstat(fd))
-        return value
-    try:
-        cloud = directory(None, '/')
-        for name in ['var', 'lib', 'cloud']:
-            cloud = directory(cloud, name)
-        # Read the one supported selector as data through its own pinned inode.
-        # Never traverse it, and never extend opened()'s no-symlink policy.
-        selector = entry(cloud, 'instance', os.O_PATH)
-        s = os.fstat(selector)
-        assert stat.S_ISLNK(s.st_mode) and s.st_nlink == 1
-        assert os.readlink('', dir_fd=selector) == '/var/lib/cloud/instances/' + host_id
-        instance = directory(directory(cloud, 'instances'), host_id)
-        instance_id = data(directory(cloud, 'data'), 'instance-id', 64)
-        assert instance_id in [host_id.encode('ascii'), (host_id + '\\n').encode('ascii')]
-        assert data(instance, 'user-data.txt', 0) == b''
-        for parent, name, fd, before in reversed(entries):
-            assert before == info(os.fstat(fd)) == info(os.stat(name, dir_fd=parent, follow_symlinks=False))
-        binding = [before for parent, name, fd, before in entries]
-        if cloud_binding is not None:
-            assert binding == cloud_binding
-        cloud_binding = binding
-    finally:
-        for fd in reversed(descriptors):
-            os.close(fd)
+${cloudInstanceProof(state.quietBootstrap === "prelogin")}
 
 def command(args):
     r = subprocess.run(args, capture_output=True, text=True, timeout=5)
@@ -840,6 +843,13 @@ const settledDrain = String.raw`def settled_receipts(root, binding, requests, g)
         assert not re.search(r'/session-[^/\n]+\.scope(?:/|\n)', cgroup)
     return digests`;
 
+// Use the same descriptor-bound instance-ID and user-data proof before
+// accepting a new host as unused or failed during setup.
+const preloginDataProof = `import re
+${inodeInfo}
+${cloudInstanceProof(true)}
+cloud_instance()`;
+
 export function unusedHostScript(state, { bootstrap = false, legacyTimestamp = false } = {}) {
   const settled = bootstrap && settledBootstrap(state), pristine = bootstrap && !settled;
   if (pristine) assert.ok(unusedBootstrap(state), "unused bootstrap proof requires pre-provisioning custody");
@@ -910,8 +920,8 @@ r = subprocess.run(['systemctl', 'list-jobs', '--no-legend', '--no-pager'], capt
 assert r.returncode == 0 and r.stdout.strip() == ''
 r = subprocess.run(['cloud-init', 'status', '--format', 'json'], capture_output=True, text=True, timeout=5)
 assert r.returncode == 0 and json.loads(r.stdout)['status'] == 'done'
-user_data = pathlib.Path('/var/lib/cloud/instance/user-data.txt')
-assert not user_data.exists() or user_data.stat().st_size == 0
+${state.quietBootstrap === "prelogin" ? preloginDataProof : `user_data = pathlib.Path('/var/lib/cloud/instance/user-data.txt')
+assert not user_data.exists() or user_data.stat().st_size == 0`}
 parent_pid = os.getppid()
 assert parent_pid > 1 and parent_pid != os.getpid()
 parent = pathlib.Path('/proc') / str(parent_pid)
@@ -1078,9 +1088,9 @@ r = subprocess.run(['systemctl', 'list-jobs', '--no-legend', '--no-pager'], capt
 assert r.returncode == 0 and r.stdout.strip() == ''
 r = subprocess.run(['cloud-init', 'status', '--format', 'json'], capture_output=True, text=True, timeout=5)
 assert r.returncode == 0 and json.loads(r.stdout)['status'] == 'done'
-user_data = pathlib.Path('/var/lib/cloud/instance/user-data.txt')
+${state.quietBootstrap === "prelogin" ? preloginDataProof : `user_data = pathlib.Path('/var/lib/cloud/instance/user-data.txt')
 if os.path.lexists(user_data):
-    regular(user_data, 0)
+    regular(user_data, 0)`}
 if os.path.lexists('/run/docker.sock') or os.path.lexists('/run/containerd/containerd.sock'):
     r = subprocess.run(['docker', 'ps', '--quiet', '--no-trunc'], capture_output=True, text=True, timeout=5)
     assert r.returncode == 0 and r.stdout.strip() == ''

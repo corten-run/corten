@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { fleetPlan, reservation, selection } from "./cloud-contract.mjs";
+import { fleetPlan, preloginUserData, reservation, selection } from "./cloud-contract.mjs";
 import { commit } from "./cloud-fixtures.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
-import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+import { failedNativeScript, setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { digest } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 
@@ -457,6 +457,60 @@ function firstGroupSetupState() {
   return { ...reservation({ round: "r21", commit, token, group, fleet }), id: "123", ip: "192.0.2.10", status: "running",
     archiveSha256: "a".repeat(64), evidenceSha256: "b".repeat(64) };
 }
+
+test("only new dedicated reservations require the exact fixed boot data in all three custody probes", {
+  skip: process.platform !== "linux",
+}, () => {
+  const s = { ...firstGroupSetupState(), quietBootstrap: "prelogin", control: { schema: "benchmark-control-ledger/v1",
+    helperSha256: guardianSha256, sealed: [], ledger: [], monitor: { schema: "benchmark-supervised-control/v1",
+      id: "b".repeat(32), phase: "pending" } } };
+  s.control.ledger.push({ localTerminal: true, code: 0, request: controlRequest(s, "ssh", ["true"], 30000, "bootstrap") });
+  const scripts = (saved) => [unusedHostScript(saved), terminalSetupScript(saved, 1),
+    failedNativeScript(saved, null, null, { roots: ["/bench/campaign"], host: {} })];
+  const [unused, setup, native] = scripts({ ...s, quietBootstrap: "after-start" });
+  assert.match(unused, /not user_data\.exists\(\) or user_data\.stat\(\)\.st_size == 0/);
+  assert.match(setup, /regular\(user_data, 0\)/);
+  assert.match(native, /data\(instance, 'user-data.txt', 0\) == b''/);
+  const programs = scripts(s);
+  const proof = programs[0].match(/cloud_binding = None[\s\S]*?            os\.close\(fd\)/)[0];
+  for (const program of programs) {
+    assert.ok(program.includes(proof));
+    assert.match(program, /^ *cloud_instance\(\)$/m);
+    assert.doesNotMatch(program, /regular\(user_data, 0\)|not user_data\.exists\(\)|data\(instance, 'user-data.txt', 0\)/);
+  }
+  // Redirect only the descriptor walk's root. The canonical absolute selector,
+  // inode checks, bounded reads and content comparisons are the generated probe.
+  const info = programs[0].match(/def info\(s\):\n    return \[[^\n]+\]/)[0];
+  const code = `import hashlib, os, pathlib, re, stat, tempfile
+${info}
+${proof.replace("directory(None, '/')", "directory(None, root)")}
+host_id = '123'
+with tempfile.TemporaryDirectory() as root:
+    cloud = pathlib.Path(root, 'var/lib/cloud')
+    inst = cloud / 'instances' / host_id
+    inst.mkdir(parents=True)
+    (cloud / 'data').mkdir()
+    (cloud / 'data/instance-id').write_text(host_id)
+    (cloud / 'instance').symlink_to('/var/lib/cloud/instances/' + host_id)
+    path = inst / 'user-data.txt'
+    fixed = ${JSON.stringify(preloginUserData)}.encode('ascii')
+    for data in [None, b'', fixed[:-1], b'x' + fixed[1:], fixed + b'x', fixed]:
+        cloud_binding = None
+        if data is not None: path.write_bytes(data)
+        try: cloud_instance()
+        except (AssertionError, FileNotFoundError):
+            assert data != fixed
+        else: assert data == fixed
+    path.rename(inst / 'other')
+    path.symlink_to('other')
+    cloud_binding = None
+    try: cloud_instance()
+    except OSError: pass
+    else: raise AssertionError('accepted a linked payload')
+`;
+  const result = spawnSync(python, ["-I", "-c", code], { encoding: "utf8", timeout: 3000 });
+  assert.equal(result.status, 0, result.stderr);
+});
 
 test("fixed failed-setup program accepts only exact common tooling markers without native work", { skip: !available }, () => {
   const base = firstGroupSetupState(), canonical = `${JSON.stringify(bootstrapMarker(base))}\n`;

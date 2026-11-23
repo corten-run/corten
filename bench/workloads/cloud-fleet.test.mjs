@@ -544,8 +544,8 @@ test("first official group waits for the bound common bootstrap marker, not nati
   assert.equal(h.calls.filter((c) => c[0] === "ssh" && c.at(-1).startsWith("if test ! -e /bench/bootstrap-ready.json")).length, 2);
 });
 
-test("dedicated startup leaves an SSH-free manager drain window before polling or registering", async (t) => {
-  for (const mode of ["quiet", "busy", "cancelled", "cancelled-at-start", "install-failed"]) {
+test("dedicated startup starts once, then leaves the host's idle check free of root SSH", async (t) => {
+  for (const mode of ["quiet", "busy", "cancelled-before-start", "cancelled-after-start", "install-failed"]) {
     const h = harness(t, { active: true }), group = "recoverable-live";
     const values = input(); values.provider = { accountId, context }; values.tokens = { [group]: values.tokens[group] };
     const fleet = join(h.temp, "fleet.json");
@@ -554,6 +554,7 @@ test("dedicated startup leaves an SSH-free manager drain window before polling o
     })));
     const options = { collect: undefined, detach: true, commit, sshKey: "42", accountId, context, group, fleet };
     const installSent = Promise.withResolvers(), ack = Promise.withResolvers();
+    const startSent = Promise.withResolvers(), startAck = Promise.withResolvers();
     let installed = false, started = false, elapsed = 0;
     const run = async (binary, args, ...rest) => {
       if (binary === "ssh" || binary === "scp") {
@@ -565,25 +566,31 @@ test("dedicated startup leaves an SSH-free manager drain window before polling o
           const result = h.run(binary, args, ...rest);
           if (mode === "install-failed") return { ...result, status: 1 };
           installed = true;
+          if (mode === "cancelled-before-start") h.flags.cancelled = true;
           return result;
         }
         if (binary === "ssh" && script.startsWith("systemctl start")) {
           assert.ok(installed, "unit started before policy installation acknowledged");
-          assert.equal(elapsed, 120_000, "unit started before the SSH-free window elapsed");
+          assert.equal(started, false, "unit start retried");
+          assert.equal(elapsed, 0, "fresh root login opened at the end of the drain");
           started = true;
+          assert.equal(h.saved().quietBootstrap, "prelogin");
+          assert.match(readFileSync(join(h.local, "job.sh"), "utf8"), /^bootstrap_stage=root-manager-drain$/m);
+          if (mode === "quiet") { startSent.resolve(); await startAck.promise; }
           if (mode === "busy") h.flags.active = false;
         } else if (installed) {
-          assert.ok(started, "controller opened a root session before the quiet handoff");
+          assert.ok(started && elapsed >= 135_000, "controller observed startup during the host's drain or idle check");
         }
       }
       return h.run(binary, args, ...rest);
     };
     const task = h.task({ run, checkFleetAdmission: () => [], sleep: async (ms) => {
       assert.equal(ms, 1000);
-      assert.ok(installed && !started);
+      assert.ok(installed && started);
+      assert.equal(h.saved().status, "starting");
       assert.equal(h.saved().control.ledger.at(-1).localTerminal, true);
       elapsed += ms;
-      if (mode === "cancelled" || mode === "cancelled-at-start" && elapsed === 120_000) h.flags.cancelled = true;
+      if (mode === "cancelled-after-start") h.flags.cancelled = true;
     } }, options);
     const launch = task.launch();
     try {
@@ -592,22 +599,28 @@ test("dedicated startup leaves an SSH-free manager drain window before polling o
       assert.equal(started, false);
     } finally { ack.resolve(); }
     if (mode === "quiet") {
+      try {
+        await Promise.race([startSent.promise, launch]);
+        assert.equal(elapsed, 0);
+        assert.equal(h.saved().control.ledger.at(-1).localTerminal, false, "start still in flight");
+      } finally { startAck.resolve(); }
       await launch;
       assert.ok(h.saved().bootstrapReady);
       assert.equal(h.saved().control.monitor.phase, "closed");
       assert.match(h.saved().control.monitor.registrationSha256, /^[a-f0-9]{64}$/);
       assert.deepEqual(h.saved().control.sealed, ["bootstrap"]);
     } else {
-      await assert.rejects(launch, { busy: /ended before running admission/, cancelled: /controller cancelled/,
-        "cancelled-at-start": /controller cancelled/, "install-failed": /control process failed/ }[mode]);
+      await assert.rejects(launch, { busy: /ended before running admission/, "cancelled-before-start": /controller cancelled/,
+        "cancelled-after-start": /controller cancelled/, "install-failed": /control process failed/ }[mode]);
       assert.equal(h.saved().bootstrapReady, undefined);
       assert.equal(h.saved().control.monitor.phase, "pending");
       assert.equal(!!h.saved().preBootstrapTerminal, mode === "busy");
+      if (mode === "cancelled-after-start") assert.equal(h.saved().status, "starting");
     }
-    assert.equal(started, mode === "quiet" || mode === "busy");
+    assert.equal(started, ["quiet", "busy", "cancelled-after-start"].includes(mode));
     if (!started) {
       assert.equal(h.saved().status, "preparing");
-      assert.equal(elapsed, { cancelled: 1000, "cancelled-at-start": 120_000, "install-failed": 0 }[mode]);
+      assert.equal(elapsed, 0);
     }
     assert.equal(h.creates, 1);
     assert.equal(h.deletes, 0);
