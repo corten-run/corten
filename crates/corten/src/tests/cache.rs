@@ -1408,13 +1408,14 @@ async fn a_kept_page_has_the_tag_and_the_coded_bytes_of_the_handler_s_answer() {
 }
 
 /// A kept page's brotli is the handler's answer's for its first two answers to a client that
-/// takes brotli, and is made once more at `Level::Kept` after the second, by no request: from
-/// then on a client that ranks brotli as high as any coding (a browser, which takes zstd too)
-/// gets those fewer bytes with the same tag, and one that prefers zstd, or takes only gzip, gets
-/// what was made for its coding.
+/// takes brotli, a browser is given zstd for as long as the page is not due its brotli at
+/// `Level::Kept` (8,192 such answers and three for each of the page's bytes), and that brotli is made once
+/// more after the due answer, by no request: from then on a client that ranks brotli as high as
+/// any coding (a browser, which takes zstd too) gets those fewer bytes with the same tag, and one
+/// that prefers zstd, or takes only gzip, gets what was made for its coding.
 #[cfg(feature = "compress")]
 #[tokio::test]
-async fn a_kept_page_is_given_in_brotli_made_after_its_second_answer() {
+async fn a_kept_page_is_given_in_brotli_made_after_its_due_answer() {
     use crate::compress::{encode, Coding, Level};
     let (runs, each) = (Runs::default(), Runs::default());
     let kept = App::new(Routes::from(kept_routes(&runs))).router();
@@ -1429,8 +1430,14 @@ async fn a_kept_page_is_given_in_brotli_made_after_its_second_answer() {
     let (_, _, identity) = fetch(&kept, "GET", "/", &[("accept-encoding", "identity")]).await;
     let better = encode(Coding::Brotli, &identity, Level::Kept);
     assert!(better.len() < fast.len(), "{} of {}", better.len(), fast.len());
-    // Made after those answers: a browser gets zstd until it is there.
+    // Not before the due answer: the two answers to `br` counted, the one in no coding did not.
     let browser = [("accept-encoding", "gzip, deflate, br, zstd")];
+    let due = crate::kept::due(identity.len());
+    for n in 3..=due {
+        let (_, headers, _) = fetch(&kept, "GET", "/", &browser).await;
+        assert_eq!(headers[header::CONTENT_ENCODING], "zstd", "answer {n} of {due}");
+    }
+    // Made after it: a browser gets zstd until it is there.
     let started = std::time::Instant::now();
     let (headers, given) = loop {
         let (_, headers, given) = fetch(&kept, "GET", "/", &browser).await;
@@ -1457,8 +1464,9 @@ async fn a_kept_page_is_given_in_brotli_made_after_its_second_answer() {
 
 /// Only answers a store kept count toward a page's brotli at `Level::Kept`: in a full store the
 /// first request for a new URL is answered by the handler and not kept, and queues nothing, so
-/// the page kept from the second request is given zstd on its first answer after that too, and
-/// its brotli is queued on its second. The compression thread is waited for after each request.
+/// the page kept from the second request counts from that request's answer: its brotli is queued
+/// on the answer that makes its due counting from there, not one answer sooner, and given once
+/// the compression thread has made it.
 #[cfg(feature = "compress")]
 #[tokio::test]
 async fn an_answer_a_full_store_did_not_keep_does_not_count_toward_its_brotli() {
@@ -1484,20 +1492,41 @@ async fn an_answer_a_full_store_did_not_keep_does_not_count_toward_its_brotli() 
         assert!(crate::compress::later(crate::compress::Turn::Kept, job), "the thread took the job");
         heard.recv_timeout(Duration::from_secs(10)).expect("the thread is done");
     };
+    drained();
     let browser = [("accept-encoding", "gzip, deflate, br, zstd")];
-    let mut given = Vec::new();
-    for _ in 0..4 {
-        let (status, headers, _) = fetch(&router, "GET", "/?new", &browser).await;
-        assert_eq!(status, StatusCode::OK);
-        given.push((headers.contains_key(header::AGE), headers[header::CONTENT_ENCODING].to_str().unwrap().to_owned()));
-        drained();
+    // The page's length, from an app that keeps nothing, so this store sees no other request.
+    let none = App::new(Routes::from(kept_routes(&Runs::default()))).kept_answers(0).router();
+    let (_, _, identity) = fetch(&none, "GET", "/?new", &[("accept-encoding", "identity")]).await;
+    let due = crate::kept::due(identity.len());
+    // The kept pages' jobs asked of the queue on this thread, each given to it.
+    let queued = std::rc::Rc::new(std::cell::Cell::new(0));
+    let count = queued.clone();
+    crate::compress::QUEUEING.set(Some(Box::new(move |turn| {
+        if turn == crate::compress::Turn::Kept {
+            count.set(count.get() + 1);
+        }
+        true
+    })));
+    let given = |n: u32| {
+        let router = router.clone();
+        async move {
+            let (status, headers, _) = fetch(&router, "GET", "/?new", &browser).await;
+            assert_eq!(status, StatusCode::OK, "answer {n}");
+            (headers.contains_key(header::AGE), headers[header::CONTENT_ENCODING].to_str().unwrap().to_owned())
+        }
+    };
+    assert_eq!(given(1).await, (false, "zstd".to_owned()), "not kept");
+    assert_eq!(given(2).await, (false, "zstd".to_owned()), "made and kept");
+    // Its answers from the one that kept it: the due one is the request after the due-th.
+    for n in 3..=due {
+        assert_eq!(given(n).await, (true, "zstd".to_owned()), "answer {n}");
     }
-    let given: Vec<(bool, &str)> = given.iter().map(|(age, coding)| (*age, coding.as_str())).collect();
-    assert_eq!(
-        given,
-        [(false, "zstd"), (false, "zstd"), (true, "zstd"), (true, "br")],
-        "not kept, then made and kept, then given twice: brotli after the kept page's second answer"
-    );
+    assert_eq!(queued.get(), 0, "not queued by the answer that would make its due were the first counted");
+    assert_eq!(given(due + 1).await, (true, "zstd".to_owned()), "the due answer");
+    assert_eq!(queued.get(), 1, "queued by the answer that makes its due from the one that kept it");
+    crate::compress::QUEUEING.take();
+    drained();
+    assert_eq!(given(due + 2).await, (true, "br".to_owned()), "brotli once it is made");
 }
 /// A write drops what is kept at its path, whatever the query and whatever it is answered (the
 /// router's own answer for a method the path has no handler for included), and one that goes
@@ -2989,17 +3018,18 @@ async fn a_public_json_or_text_answer_is_kept_and_given_again() {
 }
 
 /// A kept JSON, text or file body's compressed forms are a kept page's: given brotli made at
-/// `Level::Kept` after its second answer to a client that takes brotli, by no request, so a
-/// browser gets it once it is made with the same tag, and one that takes only gzip gets what was
-/// made for gzip. Its brotli is queued on that second answer exactly: not on the handler's, which
-/// is the first, nor on an answer in no coding between them, and once. A data client's copy
+/// `Level::Kept` after its due answer to a client that takes brotli (8,192 such answers and
+/// three for each of the body's bytes), by no request, so a browser gets it once it is made with the same tag,
+/// and one that takes only gzip gets what was made for gzip. Its brotli is queued on that answer
+/// exactly: not on the handler's, which is the first, nor on any answer before the due one, an
+/// answer in no coding not counted among them, and once. A data client's copy
 /// (`Accept: application/json` first) is kept apart, so it counts its own answers toward its own
 /// brotli. The brotli is sent with its handler's type, file name and `Vary`; a picture of a type
 /// the app does not compress is kept, given from the store with no coding, and queues none
 /// however often a browser asks.
 #[cfg(all(feature = "json", feature = "compress"))]
 #[tokio::test]
-async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
+async fn a_kept_body_is_given_in_brotli_made_after_its_due_answer() {
     use crate::compress::{encode, Coding, Level, Turn};
     let minute = Duration::from_secs(60);
     let runs = Runs::default();
@@ -3059,11 +3089,16 @@ async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
         assert_eq!(queued.get(), before, "{path} {asked:?}: an answer in no coding does not count");
         let better = encode(Coding::Brotli, &plain, Level::Kept);
         assert!(better.len() < fast.len(), "{path}: {} of {}", better.len(), fast.len());
-        let (_, second, again) = fetch(&router, "GET", path, asked).await;
-        assert!(second.contains_key(header::AGE), "{path} {asked:?}: kept {second:?}");
-        assert_eq!(second[header::CONTENT_ENCODING], "zstd", "{path} {asked:?}: made by no request");
-        assert_eq!(again.as_ptr(), fast.as_ptr(), "{path} {asked:?}: the handler's answer's bytes");
-        assert_eq!(queued.get(), before + 1, "{path} {asked:?}: queued on the second answer");
+        let due = crate::kept::due(plain.len());
+        assert!(due > 2, "{path}: {due}");
+        for n in 2..=due {
+            let (_, kept, again) = fetch(&router, "GET", path, asked).await;
+            assert!(kept.contains_key(header::AGE), "{path} {asked:?}: answer {n} kept {kept:?}");
+            assert_eq!(kept[header::CONTENT_ENCODING], "zstd", "{path} {asked:?}: answer {n} made by no request");
+            assert_eq!(again.as_ptr(), fast.as_ptr(), "{path} {asked:?}: answer {n}, the handler's answer's bytes");
+            let by_then = if n == due { before + 1 } else { before };
+            assert_eq!(queued.get(), by_then, "{path} {asked:?}: answer {n} of {due}, queued on the due one alone");
+        }
         let started = std::time::Instant::now();
         let (headers, given) = loop {
             let (_, headers, given) = fetch(&router, "GET", path, asked).await;
@@ -3126,13 +3161,15 @@ async fn a_kept_body_is_given_in_brotli_made_after_its_second_answer() {
 /// constant) is never given a brotli at `Level::Kept`, since a held value queued while it is made
 /// would wait for all of it: no answer queues one, and a browser gets the form made for its coding
 /// every time. The bound is the body's own length, not its compressed form's. One at the bound is
-/// queued on its second answer as before, and not on its first.
+/// due its brotli after 106,496 answers to a browser, 8,192 and three a byte, and queues nothing on its
+/// first answers; one past it is due none (`kept.rs` asks the past one that many times and more).
 #[cfg(feature = "compress")]
 #[tokio::test]
 async fn a_kept_body_past_the_brotli_bound_keeps_the_form_made_for_its_coding() {
     use crate::compress::Turn;
-    use crate::kept::BROTLI_MAX;
+    use crate::kept::{due, BROTLI_MAX};
     assert_eq!(BROTLI_MAX, 32 * 1024, "the bound docs/design.md#choice-kept-pages and the guide give");
+    assert_eq!((due(32_768), due(32_769)), (106_496, 0), "due by its length at the bound, and none past it");
     let minute = Duration::from_secs(60);
     let runs = Runs::default();
     let text = |length: usize, runs: Runs| {
@@ -3167,9 +3204,9 @@ async fn a_kept_body_past_the_brotli_bound_keeps_the_form_made_for_its_coding() 
         assert_eq!(again.as_ptr(), made.as_ptr(), "answer {n}: the form made for zstd");
     }
     assert_eq!((queued.get(), runs.count()), (0, 1), "no brotli queued past the bound, one run");
-    for (n, queued_by_then) in [(0, 0), (1, 1)] {
+    for n in 0..2 {
         assert_eq!(fetch(&router, "GET", "/at", &browser).await.1[header::CONTENT_ENCODING], "zstd", "answer {n}");
-        assert_eq!(queued.get(), queued_by_then, "answer {n}: at the bound, queued on its second answer and not its first");
+        assert_eq!(queued.get(), 0, "answer {n}: at the bound, not queued before its due");
     }
     assert_eq!(runs.count(), 2, "one run a URL");
     crate::compress::QUEUEING.take();

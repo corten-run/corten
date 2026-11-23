@@ -20,9 +20,11 @@
 //! An answer the app keeps ([`crate::kept`]: a page, or a whole JSON, text or file body) has each coding
 //! made once at the per-request level, by the first request that asks for it. Its brotli 5 is
 //! made by no request but by the thread that compresses held JSON, when no held value waits:
-//! each kept copy's second compressed answer to a client that ranks brotli as high as any coding
-//! queues it there (an answer in no coding, or a 304, does not count, and one the full queue
-//! refused leaves it to the next such answer). It is best effort: it is not made for a copy that
+//! a kept copy's compressed answers to clients that rank brotli as high as any coding are counted,
+//! and the one that makes 8,192 and three for each of the body's bytes queues it there (an answer in no
+//! coding, or a 304, does not count, and one the full queue refused leaves it to the next such
+//! answer), since the encoding runs on the server's CPU and is paid for only by the answers after
+//! it ([`crate::kept::due`]). It is best effort: it is not made for a copy that
 //! no longer stands, nor kept where the store has no room left for it, and a body past 32 KiB is
 //! given none, since a held value queued while it is made would wait for all of it. Once it is kept, later
 //! such answers get it in the place of the form made for their coding when that is larger, 18%
@@ -189,9 +191,10 @@ pub(crate) enum Level {
     /// and brotli 1 634 µs (444 to 746; 3.14 million) for 7,284, where brotli 2 takes 1,754 µs
     /// (1,516 to 2,153; 12.7 million) for 6,939.
     Held,
-    /// Once per page the app keeps ([`crate::kept`]), queued by its second answer that could use
-    /// it (before that answer's own form is made), on the thread that compresses held values,
-    /// after them: brotli 5, which a client that ranks
+    /// Once per page the app keeps ([`crate::kept`]), queued by the answer that could use it that
+    /// makes 8,192 and three for each of the body's bytes ([`crate::kept::due`], before that
+    /// answer's own form is made), on the thread that compresses held values, after them: brotli
+    /// 5, which a client that ranks
     /// brotli as high as any coding gets in the place of zstd 1, unless a zstd 1 already made is no
     /// larger (none is made only to compare), for a body of up to 32 KiB (`kept::BROTLI_MAX`).
     /// On the catalog

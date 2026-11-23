@@ -23,14 +23,26 @@ const COUNTS: usize = 4 << 16;
 /// The marks of the URLs asked for: a bit for every 32 bytes of the bound, made once when the
 /// store first fills and held beside the bound too.
 const MARKS: usize = BOUND / 256;
+/// The newest pages asked for by a browser until their brotli at the kept level is due (8,192
+/// answers to a client that ranks brotli first and three for each of the page's bytes), so the
+/// store holds some with it.
+#[cfg(feature = "compress")]
+const PROMOTED: usize = 4;
+
+/// The answers to a browser by which a kept body of `length` bytes is due its brotli at the kept
+/// level, as `kept::due` counts them (8,192 and three a byte).
+#[cfg(feature = "compress")]
+fn due(length: usize) -> usize {
+    8192 + 3 * length
+}
 
 /// A browser's codings: it is given a kept page's brotli at the kept level once that is made, and
 /// zstd until then or when the store had no room for it.
 #[cfg(feature = "compress")]
 const BROWSER: &str = "gzip, deflate, br, zstd";
 
-/// Each coding alone, then a browser's: its answer is the second to a client that takes brotli,
-/// so the page's brotli at the kept level is queued for the compression thread with it.
+/// Each coding alone, then a browser's. Of these, the answers to `br` and to the browser count
+/// toward the page's brotli at the kept level.
 #[cfg(feature = "compress")]
 const CODINGS: &[&str] = &["identity", "zstd", "br", "gzip", BROWSER];
 #[cfg(not(feature = "compress"))]
@@ -119,15 +131,45 @@ async fn get(stream: &mut TcpStream, read: &mut Vec<u8>, path: &str, coding: &st
     answer(stream, read, path, coding).await.0
 }
 
-/// [`get`], and the answer's `Content-Encoding`.
-async fn answer(stream: &mut TcpStream, read: &mut Vec<u8>, path: &str, coding: &str) -> (bool, Option<String>) {
-    let request = format!(
+/// The request [`get`] sends.
+fn request(path: &str, coding: &str) -> String {
+    format!(
         "GET {path} HTTP/1.1\r\nhost: localhost\r\naccept: text/html,application/xhtml+xml,*/*;q=0.8\r\n\
          accept-language: en-US,en;q=0.9\r\naccept-encoding: {coding}\r\n\
          user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36\r\n\r\n"
-    );
-    stream.write_all(request.as_bytes()).await.unwrap();
+    )
+}
+
+/// [`get`], and the answer's `Content-Encoding` and the length of its body.
+async fn answer(stream: &mut TcpStream, read: &mut Vec<u8>, path: &str, coding: &str) -> (bool, Option<String>, usize) {
+    stream.write_all(request(path, coding).as_bytes()).await.unwrap();
     read.clear();
+    let given = next(stream, read).await;
+    read.clear();
+    given
+}
+
+/// [`get`] `times` times on one connection, written a batch at a time before their answers are
+/// read, as a client that pipelines does; each must be a kept page's answer.
+#[cfg(feature = "compress")]
+async fn asked(stream: &mut TcpStream, read: &mut Vec<u8>, path: &str, coding: &str, times: usize) {
+    let one = request(path, coding);
+    read.clear();
+    let mut left = times;
+    while left > 0 {
+        let batch = left.min(32);
+        stream.write_all(one.repeat(batch).as_bytes()).await.unwrap();
+        for _ in 0..batch {
+            assert!(next(stream, read).await.0, "{path} in {coding}: kept");
+        }
+        left -= batch;
+    }
+    assert!(read.is_empty(), "nothing read past the last answer");
+}
+
+/// Reads the next answer on `stream` from `read` and the connection, and takes it out of `read`:
+/// whether it was a kept page's, its `Content-Encoding` and the length of its body.
+async fn next(stream: &mut TcpStream, read: &mut Vec<u8>) -> (bool, Option<String>, usize) {
     let head = loop {
         if let Some(at) = read.windows(4).position(|window| window == b"\r\n\r\n") {
             break at + 4;
@@ -142,14 +184,15 @@ async fn answer(stream: &mut TcpStream, read: &mut Vec<u8>, path: &str, coding: 
         assert!(stream.read_buf(read).await.unwrap() > 0, "the connection closed");
     }
     let encoding = text.lines().find_map(|line| line.strip_prefix("content-encoding: ")).map(|coding| coding.trim().to_owned());
-    (text.lines().any(|line| line.starts_with("age:")), encoding)
+    read.drain(..head + length);
+    (text.lines().any(|line| line.starts_with("age:")), encoding, length)
 }
 
 /// Waits until the compression thread has done the brotli of every kept page queued before, made
 /// or let go: it takes them in the order they were queued, and gives the one of `/mark`, kept by
 /// an app of its own whose store has room for it, once it is made. A write to `/mark` drops that
 /// page first, so it is made and kept again, in the place of the one it drops, and its brotli is
-/// queued once more by its second answer to a browser. The write is answered whatever its status.
+/// queued once more when it is due. The write is answered whatever its status.
 #[cfg(feature = "compress")]
 async fn drained(stream: &mut TcpStream, read: &mut Vec<u8>) {
     stream.write_all(b"POST /mark HTTP/1.1\r\nhost: localhost\r\ncontent-length: 0\r\n\r\n").await.unwrap();
@@ -166,6 +209,9 @@ async fn drained(stream: &mut TcpStream, read: &mut Vec<u8>) {
     while read.len() < head + length {
         assert!(stream.read_buf(read).await.unwrap() > 0, "the connection closed");
     }
+    // Made again by its first answer, which no coding counts, then asked for until it is due.
+    let (_, _, length) = answer(stream, read, "/mark", "identity").await;
+    asked(stream, read, "/mark", BROWSER, due(length)).await;
     let asked = std::time::Instant::now();
     while answer(stream, read, "/mark", BROWSER).await.1.as_deref() != Some("br") {
         assert!(asked.elapsed() < Duration::from_secs(60), "the compression thread did not come to /mark");
@@ -207,8 +253,8 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
         }
         // With room a page is kept the first time it is made. In a full store it is kept from
         // the second request for its URL, so one more comes first.
-        let made = !get(&mut stream, &mut read, &format!("/kept?n={n}"), "identity").await;
-        assert!(made, "page {n} was asked for the first time");
+        let (given, _, length) = answer(&mut stream, &mut read, &format!("/kept?n={n}"), "identity").await;
+        assert!(!given, "page {n} was asked for the first time");
         for (asked, coding) in CODINGS.iter().enumerate() {
             let given = get(&mut stream, &mut read, &format!("/kept?n={n}"), coding).await;
             if asked == 0 && !given {
@@ -228,6 +274,14 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
                 assert!(first >= COUNTS, "the first page kept took {first} bytes: the counts were made before it");
             }
         }
+        // The newest pages are asked for by a browser until their brotli is due, which queues it
+        // while the pages after them are kept.
+        #[cfg(feature = "compress")]
+        if n >= PAGES - PROMOTED {
+            asked(&mut stream, &mut read, &format!("/kept?n={n}"), BROWSER, due(length)).await;
+        }
+        #[cfg(not(feature = "compress"))]
+        let _ = length;
     }
     assert!(twice > PAGES / 2, "{twice} of {PAGES} pages were asked for in a full store");
     // So the thread has no page's brotli left to make when the count is read: each it made is
@@ -244,8 +298,8 @@ async fn what_the_kept_pages_hold_stays_within_the_bound() {
         let (mut kept, mut brotli) = (0, 0);
         for n in (0..PAGES).rev() {
             match answer(&mut stream, &mut read, &format!("/kept?n={n}"), BROWSER).await {
-                (false, _) => break,
-                (true, coding) => {
+                (false, _, _) => break,
+                (true, coding, _) => {
                     kept += 1;
                     brotli += usize::from(coding.as_deref() == Some("br"));
                 }

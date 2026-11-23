@@ -33,7 +33,7 @@ not remove that requirement.
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the request's deadline (its area's or API's where that sets one; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the grace and the deadline of every route whose requests should finish |
 | Logs | errors, warnings and other `tracing` events at `INFO` and above to stdout, one line each, as `tracing-subscriber`'s `fmt()` writes them without targets (`2026-11-06T21:20:29.018154Z  WARN corten: ...`), in its colors when stdout is a terminal and `NO_COLOR` is unset; control characters other than a tab are escaped in every field, so request text cannot start a line of its own or send the terminal a command; spans are not printed (feature `log`, a subscriber of Corten's own with no dependency) | set your own `tracing` subscriber first (`tracing_subscriber::fmt().init()` for spans, filters such as `RUST_LOG` or JSON lines); `serve` then leaves it alone |
 | Access logs | off, also in the app `corten new` writes | `.access_log(true)`: one `INFO` event per response, target `corten::access`, after every stage and app layer, at a measured cost ([below](#access-logs)) |
-| Compression | pages per request (zstd, brotli, gzip), a kept page's or JSON, text or file body's brotli at level 5, made once by the thread that compresses held JSON, queued by its second compressed answer to a client that ranks brotli as high as any coding, and given to such clients once it is made in place of their usual coding, unless a form of that coding already made is no larger (none is made to compare), as best effort ([Caching](#the-pages-the-app-keeps)), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd, else gzip, never brotli, which Playwright's WebKit on Windows holds back; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
+| Compression | pages per request (zstd, brotli, gzip), a kept page's or JSON, text or file body's brotli at level 5, made once by the thread that compresses held JSON, queued once the copy has been given to clients that rank brotli as high as any coding 8,192 times and three more for each byte of its body, and given to such clients once it is made in place of their usual coding, unless a form of that coding already made is no larger (none is made to compare), as best effort ([Caching](#the-pages-the-app-keeps)), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd, else gzip, never brotli, which Playwright's WebKit on Windows holds back; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
 | Installable app | off | `.pwa(Pwa::new(manifest))`: manifest, generated service worker, offline page; `.network_only("/auth/")` for paths whose answers the worker never caches or replaces with the offline page (sign-in, checkout, an OAuth callback), where a GET navigation still reaches the server once: the worker answers it with the request navigation preload already sent, or leaves it to a browser without navigation preload ([design Choice 56](../design.md#choice-network-only-preload)) |
 | A route outside all of the above | none: every route gets every default here | `unstaged` on one route's `#[route(..)]`: no same-origin check, middleware, security headers, cache rule, deadline or error page, for an answer the same for everyone who can reach it; the host check stays ([below](#a-route-outside-the-stages)) |
 | Languages | none | `.messages::<Msg>()`: `req.t()` and `req.lang()` follow `Accept-Language`, or the locale a page's URL names (a `Locale<Msg>` route field the handler gives `req.set_locale`, [Views](views.md#a-locale-in-the-url)); each page says its locale in `Content-Language` |
@@ -1546,18 +1546,25 @@ answer; and a request that names the page's tag gets its `304`. What a kept page
 handler with what it reads, the render, the tag's hash and the compression, since the hash and each
 coding's bytes are made once and stay with the page. A page's bytes are made once and sent many
 times, so its brotli is made once more, at level 5 (a request's is 1), on the thread that
-compresses held JSON, after any held JSON waiting there. That is queued while the app prepares
-the page's second compressed answer to a client that ranks brotli first or ties it for first among
-the codings it takes, before it looks for that answer's own form. An answer the store did not keep (in a full store, the first for a URL not asked
+compresses held JSON, after any held JSON waiting there. That encoding runs on the server's own
+CPU, so it is made only for a page asked for often enough to repay it: the page's compressed
+answers to clients that rank brotli first or tie it for first among the codings they take are
+counted, and the job is queued while the app prepares the one that makes 8,192 and three more for
+each byte of the page (26,564 for a page of 6,124 bytes), before it looks for that answer's own
+form. Spread over that many answers, the encoding costs at most about 0.5% of their instructions
+for the bodies measured, and less for a page asked for more often; a page asked for fewer times
+in its lifetime, or made again by a write, never pays for it and keeps its zstd. Queued on a
+page's second answer instead, it took a workload whose every URL was asked for twice 110% more
+CPU cycles a request. An answer the store did not keep (in a full store, the first for a URL not asked
 for before), one that is not compressed (a `304`, a client that takes none, a body too small) or
 one to a client that ranks another coding higher does not count, and when the queue for kept pages
-is full the next answer that counts tries again. Neither answer waits for the encoding: each, and
-every answer until the thread is done, gets the form made for its coding, as before (a lookup may
+is full the next answer that counts tries again. No answer waits for the encoding: the one that queues it,
+and every answer until the thread is done, gets the form made for its coding, as before (a lookup may
 wait the moment the thread takes the store's lock to put the bytes in). From then on a client that
 ranks brotli as high as any coding, as a browser does, gets it in the place of zstd (on the catalog
 benchmark's page 882 bytes where zstd sends 1,078) unless the form already made for the coding it
 would get otherwise is no larger, as on a page that repeats long runs of text, where zstd can be the
-smaller. A form not made yet is not made to compare: a page whose second answer went to clients
+smaller. A form not made yet is not made to compare: a page whose answers so far went to clients
 that take brotli alone can give its brotli to a browser that ties zstd with it, whose zstd would
 have been smaller.
 It is not made for a page written to or past its lifetime by the time the thread comes to it, and
@@ -1676,8 +1683,8 @@ a size: its whole body, when that is 1,024 bytes or more, whatever its type and 
 build has the `compress` feature, under every rule above and by the same key (the language too, where the
 handler reads it with `req.t()` or `req.lang()`), with, outside
 an API (whose answers are not tagged), the tag's hash made once, and, where the app compresses
-it, each coding's bytes made once and its brotli at level 5 queued by its second answer to a
-client that ranks brotli first as a page's is. What it saves is the handler with what it
+it, each coding's bytes made once and its brotli at level 5 queued by the same count of answers
+to clients that rank brotli first as a page's is. What it saves is the handler with what it
 reads, the writing of the JSON, the hash and the compression, and once kept it is given to a
 request that accepts no coding as well. That request gets no tag, so where its handler makes
 nothing a kept body costs it more than the handler would: in a build with `compress`, 1.3% more

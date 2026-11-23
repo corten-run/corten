@@ -7238,8 +7238,8 @@ rules something out.
     request with an `Age` ([caching](guide/app.md#the-pages-the-app-keeps),
     `crates/corten/src/kept.rs`). The hash of its body and its bytes in each coding are made
     once and stay with it, so the tag and the compression after the handler cost a kept page a
-    lookup, and its brotli is made once more at a higher level, queued by its second answer and
-    made by no request (below). It is on unless the app says otherwise, holds at most 32 MiB
+    lookup, and its brotli is made once more at a higher level, queued once the page has been
+    given often enough to repay it and made by no request (below). It is on unless the app says otherwise, holds at most 32 MiB
     (`App::kept_answers`), and is off under `corten dev`.
 
     It stands at the handler's place, not in front of the app. What makes a kept answer safe to
@@ -7476,11 +7476,13 @@ rules something out.
     A kept page's bytes in a coding are made once and sent many times, so a level that costs
     more and sends fewer pays for itself where a per-request answer's cannot
     ([#1793 A kept page is compressed at the level a per-request answer is](https://github.com/corten-run/corten/issues/1793)).
-    The request that makes the copy is still a visitor's, so nothing more is made on it: while
-    the app prepares the page's second compressed answer to a client that ranks brotli first or
-    ties it for first, before it looks for that answer's own form and so possibly before it makes
-    it (a page asked for once is compressed once, as a held value is), its brotli at level 5 is
-    queued for the one thread that already compresses held JSON, in a bounded queue of its
+    The request that makes the copy is still a visitor's, so nothing more is made on it, and the
+    encoding costs the server's CPU wherever it runs, so it is made only for a page asked for
+    often enough to repay it (the seventh run, below): the page's compressed answers to clients
+    that rank brotli first or tie it for first are counted, and while the app prepares the one
+    that makes the page's due, 8,192 and three more for each byte of its body (`kept::due`;
+    26,564 for a page of 6,124 bytes, 106,496 at 32 KiB), before it looks for that answer's own
+    form and so possibly before it makes it, its brotli at level 5 is queued for the one thread that already compresses held JSON, in a bounded queue of its
     own that the thread comes to only when no held value waits, so a burst of kept pages neither
     takes a held value's place in its queue nor makes it wait for more than the one job running.
     The job holds the page weakly while it waits and asks twice whether the page still stands
@@ -7517,7 +7519,8 @@ rules something out.
     as only then is its size known, so a page that finds none has cost the thread that encoding
     and keeps nothing of it. In
     `tests/kept_memory.rs`, whose store is at its bound, 201 of the 227 and 231 of the 232 newest
-    pages kept had it in two runs.
+    pages kept had it in two runs when the second answer queued it; it now asks the four newest
+    pages for their due, and all four had it.
     Level 5 is where the bytes stop falling until brotli's slowest levels:
     on the catalog benchmark's record page (4,424 bytes) zstd 1 sends 1,078 bytes, brotli 5 882
     (18.2% fewer), brotli 9 884, brotli 10 778 and brotli 11 761; on card-market's item pages
@@ -7627,8 +7630,10 @@ rules something out.
     against 105,463 at 512 KiB and 778,799 against 831,796 at 4 MiB less 2 KiB, where it sends
     6,628 against 7,402 at 32 KiB and 1,072 against 1,232 at 4 KiB.
     `tests/cache.rs` checks that a body of 32,769 bytes queues none however often a browser asks,
-    that one of 32,768 is queued on its second answer and not its first, and that the bound is the
-    body's length, not its compressed form's.
+    that one of 32,768 is due on its 106,496th answer, and that the bound is the body's length, not
+    its compressed form's; `kept.rs` and `tests/cache.rs` check that the job is queued on the due
+    answer and on none before it, and that answers in no coding, to clients that rank another
+    coding first, or that the store did not keep do not count.
 
     A kept JSON, text or file body is bytes made once and sent many times too, and where the app
     compresses it its compressed forms are kept the same way, so it gets its brotli 5 by the same
@@ -7661,7 +7666,14 @@ rules something out.
     clients send; leaving out a write by its status (a `4xx`, a `501`) or by a mark the router
     set on the ones it refuses, each of which left a page stale in a case a review found; a
     kept page's higher level made on the request that makes the copy, which a visitor would wait
-    for; brotli 9, or brotli's window sized to the page, which took longer for about the same size
+    for; that level queued by a page's second answer, which cost a workload whose every URL was
+    asked for twice 110% more cycles a request (the seventh run, above); a due that does not grow
+    with the body, which a 32 KiB body's 12.4 million instructions would need about 100,000 answers
+    for and so hold a 1 KiB page back as long as that body; a budget of the thread's CPU, which
+    bounds the encoding's share of the server only by a rate the app would have to choose, takes a
+    clock, and still lets a workload that asks each URL twice pay for jobs no answer repays; a due
+    counted in the bytes a page's answers would save, which are network bytes, not the CPU the job
+    costs; brotli 9, or brotli's window sized to the page, which took longer for about the same size
     (brotli 9: 884 and 1,291 bytes against 882 and 1,293); brotli 10 and 11, which do send fewer
     (104 to 123 bytes fewer than brotli 5 on the record and item pages) but take 20 to 84 times its
     instructions on the thread held values share; making room for it as for the page's other forms, by dropping the pages the clock
@@ -7721,7 +7733,8 @@ rules something out.
     bound, 4,151,648 and 4,164,307 of 4,194,304 in two runs for its page in every coding and its
     brotli 5 where the bound had room for it when the thread came to it (the thread waited for
     before the count; 201 of the 227 newest pages kept were given in brotli in the first and 231
-    of 232 in the second), and 4,050,606 with no compression. A kept page's brotli 5 (`22fddd6da`, this
+    of 232 in the second, when the second answer queued it; 4,160,055 with the four newest pages
+    asked for their due, all four given it), and 4,050,606 with no compression. A kept page's brotli 5 (`22fddd6da`, this
     change merged with main, against main's `564034b86` and against `918ba8956`, this change before
     an answer stopped writing the page's count once its brotli was queued; the request counts of
     `tests/kept_coding_cost.rs` for a page of 3,052 bytes, callgrind's count for 1,200 requests
@@ -7977,9 +7990,64 @@ rules something out.
     across the nine processes of this change), the page's brotli 5 and its put, and the thread's
     loop 151 more. Callgrind counts user
     space alone: not the thread's creation or a wake-up in the kernel, nor any wait, nor what the
-    thread's work costs answers that share a CPU with it. So a page asked for exactly twice costs
-    this change about five times its two answers' instructions, on the thread; the bet that most
-    kept answers are read more than twice is what pays for it. The first two runs on a quiet host did not count
+    thread's work costs answers that share a CPU with it. So a page asked for exactly twice cost
+    that build about five times its two answers' instructions, on the thread, a bet that most kept
+    answers are read more than twice. A seventh run took that bet's worst case to a quiet host
+    (`593b92b01` against `a02c81e86`, 2026-11-23, a DigitalOcean c-8 with a Xeon Platinum 8280,
+    Linux 6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded, the app on one CPU, with the sixth
+    run's starts, validator and margin, set before it ran): `twice`, in which every URL is new and
+    asked for exactly twice with a browser's codings in a store of 8 GiB, so that on that build each
+    URL's second answer queued its brotli 5. It missed by far: user plus kernel cycles a request
+    +109.60% at the median of 100 pairs (bound +110.31%, range +89.26% to +122.08%), user cycles
+    +84.84% and kernel cycles +162.92%, user instructions +54.55% (150,136 to 231,950), and the
+    median rate `wrk` saw fell from 32,406 requests a second to 15,731, with the second requests
+    given kept answers on both builds (99.96% and 99.92% of the recorded turns'); its second pass,
+    held to no margin, counted user first-level instruction-cache misses +7.03% (bound +8.07%). Its
+    kit, results and receipts are kept under the tag `evidence/ac43f8f0`. Taking the encoding off
+    the request did not make it free: it runs on the server's CPU, there the one CPU the app had,
+    and a page asked for twice cannot repay 1.5 million instructions with two answers of about
+    25,000. The instructions it added, about 163,600 a URL, are about a ninth of a job's, so the
+    thread came to only some of the jobs (a full queue refuses the rest, and no third answer asks
+    again), and the cycles it added were about 1.42 for each instruction it added where a request's
+    own were 0.71, kernel cycles most of the difference: both are estimates from the run's medians,
+    not counted per job. A probe that encodes as `Level::Kept` does (brotli 9.1.3, on a thread of
+    its own, on a busy workstation, so its times are good for ratios only) counted 224 to 272 minor
+    page faults a job under jemalloc 5.3.0, whatever the pause between jobs, and none under
+    glibc's allocator, and its jobs took 1.2 to 3.3 times as long under jemalloc, the most at 1
+    KiB: as `corten new`'s Dockerfile runs an app, each job faults in about a megabyte of brotli's
+    tables afresh, a cost that does not grow with the body and that callgrind, which counts user
+    space, does not see.
+
+    So the job is queued by a count that makes it pay for itself in the workload that triggers it
+    (`kept::due`): 8,192 answers to clients that rank brotli first, and three more for each byte
+    of the body. Its instructions, by the probe under callgrind for bodies of 1 to 32 KiB (a table
+    of records, prose, random text and one block repeated, 0.34 to 12.4 million a job, at most
+    about 440 a byte of the body), have a part that does not grow with it; spread over its due, a body asked
+    for exactly that often spends at most 117 instructions an answer on its job (prose of 32 KiB:
+    12,363,878 over 106,496), 0.46% of the 25,136 a page's answer given again took under
+    callgrind, 45 at 1 KiB (a table: 509,048 over 11,264), and the faults, about 250 a job whatever
+    the body, are spread over 11,264 answers or more. One asked for more spends less, and twice its
+    due half. Taken at the seventh run's rate of 1.42 cycles for each instruction a job adds, about
+    2.1 million cycles a job of 6 KB (an estimate), the job adds about 80 cycles to each of a 6,124-
+    byte page's 26,564 answers, about 0.2% of the 48,000 or so a request took in the sixth run.
+    What it gives up: a page asked for fewer times than its due in one lifetime (a page made again,
+    by a write or at the end of its lifetime, counts from none) never gets its brotli 5 and keeps
+    the zstd 1 it had before this change, and one asked for more gets it only after its due: at
+    6,124 bytes the 184 bytes a browser's answer saves begin after 26,564 answers, so a page kept
+    for a minute must be asked for about 443 times a second to get it at all, and one asked for
+    ten times its due in a lifetime sends nine tenths of its browser answers in brotli 5. Every
+    answer before the due writes the page's count, where the second answer had been the last to:
+    callgrind counts that write's instructions, not what it costs where several cores answer
+    the same page. An eighth run is declared for the rule, its plan written before it runs:
+    this change's head against main's `04530f7e0` on such a host, with every turn on a newly
+    started build, 100 pairs a workload and the margin of the runs before, a one-sided 95% bound
+    under +1% in user plus kernel cycles a request, on `twice` as the seventh ran it (which the rule
+    gives no job), `churn`, in which every URL is new and asked for exactly its due, 26,564 times,
+    so that each URL's last answer queues its job, and the four workloads of the runs before
+    (`browser`, `gzip`, `refused`, `json-browser`), each warmed to its due. A bound at or over +1%
+    on any, or a run that cannot be used, blocks the merge.
+
+    The first two runs on a quiet host did not count
     user first-level instruction-cache misses, which CONTRIBUTING.md asks for as a diagnostic when
     code is added or moved: each turn counted `cycles:u`, `cycles:k` and `instructions:u` alone,
     so that no turn's counters were multiplexed and perf ran all three for the whole of every turn;
@@ -8650,7 +8718,9 @@ rules something out.
     runs it, not by a task it spawned, one it handed a render to, or a thread of its own; no app finishes work again and again on the
     `Signal` of a write from before its first answer that may be kept; the clients that ask for a
     kept answer take brotli at the weight they take zstd, as a browser's `Accept-Encoding` does,
-    and most kept answers are read more than twice in a lifetime; an app's kept answers
+    and the kept answers whose bytes matter are asked for by such clients more often in one
+    lifetime than their due (8,192 and three a byte), the rest keeping the zstd 1 they had; an
+    app's kept answers
     are given again at ages of 1,000 to 9,999 seconds, which a lifetime of an hour reaches,
     often enough to be worth the 36,000 bytes of the table's fourth digit); value (fast and proven fast; standards
     first, the app being a shared cache as RFC 9111 describes one; mistakes fail at compile time,
@@ -8689,7 +8759,12 @@ rules something out.
     app's store at its bound keeps most of its answers without their brotli for want of room, or a
     kept answer's brotli is seen delaying held values on the thread they share, or an app's kept
     bodies past 32 KiB are where most of its bytes go, so the bound on its brotli should move on a
-    measurement of its own, or most clients of a
+    measurement of its own, or the eighth run's `churn`, or a profile of an app, shows a kept
+    body's job costing more than its due's answers can repay, so the count should grow, or a
+    measured app's kept pages rarely reach their due in a lifetime while most of its bytes go to
+    browsers, so it should fall, or the job's part that does not grow with the body (brotli's
+    tables and, under jemalloc, about 250 page faults a job) is made smaller, as by an encoder the
+    thread keeps from job to job, so its 8,192 should fall with it, or most clients of a
     measured app prefer zstd to brotli, so a level made after the answer is worth having for zstd;
     the connection speaks HTTP/2, where a request's target carries its authority; an app
     is found finishing work again and again on the `Signal` of a write from before its first
@@ -8702,7 +8777,14 @@ rules something out.
     to tell where a build's code sits from what the change costs, so an older answer's
     digits written to a buffer can be read again.
 
-    Last checked: 2026-11-23 for the sixth run's cycles and user first-level instruction-cache
+    Last checked: 2026-11-23 for the seventh run's cycles and user first-level instruction-cache
+    misses under load on `twice`, `593b92b01` against `a02c81e86` on a DigitalOcean c-8 (Xeon
+    Platinum 8280, Linux 6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded), every turn on a newly
+    started build, kept under the tag `evidence/ac43f8f0`, the miss the rule of a due answers; 2026-11-23
+    for a kept body's brotli 5 by its size, by a probe that encodes as `Level::Kept` does (brotli
+    9.1.3, rustc 1.100.0 in rust:1-trixie), its instructions under callgrind (valgrind 3.24.0) for
+    four kinds of body at nine sizes from 1 to 32 KiB and its page faults and times on a thread of
+    its own under jemalloc 5.3.0 and glibc's allocator on a workstation; 2026-11-23 for the sixth run's cycles and user first-level instruction-cache
     misses under load, `593b92b01` against `a02c81e86` on a DigitalOcean c-8 (Xeon Platinum 8280,
     Linux 6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded), every turn on a newly started build,
     kept under the tag `evidence/aed6638f`; 2026-11-23 for the instructions of the answer that

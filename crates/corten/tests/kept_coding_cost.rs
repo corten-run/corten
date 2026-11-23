@@ -6,8 +6,10 @@
 //! uncompressed request) and `REQUESTS=1200`, and again with `REQUESTS=200`; subtract the totals
 //! and divide by 1,000. `KEPT_ROUTE=json` asks for a JSON body of about the page's size in its
 //! place, as a data client does (`Accept: application/json`), and `page` (the default) for the
-//! page. `hit` is a kept page given again, asked for twice and then left two
-//! seconds before the count, so what is made for it after its answers is there; `made` a page made
+//! page. `hit` is a kept page given again, asked for 8,192 times and three more for each of its
+//! bytes (when a client that ranks brotli first has asked that often, its brotli at the kept level
+//! is due) and
+//! then left two seconds before the count, so what is made for it after its answers is there; `made` a page made
 //! and kept, at a query not asked for before. `KEPT_BOUND` sets the app's bound, and `KEPT_FILL`
 //! other pages kept before a `hit` (the page at other queries, uncompressed, each asked for twice):
 //! a bound that leaves room for the page and its zstd but not its brotli 5 counts a hit whose
@@ -159,8 +161,9 @@ fn request_cost() {
             for uri in fills.iter().chain(&fills) {
                 send(uri, "identity").await;
             }
-            send(path, &accept).await;
-            send(path, &accept).await;
+            for _ in 0..8192 + 3 * page.len() {
+                send(path, &accept).await;
+            }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
         let uris: Vec<String> = (0..=requests).map(|n| if hit { path.to_owned() } else { format!("{path}?n={n}") }).collect();
