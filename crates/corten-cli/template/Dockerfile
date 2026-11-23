@@ -38,9 +38,10 @@ RUN --mount=type=cache,target=/var/cache/cargo \
 
 FROM debian:trixie-slim
 # jemalloc, preloaded, gives back memory a burst of connections took: eight floods of unfinished
-# request heads left 406 to 455 MiB with glibc's allocator and 13 to 16 MiB with these settings
-# (three runs each). Its background thread returns memory while the app is idle; a 64 KiB thread
+# request heads left 329 to 354 MiB with glibc's allocator and about 10 MiB with these settings
+# (three runs and six). Its background thread returns memory while the app is idle; a 1 MiB thread
 # cache keeps a compressor's buffers, which otherwise fault in new pages on every brotli response
+# for a page of 20 KB or more
 # (https://github.com/corten-run/corten/blob/main/docs/design.md#choice-jemalloc-image). Remove
 # these three lines to run on glibc's allocator.
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*

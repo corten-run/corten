@@ -24,8 +24,8 @@ RUN --mount=type=cache,id=corten-examples.registry,target=/usr/local/cargo/regis
     && cargo build --release --locked -p card-market && mkdir -p /out && cp target/release/card-market /out/server
 
 FROM debian:trixie-slim
-# jemalloc, preloaded, with its background thread and a 64 KiB thread cache, gives back memory a
-# burst took (eight floods of unfinished heads: 406 to 455 MiB left on glibc's allocator, 13 to 16
+# jemalloc, preloaded, with its background thread and a 1 MiB thread cache, gives back memory a
+# burst took (eight floods of unfinished heads: 329 to 354 MiB left on glibc's allocator, about 10
 # MiB here) and keeps brotli's buffers between responses (docs/design.md#choice-jemalloc-image).
 # Remove these three lines to run on glibc's.
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
