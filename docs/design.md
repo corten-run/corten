@@ -1294,7 +1294,7 @@ rules something out.
    and a long page with a browser's encodings or uncompressed was not until the third run below.
 
    A second declared run changed one thing in the protocol and compared a setting with itself
-   before each comparison. The maintainer asked its author for it after that result, in the
+   before each comparison on the short page. The maintainer asked its author for it after that result, in the
    session that wrote this change; the request is not on the pull request, and asking for a run
    is not deciding what it settles. First, what the first
    protocol could not tell apart was looked for with one setting (64 KiB, the uncompressed page, a
@@ -1372,7 +1372,8 @@ rules something out.
    setting; and the second plan could not count a comparison whose own same-setting reading did
    not resolve 1% first. What weakens it: the first self-comparison's lean, lower under the
    second label in 65 pairs of 100, is not explained by the spread that was removed; and a trial
-   of the scripts ran on one host in the 72 seconds before the second plan was posted, one pair
+   of the scripts ran on one host for 72 seconds, ending 18 seconds before the second plan was
+   posted, one pair
    of 512 KiB against 64 KiB with `br` on each of the four page lengths and two pairs of 64 KiB
    against itself with `identity`. It ran no pair of the change with `identity` or a browser's
    encodings, and one pair does not read 1%, but the plan was not in the pull request before
@@ -1404,7 +1405,9 @@ rules something out.
    glibc, and 35 seconds after the last flood 15.5 to 16.5 MiB with 64 KiB, 40.1 to 54.3 with
    512 KiB and 399 to 426 on glibc: 24 to 39 MiB more than 64 KiB keeps, 3 to 5 MiB a CPU. No run
    was built to reach the 57 MiB a thread the rule above allows, and none came near it. More CPUs,
-   other mixes of pages and request bodies of those sizes were not measured.
+   other mixes of pages and request bodies of those sizes were not measured, nor was a live
+   stream's gzip state, 352,232 bytes that Corten itself allocates in the range this limit
+   starts to keep ([Choice 32](#choice-stream-coding)).
    Eight floods as above on that host and image left 8.9 to 9.7 MiB with 64 KiB (six runs), 9.3 to
    10.3 with 512 KiB (three), 9.4 to 10.0 with 1 MiB (six) and 329 to 354 on glibc (three), and the
    highest held a second before a hold ended was 190 to 205, 181 to 199, 188 to 220 and 335 to 360
@@ -1449,7 +1452,8 @@ rules something out.
    what its threads' caches keep, 3 to 5 MiB a CPU here; enough of an app's long pages go to a
    client without zstd, which gets brotli, to be worth that memory; the first declared run's
    miss on the uncompressed page was its protocol's spread and not a cost of this limit, which
-   the maintainer took as a judgment on the two later runs and no rule clears); reasoned (an image package
+   is this Choice's bet on the two later runs; the maintainer's judgment was on the gate alone,
+   and no rule clears the miss); reasoned (an image package
    binds only the image, where a `#[global_allocator]` crate compiles C into every build).
 
    Revisit when: an app is measured to hold more than 5 MiB a CPU at rest above what it holds with a
