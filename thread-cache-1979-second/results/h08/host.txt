@@ -1,0 +1,12 @@
+Mon Nov 23 14:08:31 UTC 2026
+6.8.0-149-generic
+CPU(s):                                  16
+Model name:                              Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz
+BIOS Model name:                         pc-i440fx-6.1  CPU @ 2.0GHz
+Thread(s) per core:                      1
+Docker version 29.10.0, build fdd4b8e
+wrk debian/4.1.0-4build2 [epoll] Copyright (C) 2012 Will Glozer
+perf version 6.8.12
+5454a6e3994564b7fe263f23632e5abc7660a48d14143e8354edcff6c3408edd  /root/server.bin
+sha256:c3eb6ee964c298ee5fabd7bd8959566b3b2a306f5832c9c75bf8f593b661e072
+0.17 0.41 0.20

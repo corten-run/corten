@@ -1,0 +1,129 @@
+===== h06: aa-item-identity (64 KiB against itself), as recorded and with the labels swapped
+# 14:08:24 n1 enc=identity pairs=201 A=tc64k B=tc64kb host network load=0.66
+# answers identical but Date and ETag (10876 bytes, HTTP/1.1 200 OK, body 9793 bytes uncompressed)
+# done 14:46:38
+pairs used: 200 (after the first 1); pairs with a failed request or a counter under 100%: none
+user+kernel cycles a request: tc64k median 92,580 best 89,360 range 89,360 to 104,860; tc64kb median 92,597 best 89,267 range 89,267 to 107,893
+  per-pair change: median +0.02%, range -12.00% to +17.86%, bound +0.43% (the 113th of 200); lower in tc64kb: 98 of 200
+  labels swapped: median -0.02%, bound +0.20% (the 113th of 200)
+user cycles a request: tc64k median 47,780 best 46,022 range 46,022 to 55,943; tc64kb median 47,863 best 46,130 range 46,130 to 58,161
+  per-pair change: median +0.21%, range -15.15% to +24.23%, bound +0.51% (the 113th of 200); lower in tc64kb: 97 of 200
+  labels swapped: median -0.21%, bound +0.40% (the 113th of 200)
+kernel cycles a request: tc64k median 44,712 best 43,045 range 43,045 to 48,917; tc64kb median 44,804 best 43,012 range 43,012 to 49,732
+  per-pair change: median +0.02%, range -8.39% to +11.20%, bound +0.28% (the 113th of 200); lower in tc64kb: 99 of 200
+  labels swapped: median -0.02%, bound +0.30% (the 113th of 200)
+user instructions a request: tc64k median 76,931 best 76,910 range 76,910 to 76,939; tc64kb median 76,931 best 76,912 range 76,912 to 76,943
+  per-pair change: median +0.00%, range -0.03% to +0.03%, bound +0.00% (the 113th of 200); lower in tc64kb: 85 of 200
+  labels swapped: median -0.00%, bound +0.00% (the 113th of 200)
+===== h06: item-identity (64 KiB against 512 KiB)
+# 14:46:38 n1 enc=identity pairs=201 A=tc64k B=tc512k host network load=1.54
+# answers identical but Date and ETag (10876 bytes, HTTP/1.1 200 OK, body 9793 bytes uncompressed)
+# done 15:24:51
+pairs used: 200 (after the first 1); pairs with a failed request or a counter under 100%: none
+user+kernel cycles a request: tc64k median 92,321 best 90,044 range 90,044 to 96,738; tc512k median 92,115 best 89,428 range 89,428 to 99,831
+  per-pair change: median +0.01%, range -4.56% to +7.44%, bound +0.20% (the 113th of 200); lower in tc512k: 99 of 200
+user cycles a request: tc64k median 47,782 best 46,418 range 46,418 to 51,128; tc512k median 47,762 best 46,332 range 46,332 to 52,919
+  per-pair change: median -0.07%, range -6.47% to +9.57%, bound +0.32% (the 113th of 200); lower in tc512k: 101 of 200
+kernel cycles a request: tc64k median 44,486 best 43,072 range 43,072 to 46,556; tc512k median 44,462 best 43,071 range 43,071 to 46,912
+  per-pair change: median +0.17%, range -4.14% to +5.14%, bound +0.36% (the 113th of 200); lower in tc512k: 94 of 200
+user instructions a request: tc64k median 76,930 best 76,912 range 76,912 to 76,939; tc512k median 76,930 best 76,906 range 76,906 to 76,941
+  per-pair change: median -0.00%, range -0.04% to +0.02%, bound +0.00% (the 113th of 200); lower in tc512k: 101 of 200
+===== h06: long33-br (64 KiB against 512 KiB)
+# 15:24:51 n20 enc=br pairs=41 A=tc64k B=tc512k host network load=1.54
+# answers identical but Date and ETag (5545 bytes, HTTP/1.1 200 OK, body 32501 bytes uncompressed)
+# done 15:32:39
+pairs used: 40 (after the first 1); pairs with a failed request or a counter under 100%: none
+user+kernel cycles a request: tc64k median 1,068,776 best 1,043,838 range 1,043,838 to 1,097,988; tc512k median 747,324 best 730,218 range 730,218 to 801,577
+  per-pair change: median -30.09%, range -33.49% to -24.36%, bound -29.30% (the 26th of 40); lower in tc512k: 40 of 40
+user cycles a request: tc64k median 782,802 best 769,203 range 769,203 to 806,821; tc512k median 679,838 best 665,780 range 665,780 to 728,711
+  per-pair change: median -13.18%, range -17.24% to -6.53%, bound -12.36% (the 26th of 40); lower in tc512k: 40 of 40
+kernel cycles a request: tc64k median 284,204 best 274,635 range 274,635 to 296,079; tc512k median 66,812 best 62,771 range 62,771 to 72,866
+  per-pair change: median -76.61%, range -78.05% to -73.99%, bound -76.26% (the 26th of 40); lower in tc512k: 40 of 40
+user instructions a request: tc64k median 1,588,596 best 1,583,567 range 1,583,567 to 1,593,489; tc512k median 1,580,763 best 1,576,465 range 1,576,465 to 1,582,838
+  per-pair change: median -0.55%, range -1.00% to -0.10%, bound -0.45% (the 26th of 40); lower in tc512k: 40 of 40
+===== h07: aa-item-zstd (64 KiB against itself), as recorded and with the labels swapped
+# 14:08:28 n1 enc=gzip, deflate, br, zstd pairs=201 A=tc64k B=tc64kb host network load=0.21
+# answers identical but Date and ETag (3357 bytes, HTTP/1.1 200 OK, body 9793 bytes uncompressed)
+# done 14:46:44
+pairs used: 200 (after the first 1); pairs with a failed request or a counter under 100%: none
+user+kernel cycles a request: tc64k median 201,264 best 195,285 range 195,285 to 232,244; tc64kb median 201,249 best 195,733 range 195,733 to 246,986
+  per-pair change: median +0.05%, range -14.87% to +20.73%, bound +0.36% (the 113th of 200); lower in tc64kb: 96 of 200
+  labels swapped: median -0.05%, bound +0.20% (the 113th of 200)
+user cycles a request: tc64k median 153,042 best 148,980 range 148,980 to 181,060; tc64kb median 153,308 best 149,026 range 149,026 to 193,544
+  per-pair change: median -0.03%, range -16.60% to +24.37%, bound +0.30% (the 113th of 200); lower in tc64kb: 101 of 200
+  labels swapped: median +0.03%, bound +0.27% (the 113th of 200)
+kernel cycles a request: tc64k median 48,049 best 45,854 range 45,854 to 51,789; tc64kb median 48,042 best 45,886 range 45,886 to 53,443
+  per-pair change: median +0.21%, range -8.72% to +9.34%, bound +0.74% (the 113th of 200); lower in tc64kb: 92 of 200
+  labels swapped: median -0.21%, bound +0.22% (the 113th of 200)
+user instructions a request: tc64k median 346,387 best 346,145 range 346,145 to 346,502; tc64kb median 346,395 best 346,141 range 346,141 to 346,563
+  per-pair change: median +0.00%, range -0.09% to +0.09%, bound +0.01% (the 113th of 200); lower in tc64kb: 90 of 200
+  labels swapped: median -0.00%, bound +0.00% (the 113th of 200)
+===== h07: item-zstd (64 KiB against 512 KiB)
+# 14:46:44 n1 enc=gzip, deflate, br, zstd pairs=201 A=tc64k B=tc512k host network load=1.24
+# answers identical but Date and ETag (3357 bytes, HTTP/1.1 200 OK, body 9793 bytes uncompressed)
+# done 15:24:59
+pairs used: 200 (after the first 1); pairs with a failed request or a counter under 100%: none
+user+kernel cycles a request: tc64k median 200,200 best 193,930 range 193,930 to 230,588; tc512k median 200,467 best 194,110 range 194,110 to 212,695
+  per-pair change: median -0.00%, range -13.62% to +5.83%, bound +0.41% (the 113th of 200); lower in tc512k: 100 of 200
+user cycles a request: tc64k median 152,564 best 147,985 range 147,985 to 179,116; tc512k median 152,718 best 148,543 range 148,543 to 163,728
+  per-pair change: median -0.06%, range -15.36% to +6.69%, bound +0.39% (the 113th of 200); lower in tc512k: 100 of 200
+kernel cycles a request: tc64k median 47,618 best 45,439 range 45,439 to 52,180; tc512k median 47,666 best 45,051 range 45,051 to 51,269
+  per-pair change: median +0.24%, range -8.62% to +6.04%, bound +0.54% (the 113th of 200); lower in tc512k: 91 of 200
+user instructions a request: tc64k median 346,386 best 346,145 range 346,145 to 346,539; tc512k median 346,376 best 346,122 range 346,122 to 346,490
+  per-pair change: median -0.00%, range -0.10% to +0.10%, bound +0.00% (the 113th of 200); lower in tc512k: 105 of 200
+===== h07: long202-br (64 KiB against 512 KiB)
+# 15:24:59 n160 enc=br pairs=41 A=tc64k B=tc512k host network load=1.09
+# answers identical but Date and ETag (19537 bytes, HTTP/1.1 200 OK, body 202041 bytes uncompressed)
+# done 15:32:56
+pairs used: 40 (after the first 1); pairs with a failed request or a counter under 100%: none
+user+kernel cycles a request: tc64k median 4,160,992 best 4,111,225 range 4,111,225 to 4,232,693; tc512k median 3,382,601 best 3,330,102 range 3,330,102 to 3,469,818
+  per-pair change: median -18.79%, range -20.74% to -16.21%, bound -18.39% (the 26th of 40); lower in tc512k: 40 of 40
+user cycles a request: tc64k median 3,297,618 best 3,254,314 range 3,254,314 to 3,346,873; tc512k median 3,248,117 best 3,198,246 range 3,198,246 to 3,325,689
+  per-pair change: median -1.48%, range -4.06% to +1.31%, bound -1.16% (the 26th of 40); lower in tc512k: 36 of 40
+kernel cycles a request: tc64k median 864,152 best 846,288 range 846,288 to 886,763; tc512k median 136,578 best 130,589 range 130,589 to 147,077
+  per-pair change: median -84.23%, range -84.99% to -82.87%, bound -84.02% (the 26th of 40); lower in tc512k: 40 of 40
+user instructions a request: tc64k median 7,963,942 best 7,891,201 range 7,891,201 to 8,137,811; tc512k median 7,935,123 best 7,867,573 range 7,867,573 to 8,022,897
+  per-pair change: median -0.48%, range -2.72% to +1.11%, bound -0.15% (the 26th of 40); lower in tc512k: 29 of 40
+===== h08: aa-item-br (64 KiB against itself), as recorded and with the labels swapped
+# 14:08:31 n1 enc=br pairs=201 A=tc64k B=tc64kb host network load=0.17
+# answers identical but Date and ETag (3581 bytes, HTTP/1.1 200 OK, body 9793 bytes uncompressed)
+# done 14:46:34
+pairs used: 200 (after the first 1); pairs with a failed request or a counter under 100%: none
+user+kernel cycles a request: tc64k median 228,052 best 225,411 range 225,411 to 274,812; tc64kb median 227,962 best 225,312 range 225,312 to 258,487
+  per-pair change: median -0.07%, range -12.65% to +13.01%, bound +0.13% (the 113th of 200); lower in tc64kb: 104 of 200
+  labels swapped: median +0.07%, bound +0.17% (the 113th of 200)
+user cycles a request: tc64k median 188,886 best 187,041 range 187,041 to 230,984; tc64kb median 188,770 best 186,709 range 186,709 to 215,484
+  per-pair change: median +0.01%, range -13.98% to +13.85%, bound +0.15% (the 113th of 200); lower in tc64kb: 98 of 200
+  labels swapped: median -0.01%, bound +0.16% (the 113th of 200)
+kernel cycles a request: tc64k median 39,205 best 38,360 range 38,360 to 43,828; tc64kb median 39,260 best 38,260 range 38,260 to 43,002
+  per-pair change: median +0.02%, range -5.62% to +8.98%, bound +0.25% (the 113th of 200); lower in tc64kb: 99 of 200
+  labels swapped: median -0.02%, bound +0.28% (the 113th of 200)
+user instructions a request: tc64k median 628,581 best 628,013 range 628,013 to 628,880; tc64kb median 628,584 best 628,031 range 628,031 to 628,861
+  per-pair change: median +0.00%, range -0.11% to +0.12%, bound +0.01% (the 113th of 200); lower in tc64kb: 99 of 200
+  labels swapped: median -0.00%, bound +0.01% (the 113th of 200)
+===== h08: item-br (64 KiB against 512 KiB)
+# 14:46:34 n1 enc=br pairs=201 A=tc64k B=tc512k host network load=1.42
+# answers identical but Date and ETag (3581 bytes, HTTP/1.1 200 OK, body 9793 bytes uncompressed)
+# done 15:24:37
+pairs used: 200 (after the first 1); pairs with a failed request or a counter under 100%: none
+user+kernel cycles a request: tc64k median 228,162 best 225,518 range 225,518 to 261,567; tc512k median 227,950 best 225,344 range 225,344 to 257,443
+  per-pair change: median -0.19%, range -12.91% to +13.22%, bound -0.06% (the 113th of 200); lower in tc512k: 115 of 200
+user cycles a request: tc64k median 188,955 best 187,139 range 187,139 to 218,789; tc512k median 188,761 best 186,798 range 186,798 to 215,681
+  per-pair change: median -0.17%, range -13.92% to +14.55%, bound +0.02% (the 113th of 200); lower in tc512k: 108 of 200
+kernel cycles a request: tc64k median 39,280 best 38,212 range 38,212 to 42,777; tc512k median 39,216 best 38,385 range 38,385 to 42,045
+  per-pair change: median -0.24%, range -7.76% to +6.78%, bound +0.11% (the 113th of 200); lower in tc512k: 109 of 200
+user instructions a request: tc64k median 628,564 best 628,022 range 628,022 to 628,876; tc512k median 628,560 best 628,013 range 628,013 to 628,897
+  per-pair change: median -0.00%, range -0.12% to +0.12%, bound +0.01% (the 113th of 200); lower in tc512k: 101 of 200
+===== h08: long496-br (64 KiB against 512 KiB)
+# 15:24:37 n400 enc=br pairs=41 A=tc64k B=tc512k host network load=1.18
+# answers identical but Date and ETag (42536 bytes, HTTP/1.1 200 OK, body 495521 bytes uncompressed)
+# done 15:32:33
+pairs used: 40 (after the first 1); pairs with a failed request or a counter under 100%: none
+user+kernel cycles a request: tc64k median 6,173,144 best 6,018,008 range 6,018,008 to 6,316,010; tc512k median 5,342,588 best 5,198,981 range 5,198,981 to 5,447,044
+  per-pair change: median -13.42%, range -15.66% to -9.95%, bound -13.13% (the 26th of 40); lower in tc512k: 40 of 40
+user cycles a request: tc64k median 5,265,330 best 5,123,343 range 5,123,343 to 5,389,519; tc512k median 5,099,126 best 4,960,150 range 4,960,150 to 5,192,868
+  per-pair change: median -3.17%, range -5.67% to +0.82%, bound -2.90% (the 26th of 40); lower in tc512k: 39 of 40
+kernel cycles a request: tc64k median 908,617 best 885,343 range 885,343 to 926,490; tc512k median 247,214 best 238,831 range 238,831 to 262,304
+  per-pair change: median -72.88%, range -73.65% to -70.90%, bound -72.58% (the 26th of 40); lower in tc512k: 40 of 40
+user instructions a request: tc64k median 19,437,472 best 18,833,295 range 18,833,295 to 19,749,642; tc512k median 19,341,916 best 18,762,913 range 18,762,913 to 19,627,111
+  per-pair change: median -0.35%, range -2.99% to +3.80%, bound +0.04% (the 26th of 40); lower in tc512k: 25 of 40
