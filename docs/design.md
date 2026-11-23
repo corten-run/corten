@@ -8090,7 +8090,14 @@ rules something out.
     lookup and its `Age` lost, putting the stale and held branches in cold functions and holding
     the windows in 32 bits (the mark is boxed in the answer's extensions, where glibc gives its
     16 bytes and 24 the same chunk and 32 a larger one) took back all but the first version's. Not counted: a page given stale or held, and the
-    refresh's task, which no harness case asks for; and cycles, left to the paired rounds.
+    refresh's task, which no harness case asks for; and cycles, left to the paired rounds. The
+    fixes of the third review (the copy for a panic or a deadline sent unshared, the held copy
+    kept through the reading of the answer's body, a refresh's signal aborted however it ends and
+    the refresh stopped as its copy goes), `668830bf3` against this change's `2f449f460` with the
+    same harness, image and method: a kept page given again took 16,970.7 against 16,962.0 with
+    glibc, 8.7 more (0.05%), and 15,380.9 against 15,380.9 with jemalloc; a page made and kept took
+    30,880.3 against 30,876.0 with glibc, 4.3 more (0.01%), and 25,581.5 against 25,577.7 with
+    jemalloc, 3.8 more (0.01%); every round within 3.5.
     What a write pays before the counts by path are made, under callgrind (valgrind 3.19.0,
     rustc 1.99.1, release with line tables, every feature) with the request-cost harness's
     write cases (`crates/corten/tests/router_cost.rs`: a `POST` sent in process as a form of
@@ -8692,8 +8699,10 @@ rules something out.
     `stale-if-error`, costs enough to show while its store is down, so a failure should hold off
     the next try; or a refresh is found outliving its window or the app's shutdown grace.
 
-    Last checked: 2026-11-23 for a page given past its lifetime, the callgrind rounds above at
-    `9c203dcdd` and `14126d2a8`, and before the merge at `c08cf5aff`, `2cd19ea94` and
+    Last checked: 2026-11-23 for what giving a page past its lifetime costs fresh hits and
+    cacheable misses (not a page given stale or held, which no harness case asks for), the
+    callgrind rounds above at `668830bf3` against `2f449f460`, at `9c203dcdd` and `14126d2a8`,
+    and before the merge at `c08cf5aff`, `2cd19ea94` and
     `13fe3f987`; 2026-11-23 for the buffer past the table read across placements, `8d02090bf`
     against `14126d2a8` on the Xeon Platinum 8280 with jemalloc 5.3.0, rustc 1.100.0 and Linux
     6.12.117, the plan under the tag `evidence/ca2af2ab` and the results under
