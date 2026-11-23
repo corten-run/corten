@@ -705,8 +705,17 @@ The original local controller, provider worker, SSH and their descendants must b
 affirmatively accounted for and gone. No elapsed timeout, absent PID or saved state
 alone proves that. Preserve original locks and intents; the controller never clears
 or takes over an old lock. Only after that local proof may the operator archive and
-release the exclusive child and fleet locks under the existing custody policy. Keep
-the proof and original lock bytes outside the fleet and child state roots. Separately verify the SSH
+release the exclusive child and fleet locks under the existing custody policy.
+For an interrupted first upload in a single-group continuation, also account for
+the owner of the outer `.continuation-operation.lock`. It serializes all groups:
+stop dispatch to that root and verify the lock's group, owner and process tree
+against the original launch. Keep the unchanged lock bytes and proof outside
+all three state roots before releasing any identified lock for in-place recovery.
+If ownership is uncertain or any process can still act, leave the locks and host
+alone. This is not the fresh-root handoff described above: after external
+deletion the old locks stay in place and no collection is attempted.
+
+Separately verify the SSH
 host key against the exact provider/metadata identity and supply a local OpenSSH
 `known_hosts` file for that key; the controller passes a private snapshot of the
 approved bytes to SSH and never falls back to global host keys. The unused retirement
