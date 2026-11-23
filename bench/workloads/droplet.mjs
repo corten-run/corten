@@ -204,10 +204,24 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const sshLimits = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"];
   const sshOptions = ["-o", "StrictHostKeyChecking=accept-new", "-o", `UserKnownHostsFile=${join(local, "known_hosts").replaceAll("\\", "/")}`, ...sshLimits];
   const launchSshOptions = [...sshOptions, "-o", "GlobalKnownHostsFile=none", "-o", "UpdateHostKeys=no"];
-  async function withHostKeySnapshot(key, prefix, fn) {
+  async function withHostKeySnapshot(key, prefix, fn, deferCleanup) {
     const sha256 = digest(key), dir = mkdtempSync(join(base, prefix)), path = join(dir, "known_hosts");
     const identity = lstatSync(dir, { bigint: true });
     let fileIdentity;
+    const removeSnapshot = () => {
+      physical(dir);
+      const current = lstatSync(dir, { bigint: true });
+      assert.ok(current.dev === identity.dev && current.ino === identity.ino, "private host-key directory changed");
+      const files = readdirSync(dir);
+      if (files.length) {
+        assert.deepEqual(files, ["known_hosts"], "unexpected private host-key artifacts; preserve");
+        const file = lstatSync(path, { bigint: true });
+        assert.ok(fileIdentity && file.dev === fileIdentity.dev && file.ino === fileIdentity.ino
+          && digest(regular(path, 1024 * 1024)) === sha256, "private host-key snapshot changed; preserve");
+        unlinkSync(path);
+      }
+      rmdirSync(dir);
+    };
     try {
       durable(path, key);
       fileIdentity = lstatSync(path, { bigint: true });
@@ -215,28 +229,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.equal(digest(regular(path, 1024 * 1024)), sha256, "private host-key snapshot changed");
       return result;
     } finally {
-      if (!preserveOperationLock) {
-        physical(dir);
-        const current = lstatSync(dir, { bigint: true });
-        assert.ok(current.dev === identity.dev && current.ino === identity.ino, "private host-key directory changed");
-        const files = readdirSync(dir);
-        if (files.length) {
-          assert.deepEqual(files, ["known_hosts"], "unexpected private host-key artifacts; preserve");
-          const file = lstatSync(path, { bigint: true });
-          assert.ok(fileIdentity && file.dev === fileIdentity.dev && file.ino === fileIdentity.ino
-            && digest(regular(path, 1024 * 1024)) === sha256, "private host-key snapshot changed; preserve");
-          unlinkSync(path);
-        }
-        rmdirSync(dir);
-      }
+      if (!preserveOperationLock) removeSnapshot();
+      else deferCleanup?.(removeSnapshot);
     }
   }
-  async function usingLaunchHostKey(fn) {
-    const result = await withHostKeySnapshot(launchHostKey(local, state), ".launch-host-key-", fn);
+  async function usingLaunchHostKey(fn, deferCleanup) {
+    const result = await withHostKeySnapshot(launchHostKey(local, state), ".launch-host-key-", fn, deferCleanup);
     launchHostKey(local, state);
     return result;
   }
-  const transport = async (binary, args, timeout, allowFail) => {
+  const transport = async (binary, args, timeout, allowFail, deferCleanup) => {
     await own(); assert.ok(state.id && state.ip, "bound host required");
     const mixedRecovery = state.group === "mixed-production" && (options.cancelMixedWait || options.retireFailedNative && !groupedPreplan);
     const pinnedKey = mixedRecovery ? mixedWait.knownHostsSha256 : options.r21MeasuredCheckout ? recoveryApproval.knownHostsSha256 : undefined;
@@ -255,12 +257,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       startedAtMs = Date.now();
       return execute(binary, [...hostOptions, ...args], timeout, allowFail, undefined, undefined, registration);
     };
-    const result = !pinnedKey && state.launchHostKeySha256 ? await usingLaunchHostKey(invoke)
+    const result = !pinnedKey && state.launchHostKeySha256 ? await usingLaunchHostKey(invoke, deferCleanup)
       : await invoke(pinnedKey ? [...pinnedHostOptions(join(local, "known_hosts")), ...sshLimits] : sshOptions);
     if (pinnedKey) assert.equal(fileHash(join(local, "known_hosts")), pinnedKey, "native host keys changed during transport");
     return { ...result, startedAtMs };
   };
-  const ssh = (script, timeout = 60000, allowFail = false) => transport("ssh", [`root@${state.ip}`, script], timeout, allowFail);
+  const ssh = (script, timeout = 60000, allowFail = false, deferCleanup) => transport("ssh", [`root@${state.ip}`, script], timeout, allowFail, deferCleanup);
   const scp = (from, to) => transport("scp", ["-q", from, to], 15 * 60000);
   async function waitForSsh() {
     const windowMs = 120000, spacingMs = 5000, attempts = windowMs / spacingMs;
@@ -359,9 +361,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assert.ok(rows.length > 0 && rows.every((r) => r.localTerminal), "unsettled local control ledger");
     const offlineBootstrap = epoch === "bootstrap" && state.fleet?.single?.offlineHandoff;
     const previous = preserveOperationLock;
+    let removeSealSnapshot;
     if (offlineBootstrap) preserveOperationLock = true;
     sealing = rows.map((r) => r.request.invocation);
-    try { await ssh(":"); }
+    try { await ssh(":", undefined, false, offlineBootstrap ? (remove) => { removeSealSnapshot = remove; } : undefined); }
     catch (error) {
       if (offlineBootstrap) throw Object.assign(new Error("offline bootstrap seal unacknowledged; preserve host and custody", { cause: error }),
         { controlTreeUncertain: true });
@@ -374,6 +377,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       try {
         assert.ok(acknowledgedBootstrapSeal(state.control.ledger), "explicit successful bootstrap seal required");
         state.control.sealed.push(epoch); save();
+        if (!previous) removeSealSnapshot();
       } catch (error) {
         throw Object.assign(new Error("offline bootstrap seal publication uncertain; preserve host and custody", { cause: error }),
           { controlTreeUncertain: true });

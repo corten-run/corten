@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as contract from "./cloud-contract.mjs";
 import { host as catalogHost } from "../catalog/droplet-contract.mjs";
@@ -569,6 +569,7 @@ test("offline launch acknowledges a handoff, not a timed result; reconnection st
   const f = offlineFixture(t), { h, run, group } = f;
   const launched = await f.launch();
   assert.equal(f.seals, 1);
+  assert.deepEqual(readdirSync(h.base).filter((name) => name.startsWith(".launch-host-key-")), []);
   assert.equal(launched.status, "running");
   assert.equal(launched.validation, undefined);
   assert.equal(launched.fullGroupQualified, false);
@@ -650,6 +651,9 @@ test("a lost offline final acknowledgement never authorizes another launch or co
   const f = offlineFixture(t, { lost: true }), { h } = f;
   await assert.rejects(f.launch(), (error) => error.controlTreeUncertain === true);
   assert.equal(f.seals, 1); assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+  const snapshots = readdirSync(h.base).filter((name) => name.startsWith(".launch-host-key-"));
+  assert.equal(snapshots.length, 1);
+  assert.deepEqual(readFileSync(join(h.base, snapshots[0], "known_hosts")), readFileSync(join(h.local, "known_hosts")));
   assert.deepEqual(h.saved().control.sealed, []);
   assert.ok(existsSync(join(h.local, "operation.lock")));
   assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
