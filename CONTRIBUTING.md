@@ -434,7 +434,10 @@ establish a general ranking.
       1. CPU: Xeon Platinum 8358, one thread a core.
       2. Kernel: Linux 6.12.117 (Debian's `6.12.117+deb13-amd64`).
       3. Allocator: jemalloc 5.3.0 by `LD_PRELOAD=libjemalloc.so.2`, with
-         `MALLOC_CONF=background_thread:true,tcache_max:65536` exactly.
+         `MALLOC_CONF=background_thread:true,tcache_max:65536` exactly: the starter image's
+         setting when the floor was measured. The image now sets 512 KiB
+         ([design Choice 23](docs/design.md#choice-jemalloc-image)), and a run with that has no
+         recorded floor.
       4. Pinning: the server on one CPU, the load on two others and the driver and `perf` on a
          fourth, all four distinct.
       5. Build: rustc 1.100.0 and LLD 23.1.5; the probe built as the receipt's `build.sh` builds it,

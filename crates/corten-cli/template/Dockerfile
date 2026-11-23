@@ -39,14 +39,14 @@ RUN --mount=type=cache,target=/var/cache/cargo \
 FROM debian:trixie-slim
 # jemalloc, preloaded, gives back memory a burst of connections took: eight floods of unfinished
 # request heads left 329 to 354 MiB with glibc's allocator and about 10 MiB with these settings
-# (three runs and six). Its background thread returns memory while the app is idle; a 1 MiB thread
-# cache keeps a compressor's buffers, which otherwise fault in new pages on every brotli response
-# for a page of 20 KB or more
-# (https://github.com/corten-run/corten/blob/main/docs/design.md#choice-jemalloc-image). Remove
-# these three lines to run on glibc's allocator.
+# (three runs each). Its background thread returns memory while the app is idle; a 512 KiB thread
+# cache keeps brotli's buffers between responses for a page up to about 200 KB, which otherwise
+# fault in new pages on every brotli response, and holds about 3 MiB a CPU for it once pages
+# run that long (https://github.com/corten-run/corten/blob/main/docs/design.md#choice-jemalloc-image).
+# Remove these three lines to run on glibc's allocator.
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
-ENV MALLOC_CONF=background_thread:true,tcache_max:1048576
+ENV MALLOC_CONF=background_thread:true,tcache_max:524288
 WORKDIR /app
 COPY --from=build /server /app/server
 # Behind a domain, add the names the app is served under (HOSTS=shop.example): any other Host

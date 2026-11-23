@@ -137,8 +137,7 @@ with its background thread
 ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
 So an app that faces clients directly sets `max_connections` from its container's memory with
 room to spare, sized from the peak repeated floods reach rather than the first: 187 to 197 MiB for
-4,000 here with the background thread, about 48 KiB a connection, and 188 to 220 MiB with the
-image's thread cache too on a Linux host (six runs), up to 56 KiB (sampled a second before each
+4,000 here with the background thread, about 48 KiB a connection (sampled a second before each
 flood's hold ended). An app with WebSockets or tunnels counts the ones it keeps open within the
 same cap, each holding what its route keeps for it (a WebSocket library's read and write
 buffers, which these floods did not measure), so it sizes the cap from that too, with room left
@@ -148,14 +147,18 @@ connections wait in each listener's queue (up to 511 from `corten::listeners` on
 Linux queues them (reasoned, not measured), the kernel keeps what each has sent so far, up to its
 receive buffer, in the host's TCP memory, and charges it to the container when the app accepts
 the connection, so it lands as the cap frees room. The Dockerfile `corten new` writes preloads jemalloc in the image's last
-stage with that background thread and a 1 MiB thread cache, which keeps brotli's buffers between
-responses for a page up to about 500 KB ([design Choice 23](../design.md#choice-jemalloc-image)). An image of the app's own adds
+stage with that background thread and a 512 KiB thread cache, which keeps brotli's buffers between
+responses for a page up to about 200 KB ([design Choice 23](../design.md#choice-jemalloc-image)).
+The cache holds what its threads used and an idle app does not give it back: after brotli pages of
+9.8 KB to 496 KB on eight CPUs card-market held 38 to 40 MiB at rest, where it held 14 with a
+64 KiB cache and 34 to 35 on glibc's allocator, so count about 3 MiB a CPU for it in the
+container's memory when pages run that long. An image of the app's own adds
 the same three lines, before any `USER` line; removing them runs the app on glibc's allocator:
 
 ```dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
-ENV MALLOC_CONF=background_thread:true,tcache_max:1048576
+ENV MALLOC_CONF=background_thread:true,tcache_max:524288
 ```
 
 Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of
