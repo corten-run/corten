@@ -198,16 +198,7 @@ static DIGITS: &str = {
 /// a kept file's request took (docs/design.md#choice-kept-pages). An older answer's is made
 /// from the number.
 fn age_value(seconds: u64) -> HeaderValue {
-    // Where the numbers of this many digits begin in `DIGITS`, and the first of them.
-    let (digits, from, first) = match seconds {
-        0..10 => (1, 0, 0),
-        10..100 => (2, 10, 10),
-        100..1_000 => (3, 190, 100),
-        1_000..AGES => (4, 2_890, 1_000),
-        _ => return HeaderValue::from(seconds),
-    };
-    let at = from + (seconds - first) as usize * digits;
-    HeaderValue::from_static(&DIGITS[at..at + digits])
+    HeaderValue::from(seconds)
 }
 
 /// A copy of a kept answer's `head`, each line where it was, with room for [`ADDED`] more
