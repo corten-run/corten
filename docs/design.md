@@ -7954,6 +7954,8 @@ rules something out.
     than the same write naming nothing) and with no store 11,380.6 (268.6 more). Under glibc the
     requests that do not name one differ by at most 4.0 (the new URL; 2.0 for the route that keeps
     nothing and for the write with no store), and naming costs 699.0 and, with no store, 263.6.
+    The same three rounds run again on this change's later head, whose library is the same, gave
+    every median within 3.0 of these.
     Paired cycles were measured for the first pair, base `83b3b8772` (main, whose `crates/` is
     `7a275ef15`'s) against head `84de7c1e5` (this change's library apart from doc comments), on a
     c-8 whose CPU is a Xeon Platinum 8280, 100 alternating pairs a workload of 3 s `wrk -t2 -c64`
@@ -9348,8 +9350,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     instances (the app's own, or a feed on `corten-cluster` whose handler calls `changed` in
     each) and the CDN's own purge, both of which differ by deploy. A short lifetime bounds how
     long a copy can stand after a change, but does not make the change show everywhere at once:
-    until it ends, instances and edges can still give the old page. A page that must never be
-    given from a stale copy is not kept anywhere: it is not `Public` (it goes out `private,
-    no-cache`), so no instance, CDN or proxy holds a copy to drop. Revisit when apps that run
-    several instances show they need one drop to reach all of them, and a channel the framework
-    already has can carry it.
+    until it ends, instances and edges can still give the old page. Keeping no copy is what does:
+    a page that must never be given from a stale copy is not `Public` (it goes out `private,
+    no-cache`), so no instance, CDN or proxy holds a copy to drop, and a browser asks the app
+    before it shows the one it holds. Revisit when apps that run several instances show they need
+    one drop to reach all of them, and a channel the framework already has can carry it.

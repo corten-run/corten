@@ -1534,10 +1534,10 @@ text and files of 1,024 bytes or more (below). The whole document a `Public` pag
 such request in the handler's place until the answer's shared lifetime ends: `s-maxage` where
 the answer has `.shared(..)`, else `max_age`. So a `Public` page's handler does not run for
 every request, and what it read may be that old when a visitor sees it, as it already may be
-behind a CDN. Count views in a middleware rather than in the handler, and give a page whose data
-must show at once a short lifetime, or leave it private. An answer given again carries `Age`,
-counted from when the request it was made for reached the handler, so a browser and a CDN count
-the lifetime from when the page was made.
+behind a CDN. Count views in a middleware rather than in the handler. A short lifetime bounds how
+old a page's data can be, and a page whose data must never be shown stale is left private. An
+answer given again carries `Age`, counted from when the request it was made for reached the
+handler, so a browser and a CDN count the lifetime from when the page was made.
 
 A kept page stands where the handler does, after [your own middleware](#your-own-middleware). Every
 stage runs for every request: a middleware that refuses, counts or stamps a header still does, and
@@ -1648,7 +1648,8 @@ CDN in front does not purge the app, which gives the CDN the kept page again wit
 A request's own `Cache-Control: no-cache` (a hard reload) gets the kept page too: how long a
 page stands is the app's to say. A short lifetime bounds how long a page can show what was there
 before a change; it does not make the change show in every instance and CDN edge at once. A page
-that must never be given from a stale copy is not `Public`, so nothing keeps it.
+that must never be given from a stale copy is not `Public`, so no instance or shared cache keeps
+it, and a browser asks the app before it shows its own copy again.
 
 `App::kept_answers(bytes)` sets how much is kept: 32 MiB unless set, and `0` keeps none. What is
 counted is each page's key (its URL once, its `Host`, and its `Accept-Language` where the page
