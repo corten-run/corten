@@ -81,6 +81,11 @@ for (const scenario of ["accepted", "apt", "download", "digest", "signature", "s
     const root = mkdtempSync(join(tmpdir(), "corten-guest-git-")), shims = join(root, "bin");
     t.after(() => rmSync(root, { recursive: true, force: true }));
     mkdirSync(shims);
+    const probe = join(shims, "fixture-probe");
+    writeFileSync(probe, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    const executable = spawnSync(probe, [], { timeout: 5000 });
+    assert.equal(executable.error, undefined, "fixture shims must execute; never fall back to system provisioning commands");
+    assert.equal(executable.status, 0);
     for (const [name, body] of Object.entries(binaries)) writeFileSync(join(name === "git-fixture" ? root : shims, name),
       `#!/bin/sh\nset -eu\n${body}\n`, { mode: 0o700 });
     // Use the real hash checker for the substituted archive; for later
