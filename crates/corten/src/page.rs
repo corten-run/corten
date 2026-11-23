@@ -904,8 +904,12 @@ pub(crate) struct RequestPage {
 }
 
 impl RequestPage {
+    /// `is_page`: the request is under no API. Under one, the stages ask nothing of the mode
+    /// (every failure there is JSON, no answer a document the runtime swaps in, and a handler's
+    /// `Req` reads the request itself), so neither header is looked up: a data client's, which
+    /// is what an API answers.
     pub(crate) fn read(headers: &HeaderMap, is_page: bool) -> Self {
-        let (mode, accepts_html) = Mode::read(headers, is_page);
+        let (mode, accepts_html) = if is_page { Mode::read(headers, true) } else { ((Mode::Data, false), false) };
         RequestPage {
             mode,
             accepts_html,
