@@ -7806,16 +7806,24 @@ rules something out.
     What giving a page past its lifetime costs the requests that are not given one, under
     callgrind (valgrind 3.19.0, rustc 1.99.1, release, every feature) with the request-cost
     harness's `ROUTER_PUBLIC=page`, as (instructions at 1,200 requests less those at 200) over
-    1,000, the median of three rounds, `4564a5aa4` (this change's code) against `13fe3f987`
+    1,000, the median of three rounds in alternating order, each run with glibc's allocator and
+    again with jemalloc preloaded, `c08cf5aff` (this change's code, whose `made` case also asks
+    for one of its URLs again afterwards and asserts that it was kept) against `13fe3f987`
     (main's `92bc32678` with the harness's `ROUTER_TARGET=made`): a kept page given again took
-    14,784.0 a request against 14,764.0, 20.0 more (0.14%), in every round; a page made and
-    kept in a store with room (`made`, a new URL each request) took 28,846.4 against 28,794.5,
-    51.9 more (0.18%), its rounds within 3.1 of each other and main's within 6.6. Of an earlier
-    draft's 61 and 559 more, inlining what the lookup and its `Age` lost, putting the stale
-    and held branches in cold functions and holding the windows in 32 bits (the mark is
-    boxed in the answer's extensions, where glibc gives its 16 bytes and 24 the same chunk and
-    32 a larger one) took back all but these. Not counted: a page given stale or held, and the refresh's
-    task, which no harness case asks for; and cycles, left to the paired rounds.
+    16,982.7 a request against 16,954.1 with glibc, 28.6 more (0.17%), and 15,398.9 against
+    15,379.9 with jemalloc, 19.0 more (0.12%), every round within 0.3; a page made and kept in a
+    store with room (`made`, a new URL each request) took 31,117.0 against 31,234.8 with glibc,
+    117.8 fewer (0.38%), and 26,095.7 against 25,990.0 with jemalloc, 105.7 more (0.41%), every
+    round within 7.4. The first version of this change (`2cd19ea94`, the same builds) took 29.9
+    and 23.0 more for the hit and 125.6 fewer and 94.2 more for the miss, so fencing the refresh
+    and the held copy against replacement moves either by 11.5 at most; a draft of that fencing
+    that wrapped the miss's keeping in a second future and built the kept entry at two call
+    sites cost 680 (glibc) and 416 (jemalloc) more on the miss than that, which one future and
+    one call site took back. Of a draft of the first version's 61 and 559 more, inlining what the
+    lookup and its `Age` lost, putting the stale and held branches in cold functions and holding
+    the windows in 32 bits (the mark is boxed in the answer's extensions, where glibc gives its
+    16 bytes and 24 the same chunk and 32 a larger one) took back all but the first version's. Not counted: a page given stale or held, and the
+    refresh's task, which no harness case asks for; and cycles, left to the paired rounds.
     What a write pays before the counts by path are made, under callgrind (valgrind 3.19.0,
     rustc 1.99.1, release with line tables, every feature) with the request-cost harness's
     write cases (`crates/corten/tests/router_cost.rs`: a `POST` sent in process as a form of
@@ -8297,7 +8305,7 @@ rules something out.
     the next try; or a refresh is found outliving its window or the app's shutdown grace.
 
     Last checked: 2026-11-23 for a page given past its lifetime, the callgrind rounds above at
-    `4564a5aa4` and `13fe3f987`; 2026-11-22 for the forms of a kept answer's `Age`, `48df6c67c`, `c25d263a9`,
+    `c08cf5aff`, `2cd19ea94` and `13fe3f987`; 2026-11-22 for the forms of a kept answer's `Age`, `48df6c67c`, `c25d263a9`,
     `77dde53d6` and `09cddd7f1` (this choice's `0a2dc9b32` with each form and the benchmark's
     PNG kept for four hours), and for an older answer's, `9b0f2e6aa` (main's `fef1f83de` with
     the file routes and that lifetime) and `b0bc7ae32` (the buffer past the table on it, not
