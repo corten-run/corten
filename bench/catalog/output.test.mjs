@@ -314,8 +314,10 @@ test("on Linux the group is signalled only while the client is unreaped; a repla
       c.emit("exit", c.exitCode, c.signalCode);
     };
     // `exitsOn`: the client exits 0 once it has that signal; `diesOn`: it is killed by it. Exits follow
-    // the signals actually recorded, never a timer racing the deferred SIGTERM.
-    c.receive = (signal) => { if (signal === exitsOn) setImmediate(() => c.end(null)); else if (signal === diesOn) setImmediate(() => c.end(signal)); };
+    // the signals actually recorded, as a microtask after the signal's call returns, so no timer (the
+    // grace's SIGKILL among them) can run between a signal and the exit it causes, however late the
+    // deferred SIGTERM runs.
+    c.receive = (signal) => { if (signal === exitsOn) queueMicrotask(() => c.end(null)); else if (signal === diesOn) queueMicrotask(() => c.end(signal)); };
     c.kill = (signal) => { c.signals.push(signal); c.receive(signal); return true; };
     clients.set(pid, c); return c;
   };
