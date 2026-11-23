@@ -213,16 +213,17 @@ pub(crate) struct Typed {
 }
 
 impl Typed {
-    /// `res`'s mark and its lifetime in seconds, when it is an answer a shared cache may keep for
-    /// one: what the app itself keeps ([`crate::kept`]).
-    pub(crate) fn shared(res: &Response) -> Option<(Typed, u64)> {
+    /// `res`'s lifetime in seconds, when it is an answer a shared cache may keep for one: what the
+    /// app itself keeps ([`crate::kept`]), whose mark is then [`Typed::kept`] of it.
+    pub(crate) fn shared(res: &Response) -> Option<u64> {
         let typed = *res.extensions().get::<Typed>()?;
-        (!typed.named && typed.lifetime > 0).then_some((typed, typed.lifetime))
+        (!typed.named && typed.lifetime > 0).then_some(typed.lifetime)
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test() -> Self {
-        Typed { named: false, lifetime: 60 }
+    /// The mark of a kept answer, made from its lifetime: one [`Typed::shared`] found is not
+    /// named by its URL, so the entry holds its lifetime alone (`crate::kept`).
+    pub(crate) fn kept(lifetime: u64) -> Self {
+        Typed { named: false, lifetime }
     }
 }
 

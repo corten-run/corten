@@ -154,6 +154,11 @@ const HEADER: usize = 112;
 #[cfg(feature = "compress")]
 const FORM: usize = 24;
 
+/// What a kept answer's brotli counts for beside its bytes and [`FORM`]: the box that holds its
+/// handle ([`Coded`]).
+#[cfg(feature = "compress")]
+const BOXED: usize = std::mem::size_of::<Bytes>();
+
 /// An entry's size once it is no longer kept: nothing made for it counts from then on.
 const GONE: usize = usize::MAX;
 
@@ -713,7 +718,6 @@ pub(crate) struct Entry {
     /// How many names `head` has, each counted once: what its map is made with room for
     /// ([`with_room`]). At most [`NAMES`].
     names: u16,
-    cache: crate::cache::Typed,
     style: Option<crate::security::StyleBlock>,
     body: Bytes,
     /// The tag's hasher once it has read the body ([`crate::cache::tag`]).
@@ -736,7 +740,9 @@ pub(crate) struct Entry {
 #[derive(Default)]
 struct Coded {
     now: [OnceLock<Bytes>; 3],
-    brotli: OnceLock<Bytes>,
+    /// Boxed, so a kept answer holds a pointer's room for it and not a handle's, made or not: the
+    /// entry stays in jemalloc's class of 448 bytes ([`BOXED`]).
+    brotli: OnceLock<Box<Bytes>>,
     /// The answers to a client that ranks brotli as high as any coding before `brotli` was made,
     /// up to the body's [`due`]: the answer that makes them that many queues it, and the next one
     /// again when the queue was full, but not when the thread could not be started, which is not
@@ -744,6 +750,14 @@ struct Coded {
     /// once it made the bytes and once it found no room for them, so an answer to a page that does
     /// without them only reads it. A body past [`BROTLI_MAX`] is due none, so no answer writes it.
     promotion: AtomicU32,
+}
+
+#[cfg(feature = "compress")]
+impl Coded {
+    /// Its brotli at [`Level::Kept`], once made.
+    fn made(&self) -> Option<&Bytes> {
+        self.brotli.get().map(Box::as_ref)
+    }
 }
 
 /// On a response whose body is a kept answer's: the stages after the handler find the body's
@@ -757,7 +771,7 @@ impl Kept {
     /// The cache's mark of the kept answer these are the extensions of, which its handler's
     /// answer carried as an extension of its own (`crate::cache::Typed`).
     pub(crate) fn typed(extensions: &http::Extensions) -> Option<crate::cache::Typed> {
-        extensions.get::<Kept>().map(|Kept(entry)| entry.cache)
+        extensions.get::<Kept>().map(|Kept(entry)| crate::cache::Typed::kept(entry.lifetime))
     }
 
     fn of<'a>(extensions: &'a http::Extensions, body: &Bytes) -> Option<&'a Arc<Entry>> {
@@ -801,7 +815,7 @@ impl Kept {
         debug_assert_eq!(accepts.now(), Some(coding), "the coding negotiated for the request");
         if accepts.ranks_brotli_first(coding) {
             let coded = &entry.coded;
-            if let Some(brotli) = coded.brotli.get() {
+            if let Some(brotli) = coded.made() {
                 // Unless the form made for the coding it takes now is no larger: the levels' and
                 // the codings' sizes are not in the same order on every page. That coding is zstd
                 // only for a client that ranks zstd as high as brotli, so either is its first
@@ -882,7 +896,7 @@ impl Entry {
         }
         // A copy of its own length, as each coding's bytes are (`Kept::coded`).
         let made = Bytes::copy_from_slice(&crate::compress::encode(Coding::Brotli, &self.body, Level::Kept));
-        let size = made.len() + FORM;
+        let size = made.len() + FORM + BOXED;
         #[cfg(test)]
         if let Some(then) = LOCKING.take() {
             then();
@@ -903,7 +917,7 @@ impl Entry {
         // Put with it as a clone, which makes the record that shares the bytes (`FORM`) here: the
         // first answer to give them would make it otherwise, and every answer would clone them by
         // the path for bytes not yet shared.
-        if self.coded.brotli.set(made.clone()).is_err() {
+        if self.coded.brotli.set(Box::new(made.clone())).is_err() {
             store.bytes.fetch_sub(size, Ordering::AcqRel);
             return;
         }
@@ -1361,7 +1375,7 @@ impl Missed {
     pub(crate) async fn keep(self, mut res: Response) -> Response {
         let Some(signal) = &self.signal else { return res };
         let Some(answers) = signal.shared().and_then(|shared| shared.kept.as_ref()) else { return res };
-        let Some((cache, lifetime)) = crate::cache::Typed::shared(&res) else { return res };
+        let Some(lifetime) = crate::cache::Typed::shared(&res) else { return res };
         // Whether the page varies on `Accept-Language` (`App::messages`, or a locale negotiated
         // from it), or on something the key does not cover.
         let Some(mut language) = varies(res.headers()) else { return res };
@@ -1434,7 +1448,6 @@ impl Missed {
             head: head_of(&parts.headers),
             // At most `NAMES`, as checked above.
             names: parts.headers.keys_len() as u16,
-            cache,
             style,
             body: body.clone(),
             hashed: OnceLock::new(),
@@ -1816,7 +1829,6 @@ mod tests {
             lifetime,
             head: Head::default(),
             names: 0,
-            cache: crate::cache::Typed::for_test(),
             style: None,
             body: Bytes::from(vec![b'x'; body]),
             hashed: OnceLock::new(),
@@ -2382,9 +2394,9 @@ mod tests {
         // The thread runs the kept pages' jobs in turn, so one queued after it is done once the
         // brotli is put with the page and counted, not when the room for it is taken.
         queued_before_done().recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
-        let brotli = kept.coded.brotli.get().expect("made").clone();
+        let brotli = kept.coded.made().expect("made").clone();
         assert_eq!(brotli, crate::compress::encode(Coding::Brotli, &kept.body, Level::Kept));
-        assert_eq!(answers.bytes(), before + brotli.len() + FORM, "and counted");
+        assert_eq!(answers.bytes(), before + brotli.len() + FORM + BOXED, "and counted");
         assert!(brotli.len() < zstd.len() && brotli.len() < fast(Coding::Brotli).len(), "{} {}", brotli.len(), zstd.len());
         // From then on: brotli to a client that ranks it as high as any, made by no request.
         for (asked, now) in [
@@ -2401,7 +2413,7 @@ mod tests {
         assert_eq!(given, (zstd, Coding::Zstd));
         let given = Kept::coded(&extensions, &kept.body, accepts("gzip"), Coding::Gzip, || fast(Coding::Gzip));
         assert_eq!(given.1, Coding::Gzip);
-        assert_eq!(answers.bytes(), before + brotli.len() + given.0.len() + FORM * 2);
+        assert_eq!(answers.bytes(), before + brotli.len() + given.0.len() + FORM * 2 + BOXED);
         // Dropped, the page gives back all it counted for, its brotli with the rest.
         answers.0.drop_entry(&mut answers.0.inner.write().unwrap(), &kept);
         assert_eq!(answers.bytes(), 0);
@@ -2529,12 +2541,12 @@ mod tests {
                 drop(release);
                 done.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
                 assert!(store.upgrade().is_none());
-                assert!(stale.coded.brotli.get().is_none(), "{ended}: not made for a store no one has");
+                assert!(stale.coded.made().is_none(), "{ended}: not made for a store no one has");
                 continue;
             }
             drop(release);
             done.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
-            assert!(stale.coded.brotli.get().is_none(), "{ended}: not made");
+            assert!(stale.coded.made().is_none(), "{ended}: not made");
             assert_eq!(answers.bytes(), before, "{ended}: nor counted");
             // Not encoded either: the job run again on this thread, where a test sees its steps,
             // stops at the check before the encoding.
@@ -2543,7 +2555,7 @@ mod tests {
             stale.make_brotli();
             assert!(ENCODING.take().is_some(), "{ended}: the thread stopped before it encoded");
             assert!(ADMITTING.take().is_some(), "{ended}: and never came to the admission");
-            assert!(stale.coded.brotli.get().is_none() && answers.bytes() == before, "{ended}");
+            assert!(stale.coded.made().is_none() && answers.bytes() == before, "{ended}");
             // Nor queued again: a later answer finds it was, asks nothing of the queue, and
             // writes nothing.
             let asked = the_queue_answers(&[]);
@@ -2561,7 +2573,7 @@ mod tests {
                 Kept::coded(&extensions, &fresh.body, accepts("br"), Coding::Brotli, || body.clone());
             }
             queued_before_done().recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
-            let brotli = fresh.coded.brotli.get().expect("made").clone();
+            let brotli = fresh.coded.made().expect("made").clone();
             assert_eq!(brotli, crate::compress::encode(Coding::Brotli, &body, Level::Kept), "{ended}");
             assert_eq!(Kept::coded(&extensions, &fresh.body, accepts("br"), Coding::Brotli, || unreachable!()).0, brotli);
         }
@@ -2585,7 +2597,7 @@ mod tests {
         page.make_brotli();
         assert!(ENCODING.take().is_none(), "the page stood before the encoding, so it was encoded");
         assert!(ADMITTING.take().is_some(), "the check under the lock stopped it before the admission");
-        assert!(page.coded.brotli.get().is_none(), "nothing put with it");
+        assert!(page.coded.made().is_none(), "nothing put with it");
         assert_eq!(answers.bytes(), before, "nor counted");
         assert!(!page.stands(&answers.0, Instant::now()), "written since");
     }
@@ -2616,13 +2628,13 @@ mod tests {
                 .recv_timeout(std::time::Duration::from_secs(10))
                 .expect("the bytes were made while the writer held the lock");
             assert!(held, "and the lock was held when the job asked for it");
-            assert!(page.coded.brotli.get().is_none(), "and are not put in while it holds it");
+            assert!(page.coded.made().is_none(), "and are not put in while it holds it");
             drop(writer);
             assert!(job.join().unwrap(), "the thread came to the lock");
         });
-        let brotli = page.coded.brotli.get().expect("put in once the writer let go").clone();
+        let brotli = page.coded.made().expect("put in once the writer let go").clone();
         assert_eq!(brotli, crate::compress::encode(Coding::Brotli, &body, Level::Kept));
-        assert_eq!(answers.bytes(), before + brotli.len() + FORM, "and counted");
+        assert_eq!(answers.bytes(), before + brotli.len() + FORM + BOXED, "and counted");
     }
 
     /// A page's brotli at `Level::Kept` takes only the room the bound has left: it drops no other
@@ -2648,7 +2660,7 @@ mod tests {
             assert!(ADMITTING.take().is_none(), "racing {racing}: the thread came to the brotli's admission");
             assert_eq!(page.stands(&answers.0, Instant::now()), !racing, "racing {racing}");
             assert!(answers.find("/c", None, None, false).is_some(), "racing {racing}: the page that stands is kept");
-            assert!(page.coded.brotli.get().is_none(), "racing {racing}: there is no room for the brotli");
+            assert!(page.coded.made().is_none(), "racing {racing}: there is no room for the brotli");
             assert_eq!(answers.bytes(), before, "racing {racing}");
         }
     }
@@ -2667,8 +2679,8 @@ mod tests {
         ADMITTING.set(Some(Box::new(move || store.count(count_of(b"/a")))));
         page.make_brotli();
         assert!(ADMITTING.take().is_none(), "the thread came to the brotli's admission");
-        let brotli = page.coded.brotli.get().expect("put with the page");
-        assert_eq!(answers.bytes(), before + brotli.len() + FORM, "and counted for it");
+        let brotli = page.coded.made().expect("put with the page");
+        assert_eq!(answers.bytes(), before + brotli.len() + FORM + BOXED, "and counted for it");
         assert!(!page.stands(&answers.0, Instant::now()), "written since");
         assert!(answers.find("/a", None, None, false).is_none(), "no lookup after the write gives it");
     }
@@ -2751,7 +2763,7 @@ mod tests {
         let done = queued_before_done();
         drop(release);
         done.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
-        let brotli = page.coded.brotli.get().expect("made").clone();
+        let brotli = page.coded.made().expect("made").clone();
         assert_eq!(brotli, crate::compress::encode(Coding::Brotli, &body, Level::Kept));
         let asked = the_queue_answers(&[]);
         assert_eq!(hit(), (brotli, Coding::Brotli));
@@ -2791,7 +2803,7 @@ mod tests {
         }
         crate::compress::QUEUEING.take();
         assert_eq!((asked.get(), promotion()), (1, due), "no later answer asks again or writes the count");
-        assert!(page.coded.brotli.get().is_none());
+        assert!(page.coded.made().is_none());
     }
 
     /// Answers given at once on several threads that together make a page's due queue its brotli
@@ -2844,7 +2856,7 @@ mod tests {
             let done = queued_before_done();
             drop(release);
             done.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
-            let brotli = page.coded.brotli.get().expect("made").clone();
+            let brotli = page.coded.made().expect("made").clone();
             assert_eq!(brotli, crate::compress::encode(Coding::Brotli, &body, Level::Kept), "{past} past");
         }
     }
@@ -2891,7 +2903,7 @@ mod tests {
             let done = queued_before_done();
             drop(release);
             done.recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
-            assert!(old.coded.brotli.get().is_none(), "{ended}: not made");
+            assert!(old.coded.made().is_none(), "{ended}: not made");
             assert_eq!(answers.bytes(), before, "{ended}: nor counted");
             // Not encoded either: the job run again on this thread stops at the check before it.
             ENCODING.set(Some(Box::new(|| ())));
@@ -2947,7 +2959,7 @@ mod tests {
         queued_before_done().recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
         assert!(page.stands(&answers.0, Instant::now()), "the page still stands");
         assert!(answers.find("/c", None, None, false).is_some(), "the other page is kept");
-        assert!(page.coded.brotli.get().is_none(), "there was no room for the brotli");
+        assert!(page.coded.made().is_none(), "there was no room for the brotli");
         assert_eq!(answers.bytes(), before);
         // Room made: later answers still get the fast form, and ask nothing of the queue.
         answers.0.drop_entry(&mut answers.0.inner.write().unwrap(), &standing);
@@ -2960,7 +2972,7 @@ mod tests {
         crate::compress::QUEUEING.take();
         assert_eq!((asked.get(), promotion()), (0, due), "not queued again");
         queued_before_done().recv_timeout(std::time::Duration::from_secs(10)).expect("the thread is done");
-        assert!(page.coded.brotli.get().is_none(), "nothing made since");
+        assert!(page.coded.made().is_none(), "nothing made since");
         assert_eq!(answers.bytes(), before, "nor counted");
     }
 
@@ -2976,7 +2988,7 @@ mod tests {
         let bytes = |n: usize| Bytes::from(vec![b'b'; n]);
         let made = |kept: usize, zstd: Option<usize>, fast: Option<usize>| {
             let page = answers.keep(entry(&answers, "/p", None, 60, 4000));
-            page.coded.brotli.set(bytes(kept)).unwrap();
+            page.coded.brotli.set(Box::new(bytes(kept))).unwrap();
             if let Some(n) = zstd {
                 page.coded.now[Coding::Zstd as usize].set(bytes(n)).unwrap();
             }
