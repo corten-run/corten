@@ -101,7 +101,8 @@ function fleetHost(region, regions = fleetRegions) {
 function fleetSelection(single) {
   const current = selection();
   if (!single) return current;
-  exact(single, ["group", "indexSha256", "checkout"]);
+  exact(single, ["group", "indexSha256", "checkout", ...(single.offlineHandoff === undefined ? [] : ["offlineHandoff"])]);
+  if (single.offlineHandoff !== undefined) assert.equal(single.offlineHandoff, true, "offline handoff marker");
   assert.ok(groupNames.includes(single.group), "unknown independent group");
   full(single.indexSha256, /[a-f0-9]{64}/, "continuation index digest");
   full(single.checkout, /[^\r\n\0]{1,4096}/, "measured checkout");
@@ -202,7 +203,9 @@ export function fleetRegion(catalog, reservedRegion, { remainingOnly = false, st
 }
 export function assertFleetCensus(droplets, plan, remainingRegion, peers = []) {
   validateLaunchFleet(plan); assert.ok(Array.isArray(droplets));
+  if (plan.single?.offlineHandoff) assert.deepEqual(peers, [], "offline handoff requires no live peer");
   const peerRows = new Set(peers.map((s) => {
+    assert.ok(!s.fleet.single?.offlineHandoff, "offline handoff cannot authorize a parallel host");
     assert.ok(plan.single && s.fleet.single?.indexSha256 === plan.single.indexSha256
       && s.group !== plan.single.group && s.provider.accountId === plan.provider.accountId,
       "peer belongs to a different reservation or account");
@@ -275,9 +278,14 @@ export function validateState(s, round, options) {
   }
   // Hosts launched since the bench package existed install it. Absent means the original job bytes.
   if (s.benchPackage !== undefined) assert.equal(s.benchPackage, true, "bench package marker");
+  if (s.gitSource !== undefined) assert.equal(s.gitSource, true, "Git source marker");
   // Saved reservations without this marker must regenerate the original job.
   if (s.quietBootstrap !== undefined)
-    assert.ok([true, "after-start", "prelogin"].includes(s.quietBootstrap) && dedicated && s.control?.monitor, "quiet bootstrap requires a supervised group");
+    assert.ok([true, "after-start", "prelogin"].includes(s.quietBootstrap) && dedicated
+      && (s.control?.monitor || s.fleet.single?.offlineHandoff), "quiet bootstrap requires a registered group");
+  if (s.fleet?.single?.offlineHandoff && (s.control || s.status !== "reserved"))
+    assert.ok(s.control && !s.control.monitor && s.quietBootstrap === "prelogin",
+    "offline handoff requires the prelogin policy and no monitor");
   date(s.createdAt);
   assert.ok(["reserved", "creating", "preparing", "starting", "running", "collected", "retired"].includes(s.status));
   if (["preparing", "starting", "running", "collected", "retired"].includes(s.status)) assert.ok(s.id && s.ip, "owned host identity missing");
@@ -535,7 +543,7 @@ const dedicatedWorkspaceSha256 = createHash("sha256").update(`set -euo pipefail\
 // of the inspecting controller. Historical uploaded job bytes stay the same.
 export function bootstrapWorkspaceScript(s, { launch = false } = {}) {
   const row = s.control?.ledger[1];
-  return s.group && s.control?.monitor && (launch || (row?.localTerminal === true && row.code === 0
+  return s.group && (s.control?.monitor || s.fleet?.single?.offlineHandoff) && (launch || (row?.localTerminal === true && row.code === 0
     && row.request.sequence === 1 && row.request.epoch === "bootstrap" && !row.request.seal
     && row.request.invocation.channel === "ssh" && row.request.invocation.deadlineMs === 60000
     && row.request.invocation.requestSha256 === dedicatedWorkspaceSha256))
@@ -596,7 +604,8 @@ bootcmd:
     ( set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${rootManagerDropIn}' > "$dropin" )
     systemctl daemon-reload
 `;
-const rootManagerBinding = (s) => s.group && s.control?.monitor ? `/run/corten-bench-control-${s.token}/binding.json` : null;
+const rootManagerBinding = (s) => s.group && s.control && (s.control.monitor || s.fleet?.single?.offlineHandoff)
+  ? `/run/corten-bench-control-${s.token}/binding.json` : null;
 const rootManagerPolicy = (marker, prelogin = false) => `test -f '${marker}'
 test ! -L '${marker}'
 dropin=${rootManagerDropIn}
@@ -624,8 +633,10 @@ const observeRootManager = `    echo "root-manager: querying ActiveState" >&2
 
 export function installBenchmarkUnit(s) {
   const install = `bash -n /bench/job.sh && bash -n /bench/pack.sh && install -m 644 /bench/${s.unit} /etc/systemd/system/${s.unit} && systemd-analyze verify /etc/systemd/system/${s.unit}`;
+  const binding = rootManagerBinding(s);
+  assert.ok(!s.quietBootstrap || binding, "quiet bootstrap requires a guardian binding");
   return s.quietBootstrap
-    ? `${install} || exit 1\n${rootManagerPolicy(rootManagerBinding(s), s.quietBootstrap === "prelogin")}systemctl daemon-reload`
+    ? `${install} || exit 1\n${rootManagerPolicy(binding, s.quietBootstrap === "prelogin")}systemctl daemon-reload`
     : `${install} && systemctl daemon-reload`;
 }
 
@@ -638,6 +649,70 @@ export function validateRemoteFileState(s) {
     && s.fleet.selection && digest(s.fleet.selection) === "b374b8f7bb9600efb0f06abc30dd08bbbaf97ef8fafb7e3858e83fd5d32570a8";
   return validateState(s, s.round, { priorSelection });
 }
+
+// Embed the exact CI verifier in job.sh: a fresh guest has no checkout, and the
+// pinned controller/worker must not load a new, unbound runtime input.
+// git-source.test.mjs checks it against scripts/benchmark-evidence-git.sh.
+const sourceGitInstall = String.raw`bootstrap_stage=git-install
+timeout -k 10 900 apt-get -o Acquire::Retries=5 install -y -qq --no-install-recommends gpgv libcurl4-gnutls-dev libexpat1-dev libpcre2-dev libssl-dev perl pkg-config xz-utils zlib1g-dev
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+(
+  git_build=$(mktemp -d /tmp/corten-git-build.XXXXXXXXXX)
+  trap 'code=$?; timeout -k 5 60 rm -rf -- "$git_build" || exit 1; exit "$code"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  cd "$git_build"
+  timeout -k 10 420 /bin/sh <<'CORTEN_GIT_VERIFY'
+#!/bin/sh
+# Run in an empty build directory. Git signs the .tar, not the .tar.xz.
+set -eu
+base=https://www.kernel.org/pub/software/scm/git/git-2.56.1.tar
+get() { curl --proto '=https' --proto-redir '=https' -fsSL --retry 3 --max-time 90 "$1" -o "$2"; }
+get "$base.xz" git.tar.xz
+echo 'f0b0bf89264b9bd2e1c640363e7529643989da76281600473c50745cd34a607f  git.tar.xz' | sha256sum -c -
+get "$base.sign" git.tar.sign
+get https://github.com/gitster.gpg release-key.asc
+export GNUPGHOME="$PWD/gnupg"
+mkdir -m 700 "$GNUPGHOME"
+gpg --batch --dearmor -o release-key.gpg release-key.asc
+xz -dc git.tar.xz > git.tar
+gpgv --status-fd 1 --keyring "$PWD/release-key.gpg" git.tar.sign git.tar > signer
+verified=$(awk '$1=="[GNUPG:]" && $2=="VALIDSIG"{print $3, $NF}' signer)
+test "$verified" = \
+  'E1F036B1FEE7221FC778ECEFB0B5E88696AFE6CB 96E07AF25771955980DAD10020D04E5A713660A7'
+CORTEN_GIT_VERIFY
+  timeout -k 10 120 tar -xf git.tar
+  timeout -k 10 900 make -C git-2.56.1 -j2 prefix=/usr/local INSTALL_STRIP=-s INSTALL_SYMLINKS=1 \
+    NO_RUST=1 NO_GETTEXT=1 NO_TCLTK=1 NO_GITWEB=1 USE_LIBPCRE2=1 install
+  timeout -k 5 60 /bin/bash -euo pipefail <<'CORTEN_GIT_CHECK'
+test "$(command -v git)" = /usr/local/bin/git
+test -x "$(git --exec-path)/git-remote-https"
+version=$(git --no-replace-objects --no-lazy-fetch --version)
+test "$version" = 'git version 2.56.1'
+unset GIT_NO_REPLACE_OBJECTS GIT_NO_LAZY_FETCH
+git init -q source
+printf evidence > source/blob
+git -C source add blob
+git -C source -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm fixture
+git -C source config uploadpack.allowFilter true
+git clone -q --no-local --no-checkout --filter=blob:none "$PWD/source" replay
+git -C replay config protocol.file.allow always
+oid=$(git -C source rev-parse HEAD:blob)
+if git --no-replace-objects --no-lazy-fetch -C replay cat-file blob "$oid" >/dev/null 2>&1; then exit 1; fi
+test "$(git --no-replace-objects -C replay cat-file blob "$oid")" = evidence
+test "$(git --no-replace-objects --no-lazy-fetch -C replay cat-file blob "$oid")" = evidence
+replacement=$(printf replaced | git -C source hash-object -w --stdin)
+git -C source replace "$oid" "$replacement"
+test "$(git -C source cat-file blob "$oid")" = replaced
+test "$(git --no-replace-objects -C source cat-file blob "$oid")" = evidence
+{
+  printf '%s\n' "$version" 'git-source-url=https://www.kernel.org/pub/software/scm/git/git-2.56.1.tar.xz'
+  printf 'git-source-sha256='; sha256sum git.tar.xz | cut -d ' ' -f 1
+  printf 'git-source-signer='; awk '$1=="[GNUPG:]" && $2=="VALIDSIG"{print $3, $NF}' signer
+} >> /bench/host.txt
+CORTEN_GIT_CHECK
+)
+`;
 
 export function remoteFiles(s) {
   validateRemoteFileState(s);
@@ -748,7 +823,7 @@ timeout 900 apt-get update -qq
 timeout 900 apt-get install -y -qq gnupg curl ca-certificates build-essential
 ${sshIngress ? `bootstrap_stage=ssh-ingress-install
 ${installSshIngress}
-` : ""}# https://git-scm.com/install/linux: Ubuntu's upstream stable Git PPA.
+` : ""}${s.gitSource ? sourceGitInstall : `# https://git-scm.com/install/linux: Ubuntu's upstream stable Git PPA.
 # Distribution Git may lack --no-lazy-fetch; never weaken immutable native queries.
 bootstrap_stage=git-install
 # Use the signed PPA directly; add-apt-repository's metadata API can truncate reads.
@@ -764,7 +839,7 @@ rm /tmp/corten-git-ppa.keys /tmp/corten-git-ppa.asc
 timeout 900 apt-get update -qq
 timeout 900 apt-get install -y -qq git
 timeout 30 git --no-replace-objects --no-lazy-fetch --version >> /bench/host.txt
-bootstrap_stage=docker-install
+`}bootstrap_stage=docker-install
 timeout 900 bash -o pipefail -c 'curl -fsSL https://get.docker.com | sh'
 bootstrap_stage=node-install
 timeout 900 bash -o pipefail -c 'curl -fsSL https://deb.nodesource.com/setup_26.x | bash -'
@@ -836,7 +911,7 @@ Wants=network-online.target
 [Service]
 Type=exec
 ExecStart=/bin/bash /bench/job.sh
-WorkingDirectory=/bench
+${s.fleet?.single?.offlineHandoff ? "ExecStopPost=-/usr/bin/timeout -k 5 15 /usr/sbin/nft delete table inet corten_bench_native\n" : ""}WorkingDirectory=/bench
 Delegate=cpu cpuset memory pids
 DelegateSubgroup=supervisor
 Restart=no

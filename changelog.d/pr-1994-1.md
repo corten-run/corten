@@ -1,0 +1,1 @@
+- Newly reserved benchmark guests build Git from a pinned, verified upstream release rather than Launchpad; saved reservations keep their original startup recipe. [#1993 Fresh benchmark guests depend on the unavailable Git PPA before checkout](https://github.com/corten-run/corten/issues/1993)

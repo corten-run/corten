@@ -494,7 +494,7 @@ built in its build image, run on its run image and not from an image `docker bui
 `compress`, by the Dockerfile's `cargo build --release --locked` and by
 `corten build --locked --profile-from sh train.sh` in its place, with the script above (500
 requests for the home page); run on `debian:trixie-slim` with jemalloc preloaded and the
-image's settings, as root, the two binaries in one container with `perf` and `wrk`. The home
+image's settings at that commit (a 64 KiB thread cache), as root, the two binaries in one container with `perf` and `wrk`. The home
 page is 1,274 bytes, and 649 in zstd, which the app chose from a browser's codings. The app on
 one CPU, `wrk` with 64 connections on three others, 10 rounds in which the two builds took
 turns, on a desktop with other work running; medians are the sixth of the ten:
@@ -764,6 +764,10 @@ Before reserving a new grouped fleet, its [placement preflight](../../bench/work
 checks the provider's size and region listings for all required hosts. The
 reservation fixes those locations; create never tries a different region.
 
+New guest reservations use the [pinned upstream Git verifier](../../bench/workloads/CLOUD.md#public-source-permissions)
+before checkout, without relying on Launchpad. A failed verification or Git
+capability check is a setup failure, not benchmark evidence.
+
 For a partial round, the [independent group procedure](../../bench/workloads/CLOUD.md#independent-group-continuation)
 replays completed results from their original evidence and reserves only the
 named missing group. Different groups in the same continuation can measure on
@@ -805,4 +809,11 @@ version=$(node -p 'require("@playwright/test/package.json").version') &&
     -f bench/workloads/test-tools.Dockerfile -t corten-evidence-tools .
 ```
 
-The Dockerfile has no default base image.
+The Dockerfile has no default base image. CI builds Git 2.56.1 from its
+[upstream release on kernel.org](https://www.kernel.org/pub/software/scm/git/), not from
+the Launchpad PPA or the runner's installation. It verifies the pinned archive SHA-256
+and the detached signature on the uncompressed tar from Junio Hamano's pinned release key.
+When updating Git, verify both, and update the source pin and final image version check
+together. The compiler and source stay in the build stage. The final image checks that
+a missing blob in a local partial clone cannot be fetched with `--no-lazy-fetch`, but
+can be fetched without it. This check needs neither a network nor a Docker socket.

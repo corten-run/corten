@@ -129,8 +129,15 @@ test("native flags, partial commands, missing OS proof, abort or invalid audit c
 });
 test("client's real diagnostic exit two is not fabricated failure or exit zero", () => {
   const b = { ...binding, request: { group: "client-heavy" }, latestStable: policy("client-heavy", "blocked") }, n = { ...native, status: "verified", outcomes: native.outcomes.map((r) => ({ ...r, outcome: "passed" })) };
-  assert.equal(composePhase(b, n, { cleanupComplete: true, resources: "verified" }, [{ ...command, code: 2 }]).outcome, "native-validated");
-  assert.notEqual(composePhase(b, n, { cleanupComplete: true, resources: "verified" }, [{ ...command, code: 0, success: true }]).outcome, "native-validated");
+  const host = { cleanupComplete: true, resources: "verified" };
+  const observed = [{ ...command, code: 2 }];
+  assert.equal(composePhase(b, n, host, observed).outcome, "native-validated");
+  const probed = composePhase(b, n, host, observed, true, 1);
+  assert.equal(probed.outcome, "blocked");
+  assert.equal(probed.report.timingBlockedByPreLoginProbes, true);
+  assert.ok(probed.appOutcomes.every(({ comparisonEligible }) => !comparisonEligible));
+  assert.equal(composePhase(b, n, host, [{ ...command, code: 137 }], true, 1).outcome, "failed");
+  assert.notEqual(composePhase(b, n, host, [{ ...command, code: 0, success: true }]).outcome, "native-validated");
 });
 
 test("latest-stable blockers preserve complete native outcomes but never qualify comparisons", () => {

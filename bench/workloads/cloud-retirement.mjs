@@ -745,10 +745,15 @@ function replayFailedNativeRetirement(local, state, expectedSha256, readGrouped)
   return record;
 }
 
-function unusedBootstrapState(state) {
+function unusedBootstrapState(state, interrupted = false) {
   const c = state.control;
+  const pending = c?.monitor?.phase === "pending" && !c.monitor.registrationSha256;
+  // Offline launch has no monitor by design. Admit only this exact interrupted
+  // first-upload prefix, never an unmonitored no-op or settled prefix.
+  const offline = interrupted && state.fleet?.single?.offlineHandoff === true
+    && state.quietBootstrap === "prelogin" && c?.monitor === undefined;
   return !!(state.id && state.ip && state.createIntentAt && c?.helperSha256 === guardianSha256
-    && c.monitor?.phase === "pending" && !c.monitor.registrationSha256 && !c.sealed.length
+    && (pending || offline) && !c.sealed.length
     && (state.status === "preparing" ? !state.deletionIntentAt : state.status === "retired" && state.retirement?.kind === "unused")
     && ["bootstrapReady", "preBootstrapTerminal", "auditIntent", "auditIntents", "archiveSha256", "evidenceSha256", "extractionAttempts",
       "evidence", "evidenceOutcome", "exitCode", "validation", "collectedAt", "mixedCancellation"].every((key) => state[key] === undefined));
@@ -764,11 +769,21 @@ export function unusedBootstrap(state) {
 }
 
 export function settledBootstrap(state, local) {
-  if (!unusedBootstrapState(state)) return false;
+  return uploadPrefix(state, local, false);
+}
+
+// A missing reply is never an acknowledgement. Only the first file may be in
+// doubt, and only on a host whose launch established its own SSH key.
+export function interruptedFirstUpload(state, local) {
+  return !!state.launchHostKeySha256 && state.control?.ledger.length === 3 && uploadPrefix(state, local, true);
+}
+
+function uploadPrefix(state, local, interrupted) {
+  if (!unusedBootstrapState(state, interrupted)) return false;
   const { ledger } = state.control;
   if (ledger.length < 3 || ledger.length > 8) return false;
   const ssh = (script, deadline = 60000) => ["ssh", deadline, digest("set -euo pipefail\n" + script + "\n")];
-  const expected = [ssh("true", 30000), ssh(bootstrapWorkspaceScript(state))];
+  const expected = [ssh("true", 30000), ssh(bootstrapWorkspaceScript(state, { launch: interrupted }))];
   // Dispatch checks absolute SFTP operands. Replay also works on moved evidence,
   // where the combined script digest still binds every original request digest.
   for (const [name, content] of Object.entries(remoteFiles(state))) {
@@ -777,12 +792,63 @@ export function settledBootstrap(state, local) {
   }
   return ledger.every(({ request, localTerminal, code }, sequence) => {
     const [channel, deadlineMs, hash] = expected[sequence], invocation = request.invocation;
-    return localTerminal === true && code === 0 && request.epoch === "bootstrap" && request.sequence === sequence && !request.seal
+    const expectedDisposition = interrupted && sequence === 2 ? localTerminal === false && code === undefined : localTerminal === true && code === 0;
+    return expectedDisposition && request.epoch === "bootstrap" && request.sequence === sequence && !request.seal
       && invocation.channel === channel && invocation.deadlineMs === deadlineMs && (hash === undefined || invocation.requestSha256 === hash);
   });
 }
 
-const settledDrain = String.raw`def settled_receipts(root, binding, requests, g):
+// Unlike a receipt, this is a failed watcher which never registered the
+// transfer. guard() starts the child but cannot forward input until registration.
+const refusedUploadProof = String.raw`def refused_upload(root, binding, request, expect, units, g):
+    inv = request['invocation']
+    identifier = inv['id']
+    unit = 'corten-bench-control-' + binding['token'] + '-' + identifier + '.service'
+    records = {}
+    for prefix in ['request', 'start', 'launcher', 'watch-failure']:
+        name = prefix + '-' + identifier + '.json'
+        expect.add(name)
+        records[prefix] = g['load'](root, name)
+    # The subsequent exact directory inventory excludes a registration, result,
+    # receipt, or any other work. Never invent terminal ticks for an absent PID.
+    assert records['request'] == request and records['launcher'] == {'unit': unit, 'code': 0}
+    start, failure = records['start'], records['watch-failure']
+    assert set(start) == {'guardian', 'child', 'unit', 'connection', 'deadlineMonoNs'} and start['unit'] == unit
+    assert set(failure) == {'helperLine'} and type(failure['helperLine']) is int and 0 < failure['helperLine'] <= len(source.splitlines())
+    assert re.fullmatch(r'[1-9][0-9]{0,18}', start['deadlineMonoNs']) and time.monotonic_ns() > int(start['deadlineMonoNs'])
+    assert start['guardian'] != start['child']
+    for pid in (start['guardian'], start['child']):
+        assert type(pid) is int and pid > 1
+        try: os.stat('/proc/' + str(pid))
+        except FileNotFoundError: pass
+        else: raise AssertionError('original transfer PID present')
+    client, client_port, server, server_port = start['connection'].split()
+    def ip(text):
+        value = g['ipaddress'].ip_address(text)
+        return getattr(value, 'ipv4_mapped', None) or value
+    assert 0 < int(client_port) <= 65535 and int(server_port) == 22
+    target = (ip(server), int(server_port), ip(client), int(client_port))
+    for fields, _ in g['socket_rows']():
+        local, lp = fields[1].split(':')
+        remote, rp = fields[2].split(':')
+        assert (g['address'](local), int(lp, 16), g['address'](remote), int(rp, 16)) != target
+    required = dict(Id=unit, LoadState='loaded', ActiveState='failed', SubState='failed', Restart='no',
+                    MainPID='0', ControlPID='0', NRestarts='0', Job='', Triggers='', TriggeredBy='',
+                    ExecMainCode='1')
+    r = subprocess.run(['systemctl', 'show', '--all', unit] + ['--property=' + k for k in [*required, 'ExecMainStatus']],
+                       capture_output=True, text=True, timeout=5, check=True)
+    values = dict(line.split('=', 1) for line in r.stdout.splitlines())
+    assert 0 < int(values.pop('ExecMainStatus')) <= 255 and values == required
+    cg = pathlib.Path('/sys/fs/cgroup/system.slice') / unit
+    try: mode = cg.lstat().st_mode
+    except FileNotFoundError: pass
+    else:
+        assert stat.S_ISDIR(mode) and dict(line.split() for line in (cg / 'cgroup.events').read_text().splitlines())['populated'] == '0'
+    units.add(unit)
+    return dict(invocationId=identifier, jobPresent=False, failureSha256=hashlib.sha256(g['read'](root / ('watch-failure-' + identifier + '.json'))).hexdigest())
+`;
+
+const settledDrain = (interrupted) => String.raw`def settled_receipts(root, binding, requests, g):
     g['private'](root)
     assert g['load'](root, 'binding.json') == binding
     expect = {'helper.py', 'binding.json', 'mutex'}
@@ -790,7 +856,7 @@ const settledDrain = String.raw`def settled_receipts(root, binding, requests, g)
     listener, chain, _ = g['ancestry'](os.getpid(), os.environ['SSH_CONNECTION'])
     identities = ('pid', 'startTicks', 'cgroup', 'executable')
     same = lambda a, b: all(a[k] == b[k] for k in identities)
-    for request in requests:
+    ${interrupted ? "refused = refused_upload(root, binding, requests[-1], expect, units, g)\n    for request in requests[:-1]:" : "for request in requests:"}
         invocation = request['invocation']
         identifier = invocation['id']
         for prefix in ['request', 'start', 'launcher', 'registration', 'result', 'receipt']:
@@ -822,7 +888,9 @@ const settledDrain = String.raw`def settled_receipts(root, binding, requests, g)
     assert listed.returncode == 0 and len(listed.stdout) <= 4096
     assert {line.split()[0] for line in listed.stdout.splitlines() if line.strip()} <= units
     rows = g['inventory']()
-    key = g['key']
+${interrupted ? `    sftp = os.stat('/usr/lib/openssh/sftp-server')
+    assert all(row['executable'] != {'device': str(sftp.st_dev), 'inode': str(sftp.st_ino)} for row in rows.values())
+` : ""}    key = g['key']
     live = {key(p) for p in rows.values()}
     allowed = {p['pid'] for p in [listener] + chain}
     assert all(same(rows[p['pid']], p) for p in [listener] + chain)
@@ -841,7 +909,7 @@ const settledDrain = String.raw`def settled_receipts(root, binding, requests, g)
         assert not cgroup.startswith(listener['cgroup'].rstrip('\n') + '/')
         assert not cgroup.startswith(('0::/user.slice/', '0::/system.slice/corten-bench'))
         assert not re.search(r'/session-[^/\n]+\.scope(?:/|\n)', cgroup)
-    return digests`;
+    return ${interrupted ? "digests, refused" : "digests"}`;
 
 // Use the same descriptor-bound instance-ID and user-data proof before
 // accepting a new host as unused or failed during setup.
@@ -851,10 +919,11 @@ ${cloudInstanceProof(true)}
 cloud_instance()`;
 
 export function unusedHostScript(state, { bootstrap = false, legacyTimestamp = false } = {}) {
-  const settled = bootstrap && settledBootstrap(state), pristine = bootstrap && !settled;
+  const interrupted = bootstrap && interruptedFirstUpload(state);
+  const settled = bootstrap && (interrupted || settledBootstrap(state)), pristine = bootstrap && !settled;
   if (pristine) assert.ok(unusedBootstrap(state), "unused bootstrap proof requires pre-provisioning custody");
   assert.ok(!settled || !legacyTimestamp, "settled bootstrap needs current unit proof");
-  const files = pristine ? {} : Object.fromEntries(Object.entries(remoteFiles(state))
+  const files = pristine || interrupted ? {} : Object.fromEntries(Object.entries(remoteFiles(state))
     .slice(0, settled ? Math.ceil((state.control.ledger.length - 2) / 2) : undefined).map(([name, content]) => [name, digest(content)]));
   const invocation = pristine && state.control.ledger[0]?.request.invocation;
   const watcher = invocation && `corten-bench-control-${state.token}-${invocation.id}.service`;
@@ -940,7 +1009,7 @@ ${pristine ? `    assert all(value not in command for value in [b'/bench', b'cor
 absent('/run/corten-bench-control-${state.token}')
 absent('/bench')
 ` : ""}${settled ? `import re
-${settledDrain}
+${interrupted ? refusedUploadProof : ""}${settledDrain(interrupted)}
 
 root = pathlib.Path('/run/corten-bench-control-${state.token}')
 binding = json.loads(${JSON.stringify(JSON.stringify({ round: state.round, commit: state.commit, token: state.token, helperSha256: guardianSha256 }))})
@@ -951,16 +1020,16 @@ assert len(source) <= 1048576 and hashlib.sha256(source).hexdigest() == binding[
 namespace = {'__name__': '_settled_bootstrap_observation'}
 exec(compile(source, 'bound-control-source', 'exec'), namespace)
 assert namespace['read'](root / 'helper.py') == source
-drained = settled_receipts(root, binding, requests, namespace)
+${interrupted ? "drained, refused" : "drained"} = settled_receipts(root, binding, requests, namespace)
 ` : ""}assert os.getppid() == parent_pid and (parent / 'cmdline').read_bytes() == parent_command
 assert os.readlink(parent / 'exe') == '/usr/bin/timeout'
 print(json.dumps(dict(schema='benchmark-unused-host/v1', hostId=host_id, unit=unit,
-                     observedAtMs=int(time.time()*1000), unused=True${settled ? ", drainedReceipts=drained" : ""})))
+                     observedAtMs=int(time.time()*1000), unused=True${settled ? ", drainedReceipts=drained" : ""}${interrupted ? ", refusedUpload=refused" : ""})))
 CORTEN_UNUSED_HOST`;
 }
 
 export function unusedEvidence(raw, state, script, startedAtMs, finishedAtMs, knownHostsSha256) {
-  const settled = settledBootstrap(state);
+  const interrupted = interruptedFirstUpload(state), settled = interrupted || settledBootstrap(state);
   if (knownHostsSha256 !== undefined) {
     assert.equal(typeof knownHostsSha256, "string"); assert.match(knownHostsSha256, /^[a-f0-9]{64}$/);
     assert.ok(settled || unusedBootstrap(state));
@@ -969,10 +1038,18 @@ export function unusedEvidence(raw, state, script, startedAtMs, finishedAtMs, kn
   assert.ok(typeof raw === "string" && Buffer.byteLength(raw) <= 1024, "bounded unused proof required");
   const observation = JSON.parse(raw);
   assert.ok(observation && typeof observation === "object" && !Array.isArray(observation), "unused proof required");
-  assert.deepEqual(Object.keys(observation).sort(), [...(settled ? ["drainedReceipts"] : []), "hostId", "observedAtMs", "schema", "unit", "unused"]);
+  assert.deepEqual(Object.keys(observation).sort(), [...(settled ? ["drainedReceipts"] : []), "hostId", "observedAtMs", ...(interrupted ? ["refusedUpload"] : []), "schema", "unit", "unused"]);
+  if (interrupted) {
+    assert.equal(knownHostsSha256, state.launchHostKeySha256, "unused proof needs the original launch key");
+    const failed = observation.refusedUpload;
+    assert.deepEqual(Object.keys(failed).sort(), ["failureSha256", "invocationId", "jobPresent"]);
+    assert.equal(failed.invocationId, state.control.ledger[2].request.invocation.id);
+    assert.equal(failed.jobPresent, false);
+    assert.match(failed.failureSha256, /^[a-f0-9]{64}$/);
+  }
   if (settled) {
     const hashes = observation.drainedReceipts;
-    assert.ok(Array.isArray(hashes) && hashes.length === state.control.ledger.length && new Set(hashes).size === hashes.length
+    assert.ok(Array.isArray(hashes) && hashes.length === state.control.ledger.length - Number(interrupted) && new Set(hashes).size === hashes.length
       && hashes.every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)), "complete distinct drain receipts required");
   }
   assert.equal(observation.schema, "benchmark-unused-host/v1");
