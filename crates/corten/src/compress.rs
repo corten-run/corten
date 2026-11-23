@@ -3,9 +3,9 @@
 //! Pages, patches and JSON are generated per request, so they are compressed per request at the
 //! fastest level that still pays: zstd 1 for clients that accept it (current Chrome, Edge and
 //! Firefox, and Safari over HTTPS from 26.3 as caniuse lists it; Playwright's WebKit does not
-//! send it), otherwise the smaller of gzip made by libdeflate at its level 1 and brotli 1, which
-//! is gzip for a body up to 16 KiB and brotli for a larger one, or the one of the two the client
-//! accepts. The client's own ranking (its q-values) comes before this order. On
+//! send it), otherwise gzip made by libdeflate at its level 1 for a body up to 16 KiB and
+//! brotli 1 for a larger one, or the one of the two the client accepts. The client's own ranking
+//! (its q-values) comes before this order. On
 //! card-market's item page (8.8 KB on average; instructions by callgrind in process, bytes the
 //! average `render_cost` reports) zstd 1 adds about 230,000 user instructions to the request and
 //! sends 2,178 bytes; brotli 1 adds about 690,000 for 2,358 bytes. brotli's other fast levels cost
@@ -17,9 +17,11 @@
 //! 335,326 instructions with zstd 1 for 2,250 bytes, 409,926 with libdeflate's gzip for 2,307, and
 //! 840,592 with brotli 1 for 2,475; flate2's gzip 1, which a client with gzip alone got before,
 //! took 866,175 for 2,612 (`docs/design.md#choice-request-gzip`, with the times and the page
-//! faults). Past 16 KiB a body that repeats is smaller with brotli 1: of twelve pages, documents
-//! and JSON files cut to sizes from 1 KB up, gzip was 4.6 to 9.9% smaller on eight of the nine
-//! that reach 16 KiB and 11.6% larger on one, and at 20 KB 3.5 to 30.5% larger on four of them.
+//! faults). Past 16 KiB the order is the one before, brotli then gzip, since gzip is no longer
+//! the smaller on most bodies: of twelve pages, documents and JSON files cut to sizes from 1 KB
+//! up, gzip was 4.6 to 9.9% smaller on eight of the nine that reach 16 KiB and 11.6% larger on
+//! one, and from 20 KB to 32 KB 3.5 to 30.5% larger on four of them (those that repeat) and 2.1
+//! to 7.4% smaller on the other five, which brotli so sends a little larger than gzip would.
 //! A client that accepts gzip alone gets libdeflate's at every size, smaller than flate2's gzip 1
 //! was on each of those. libdeflate compresses a whole body into one buffer, which is what a
 //! request's body is; its levels 2 to 4 gave at most 2.1% fewer bytes on the item page for 43 to
@@ -72,8 +74,8 @@ const BROTLI_LEVEL: u32 = 1;
 const GZIP_LEVEL: i32 = 1;
 /// The largest body gzip is ahead of brotli for when it is compressed per request
 /// ([`Accepts::now`]). Up to here libdeflate's gzip 1 was the smaller of the two on all but one
-/// of twelve bodies; from 20 KB brotli 1 was on four of nine, by up to 30%
-/// (`docs/design.md#choice-request-gzip`).
+/// of twelve bodies; from 20 KB to 32 KB brotli 1 was the smaller on four of nine, by up to 30%,
+/// and gzip on five, by up to 7.4% (`docs/design.md#choice-request-gzip`).
 const GZIP_FIRST: u64 = 16 * 1024;
 /// A stream's gzip level: deflate (miniz_oxide) at 1 finds few of an earlier event's matches, so a
 /// 2.7 KB redraw of one changed row costs 129 to 453 bytes a time; at 3 it costs 60 to 69
@@ -237,7 +239,7 @@ pub(crate) fn encode(coding: Coding, data: &[u8], level: Level) -> Vec<u8> {
             let mut out = vec![0; compressor.gzip_compress_bound(data.len())];
             let written = compressor.gzip_compress(data, &mut out).expect("libdeflate compresses into its bound");
             out.truncate(written);
-            // What is sent, or kept with a kept answer, is what was written, not the bound.
+            // The body sent holds what was written, not the bound it was given.
             out.shrink_to_fit();
             out
         }),
@@ -261,9 +263,11 @@ impl Accepts {
     }
 
     /// The coding for a body of `size` bytes compressed as it is sent: the highest q-value, then
-    /// the server's order for one made now, which is zstd, then the smaller of the other two:
-    /// gzip for a body up to [`GZIP_FIRST`], which also takes less to make, and brotli for a
-    /// larger one (the module's figures). A stored form is brotli first ([`Accepts::stored`]).
+    /// the server's order for one made now, which is zstd, then gzip for a body up to
+    /// [`GZIP_FIRST`], where it is the smaller of the other two on nearly every body measured
+    /// and takes less to make, and brotli for a larger one, where gzip is up to 30% larger on a
+    /// body that repeats (the module's figures). A stored form is brotli first
+    /// ([`Accepts::stored`]).
     fn now(self, size: u64) -> Option<Coding> {
         if size <= GZIP_FIRST {
             self.best(&[Coding::Zstd, Coding::Gzip, Coding::Brotli])
@@ -1008,8 +1012,45 @@ mod tests {
         assert_eq!(negotiate(&HeaderMap::new()), Accepts::default());
     }
 
-    /// Past `GZIP_FIRST` brotli is the smaller of the two, so it is ahead of gzip again; zstd and
-    /// the client's own ranking still come first, and a client with gzip alone gets gzip.
+    /// What gzip's place ahead of brotli rests on: for a body under `GZIP_FIRST` the gzip a request
+    /// is sent is smaller than brotli 1, and smaller than flate2's gzip 1, which made it before. A
+    /// change of coder or level that loses either fails here.
+    #[test]
+    fn a_short_bodys_gzip_is_smaller_than_brotli_1_and_than_flate2s_gzip_1() {
+        let words = ["card", "market", "holo", "mint", "played", "rare", "foil", "seller", "ships", "listing", "offer", "edition"];
+        let mut seed = 0x2545_f491_u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) as usize
+        };
+        let page: String = (0..70)
+            .map(|i| {
+                format!(
+                    r#"<li id="r{i}"><a href="/items/item_{}">{} {} {}</a> <span class="price">{}.{:02}</span> {} by {}</li>"#,
+                    next() % 5_000,
+                    words[next() % words.len()],
+                    words[next() % words.len()],
+                    words[next() % words.len()],
+                    next() % 900,
+                    next() % 100,
+                    words[next() % words.len()],
+                    words[next() % words.len()]
+                )
+            })
+            .collect();
+        assert!((4_096..GZIP_FIRST).contains(&(page.len() as u64)), "{}", page.len());
+        let gzip = encode(Coding::Gzip, page.as_bytes(), Level::Fast);
+        let brotli = encode(Coding::Brotli, page.as_bytes(), Level::Fast);
+        let mut flate = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(1));
+        flate.write_all(page.as_bytes()).unwrap();
+        let flate = flate.finish().unwrap();
+        assert!(gzip.len() < brotli.len(), "gzip {} against brotli 1 {}", gzip.len(), brotli.len());
+        assert!(gzip.len() < flate.len(), "gzip {} against flate2's gzip 1 {}", gzip.len(), flate.len());
+    }
+
+    /// Past `GZIP_FIRST` the order is the one before, brotli ahead of gzip, since gzip is larger
+    /// there on a body that repeats; zstd and the client's own ranking still come first, and a
+    /// client with gzip alone gets gzip.
     #[test]
     fn a_body_past_the_gzip_size_is_brotli_for_a_client_without_zstd() {
         let now = |value: &str, size: u64| negotiate(&accept(value)).now(size);

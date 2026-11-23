@@ -522,27 +522,27 @@ The starter enables `compress`. A response compressed per request is zstd for a 
 offers it; for one that does not, gzip up to 16 KiB and Brotli past it, or the one of the two
 the client accepts. Assets and held JSON compressed once are Brotli and gzip, and event streams
 zstd or gzip, never Brotli ([Choice 32](../design.md#choice-stream-coding)). A request's gzip
-is made by libdeflate: up to 16 KiB it was smaller than Brotli at its fastest level on all but
-one of twelve bodies and took a third to a half less time to make, and at every size it was
+is made by libdeflate: up to 16 KiB it was smaller than Brotli at level 1, the level a request's
+Brotli is made at, on all but one of twelve bodies and took a third to a half less time to make, and at every size it was
 smaller than the gzip it replaced ([Choice 72](../design.md#choice-request-gzip)). So one
 client can be sent gzip for a short page and Brotli for a long one; `Vary: Accept-Encoding`
 is the same for both.
 
 Revisit Brotli when a zstd/gzip-only build can serve supported clients without a slowdown.
 For a body compressed per request that was measured: past 16 KiB a body that repeats was up
-to 30% larger as gzip, so Brotli stays for those. For assets and held JSON, compare release
+to 30% larger as gzip and one that does not at most 7.4% smaller, so Brotli stays there. For assets and held JSON, compare release
 builds on the same runtime, kit CSS and held JSON, and try high-level zstd where the client
 offers it. Measure bytes for both client groups and browser load time on a throttled link if
 the replacement sends more. A faster encoder on the server is not enough if the extra bytes
 make the page slower for the visitor.
 
 `libdeflate-sys` builds its bundled C sources and links them into the app, so the build needs
-a C compiler and the runtime image nothing for it; built alone it took about five seconds of
-a clean release build (16 cores, three builds, 4.8 to 5.1 s).
+a C compiler, which the starter's build image has, and the runtime image nothing for it.
 By default `zstd-sys` builds its bundled C sources, which needs a C compiler, even when a
 system zstd is installed. The starter's Dockerfile instead sets `ZSTD_SYS_USE_PKG_CONFIG=1` to use the build image's libzstd, which needs
 `libzstd.so.1` in the runtime image. To keep compression in an image without that shared
-library, remove the setting so the build compiles zstd and links it into the app. To build
+library, remove the setting so the build compiles zstd and links it into the app. With the
+setting, libdeflate is the only C the starter's image compiles. To build
 without either C library, turn off the `compress` feature in the app's `Cargo.toml`.
 
 Whichever compresses, the proxy passes the browser's `Accept-Encoding` on to the app (row 13

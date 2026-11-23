@@ -28,8 +28,8 @@ artifact attestations and `SHA256SUMS`, not a minisign signature
 with a script, a
 test and a Dockerfile.
 
-The starter enables Corten's `compress` feature. A local build normally needs a C compiler for
-`zstd-sys`, the starter's only C dependency. To build without it, remove `features = ["compress"]`
+The starter enables Corten's `compress` feature. A local build needs a C compiler for
+`libdeflate-sys` and normally for `zstd-sys`, the starter's two C dependencies. To build without one, remove `features = ["compress"]`
 from the `corten` dependency in `Cargo.toml`. This turns off Corten's response compression.
 See [Response compression](deploy.md#response-compression) for the Docker build and the codecs.
 
