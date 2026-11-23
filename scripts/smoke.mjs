@@ -16,7 +16,7 @@ import { partReads, partsInPatches } from "./smoke/parts.mjs";
 import { trustedTypes } from "./smoke/trusted-types.mjs";
 import { submitQueue } from "./smoke/submit-queue.mjs";
 import { busyForms } from "./smoke/busy.mjs";
-import { sectionNavigation, redirects, guardedNavigation, shellChanges, navigationMarks, currentLinks, earlyNavigation } from "./smoke/navigation.mjs";
+import { sectionNavigation, redirects, guardedNavigation, shellChanges, navigationMarks, currentLinks, fragmentTargets, earlyNavigation } from "./smoke/navigation.mjs";
 import { scroll } from "./smoke/scroll.mjs";
 import { appendPatches, retainedPatchState } from "./smoke/patches.mjs";
 import { history } from "./smoke/history.mjs";
@@ -65,6 +65,7 @@ await runSmoke(async (browser) => {
   await navigationMarks(page);
   await patchUploads(errors, page, part);
   await currentLinks(browser, swaps, noSwaps);
+  await fragmentTargets(browser);
   await prefetch(swaps, page, navRequests, browser, errors, noteBorder, noSwaps);
   await pageRefresh(page, swaps, noSwaps, errors, signsIn);
   await uploads(page, live, errors, signsIn);
