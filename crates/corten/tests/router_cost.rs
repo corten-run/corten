@@ -13,6 +13,8 @@
 //! `Public` text is too small to keep, or with `ROUTER_PUBLIC=page` a `Public` page.
 //! `ROUTER_ASKED=1` asks for that route three times first, so a page is kept by then.
 //! `ROUTER_TARGET=kept` with `ROUTER_PUBLIC=page` counts the kept page given again.
+//! `ROUTER_TARGET=made` with `ROUTER_PUBLIC=page` counts the page made and kept: each request
+//! asks for a query of its own, which nothing kept stands for, in a store with room.
 //! `ROUTER_KEPT=0` turns the store off (`App::kept_answers(0)`), for what a write pays the store
 //! in the same app; with it nothing is kept, so `ROUTER_ASKED=1` and `ROUTER_TARGET=kept` with a
 //! page, which assert that one is, do not go with it.
@@ -104,9 +106,10 @@ fn request_cost() {
     let public = std::env::var("ROUTER_PUBLIC").unwrap_or_default();
     let asked = std::env::var("ROUTER_ASKED").is_ok_and(|asked| asked == "1");
     let (missing, write, kept, unstaged) = (target == "missing", target == "write", target == "kept", target == "unstaged");
+    let made = target == "made";
     let path = if missing { "/items/7/unknown" } else { "/items/7/edit" };
     let status = if missing { 404 } else { 200 };
-    let (routes, shared) = match (write || kept, public.as_str()) {
+    let (routes, shared) = match (write || kept || made, public.as_str()) {
         (false, _) if unstaged => (bare::router(), None),
         (false, _) => (url::router(), None),
         (true, "") => (plain::router(), None),
@@ -139,6 +142,14 @@ fn request_cost() {
             let shared = shared.expect("ROUTER_TARGET=kept needs ROUTER_PUBLIC=page");
             for _ in 0..requests {
                 assert!(ask(shared).await, "the kept page");
+            }
+            return;
+        }
+        if made {
+            assert_eq!(shared, Some("/home"), "ROUTER_TARGET=made needs ROUTER_PUBLIC=page");
+            // A new query each time, which writing counts in every build alike.
+            for n in 0..requests {
+                assert!(!ask(format!("/home?n={n}").leak()).await, "made by its handler");
             }
             return;
         }
