@@ -662,7 +662,6 @@ pub(crate) struct Entry {
     size: AtomicUsize,
 }
 
-
 /// On a response whose body is a kept answer's: the stages after the handler find the body's
 /// hash and its compressed forms here while the body is still those bytes, as a held value's are
 /// found (`compress::Stored`). A middleware that replaced the body keeps the extension, not the
