@@ -525,8 +525,7 @@ establish a general ranking.
          byte-identical to the build's own binary; that each placement has exactly that binary's
          functions and the pad, the pad first, every function moved by exactly the pad's size (so
          the placement has the line and page phase the plan declared) and every pair of neighbours
-         still next to each other in order (C code a build links is checked as the paragraph after
-         this list says); that each placement of one build has a SHA-256 no
+         still next to each other in order; that each placement of one build has a SHA-256 no
          other placement of that build has (base and head at one pad may be one binary, when the
          change compiles to the same code); and that each answers the workload's requests as the unpadded binary does: status, headers but
          `Date`, and body as received, with nothing in the body masked and only the header values
@@ -561,26 +560,6 @@ establish a general ranking.
          change's own bound. Only a complete, resolved A/A records or replaces a spread, through a
          pull request that changes the Choice; a run reads the spread recorded in the Choice on
          `main` when its plan is declared, whatever a later run records.
-
-      C code a build links. rustc gives each function a section aligned to 16 bytes, so a pad
-      in steps of 16 moves it by exactly the pad. A C compiler may align a function's section
-      further, and such a section moves only by a multiple of its alignment: with a pad that is
-      not one, the linker moves it, and what it lays after it, by the pad rounded. A build with
-      the `compress` feature links libdeflate, 17 of whose function sections gcc 14.2.0 aligned
-      to 64 bytes and 5 to 32, the last code in `.text`
-      ([design Choice 72](docs/design.md#choice-placement-runs)). For a side that links C
-      archives the plan names them, and item 1's check on shifts is then: every function before
-      the first one those archives define moved by exactly the pad; every function from it to
-      the end of `.text` moved by exactly the pad or by a multiple of 32 bytes less than 64
-      bytes from it; neighbours kept throughout; and the run records each of those functions'
-      shifts. An aligned section sits at the same place in a 64-byte line in every build, so a
-      placement that keeps it there varies what a real build varies. The sections after `.text`
-      move with its end, so on such a side the data moves by the pad rounded to a multiple of
-      64 where a side with rustc's code alone moves it by the pad. When a comparison's two sides
-      differ in this (a change that adds or removes the C code), its A/A, one side against
-      itself, cannot see what that does: the plan says so before the run, and the report gives
-      the change's placement medians where the pad is a multiple of 64, which moves everything
-      on both sides by exactly the pad, beside the rest, as a diagnostic.
 
       The margin stays +1% with no floor: the workload meets it when the change's bound across
       placements is under +1% and its A/A resolves. A placement that fails a check above, or has
