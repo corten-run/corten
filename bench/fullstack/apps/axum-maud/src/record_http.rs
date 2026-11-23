@@ -6,10 +6,12 @@ use axum::{
 use serde::Serialize;
 use std::time::Duration;
 
-/// How long a connection to the catalog or marketplace upstream may sit idle in the pool before a
-/// request opens a new one instead. Both fixtures (`bench/catalog/upstream.mjs`,
-/// `bench/marketplace/upstream.mjs`, on Node 26) answer with `Keep-Alive: timeout=5` and close a
-/// connection idle for their 5 s keep-alive timeout plus Node's 1 s buffer. A request written to a
+/// How long a connection to an upstream may sit idle in the pool before a request opens a new one
+/// instead (this client and the item API's, `items.rs`). The catalog and marketplace fixtures
+/// (`bench/catalog/upstream.mjs`, `bench/marketplace/upstream.mjs`) and the item API
+/// (`bench/fullstack/item-api/server.mjs`), all Node HTTP servers, answer with
+/// `Keep-Alive: timeout=5` and close a connection idle for their 5 s keep-alive timeout plus
+/// Node's 1 s buffer. A request written to a
 /// pooled connection as the fixture closes it fails in the send (reqwest keeps an idle connection
 /// for 90 s unless told otherwise), so the pool drops a connection a second before the shortest
 /// time the fixtures advertise. It is not a retry: each record is still one upstream GET.

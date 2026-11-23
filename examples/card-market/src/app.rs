@@ -655,6 +655,75 @@ mod tests {
         Source::fixture(&json!({ "item_9": item, "item_10": bare }).to_string()).unwrap()
     }
 
+    /// How long the benchmark item API (`bench/fullstack/item-api/server.mjs`, Node's HTTP server)
+    /// keeps an idle connection open: it answers `Keep-Alive: timeout=5`.
+    const API_KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// What the item API double did, in order.
+    #[derive(Debug, PartialEq)]
+    enum Seen {
+        Answered,
+        /// A request arrived on a connection idle for `API_KEEP_ALIVE`, and met the close.
+        ClosedIdle,
+    }
+
+    /// The item API's idle close, made certain: a request that arrives on a connection idle for
+    /// `API_KEEP_ALIVE` or more is dropped unread, which resets the connection, and nothing answers
+    /// it. Any other request gets one bare item, and the connection stays open.
+    fn closing_api() -> (String, std::sync::Arc<std::sync::Mutex<Vec<Seen>>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = format!("http://{}", listener.local_addr().unwrap());
+        let seen = std::sync::Arc::<std::sync::Mutex<Vec<Seen>>>::default();
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for socket in listener.incoming() {
+                let (mut socket, log) = (socket.unwrap(), log.clone());
+                std::thread::spawn(move || {
+                    let body = r#"{"catalog_item_id":"item_1","title":"Item one","market_summary":null}"#;
+                    let mut answered: Option<std::time::Instant> = None;
+                    // Until the client closes the connection.
+                    while matches!(socket.peek(&mut [0]), Ok(1)) {
+                        if answered.is_some_and(|at| at.elapsed() >= API_KEEP_ALIVE) {
+                            return log.lock().unwrap().push(Seen::ClosedIdle);
+                        }
+                        let mut head = Vec::new();
+                        while !head.ends_with(b"\r\n\r\n") {
+                            let mut byte = [0];
+                            socket.read_exact(&mut byte).unwrap();
+                            head.push(byte[0]);
+                        }
+                        let length = body.len();
+                        let answer = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {length}\r\nkeep-alive: timeout=5\r\n\r\n{body}"
+                        );
+                        socket.write_all(answer.as_bytes()).unwrap();
+                        answered = Some(std::time::Instant::now());
+                        log.lock().unwrap().push(Seen::Answered);
+                    }
+                });
+            }
+        });
+        (at, seen)
+    }
+
+    /// An item page read after its connection to the item API sat idle past the API's keep-alive
+    /// opens a new connection and asks once, instead of writing to the connection the API closes
+    /// and failing the page (`source::UPSTREAM_IDLE`).
+    #[tokio::test]
+    async fn an_item_page_after_the_apis_keep_alive_does_not_reuse_its_closed_connection() {
+        assert!(crate::source::UPSTREAM_IDLE < API_KEEP_ALIVE);
+        let (at, seen) = closing_api();
+        let keys = Keys { partners: Partners::parse("dev=dev-key"), agents: "dev-token" };
+        let app = super::app_with(Source::api(&at), keys, WRITES_PER_MINUTE).test();
+        let item = items::Item { id: "item_1", view: ItemQuery { offers: None } };
+        assert_eq!(app.get(&item).await.status(), StatusCode::OK);
+        tokio::time::sleep(API_KEEP_ALIVE + std::time::Duration::from_millis(250)).await;
+        let status = app.get(&item).await.status();
+        let seen = seen.lock().unwrap();
+        assert_eq!((status, &seen[..]), (StatusCode::OK, &[Seen::Answered, Seen::Answered][..]));
+    }
+
     /// The alert form on `item`, posted from the page: the title, the address and the price.
     fn alert<'c>(app: &'c App, item: &items::Item, title: &str, price: &str) -> Call<'c, FormBody> {
         let f = AlertInput::FIELDS;

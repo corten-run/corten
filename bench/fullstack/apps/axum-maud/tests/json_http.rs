@@ -469,20 +469,23 @@ fn serve_until_idle(mut socket: std::net::TcpStream, connection: usize, bodies: 
     }
 }
 
-/// A catalog page and a marketplace item whose upstream connections sat idle past the fixtures'
-/// keep-alive are answered from new connections with one upstream request each, not failed with a
-/// 502 (#1570). A client that keeps idle connections for reqwest's default 90 seconds, sending at
-/// the same moment, shows the upstream does close the reused connection.
+/// A catalog page, a marketplace item and an item page whose upstream connections sat idle past
+/// the upstreams' keep-alive are answered from new connections with one upstream request each, not
+/// failed with a 502 (#1570). The item API (`bench/fullstack/item-api/server.mjs`) is Node's HTTP
+/// server too, with the same 5 s. A client that keeps idle connections for reqwest's default 90
+/// seconds, sending at the same moment, shows the upstream does close the reused connection.
 #[tokio::test]
 async fn api_reads_after_the_upstream_s_keep_alive_do_not_reuse_its_closed_connections() {
     let upstream = ClosingUpstream::start(vec![
         ("/catalog/", expected("catalog").to_string()),
         ("/marketplace/", expected("marketplace").to_string()),
+        ("/api/discovery/items/", r#"{"catalog_item_id":"item_1","title":"Item one","description":"An item"}"#.to_string()),
     ]);
     let app = App::start(Some(&upstream.at)).await;
     let reads = [
         ("/catalog/record_1", "GET /catalog/records/record_1 HTTP/1.1"),
         ("/api/marketplace/item_1", "GET /marketplace/records/item_1 HTTP/1.1"),
+        ("/items/item_1", "GET /api/discovery/items/item_1 HTTP/1.1"),
     ];
     let unbounded =
         reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(10)).build().unwrap();
@@ -504,7 +507,7 @@ async fn api_reads_after_the_upstream_s_keep_alive_do_not_reuse_its_closed_conne
     };
     assert!(reused.is_err(), "the upstream did not close an idle connection: {seen:?}");
     assert_eq!(closed(upstream.connections("GET /catalog/records/control HTTP/1.1")), 1, "{seen:?}");
-    assert_eq!(statuses, [StatusCode::OK, StatusCode::OK], "sent at {sent} ms; upstream: {seen:?}");
+    assert_eq!(statuses, [StatusCode::OK; 3], "sent at {sent} ms; upstream: {seen:?}");
     for (path, line) in reads {
         assert_eq!(closed(upstream.connections(line)), 0, "{path}: {seen:?}");
         let answers = seen.iter().filter(|(_, _, s)| *s == Seen::Answered(line.into())).count();
