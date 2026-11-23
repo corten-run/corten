@@ -333,10 +333,11 @@ export async function submitAlert(page, form, javaScriptEnabled) {
       page.waitForResponse((r) => alertResponse(r, action, fields)),
       form.locator('[type="submit"]').click(),
     ]);
-    // Playwright polls a locator itself. A page without JavaScript runs no animation-frame or timer
-    // callbacks, so waitForFunction's in-page polling never re-checked a POST document first observed
-    // before the parser reached its message, and waited out the deadline: the symptom in #1251.
-    await page.locator(".marketplace__message").first().filter({ hasText: /\S/ }).waitFor({ state: "attached" });
+    // The original predicate, re-evaluated by Playwright from outside the page. A page without JavaScript
+    // runs no animation-frame or timer callbacks, so page.waitForFunction's in-page polling never re-checked
+    // a POST document first observed before the parser reached its message, and waited out the deadline:
+    // the symptom in #1251. The locator re-resolves :root, so a new document is re-checked too.
+    await page.locator(":root").waitForFunction((root) => root.ownerDocument.querySelector(".marketplace__message")?.textContent.trim().length > 0);
     // LiveView keeps polling after its correlated save reply; that is not pending navigation.
     if (!liveView) await page.waitForLoadState("networkidle");
   } catch (error) {

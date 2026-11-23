@@ -118,9 +118,11 @@ function parityEntries(app) {
     const command = run.replaceAll("${{ matrix.app }}", app);
     const entries = [...command.matchAll(/(?:^|\s)(bench\/[^\s]+\.mjs)(?=\s|$)/g)].map(([, path]) => path);
     if (!entries.length || !condition) return entries;
-    const single = /^matrix\.app == '([^']+)'$/.exec(condition);
+    // A diagnostic that also runs after an earlier step failed: its app selection is the same.
+    const selection = /^always\(\) && (matrix\.app == '[^']+') && \((?:steps\.[\w-]+\.outcome == '(?:success|failure)'(?: \|\| )?)+\)$/.exec(condition)?.[1] ?? condition;
+    const single = /^matrix\.app == '([^']+)'$/.exec(selection);
     if (single) return single[1] === app ? entries : [];
-    const multiple = /^contains\(fromJSON\('([^']+)'\), matrix\.app\)$/.exec(condition);
+    const multiple = /^contains\(fromJSON\('([^']+)'\), matrix\.app\)$/.exec(selection);
     assert.ok(multiple, "trace new parity condition: " + condition);
     return JSON.parse(multiple[1]).includes(app) ? entries : [];
   }))];
