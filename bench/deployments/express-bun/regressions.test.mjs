@@ -9,6 +9,7 @@ import { checkoutIdentity, assertCheckoutUnchanged, verifyFixes } from "./verify
 import { upstream, checkHttp, fixtureIndependent, read } from "./checks.mjs";
 import { records as catalogRecords } from "../../catalog/fixtures.mjs";
 import { records as marketplaceRecords } from "../../marketplace/fixtures.mjs";
+import { fixtureGitEnv } from "../../../scripts/fixture-git.mjs";
 
 test("fixture JSON checks reject API relays, including fallback after upstream failure", async (t) => {
   const records = { catalog: catalogRecords(), marketplace: marketplaceRecords() };
@@ -71,7 +72,7 @@ test("command stream artifacts retain full stdout and stderr separately", async 
 test("receipt binds clean committed harness/oracle bytes and rejects changes after execution", () => {
   mkdirSync(join(here, "work"), { recursive: true });
   const base = mkdtempSync(join(here, "work/receipt-"));
-  const git = (...args) => execFileSync("git", args, { cwd: base, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const git = (...args) => execFileSync("git", args, { cwd: base, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv() }).trim();
   const verifier = "bench/deployments/express-bun/verify-fixes.mjs", oracle = "bench/workloads/json-check.mjs";
   try {
     git("init", "-q");

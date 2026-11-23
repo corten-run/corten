@@ -11,6 +11,7 @@ import { ownedContainerRecorder, ownedCleanupObservation, verifyOwnedCleanup, ow
 import { budgets, parseArgs } from "./plan.mjs";
 import { buildNativeImage, committedInputs, digest, readyScript, savedFiles, verifyOwnedReceipts, verifyContainerLimit } from "./evidence.mjs";
 import { nativeBuildContext } from "../mixed-production/build-context.mjs";
+import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 
 test("actual cached Docker build, charged worker lifetime and final cleanup replay", { skip: process.env.HARDENING_OS_PROOF !== "1", timeout: 120000 }, async () => {
   const folder = mkdtempSync(join(tmpdir(), "hardening-os-proof-")), repository = join(folder, "git"), result = join(folder, "saved");
@@ -21,7 +22,7 @@ test("actual cached Docker build, charged worker lifetime and final cleanup repl
   mkdirSync(repository); mkdirSync(result);
   const execute = (binary, args, options = {}) => {
     const row = spawnSync(binary, args, { cwd: repository, input: options.input, windowsHide: true, timeout: Math.min(options.timeout ?? 20000, 60000),
-      maxBuffer: 8 * 1024 ** 2, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" } });
+      maxBuffer: 8 * 1024 ** 2, env: fixtureGitEnv({ GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" }) });
     if (options.receipt) Object.assign(options.receipt, { exitCode: row.status, timedOut: row.error?.code === "ETIMEDOUT", interrupted: !!row.signal });
     assert.equal(row.error, undefined, `${binary} command unavailable`);
     if (row.status !== 0) throw Object.assign(new Error(`${binary} ${args.slice(0, 2).join(" ")} failed`), {

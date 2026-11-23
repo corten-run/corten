@@ -11,6 +11,7 @@ import { selectedApps } from "../workloads/registry.mjs";
 import { validateSaved, snapshot } from "./verify.mjs";
 import { vendorConfiguration } from "./build.mjs";
 import { artifactProfile, replayToolIdentity } from "./verify-v2.mjs";
+import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 import { captureExecutable, executableBytes } from "./launch.mjs";
 
 // All fixtures here are collector unit inputs, NOT saved native framework evidence.
@@ -40,7 +41,7 @@ test("source before/after saves real bytes, commit, binary diff and clean observ
   const f = await fixture(t);
   await f.write(".gitignore", "saved/\n"); await f.write("bench/client-heavy/probe.mjs", "// Collector unit fixture\n");
   await f.write("Cargo.toml", "# Collector unit fixture\n");
-  const git = (...args) => execFileSync("git", args, { cwd: f.root, stdio: ["ignore", "pipe", "pipe"] });
+  const git = (...args) => execFileSync("git", args, { cwd: f.root, stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv() });
   git("init", "--quiet"); git("add", ".gitignore", "Cargo.toml", "bench/client-heavy/probe.mjs");
   await mkdir(join(f.root, "hooks"));
   git("-c", "user.name=Collector unit fixture", "-c", "user.email=unit@example.invalid", "-c", "commit.gpgsign=false",

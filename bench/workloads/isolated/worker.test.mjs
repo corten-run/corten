@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { inside } from "./evidence.mjs";
+import { fixtureGitEnv } from "../../../scripts/fixture-git.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 for (const phase of ["ownership", "validation", "unsafe", "unsupported"]) test(`fake native worker ${phase} in a disposable clean checkout`, { timeout: 600000 }, async () => {
@@ -19,7 +20,7 @@ for (const phase of ["ownership", "validation", "unsafe", "unsupported"]) test(`
       JSON.parse(readFileSync(join(checkout, "package.json"), "utf8")).devDependencies.semver, "fixture semver must match the committed pin");
     let output = "";
     const child = spawn(process.execPath, [join(checkout, "bench/workloads/isolated/test-fixtures/worker.mjs"), phase], {
-      cwd: checkout, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: false,
+      cwd: checkout, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: false, env: fixtureGitEnv(),
     });
     const timeout = setTimeout(() => child.kill("SIGKILL"), 540000);
     for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => { output += chunk; });

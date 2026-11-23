@@ -6,12 +6,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { cited, unresolved } from "./design-refs.mjs";
+import { fixtureGitEnv } from "./fixture-git.mjs";
 
 const git = (/** @type {string} */ cwd, /** @type {string[]} */ args) =>
   execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...args], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    env: fixtureGitEnv(),
   }).trim();
 /** A commit on the tree of HEAD, its parent, made by no branch. @param {string} repo @param {string} message */
 const loose = (repo, message) => git(repo, ["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", message]);

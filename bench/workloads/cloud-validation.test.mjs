@@ -10,10 +10,11 @@ import test from "node:test";
 import { harness } from "./cloud-fixtures.mjs";
 import { inspectCampaign, validationLimit, validationStopLimit } from "./cloud-validation.mjs";
 import { captureValidation, localCompiler, validationPaths, validationTask, typescriptPath, semverIntegrity, semverSources } from "./cloud-validation-snapshot.mjs";
+import { fixtureGitEnv } from "../../scripts/fixture-git.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 function git(root, ...args) {
-  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", timeout: 5000, windowsHide: true });
+  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", timeout: 5000, windowsHide: true, env: fixtureGitEnv() });
   assert.equal(result.status, 0, "synthetic local Git operation failed"); return result.stdout.trim();
 }
 // The bench package's classic compiler (npm --prefix bench ci), linked, never copied or altered.

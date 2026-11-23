@@ -10,6 +10,7 @@ import { parse } from "yaml";
 import { teardownReserve } from "../bench/marketplace/alert-probe-run.mjs";
 import { sourceRoots } from "../bench/workloads/isolated/contract.mjs";
 import { eventPaths, selectEvidence, selectKernel, selectScope } from "./benchmark-scope.mjs";
+import { fixtureGitEnv } from "./fixture-git.mjs";
 
 const root = new URL("../", import.meta.url);
 const workflow = parse(readFileSync(new URL(".github/workflows/catalog.yml", root), "utf8"));
@@ -305,7 +306,7 @@ function fixture(t) {
   const git = (...args) => execFileSync("git", [
     "-c", "core.autocrlf=false", "-c", "user.name=Catalog Fixture", "-c", "user.email=fixture@example.invalid",
     "-c", "commit.gpgsign=false", ...args,
-  ], { cwd, encoding: "utf8" }).trim();
+  ], { cwd, encoding: "utf8", env: fixtureGitEnv() }).trim();
   git("init", "-q", "-b", "main");
   const write = (path, text = "fixture\n") => {
     const file = join(cwd, path);

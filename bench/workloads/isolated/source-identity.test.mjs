@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { fixtureGitEnv } from "../../../scripts/fixture-git.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 test("private replacement refs plus hidden matching working bytes cannot bind another source to current HEAD", { timeout: 300000 }, () => {
@@ -12,8 +13,10 @@ test("private replacement refs plus hidden matching working bytes cannot bind an
   const git = (args) => execFileSync("git", args, { cwd: repo, windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   try {
     // Replacement refs are repository-wide: never create them in a shared worktree.
-    git(["clone", "--shared", "--no-checkout", "--no-hardlinks", repo, checkout]);
-    execFileSync("git", ["checkout", "--detach", git(["rev-parse", "HEAD"])], { cwd: checkout, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const source = git(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    execFileSync("git", ["clone", "--shared", "--no-checkout", "--no-hardlinks", source, checkout],
+      { cwd: temporary, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv() });
+    execFileSync("git", ["checkout", "--detach", git(["rev-parse", "HEAD"])], { cwd: checkout, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: fixtureGitEnv() });
     cpSync(join(repo, "node_modules/semver"), join(checkout, "node_modules/semver"), { recursive: true, errorOnExist: true, force: false });
     assert.equal(JSON.parse(readFileSync(join(checkout, "node_modules/semver/package.json"), "utf8")).version,
       JSON.parse(readFileSync(join(checkout, "package.json"), "utf8")).devDependencies.semver, "fixture semver must match the committed pin");
@@ -39,7 +42,7 @@ test("private replacement refs plus hidden matching working bytes cannot bind an
           boundOriginal:actual===crypto.createHash('sha256').update(canonical).digest('hex'),
           poisoned:actual===crypto.createHash('sha256').update(bytes).digest('hex')}));
       } finally {fs.writeFileSync(file,original);git(['update-index','--no-assume-unchanged',file]);git(['replace','-d',blob]);}
-    `], { cwd: checkout, windowsHide: true, encoding: "utf8", timeout: 240000, maxBuffer: 1024 * 1024 });
+    `], { cwd: checkout, windowsHide: true, encoding: "utf8", timeout: 240000, maxBuffer: 1024 * 1024, env: fixtureGitEnv() });
     assert.deepEqual(JSON.parse(output.trim()), { clean: true, workingRejected: true, boundOriginal: true, poisoned: false });
   } finally {
     assert.ok(resolve(temporary).startsWith(`${resolve(tmpdir())}\\`) || resolve(temporary).startsWith(`${resolve(tmpdir())}/`));
