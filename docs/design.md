@@ -8416,7 +8416,8 @@ rules something out.
     The CPU-win rule in Pull requests decides wins as before. Nor does a floor apply to a workload
     read across placements ([design Choice 72](#choice-placement-runs)), whose own A/A says what
     the run resolves; this Choice's floor and its calibration are for single-build runs, whose
-    protocol that Choice leaves as it was.
+    protocol that Choice leaves as it was except for a touched workload with a recorded placement
+    spread, where a single-build bound inside the spread no longer decides it.
 
     The runs: one host with nothing else running (Debian 13, Linux 6.12.117, rustc 1.100.0 with LLD
     23.1.5 and the repository's release profile, jemalloc 5.3.0 preloaded), every binary built there
@@ -8522,7 +8523,8 @@ rules something out.
     which a later calibration records with the rest.
 
 72. <a id="choice-placement-runs"></a>**A touched workload may be read across placements the run's
-    plan declares, each side compiled once and relinked with a shuffled function order.** The
+    plan declares, each side compiled once and relinked with a never-called pad of a declared size
+    first in its code, and must be when a single build lands inside the placement spread.** The
     paired-cycle gate reads one build of each side
     ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2), and one build's placement moves a
     touched request's cycles by more than its +1% margin:
@@ -8538,16 +8540,32 @@ rules something out.
     touched workload can cost cycles on flat instructions. So a run's plan may declare, before the
     run, that a touched workload is read across placements, and the gate then reads it as Pull
     requests says: each side compiled once; K placements of it from its captured final link run
-    again with LLD's `--shuffle-sections=.text*=<seed>`, the seeds listed in the plan; R recorded
-    pairs per placement after one that is not, every turn on a fresh start; per placement the median
-    of its per-pair changes in user plus kernel cycles per request; across placements the median of
-    the K medians and its distribution-free one-sided 95% upper bound, the j-th smallest with j the
-    smallest rank whose binomial tail is at most 5% (the 20th of 30); and main against main across
-    placements with distinct seeds, read the same way, as what the run can resolve. A bound under
-    +1% with a resolved A/A meets the margin; an A/A at or above +1% is not resolved, which does not
-    pass. A single-build run stays valid and binding where its plan chose it, so a run declared
-    after a miss cannot clear it, and the benefit side may use the protocol when the plan declares
-    it and its smallest worthwhile reduction before the run.
+    again with one more object, a function of p bytes that nothing calls, placed first in `.text`
+    by `-Wl,--symbol-ordering-file`, so every other function moves by p in the default order with
+    its neighbours, the sizes listed in the plan and spread across the phases of a 64-byte line and
+    a 4 KiB page up to about 40,000 bytes, as #1955's blocks were; base with pad p_i against head
+    with pad p_i; R recorded pairs per placement after one that is not, every turn on a fresh
+    start; per placement the median of its per-pair changes in user plus kernel cycles per
+    request; across placements the median of the K medians and its distribution-free one-sided
+    95% upper bound, the j-th smallest with j the smallest rank whose binomial tail is at most 5%
+    (the 20th of 30); and main with pad p_i against main with pad q_i from a second list, read the
+    same way, as what the run can resolve. A bound under +1% with a resolved A/A meets the margin;
+    an A/A at or above +1% is not resolved, which does not pass. The benefit side may use the
+    protocol when the plan declares it and its smallest worthwhile reduction before the run.
+
+    When it is required. A placement run costs about two hours of a c-8 for one workload's change
+    and A/A beside an A/A on `plain`, against about 35 minutes for three single-build comparisons
+    of 100 pairs ([design Choice 71](#choice-layout-floor)'s runs), so it is not the rule for every
+    change. Each placement run's A/A records the workload's
+    placement spread here, its lowest and highest placement median. A single-build bound that,
+    less +1%, lands inside that spread does not decide the workload, a pass as much as a miss,
+    since the build's own placement could account for the whole distance to the margin either way;
+    the pull request reads that workload across placements, under a plan written before that run.
+    A single-build bound outside the spread, or on a workload with no recorded spread, is the
+    reading, and a placement run declared after it does not clear its miss. So a change whose
+    single-build reading no placement could flip keeps the cheaper run. Recorded spreads:
+    TODO(evidence: `plain` and `kept` from the first run's A/As, lowest and highest placement
+    median, with the run's commit and host).
 
     What ships is one placement. A release binary is one draw of where the linker put the code, and
     the next change to anything before a function moves it again, so the placement a change lands in
@@ -8556,74 +8574,93 @@ rules something out.
     that ships pays for its placement stays a cost no check here measures:
     [design Choice 71](#choice-layout-floor) says so for its controls, and this Choice does not add
     a release-against-release check, which would need its own A/A across placements of two releases
-    and is a separate question. Base and head under one seed are two placements, not one: they hold
-    different functions, so LLD's shuffle of their sections is a different permutation, and the same
-    seed is a pairing declared before the run, not a shared layout. The A/A's distinct seeds model
-    exactly that.
+    and is a separate question. Base and head with one pad are not one layout: they hold different
+    code, so the same pad is the same offset applied to each side's own default layout, which is
+    what a pull request's two builds are, and the A/A's two lists of sizes give main's two sides
+    placement differences of the same kind. One run also reads main's unpadded build against eight
+    of its padded ones, a diagnostic of where the build that ships sits among them.
 
     The kit for the first run is TODO(evidence: the receipt commit or tag of kit 1965, with its
     `margin.md`, scripts and results). Before any turn it checks that each side's captured link run
-    again unshuffled is byte-identical to cargo's binary, that every placement has exactly that
-    binary's function symbols with some moved and a SHA-256 of its own, that one seed relinked twice
-    is one binary, and that every placement answers `GET /private` and the kept `GET /page` as its
-    unshuffled binary does (status, headers but `Date`, body). In a local container dry run at
-    `a02c81e86` with rustc 1.100.0 (no counters, so no timing), each side's unshuffled relink was
-    byte-identical to cargo's binary, 20 placements (five seeds each for main's two sides, base and
-    head) were relinked and checked in 15 seconds, all 23 binaries had distinct SHA-256s, seed 1
-    relinked twice gave one binary, and all 20 answered as their unshuffled binary. In seed 1's
-    placement of main every one of the 3,404 functions moved, 793 kept their offset in a 64-byte
-    line, and of 3,335 pairs of functions next to each other in the unshuffled binary 5 were still
-    neighbours: the shuffle undoes nearly all of the default order's adjacency. On a c-8:
-    TODO(evidence: CPU model and kernel; for `aa-plain`, `aa-kept` and `change-kept`, the median of
-    placement medians, the bound, the range of medians, the t bound, and the between- and
-    within-placement spread; whether each A/A resolved; the change's reading; the run's time).
+    again without a pad is byte-identical to cargo's binary; that every placement has exactly that
+    binary's function symbols and the pad, the pad at the start of `.text`, every function moved,
+    every pair of neighbours still next to each other in order and a SHA-256 of its own; that one
+    pad relinked twice is one binary; and that every placement answers `GET /private` and the kept
+    `GET /page` as its unpadded binary does (status, headers but `Date`, body). In a local
+    container dry run at `a02c81e86` with rustc 1.100.0 and LLD 23.1.5 (no counters, so no timing),
+    each side's relink without a pad was byte-identical to cargo's binary, each side's compile gave
+    the same SHA-256 as an earlier one, and 20 placements (five pads each for main's two sides,
+    base and head) were relinked and checked in 24 seconds. In all 20 every function moved
+    by exactly its pad (68,060 of 68,060) and every pair of neighbours stayed next to each other in
+    order (66,680 of 66,680; on main 3,335 of 3,335 at every pad), the sections after `.text`
+    (`.data`, `.got`, `.bss` and the rest) moved by the pad as well, all 23 binaries had distinct
+    SHA-256s, one pad relinked twice gave one binary, and all 20 answered as their unpadded binary. On a c-8: TODO(evidence: CPU
+    model and kernel; for `aa-plain`, `aa-kept` and `change-kept`, the median of placement
+    medians, the bound, the range of medians, the t bound, and the between- and within-placement
+    spread; whether each A/A resolved; the change's reading; the unpadded diagnostic; the run's
+    time).
 
-    Not chosen: placements from source pads, a block of declared sizes no request runs, as
+    Not chosen: a seeded shuffle of the function order (LLD's `--shuffle-sections`, this Choice's
+    first version), since in the dry run's placement of main with seed 1 all 3,404 functions moved,
+    793 kept their offset in a 64-byte line and 5 of 3,335 pairs of neighbours stayed next to each
+    other: it replaces the default order no real build changes, could make every placement slower
+    than a real build in a way an A/A cannot see (both sides pay it), and gives base and head with
+    one seed different permutations; placements from source pads, a block of declared sizes in the
+    source, as
     [#1965 The cycle gate reads one build, and one build's placement moves a touched request's cycles by up to 4% either way](https://github.com/corten-run/corten/issues/1965)
     proposed and that pull request's run did, since each pad is a separate compile of each side,
-    about three minutes a build on a c-8 where a relink and its checks took under a second in the
-    dry run, and a pad shifts every function after it by one offset and keeps their order, where a
-    shuffle reorders them, which varies more of what placement decides (which functions share a
-    cache line, a page, a branch predictor's slot); the mean across placements with a Student t
-    bound as the gate's statistic, which assumes the placement medians are near normal, which
-    nothing measured shows, and lets one unlucky placement move the bound as far as it is from the
-    rest (reported as a diagnostic); more pairs on one build, since more pairs narrow the bound
-    around that build's own placement offset, not toward the change
+    about two minutes a build where a relink and its checks take about a second, and a pad in the
+    source moves only what follows it, by an amount inlining and alignment decide, where one at the
+    start of `.text` moves every function by exactly its size; the protocol for every change, at
+    more than three times a single-build run's cost, for readings no placement could flip as well
+    as those it could; a placement run only after a single-build miss, which reads a
+    miss again and never a pass, though a lucky placement passes a real cost as easily as an
+    unlucky one blocks a free change; the mean across placements with a Student t bound as the
+    gate's statistic, which assumes the placement medians are near normal, which nothing measured
+    shows, and lets one unlucky placement move the bound as far as it is from the rest (reported
+    as a diagnostic); more pairs on one build, since more pairs narrow the bound around that
+    build's own placement offset, not toward the change
     ([design Choice 71](#choice-layout-floor)'s measured +1.16% offset on an A/A); builds that pin
     placement, by function alignment or a fixed link order, which gate a binary no app builds and
     leave the change's cost at the pinned placement alone; gating the release binary instead,
-    against the previous release, which measures every change since that release together and cannot
-    attribute a cost to one pull request; and a recorded A/A reused across runs, since the run's own
-    A/A is what says its host and protocol resolve +1%.
+    against the previous release, which measures every change since that release together and
+    cannot attribute a cost to one pull request; and a recorded A/A reused across runs, since the
+    run's own A/A is what says its host and protocol resolve +1%.
 
     Stands on: measured (the five pad builds of each side of that pull request above and main
     against main with the same pads, one run on two cloud machines, one start a placement, recorded
-    in [design Choice 70](#choice-kept-pages); and the first placement run, TODO(evidence));
-    platform (LLD's `--shuffle-sections` reorders the input sections a glob matches by a seeded
-    shuffle, the same seed and inputs giving the same output, and rustc 1.100.0 puts each function
-    in its own `.text` section and links through LLD 23 on Linux by default); reasoned (a release
-    binary's placement moves with every later change, so a change's cost is read across placements,
-    not at one; a shuffle of the same objects changes placement alone, as the byte-identical answers
-    and the unchanged symbol set check; and the order statistic's coverage holds for any
-    distribution of placement medians); bet (a seeded shuffle varies placement about as real changes
-    do, or more, so an A/A that resolves under it resolves the placements real builds land in; a
-    shuffle that wrecks locality the default order keeps could make every placement slower than a
-    real build, which an A/A cannot see, since both sides pay it); value (Fast, and proven fast: a
-    touched request's cost is read from the change, not from where one build put it; Verified, not
-    assumed: the run's own A/A says whether it can resolve +1%, and a run that cannot does not pass,
-    README Values).
+    in [design Choice 70](#choice-kept-pages); the dry run's layouts above; and the first placement
+    run, TODO(evidence)); platform (LLD places the sections of the symbols an ordering file names
+    first in their output section and the rest in their default order, rustc 1.100.0 puts each
+    function in its own `.text` section, aligns them to 16 bytes and links through LLD 23 on Linux
+    by default, so a pad of a multiple of 16 bytes moves every function by exactly its size);
+    reasoned (a release binary's placement moves with every later change, so a change's cost is
+    read across placements, not at one; relinking the same objects with a pad changes placement
+    alone, as the byte-identical answers, the unchanged symbol set and the kept neighbours check;
+    a bound inside the spread is one placement could move across the margin, and one outside it is
+    not; and the order statistic's coverage holds for any distribution of placement medians); bet
+    (moving the whole of the code by declared offsets varies placement about as much as real
+    changes do, though a real change moves only the code after it and by sizes no plan chose, so
+    two functions' distance apart, which a pad keeps, can change too; an A/A that resolves under
+    pads may understate a spread that comes from that); value (Fast, and proven fast: a touched
+    request's cost is read from the change, not from where one build put it; Verified, not
+    assumed: the run's own A/A says whether it can resolve +1%, and a run that cannot does not
+    pass, README Values).
 
     Revisit when: the first run's A/A on a workload does not resolve +1% at K = 30, which asks for
-    more placements, a narrower shuffle or another reading; a placement run's change and a
-    single-build run on the same commits disagree past their bounds often enough to show the
-    shuffle's placements are not those real builds land in; the median over shuffled placements sits
-    clearly above or below unshuffled builds of the same objects, so the shuffle moves cost as well
-    as spreading it; rustc stops emitting a section per function, or the gate's linker is not LLD; a
-    run's time across placements falls to a single-build run's, so the protocol could be the rule
-    rather than an option; or the release binary's own placement is asked to be checked.
+    more placements or pairs, or another reading; a placement run's change and a single-build run
+    on the same commits disagree past their bounds often enough to show the pads' placements are not
+    those real builds land in, or that two functions' distance apart matters; the unpadded build
+    sits clearly above or below its padded ones, so the pads move cost as well as spreading it;
+    rustc stops emitting a section per function or aligning functions to 16 bytes, the gate's
+    linker is not LLD, or LLD stops placing an ordering file's sections first; a recorded spread
+    is so wide that most single-build readings land inside it, so the protocol is the rule in
+    practice, or so narrow that none do; a run's time across placements falls to a single-build
+    run's, so the protocol could be the rule rather than an option; or the release binary's own
+    placement is asked to be checked.
 
     Last checked: 2026-11-23, the dry run of kit 1965 at `a02c81e86` in a Debian 13 container with
-    rustc 1.100.0, and TODO(evidence: the droplet run's date, commit and versions).
+    rustc 1.100.0 and LLD 23.1.5, and TODO(evidence: the droplet run's date, commit and versions).
 
 ## Rules
 
