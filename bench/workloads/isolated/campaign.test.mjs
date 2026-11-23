@@ -330,7 +330,7 @@ async function offlineCampaign(t, group, packets = 2) {
   assert.equal(result.status, 0, result.stderr);
   const { binding, admission } = JSON.parse(result.stdout), s = setupGroup(group);
   s.plan.round = "r21"; admittedHost = admission.host; offlineTest = true;
-  auditClock = { bootId: admittedHost.bootId, monoNs: "5000000" };
+  auditClock = { bootId: admittedHost.bootId, monoNs: admission.closedMonoNs };
   s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2" }, load: { cpuset: "3-7" } };
   const table = "corten_bench_native", tcpMatch = { match: { op: "==", left: { payload: { protocol: "tcp", field: "dport" } }, right: 22 } };
   const policy = { nftables: [
@@ -423,8 +423,15 @@ test("offline timed phase with zero denied probes remains eligible for ordinary 
   assert.deepEqual(saved.offlineIngress, [{ group: "localized-marketplace", phase: "timing", packets: 0, bytes: 0 }]);
 });
 
+test("offline audit cannot start before the guest has closed bootstrap", async (t) => {
+  const { campaign, handle, admission } = await offlineCampaign(t, "mixed-production");
+  auditClock.monoNs = String(BigInt(admission.closedMonoNs) - 1n);
+  await assert.rejects(campaign.advance(handle), /audit wait predates bootstrap closure/);
+  assert.equal(campaign.status(handle).state, "preserved-uncertain");
+});
+
 for (const group of ["json-api", "mixed-production"]) test("offline audit expiry seals only the pre-timing evidence: " + group, async (t) => {
-  const { campaign, handle, collection, validate } = await offlineCampaign(t, group);
+  const { campaign, handle, collection, validate, admission } = await offlineCampaign(t, group);
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-22T00:00:00Z") });
   const waiting = await campaign.advance(handle);
   assert.equal(waiting.state, "blocked-review-needed", "untimed preparation may see denied probes");
@@ -455,10 +462,12 @@ for (const group of ["json-api", "mixed-production"]) test("offline audit expiry
   assert.deepEqual(result.offlineAuditExpired, { group, subjectSha256: group === "json-api" ? waiting.auditSubjectSha256 : waiting.mixedAuditSubjectSha256 });
   assert.deepEqual(result.offlineIngress, group === "json-api" ? [{ group, phase: "prepare", packets: 2, bytes: 120 }] : []);
   const retained = JSON.parse(readFileSync(collection));
+  const { deploymentSha256 } = await import("../deployments.mjs");
   const reseal = () => {
     const entries = evidence.tree(handle.directory).entries.filter(({ path }) => path !== "collection-manifest.json");
-    writeFileSync(collection, JSON.stringify({ ...retained, manifest: { entries, sha256: evidence.digest(JSON.stringify(entries)) } }));
+    writeFileSync(collection, JSON.stringify({ ...retained, manifest: { entries, sha256: deploymentSha256(entries) } }));
   };
+  reseal(); assert.equal((await validate()).status, "blocked", "control: an unchanged archive survives resealing");
   writeFileSync(inbox, "{}"); reseal();
   assert.equal((await validate()).status, "invalid", "rehashing cannot excuse an unsettled audit delivery");
   fs.unlinkSync(inbox);
@@ -477,6 +486,11 @@ for (const group of ["json-api", "mixed-production"]) test("offline audit expiry
   writeFileSync(waitPath, JSON.stringify(wait));
   reseal();
   assert.equal((await validate()).status, "invalid", "two samples on a different boot cannot qualify the admitted host");
+  const beforeBootstrap = BigInt(admission.closedMonoNs) - 1n;
+  wait.auditClock = { bootId, monoNs: String(beforeBootstrap) };
+  terminal.auditClock = { bootId, monoNs: String(beforeBootstrap + BigInt(contracts.auditWaitMs) * 1000000n) };
+  writeFileSync(waitPath, JSON.stringify(wait)); writeFileSync(expiryPath, JSON.stringify(terminal)); reseal();
+  assert.equal((await validate()).status, "invalid", "the full wait must begin after bootstrap has closed");
 });
 
 test("v5 browser campaign carries the native roles through streamed bookends and saved drain replay", async (t) => {

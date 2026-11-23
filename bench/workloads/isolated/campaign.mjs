@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { validateCampaign, freeze, jsonPhase, mixedPhase, offlineAuditRemainingMs, verifyOfflineAuditClock } from "./campaign-contract.mjs";
+import { validateCampaign, freeze, jsonPhase, mixedPhase, offlineAuditRemainingMs, verifyOfflineAuditStart } from "./campaign-contract.mjs";
 import { verifyWorkingSources } from "./worker.mjs";
 import { copyEvidence, digest, durable, inside, phaseSnapshot, physical, publishDurable, readRegular, syncDirectory, transferEvidence, tree } from "./evidence.mjs";
 import { supervise } from "./process.mjs";
@@ -55,13 +55,13 @@ export function createCampaign({ authorize }) {
   }
   function waitForAudit(c, kind, data) {
     const auditClock = c.offlineHandoff ? sampleAuditClock() : undefined;
-    if (c.offlineHandoff) verifyOfflineAuditClock(auditClock, c.offlineBootId);
+    if (c.offlineHandoff) verifyOfflineAuditStart(auditClock, c.offlineBootstrap);
     c.state = "blocked-review-needed";
     c.reviewWait = event(c, kind, { ...data, ...(auditClock ? { auditClock } : {}) });
   }
   function remainingAuditMs(c, now) {
     assert.ok(c?.offlineHandoff && !c.busy && c.state === "blocked-review-needed" && c.reviewWait);
-    return offlineAuditRemainingMs(c.reviewWait.auditClock, now, c.offlineBootId);
+    return offlineAuditRemainingMs(c.reviewWait.auditClock, now, c.offlineBootstrap.host.bootId);
   }
   function verifyPhases(c) {
     own(c.handle);
@@ -283,7 +283,7 @@ export function createCampaign({ authorize }) {
         if (control?.admission.apparatus) assert.ok(c.stream, "presealed apparatus requires independent lease enforcement");
         const observed = observeHost(c.stream?.registration); save(c, "host-initial.json", observed);
         if (control) for (const field of ["hostname", "bootId"]) assert.equal(observed[field], control.admission.host[field]);
-        if (c.offlineHandoff) c.offlineBootId = control.admission.host.bootId;
+        if (c.offlineHandoff) c.offlineBootstrap = control.admission;
         assert.deepEqual(observed.containers, [], "fresh campaign host has preexisting containers");
         event(c, "started"); return handle;
       } catch (error) { halt(c, error); throw error; }

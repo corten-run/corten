@@ -2,7 +2,7 @@
 // provider ownership, operator authorization or independent human attestation.
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { campaignRounds, exact, groupCampaignSchema, jsonPhase, mixedPhase, validateCampaign as validatePlan, verifyOfflineAuditClock } from "./campaign-contract.mjs";
+import { campaignRounds, exact, groupCampaignSchema, jsonPhase, mixedPhase, validateCampaign as validatePlan, verifyOfflineAuditStart } from "./campaign-contract.mjs";
 import { digest, inspectEvidence, phaseSnapshot, readRegular, supportedGroups, tree } from "./evidence.mjs";
 import { auditSubject, inspectPreparation, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
@@ -63,7 +63,7 @@ export async function validateCampaign(input) {
       journal.push(event);
     }
     const replay = replayJournal(plan, id, journal, status);
-    let controlHost, apparatus, streamSeal, supervisedTerminal, offlineTerminal, bootstrapSealSha256;
+    let controlHost, apparatus, streamSeal, supervisedTerminal, offlineTerminal, offlineBootstrap;
     for (const [epoch, event] of replay.controlAdmissions) {
       const bytes = readRegular(join(folder, id, event.path)); assert.equal(digest(bytes), event.sha256);
       const admission = JSON.parse(bytes);
@@ -75,7 +75,7 @@ export async function validateCampaign(input) {
         assert.equal(digest(delivery), admission.intent.sha256); assert.equal(delivery.length, admission.intent.bytes); continue;
       }
       verifyControlAdmission(event.binding, epoch, admission);
-      if (offline && epoch === "bootstrap") bootstrapSealSha256 = digest(JSON.stringify(admission.seal.ledger));
+      if (offline && epoch === "bootstrap") offlineBootstrap = admission;
       if (status.executionVersion === 5) { assert.equal(epoch, "bootstrap"); assert.ok(admission.apparatus); apparatus = admission.apparatus; }
       else assert.equal(admission.apparatus, undefined, "legacy execution cannot claim supervised apparatus");
       if (controlHost) assert.deepEqual(admission.host, controlHost);
@@ -95,10 +95,11 @@ export async function validateCampaign(input) {
       for (const field of ["hostname", "bootId"]) assert.equal(initial[field], controlHost[field]);
     }
     if (offline) for (const wait of [replay.reviewNeeded, replay.mixedReviewNeeded])
-      if (wait) verifyOfflineAuditClock(wait.auditClock, controlHost?.bootId);
+      if (wait) verifyOfflineAuditStart(wait.auditClock, offlineBootstrap);
     if (offline && (status.state === "finished" || replay.offlineAuditExpired)) {
       assert.ok(controlHost);
-      offlineTerminal = { ...controlHost, token: replay.controlAdmissions.get("bootstrap").binding.token, bootstrapSealSha256 };
+      offlineTerminal = { ...controlHost, token: replay.controlAdmissions.get("bootstrap").binding.token,
+        bootstrapSealSha256: digest(JSON.stringify(offlineBootstrap.seal.ledger)) };
     }
     const lastEvent = read(`${id}/${events.at(-1).path}`);
     assert.ok(isDeepStrictEqual(lastEvent.status, status), "terminal journal and result disagree");

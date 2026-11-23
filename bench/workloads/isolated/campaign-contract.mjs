@@ -36,6 +36,10 @@ export function offlineAuditRemainingMs(waiting, now, bootId) {
   const remainingNs = BigInt(auditWaitMs) * 1000000n - elapsed;
   return remainingNs > 0n ? Number((remainingNs + 999999n) / 1000000n) : 0;
 }
+export function verifyOfflineAuditStart(sample, bootstrap) {
+  assert.ok(verifyOfflineAuditClock(sample, bootstrap.host.bootId) >= BigInt(bootstrap.closedMonoNs),
+    "offline audit wait predates bootstrap closure");
+}
 export { campaignRounds };
 export function bindCampaign(input) {
   exact(input, ["round", "commit"]);
