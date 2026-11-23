@@ -8066,7 +8066,7 @@ rules something out.
     this change and none on main. Callgrind counts user space, so neither the faults nor the
     thread's wake-up are in these. An eighth run is declared for the rule, its plan written before
     it runs:
-    this change's head, with main merged, against main's `14126d2a8` (declared first against
+    this change's head, with main merged, against main's `1fb2b3784` (declared first against
     `04530f7e0`, and again for the merged pair in round 18) on such a host, with every turn on a newly
     started build, 100 pairs a workload and the margin of the runs before, a one-sided 95% bound
     under +1% in user plus kernel cycles a request, on `twice` as the seventh ran it (which the rule
@@ -8095,10 +8095,16 @@ rules something out.
     acknowledgement of `disable`, sent after `wrk` has exited, and a turn without both is
     refused, so the counted interval encloses the load (round 17 of the review found the earlier
     fixed-length count did not show that). It is not the load alone: perf may count from the
-    moment it reads `enable` and until it acknowledges `disable`, so a turn is also refused
-    whose gaps pass 50 ms from `enable` sent to `wrk`'s start or from `wrk`'s end to `disable`
-    acknowledged (round 18), and what the server does in them, a job the load queued among it, is
-    counted with the load. Every timed answer must be a `200`: the scripts count any other
+    moment it reads `enable` and until it acknowledges `disable`, so the counters enclose the
+    load with bounded overhead (round 18): one driver process stamps every edge on a monotonic
+    clock (`enable` sent and acknowledged, `wrk` launched and exited, `disable` sent and
+    acknowledged), each `wrk` thread stamps its first and last answers on the same clock, and a
+    turn is refused if any of the six gaps between them, launch to first answer among them, is
+    over 50 ms, each bounded by itself with no allowance over the whole span. What the server does
+    in them, a job the load queued among it, is counted with the load. Before any deciding turn the
+    run qualifies the host: every workload's turns bracketed the same way, and turns with a stall
+    injected before, inside and after `wrk`'s launch and exit, which must be refused; the run
+    records the gaps' distribution and stops if any qualification turn passes 50 ms. Every timed answer must be a `200`: the scripts count any other
     status themselves, since `wrk` counts one as an error only above 399 (round 18). A first plan
     for this run counted the requests
     sent where it meant the jobs done, which could have let a turn with no job pass, and had no
