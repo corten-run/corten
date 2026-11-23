@@ -373,3 +373,145 @@ async fn api_json_deadline_covers_the_full_body_read() {
         assert_eq!(state.reads(payload, "recovery"), 1);
     }
 }
+
+/// How long the catalog and marketplace fixtures (`bench/catalog/upstream.mjs`,
+/// `bench/marketplace/upstream.mjs`, Node's HTTP server) say they keep an idle connection open:
+/// they answer with `Keep-Alive: timeout=5`.
+const FIXTURE_KEEP_ALIVE: Duration = Duration::from_secs(5);
+
+/// What the upstream did, in milliseconds from its start, on which of its connections.
+#[derive(Clone, Debug, PartialEq)]
+enum Seen {
+    Accepted,
+    Answered(String),
+    /// A request arrived on a connection idle this long, and the connection closed unanswered.
+    ClosedIdle(u128),
+    ClosedByClient,
+}
+
+type Log = Arc<Mutex<Vec<(u128, usize, Seen)>>>;
+
+/// The fixtures' idle close, made deterministic. A fixture closes a connection that has been idle
+/// for its keep-alive timeout; a request written to it in that instant never reaches its handler.
+/// Here every request that arrives on a connection idle for at least [`FIXTURE_KEEP_ALIVE`] meets
+/// that close: the connection is dropped with the request unread, which resets it, and nothing
+/// answers. A request on a fresh or recently used connection is answered with the body of the
+/// first `(path prefix, body)` its path starts with, and the connection kept open.
+struct ClosingUpstream {
+    at: String,
+    started: Instant,
+    seen: Log,
+}
+
+impl ClosingUpstream {
+    fn start(bodies: Vec<(&'static str, String)>) -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = format!("http://{}", listener.local_addr().unwrap());
+        let (started, seen, bodies) = (Instant::now(), Log::default(), Arc::new(bodies));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for (connection, socket) in listener.incoming().enumerate() {
+                let (log, bodies) = (log.clone(), bodies.clone());
+                std::thread::spawn(move || serve_until_idle(socket.unwrap(), connection, &bodies, started, &log));
+            }
+        });
+        Self { at, started, seen }
+    }
+
+    fn now(&self) -> u128 {
+        self.started.elapsed().as_millis()
+    }
+
+    fn seen(&self) -> Vec<(u128, usize, Seen)> {
+        self.seen.lock().unwrap().clone()
+    }
+
+    /// The connections that answered a `line` request.
+    fn connections(&self, line: &str) -> Vec<usize> {
+        let answered = Seen::Answered(line.into());
+        let mut found: Vec<usize> = self.seen().into_iter().filter_map(|(_, c, s)| (s == answered).then_some(c)).collect();
+        found.sort_unstable();
+        found.dedup();
+        found
+    }
+}
+
+fn serve_until_idle(mut socket: std::net::TcpStream, connection: usize, bodies: &[(&str, String)], started: Instant, log: &Log) {
+    use std::io::{Read, Write};
+    let record = |seen| log.lock().unwrap().push((started.elapsed().as_millis(), connection, seen));
+    record(Seen::Accepted);
+    socket.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    let mut answered: Option<Instant> = None;
+    loop {
+        if !matches!(socket.peek(&mut [0]), Ok(1)) {
+            return record(Seen::ClosedByClient);
+        }
+        if let Some(idle) = answered.map(|at| at.elapsed()).filter(|idle| *idle >= FIXTURE_KEEP_ALIVE) {
+            return record(Seen::ClosedIdle(idle.as_millis()));
+        }
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            socket.read_exact(&mut byte).unwrap();
+            head.push(byte[0]);
+        }
+        let line = String::from_utf8(head).unwrap().lines().next().unwrap().to_string();
+        let path = line.split(' ').nth(1).unwrap();
+        let body = &bodies.iter().find(|(prefix, _)| path.starts_with(prefix)).unwrap().1;
+        let length = body.len();
+        write!(
+            socket,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {length}\r\nkeep-alive: timeout=5\r\n\r\n{body}"
+        )
+        .unwrap();
+        answered = Some(Instant::now());
+        record(Seen::Answered(line));
+    }
+}
+
+/// A catalog page and a marketplace item whose upstream connections sat idle past the fixtures'
+/// keep-alive are answered from new connections with one upstream request each, not failed with a
+/// 502 (#1570). A client that keeps idle connections for reqwest's default 90 seconds, sending at
+/// the same moment, shows the upstream does close the reused connection.
+#[tokio::test]
+async fn api_reads_after_the_upstream_s_keep_alive_do_not_reuse_its_closed_connections() {
+    let upstream = ClosingUpstream::start(vec![
+        ("/catalog/", expected("catalog").to_string()),
+        ("/marketplace/", expected("marketplace").to_string()),
+    ]);
+    let app = App::start(Some(&upstream.at)).await;
+    let reads = [
+        ("/catalog/record_1", "GET /catalog/records/record_1 HTTP/1.1"),
+        ("/api/marketplace/item_1", "GET /marketplace/records/item_1 HTTP/1.1"),
+    ];
+    let unbounded =
+        reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(10)).build().unwrap();
+    let control = format!("{}/catalog/records/control", upstream.at);
+    for (path, _) in reads {
+        assert_eq!(app.request(reqwest::Method::GET, path).await.status(), StatusCode::OK, "{path}");
+    }
+    assert!(unbounded.get(&control).send().await.unwrap().status().is_success());
+    tokio::time::sleep(FIXTURE_KEEP_ALIVE + Duration::from_millis(250)).await;
+    let sent = upstream.now();
+    let reused = unbounded.get(&control).send().await;
+    let mut statuses = Vec::new();
+    for (path, _) in reads {
+        statuses.push(app.request(reqwest::Method::GET, path).await.status());
+    }
+    let seen = upstream.seen();
+    let closed = |connections: Vec<usize>| {
+        seen.iter().filter(|(at, c, s)| connections.contains(c) && matches!(s, Seen::ClosedIdle(_)) && *at >= sent).count()
+    };
+    assert!(reused.is_err(), "the upstream did not close an idle connection: {seen:?}");
+    assert_eq!(closed(upstream.connections("GET /catalog/records/control HTTP/1.1")), 1, "{seen:?}");
+    assert_eq!(statuses, [StatusCode::OK, StatusCode::OK], "sent at {sent} ms; upstream: {seen:?}");
+    for (path, line) in reads {
+        assert_eq!(closed(upstream.connections(line)), 0, "{path}: {seen:?}");
+        let answers = seen.iter().filter(|(_, _, s)| *s == Seen::Answered(line.into())).count();
+        assert_eq!(
+            (answers, upstream.connections(line).len()),
+            (2, 2),
+            "{path}: one upstream request each, on a new connection: {seen:?}"
+        );
+    }
+}

@@ -19,6 +19,10 @@ remain unchanged. V2 is a separate workload, with a new baseline, not a rewrite 
   parse it, and render/serialize it. No record/response cache or upstream JSON pass-through.
   Upstream 404 becomes 404, other upstream errors and redirects become 5xx. Do not follow
   redirects: that would fetch more than once. URL-encode the ID.
+- The upstream is Node's HTTP server, which answers with `Keep-Alive: timeout=5` and closes a
+  connection idle that long (6 s on the pinned Node 26, with its 1 s buffer). A client that pools
+  connections must not reuse one idle for 5 s or more: a request written as the upstream closes it
+  is lost in the send. The reqwest-based apps drop a connection idle for 4 s. Do not retry instead.
 
 The complete numeric wire record (all keys required, empty arrays and nulls are meaningful):
 
