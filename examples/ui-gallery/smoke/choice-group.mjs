@@ -91,7 +91,7 @@ export async function choiceGroup(page, period, showing, tab) {
   await page.keyboard.press("ArrowUp");
   check("Arrow Up moves back", (await period("Week").getAttribute("aria-checked")) === "true");
   // Every other key the group takes. With three options a step the wrong way lands on another
-  // option, and Home and End are each pressed where neither arrow goes to the same one.
+  // option, and Home and End are each pressed from both other options, so no one arrow passes both.
   const chosen = async (/** @type {string} */ name) => (await period(name).getAttribute("aria-checked")) === "true" && (await period(name).evaluate((r) => r === document.activeElement));
   await page.keyboard.press("ArrowDown");
   check("Arrow Down moves on, as Arrow Right does", await chosen("Month"));

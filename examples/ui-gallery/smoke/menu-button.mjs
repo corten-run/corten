@@ -115,24 +115,27 @@ export async function menuButton(page, errors) {
   check("using an item closes the menu", (await trigger.getAttribute("aria-expanded")) === "false");
   // Enter and Space on a focused item are the browser's click on it: the menu's keys (a letter
   // moves to an item) must leave both alone.
+  // Each wait is caught, so a key that does nothing is a named failure, and whatever it left open
+  // is closed before the checks after it.
+  const within = (/** @type {() => boolean} */ holds) => page.waitForFunction(holds, null, { timeout: 10_000 }).then(() => true, () => false);
+  const closed = () => within(() => document.querySelector("#actions-button")?.getAttribute("aria-expanded") === "false");
+  const nothingOpen = () => page.waitForFunction(() => !document.querySelector("dialog[open]") && !document.querySelector("#actions")?.matches(":popover-open"));
   await trigger.click();
   await expanded("true");
   await page.keyboard.press("End");
   await page.keyboard.press("Enter");
-  const watched = await page.waitForFunction(() => document.querySelector("#menu-result")?.textContent === "Watching.", null, { timeout: 10_000 }).then(() => true, () => false);
-  await expanded("false");
-  check("Enter on a focused item uses it and closes the menu", watched, await page.locator("#menu-result").textContent());
+  const watched = await within(() => document.querySelector("#menu-result")?.textContent === "Watching.");
+  check("Enter on a focused item uses it and closes the menu", watched && (await closed()), await page.locator("#menu-result").textContent());
+  if ((await trigger.getAttribute("aria-expanded")) === "true") await page.keyboard.press("Escape");
+  await nothingOpen();
   await trigger.click();
   await expanded("true");
   await page.keyboard.press("r");
   await page.keyboard.press("Space");
-  const renaming = await page
-    .waitForFunction(() => /** @type {HTMLDialogElement | null} */ (document.querySelector("dialog[aria-label='Rename the draft']"))?.open === true, null, { timeout: 10_000 })
-    .then(() => true, () => false);
-  check("Space on a focused item uses it and closes the menu", renaming && (await trigger.getAttribute("aria-expanded")) === "false", await focused());
-  // Closed whichever way the check went, so the checks after it start with nothing open.
+  const renaming = await within(() => /** @type {HTMLDialogElement | null} */ (document.querySelector("dialog[aria-label='Rename the draft']"))?.open === true);
+  check("Space on a focused item uses it and closes the menu", renaming && (await closed()), await focused());
   await page.keyboard.press("Escape");
-  await page.waitForFunction(() => !document.querySelector("dialog[open]") && !document.querySelector("#actions")?.matches(":popover-open"));
+  await nothingOpen();
   // An item is any element the app writes: here a command that opens a dialog.
   await trigger.click();
   await expanded("true");
