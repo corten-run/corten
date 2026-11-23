@@ -2661,14 +2661,15 @@ rules something out.
     Last checked: 2026-11-23, the plain page in `tests::cache::what_settling_a_page_costs` at
     `2dc94faf2` (round 15's head) against main `14126d2a8`, which it merged (three rounds
     alternating the two builds, every run within 0.1 of the others): 104 more (16,396.6 against
-    16,292.6); and an MCP tool call in `tests::cache::what_an_mcp_call_costs` (an app's MCP
-    endpoint, one read tool, in process) the same way (every run within 4.7 of the others): a call
-    the tool answers 135 more (27,601.0 against 27,466.0), of which, by function, 125 is the cache
-    rule reading the answer's headers (`settle`, `sets_cookie` and the header map), not the
-    endpoint, and 12 the tool call's handler; a call whose arguments do not fit the tool, the `isError`
-    result Corten makes in its place, 766 more (33,976.7 against 33,210.7), and a call to a tool the
-    endpoint does not have, Corten's JSON-RPC error, 771 more (31,769.4 against 30,998.2), both
-    failures now marked and settled as Corten's; 2026-11-23, the same plain page at
+    16,292.6); 2026-11-23, an MCP tool call in `tests::cache::what_an_mcp_call_costs` (an app's MCP
+    endpoint, one read tool, in process) at `2dc94faf2` against `14126d2a8`, the same way (every
+    run within 4.7 of the others): a call the tool answers 135 more (27,601.0 against 27,466.0), of which, by function,
+    125 is the cache rule reading the answer's headers (`settle`, `sets_cookie` and the header
+    map), not the endpoint, and 12 the tool call's handler; 2026-11-23, the two MCP failures this
+    round's head marks and settles as Corten's, at `2dc94faf2` against `14126d2a8` the same way: a call whose arguments do not fit the
+    tool, the `isError` result Corten makes in its place, 766 more (33,976.7 against 33,210.7), and
+    a call to a tool the endpoint does not have, Corten's JSON-RPC error, 771 more (31,769.4 against
+    30,998.2); 2026-11-23, the same plain page at
     `ee2d8f7f0` (round 14's head) against main `a01dd5109`, which it merged (three rounds
     alternating the two builds, every run within 1.2 of the others): 104 more (16,383.6 against
     16,279.6); 2026-11-23, the same at
