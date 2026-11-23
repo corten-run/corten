@@ -2476,7 +2476,15 @@ rules something out.
     much, which only lowers the measurement. Measure both profiles again before moving a
     measurement.
 
-    Last checked: 2026-11-20, `staged_page_future_sizes` at `3089d0a97`, after it failed on
+    Last checked: 2026-11-23, the unstaged route at `03302804e`
+    ([#1865 Send a Public answer's Cache-Control without reading it again or making it per answer](https://github.com/corten-run/corten/pull/1865))
+    against main `a02c81e86`, in a harness written again (the same JSON handler in process, the
+    route unstaged in the app's routes and in an API's, staged, and the `service_fn` control;
+    callgrind, (1,200 requests less 200) over 1,000, three rounds each with jemalloc and with
+    glibc): 6,578.4 and 6,622.3 in both builds (7,586.5 and 7,630.5 with glibc), the control
+    2,617.3 in both (3,084.8), so the change adds nothing to the route (that harness counts
+    fewer than the one the bound was measured with, so its counts are compared with each other
+    and not with 7,030); 2026-11-20, `staged_page_future_sizes` at `3089d0a97`, after it failed on
     main: the stage future grew from 2,632 to 3,008 bytes in a debug build and from 2,176 to
     2,280 in a release one, holding the page snapshot that sharing the staged header reads keeps
     before dispatch, not the request again (the stage owns one request slot, and dispatch takes
@@ -7990,8 +7998,8 @@ rules something out.
     build do; the item's `ToJson` alone, 35,416.5 against 35,382.8 an item (35,412.2 to
     35,428.0 against 35,303.8 to 35,416.8), every function main's but the allocator and
     `memcpy`.
-    The attribute is now on `ascii::digits_inlined`, which only `Cache-Control`'s two writers
-    call, and `ascii::digits`, the JSON writer's, is main's `#[inline]` again around the same
+    The attribute was then put on `ascii::digits_inlined`, which only `Cache-Control`'s two writers
+    called, and `ascii::digits`, the JSON writer's, is main's `#[inline]` again around the same
     body (`e37a8b260`), so the catalog's item JSON, which the run below does not measure, takes
     main's code for it: in release builds of card-market (rustc 1.100.0) from `e37a8b260` and
     `7e9a0c715`, all 83 functions named in `corten::json` disassemble to the same 37,540
@@ -8025,22 +8033,62 @@ rules something out.
     unstaged route with five policies 13,665.5 against 13,668.3 and with one 13,663.4 against
     13,658.3, and a kept page whose header is not held 24,442.9 against 24,452.5. In release
     builds of card-market from the two, all 83 `corten::json` functions still disassemble to the
-    same 37,540 instructions. The quiet-host run is declared before it runs, in place of the
-    third and of one declared on `e37a8b260` against `7e9a0c715`, which was stopped before its
-    main pass when main changed the answers it measures: this change's code as of `83819376a`
-    against `fef1f83de`, the `origin/main` the branch merged, the seven answers above and those
-    two, every turn on a freshly started build,
+    same 37,540 instructions. With main's `a02c81e86` merged (`314a20718`; that main writes an integer under ten in
+    `json::unsigned` and the rest in `json::longer`, a function of its own, two digits from a
+    table and three or more by `ascii::digits`), this change's `ascii::digits`, an `#[inline]`
+    wrapper around the `inline(always)` body, was inlined into `json::longer`: 220
+    instructions against main's 66, which call `ascii::digits` (card-market in release, rustc
+    1.100.0; the other 82 `corten::json` functions the same). `ascii::digits` is now main's as
+    it is there, the function the JSON writer and the header made for one answer call, and the
+    held header's writer has a copy of its own, `ascii::digits_inlined` (`03302804e`): all 83
+    `corten::json` functions disassemble to main's 37,475 instructions, `json::longer` 66 with
+    its call, apart from addresses and two offsets of a thread-local, which this change's own
+    thread-locals move. Counted through card-market's router in process as
+    above (glibc, (1,200 requests less 200) over 1,000 of `/api/items/{id}`, the mean of two
+    starts that each moved the stack, three rounds in turned order), `03302804e` took 49,460.5
+    instructions a request against 49,441.3 (49,437.6 to 49,702.8 against 49,044.0 to 49,446.0),
+    and `314a20718`, its digits inlined into `json::longer`, 49,365.8 (49,071.0 to 49,376.6);
+    counted once by function, `03302804e` against `a02c81e86`, every `corten::json` function and
+    `ascii::digits` ran main's count (`json::longer` 722.9 a request), `page::run` 5 more (the
+    thread's flag, below) and the allocator and `memcpy` within 15 either way.
+    The thread's flag moved too (`03302804e`): it now says the thread is polling a staged
+    route's handler and the app's middleware around it (`page::run`, which a page's dispatch
+    and a JSON route's both go through), where a `Public` header is held, and the unstaged lane
+    neither reads nor writes it, an unstaged answer's header being made for it alone as before
+    (`a_header_is_held_only_while_a_staged_handler_runs`,
+    `an_unstaged_answer_made_while_a_staged_handler_waits_is_its_own`, and the unstaged route
+    asked for after a staged handler's panic). A staged `Public` header made outside that poll
+    (none in Corten; `seo`'s files are answered by typed routes) would be made apart and read
+    by `settle`, as one written by hand is. Under [Choice 28](#choice-fixed-stages)'s harness
+    written again (the same JSON answered in process by an `App` with the route unstaged, in the
+    app's routes and in an API's, with it staged, and by tower's `service_fn` with no framework;
+    callgrind, (1,200 requests less 200) over 1,000, three rounds in turned order, every round
+    within 0.05 of the others of its build), against `a02c81e86`: the unstaged route 6,578.4
+    instructions in both builds and 6,622.3 in both in an API's module (7,586.5 and 7,630.5 in
+    both with glibc), the staged route 11,830.3 against 11,831.3 (13,245.7 against 13,247.1),
+    and the control 2,617.3 in both (3,084.8); with the flag in the lane (`314a20718`) the
+    unstaged route took 3 more in each (6,581.3 and 6,625.3; 7,589.5 and 7,633.5).
+    The quiet-host run is declared before it runs, in place of the third, of one declared on
+    `e37a8b260` against `7e9a0c715`, and of one declared on `83819376a` against `fef1f83de`
+    before main changed the JSON writer and the flag moved (a result of that run is for that
+    pair alone): this change's code as of `03302804e` against `a02c81e86`, the `origin/main`
+    the branch merged, the seven answers above, those two, and an unstaged route whose handler
+    makes no `Public` header (the lane alone), every turn on a freshly started build,
     100 pairs after one not recorded, passing when the one-sided 95% upper bound of the paired
     change in user plus kernel cycles a request (the 59th of the 100 sorted changes) is under
-    +1% for every one of the nine; none is a negative control and no layout floor applies. Each
+    +1% for every one of the ten; none is a negative control and no layout floor applies. Each
     build's dependencies are fixed: its lock is the tree's with the probe's own package added,
     every package from a registry the workspace lock's version and checksum, and it is built
-    with `--locked`. The bound is read only from complete evidence: every one of the 100 pairs,
+    with `--locked`. Before any request the build is checked to be the one its receipt records
+    (each side's commit, locks and binary, by hash), and the bound is read only from that
+    verified build and complete evidence: every one of the 100 pairs,
     one turn a build in the declared order, every counter at 100% running and recorded as its
-    turn's one reading, every turn's requests counted without an error, and each pass's outcome
-    recorded once; the margin is applied to the exact ratios, so a bound of exactly +1% is not
-    under it. Before any pair, each answer checked is fetched whole (curl's status and the
-    `Content-Length`) and is the same from both builds. Until it passes, this change does not merge. After it, and apart from it, 30 pairs of
+    turn's one reading, every turn's requests counted without an error, each pass's outcome
+    recorded once and the run's end; the margin is applied to the exact ratios, so a bound of
+    exactly +1% is not under it. Before any pair, each declared request is fetched whole (curl's
+    status and the `Content-Length`) from both builds, with the same status and headers but
+    those the time or the process sets (`Date`, `Age`, a weak `ETag`) and the same body byte
+    for byte. Until it passes, this change does not merge. After it, and apart from it, 30 pairs of
     each in 1 s turns count user first-level instruction-cache misses and user instructions
     alone, to say what the hardware's misses were, not as a condition.
     Set aside, counted the same way on the unstaged route with
@@ -8415,19 +8463,24 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; an app
     is found finishing work again and again on the `Signal` of a write from before its first
     answer that may be kept, which empties its store each time, so such a write should keep
-    its path to count by; the quiet-host run declared above, in place of the third, finds the
-    one-sided 95% bound at +1% or more for any of its nine answers (the page for one visitor, the
+    its path to count by; the quiet-host run declared above, on `03302804e`'s code, finds the
+    one-sided 95% bound at +1% or more for any of its ten answers (the page for one visitor, the
     `Public` page in an app that keeps none, a kept page, the page with five policies behind a
     middleware, the unstaged route with five policies and with one, a kept page whose header the
-    thread does not hold, and a short `NoStore` answer and a short `Public::immutable` image, each
-    after its thread made four `Public` headers); a measured app's `settle` finds a `Public`
+    thread does not hold, a short `NoStore` answer and a short `Public::immutable` image, each
+    after its thread made four `Public` headers, and an unstaged route whose handler makes no
+    `Public` header); a measured app's `settle` finds a `Public`
     header its thread does not hold (a kept page given on another worker, or one whose header
     the thread put out going through more than four sets of numbers) on a share of its answers
     that shows, since each such answer pays the look through the four on top of main's read; or an app
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-22, under callgrind as below `83819376a` (main's `fef1f83de` merged)
+    Last checked: 2026-11-23, `03302804e` and `314a20718` (main's `a02c81e86` merged)
+    against `a02c81e86` with rustc 1.100.0: card-market's `corten::json` functions disassembled,
+    its item JSON under callgrind as below, and [Choice 28](#choice-fixed-stages)'s unstaged
+    route under callgrind in a harness written again;
+    2026-11-22, under callgrind as below `83819376a` (main's `fef1f83de` merged)
     against `fef1f83de` with rustc 1.100.0, the nine answers (three rounds for the `NoStore`
     answer and the immutable image), and card-market's `corten::json` functions disassembled in
     both builds; 2026-11-22, under callgrind as below `e37a8b260` (main's `7e9a0c715` merged)
