@@ -14,10 +14,11 @@
 //! `ROUTER_ASKED=1` asks for that route three times first, so a page is kept by then.
 //! `ROUTER_TARGET=kept` with `ROUTER_PUBLIC=page` counts the kept page given again.
 //! `ROUTER_TARGET=made` with `ROUTER_PUBLIC=page` counts the page made and kept: each request
-//! asks for a query of its own, which nothing kept stands for, in a store with room.
+//! asks for a query of its own, which nothing kept stands for, in a store with room; one of them
+//! asked for again after the count is the kept page, so the case counts keeping, not misses alone.
 //! `ROUTER_KEPT=0` turns the store off (`App::kept_answers(0)`), for what a write pays the store
-//! in the same app; with it nothing is kept, so `ROUTER_ASKED=1` and `ROUTER_TARGET=kept` with a
-//! page, which assert that one is, do not go with it.
+//! in the same app; with it nothing is kept, so `ROUTER_ASKED=1` and `ROUTER_TARGET=kept` or
+//! `made` with a page, which assert that one is, do not go with it.
 
 use std::time::Duration;
 
@@ -151,6 +152,8 @@ fn request_cost() {
             for n in 0..requests {
                 assert!(!ask(format!("/home?n={n}").leak()).await, "made by its handler");
             }
+            // Once for every count alike, so the difference between two counts leaves it out.
+            assert!(ask(format!("/home?n={}", requests / 2).leak()).await, "each page made was kept");
             return;
         }
         for _ in 0..requests {

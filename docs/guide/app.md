@@ -1533,28 +1533,54 @@ mistake, the runtime loads the URL as a whole page instead of swapping it in.
 The app is the first shared cache of its own `Public` pages, and of its `Public` JSON,
 text and files of 1,024 bytes or more (below). The whole document a `Public` page's handler made for a `GET` that shows nothing about who asks is kept, and given to the next
 such request in the handler's place until the answer's shared lifetime ends: `s-maxage` where
-the answer has `.shared(..)`, else `max_age`. So a `Public` page's handler does not run for
+the answer has `.shared(..)`, else `max_age`, or past it for as long as a stale window the answer
+sets allows (below). So a `Public` page's handler does not run for
 every request, and what it read may be that old when a visitor sees it, as it already may be
 behind a CDN. Count views in a middleware rather than in the handler, and give a page whose data
 must show at once a short lifetime, or leave it private. An answer given again carries `Age`,
 counted from when the request it was made for reached the handler, so a browser and a CDN count
 the lifetime from when the page was made.
 
-Past its lifetime a kept page is still given where its answer says a shared cache may give it
-stale ([RFC 5861](https://www.rfc-editor.org/rfc/rfc5861.html)), each window counted from the
-end of the lifetime. Within `.stale_while_revalidate(..)` it is given at once, with its `Age`,
-and the request that found it has the handler make it again apart from its answer, one request
-at a time for each page, under the request's deadline and no later than the window's end: what
-that makes takes the old page's place, as a miss's answer would. The app's middleware ran for
-the request that was given the old page, not again for the one made. Within
-`.stale_if_error(..)` (past the other window, where both are set) a request waits for the
-handler, as when nothing is kept, and when the handler answers `500`, `502`, `503` or `504`,
-panics or passes its deadline, the kept page is sent in the place of that failure with its
-`Age`. Any other answer is the handler's: a success is kept as a miss's would be, and a `404`
-or a redirect ends the old page. A failure while a page is made again leaves the old one
-given until its window ends, and in the `stale-if-error` window every request runs the
-handler, failing or not. A write to the page's path ends both windows, and with `.shared(..)`
-there are none, since `s-maxage` forbids a shared cache to give the page stale.
+Past its lifetime a kept page, or a kept JSON, text or file body, is still given where its
+answer says a shared cache may give it stale
+([RFC 5861](https://www.rfc-editor.org/rfc/rfc5861.html)), each window counted from the end of
+the lifetime. Within `.stale_while_revalidate(..)` it is given at once, with its `Age`, and the
+request that found it has the handler make it again apart from its answer, one request at a
+time for each page. What that makes takes the old page's place, as a miss's answer would, only
+while the old page is still the one kept: once a write to its path ended it, it went for room,
+or another request's page was kept in its place, what the refresh made is dropped, so it never
+replaces a newer page. The refresh has the area's deadline counted afresh from when it starts,
+not what was left of the request's, and stops at the earlier of that and the window's end, or
+at shutdown, which waits for it; reading its body is part of that time, and none starts once
+shutdown has begun. A failure there (a `500`, `502`, `503` or `504`, a panic, a passed deadline,
+a body of a known size that could not be read) leaves the old page given until its window
+ends, and the next request has it made again; any other answer (a `404`, a redirect, a page
+that may not be kept) ends the old page.
+
+The handler that makes it again is given the request that found the old page as your
+middleware left it: its URL, headers and extensions, and a locale the middleware chose with
+`req.set_locale`. The middleware does not run again for it, and what the middleware set around
+`next` (a task-local value) or otherwise on the request's signal does not reach it, so leave
+`.stale_while_revalidate(..)` off a route whose page depends on more of the middleware than
+that.
+
+Within `.stale_if_error(..)` (past the other window, where both are set) a request waits for
+the handler, as when nothing is kept, and when the handler answers `500`, `502`, `503` or `504`,
+panics, passes its deadline or gives a body of a known size that cannot be read, the kept page
+is sent in the place of that failure with its `Age`, if it may still be given then: not once
+another request's answer ended it (a `404`, a redirect, a page that may not be kept) or
+replaced it, it went for room, a write to its path came, or its window ended while the handler
+ran. Any other answer is the handler's, a `501` too, which RFC 5861 does not name: a success is
+kept as a miss's would be, and a `404`, a redirect or a page that may not be kept ends the old
+page. In this window every request runs the handler, failing or not. A write to the page's
+path ends both windows, and with `.shared(..)` there are none, since `s-maxage` forbids a
+shared cache to give the page stale.
+
+The windows are the handler's answer's. A middleware that sets its own `Cache-Control` after
+`next` (`private, no-store`, say) changes what leaves the app for the browser and the caches in
+front of it, not what the app keeps, which stands where the handler does (below): the kept page
+is still given within its windows. Leave the windows off a route whose kept page should stop at
+its lifetime.
 
 A kept page stands where the handler does, after [your own middleware](#your-own-middleware). Every
 stage runs for every request: a middleware that refuses, counts or stamps a header still does, and
@@ -1580,7 +1606,7 @@ else a page could differ by, and the answer nothing made for one request:
 | the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
-| past its lifetime | within `stale-while-revalidate`, given at once while the handler makes it again; within `stale-if-error`, given in the place of the handler's `500`, `502`, `503` or `504`, panic or passed deadline | past both windows, after a write to its path, with `.shared(..)`; within `stale-if-error`, any other answer |
+| past its lifetime | within `stale-while-revalidate`, given at once while the handler makes it again; within `stale-if-error`, given in the place of the handler's `500`, `502`, `503` or `504`, panic, passed deadline or body that cannot be read | past both windows, after a write to its path, with `.shared(..)`; within `stale-if-error`, any other answer, and a failure once another request's answer ended or replaced the page |
 | what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
@@ -1622,7 +1648,9 @@ Nothing else is meant to drop a page before its lifetime ends (a write to anothe
 once in 65,536 times, where two paths share a count, and so does one that began before the app
 had made any answer it may keep, below). A write to another path does not drop the
 list, and neither does a change made outside a request to the app (a task, a script, another
-instance): the page shows it when its lifetime ends, which is what the lifetime says. Purging a
+instance): the page shows it when its lifetime ends, which is what the lifetime says (where the
+answer sets a stale window, once a request past it has had the page made again, or when the
+window ends). Purging a
 CDN in front does not purge the app, which gives the CDN the kept page again with its `Age`.
 A request's own `Cache-Control: no-cache` (a hard reload) gets the kept page too: how long a
 page stands is the app's to say. Give a page whose changes must show at once a short lifetime.

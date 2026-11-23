@@ -87,6 +87,12 @@ impl Finishing {
         &self.stop
     }
 
+    /// How many pieces of work are running, for a test.
+    #[cfg(test)]
+    pub(crate) fn running(&self) -> usize {
+        self.running.load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// Waits until no work is running, or `until`; work still running then is left to end with
     /// the process, and logged.
     pub(crate) async fn wait(&self, until: tokio::time::Instant, grace: Duration) {

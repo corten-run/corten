@@ -7478,19 +7478,34 @@ rules something out.
     cache to serve stale (RFC 9111 section 5.2.2.10). Within `stale-while-revalidate` the copy is
     given at once, and the request that found it, already one the store answers, has the route's
     handler make it again on a task apart from its answer: one request at a time for each copy
-    (a flag on the entry), with a signal of its own that aborts at the request's deadline, the
-    window's end, shutdown (which waits for it as for `Signal::finish` work) or once it has
-    answered. What it makes is kept as a miss's answer is (in a full store too: its URL has a
-    copy, so it was asked for), under the path's write count read before it ran, so a write
-    while it runs keeps it out; a `500`, `502`, `503` or `504`, a panic
-    or a passed deadline leaves the old copy given until its window ends, and any other answer
-    takes it out. Within `stale-if-error`, past the other window, the request runs the handler
-    as a miss does, with the copy held on its signal: a `500`, `502`, `503` or `504` from the
-    route, a panic or a passed deadline (both caught where every handler's are) is answered with
-    the copy and its `Age`, and a `4xx` is the handler's, since the page is gone, not failing. A
+    (a flag on the entry, set only while the copy is still the store's, with no write to its path
+    since its handler read), with a signal of its own that aborts at the area's deadline counted
+    afresh from its start, the window's end, shutdown (which waits for it as for `Signal::finish`
+    work) or once it has answered. Reading the answer's body is inside those limits, and none
+    starts once shutdown has begun or its time is up. What it makes is kept as a miss's answer is
+    (in a full store too: its URL has a copy, so it was asked for), and only, under the store's
+    lock, while the copy it was made for is still the store's, with no write to the path since
+    the handler read and before shutdown or its end: so it never takes the place of a page
+    another request kept after the copy went for room, was replaced or was ended. A `500`, `502`,
+    `503` or `504`, a panic, a passed deadline or a body of a known size that could not be read
+    leaves the old copy given until its window ends, and any other answer takes it out. Its
+    handler sees the request as the app's middleware left it, its headers and extensions and a
+    locale the middleware chose from the URL (`Req::set_locale`, carried to the refresh's signal);
+    not the middleware again, nor what it set around `next` or on the request's signal otherwise,
+    which the guide tells a route that depends on to leave the window off. Within
+    `stale-if-error`, past the other window, the request runs the handler as a miss does, with
+    the copy held on its signal: a `500`, `502`, `503` or `504` from the route, a panic or a
+    passed deadline (both caught where every handler's are), or a body of a known size that could
+    not be read, is answered with the copy and its `Age`, while the copy is still the store's and
+    within its window when the failure comes: not once another request's answer ended or replaced
+    it, or it went for room. Any other answer is the handler's (a `4xx`, since the page is gone,
+    not failing, and a `501`, which RFC 5861 does not name), decided once its body is read. A
     write to the path ends both windows, as it ends the lifetime. A copy in either window counts
     against the bound and goes, as one past its lifetime does, when the hand comes to it, before
-    one that stands and was read. A request that finds no copy within its lifetime pays for a
+    one that stands and was read; a refresh or a request it is held for holds it by its identity
+    alone (a `Weak`), so one that goes takes its body and head with it. The windows are the
+    handler's answer's: a `Cache-Control` a middleware writes after `next` is for what leaves the
+    app, and does not end them. A request that finds no copy within its lifetime pays for a
     second look along its URL's copies; one that finds one pays for a third value in what the
     lookup returns (below).
 

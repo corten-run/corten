@@ -177,7 +177,7 @@ impl Endpoint for Keeping {
             if drew_key {
                 return res;
             }
-            missed.keep(res).await
+            missed.keep(res, None).await.answer()
         })
     }
 
@@ -188,7 +188,8 @@ impl Endpoint for Keeping {
 
 impl Keeping {
     /// The handler's answer for `req`, which a page past its lifetime is held for
-    /// (`stale-if-error`): the page in the place of a failure, else as a miss's answer.
+    /// (`stale-if-error`): the page in the place of a failure, else as a miss's answer, settled
+    /// once its body is read ([`crate::kept::Held::answer`]).
     #[cold]
     fn held(&self, req: Request, missed: crate::kept::Missed, held: crate::kept::Held) -> Answering {
         let here = req.extensions().get::<crate::layout::StartHere>().cloned();
@@ -199,19 +200,13 @@ impl Keeping {
                 Some(here) => here.fill(res).await,
                 None => res,
             };
-            if let Some(held) = held.instead_of(&res) {
-                return held;
-            }
-            if drew_key {
-                return res;
-            }
-            missed.keep(res).await
+            held.answer(res, drew_key, missed).await
         })
     }
 
     /// Has the page given past its lifetime made again by its handler, for `req`, apart from
     /// the answer (`stale-while-revalidate`, [`crate::kept::Refresh`]): filled and watched for a
-    /// submit key as a miss's answer is.
+    /// submit key as a miss's answer is. Not started once shutdown has begun or its time is up.
     #[cold]
     fn again(&self, mut req: Request, refresh: crate::kept::Refresh) {
         let Some(again) = refresh.again(&mut req, self.shape, self.unkept.clone()) else { return };

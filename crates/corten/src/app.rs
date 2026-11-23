@@ -951,7 +951,11 @@ impl<M: Middleware> App<M> {
     /// gives, and the app is the first of them: the whole document, or such a body of a route
     /// that answers JSON, text or a file, made for a `GET` with no cookie or `Authorization` is given to the
     /// next such request in the handler's place until that lifetime ends (`s-maxage` where the
-    /// answer has `.shared(..)`, else `max_age`), with an `Age`. Every stage still runs for it,
+    /// answer has `.shared(..)`, else `max_age`), with an `Age`; past it, where the answer says
+    /// `stale-while-revalidate` (given at once while a request has its handler make it again) or
+    /// `stale-if-error` (given in the place of a `500`, `502`, `503` or `504`, a panic or a
+    /// passed deadline), for as long as those allow, and never with `.shared(..)`, which forbids
+    /// a shared cache to give it stale. Every stage still runs for it,
     /// the app's middleware too; what it saves is the handler, the render or the writing of the
     /// JSON, the tag's hash and the compression. So a `Public` handler does not run for every
     /// request, and what it reads may be that old when it is seen, as it already may be behind a
@@ -967,7 +971,8 @@ impl<M: Middleware> App<M> {
     /// URL asked for once seldom takes a page's room and a page's handler runs twice before
     /// its page is kept. A write to a page's path drops what is
     /// kept there, whatever it is answered, and so does one that redirects to it; a
-    /// change made any other way (a task, another instance) shows when the lifetime ends. None is kept
+    /// change made any other way (a task, another instance) shows when the lifetime ends, or
+    /// within a stale window once a request has had the answer made again. None is kept
     /// under `corten dev`, and an app with no `Public` route of a kind it keeps (a page, or JSON,
     /// text or a file) keeps none and counts no writes, whatever the bound. The bytes counted are each page's key, its headers, its body and each
     /// compressed form made of it.
@@ -1154,6 +1159,13 @@ impl<M: Middleware> App<M> {
     pub fn shutdown_grace(mut self, grace: Duration) -> Self {
         self.grace = grace;
         self
+    }
+
+    /// The work shutdown waits for ([`crate::Signal::finish`], a kept page made again), for a test
+    /// that sees it end.
+    #[cfg(test)]
+    pub(crate) fn finishing(&self) -> Arc<Finishing> {
+        self.finishing.clone()
     }
 
     /// How long a connection may go on once shutdown begins: the longer of the grace and the

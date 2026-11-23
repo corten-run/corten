@@ -2154,61 +2154,97 @@ async fn a_kept_page_lasts_its_lifetime() {
     assert!((1..60).contains(&age), "counted from before its handler ran: {age}");
 }
 
-/// What a kept page's handler does next, for the tests of a page past its lifetime: answers,
-/// fails (`Error`, 500), answers `502`, panics, passes the app's deadline, or says the page is
-/// gone (`404`).
-#[derive(Clone, Copy, Default, PartialEq)]
+/// What one run of a kept page's handler does, for the tests of a page past its lifetime: answers,
+/// fails (an `Error`, 500), fails with a status of its own, panics, waits past the app's deadline,
+/// redirects, or draws the request's nonce (a page that may not be kept).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum Does {
     #[default]
     Answers,
     Fails,
-    BadGateway,
+    Status(StatusCode),
     Panics,
     Waits,
-    Gone,
+    Redirects,
+    DrawsNonce,
 }
 
-/// A `Public` page for a second at `/`, `/written` (which takes a `POST`) and `/late`, that may
-/// be given stale for two (`stale-while-revalidate` where `revalidate`, else `stale-if-error`),
-/// whose handler counts its runs and does what `does` says. After the first three runs it waits
-/// for a permit from `gate` while the gate is open, so what happens while it runs is seen. Its
-/// text names the run that made it.
-fn held_routes(
-    runs: &Runs,
-    does: &std::sync::Arc<std::sync::Mutex<Does>>,
-    gate: &std::sync::Arc<tokio::sync::Semaphore>,
-    revalidate: bool,
-) -> Table {
-    let (runs, does, gate) = (runs.clone(), does.clone(), gate.clone());
-    let page = move |req: Req| {
-        runs.ran();
-        let (run, does, gate) = (runs.count(), *does.lock().unwrap(), gate.clone());
-        async move {
-            match does {
-                Does::Panics => panic!("the page's store is down"),
-                Does::Waits => tokio::time::sleep(Duration::from_secs(30)).await,
-                _ if run > 3 && !gate.is_closed() => drop(gate.acquire().await),
-                _ => {}
+/// A gate a run of a handler or the reading of a body waits at until it has a permit.
+type Gate = std::sync::Arc<tokio::sync::Semaphore>;
+
+/// What a run of [Steps]' handler does, and a gate it waits at first.
+type Step = (Does, Option<Gate>);
+
+/// A page's handler for the tests of a page past its lifetime, run by run: each run counts itself
+/// and takes the next step set for it (what it does, and a gate it waits at first), or answers
+/// when none is set. A run with a gate adds a permit to `started` as it starts, so a test knows
+/// the run is under way before it releases it, with no sleep. The page's text names the run that
+/// made it.
+#[derive(Clone)]
+struct Steps {
+    runs: Runs,
+    next: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Step>>>,
+    started: Gate,
+}
+
+impl Steps {
+    fn new() -> Self {
+        Steps { runs: Runs::default(), next: Default::default(), started: Gate::new(tokio::sync::Semaphore::new(0)) }
+    }
+
+    /// The next run to start does `does`.
+    fn then(&self, does: Does) {
+        self.next.lock().unwrap().push_back((does, None));
+    }
+
+    /// The next run to start waits at the gate this gives, then does `does`.
+    fn held(&self, does: Does) -> Gate {
+        let gate = Gate::new(tokio::sync::Semaphore::new(0));
+        self.next.lock().unwrap().push_back((does, Some(gate.clone())));
+        gate
+    }
+
+    /// Until a run with a gate has started.
+    async fn started(&self) {
+        self.started.acquire().await.unwrap().forget();
+    }
+
+    /// `/` (at any query) and `/written`, which takes a `POST`: a `Public` page for a second with
+    /// the windows `windows` adds.
+    fn routes(&self, windows: fn(Public<HtmlResult>) -> Public<HtmlResult>) -> Table {
+        let steps = self.clone();
+        let page = move |req: Req| {
+            steps.runs.ran();
+            let run = steps.runs.count();
+            let (does, gate) = steps.next.lock().unwrap().pop_front().unwrap_or_default();
+            if gate.is_some() {
+                steps.started.add_permits(1);
             }
-            let page = req.test_page_for("Held", html! { <p>{format!("made by run {run} ")}{"held ".repeat(400)}</p> });
-            let page = page.and_then(|page| match does {
-                Does::Fails => Err(Error::new("the page's store is down")),
-                Does::BadGateway => Err(Error::status(StatusCode::BAD_GATEWAY)),
-                Does::Gone => Err(Error::status(StatusCode::NOT_FOUND)),
-                _ => Ok(page),
-            });
-            let public = Public::new(Duration::from_secs(1), page);
-            if revalidate {
-                public.stale_while_revalidate(Duration::from_secs(2))
-            } else {
-                public.stale_if_error(Duration::from_secs(2))
+            async move {
+                if let Some(gate) = gate {
+                    gate.acquire().await.unwrap().forget();
+                }
+                let page = match does {
+                    Does::Answers => {
+                        req.test_page_for("Stale", html! { <p>{format!("made by run {run} ")}{"stale ".repeat(400)}</p> })
+                    }
+                    Does::Fails => Err(Error::new("the page's store is down")),
+                    Does::Status(status) => Err(Error::status(status)),
+                    Does::Panics => panic!("the page's store is down"),
+                    Does::Waits => std::future::pending().await,
+                    Does::Redirects => req.redirect(&Root),
+                    Does::DrawsNonce => {
+                        let nonce = req.nonce().len();
+                        req.test_page_for("Stale", html! { <p>{format!("a nonce of {nonce}")}</p> })
+                    }
+                };
+                windows(Public::new(Duration::from_secs(1), page))
             }
-        }
-    };
-    Table::new()
-        .route("/", crate::route::get(page.clone()).0)
-        .route("/written", crate::route::get(page.clone()).0.post(|| async { StatusCode::NO_CONTENT }))
-        .route("/late", crate::route::get(page).0)
+        };
+        Table::new()
+            .route("/", crate::route::get(page.clone()).0)
+            .route("/written", crate::route::get(page).0.post(|| async { StatusCode::NO_CONTENT }))
+    }
 }
 
 /// The age a kept answer was given with, if it was one.
@@ -2216,151 +2252,535 @@ fn age_of(headers: &HeaderMap) -> Option<u64> {
     headers.get(header::AGE).map(|age| age.to_str().unwrap().parse().unwrap())
 }
 
+/// The run of its handler that made a page, as its text names it.
+fn made_by(body: &[u8]) -> usize {
+    let text = String::from_utf8_lossy(body);
+    let from = text.find("made by run ").unwrap_or_else(|| panic!("a page a run made: {text}")) + "made by run ".len();
+    text[from..].split(' ').next().unwrap().parse().unwrap()
+}
+
+/// Waits until no work shutdown waits for is running (a page past its lifetime being made again
+/// among it), and says how many are: one left waiting on something is still counted, and the
+/// paused clock then runs on to the end of this wait.
+async fn settled(finishing: &crate::task::Finishing) -> usize {
+    let hour = Duration::from_secs(3600);
+    finishing.wait(tokio::time::Instant::now() + hour, hour).await;
+    finishing.running()
+}
+
 /// Past its lifetime, a page whose answer says `stale-if-error` is held for that long: a request
-/// for it runs the handler, and when the handler fails (an error answered 500, 502, 503 or 504, a
-/// panic, a passed deadline) the held page is sent in its place, with its age. A `404` is the
-/// handler's answer, after which the page is no longer held; and nothing is held past the window
-/// or after a write to its path.
-#[tokio::test]
+/// for it runs the handler, and when the handler answers 500, 502, 503 or 504, panics or passes its
+/// deadline, the held page is sent in its place, with its age. Any other answer is the handler's
+/// and ends the page: a `501` (which RFC 5861 does not name), a `404`, a redirect, a page that may
+/// not be kept. Nothing is held after a write to its path or past the window, and a success there
+/// is kept as a miss's would be. The clock is paused, so the page's age is what the test moves it
+/// by.
+#[tokio::test(start_paused = true)]
 async fn a_kept_page_stands_in_for_a_failure_within_stale_if_error() {
-    let (runs, does, gate) = (Runs::default(), std::sync::Arc::default(), std::sync::Arc::new(tokio::sync::Semaphore::new(0)));
-    gate.close();
-    let router = App::new(Routes::from(held_routes(&runs, &does, &gate, false))).deadline(Duration::from_millis(300)).router();
-    let set = |next: Does| *does.lock().unwrap() = next;
+    let steps = Steps::new();
+    let routes = steps.routes(|page| page.stale_if_error(Duration::from_secs(2)));
+    let router = App::new(Routes::from(routes)).deadline(Duration::from_millis(300)).router();
+    let ends =
+        [Does::Status(StatusCode::NOT_IMPLEMENTED), Does::Status(StatusCode::NOT_FOUND), Does::Redirects, Does::DrawsNonce];
+    let urls = ["/", "/written", "/?late"].map(String::from).into_iter().chain((0..ends.len()).map(|n| format!("/?ends={n}")));
     let mut made = std::collections::HashMap::new();
-    for at in ["/", "/written", "/late"] {
-        let (status, headers, body) = fetch(&router, "GET", at, &[]).await;
+    for at in urls {
+        let (status, headers, body) = fetch(&router, "GET", &at, &[]).await;
         assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=1, stale-if-error=2");
-        assert!(status == StatusCode::OK && age_of(&headers).is_none());
+        assert!(status == StatusCode::OK && age_of(&headers).is_none(), "{at}: {headers:?}");
         made.insert(at, body);
     }
-    assert_eq!(runs.count(), 3);
-    tokio::time::sleep(Duration::from_millis(1100)).await;
+    tokio::time::advance(Duration::from_secs(1)).await;
 
-    // Past its lifetime and within the window: each failure gets the held page.
-    for (failure, ran) in [(Does::Fails, 4), (Does::BadGateway, 5), (Does::Panics, 6), (Does::Waits, 7)] {
-        set(failure);
+    // Past its lifetime and within the window: each failure the window covers gets the kept page.
+    let failures = [
+        Does::Fails,
+        Does::Status(StatusCode::BAD_GATEWAY),
+        Does::Status(StatusCode::SERVICE_UNAVAILABLE),
+        Does::Status(StatusCode::GATEWAY_TIMEOUT),
+        Does::Panics,
+        Does::Waits,
+    ];
+    for failure in failures {
+        let ran = steps.runs.count();
+        steps.then(failure);
         let (status, headers, body) = fetch(&router, "GET", "/", &[]).await;
-        assert_eq!(runs.count(), ran, "the handler ran");
-        assert_eq!(status, StatusCode::OK, "{headers:?}");
-        assert!(age_of(&headers).is_some_and(|age| (1..3).contains(&age)), "{headers:?}");
-        assert_eq!(body, made["/"], "the page held");
+        assert_eq!(steps.runs.count(), ran + 1, "{failure:?}: the handler ran");
+        assert_eq!((status, age_of(&headers)), (StatusCode::OK, Some(1)), "{failure:?}: {headers:?}");
+        assert_eq!(body, made["/"], "{failure:?}: the page held");
     }
+
+    // Any other answer is the handler's, and the page is not held after it.
+    for (n, end) in ends.into_iter().enumerate() {
+        let at = format!("/?ends={n}");
+        steps.then(end);
+        let (status, headers, body) = fetch(&router, "GET", &at, &[]).await;
+        assert!(age_of(&headers).is_none() && body != made[&at], "{end:?}: the handler's {status}: {headers:?}");
+        steps.then(Does::Fails);
+        let (status, headers, _) = fetch(&router, "GET", &at, &[]).await;
+        assert_eq!((status, age_of(&headers)), (StatusCode::INTERNAL_SERVER_ERROR, None), "{end:?}: no longer held");
+    }
+
     // A write to its path: the page it held may show what was there before.
-    set(Does::Answers);
     let (status, _, _) = fetch(&router, "POST", "/written", &[("sec-fetch-site", "same-origin")]).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    set(Does::Fails);
+    steps.then(Does::Fails);
     assert_eq!(fetch(&router, "GET", "/written", &[]).await.0, StatusCode::INTERNAL_SERVER_ERROR, "after a write");
-    // The page is gone: its handler's answer, and nothing is held for it after.
-    set(Does::Gone);
-    let (status, headers, _) = fetch(&router, "GET", "/", &[]).await;
-    assert!(status == StatusCode::NOT_FOUND && age_of(&headers).is_none(), "{headers:?}");
-    set(Does::Fails);
-    assert_eq!(fetch(&router, "GET", "/", &[]).await.0, StatusCode::INTERNAL_SERVER_ERROR, "no longer held");
 
-    // Past the window, a failure is the handler's.
-    tokio::time::sleep(Duration::from_millis(2000)).await;
-    let (status, headers, _) = fetch(&router, "GET", "/late", &[]).await;
-    assert!(status == StatusCode::INTERNAL_SERVER_ERROR && age_of(&headers).is_none(), "past the window: {headers:?}");
-    // And an answer is kept as a miss's would be.
-    set(Does::Answers);
-    assert!(age_of(&fetch(&router, "GET", "/late", &[]).await.1).is_none());
-    assert_eq!(age_of(&fetch(&router, "GET", "/late", &[]).await.1), Some(0));
+    // Past the window, a failure is the handler's, and an answer is kept as a miss's would be.
+    tokio::time::advance(Duration::from_secs(2)).await;
+    steps.then(Does::Fails);
+    let (status, headers, _) = fetch(&router, "GET", "/?late", &[]).await;
+    assert_eq!((status, age_of(&headers)), (StatusCode::INTERNAL_SERVER_ERROR, None), "past the window");
+    let (_, headers, body) = fetch(&router, "GET", "/?late", &[]).await;
+    assert!(age_of(&headers).is_none() && body != made["/?late"], "{headers:?}");
+    assert_eq!(age_of(&fetch(&router, "GET", "/?late", &[]).await.1), Some(0), "and kept");
+}
+
+/// A request whose handler fails within `stale-if-error` is not given the kept page once another
+/// request ended it while the first one's handler ran: one whose handler answered `404`, or made a
+/// page that may not be kept (it drew the request's nonce). The first gets its own failure.
+#[tokio::test(start_paused = true)]
+async fn a_kept_page_another_request_ended_is_not_given_for_a_failure() {
+    let steps = Steps::new();
+    let router = App::new(Routes::from(steps.routes(|page| page.stale_if_error(Duration::from_secs(2))))).router();
+    let ends = [Does::Status(StatusCode::NOT_FOUND), Does::DrawsNonce];
+    for n in 0..ends.len() {
+        fetch(&router, "GET", &format!("/?n={n}"), &[]).await;
+    }
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for (n, end) in ends.into_iter().enumerate() {
+        let at = format!("/?n={n}");
+        let gate = steps.held(Does::Fails);
+        let failing = tokio::spawn({
+            let (router, at) = (router.clone(), at.clone());
+            async move { fetch(&router, "GET", &at, &[]).await }
+        });
+        steps.started().await;
+        steps.then(end);
+        let (_, headers, _) = fetch(&router, "GET", &at, &[]).await;
+        assert!(age_of(&headers).is_none(), "{end:?}: the handler's answer: {headers:?}");
+        gate.add_permits(1);
+        let (status, headers, _) = failing.await.unwrap();
+        assert_eq!((status, age_of(&headers)), (StatusCode::INTERNAL_SERVER_ERROR, None), "{end:?}: {headers:?}");
+    }
+}
+
+/// A handler that fails after the `stale-if-error` window ended while it ran is the request's
+/// answer: the page held for it is given only within the window.
+#[tokio::test(start_paused = true)]
+async fn a_failure_that_ends_past_stale_if_error_is_the_handler_s() {
+    let steps = Steps::new();
+    let router = App::new(Routes::from(steps.routes(|page| page.stale_if_error(Duration::from_secs(2))))).router();
+    fetch(&router, "GET", "/", &[]).await;
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let gate = steps.held(Does::Fails);
+    let failing = tokio::spawn({
+        let router = router.clone();
+        async move { fetch(&router, "GET", "/", &[]).await }
+    });
+    steps.started().await;
+    tokio::time::advance(Duration::from_secs(2)).await;
+    gate.add_permits(1);
+    let (status, headers, _) = failing.await.unwrap();
+    assert_eq!((status, age_of(&headers)), (StatusCode::INTERNAL_SERVER_ERROR, None), "{headers:?}");
+}
+
+/// With `s-maxage` neither window is the app's, since RFC 9111 forbids a shared cache to give the
+/// answer stale then: past its shared lifetime a request waits for its handler, whose failure is
+/// its own.
+#[tokio::test(start_paused = true)]
+async fn s_maxage_leaves_a_kept_page_no_stale_window() {
+    let steps = Steps::new();
+    let both = |page: Public<HtmlResult>| {
+        page.shared(Duration::from_secs(1)).stale_while_revalidate(Duration::from_secs(2)).stale_if_error(Duration::from_secs(2))
+    };
+    let router = App::new(Routes::from(steps.routes(both))).router();
+    let (_, headers, _) = fetch(&router, "GET", "/", &[]).await;
+    let cache = headers[header::CACHE_CONTROL].to_str().unwrap();
+    assert!(["s-maxage=1", "stale-while-revalidate=2", "stale-if-error=2"].iter().all(|said| cache.contains(said)), "{cache}");
+    assert_eq!(age_of(&fetch(&router, "GET", "/", &[]).await.1), Some(0), "kept for its lifetime");
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let (status, headers, body) = fetch(&router, "GET", "/", &[]).await;
+    assert!(status == StatusCode::OK && age_of(&headers).is_none(), "made by its handler: {headers:?}");
+    assert_eq!(made_by(&body), 2);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    steps.then(Does::Fails);
+    let (status, headers, _) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!((status, age_of(&headers)), (StatusCode::INTERNAL_SERVER_ERROR, None), "its failure is its own");
 }
 
 /// Past its lifetime, a page whose answer says `stale-while-revalidate` is given at once for that
 /// long, and the request that finds it has its handler make it again apart from its answer, one
 /// such request at a time: the page made then takes the old one's place. A write while it is made
-/// again keeps it from being kept, a failure leaves the old page given, and past the window a
-/// request waits for its handler.
-#[tokio::test]
+/// again keeps it from being kept, a failure leaves the old page given and the next request has it
+/// made again, and past the window a request waits for its handler. Gates and the count of work
+/// shutdown waits for order each step, with the clock paused.
+#[tokio::test(start_paused = true)]
 async fn a_kept_page_is_given_at_once_within_stale_while_revalidate_and_made_again_once() {
-    let (runs, does, gate) = (Runs::default(), std::sync::Arc::default(), std::sync::Arc::new(tokio::sync::Semaphore::new(0)));
-    let router = App::new(Routes::from(held_routes(&runs, &does, &gate, true))).router();
+    let steps = Steps::new();
+    let app = App::new(Routes::from(steps.routes(|page| page.stale_while_revalidate(Duration::from_secs(2)))));
+    let finishing = app.finishing();
+    let router = app.router();
     let mut made = std::collections::HashMap::new();
-    for at in ["/", "/written", "/late"] {
+    for at in ["/", "/written", "/?late"] {
         let (_, headers, body) = fetch(&router, "GET", at, &[]).await;
         assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=1, stale-while-revalidate=2");
         made.insert(at, body);
     }
-    assert_eq!(runs.count(), 3);
-    // Until the count of runs reaches `ran`, which a page made apart from its request leads to.
-    let ran = |ran: usize| {
-        let runs = runs.clone();
-        async move {
-            tokio::time::timeout(Duration::from_secs(5), async {
-                while runs.count() < ran {
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
-            })
-            .await
-            .expect("the page is made again");
-        }
-    };
-    tokio::time::sleep(Duration::from_millis(1100)).await;
+    tokio::time::advance(Duration::from_secs(1)).await;
 
-    // Given at once, while its handler waits at the gate; asked for again meanwhile, it is not
+    // Given at once while its handler waits at the gate; asked for again meanwhile, it is not
     // made a second time.
-    for _ in 0..4 {
-        let (status, headers, body) =
-            tokio::time::timeout(Duration::from_millis(500), fetch(&router, "GET", "/", &[])).await.expect("given at once");
-        assert!(status == StatusCode::OK && age_of(&headers).is_some_and(|age| age >= 1), "{headers:?}");
+    let gate = steps.held(Does::Answers);
+    for asked in 0..4 {
+        let (status, headers, body) = fetch(&router, "GET", "/", &[]).await;
+        assert_eq!((status, age_of(&headers)), (StatusCode::OK, Some(1)), "{asked}: {headers:?}");
         assert_eq!(body, made["/"]);
-    }
-    ran(4).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(runs.count(), 4, "made again once");
-    gate.add_permits(1);
-    // The page it made takes the old one's place.
-    let (headers, body) = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let (_, headers, body) = fetch(&router, "GET", "/", &[]).await;
-            if body != made["/"] {
-                return (headers, body);
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
+        if asked == 0 {
+            steps.started().await;
         }
-    })
-    .await
-    .expect("the page made again is kept");
-    assert_eq!(age_of(&headers), Some(0), "{headers:?}");
-    assert!(String::from_utf8_lossy(&body).contains("made by run 4 "));
-    assert_eq!(runs.count(), 4);
+    }
+    assert_eq!((steps.runs.count(), finishing.running()), (4, 1), "made again once, on one task");
+    gate.add_permits(1);
+    assert_eq!(settled(&finishing).await, 0);
+    // The page it made takes the old one's place.
+    let (_, headers, body) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!((age_of(&headers), made_by(&body), steps.runs.count()), (Some(0), 4, 4), "{headers:?}");
 
     // A write while it is made again: what it made is not kept.
-    let (_, headers, _) = fetch(&router, "GET", "/written", &[]).await;
-    assert!(age_of(&headers).is_some());
-    ran(5).await;
+    let gate = steps.held(Does::Answers);
+    assert_eq!(age_of(&fetch(&router, "GET", "/written", &[]).await.1), Some(1));
+    steps.started().await;
     let (status, _, _) = fetch(&router, "POST", "/written", &[("sec-fetch-site", "same-origin")]).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     gate.add_permits(1);
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    gate.close();
+    assert_eq!(settled(&finishing).await, 0);
     let (_, headers, body) = fetch(&router, "GET", "/written", &[]).await;
-    assert!(age_of(&headers).is_none(), "made by its handler: {headers:?}");
-    assert!(String::from_utf8_lossy(&body).contains("made by run 6 "));
+    assert_eq!((age_of(&headers), made_by(&body)), (None, 6), "made by its handler: {headers:?}");
     assert_eq!(age_of(&fetch(&router, "GET", "/written", &[]).await.1), Some(0), "and that one kept");
 
     // Made again and failing: the old page is still given, and the next request has it made again.
-    *does.lock().unwrap() = Does::Fails;
-    for ran_by_now in [7, 8] {
-        let (status, headers, body) = fetch(&router, "GET", "/late", &[]).await;
-        assert!(status == StatusCode::OK && age_of(&headers).is_some(), "{headers:?}");
-        assert_eq!(body, made["/late"]);
-        ran(ran_by_now).await;
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    for ran in [7, 8] {
+        steps.then(Does::Fails);
+        let (status, headers, body) = fetch(&router, "GET", "/?late", &[]).await;
+        assert_eq!((status, age_of(&headers)), (StatusCode::OK, Some(1)), "{headers:?}");
+        assert_eq!(body, made["/?late"]);
+        assert_eq!(settled(&finishing).await, 0);
+        assert_eq!(steps.runs.count(), ran);
     }
 
     // Past the window a request waits for its handler.
-    *does.lock().unwrap() = Does::Answers;
-    tokio::time::sleep(Duration::from_millis(2000)).await;
-    let (status, headers, body) = fetch(&router, "GET", "/late", &[]).await;
-    assert!(status == StatusCode::OK && age_of(&headers).is_none(), "{headers:?}");
-    assert!(String::from_utf8_lossy(&body).contains("made by run 9 "));
-    assert_eq!(runs.count(), 9);
+    tokio::time::advance(Duration::from_secs(2)).await;
+    let (status, headers, body) = fetch(&router, "GET", "/?late", &[]).await;
+    assert_eq!((status, age_of(&headers), made_by(&body), steps.runs.count()), (StatusCode::OK, None, 9, 9), "{headers:?}");
 }
 
+/// A page made again is not kept once the copy it was made for has gone: a page another request
+/// made and kept meanwhile, after the copy was turned out for room, is not replaced by it.
+#[tokio::test(start_paused = true)]
+async fn a_page_made_again_does_not_replace_one_kept_after_its_copy_went() {
+    let steps = Steps::new();
+    let app = App::new(Routes::from(steps.routes(|page| page.stale_while_revalidate(Duration::from_secs(60)))));
+    let app = app.kept_answers(128 * 1024);
+    let finishing = app.finishing();
+    let router = app.router();
+    fetch(&router, "GET", "/", &[]).await;
+    assert_eq!(age_of(&fetch(&router, "GET", "/", &[]).await.1), Some(0), "kept");
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let gate = steps.held(Does::Answers);
+    assert_eq!(age_of(&fetch(&router, "GET", "/", &[]).await.1), Some(1));
+    steps.started().await;
+    // Other pages fill the store until the copy past its lifetime is turned out for room; then a
+    // request for its URL has the page made and kept.
+    let mut n = 0;
+    let kept = loop {
+        assert!(n < 64, "the copy past its lifetime goes when room is needed");
+        for _ in 0..2 {
+            fetch(&router, "GET", &format!("/?n={n}"), &[]).await;
+        }
+        n += 1;
+        let (_, headers, body) = fetch(&router, "GET", "/", &[]).await;
+        if age_of(&headers).is_none() {
+            break made_by(&body);
+        }
+    };
+    // In a full store a URL is kept when it was asked for before.
+    let kept = match fetch(&router, "GET", "/", &[]).await {
+        (_, headers, _) if age_of(&headers) == Some(0) => kept,
+        (_, _, body) => made_by(&body),
+    };
+    assert_eq!(age_of(&fetch(&router, "GET", "/", &[]).await.1), Some(0), "kept");
+    gate.add_permits(1);
+    assert_eq!(settled(&finishing).await, 0);
+    let (_, headers, body) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!((age_of(&headers), made_by(&body)), (Some(0), kept), "the page kept after the copy went stays");
+}
+
+/// A page made again is made in the locale the app's middleware chose for the request that found
+/// it (`Req::set_locale`, from its URL), not the one its `Accept-Language` asks for.
+#[tokio::test(start_paused = true)]
+async fn a_page_made_again_keeps_the_locale_a_middleware_chose() {
+    use crate::i18n::Messages as _;
+    crate::i18n::messages! { struct StaleMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    struct French;
+
+    impl crate::Middleware for French {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            use crate::extract::FromRequestParts;
+            let (mut parts, body) = req.into_parts();
+            let chosen = Req::from_request_parts(&mut parts, &()).await.unwrap();
+            chosen.set_locale(crate::i18n::Locale::of(StaleMsg::for_locale("fr")));
+            next.run(Request::from_parts(parts, body)).await
+        }
+    }
+
+    let runs = Runs::default();
+    let counted = runs.clone();
+    let page = move |req: Req| {
+        counted.ran();
+        async move {
+            let t: StaleMsg = req.t();
+            let listings = t.item_listings().to_string();
+            let page = req.test_page_for("Words", html! { <p>{listings}</p> });
+            Public::new(Duration::from_secs(1), page).stale_while_revalidate(Duration::from_secs(2))
+        }
+    };
+    let app =
+        App::new(Routes::from(Table::new().route("/", crate::route::get(page).0))).messages::<StaleMsg>().middleware(French);
+    let finishing = app.finishing();
+    let router = app.router();
+    let english = [("accept-language", "en")];
+    let (_, headers, body) = fetch(&router, "GET", "/", &english).await;
+    assert!(String::from_utf8_lossy(&body).contains("Annonces") && age_of(&headers).is_none(), "{headers:?}");
+    assert_eq!(age_of(&fetch(&router, "GET", "/", &english).await.1), Some(0), "kept");
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert_eq!(age_of(&fetch(&router, "GET", "/", &english).await.1), Some(1), "given past its lifetime");
+    assert_eq!((settled(&finishing).await, runs.count()), (0, 2), "and made again");
+    let (_, headers, body) = fetch(&router, "GET", "/", &english).await;
+    assert_eq!(age_of(&headers), Some(0), "{headers:?}");
+    assert!(String::from_utf8_lossy(&body).contains("Annonces"), "in the locale the middleware chose");
+}
+
+/// A middleware's own `Cache-Control` after `next` (`private, no-store`) is for what leaves the
+/// app: the app's store stands where the handler does, inside the middleware, and keeps the
+/// handler's windows, so a page past its lifetime is still given within them.
+#[tokio::test(start_paused = true)]
+async fn a_middleware_s_no_store_leaves_a_kept_page_s_windows_as_the_handler_set_them() {
+    struct Unshared;
+
+    impl crate::Middleware for Unshared {
+        async fn call(&self, req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let mut res = next.run(req).await;
+            res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+            res
+        }
+    }
+
+    let steps = Steps::new();
+    let windows =
+        |page: Public<HtmlResult>| page.stale_while_revalidate(Duration::from_secs(2)).stale_if_error(Duration::from_secs(4));
+    let app = App::new(Routes::from(steps.routes(windows))).middleware(Unshared);
+    let finishing = app.finishing();
+    let router = app.router();
+    let (_, headers, made) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!(headers[header::CACHE_CONTROL], "private, no-store");
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let (_, headers, body) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!((age_of(&headers), &body), (Some(1), &made), "given past its lifetime: {headers:?}");
+    assert_eq!(headers[header::CACHE_CONTROL], "private, no-store");
+    assert_eq!(settled(&finishing).await, 0);
+    let (_, headers, made) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!((age_of(&headers), made_by(&made)), (Some(0), 2), "made again and kept");
+    tokio::time::advance(Duration::from_secs(3)).await;
+    steps.then(Does::Fails);
+    let (status, headers, body) = fetch(&router, "GET", "/", &[]).await;
+    assert_eq!((status, age_of(&headers), body), (StatusCode::OK, Some(3), made), "held for a failure: {headers:?}");
+}
+
+/// How a page's body is read, for the tests of a page made again: whole at once, once its gate has
+/// a permit (which may never come), or not at all, with an error.
+#[derive(Clone)]
+enum Read {
+    Whole,
+    Gated(Gate),
+    Fails,
+}
+
+/// A page of an exact size whose body is read as its `Read` says: an answer type of the app's own
+/// that says it is a page, as a `Public` route may answer.
+struct Exact {
+    text: bytes::Bytes,
+    read: Read,
+}
+
+impl crate::response::IntoResponse for Exact {
+    fn into_response(self) -> crate::response::Response {
+        let wait: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> = match self.read.clone() {
+            Read::Gated(gate) => Some(Box::pin(async move { gate.acquire().await.unwrap().forget() })),
+            Read::Whole | Read::Fails => None,
+        };
+        let length = self.text.len() as u64;
+        let body = ExactBody { text: Some(self.text), length, wait, fails: matches!(self.read, Read::Fails) };
+        let mut res = crate::response::Response::new(Body::new(body));
+        res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
+        res
+    }
+}
+
+impl crate::Answer for Exact {
+    const FORMAT: crate::answer::Format = crate::answer::Format::Html;
+    const PAGE: bool = true;
+    type Inputs = crate::answer::AnyInputs;
+    type Rows = crate::answer::NotAFeed;
+    type Kind = crate::AnyAnswer;
+}
+
+impl crate::answer::Shareable for Exact {
+    type ForAll = Self;
+}
+
+impl crate::answer::ForEveryone for Exact {
+    type Named = Self;
+
+    fn for_all(self) -> Self {
+        self
+    }
+}
+
+/// [`Exact`]'s body: its length known before it is read.
+struct ExactBody {
+    text: Option<bytes::Bytes>,
+    length: u64,
+    wait: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>>,
+    fails: bool,
+}
+
+impl http_body::Body for ExactBody {
+    type Data = bytes::Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<bytes::Bytes>, std::io::Error>>> {
+        if let Some(wait) = &mut self.wait {
+            std::task::ready!(wait.as_mut().poll(cx));
+            self.wait = None;
+        }
+        if self.fails {
+            return std::task::Poll::Ready(Some(Err(std::io::Error::other("the page's store went away"))));
+        }
+        std::task::Poll::Ready(self.text.take().map(|text| Ok(http_body::Frame::data(text))))
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(self.length)
+    }
+}
+
+/// `/` (at any query): an [`Exact`] page for a second with the windows `windows` adds, whose
+/// body is read as the next of `reads` says (whole once none is left), and whose handler counts
+/// its runs; its text names the run that made it.
+fn exact_routes(
+    runs: &Runs,
+    reads: &std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Read>>>,
+    windows: fn(Public<Exact>) -> Public<Exact>,
+) -> Table {
+    let (runs, reads) = (runs.clone(), reads.clone());
+    let page = move |_: Req| {
+        runs.ran();
+        let run = runs.count();
+        let read = reads.lock().unwrap().pop_front().unwrap_or(Read::Whole);
+        async move {
+            let text = format!("<!DOCTYPE html><html><head><title>Exact</title></head><body><main><p>made by run {run} </p></main></body></html>");
+            windows(Public::new(Duration::from_secs(1), Exact { text: text.into(), read }))
+        }
+    };
+    Table::new().route("/", crate::route::get(page).0)
+}
+
+/// A page made again whose body cannot be read failed, as a handler that answered 500 did: within
+/// `stale-while-revalidate` the old page is still given, and the next request has it made again;
+/// within `stale-if-error` the request is given the old page in its place.
+#[tokio::test(start_paused = true)]
+async fn a_body_that_cannot_be_read_past_a_page_s_lifetime_is_a_failure() {
+    let (runs, reads) = (Runs::default(), std::sync::Arc::default());
+    let windows =
+        |page: Public<Exact>| page.stale_while_revalidate(Duration::from_secs(1)).stale_if_error(Duration::from_secs(3));
+    let app = App::new(Routes::from(exact_routes(&runs, &reads, windows)));
+    let finishing = app.finishing();
+    let router = app.router();
+    for at in ["/?revalidate", "/?if-error"] {
+        fetch(&router, "GET", at, &[]).await;
+        assert_eq!(age_of(&fetch(&router, "GET", at, &[]).await.1), Some(0), "{at}: kept");
+    }
+    let fails = || reads.lock().unwrap().push_back(Read::Fails);
+
+    // Within `stale-while-revalidate`.
+    tokio::time::advance(Duration::from_secs(1)).await;
+    fails();
+    let (status, headers, body) = fetch(&router, "GET", "/?revalidate", &[]).await;
+    assert_eq!((status, age_of(&headers), made_by(&body)), (StatusCode::OK, Some(1), 1), "{headers:?}");
+    assert_eq!((settled(&finishing).await, runs.count()), (0, 3), "made again, and its body failed");
+    let (status, headers, body) = fetch(&router, "GET", "/?revalidate", &[]).await;
+    assert_eq!((status, age_of(&headers), made_by(&body)), (StatusCode::OK, Some(1), 1), "the old page stands: {headers:?}");
+    assert_eq!((settled(&finishing).await, runs.count()), (0, 4), "and is made again");
+    let (_, headers, body) = fetch(&router, "GET", "/?revalidate", &[]).await;
+    assert_eq!((age_of(&headers), made_by(&body)), (Some(0), 4), "{headers:?}");
+
+    // Within `stale-if-error`.
+    tokio::time::advance(Duration::from_secs(1)).await;
+    fails();
+    let (status, headers, body) = fetch(&router, "GET", "/?if-error", &[]).await;
+    assert_eq!((status, age_of(&headers), made_by(&body)), (StatusCode::OK, Some(2), 2), "the old page: {headers:?}");
+    let (status, headers, body) = fetch(&router, "GET", "/?if-error", &[]).await;
+    assert_eq!((status, age_of(&headers), made_by(&body)), (StatusCode::OK, None, 6), "the handler's: {headers:?}");
+    assert_eq!(age_of(&fetch(&router, "GET", "/?if-error", &[]).await.1), Some(0), "kept");
+}
+
+/// A page made again stops, its whole work with it, at its deadline or at shutdown, however long
+/// its body takes to read: shutdown is not kept waiting for it, the old page is not replaced, and
+/// the next request may have the page made again. Once shutdown has begun none is started.
+#[tokio::test(start_paused = true)]
+async fn a_page_made_again_ends_at_its_deadline_or_shutdown_however_long_its_body_takes() {
+    let (runs, reads) = (Runs::default(), std::sync::Arc::default());
+    let windows = |page: Public<Exact>| page.stale_while_revalidate(Duration::from_secs(2));
+    let app = App::new(Routes::from(exact_routes(&runs, &reads, windows))).deadline(Duration::from_millis(500));
+    let finishing = app.finishing();
+    let router = app.router();
+    for at in ["/?deadline", "/?shutdown", "/?after"] {
+        fetch(&router, "GET", at, &[]).await;
+    }
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let never = Gate::new(tokio::sync::Semaphore::new(0));
+
+    // Its deadline: the body it waits for never comes.
+    reads.lock().unwrap().push_back(Read::Gated(never.clone()));
+    assert_eq!(age_of(&fetch(&router, "GET", "/?deadline", &[]).await.1), Some(1));
+    assert_eq!(finishing.running(), 1, "made again on a task of its own");
+    assert_eq!((settled(&finishing).await, runs.count()), (0, 4), "ended at its deadline");
+    let (_, headers, body) = fetch(&router, "GET", "/?deadline", &[]).await;
+    assert_eq!((age_of(&headers), made_by(&body)), (Some(1), 1), "the old page stands: {headers:?}");
+    assert_eq!((settled(&finishing).await, runs.count()), (0, 5), "and is made again");
+    let (_, headers, body) = fetch(&router, "GET", "/?deadline", &[]).await;
+    assert_eq!((age_of(&headers), made_by(&body)), (Some(0), 5), "{headers:?}");
+
+    // Shutdown: the body never comes either.
+    reads.lock().unwrap().push_back(Read::Gated(never.clone()));
+    assert_eq!(age_of(&fetch(&router, "GET", "/?shutdown", &[]).await.1), Some(1));
+    tokio::task::yield_now().await;
+    assert_eq!((runs.count(), finishing.running()), (6, 1), "its body awaited");
+    finishing.signal().abort(crate::Abort::Shutdown);
+    assert_eq!(settled(&finishing).await, 0, "ended at shutdown");
+
+    // Once shutdown has begun, the page is given and not made again.
+    for _ in 0..2 {
+        let (_, headers, body) = fetch(&router, "GET", "/?after", &[]).await;
+        assert_eq!((age_of(&headers), made_by(&body)), (Some(1), 3), "{headers:?}");
+        assert_eq!((settled(&finishing).await, runs.count()), (0, 6), "not made again");
+    }
+}
 /// A page is kept for the `Host` it was asked with, and for the `Accept-Language` when its
 /// language follows the header (its `Vary` names the header then).
 #[tokio::test]
