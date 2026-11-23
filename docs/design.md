@@ -8767,6 +8767,40 @@ rules something out.
     than the one the change comparison built; and it counted no user L1 instruction-cache misses,
     which item 2 asks for when a change adds or moves code, as that pull request's does.
 
+    C code a build links.
+    [#1971 Compress a request's small body with gzip by libdeflate for a client without zstd](https://github.com/corten-run/corten/pull/1971)
+    took away a premise above, that a pad moves every function by exactly its size. It puts
+    libdeflate in a build with the `compress` feature, the first C code in such a build's `.text`
+    that the app's own compiler makes (zstd comes from the system's library), and the system's gcc
+    (14.2.0 on Debian 13) aligned 17 of libdeflate's function sections to 64 bytes and 5 to 32,
+    where rustc aligns every function's to 16. A section moves only by a multiple of its
+    alignment, so a pad that is not one moves it, and what the linker lays after it, by the pad
+    rounded. In that pull request's head (`498291116`, [design Choice 73](#choice-request-gzip))
+    the C code is the last 43 function symbols of `.text`: libdeflate's 39 and `__udivti3`,
+    `round`, `_init` and `_fini` after them. Over its 30 placements each of the 43 moved by its
+    pad, by 16 bytes more, or by 16 or 32 bytes less (387, 318, 312 and 273 of the 1,290 shifts),
+    and by exactly the pad in the 8 placements whose pad is a multiple of 64; the 3,405 function
+    symbols before them, all of Corten's and the probe's, moved by exactly the pad in all 30
+    (102,150 of 102,150), every pair of neighbours stayed next to each other, and the sections
+    after `.text` moved by the pad rounded to a multiple of 64 (looked at for one placement, the
+    pad of 15,120 bytes, where they moved by 15,104), where the base's 3,407, rustc's code alone,
+    moved by exactly the pad in all 60 of its placements (204,420 of 204,420). So Pull requests
+    now checks a side that links C archives in two parts: exactly the pad before the first function
+    those archives define, and from it to the end of `.text` exactly the pad or a multiple of 32
+    bytes less than 64 bytes from it, each shift recorded. That is not a looser reading of the same
+    thing: a section aligned to 64 bytes sits at one place in a line in every build an app makes,
+    so a placement that moved it by 16 would be one no build lands in, while its place in a page
+    still varies with the pad. What the check gives up is said, not measured: when one side of a
+    comparison has such code and the other does not, as this pull request's did, the first side's
+    data keeps its place in a 64-byte line across placements and the other's takes each 16-byte
+    phase, and an A/A of one side against itself cannot see what that does. The plan says so and
+    the report sets the placements whose pad is a multiple of 64, where both sides move by exactly
+    the pad throughout, beside the rest. Not chosen for it: pads that are all multiples of 64,
+    which would move everything exactly and vary no phase within a line for rustc's code, most of
+    what a request runs; libdeflate built with its functions aligned to 16, a binary no app
+    builds; and leaving the rule as it read, which every placement run of a `compress` build would
+    then fail before its first turn.
+
     Not chosen: a seeded shuffle of the function order (LLD's `--shuffle-sections`, this Choice's
     first version), since in that plan's container dry run seed 1 on main moved all 3,404
     functions to a new order and kept 5 of 3,335 pairs of neighbours next to each other (as the
@@ -8811,7 +8845,9 @@ rules something out.
     function in its own `.text` section, aligns them to 16 bytes and links through LLD 23 on Linux
     by default; LLD aligns each input section to its own alignment, so a pad does not by itself
     move every function by exactly its size; the run checks each function's shift rather than
-    assuming it, and the first run measured exactly the pad for every function it compared);
+    assuming it, and the first run measured exactly the pad for every function it compared; C code
+    is aligned as its own compiler chose, `libdeflate-sys` 1.26.1's by gcc 14.2.0 to 16, 32 and 64
+    bytes a function section, the last code in `.text` in the builds measured);
     reasoned (a release binary's placement moves with every later change, so a change's cost is
     read across placements, not at one; relinking the same objects with a pad changes placement
     alone, as the answers, the unchanged symbol set and the kept neighbours check; a bound inside
@@ -8836,7 +8872,11 @@ rules something out.
     those real builds land in, or that two functions' distance apart matters; the unpadded build
     sits clearly above or below its padded ones, so the pads move cost as well as spreading it;
     rustc stops emitting a section per function or aligning functions to 16 bytes, the gate's
-    linker is not LLD, or LLD stops placing an ordering file's sections first; a recorded spread
+    linker is not LLD, or LLD stops placing an ordering file's sections first; a build links C
+    code that is laid before rustc's in `.text` or aligned past 64 bytes, so more than a tail of
+    the code moves by other than the pad; a comparison whose sides differ in such code reads its
+    placements at multiples of 64 bytes clearly apart from the rest, so where the data sits in a
+    line matters to the reading; a recorded spread
     is so wide that most single-build readings land inside it, so the protocol is the rule in
     practice, or so narrow that none do; a placement run with another kernel or toolchain on an
     otherwise matching setup records a spread wider than the one here, so they belong among what a
@@ -8853,7 +8893,10 @@ rules something out.
     `5a22836fc`, rustc 1.100.0 with LLD 23.1.5, Linux 6.12.117, tag `evidence/ee7b0b41`);
     2026-11-23, the A/As' bounds with their lists' labels swapped, the saved answers' body
     lengths, the warm-up `Age`s, the layouts' section shifts and the binaries' SHA-256s, read
-    from that tag's results at `ee7b0b417`.
+    from that tag's results at `ee7b0b417`; 2026-11-23, the C code's alignment and each
+    function's shift over 90 placements, from the builds of `14126d2a8` and `498291116` on two
+    c-8s (rustc 1.100.0 with LLD 23.1.5, gcc 14.2.0, Debian 13), tag
+    `evidence/request-gzip-1971-placed`.
 73. <a id="choice-request-gzip"></a>**A body compressed as it is sent is zstd, else libdeflate's gzip
     up to 16 KiB and brotli 1 past it.** A client that accepts
     gzip and not zstd (Safari before 26.3, a later Safari on a macOS before 26.3, and a browser
@@ -8977,6 +9020,48 @@ rules something out.
     (`a02c81e86`); that binary was not measured. Not run under load: a client with gzip alone or brotli
     alone, and a body past 16 KiB (counted and probed above). These are cycles, not latency.
 
+    A second declared run read the code that would merge across placements
+    ([Choice 72](#choice-placement-runs)), under a plan in the pull request before it. Its
+    author was asked for it by the maintainer after the result above, in the session that wrote
+    this change, which is not on the pull request. Base main `14126d2a8` against head
+    `498291116`, this change with that main merged, on the probe that Choice's runs use
+    (`GET /private` to its `plain` configuration, a page of about 6 KB made for one visitor,
+    features `json` and `compress`), each side compiled once and placed 30 ways, 8 recorded
+    pairs a placement after one that is not, every turn a fresh start, and the base against
+    itself under a second list of pads as what the run can resolve; two c-8s, one with a Xeon
+    Platinum 8168 for the request with no `Accept-Encoding` and one with an 8280 for the zstd
+    request. With `gzip, deflate, br, zstd` the base against itself read 0.27% more at the
+    median of the 30 placement medians with a bound of 0.49% more, and with its lists' labels
+    swapped a bound of 0.09% fewer, so it resolved 1%; the change read 0.43% fewer (placement
+    medians from 1.45% fewer to 2.48% more) with a bound of 0.03% fewer, on 0.01% fewer user
+    instructions and 0.74% more user L1 instruction-cache misses a request (bound 1.60% more).
+    That margin was met. With no `Accept-Encoding` the base against itself read 0.42% more
+    with a bound of 1.03% more (0.22% more with the labels swapped; placement medians from
+    3.31% fewer to 3.39% more, 19 of 30 above zero), so that workload was not resolved, and by
+    the plan the change does not pass on it whatever its own reading, which was 0.06% fewer
+    (2.24% fewer to 1.52% more) with a bound of 0.22% more, on 0.04% fewer instructions and
+    1.84% more instruction-cache misses (bound 2.47% more). The reduction, on one build of
+    each side over 40 pairs with `gzip, br`: 157,039 user and kernel cycles a request against
+    228,437, 31.43% fewer at the median (25.54% to 35.46% fewer) with a bound of 31.20% fewer
+    (user instructions 282,932 against 473,660). All 120 placement runs completed, every
+    counter ran for all of every turn, and no comparison was run again. So of the two workloads
+    this run held to +1% one met it and one was not resolved, and the run does not carry the
+    change. Nor does it undo the first run's miss, which Pull requests keeps binding ("a
+    placement run declared after it does not clear such a miss"); whether a run on later
+    commits can stand in for that one is the maintainer's to say and is not said here. The plan
+    named two departures before anything was measured. The head's C code cannot meet the letter
+    of the placement check, and is checked as that Choice's "C code a build links" says; the
+    diagnostic that plan named, which no reading uses, has the change's placement medians where
+    the pad is a multiple of 64 (8 placements) at 0.14% more against 0.47% fewer for the other
+    22 on the zstd request, and 0.71% fewer against 0.02% more with no `Accept-Encoding`. And the
+    plan as first posted compared the answers' headers with nothing masked but `Date`, which no
+    binary meets against a second start of itself, since a compressed answer's weak `ETag` is
+    keyed per start; the dry run stopped on that before any turn, and the plan was changed in
+    the pull request, before any turn was measured, to mask that one value. The receipt is
+    commit `04d4ec477` under the tag `evidence/request-gzip-1971-placed`: the kit, the plan as
+    run and as first posted, both hosts' results and the dry run's (its parent `29af5a467`,
+    under `evidence/request-gzip-1971-placements`, differs by one comment line of a script).
+
     The receipt is commit `4800ed8d1`, which adds it to `fdf94a6a7`, kept under the tag
     `evidence/request-gzip-1971`: the kit (the plans,
     the scripts, the small app, the sweep's program and the generators of the long page and of
@@ -9037,7 +9122,9 @@ rules something out.
 
     Stands on: measured (the sweep, whose bytes do not vary; instructions, three pairs a build;
     time in process, three turns; CPU and faults on the image, three rounds; cycles under load,
-    40 and 60 pairs a workload on one host, whose margin for a zstd request was not met; the
+    40 and 60 pairs a workload on one host, whose margin for a zstd request was not met, and a
+    second run across 30 placements a workload on two hosts, which met the zstd request's
+    margin and did not resolve the uncompressed request's; the
     coders alone, one run on one host; a clean build's time, four builds each); platform (libdeflate 1.26.1 as `libdeflater` 1.26.1 builds it,
     `brotli` 9.1.3; Go 1.27.4's `net/http` asking for gzip alone, as its `Transport`
     documents; caniuse's zstd data, where Chrome and Edge send it from 123, Firefox from 126,
@@ -9066,7 +9153,10 @@ rules something out.
     6.12.118, and the sweep, the coders alone, the probe and the builds on a c-16, Linux
     6.8.0-149, both with Docker 29.10.0), with rustc 1.100.0, libdeflater 1.26.1, brotli 9.1.3
     and Debian's libjemalloc2 5.3.0 in the image, and caniuse's zstd data, pkg.go.dev's
-    `net/http` at go1.27.4 and CloudFront's developer guide as they read that day.
+    `net/http` at go1.27.4 and CloudFront's developer guide as they read that day; 2026-11-23,
+    the run across placements, `14126d2a8` against `498291116` on two DigitalOcean c-8s (a Xeon
+    Platinum 8168 and an 8280), Debian 13, Linux 6.12.117, rustc 1.100.0 with LLD 23.1.5, gcc
+    14.2.0 and perf 6.12.118.
 
 ## Rules
 
