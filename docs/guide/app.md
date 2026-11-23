@@ -1529,7 +1529,8 @@ build's error about the app's code, which keeps a `NoStore` answer's `private, n
 replaces one. A handler that passes such a failure on with `?`, or gives it another status, keeps
 the mark, as one does that met an extractor's rejection as a value (`Result<Json<T>, BodyRejection>`,
 a `FormRejection`) and passes it on with `?`; one that wraps it (`Error::new(error)`) makes it its
-own, except a refusal (`Refused`), which stays Corten's however it is wrapped. A handler's own failure is its answer, a plain-text one too: the error
+own, except an `Error` that holds a refusal (`Refused`), which `Error::new` keeps as the refusal it
+is (inside an error of another type, `io::Error::other(error)`, it is the handler's). A handler's own failure is its answer, a plain-text one too: the error
 page a browser gets in its place keeps what a middleware wrote, as for its own 404. An unstaged route's `NoStore`
 answer goes out `private, no-store` with none of them either
 ([a route outside the stages](#a-route-outside-the-stages)); its other answers, refusals

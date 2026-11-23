@@ -1355,7 +1355,8 @@ impl Error {
     /// without reading a caller. A handler that passes it on with `?`, or gives it another status,
     /// keeps the mark, as does one that passes a typed rejection on with `?` (`From<E>`); one that
     /// wraps it (`Error::new(error)`) makes the failure its own, except a [`Refused`] in it, which
-    /// stays Corten's (a plain failure at the new status, as [`Error::with_status`] makes it). Every
+    /// stays Corten's (a plain failure at the new status, as [`Error::with_status`] makes it; inside
+    /// an error of another type, it is the handler's too). Every
     /// failure Corten makes is one of these, [`cache::unshared`] or [`cache::unshared_in_place_of`]
     /// (`tests::cache`'s source check holds the crate to it).
     pub(crate) fn corten(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {

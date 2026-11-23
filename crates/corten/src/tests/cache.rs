@@ -6245,7 +6245,8 @@ async fn sent_by_ann(
 /// Corten's: the `500` it becomes, as any error passed on with `?` does, keeps the mark, so the
 /// error page drawn in its place, which greets Ann by her cookie, is never shared. Wrapped by hand
 /// (`Error::new`), it is the handler's own failure, as an error of the handler's own passed on with
-/// `?` is, and the page in its place keeps what the middleware wrote (the controls).
+/// `?` is, and the page in its place keeps what the middleware wrote (the controls). A refusal
+/// wrapped with `Error::new` stays Corten's; inside an error of another type, it is the handler's.
 #[tokio::test]
 async fn a_rejection_passed_on_with_the_question_mark_stays_corten_s() {
     type Text = std::result::Result<String, crate::extract::BodyRejection>;
@@ -6285,6 +6286,13 @@ async fn a_rejection_passed_on_with_the_question_mark_stays_corten_s() {
                 Err::<(), _>(std::io::Error::other("the store is down"))?;
                 Ok::<_, Error>("never")
             }),
+        )
+        // A refusal wrapped with `Error::new` is still the refusal (`From<Error> for Box` hands
+        // `Error::new` the refusal itself), sent as a plain 500; inside another error, it is not.
+        .route("/refused-wrapped", get(|| async { Err::<&str, _>(Error::new(Error::from(crate::Refused::forbidden()))) }))
+        .route(
+            "/refused-in-another-error",
+            get(|| async { Err::<&str, _>(Error::new(std::io::Error::other(Error::from(crate::Refused::forbidden())))) }),
         );
     let router = App::new(Routes::from(routes))
         .middleware(CdnRecaches(Some("public, max-age=60")))
@@ -6300,6 +6308,8 @@ async fn a_rejection_passed_on_with_the_question_mark_stays_corten_s() {
         ("BodyRejection wrapped with Error::new", "POST", "/text-wrapped", same_site, &b"\xff"[..], false),
         ("FormRejection wrapped with Error::new", "GET", "/fields-wrapped?n=x", html, &b""[..], false),
         ("the handler's own error passed on with ?", "GET", "/own", html, &b""[..], false),
+        ("a refusal wrapped with Error::new", "GET", "/refused-wrapped", html, &b""[..], true),
+        ("a refusal inside another error", "GET", "/refused-in-another-error", html, &b""[..], false),
     ] {
         let (status, headers, body) = sent_by_ann(&router, method, uri, asked, body).await;
         // `?` makes a 500 of any error, Corten's or not, as it did.
