@@ -154,6 +154,29 @@ test("a successful or failing command keeps its existing result and exit shape",
   await assert.rejects(runner.command(...node("")), /catalog run interrupted/);
 });
 
+test("a client that cannot start fails with its spawn error unless a stop was accepted first, and carries `exit` either way", { timeout: 15000 }, async () => {
+  const missing = join(tmpdir(), `catalog-missing-client-${randomBytes(6).toString("hex")}`);
+  // Unopposed, the spawn error is the command's own failure.
+  const alone = await failure(commandRunner({ cwd: tmpdir() }).command(missing, ["logs"], { receipt: true }));
+  assert.equal(alone.code, "ENOENT");
+  assert.deepEqual(alone.exit, { code: null, signal: null, expired: false, interrupted: false });
+  assert.equal(alone.spawnError, undefined); assert.equal(alone.lifetime.stopped, null); assert.equal(alone.lifetime.kill, null);
+  // An interrupt in the same turn is accepted before Node reports the spawn error, so the interrupt decides
+  // the outcome, as the receipt says, and the spawn error is secondary.
+  let interrupted = false;
+  const runner = commandRunner({ cwd: tmpdir(), interrupted: () => interrupted });
+  const pending = failure(runner.command(missing, ["logs"], { receipt: true }));
+  interrupted = true; runner.interrupt();
+  const stopped = await pending;
+  assert.equal(stopped.code, undefined, "not the raw spawn error");
+  assert.deepEqual(stopped.exit, { code: null, signal: null, expired: false, interrupted: true });
+  assert.match(stopped.message, /: did not start \(ENOENT\); interrupted\n/);
+  assert.match(stopped.spawnError, /ENOENT/);
+  assert.equal(stopped.lifetime.stopped, "interrupt"); assert.equal(stopped.lifetime.kill.end, "no process");
+  const receipt = await failureReceipt(() => assert.fail("a refusal queries nothing"), { stage: "app start", container: "c1-run-gin", error: stopped,
+    owned: () => false, verified: { refusal: "not inspected" } });
+  assert.deepEqual([receipt.exit, receipt.spawnError, receipt.lifetime.stopped], [stopped.exit, stopped.spawnError, "interrupt"]);
+});
 test("a client that exits while another process holds its output open still settles at its deadline", { timeout: 20000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "catalog-command-held-"));
   const pidFile = join(dir, "holder.pid");
@@ -283,28 +306,31 @@ const errno = (code) => Object.assign(new Error(code), { code });
 test("on Linux the group is signalled only while the client is unreaped; a replacement group answering after the leader exits gets nothing", { timeout: 20000 }, async () => {
   const options = { platform: "linux", graceMs: 300, boundMs: 1500 }, clients = new Map();
   // A fake client: Node sets its exit state and emits `exit` when it reaps it.
-  const client = (pid, { exitCode = null, exitAfterMs = null, diesOn = null } = {}) => {
+  const client = (pid, { exitCode = null, exitsOn = null, diesOn = null } = {}) => {
     const c = Object.assign(new EventEmitter(), { pid, exitCode, signalCode: null, signals: [] });
     c.end = (signal) => {
       if (c.exitCode !== null || c.signalCode !== null) return;
       if (signal) c.signalCode = signal; else c.exitCode = 0;
       c.emit("exit", c.exitCode, c.signalCode);
     };
-    c.kill = (signal) => { c.signals.push(signal); if (signal === diesOn) setImmediate(() => c.end(signal)); return true; };
-    if (exitAfterMs !== null) setTimeout(() => c.end(null), exitAfterMs);
+    // `exitsOn`: the client exits 0 once it has that signal; `diesOn`: it is killed by it. Exits follow
+    // the signals actually recorded, never a timer racing the deferred SIGTERM.
+    c.receive = (signal) => { if (signal === exitsOn) setImmediate(() => c.end(null)); else if (signal === diesOn) setImmediate(() => c.end(signal)); };
+    c.kill = (signal) => { c.signals.push(signal); c.receive(signal); return true; };
     clients.set(pid, c); return c;
   };
   const { result, sent } = await signals((pid, signal) => {
     if (-pid === 4202 || -pid === 4205) throw errno("ESRCH");
-    // A group SIGKILL ends its leader, except 4206's, which outlives it.
+    // A group SIGTERM reaches its leader; a group SIGKILL ends its leader, except 4206's, which outlives it.
+    if (signal === "SIGTERM") clients.get(-pid)?.receive(signal);
     if (signal === "SIGKILL" && -pid !== 4206) setImmediate(() => clients.get(-pid)?.end("SIGKILL"));
     // Every other number answers, including whatever group holds 4203's ID once its leader has exited.
     return true;
   }, async () => {
     const records = await Promise.all([
       killCommand(client(4201, { exitCode: 0 }), options), // Already exited: its group's ID may be reused.
-      killCommand(client(4202, { exitAfterMs: 50 }), options), // The group SIGTERM fails; the client is stopped by its handle.
-      killCommand(client(4203, { exitAfterMs: 50 }), options), // The client exits; a replacement group then answers any signal.
+      killCommand(client(4202, { exitsOn: "SIGTERM" }), options), // The group SIGTERM fails; SIGTERM through its handle ends it.
+      killCommand(client(4203, { exitsOn: "SIGTERM" }), options), // Its group's SIGTERM ends it; a replacement group then answers any signal.
       killCommand(client(4204), options), // The client and its group ignore SIGTERM while it is unreaped.
       killCommand(client(4205, { diesOn: "SIGKILL" }), options), // The group signal fails and the client ignores SIGTERM.
       killCommand(client(4206), options), // The client survives even SIGKILL until the bound.
@@ -322,6 +348,25 @@ test("on Linux the group is signalled only while the client is unreaped; a repla
     ["sent", "sent", clientExitEnd], ["ESRCH", "client", clientExitEnd], ["sent", "sent", "bound reached; the client was still running"]]);
 });
 
+test("on Linux a client that exits before its deferred SIGTERM runs gets no signal at all", { timeout: 10000 }, async () => {
+  const options = { platform: "linux", graceMs: 300, boundMs: 1500 };
+  const client = (pid) => Object.assign(new EventEmitter(), { pid, exitCode: null, signalCode: null, signals: [],
+    kill(signal) { this.signals.push(signal); return true; } });
+  const { result, sent } = await signals(() => true, async () => {
+    // Node reaps it and emits `exit` in the same turn the stop starts, before the deferred SIGTERM.
+    const announced = client(4301), first = killCommand(announced, options);
+    announced.exitCode = 0; announced.emit("exit", 0, null);
+    // Reaped in the same libuv batch: its exit fields are set before the deferred SIGTERM, its `exit` not yet emitted.
+    const batched = client(4302), second = killCommand(batched, options);
+    batched.exitCode = 0;
+    const records = await Promise.all([first, second]);
+    await sleep(500);
+    return { records, clients: [announced, batched] };
+  });
+  assert.deepEqual(sent, [], "no group signal for a client already reaped");
+  assert.deepEqual(result.clients.map((c) => c.signals), [[], []], "nor through its handle");
+  assert.deepEqual(result.records.map((r) => [r.term, r.kill, r.end]), [[null, null, clientExitEnd], [null, null, clientExitEnd]]);
+});
 // A Linux process that has exited but has not been reaped.
 const zombie = (pid) => { try { return /^\d+ \(.*\) Z /.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return false; } };
 const block = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);

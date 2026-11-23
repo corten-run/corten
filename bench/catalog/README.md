@@ -184,12 +184,15 @@ This does not disable native access logging or change measured application setti
 When a detached app start or an application, startup or upstream log collection fails or
 reaches its deadline, the runner saves a `catalog-command-failure/v1` receipt before it removes
 the owned container: `app-start.failure.json` in the source or preflight folder, or
-`<log>.failure.json` beside the partial log. Each failed start keeps its own
-`<container>-startup-<attempt>.log`. The receipt records the Docker client's lifetime in
-milliseconds after spawn (first and last output on each pipe, client exit, each pipe's close,
-when and why the runner stopped it, and what the stop signalled), and the offset, bytes and
-SHA-256 of what the log collection appended, hashed from the closed file. A container is read
-only when Docker names it exactly and it carries this run's label. Each command makes that
+`<log>.failure.json` beside the partial log. A failed detached start (`docker run -d`) writes only
+its receipt, with no log file: that command collects no logs. When a started app later fails its
+startup check (not running, or no published port), the runner collects its logs into
+`<container>-startup-<attempt>.log`, numbered per attempt, and a failure of that collection
+writes `<container>-startup-<attempt>.log.failure.json` beside it. The receipt records the
+Docker client's lifetime in milliseconds after spawn (first and last output on each pipe, client
+exit, each pipe's close, when and why the runner stopped it, and what the stop signalled), and the
+offset, bytes and SHA-256 of what the log collection appended, hashed from the closed file. A
+container is read only when Docker names it exactly and it carries this run's label. Each command makes that
 check once, and its receipt is bound to the result: a log collection reads logs by the ID it
 resolved, and its receipt reads that same ID, never the name again. From `docker inspect` it
 keeps the restart count and the state's status, running flag, exit code, OOM flag and start
@@ -201,7 +204,9 @@ receipt, it records that and queries nothing else. A detached start has no earli
 its receipt's one ownership check is also its state: that inspect is not repeated. Each probe
 has a 10-second bound and a probe failure is recorded in the receipt. An output write error
 after another stop was accepted is recorded as `outputError` and does not change the stop's
-outcome. Saving the receipt is best effort and never replaces the
+outcome. A Docker client that cannot be started fails with Node's spawn error (its `exit` has no
+code or signal) unless a stop was accepted first; then that stop decides and the spawn error is
+recorded as `spawnError`. Saving the receipt is best effort and never replaces the
 failure, which still fails the run; nothing is retried and no command deadline changes.
 Receipts cover the detached parity and preflight starts and these log collections, not the
 measured cold-start create and start. Commands in a timed phase, such as k6's `docker start

@@ -187,7 +187,10 @@ function stopTree(child, { cwd, helperMs, boundMs, taskkill }) {
 // an interrupt. The first stop reason the runner accepts decides the outcome. A failure
 // carries `exit` (the stable outcome other evidence checks); an output error after another
 // stop was accepted is kept as `outputError`, and a failed signal to the client as
-// `signalError`; neither changes it. A stopped command settles only after its stop has
+// `signalError`; neither changes it. A client that cannot be started (spawn ENOENT, for
+// example) fails with Node's spawn error, given an `exit` with no code or signal, unless a stop
+// was accepted first: then that stop decides, as for any command, and the spawn error is kept as
+// `spawnError`. A stopped command settles only after its stop has
 // (killCommand), inside the stop bound. At the bound the runner releases the pipes and, if the
 // client is still running, unreferences it so it no longer holds the runner, records that it
 // survived, and fails; a failed signal never cancels that release.
@@ -217,7 +220,7 @@ export function commandRunner({ cwd, interrupted = () => false, killOptions = {}
       exitMs: null, exitCode: null, exitSignal: null, closeMs: null, stopped: null, stoppedMs: null, releasedMs: null, clientAtRelease: null, kill: null,
       file: null, settledMs: null } : null;
     let reason = null, exitedAtStop = false, released = false, survived = false, settled = false, escalation = null;
-    let ioError, signalError, release, timer, settleNow;
+    let ioError, signalError, spawnError, release, timer, settleNow;
     // Idempotent, and the first accepted reason decides the outcome: a later deadline, interrupt
     // or output error neither signals again, restarts the grace, nor changes the outcome.
     const stop = (why) => {
@@ -240,13 +243,15 @@ export function commandRunner({ cwd, interrupted = () => false, killOptions = {}
       try { escalation = killCommand(child, { cwd, ...killOptions }); }
       catch (e) { escalation = Promise.resolve({ error: e?.code ?? e?.name ?? "error" }); }
     };
-    const closed = new Promise((resolve, reject) => {
+    const closed = new Promise((resolve) => {
       settleNow = (value) => { settled = true; resolve(value); };
       // Node also emits `error` when a kill() fails; the client may still be running, so that is
-      // secondary evidence (killCommand records it too) and the release stays armed.
+      // secondary evidence (killCommand records it too) and the release stays armed. Any other
+      // `error` means the client was never started; it settles the command, and is classified
+      // below with whatever stop was accepted before it.
       child.on("error", (e) => {
         if (e?.syscall === "kill") { signalError ??= e; return; }
-        settled = true; reject(e);
+        spawnError ??= e ?? new Error(`${binary}: failed to start`); settleNow({ code: null, signal: null });
       });
       child.on("close", (code, signal) => { if (lifetime && !released) lifetime.closeMs = at(); settleNow({ code, signal }); });
     });
@@ -286,15 +291,23 @@ export function commandRunner({ cwd, interrupted = () => false, killOptions = {}
         // An output error that was itself the stop is the failure; after another accepted stop it is secondary.
         if (ioError && (reason === "output error" || reason === null)) throw ioError;
         const expired = reason === "deadline", interruption = reason === "interrupt", runInterrupted = interrupted() && !cleanup;
+        const exit = { code, signal, expired, interrupted: interruption || (reason === null && runInterrupted) };
+        // Unopposed, a client that never started fails with its own spawn error.
+        if (spawnError !== undefined && reason === null) {
+          if (typeof spawnError === "object") spawnError.exit ??= exit;
+          throw spawnError;
+        }
         if (code !== 0 || reason !== null || released || runInterrupted) {
           // The client finished, before the stop or before the release, but a pipe was still held open.
           const held = exitedAtStop || (released && !survived)
             ? `; the client exited ${child.exitCode ?? child.signalCode}${lifetime ? ` at ${lifetime.exitMs} ms` : ""} but its output stayed open` : "";
           const forced = released ? `; its pipes were released${lifetime ? ` at ${lifetime.releasedMs} ms` : ""} without end of file${survived
             ? " while the client was still running; it was left running" : ""}` : "";
-          const error = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${expired ? `timeout after ${timeout} ms` : `exit ${code}`}${interruption ? "; interrupted" : ""}${held}${forced}\n${output.diagnostic()}`);
-          error.exit = { code, signal, expired, interrupted: interruption || (reason === null && runInterrupted) };
+          const ended = expired ? `timeout after ${timeout} ms` : spawnError !== undefined ? `did not start (${spawnError?.code ?? "error"})` : `exit ${code}`;
+          const error = new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${ended}${interruption ? "; interrupted" : ""}${held}${forced}\n${output.diagnostic()}`);
+          error.exit = exit;
           if (ioError) error.outputError = firstLine(ioError);
+          if (spawnError !== undefined) error.spawnError = firstLine(spawnError);
           throw error;
         }
         result = output.result();
@@ -374,7 +387,7 @@ export async function failureReceipt(docker, { stage, container, error, verified
   const lifetime = error?.lifetime ?? null;
   const receipt = { schema: "catalog-command-failure/v1", stage, container, id: verified?.id ?? null, recordedAt: new Date().toISOString(),
     error: firstLine(error), exit: error?.exit ?? null, outputError: error?.outputError ?? null, outputCloseError: error?.outputCloseError ?? null,
-    signalError: error?.signalError ?? null, lifetime, refusal: null, inspect: null, events: null, diagnosticErrors: [] };
+    signalError: error?.signalError ?? null, spawnError: error?.spawnError ?? null, lifetime, refusal: null, inspect: null, events: null, diagnosticErrors: [] };
   if (!verified?.id) {
     receipt.refusal = verified?.refusal ?? "not verified";
     if (verified?.problem) receipt.diagnosticErrors.push(verified.problem);
