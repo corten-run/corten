@@ -8105,7 +8105,10 @@ rules something out.
     measured in cycles yet.
     Not measured: a file kept for a handler that reads it from a disk, a database or a store
     of objects, where the read is what a kept file saves; a body between 1,024 and 8,000
-    bytes, under 1,024 or over 1 MiB; a store that kept pictures or downloads fill, where
+    bytes in cycles (the 1,999-byte JSON body above was counted for memory and instructions
+    only), under 1,024 or over 1 MiB; a head of many names or many values of one name (a page
+    with dozens of `Link`s), whose map a kept answer given again makes with room for its names,
+    beside the four lines measured; a store that kept pictures or downloads fill, where
     pages are turned out for them; a picture asked for with `gzip` alone; a request with a
     cookie for a body route in a build without `compress`, which now passes the stage that
     asks; the kernel's part of the price with no coding on a load whose threads do not sleep;
@@ -8184,7 +8187,9 @@ rules something out.
     router's own refusals are worth leaving out where the request met no middleware; the connection speaks HTTP/2, where a request's target carries its authority; an app
     is found finishing work again and again on the `Signal` of a write from before its first
     answer that may be kept, which empties its store each time, so such a write should keep
-    its path to count by; or an app
+    its path to count by; a kept answer given again with a head of many names or many values
+    of one name is measured costing more than its handler's map cost to clone, so the head
+    should be held as a map past some size; or an app
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
