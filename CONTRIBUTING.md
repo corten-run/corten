@@ -523,7 +523,8 @@ establish a general ranking.
          Placement i of the change is base with pad p_i against head with pad p_i. Before
          anything is measured, the run records that the link run again without a pad is
          byte-identical to the build's own binary; that each placement has exactly that binary's
-         functions and the pad, the pad first, every function moved and every pair of neighbours
+         functions and the pad, the pad first, every function moved by exactly the pad's size (so
+         the placement has the line and page phase the plan declared) and every pair of neighbours
          still next to each other in order; that each has a SHA-256 no other binary has; and that
          each answers the workload's requests as the unpadded binary does: status, headers but
          `Date`, and body as received, with nothing in the body masked and only the header values

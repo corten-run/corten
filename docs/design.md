@@ -8422,8 +8422,8 @@ rules something out.
     read across placements ([design Choice 72](#choice-placement-runs)), whose own A/A says what
     the run resolves; this Choice's floor and its calibration are for single-build runs, whose
     protocol that Choice leaves as it was except for a touched workload with a recorded placement
-    spread, where a single-build bound inside the spread no longer decides it, for the margin or
-    for a win.
+    spread, where a single-build bound whose distance from its threshold is inside the spread, by
+    that Choice's one test, no longer decides it, for the margin or for a win.
 
     The runs: one host with nothing else running (Debian 13, Linux 6.12.117, rustc 1.100.0 with LLD
     23.1.5 and the repository's release profile, jemalloc 5.3.0 preloaded), every binary built there
@@ -8530,7 +8530,8 @@ rules something out.
 
 72. <a id="choice-placement-runs"></a>**A touched workload may be read across placements the run's
     plan declares, each side compiled once and relinked with a never-called pad of a declared size
-    first in its code, and must be when a single build lands inside the placement spread.** The
+    first in its code, and must be when a single build's distance from its threshold lands inside the placement
+    spread.** The
     paired-cycle gate reads one build of each side
     ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2), and builds of one commit whose code sits at
     different places have differed in a touched request's cycles by more than its +1% margin:
@@ -8541,8 +8542,9 @@ rules something out.
     to 3.3% more by placement) and 0.9% and 0.3% fewer on two kept files (to 6.8% fewer and 3.8%
     more), and main against main with those blocks ran from 4.5% fewer to 4.0% more
     ([design Choice 70](#choice-kept-pages), tag `evidence/cheaper-ask-1925`); each of those was
-    one start, so they are differences observed, not what placement alone moves, which the
-    fresh-start A/As below measure. A change of a few
+    one start, so they are differences observed, not what placement alone moves; the A/As below,
+    every turn a fresh start, give the spreads observed under that protocol, which still hold some
+    of a start's own variation. A change of a few
     hundred instructions on a touched request passes or misses by where its code landed, and a floor
     ([design Choice 71](#choice-layout-floor)) is not the answer there, for that Choice's reason: a
     touched workload can cost cycles on flat instructions. So a run's plan may declare, before the
