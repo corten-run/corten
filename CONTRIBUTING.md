@@ -525,8 +525,9 @@ establish a general ranking.
          byte-identical to the build's own binary; that each placement has exactly that binary's
          functions and the pad, the pad first, every function moved by exactly the pad's size (so
          the placement has the line and page phase the plan declared) and every pair of neighbours
-         still next to each other in order; that each has a SHA-256 no other binary has; and that
-         each answers the workload's requests as the unpadded binary does: status, headers but
+         still next to each other in order; that each placement of one build has a SHA-256 no
+         other placement of that build has (base and head at one pad may be one binary, when the
+         change compiles to the same code); and that each answers the workload's requests as the unpadded binary does: status, headers but
          `Date`, and body as received, with nothing in the body masked and only the header values
          the plan names masked, each one that differs between two starts of one binary (a keyed
          `ETag`). A header value the workload's cost depends on, as `kept`'s depends on `Age`, is
@@ -548,8 +549,9 @@ establish a general ranking.
          against base with pad q_i from a second list of sizes, no size in both lists, chosen so the
          pairs themselves differ in phase: across the K pairs, the 64-byte-line phases of p_i and
          q_i (each size mod 64, in steps of 16) take all 16 ordered combinations (K distinct ones
-         when K is under 16), and q_i - p_i mod 4096 takes K distinct values, which the plan lists and the run records. The A/A is
-         read twice from the same pairs: as recorded, and with its lists' labels swapped (each
+         when K is under 16), and q_i - p_i mod 4096 takes K distinct values, at least
+         floor(K / 8) of them in each quarter of a page, which the plan lists and the run
+         records. The A/A is read twice from the same pairs: as recorded, and with its lists' labels swapped (each
          per-pair change B / A - 1 read as A / B - 1), since a list whose placements happened to
          run faster would lower one reading's bound and raise the other's. Its bounds in the two
          readings are what the run can resolve, and its lowest and highest placement median as
