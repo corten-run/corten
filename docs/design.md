@@ -8264,7 +8264,9 @@ rules something out.
     glibc's allocator, and its jobs took 1.2 to 3.3 times as long under jemalloc, the most at 1
     KiB: as `corten new`'s Dockerfile runs an app, each job faults in about a megabyte of brotli's
     tables afresh, a cost that does not grow with the body and that callgrind, which counts user
-    space, does not see.
+    space, does not see. That count was taken before [Choice 23](#choice-jemalloc-image) set the
+    image's thread cache to 512 KiB, which keeps brotli 1's buffers between responses; whether it
+    keeps any of a brotli 5 job's, which would make that part smaller, is not measured.
     So the job is queued only for a kept copy asked for often enough to spread its cost thin
     (`kept::due`): 8,192 answers to clients that rank brotli first, and three more for each byte
     of the body. The count spreads the cost; the answers before it do not repay it, and a copy
@@ -8314,8 +8316,12 @@ rules something out.
     this change and none on main. Callgrind counts user space, so neither the faults nor the
     thread's wake-up are in these. An eighth run is declared for the rule, its plan written before
     it runs:
-    this change's head, with main merged, against main's `1fb2b3784` (declared first against
-    `04530f7e0`, and again for the merged pair in round 18) on such a host, with every turn on a newly
+    this change's head, with main merged, against main's `e19c25b5b` (declared first against
+    `04530f7e0`, again for the merged pair against `1fb2b3784` in round 18, and again once main set
+    the image's thread cache to 512 KiB) on such a host, every start under the allocator setting
+    the measured trees' image ships (read from each tree's `examples/card-market/Dockerfile`, now
+    `MALLOC_CONF=background_thread:true,tcache_max:524288`; the run refuses to start if the base's,
+    the head's and its declared setting differ), with every turn on a newly
     started build, 100 pairs a workload and the margin of the runs before, a one-sided 95% bound
     under +1% in user plus kernel cycles a request, on `twice` as the seventh ran it (which the rule
     gives no job); `churn`, in which every URL is new and asked for exactly its due, 26,564 times,
