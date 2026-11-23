@@ -498,14 +498,21 @@ handoff to a fresh root is possible only when the old campaign is over:
    list). A lookup error, an outstanding job or an unknown owner stops the
    handoff. Preserve the old root, its locks, failure artifacts and issue
    history unchanged.
-3. This path applies only if every verified result is already pinned in the
-   old `index.json`. If a standalone group in the old root produced a result,
-   **do not use this shortcut**: the index alone would omit it. Copy the
-   unchanged index into an empty root and run the read-only continuation
-   report there. Require native replay of the same successful archives and
-   compare the complete verified and missing group sets with the old
-   inventory. A partial report or an archive hash alone is not sufficient.
-4. Record both roots, the last round used, the inventory and the evidence in
+3. Inventory every old standalone slot read-only: check its state, receipts,
+   archives and extracted evidence, including slots reported busy or awaiting
+   cleanup. A 404 proves nothing about saved results. If a slot contains a
+   verified or potentially recoverable result, or its evidence cannot be
+   classified, stop. The unchanged index cannot carry standalone results.
+4. Copy the index into an empty root. If an indexed checkout is no longer at
+   its measured commit, provide a separate clean worktree with its pinned
+   installs at `NEW_ROOT-checkouts/MEASURED_SHA`; leave old worktrees intact.
+   Run the read-only continuation report there. Require native replay of the
+   full roster: the same verified groups, measured commits and archive hashes
+   and exactly the expected missing groups, with no blocked or ambiguous row.
+   Exit 1 is expected with missing groups; it does not prove those conditions.
+   Keep old failed and never-launched attempts in the handoff inventory, not
+   as results in the new root.
+5. Record both roots, the last round used, the inventory and the evidence in
    the operator handoff. Switch the single dispatch target only after review.
    Use new round numbers above the old campaign and the normal reviewed
    preparation and pre-create census. Never resume or collect an old attempt
