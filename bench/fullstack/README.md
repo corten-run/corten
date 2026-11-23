@@ -2141,7 +2141,7 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    `SocketsHttpHandler` (both ASP.NET apps), urllib3 under `requests` (Django, which keeps a
    connection until it sees the close), Finch (Phoenix, `conn_max_idle_time`) and Drogon's
    clients. The JDK client (Spring) gets 1 s, since it drops an expired connection late (it reused
-   connections idle 6 s with 4 s set). Node's `fetch` (the JavaScript apps) and Rails'
+   connections idle about 6 s with 4 s set). Node's `fetch` (the JavaScript apps) and Rails'
    `Net::HTTP` (2 s by default) already stay under 5 s, and Laravel's client opens a connection
    per request. None of these adds a retry; Go's transport and the JDK client retry a request lost
    on a reused connection on their own, which hides the loss without preventing it.

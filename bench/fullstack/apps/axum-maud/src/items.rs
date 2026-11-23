@@ -40,7 +40,8 @@ impl Items {
         }
         let base = std::env::var("API_BASE").unwrap_or_else(|_| "http://localhost:8080".into());
         // Idle connections dropped under the item API's keep-alive (`record_http::UPSTREAM_IDLE`).
-        let client = reqwest::Client::builder().pool_idle_timeout(crate::record_http::UPSTREAM_IDLE).build().expect("HTTP client");
+        let client =
+            reqwest::Client::builder().pool_idle_timeout(crate::record_http::UPSTREAM_IDLE).build().expect("HTTP client");
         Items::Api { client, base: base.parse().expect("API_BASE is a URL") }
     }
 
