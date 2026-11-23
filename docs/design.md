@@ -2406,6 +2406,9 @@ rules something out.
     a box to a late-eligible write.
     The stages read the incoming request's mode, credentials, validators, and the host and
     origin headers they need before dispatch. The error page and cache rule share those reads.
+    A request under an API is the exception for the mode: the stages ask nothing of it there
+    (every failure is JSON, and no answer is a document the runtime swaps in), so its two
+    headers, `corten` and `Accept`, are not looked up.
     `Req` negotiates from the headers where it is taken: middleware and earlier extractors can
     change them ([Choice 21](#choice-own-extractors)). Keeping those two views separate is what
     lets a handler see an edit without letting it change the outer cache or same-origin decision.
@@ -2674,7 +2677,9 @@ rules something out.
     request from 43,274.3 (43,274.1 to 43,275.6) to 42,763.2 (42,762.1 to 42,770.4).
     A mounted JSON GET with a session cookie kept six named request-map lookups, none for
     `Authorization`, and went from 35,796.1 (35,794.0 to 35,797.9) to 35,650.6 (35,647.5 to
-    35,654.7) median instructions per request); value
+    35,654.7) median instructions per request; since `91e193bce` a request under an API no
+    longer has `corten` and `Accept` looked up by the stages, two of those six by reading the
+    code, and the six were not counted again); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
     for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
@@ -2720,7 +2725,9 @@ rules something out.
     much, which only lowers the measurement. Measure both profiles again before moving a
     measurement.
 
-    Last checked: 2026-11-20, `staged_page_future_sizes` at `3089d0a97`, after it failed on
+    Last checked: 2026-11-23, the stages' reads of a request under an API, read in the code at
+    `91e193bce` (which stopped looking up the mode's two headers there; the lookup counts above
+    were not taken again); 2026-11-20, `staged_page_future_sizes` at `3089d0a97`, after it failed on
     main: the stage future grew from 2,632 to 3,008 bytes in a debug build and from 2,176 to
     2,280 in a release one, holding the page snapshot that sharing the staged header reads keeps
     before dispatch, not the request again (the stage owns one request slot, and dispatch takes
