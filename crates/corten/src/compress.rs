@@ -343,9 +343,7 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
 /// for the end takes it as whole; one that fails is cut where it failed, without that end.
 fn stream(res: Response, coding: Option<Coding>) -> Response {
     let headers = res.headers();
-    if headers.contains_key(header::CONTENT_ENCODING)
-        || headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("no-transform"))
-    {
+    if headers.contains_key(header::CONTENT_ENCODING) || headers.get(header::CACHE_CONTROL).is_some_and(no_transform) {
         return res;
     }
     let (mut parts, body) = res.into_parts();
@@ -514,8 +512,14 @@ pub(crate) fn varies(content_type: &str, headers: &HeaderMap) -> bool {
 
 /// [`varies`], for a media type already read from its `Content-Type`.
 fn varies_as(essence: &str, headers: &HeaderMap) -> bool {
-    compressible(essence)
-        && !headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("no-transform"))
+    compressible(essence) && !headers.get(header::CACHE_CONTROL).is_some_and(no_transform)
+}
+
+/// Whether a `Cache-Control` line says `no-transform`. The line the stages give an answer that
+/// says nothing of caching is compared first: most answers carry it, and `str::contains` prepares
+/// a search made for long text before it looks (242 instructions on those 17 bytes).
+fn no_transform(line: &HeaderValue) -> bool {
+    *line != crate::cache::PRIVATE && line.to_str().is_ok_and(|line| line.contains("no-transform"))
 }
 
 /// Adds `accept-encoding` to `Vary`, so a cache keeps one copy per coding.
