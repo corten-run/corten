@@ -10,25 +10,34 @@ import { upstreamImage } from "./raw.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
+// The fake daemon's immutable container ID for a name.
+const idOf = (name) => createHash("sha256").update(name).digest("hex");
 
 for (const [index, mode] of ["cached", "absent", "wrong platform", "daemon error", "registry error", "start error", "prepare timeout",
-  "app start stall", "app start held", "app logs stall"].entries()) {
+  "app start stall", "app start held", "app logs stall", "app logs receipt unwritable", "startup logs stall twice"].entries()) {
   test(`runner upstream image: ${mode}`, () => run(mode, index));
 }
 
 // A real local client stands in for one Docker command: the deadline is shortened, but the
-// runner's own helper, receipt and cleanup run unchanged.
+// runner's own helper, receipt and cleanup run unchanged. `at` lists which of the matching
+// commands stall, counted from zero.
+const logsStall = { command: "logs", source: "api", receipt: "api/gin/app.log.failure.json", stage: "app logs", ms: 1500, at: [0],
+  script: (name, pidFile, n) => `process.stdout.write('[GIN] ${n} 200 | GET /catalog/record_1\\n'.repeat(2000));setInterval(()=>{},1000)` };
 const stalls = {
-  "app start stall": { command: "run", source: "fixture", receipt: "fixture/gin/app-start.failure.json", stage: "checks", ms: 1500,
+  "app start stall": { command: "run", source: "fixture", receipt: "fixture/gin/app-start.failure.json", stage: "checks", ms: 1500, at: [0],
     script: (name) => `console.log(${JSON.stringify(name)});setInterval(()=>{},1000)` },
   // The client prints the ID and exits 0, but a detached process it started still holds its pipes.
-  "app start held": { command: "run", source: "fixture", receipt: "fixture/gin/app-start.failure.json", stage: "checks", ms: 2500, held: true,
+  "app start held": { command: "run", source: "fixture", receipt: "fixture/gin/app-start.failure.json", stage: "checks", ms: 2500, held: true, at: [0],
     script: (name, pidFile) => {
       const holder = `require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setTimeout(()=>{},30000)`;
       return `const c=require('child_process').spawn(process.execPath,['-e',${JSON.stringify(holder)}],{detached:true,stdio:['ignore','inherit','inherit']});c.unref();console.log(${JSON.stringify(name)})`;
     } },
-  "app logs stall": { command: "logs", source: "api", receipt: "api/gin/app.log.failure.json", stage: "app logs", ms: 1500,
-    script: () => "process.stdout.write('[GIN] 200 | GET /catalog/record_1\\n'.repeat(2000));setInterval(()=>{},1000)" },
+  "app logs stall": logsStall,
+  // Neither the receipt nor its log line can be written; the original failure must survive.
+  "app logs receipt unwritable": { ...logsStall, unwritable: true },
+  // Both sources' apps stop after starting, and both startup log collections stall. The app
+  // logs collected in between (the second matching command) do not.
+  "startup logs stall twice": { ...logsStall, source: null, stage: "checks", startup: true, at: [0, 2] },
 };
 
 function run(mode, index) {
@@ -44,19 +53,23 @@ function run(mode, index) {
   // and readiness replaced. No fake negative receipt makes the browser assertion pass.
   writeFileSync(hook, `
 import cp from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { syncBuiltinESMExports } from 'node:module';
 import { records } from ${JSON.stringify(pathToFileURL(join(here, "fixtures.mjs")).href)};
-const spawn = cp.spawn, read = fs.readFileSync, containers = new Map();
+const spawn = cp.spawn, read = fs.readFileSync, write = fs.writeFileSync, append = fs.appendFileSync, containers = new Map();
 const imageId = 'sha256:' + 'a'.repeat(64);
 const upstreamImage = ${JSON.stringify(upstreamImage)}, mode = ${JSON.stringify(mode)};
-const stall = ${JSON.stringify(stall ? { command: stall.command, source: stall.source, ms: stall.ms } : null)};
+const stall = ${JSON.stringify(stall ? { command: stall.command, source: stall.source, ms: stall.ms, at: stall.at, startup: !!stall.startup, unwritable: !!stall.unwritable } : null)};
 const stallScript = ${stall ? stall.script.toString() : "null"};
 const holder = ${JSON.stringify(holder)};
 const journal = [], stallDeadlines = [];
-let stalled = false, stallTimer = false;
+let matched = 0, stallTimer = false;
+const idOf = name => createHash('sha256').update(name).digest('hex');
+// Docker resolves a container by its name or its ID.
+const resolve = key => containers.has(key) ? key : [...containers.keys()].find(name => idOf(name) === key);
 const localPlatform = mode === 'wrong platform' ? 'linux/arm64' : ['absent', 'registry error'].includes(mode) ? null : 'linux/amd64';
 const deadlines = [], setTimer = globalThis.setTimeout;
 let upstreamCommand;
@@ -75,10 +88,15 @@ process.on('exit', () => {
 });
 let network, runId;
 fs.readFileSync = (path, ...args) => String(path).replaceAll('\\\\', '/').endsWith('/bench/catalog/fixtures/catalog.json') ? Buffer.from(JSON.stringify(records())) : read(path, ...args);
+if (stall?.unwritable) {
+  const denied = () => Object.assign(new Error('EACCES: permission denied, open'), { code: 'EACCES' });
+  fs.writeFileSync = (path, ...args) => { if (String(path).endsWith('.failure.json')) throw denied(); return write(path, ...args); };
+  fs.appendFileSync = (path, data, ...args) => { if (String(data).includes('failure receipt')) throw denied(); return append(path, data, ...args); };
+}
 globalThis.fetch = async () => ({ status: 200, ok: true, text: async () => '{}', arrayBuffer: async () => new ArrayBuffer(0) });
 const info = name => {
-  const row = containers.get(name), running = row.source !== 'fixture' && !name.endsWith('-check');
-  return { Id: name, Image: imageId, Path: 'node', Args: [], RestartCount: 0, Mounts: [],
+  const row = containers.get(name), running = row.source !== 'fixture' && !name.endsWith('-check') && !(stall?.startup && name.endsWith('-gin'));
+  return { Id: idOf(name), Name: '/' + name, Image: imageId, Path: 'node', Args: [], RestartCount: 0, Mounts: [],
     State: { Running: running, Status: running ? 'running' : 'exited', ExitCode: running ? 0 : 1 },
     Config: { Labels: { 'run.corten.catalog': runId }, Env: [], Entrypoint: null, Cmd: [] }, HostConfig: {},
     NetworkSettings: { Networks: { [network]: {} }, Ports: running ? { '8080/tcp': [{ HostPort: '18480' }] } : {} } };
@@ -86,13 +104,13 @@ const info = name => {
 cp.spawn = (binary, args, options) => {
   if (!['docker', 'git'].includes(binary)) return spawn(binary, args, options);
   if (binary === 'docker') journal.push(args);
-  if (stall && !stalled && binary === 'docker' && args[0] === stall.command) {
-    const name = stall.command === 'run' ? args[2] : args[1];
-    const source = stall.command === 'run' ? args.find(a => a.startsWith('CATALOG_SOURCE='))?.split('=')[1] : containers.get(name)?.source;
-    if (name === runId + '-gin' && source === stall.source) {
-      stalled = true; stallTimer = true;
+  if (stall && binary === 'docker' && args[0] === stall.command) {
+    const name = stall.command === 'run' ? args[2] : resolve(args[1]);
+    const source = stall.command === 'run' ? args.find(a => a.startsWith('CATALOG_SOURCE='))?.split('=')[1] : containers.get(resolve(name))?.source;
+    if (name === runId + '-gin' && (stall.source === null || source === stall.source) && stall.at.includes(matched++)) {
+      stallTimer = true;
       if (stall.command === 'run') containers.set(name, { source }); // The daemon created it; its client stalls.
-      return spawn(process.execPath, ['-e', stallScript(name, holder)], options);
+      return spawn(process.execPath, ['-e', stallScript(name, holder, matched)], options);
     }
   }
   const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => {};
@@ -130,19 +148,21 @@ cp.spawn = (binary, args, options) => {
           else error = 'pulled pin for ' + platform;
         }
       }
-    } else if (args[0] === 'inspect') output = JSON.stringify([info(args.at(-1))]);
-    else if (args[0] === 'events') {
-      const name = args[args.indexOf('--filter') + 1].slice('container='.length);
-      output = JSON.stringify({ status: 'create', id: name, Actor: { Attributes: { name } }, time: Math.floor(Number(args[2])) + 60 });
+    } else if (args[0] === 'inspect') {
+      const name = resolve(args.at(-1));
+      if (name) output = JSON.stringify([info(name)]); else { code = 1; error = 'Error: No such container: ' + args.at(-1); }
+    } else if (args[0] === 'events') {
+      const id = args[args.indexOf('--filter') + 1].slice('container='.length);
+      output = JSON.stringify({ Type: 'container', Action: 'create', Actor: { ID: id, Attributes: { name: resolve(id) } }, time: Math.floor(Number(args[2])) + 60 });
     }
     else if (args[0] === 'start' && args[1] === runId + '-upstream' && containers.has(args[1])) {
       if (mode === 'start error') { code = 1; error = 'failed to start upstream process'; }
     } else if (args[0] === 'start') { code = 1; error = 'AssertionError: desktop-light js=false record_1: article styles at 0'; }
-    else if (args[0] === 'logs') { if (containers.get(args[1]).source === 'fixture') error = 'open /fixtures/catalog.json: permission denied'; }
+    else if (args[0] === 'logs') { if (containers.get(resolve(args[1])).source === 'fixture') error = 'open /fixtures/catalog.json: permission denied'; }
     else if (args[0] === 'ps') {
       const filter = args[args.indexOf('--filter') + 1];
       output = [...containers.keys()].filter(name => !filter.startsWith('name=') || filter === 'name=^/' + name + '$').join('\\n');
-    } else if (args[0] === 'rm') containers.delete(args.at(-1));
+    } else if (args[0] === 'rm') containers.delete(resolve(args.at(-1)));
     else throw Error('unhandled fake Docker command: ' + args.join(' '));
     child.stdout.end(output); child.stderr.end(error); child.exitCode = code; child.signalCode = null; child.emit('close', code, null);
   });
@@ -181,10 +201,15 @@ syncBuiltinESMExports();
       const found = summary.failures.find((f) => f.app === "gin" && f.source === source && f.stage === "checks");
       assert.ok(found, JSON.stringify(summary.failures)); return found.error;
     };
-    assert.match(failure("api"), /AssertionError: desktop-light js=false record_1: article styles at 0\nFailed-check evidence unavailable or invalid: ENOENT/);
-    if (stall?.command !== "run") assert.match(failure("fixture"), /native startup failed.*\nopen \/fixtures\/catalog.json: permission denied/);
+    if (!stall?.startup) {
+      assert.match(failure("api"), /AssertionError: desktop-light js=false record_1: article styles at 0\nFailed-check evidence unavailable or invalid: ENOENT/);
+      if (stall?.command !== "run") assert.match(failure("fixture"), /native startup failed.*\nopen \/fixtures\/catalog.json: permission denied/);
+    }
     assert.equal(summary.checksPassed, false);
-    if (stall) verifyStall(stall, summary, folder, JSON.parse(readFileSync(journal, "utf8")));
+    const trace = stall && JSON.parse(readFileSync(journal, "utf8"));
+    if (stall?.startup) verifyStartupStalls(stall, summary, folder, trace);
+    else if (stall?.unwritable) verifyUnwritable(summary, folder, trace);
+    else if (stall) verifyStall(stall, summary, folder, trace);
   } finally {
     if (existsSync(holder)) try { process.kill(Number(readFileSync(holder, "utf8"))); } catch {}
     assert.equal(dirname(folder), join(here, "results")); rmSync(folder, { recursive: true, force: true });
@@ -193,11 +218,12 @@ syncBuiltinESMExports();
 }
 
 function verifyStall(stall, summary, folder, { journal, stallDeadlines }) {
-  const name = `${summary.runId}-gin`;
+  const name = `${summary.runId}-gin`, id = idOf(name);
   assert.deepEqual(stallDeadlines, [30000], "the runner keeps its 30-second command bound");
   const found = summary.failures.filter((f) => f.app === "gin" && f.source === stall.source && f.stage === stall.stage);
   assert.equal(found.length, 1, JSON.stringify(summary.failures));
-  assert.match(found[0].error, new RegExp(`docker ${stall.command} --name|docker logs ${name}`));
+  // Logs are read by the owned container's immutable ID, not its name.
+  assert.match(found[0].error, new RegExp(stall.command === "run" ? `docker run --name ${name}` : `docker logs ${id}:`));
   // The fake shortens only the timer; the runner still reports its configured bound.
   assert.match(found[0].error, /timeout after 30000 ms/);
   const receipt = JSON.parse(readFileSync(join(folder, stall.receipt), "utf8"));
@@ -217,20 +243,55 @@ function verifyStall(stall, summary, folder, { journal, stallDeadlines }) {
     assert.equal(life.releasedMs, null);
   }
   assert.deepEqual(receipt.diagnosticErrors, []);
-  assert.equal(receipt.inspect.owned, true); assert.equal(typeof receipt.inspect.state.Running, "boolean");
-  assert.equal(receipt.events.total, 1); assert.equal(receipt.events.recent[0].id, name);
+  assert.equal(receipt.refusal, null); assert.equal(receipt.inspect.id, id);
+  assert.equal(typeof receipt.inspect.state.running, "boolean");
+  assert.equal(receipt.events.total, 1); assert.equal(receipt.events.recent[0].action, "create");
   if (stall.command === "logs") {
     const bytes = readFileSync(join(folder, "api/gin/app.log"));
     assert.ok(bytes.length > 0);
-    assert.deepEqual(life.file, { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
+    assert.deepEqual(life.file, { offset: 0, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
     assert.equal(life.stdout.bytes, bytes.length);
   } else assert.equal(life.file, null);
   // The receipt is taken while the container still exists, before owned cleanup removes it.
   // Both sources reuse the app name, so look for the removal that follows the probes.
   const find = (from, match) => { const i = journal.slice(from).findIndex(match); return i < 0 ? -1 : from + i; };
   const state = find(0, (args) => ["inspect", "--type", "container", name].every((arg, i) => args[i] === arg));
-  const events = find(0, (args) => args[0] === "events" && args.includes(`container=${name}`));
-  const removal = find(Math.max(state, events), (args) => args[0] === "rm" && args.at(-1) === name);
+  const events = find(0, (args) => args[0] === "events" && args.includes(`container=${id}`));
+  // remove() deletes by the inspected ID.
+  const removal = find(Math.max(state, events), (args) => args[0] === "rm" && args.at(-1) === id);
   assert.ok(state >= 0 && events >= 0 && removal > Math.max(state, events), JSON.stringify(journal));
   assert.equal(journal.filter((args) => args[0] === "events").length, 1, "exactly one receipt was taken");
+  if (stall.command === "logs") {
+    const logs = journal.filter((args) => args[0] === "logs");
+    assert.ok(logs.length > 0 && logs.every((args) => /^[0-9a-f]{64}$/.test(args[1])), JSON.stringify(logs));
+  }
+}
+
+// Neither a receipt write nor its log line replaces the timeout that failed the collection.
+function verifyUnwritable(summary, folder, { stallDeadlines }) {
+  assert.deepEqual(stallDeadlines, [30000]);
+  const found = summary.failures.filter((f) => f.app === "gin" && f.source === "api" && f.stage === "app logs");
+  assert.equal(found.length, 1, JSON.stringify(summary.failures));
+  assert.match(found[0].error, new RegExp(`^Error: docker logs ${idOf(`${summary.runId}-gin`)}: timeout after 30000 ms`));
+  assert.equal(existsSync(join(folder, "api/gin/app.log.failure.json")), false);
+  assert.doesNotMatch(readFileSync(join(folder, "run.log"), "utf8"), /failure receipt/);
+}
+
+// Two startup log collections for one reused container name keep two logs and two receipts,
+// each matching its own file.
+function verifyStartupStalls(stall, summary, folder, { journal, stallDeadlines }) {
+  const name = `${summary.runId}-gin`;
+  assert.deepEqual(stallDeadlines, [30000, 30000]);
+  for (const [attempt, source] of [[1, "fixture"], [2, "api"]]) {
+    const found = summary.failures.filter((f) => f.app === "gin" && f.source === source && f.stage === "checks");
+    assert.equal(found.length, 1, JSON.stringify(summary.failures));
+    assert.match(found[0].error, new RegExp(`docker logs ${idOf(name)}: timeout after 30000 ms`));
+    const log = join(folder, `${name}-startup-${attempt}.log`), bytes = readFileSync(log);
+    assert.ok(bytes.toString().startsWith(`[GIN] ${attempt === 1 ? 1 : 3} 200`), "each attempt's log holds only its own output");
+    const receipt = JSON.parse(readFileSync(`${log}.failure.json`, "utf8"));
+    assert.equal(receipt.stage, "startup logs"); assert.equal(receipt.container, name);
+    assert.deepEqual(receipt.lifetime.file, { offset: 0, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
+    assert.equal(receipt.inspect.id, idOf(name)); assert.equal(receipt.inspect.state.running, false);
+  }
+  assert.equal(journal.filter((args) => args[0] === "events").length, 2, "one receipt per failed attempt");
 }

@@ -184,17 +184,31 @@ This does not disable native access logging or change measured application setti
 When a detached app start or an application, startup or upstream log collection fails or
 reaches its deadline, the runner saves a `catalog-command-failure/v1` receipt before it removes
 the owned container: `app-start.failure.json` in the source or preflight folder, or
-`<log>.failure.json` beside the partial log. It records the Docker client's lifetime in
+`<log>.failure.json` beside the partial log. Each failed start keeps its own
+`<container>-startup-<attempt>.log`. The receipt records the Docker client's lifetime in
 milliseconds after spawn (first and last output on each pipe, client exit, each pipe's close,
-and when and why the runner stopped it), the bytes and SHA-256 of what the log collection
-wrote, the container's `docker inspect` state and its Docker events from one minute before the
-command. Each probe has a 10-second bound and a probe failure is recorded in the receipt. The
-failure still fails the run; nothing is retried and no command deadline changes.
+and when and why the runner stopped it), and the offset, bytes and SHA-256 of what the log
+collection appended, hashed from the closed file. It reads the container only when Docker names
+it exactly and it carries this run's label, and then only by the ID it resolved: from
+`docker inspect`, the restart count and the state's status, running flag, exit code, OOM flag
+and start and finish times; from Docker events since one minute before the command, each
+event's action and time. It keeps no health-check output, labels or other event attributes.
+For a missing or foreign container it keeps the command's own evidence and the refusal. Logs
+are collected the same way, by the owned container's ID. Each probe has a 10-second bound and a
+probe failure is recorded in the receipt. Saving the receipt is best effort and never replaces
+the failure, which still fails the run; nothing is retried and no command deadline changes.
+Receipts cover the detached parity and preflight starts and these log collections, not the
+measured cold-start create and start. Commands in a timed phase, such as k6's `docker start
+-a`, take no receipt: they hash nothing and keep no per-chunk timing.
 A command succeeds only once its Docker client has exited and both of its pipes have closed,
-so its output is complete. A process that inherited a pipe can hold it open after the client
-exits, beyond the reach of the runner's process-group or `taskkill` stop. The deadline still
-applies; five seconds after the stop the runner stops reading, so the command settles as a
-failure that says the client exited but its output stayed open, instead of waiting forever.
+so its output is complete, and nothing stopped it: a command stopped at its deadline or by an
+interrupt fails whatever its exit code, cleanup commands included. On Linux the stop sends
+SIGTERM and then SIGKILL to the client's process group, even after the client itself has
+exited, so a descendant still in that group cannot keep its output open. A process that left
+the group (a new session) or the `taskkill` tree can still hold a pipe after the client exits.
+The runner does not stop such a process: five seconds after the stop it stops reading, so the
+command settles as a failure that says its pipes were released without end of file, instead
+of waiting forever.
 Startup failures include the container's actual exit state and application log. A checker
 failure without a valid record-response failure receipt retains its original diagnostic
 (including browser/style assertions), rather than replacing it with a missing-file error.

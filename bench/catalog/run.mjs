@@ -7,7 +7,7 @@ import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sampleStats } from "./stats.mjs";
-import { commandRunner, failureReceipt } from "./output.mjs";
+import { commandRunner, failureReceipt, ownedContainer } from "./output.mjs";
 import { readFailedCheck } from "./check-result.mjs";
 import { describeK6, k6Image } from "../load-tool.mjs";
 import { collectTimedPhase, verifyTimedPhase } from "./timed.mjs";
@@ -85,20 +85,29 @@ const owned = async (args, name, opts) => {
   await docker([args[0], "--name", name, "--label", `${label}=${runId}`, ...args.slice(1)], opts);
   return name;
 };
+const ownedByRun = (labels) => labels?.[label] === runId;
 // A failed bounded command saves its receipt BEFORE owned cleanup removes the container.
-// Saving it never replaces or clears the failure itself.
+// Saving and reporting it are best effort: they never replace or clear the failure itself.
 async function saveReceipt(path, stage, name, error) {
-  const receipt = await failureReceipt(docker, { stage, container: name, error, owned: (labels) => labels?.[label] === runId });
-  try { writeFileSync(path, JSON.stringify(receipt, null, 2)); log(`${stage} failure receipt: ${path}`); }
-  catch (e) { log(`${stage} failure receipt not saved: ${e.message}`); }
+  try {
+    writeFileSync(path, JSON.stringify(await failureReceipt(docker, { stage, container: name, error, owned: ownedByRun }), null, 2));
+    log(`${stage} failure receipt: ${path}`);
+  } catch (e) { try { log(`${stage} failure receipt not saved: ${e?.message ?? e}`); } catch {} }
 }
+// Receipts cover these detached parity and preflight starts and the log collections below,
+// not the measured cold-start create and start.
 async function startApp(args, name, receipt) {
-  try { return await owned(["run", "-d", ...args], name); }
+  try { return await owned(["run", "-d", ...args], name, { receipt: true }); }
   catch (e) { await saveReceipt(receipt, "app start", name, e); throw e; }
 }
+// Logs come only from the container this run owns, by its immutable ID, never by a name
+// another container could hold.
 async function collectLogs(name, file, stage, opts = {}) {
-  try { await docker(["logs", name], { file, capture: false, ...opts }); }
-  catch (e) { await saveReceipt(`${file}.failure.json`, stage, name, e); throw e; }
+  try {
+    const found = await ownedContainer((args) => docker(args, { cleanup: opts.cleanup }), name, ownedByRun);
+    if (!found.id) throw new Error(`refusing ${stage} from ${name}: ${found.refusal}${found.problem ? ` (${found.problem})` : ""}`);
+    await docker(["logs", found.id], { file, capture: false, receipt: true, ...opts });
+  } catch (e) { await saveReceipt(`${file}.failure.json`, stage, name, e); throw e; }
 }
 async function remove(name) {
   // A failed create might not have created anything. A collision is never ours to stop.
@@ -110,11 +119,15 @@ async function remove(name) {
   }
   active.delete(name);
 }
+// One startup log per failed start, so each receipt's bytes and hash describe its own file.
+const startupAttempts = new Map();
 async function portOf(name) {
   const info = await inspect(name);
   const port = info.NetworkSettings.Ports["8080/tcp"]?.[0]?.HostPort;
   if (!info.State.Running || !port) {
-    const file = join(folder, `${name}-startup.log`);
+    const attempt = (startupAttempts.get(name) ?? 0) + 1;
+    startupAttempts.set(name, attempt);
+    const file = join(folder, `${name}-startup-${attempt}.log`);
     await collectLogs(name, file, "startup logs");
     throw new Error(`${name}: native startup failed; state=${JSON.stringify(info.State)}\n${readFileSync(file, "utf8")}`);
   }
