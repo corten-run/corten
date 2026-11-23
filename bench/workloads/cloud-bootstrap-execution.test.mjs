@@ -4,7 +4,6 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { parse } from "yaml";
 import { bootstrapWorkspaceScript, fleetPlan, installBenchmarkUnit, preloginUserData, remoteFiles, reservation } from "./cloud-contract.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { digest } from "./cloud-local.mjs";
@@ -261,6 +260,16 @@ function rootManagerStages(script, quiet = false) {
     : [section("root-manager-policy", "firmware-mask"), section("root-manager-idle", "native-entry")];
 }
 
+// The native Linux evidence job loads this file before installing any packages.
+// Accept only our single literal block, not general cloud-config or YAML.
+function preloginBootCommand(data) {
+  const lines = data.split("\n");
+  assert.deepEqual(lines.splice(0, 3), ["#cloud-config", "bootcmd:", "  - |"]);
+  assert.equal(lines.pop(), "");
+  assert.ok(lines.length && lines.every(line => /^    \S[^\r]*$/.test(line)));
+  return lines.map(line => line.slice(4)).join("\n") + "\n";
+}
+
 function executeRootManager(t, script, { mode = "drain", marker = true, prior, quiet } = {}) {
   const root = mkdtempSync(join(tmpdir(), "corten-root-manager-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -360,7 +369,7 @@ exec "$@"
     "late-shadowed": "export MODE=shadowed\n" };
   const drain = afterStart ? script.slice(script.indexOf("bootstrap_stage=root-manager-drain\n"), script.indexOf("bootstrap_stage=root-manager-idle\n"))
     : mode === "drain" ? ": > drained\n" : "";
-  const boot = prelogin && mode !== "missing-boot" ? parse(preloginUserData).bootcmd[0] +
+  const boot = prelogin && mode !== "missing-boot" ? preloginBootCommand(preloginUserData) +
     (mode === "wrong-boot" ? 'echo foreign > "$DROPIN"\n' : "") : "";
   const shell = quiet ? boot + install + drain + stages[0] + (late[mode] ?? "") + stages[1]
     : stages.join("");
@@ -461,11 +470,11 @@ test("prelogin condition precedes guardian custody; both idle gates survive the 
   skip: process.platform !== "linux",
 }, (t) => {
   const quiet = { ...ingressState(), quietBootstrap: "prelogin" }, job = productionFiles(quiet)["job.sh"];
-  const config = parse(preloginUserData);
-  assert.deepEqual(Object.keys(config), ["bootcmd"]);
-  assert.equal(config.bootcmd.length, 1);
-  assert.match(config.bootcmd[0], /ConditionPathExists=!\/run\/systemd\/system\/user@0\.service\.d\/90-corten-benchmark\.conf/);
-  assert.doesNotMatch(config.bootcmd[0], /binding\.json|systemctl (?:stop|mask|restart)/);
+  const boot = preloginBootCommand(preloginUserData);
+  assert.throws(() => preloginBootCommand(preloginUserData + "  - second-command\n"));
+  assert.throws(() => preloginBootCommand(preloginUserData + "runcmd: []\n"));
+  assert.match(boot, /ConditionPathExists=!\/run\/systemd\/system\/user@0\.service\.d\/90-corten-benchmark\.conf/);
+  assert.doesNotMatch(boot, /binding\.json|systemctl (?:stop|mask|restart)/);
   for (const mode of ["drain", "missing-boot", "wrong-boot", "busy", "held-session", "unknown-sessions", "late-busy", "late-shadowed"]) {
     const result = executeRootManager(t, job, { mode, quiet });
     assert.equal(result.status === 0, mode === "drain", mode + ": " + result.stderr);
