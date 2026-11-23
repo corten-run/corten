@@ -936,12 +936,13 @@ impl StartHere {
     }
 }
 
-/// `failed`, sent in the place of the page whose extensions are `page`, with that page's marks
-/// ([`crate::cache::Marks`]): in a `NoStore` page's place it is `NoStore` too, and in a refusal's
-/// never shared, whatever the app's middleware then makes of its headers.
+/// `failed`, Corten's failure sent in the place of the page whose extensions are `page`: no
+/// handler's own answer, so marked [`crate::cache::Unshared`] whatever the page was (the error page
+/// drawn in its place may read the request's `Cookie`), and in a `NoStore` page's place `NoStore`
+/// too ([`crate::cache::Marks`]), whatever the app's middleware then makes of its headers.
 #[cold]
 fn marked_as(page: &http::Extensions, mut failed: Response) -> Response {
-    crate::cache::Marks::of(page).put(&mut failed);
+    crate::cache::Marks { unshared: true, ..crate::cache::Marks::of(page) }.put(&mut failed);
     failed
 }
 

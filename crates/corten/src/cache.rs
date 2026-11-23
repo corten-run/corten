@@ -538,8 +538,9 @@ pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
 /// that panicked or passed its deadline (`crate::page`), the router's own `404`, `405`, `501` and
 /// its `400` for a named post none of the page's handlers is for (`crate::router`), the static
 /// files' `404` for a file the version lacks and `400` for a path that is not one
-/// (`crate::assets`), and the page, redirect, debug build's diagnostic or failed fill Corten
-/// draws in the place of any of those ([`Marks`]).
+/// (`crate::assets`), the failure Corten sends in place of a page whose layout reads it could not
+/// fill and a debug build's diagnostic there, whatever that page was (`crate::layout`), and the
+/// page, redirect or debug build's diagnostic Corten draws in the place of any of those ([`Marks`]).
 /// Such an answer may be about who is asking (the error page can read the request's `Cookie` and
 /// `Authorization` without reading a caller), so it is never shared, in whatever form and with
 /// whatever status it goes out ([`settle`]). The mark stays on the answer: a middleware that

@@ -1319,7 +1319,7 @@ async fn an_error_page_for_a_failure_no_handler_answered_is_not_shared() {
 
 /// Who is asking, by the request's `Cookie` (`name=ann`), read by an extractor of the app's own
 /// with no caller: how an error page can show the visitor without marking the answer personal.
-struct CookieName(String);
+pub(super) struct CookieName(String);
 
 impl<S: Send + Sync> crate::extract::FromRequestParts<S> for CookieName {
     type Rejection = Response;
@@ -1331,13 +1331,13 @@ impl<S: Send + Sync> crate::extract::FromRequestParts<S> for CookieName {
 }
 
 /// An app's error page that greets the visitor its cookie names.
-async fn greeting_error_page(_: Failure, req: Req, name: CookieName) -> HtmlResult {
+pub(super) async fn greeting_error_page(_: Failure, req: Req, name: CookieName) -> HtmlResult {
     req.test_page("Sorry", html! { <p>"Sorry, "{name.0}"."</p> })
 }
 
 /// `method` `uri` through `router` from Ann (`name=ann`), asked with `asked`: its status, headers
 /// and body.
-async fn from_ann(
+pub(super) async fn from_ann(
     router: &Router,
     method: &str,
     uri: &str,
@@ -5358,6 +5358,10 @@ async fn a_json_answer_that_failed_or_is_one_request_s_alone_is_not_kept() {
 /// that is not a failure); `nostore`, the plain page as `NoStore`. `unstaged` is an unstaged
 /// route's JSON (`Media`), and `control` the same JSON from a service of no framework (tower's
 /// `service_fn`), the control `docs/design.md`'s Choice counts an unstaged route against. With
+/// `asset`, a stylesheet no version of the app's static files has (`RefusedStatic`, an old
+/// version's URL) asked for as HTML: the static files' `404` with the error page in its place;
+/// `fill`, a page with a layout read's place ([`SettleCount`]) whose body fails as it is read to be
+/// filled, asked for as HTML: Corten's `500` with the error page in its place. With
 /// `SETTLE_CDN` set, a staged middleware writes the six caching headers
 /// a CDN reads first on every answer, and each answer is checked to keep them (`kept`) or not
 /// (`dropped`), so the count includes their removal. Counting it under callgrind at two numbers of
@@ -5435,29 +5439,34 @@ fn what_settling_a_page_costs() {
     let minute = Duration::from_secs(60);
     let keyed = case == "keyed" || case == "private";
     let form = move || html! { <form method="post">if keyed { {crate::SubmitKey::field(KeyedWrite::FIELDS.submit)} }</form> };
-    let routes = if ["private", "plain", "caller", "data", "missing", "custom", "refused", "turned"].contains(&case.as_str()) {
-        Table::new().route("/", get(move |req: Req| async move { req.test_page("Form", form()) }))
-    } else if case == "rejected" {
-        Table::new().route("/", get(|_: GreetsInstead| async { "never" }))
-    } else if case == "nostore" {
-        Table::new().route("/", get(move |req: Req| async move { NoStore(req.test_page("Form", form())) }))
-    } else if case == "unnamed" {
-        Table::new().route(
-            "/",
-            get(move |req: Req| async move { req.test_page("Form", form()) }).post(|| async { "saved" }).named("save"),
-        )
-    } else if case == "cookie" {
-        Table::new().route(
-            "/",
-            get(move |req: Req| async move {
-                Ok::<_, Error>((Cache::public(minute), [(header::SET_COOKIE, "seen=1")], req.test_page("Form", form())?))
-            }),
-        )
-    } else {
-        Table::new().route("/", get(move |req: Req| async move { Public::new(minute, req.test_page_for("Form", form())) }))
-    };
+    let routes =
+        if ["private", "plain", "caller", "data", "missing", "custom", "refused", "turned", "asset"].contains(&case.as_str()) {
+            Table::new().route("/", get(move |req: Req| async move { req.test_page("Form", form()) }))
+        } else if case == "fill" {
+            Table::new().route("/", get(settle_fill_fails))
+        } else if case == "rejected" {
+            Table::new().route("/", get(|_: GreetsInstead| async { "never" }))
+        } else if case == "nostore" {
+            Table::new().route("/", get(move |req: Req| async move { NoStore(req.test_page("Form", form())) }))
+        } else if case == "unnamed" {
+            Table::new().route(
+                "/",
+                get(move |req: Req| async move { req.test_page("Form", form()) }).post(|| async { "saved" }).named("save"),
+            )
+        } else if case == "cookie" {
+            Table::new().route(
+                "/",
+                get(move |req: Req| async move {
+                    Ok::<_, Error>((Cache::public(minute), [(header::SET_COOKIE, "seen=1")], req.test_page("Form", form())?))
+                }),
+            )
+        } else {
+            Table::new().route("/", get(move |req: Req| async move { Public::new(minute, req.test_page_for("Form", form())) }))
+        };
     let app = App::new(Routes::from(routes));
     let app = if case == "custom" { app.error_page(settle_error_page, ()) } else { app };
+    let app = if case == "asset" { app.assets(super::RefusedStatic) } else { app };
+    let app = if case == "fill" { app.layout_read(SettleCount) } else { app };
     let router = if ["caller", "refused", "turned"].contains(&case.as_str()) || cdn.is_some() {
         let refuse = case == "refused" || case == "turned";
         app.middleware(Staged { caller: case == "caller", cdn: cdn.is_some(), refuse, turn: case == "turned" }).router()
@@ -5476,7 +5485,11 @@ fn what_settling_a_page_costs() {
     });
     runtime.block_on(async {
         for _ in 0..requests {
-            let mut req = Request::get(if case == "missing" || case == "custom" { "/nowhere" } else { "/" });
+            let mut req = Request::get(match case.as_str() {
+                "missing" | "custom" => "/nowhere",
+                "asset" => "/assets/000000000000/missing.css",
+                _ => "/",
+            });
             if case == "caller" {
                 req = req.header("viewer", "ann");
             } else if case == "partial" {
@@ -5485,11 +5498,21 @@ fn what_settling_a_page_costs() {
                 req = req.header("accept", "application/json");
             } else if case == "unnamed" {
                 req = req.method("POST").uri("/?do=sell").header("sec-fetch-site", "same-origin");
+            } else if case == "asset" || case == "fill" {
+                req = req.header("accept", "text/html");
             }
             let (parts, body) = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap().into_parts();
             let body = String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap();
             match case.as_str() {
                 "missing" => assert_eq!(parts.status, StatusCode::NOT_FOUND, "{body}"),
+                "asset" => assert!(parts.status == StatusCode::NOT_FOUND && body.contains("<html"), "{}: {body}", parts.status),
+                "fill" => {
+                    assert!(
+                        parts.status == StatusCode::INTERNAL_SERVER_ERROR && body.contains("<html"),
+                        "{}: {body}",
+                        parts.status
+                    )
+                }
                 "custom" => {
                     assert!(parts.status == StatusCode::NOT_FOUND && body.contains("Nothing here."), "{}: {body}", parts.status)
                 }
@@ -5505,11 +5528,12 @@ fn what_settling_a_page_costs() {
                     assert!(parts.status == StatusCode::OK && body.contains("<form method=\"post\">"), "{}: {body}", parts.status)
                 }
             }
-            // The router's `400` goes out with what the build settles a failure sent as it is with,
-            // and `NoStore` as the build writes it (`private, no-store`, or a bare `no-store`).
+            // The router's `400`, the static files' `404` and the failed fill's `500` go out with
+            // what the build settles such a failure with, and `NoStore` as the build writes it
+            // (`private, no-store`, or a bare `no-store`).
             if case == "nostore" {
                 assert!(parts.headers[header::CACHE_CONTROL].to_str().unwrap().ends_with("no-store"), "{:?}", parts.headers);
-            } else if case != "unnamed" {
+            } else if !["unnamed", "asset", "fill"].contains(&case.as_str()) {
                 assert_eq!(parts.headers[header::CACHE_CONTROL], expected);
             }
             assert_eq!(parts.headers.contains_key(header::SET_COOKIE), case == "cookie");
@@ -5538,4 +5562,39 @@ async fn settle_unstaged_item(at: crate::Params<settle_unstaged::Item>) -> crate
 /// The error page of its own an app has in [`what_settling_a_page_costs`]'s `custom` case.
 async fn settle_error_page(_: Failure, req: Req) -> HtmlResult {
     req.test_page("Missing", html! { <p>"Nothing here."</p> })
+}
+
+/// The layout read of [`what_settling_a_page_costs`]'s `fill` case: a count, in at once.
+struct SettleCount;
+
+impl crate::LayoutRead for SettleCount {
+    type Value = u32;
+
+    fn start(&self, _: &http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
+        Some(async { 3 })
+    }
+
+    fn view(count: &u32) -> impl Render + '_ {
+        html! { <span>{*count}</span> }
+    }
+}
+
+/// The page of [`what_settling_a_page_costs`]'s `fill` case: an ordinary page with the count's
+/// place, whose body fails as it is read to be filled.
+async fn settle_fill_fails(req: Req) -> Response {
+    let page = req.page::<crate::ForOne>(html! {
+        <html>
+            <head>
+                <title>"Fill"</title>
+                <Corten />
+            </head>
+            <body>
+                <header>"Count "{crate::later::<SettleCount>()}</header>
+                <main><p>"fill"</p></main>
+            </body>
+        </html>
+    });
+    let (head, _) = page.into_response().into_parts();
+    let body = Body::from_stream(futures_util::stream::iter([Err::<bytes::Bytes, _>(std::io::Error::other("cut off"))]));
+    Response::from_parts(head, body)
 }

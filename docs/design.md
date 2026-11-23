@@ -1745,8 +1745,8 @@ rules something out.
     round 11 of the review, the error page drawn in place of an answer whose extensions hold the
     mark alone takes that map rather than a new one (`page::carried_from`); nothing else of the
     failed answer's is carried. Against main `a138e2391` the router's `404` costs 1,152
-    instructions a request (19,257.6 in every run against 18,105.6; `custom` 1,153: 19,576.6
-    against 18,423.3) and the plain page 111 (16,509.6 against 16,398.6), the `404` 367 less than
+    instructions a request at `30cadaaeb` (19,257.6 against 18,105.5, each in every run; `custom`
+    1,153, medians 19,576.6 against 18,423.4) and the plain page 111 (16,509.6 against 16,398.6), the `404` 367 less than
     the same head without the move (19,625.0; by function, `hashbrown`'s insert, rehash and drop,
     `malloc` and `free`). Taking the map before the page is drawn kept it in the request's
     future across that await and cost the plain page 12 (`memcpy`), so it is taken once the page
@@ -1756,7 +1756,9 @@ rules something out.
     16,284 and 11,128), a page 12,991, one with a middleware 13,208, an API request 11,882 and an
     unstaged route 6,474 against 21,216, 21,465, 15,726 and 8,479: fewer than axum's on each of
     these, so Revisit when is not met by them. Card-market's item page and its JSON, which step 2
-    also counted, were not counted again.
+    also counted, were not counted again: this conclusion is about the six shapes counted, and
+    the two left are neither met nor cleared by it until they are counted against a comparable
+    axum run.
 
     Stands on: platform (RFC 9110 9.1: an origin server SHOULD answer `501` to a method it does
     not recognize or implement, and every server implements `GET` and `HEAD`; 15.5.6: `405` is
@@ -2026,7 +2028,7 @@ rules something out.
     named post's `400`, with and without the CDN headers, at `2960a7abe` against main `63e7c3314`
     (three rounds alternating the two builds, every run within 1.5 of the others), and the `404`
     and the `400` by function against that main; 2026-11-22, the router's `404`, with and without
-    the app's error page, and the plain page at round 11's head, with and without the error page
+    the app's error page, and the plain page at `30cadaaeb` (round 11's head), with and without the error page
     taking the failed answer's map, against main `a138e2391` (three rounds alternating the
     builds, every run within 2 of the others), and by function; 2026-11-22, a page's and an API's
     `404`, a page with and without a middleware, an API request and an unstaged route in step 2's
@@ -2258,6 +2260,8 @@ rules something out.
     own (a refusal, an extractor's rejection, a panic's or the deadline's failure, and the page,
     JSON failure or sign-in redirect Corten draws in place of one, the router's own failures, the
     static files' `404` for a file the version lacks and `400` for a path that is not one, a
+    failure Corten sends in place of a page whose layout reads it could not fill (and a debug
+    build's diagnostic there), whatever that page was, a
     refusal sent at another status with `Error::with_status`, and what an error page's own
     extractor answers in its place) carries a private mark in its
     extensions (`cache::Unshared`), put there by the code that made it, and the cache rule decides
@@ -2627,6 +2631,10 @@ rules something out.
     measurement.
 
     Last checked: 2026-11-22, the plain page, the unstaged route and the `service_fn` control in
+    `tests::cache::what_settling_a_page_costs` at `30cadaaeb` against main `a138e2391` (three
+    rounds alternating the two builds, every run within 2.3 of the others): 111 more on the
+    plain page (16,509.6 against 16,398.6), 11 on the unstaged route (6,400.9 against 6,390.0)
+    and the control the same (3,084.7); 2026-11-22, the same in
     `tests::cache::what_settling_a_page_costs` at `2960a7abe` against main `63e7c3314` (three
     rounds alternating the two builds, every run within 2.2 of the others), and the plain page by
     function against it; 2026-11-22, the same at `57f2138a4` against main `7a275ef15`, which it

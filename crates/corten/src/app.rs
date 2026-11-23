@@ -928,6 +928,12 @@ impl<M: Middleware> App<M> {
     /// request's mode, like any page, with the failure's status; `failure.detail()` is the error,
     /// set only under `corten dev`. A JSON route's failures, and a data client's, are JSON instead.
     /// `corten new` writes one. Without it, Corten sends a plain document.
+    ///
+    /// In place of a handler's own failure the page keeps what a middleware wrote, a CDN's
+    /// caching headers included, so a middleware that tells a CDN to keep every answer must not
+    /// do so for an error page that reads the raw `Cookie` or `Authorization` itself: find who is
+    /// asking through a `Caller` (which makes the answer private) or leave failures uncached
+    /// (the guide's Error pages).
     pub fn error_page<H, T, S>(mut self, page: H, state: S) -> Self
     where
         H: ErrorPageFn<T, S>,

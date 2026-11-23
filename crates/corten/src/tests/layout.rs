@@ -484,40 +484,59 @@ mod layout_reads {
             assert!(body.contains("<header>Cart </header>") && body.contains("<p>forgot</p>"), "{body}");
         }
         // A `no_store` route's: what is sent in its page's place is kept by no cache either, whatever
-        // the app's middleware makes of its caching headers.
+        // the app's middleware makes of its caching headers. A debug build's refusal of a route
+        // with no mark is Corten's answer, not the handler's, so no shared cache keeps it, also
+        // when the error page drawn for it greets the visitor its cookie names.
+        let html = [("accept", "text/html")];
         for cache in [None, Some("public, max-age=60"), Some("private, max-age=60")] {
             let router = App::new(shop_url::router())
                 .layout_read(CartCount::default())
                 .layout_read(SignedIn)
                 .middleware(crate::tests::cache::CdnRecaches(cache))
+                .error_page(crate::tests::cache::greeting_error_page, ())
                 .dev(false)
                 .router();
-            let (status, headers, body) = call_with(router, "GET", "/forgot-secret", None, None).await;
+            let (status, headers, body) = call_with(router.clone(), "GET", "/forgot-secret", None, None).await;
             let sent = if cfg!(debug_assertions) { StatusCode::INTERNAL_SERVER_ERROR } else { StatusCode::OK };
             assert_eq!(status, sent, "{cache:?}: {body}");
             let wrong = crate::tests::cache::kept_from_cdns(&headers, "private, no-store");
             assert!(wrong.is_empty(), "{cache:?}: a no_store page's replacement, open to a cache: {wrong:?}");
+            let (status, headers, body) = crate::tests::cache::from_ann(&router, "GET", "/forgot", &html).await;
+            assert_eq!(status, sent, "{cache:?}: {body}");
+            if cfg!(debug_assertions) {
+                assert!(body.contains("Sorry, ann."), "{cache:?}: the error page in the refused page's place: {body}");
+                let wrong = crate::tests::cache::kept_from_cdns(&headers, "private, no-cache");
+                assert!(wrong.is_empty(), "{cache:?}: a refused page's replacement, open to a CDN: {wrong:?}");
+            }
         }
     }
 
-    /// A page whose body fails as it is read to be filled: the failure sent in its place keeps the
-    /// page's marks, whatever the app's middleware makes of its caching headers. A `NoStore` page's
-    /// is kept by no cache, and one that is no handler's own (marked `cache::Unshared`, as a
-    /// refusal's page is) by no shared cache.
+    /// A page whose body fails as it is read to be filled: the failure sent in its place is Corten's,
+    /// not the handler's, so no shared cache keeps it, whatever the app's middleware makes of its
+    /// caching headers, also when the page had no mark and the error page drawn for it greets the
+    /// visitor its cookie names. A `NoStore` page's is kept by no cache.
     #[tokio::test]
     async fn a_page_that_cannot_be_read_to_be_filled_keeps_its_marks() {
+        let html = [("accept", "text/html")];
         for cache in [None, Some("public, max-age=60"), Some("private, max-age=60")] {
             let routes = Table::new()
+                .route("/broken", get(breaks_secret))
                 .route("/broken-secret", get(|req: Req| async move { NoStore(breaks_secret(req).await) }))
                 .route("/broken-refusal", get(|req: Req| async move { crate::cache::unshared(breaks_secret(req).await) }));
             let router = App::new(Routes::from(routes))
                 .layout_read(CartCount::default())
                 .layout_read(SignedIn)
                 .middleware(crate::tests::cache::CdnRecaches(cache))
+                .error_page(crate::tests::cache::greeting_error_page, ())
                 .router();
-            for (path, sent) in [("/broken-secret", "private, no-store"), ("/broken-refusal", "private, no-cache")] {
-                let (status, headers, body) = call_with(router.clone(), "GET", path, None, None).await;
+            for (path, sent) in [
+                ("/broken", "private, no-cache"),
+                ("/broken-secret", "private, no-store"),
+                ("/broken-refusal", "private, no-cache"),
+            ] {
+                let (status, headers, body) = crate::tests::cache::from_ann(&router, "GET", path, &html).await;
                 assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path} {cache:?}: {body}");
+                assert!(body.contains("Sorry, ann."), "{path} {cache:?}: the error page in the page's place: {body}");
                 let wrong = crate::tests::cache::kept_from_cdns(&headers, sent);
                 assert!(wrong.is_empty(), "{path} {cache:?}: the failure in the page's place, open to a cache: {wrong:?}");
             }
@@ -2255,18 +2274,27 @@ mod layout_reads {
             assert!(body.contains("layout_reads::CartCount&gt;()") && body.contains("(Answer::PAGE)"), "{body}");
             assert_eq!(count.started.load(Ordering::SeqCst), 0, "{method} {mode:?}");
         }
-        // A `no_store` route's: kept by no cache, whatever the app's middleware makes of it.
+        // A `no_store` route's: kept by no cache, whatever the app's middleware makes of it. One
+        // with no mark: kept by no shared cache, also when the error page drawn in its place greets
+        // the visitor its cookie names.
+        let html = [("accept", "text/html")];
         for cache in [None, Some("public, max-age=60"), Some("private, max-age=60")] {
             let router = App::new(wrapped_url::router())
                 .layout_read(CartCount::default())
                 .layout_read(SignedIn)
                 .middleware(crate::tests::cache::CdnRecaches(cache))
+                .error_page(crate::tests::cache::greeting_error_page, ())
                 .dev(false)
                 .router();
-            let (status, headers, body) = call_with(router, "GET", "/wrapped-secret", None, None).await;
+            let (status, headers, body) = call_with(router.clone(), "GET", "/wrapped-secret", None, None).await;
             assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{cache:?}: {body}");
             let wrong = crate::tests::cache::kept_from_cdns(&headers, "private, no-store");
             assert!(wrong.is_empty(), "{cache:?}: a no_store page's replacement, open to a cache: {wrong:?}");
+            let (status, headers, body) = crate::tests::cache::from_ann(&router, "GET", "/wrapped", &html).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{cache:?}: {body}");
+            assert!(body.contains("Sorry, ann."), "{cache:?}: the error page in the refused page's place: {body}");
+            let wrong = crate::tests::cache::kept_from_cdns(&headers, "private, no-cache");
+            assert!(wrong.is_empty(), "{cache:?}: a refused page's replacement, open to a CDN: {wrong:?}");
         }
     }
 

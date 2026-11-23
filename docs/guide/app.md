@@ -1474,7 +1474,8 @@ the 501 of one no route has, the 400 of a post whose `do` names none of the page
 names two), the PWA's offline page included, which its service worker keeps
 whatever its `Cache-Control` says, and for the 404 of a request for the app's static files that
 names no file (one the version served lacks, an old version's included) or its 400 for a path that
-is not one; a handler's own 404 is its answer, under the rules above. Nor
+is not one, and for the 500 Corten sends when a page whose layout reads it fills cannot be read
+(its body fails), whatever that page was; a handler's own 404 is its answer, under the rules above. Nor
 is the router's own failure shared as it is or as JSON (an API's 404 for a path under its prefix
 that a route outside it matched included), whatever a middleware wrote into it or made of it in
 place (another status, a redirect, a body of its own): the router marks the answer as it makes it.
@@ -3125,6 +3126,15 @@ middleware made of the failure's header, and on a page Corten never lets be shar
 404, 405, 501 or a named post's 400), where a `no-store` written by hand goes out so as well and none of the failure's
 CDN caching headers is kept. On the page for a handler's own failure, a `no-store` written by hand
 goes out bare unless the page is personal.
+
+That page for a handler's own failure (its 404, its `Error`) keeps what a middleware wrote,
+`CDN-Cache-Control` and `Surrogate-Control` included, as the handler's answer would: whether it
+may be shared is the app's policy. So a middleware that tells a CDN to keep every answer must not
+do so for an error page that reads the raw `Cookie` or `Authorization` header itself (an
+extractor of the app's own, with no `Caller`): a CDN would keep one visitor's page and give it to
+the next. Have such a middleware leave failures alone (`res.status().is_client_error()` or
+`is_server_error()`), or have the error page find who is asking through a `Caller`, which makes
+its answer private.
 
 The error page is an async function of the `Failure` and then extractors, as a handler's
 arguments are, with the state they read given beside it (`()` for none). A layout that shows
