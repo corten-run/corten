@@ -41,60 +41,9 @@ jobs:
           PUSH_BEFORE: ${{ github.event.before }}
         run: node scripts/benchmark-scope.mjs evidence
 
-  git-packages:
+  evidence:
     needs: scope
     if: needs.scope.outputs.run == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.native_only)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    outputs:
-      artifact: ${{ steps.upload.outputs.artifact-id }}
-      checksum: ${{ steps.packages.outputs.checksum }}
-      image: ${{ steps.packages.outputs.image }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Test cold, offline and rejected Git packages
-        run: bash scripts/benchmark-evidence-git.test.sh
-      - id: cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/git-ppa
-          key: evidence-git-noble-amd64-${{ hashFiles('scripts/benchmark-evidence-git.sh') }}
-      - id: packages
-        shell: bash
-        env:
-          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
-        run: |
-          mode=cold; if [[ "$CACHE_HIT" == true ]]; then mode=warm; fi
-          bash scripts/benchmark-evidence-git.sh "$mode" "$RUNNER_TEMP/git-ppa" "$RUNNER_TEMP/packages"
-          cd "$RUNNER_TEMP/packages"
-          checksum=$(sha256sum git.deb git-man.deb | sha256sum)
-          echo "checksum=${checksum%% *}" >> "$GITHUB_OUTPUT"
-          cd "$GITHUB_WORKSPACE"
-          version=$(node -p 'require("./package-lock.json").packages["node_modules/@playwright/test"].version')
-          image="mcr.microsoft.com/playwright:v${version}-noble"
-          digest=$(docker buildx imagetools inspect "$image" | awk '$1=="Digest:"{print $2}')
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "image=$image@$digest" >> "$GITHUB_OUTPUT"
-      # Only main seeds a shared cache. A hit still undergoes full verification.
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
-        with:
-          path: ${{ runner.temp }}/git-ppa
-          key: ${{ steps.cache.outputs.cache-primary-key }}
-      - id: upload
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: evidence-git-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/packages/*.deb
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
-
-  evidence:
-    needs: [scope, git-packages]
-    if: "!cancelled() && needs.scope.outputs.run == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.native_only)"
     name: benchmark evidence (${{ matrix.suite }})
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -103,10 +52,6 @@ jobs:
       matrix:
         suite: [core, contracts, browser]
     steps:
-      - name: Require verified tooling
-        env:
-          RESULT: ${{ needs.git-packages.result }}
-        run: test "$RESULT" = success
       # Source replay needs the actual history and evidence tags, without lazy fetching.
       - uses: actions/checkout@v7
         with:
@@ -125,23 +70,11 @@ jobs:
       - run: npm --prefix bench ci
       - run: npm --prefix bench/browser ci
         if: matrix.suite == 'browser'
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          artifact-ids: ${{ needs.git-packages.outputs.artifact }}
-          path: ${{ runner.temp }}/packages
-          merge-multiple: true
-      - name: Install verified Git in the locked Playwright base
-        shell: bash
-        env:
-          IMAGE: ${{ needs.git-packages.outputs.image }}
-          CHECKSUM: ${{ needs.git-packages.outputs.checksum }}
+      - name: Prepare the existing Git-capable Playwright test image
         run: |
           image="mcr.microsoft.com/playwright:v$(node -p 'require("@playwright/test/package.json").version')-noble"
-          [[ "$IMAGE" == "$image@"* && "${IMAGE##*@}" =~ ^sha256:[0-9a-f]{64}$ ]]
-          cd "$RUNNER_TEMP/packages"
-          checksum=$(sha256sum git.deb git-man.deb | sha256sum)
-          test "${checksum%% *}" = "$CHECKSUM"
-          docker build --pull --build-arg PLAYWRIGHT_IMAGE="$IMAGE" -f "$GITHUB_WORKSPACE/bench/workloads/evidence-tools.Dockerfile" -t corten-evidence-tools .
+          docker pull "$image"
+          docker build --build-arg PLAYWRIGHT_IMAGE="$image" -f bench/workloads/test-tools.Dockerfile -t corten-evidence-tools .
       - name: Run serial evidence controls as the checkout owner
         env:
           SUITE: ${{ matrix.suite }}

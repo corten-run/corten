@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -23,34 +23,57 @@ test("browser CI keeps its pinned Playwright base and prepares immutable-source 
   assert.equal(sourceChecks.run, "$PLAYWRIGHT_SOURCE env MIXED_BROWSER_TESTS=1 npm run check:groups:browser");
   assert.doesNotMatch(step.run, /safe\.directory/);
   const dockerfile = readFileSync(new URL("test-tools.Dockerfile", import.meta.url), "utf8");
-  assert.match(dockerfile, /^ARG PLAYWRIGHT_IMAGE\r?\nFROM \$\{PLAYWRIGHT_IMAGE\}$/m);
-  assert.match(dockerfile, /signed-by=\/etc\/apt\/keyrings\/corten-git-ppa.asc/);
-  assert.match(dockerfile, /https:\/\/ppa.launchpadcontent.net\/git-core\/ppa\/ubuntu noble main/);
-  assert.match(dockerfile, /test .* = F911AB184317630C59970973E363C90F8F1B6217/);
-  assert.doesNotMatch(dockerfile, /&& add-apt-repository/);
-  assert.match(dockerfile, /git --no-replace-objects --no-lazy-fetch --version/);
+  assert.match(dockerfile, /^ARG PLAYWRIGHT_IMAGE\r?\nFROM \$\{PLAYWRIGHT_IMAGE\} AS playwright\r?\nFROM playwright AS build/m);
+  assert.doesNotMatch(dockerfile, /launchpad|add-apt-repository/);
+  assert.match(dockerfile, /RUN sh \/tmp\/verify-git\.sh\r?\nRUN --network=none tar -xf git\.tar/);
+  assert.match(dockerfile, /FROM playwright\r?\nCOPY --from=build \/out\/ \/\r?\nRUN --network=none/);
+  assert.match(dockerfile, /if git --no-replace-objects --no-lazy-fetch [^\n]+then exit 1/);
+});
+
+test("a substituted CI Git archive fails before extraction or another download", { skip: process.platform !== "linux" }, t => {
+  const cwd = mkdtempSync(join(tmpdir(), "ci-git-release-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  writeFileSync(join(cwd, "curl"), '#!/bin/sh\nset -eu\nwhile test "$1" != -o; do shift; done\necho "$2" >> calls\nprintf substitute > "$2"\n', { mode: 0o700 });
+  const script = fileURLToPath(new URL("../../scripts/benchmark-evidence-git.sh", import.meta.url));
+  const r = spawnSync("/bin/sh", [script], { cwd, env: { PATH: cwd + ":/usr/bin:/bin", HOME: cwd }, encoding: "utf8", timeout: 5000 });
+  assert.ifError(r.error); assert.equal(r.status, 1);
+  assert.match(r.stdout, /git.tar.xz: FAILED/);
+  assert.equal(readFileSync(join(cwd, "calls"), "utf8"), "git.tar.xz\n");
+  assert.equal(existsSync(join(cwd, "git.tar")), false);
+});
+
+test("CI requires gpgv success and the pinned Git signing subkey and primary", { skip: process.platform !== "linux" }, t => {
+  const root = mkdtempSync(join(tmpdir(), "ci-git-signer-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  // The preceding test exercises the actual archive hash. Here drive the verifier's
+  // status interface without a live keyserver or the release signer's private key.
+  const signing = "E1F036B1FEE7221FC778ECEFB0B5E88696AFE6CB", primary = "96E07AF25771955980DAD10020D04E5A713660A7";
+  for (const [command, body] of Object.entries({
+    curl: 'while test "$1" != -o; do shift; done; touch "$2"', sha256sum: "cat >/dev/null", gpg: "exit 0", xz: "exit 0",
+    gpgv: 'test "$1 $2 $3 $4 $5 $6" = "--status-fd 1 --keyring $PWD/release-key.gpg git.tar.sign git.tar" || exit 8\necho "[GNUPG:] VALIDSIG $SIGNING ... $PRIMARY"\nexit "$CODE"',
+  })) writeFileSync(join(root, command), `#!/bin/sh\n${body}\n`, { mode: 0o700 });
+  for (const [label, key, signer, code, expected] of [
+    ["approved", signing, primary, 0, 0], ["bad signature", signing, primary, 1, 1],
+    ["foreign primary", signing, "OTHER", 0, 1], ["foreign subkey", "OTHER", primary, 0, 1],
+  ]) {
+    const cwd = join(root, label); mkdirSync(cwd);
+    const script = fileURLToPath(new URL("../../scripts/benchmark-evidence-git.sh", import.meta.url));
+    const r = spawnSync("/bin/sh", [script], { cwd, env: { PATH: root + ":/usr/bin:/bin", HOME: cwd,
+      SIGNING: key, PRIMARY: signer, CODE: String(code) }, timeout: 5000, encoding: "utf8" });
+    assert.ifError(r.error); assert.equal(r.status, expected, label + ": " + r.stderr);
+  }
 });
 
 test("benchmark evidence supplies the installed, locked Playwright base explicitly", () => {
   const workflow = parse(readFileSync(new URL("../../.github/workflows/benchmark-evidence.yml", import.meta.url), "utf8"));
   const steps = workflow.jobs.evidence.steps;
-  const build = steps.findIndex((entry) => entry.run?.includes("evidence-tools.Dockerfile"));
+  const build = steps.findIndex((entry) => entry.run?.includes("test-tools.Dockerfile"));
   const install = steps.findIndex((entry) => entry.run === "npm ci");
   // Tool replay also reads the bench package's locked classic TypeScript archive.
   const bench = steps.findIndex((entry) => entry.run === "npm --prefix bench ci");
   assert.ok(install >= 0 && bench > install && bench < build);
   assert.match(steps[build].run, /image="mcr\.microsoft\.com\/playwright:v\$\(node -p 'require\("@playwright\/test\/package\.json"\)\.version'\)-noble"/);
-  assert.equal(steps[build].env.IMAGE, "${{ needs.git-packages.outputs.image }}");
-  assert.equal(steps[build].env.CHECKSUM, "${{ needs.git-packages.outputs.checksum }}");
-  assert.match(steps[build].run, /test "\$\{checksum%% \*\}" = "\$CHECKSUM"[\s\S]+docker build --pull --build-arg PLAYWRIGHT_IMAGE="\$IMAGE"/);
-  const download = steps.find(entry => entry.uses?.startsWith("actions/download-artifact@"));
-  assert.deepEqual(download.with, { "artifact-ids": "${{ needs.git-packages.outputs.artifact }}", path: "${{ runner.temp }}/packages", "merge-multiple": true });
-  const tools = workflow.jobs["git-packages"].steps;
-  assert.equal(tools.find(entry => entry.uses?.startsWith("actions/cache/save@")).if,
-    "github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'");
-  assert.equal(tools.find(entry => entry.id === "cache").with["restore-keys"], undefined);
-  const dockerfile = readFileSync(new URL("evidence-tools.Dockerfile", import.meta.url), "utf8");
-  assert.match(dockerfile, /RUN --network=none[\s\S]+git --no-replace-objects --no-lazy-fetch -C "\$repo" cat-file blob/);
+  assert.match(steps[build].run, /docker build --build-arg PLAYWRIGHT_IMAGE="\$image" -f bench\/workloads\/test-tools\.Dockerfile/);
 });
 
 test("Django qualification checks its Playwright install and resource cleanup without Docker", () => {

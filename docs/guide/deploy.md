@@ -760,17 +760,6 @@ with the default inputs runs the whole evidence suite. Verify the run's commit
 and the successful jobs before counting them. Neither mode starts a droplet or
 produces framework timings.
 
-The three replay jobs share two Git packages, not a browser image or runner home.
-One job verifies the pinned Noble `git` and `git-man` against the Git PPA's exact
-primary key, signed index and package hashes on every run. On an exact cache miss
-it must fetch those inputs; only a push to `main` saves them for other runs.
-Each suite verifies the same-run artifact checksum, installs those packages
-offline in the same resolved Playwright image and reads a Git object with
-`--no-replace-objects --no-lazy-fetch`. A missing dependency or invalid input
-fails CI. Update the pin in `scripts/benchmark-evidence-git.sh` when changing
-versions; that changes the cache key. An evicted cache needs the PPA again.
-This cache is not used on a measured host.
-
 Before reserving a new grouped fleet, its [placement preflight](../../bench/workloads/CLOUD.md#dedicated-group-hosts)
 checks the provider's size and region listings for all required hosts. The
 reservation fixes those locations; create never tries a different region.
@@ -808,7 +797,7 @@ the saved evidence. A timed-out or cancelled replay does not qualify the results
 The replay time is not part of any framework's timing.
 
 To build the Git-capable browser test image manually, run `npm ci` from the repository
-root and pass the image that matches the installed Playwright version:
+root and pass the image that matches the installed Playwright version, as CI does:
 
 ```sh
 version=$(node -p 'require("@playwright/test/package.json").version') &&
@@ -816,4 +805,11 @@ version=$(node -p 'require("@playwright/test/package.json").version') &&
     -f bench/workloads/test-tools.Dockerfile -t corten-evidence-tools .
 ```
 
-The Dockerfile has no default base image.
+The Dockerfile has no default base image. CI builds Git 2.56.1 from its
+[upstream release on kernel.org](https://www.kernel.org/pub/software/scm/git/), not from
+the Launchpad PPA or the runner's installation. It verifies the pinned archive SHA-256
+and the detached signature on the uncompressed tar from Junio Hamano's pinned release key.
+When updating Git, verify both, and update the source pin and final image version check
+together. The compiler and source stay in the build stage. The final image checks that
+a missing blob in a local partial clone cannot be fetched with `--no-lazy-fetch`, but
+can be fetched without it. This check needs neither a network nor a Docker socket.

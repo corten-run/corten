@@ -32,13 +32,8 @@ test("Evidence scopes the full diff on pull requests and main without fail-open 
   assert.deepEqual(job.strategy.matrix.suite, ["core", "contracts", "browser"]);
   assert.equal(job.strategy["fail-fast"], false);
   assert.equal(job["continue-on-error"], undefined);
-  const tools = workflow.jobs["git-packages"];
-  assert.equal(tools.needs, "scope");
-  assert.equal(tools.if, "needs.scope.outputs.run == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.native_only)");
-  assert.deepEqual(job.needs, ["scope", "git-packages"]);
-  assert.equal(job.if, "!cancelled() && " + tools.if);
-  assert.equal(job.steps[0].env.RESULT, "${{ needs.git-packages.result }}");
-  assert.equal(job.steps[0].run, 'test "$RESULT" = success');
+  assert.equal(job.needs, "scope");
+  assert.equal(job.if, "needs.scope.outputs.run == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.native_only)");
   const step = job.steps.find((step) => step.env?.SUITE);
   assert.equal(step.if, undefined);
   assert.equal(step["continue-on-error"], undefined);
