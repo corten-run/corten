@@ -482,6 +482,36 @@ apparatus is not a result. An old bound host without confirmed cleanup is shown
 as such. Continuation then requires the same provider account and still refuses
 create if the existing pre-create census finds any foreign benchmark host.
 
+**Starting a new campaign after external cleanup.** A failed upload may leave
+the old continuation locked even after an operator has proved its droplet was
+destroyed. Do not unlock it, change its native state, or count deletion as a
+result. Ordinarily continue in the same root. A reviewed, one-time operator
+handoff to a fresh root is possible only when the old campaign is over:
+
+1. Stop dispatch to the old root. Account for every slot, launch intent and
+   owner, including scheduled dispatches. No owner may still be able to send a
+   create or upload. A manifest alone is not a launch. An ambiguous create
+   with no bound provider ID must be reconciled, not skipped.
+2. In the original provider account, check all bound IDs, including renamed
+   hosts. Retain native deletion receipts or separately reviewed external
+   deletion evidence (exact-ID 404 and absence from the complete account
+   list). A lookup error, an outstanding job or an unknown owner stops the
+   handoff. Preserve the old root, its locks, failure artifacts and issue
+   history unchanged.
+3. This path applies only if every verified result is already pinned in the
+   old `index.json`. If a standalone group in the old root produced a result,
+   **do not use this shortcut**: the index alone would omit it. Copy the
+   unchanged index into an empty root and run the read-only continuation
+   report there. Require native replay of the same successful archives and
+   compare the complete verified and missing group sets with the old
+   inventory. A partial report or an archive hash alone is not sufficient.
+4. Record both roots, the last round used, the inventory and the evidence in
+   the operator handoff. Switch the single dispatch target only after review.
+   Use new round numbers above the old campaign and the normal reviewed
+   preparation and pre-create census. Never resume or collect an old attempt
+   through the new root. The failed rounds remain failures; the verified
+   groups keep their original measured commits.
+
 If a standalone group failed before native entry and its collector recorded the
 archive but not deletion, an unrelated group can use that same census. Its
 launch approval includes the stopped host's original ID: even a renamed or
