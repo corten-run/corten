@@ -531,9 +531,11 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
         || headers.contains_key(header::CONTENT_ENCODING)
         || headers.contains_key(header::CONTENT_RANGE)
         || headers.get_all(header::CACHE_CONTROL).iter().any(|line| {
+            // The default says neither, and most answers have it: it is compared, not searched.
             // An immutable answer is never asked about again.
-            mentions_no_store(line.as_bytes())
-                || directives(line.as_bytes()).any(|d| d.trim_ascii().eq_ignore_ascii_case(b"immutable"))
+            *line != PRIVATE
+                && (mentions_no_store(line.as_bytes())
+                    || directives(line.as_bytes()).any(|d| d.trim_ascii().eq_ignore_ascii_case(b"immutable")))
         })
         || res.extensions().get::<crate::answer::Relayed>().is_some()
         || res.extensions().get::<Unrepeatable>().is_some()
