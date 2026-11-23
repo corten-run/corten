@@ -1,0 +1,1 @@
+.list { :is([x=&(], .list) ], p) { outline-style: solid } }

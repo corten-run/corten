@@ -1,0 +1,589 @@
+// Browser smoke test and timings for the seller desk.
+// Usage: node examples/seller-desk/smoke.mjs http://localhost:18484
+import { readFileSync } from "node:fs";
+import { chromium, firefox, webkit } from "@playwright/test";
+import { steady } from "../../scripts/steady.mjs";
+import { stall } from "../../scripts/stall.mjs";
+
+const base = process.argv[2];
+if (!base) throw new Error("usage: node examples/seller-desk/smoke.mjs <base url>");
+const failures = [];
+const seen = stall(5);
+const check = (name, ok, detail = "") => {
+  seen(name);
+  console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? ` (${detail})` : ""}`);
+  if (!ok) failures.push(name);
+};
+/** @type {Record<string, string>} */
+const timings = {};
+
+const browser = steady(await chromium.launch({ headless: true, args: ["--enable-precise-memory-info", "--js-flags=--expose-gc"] }));
+try {
+  const page = await (await browser.newContext()).newPage();
+  const errors = [];
+  page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  page.on("pageerror", (e) => errors.push(e.message));
+
+  // At DOMContentLoaded the page's module scripts have run and handed their handlers to the
+  // runtime: a click then already runs the grid's handler (and a second click puts it back). The
+  // hand-off is not an API: a forged one from another URL, sent just before the real module's,
+  // is ignored (or this click would find no handler).
+  // Markup a check hands the runtime goes through the test's own Trusted Types policy, made when
+  // first used, on a page whose CSP allows it (below).
+  await page.addInitScript(() => {
+    /** @type {any} */
+    let smoke;
+    Object.defineProperty(window, "smokeHTML", {
+      value: (/** @type {string} */ html) => (smoke ??= /** @type {any} */ (globalThis).trustedTypes.createPolicy("smoke", { createHTML: (/** @type {string} */ s) => s })).createHTML(html),
+    });
+  });
+  await page.addInitScript(() => {
+    let forged = false;
+    document.addEventListener("corten:module", (event) => {
+      if (forged) return;
+      forged = true;
+      const { name } = /** @type {CustomEvent<{ name: string }>} */ (event).detail;
+      const detail = { name, url: new URL("/forged.js", location.href).href, exports: {} };
+      document.dispatchEvent(new CustomEvent("corten:module", { detail }));
+    }, { capture: true });
+    document.addEventListener("DOMContentLoaded", () => {
+      const box = /** @type {HTMLInputElement | null} */ (document.querySelector("tbody input[type=checkbox]"));
+      box?.click();
+      /** @type {any} */ (window).__countAtDcl = document.querySelector("output")?.textContent;
+      box?.click();
+    });
+  });
+  await page.goto(base);
+  check("handlers run from DOMContentLoaded", (await page.evaluate(() => /** @type {any} */ (window).__countAtDcl)) === "1");
+  const nav = await page.evaluate(async () => {
+    const { ready } = await import("corten");
+    await ready;
+    const t = performance.getEntriesByType("navigation")[0];
+    return { ready: performance.now(), dcl: t.domContentLoadedEventEnd, rows: document.querySelectorAll("tbody tr").length, bytes: t.transferSize };
+  });
+  timings["first load: DOMContentLoaded / scripts ready"] = `${nav.dcl.toFixed(0)} / ${nav.ready.toFixed(0)} ms, ${nav.rows} rows, ${(nav.bytes / 1024).toFixed(0)} KB transferred`;
+
+  // Each timing runs the real event in the page: handlers run synchronously while it is
+  // dispatched, so the time is the handler and the runtime's routing to it.
+  const time = (/** @type {string} */ name, /** @type {() => void} */ act) => page.evaluate(async (code) => {
+    const fn = new Function(code);
+    const start = performance.now();
+    fn();
+    const handled = performance.now() - start;
+    await new Promise((r) => setTimeout(r)); // the MutationObserver's work, if any
+    return { handled, settled: performance.now() - start };
+  }, `(${act.toString()})()`).then((t) => (timings[name] = `${t.handled.toFixed(2)} ms (settled ${t.settled.toFixed(2)} ms)`, t));
+
+  const count = () => page.textContent("output");
+  await time("toggle one row", () => /** @type {HTMLInputElement} */ (document.querySelectorAll("tbody input[type=checkbox]")[3]).click());
+  check("a row's click selects it and the grid counts it", (await count()) === "1" && (await page.isVisible("[role=group]")));
+  await page.click("tbody tr:nth-child(6) td:nth-child(2)");
+  check("a click outside a checkbox is not the handler's (ref.closest() finds none)", (await count()) === "1", await count());
+  await time("shift-click a 200-row range", () => {
+    const box = /** @type {HTMLInputElement} */ (document.querySelectorAll("tbody input[type=checkbox]")[203]);
+    box.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: true }));
+  });
+  check("shift-click selects the range (one handler on the table body)", (await count()) === "201", await count());
+  await time("select all", () => /** @type {HTMLInputElement} */ (document.querySelector("thead input[type=checkbox]")).click());
+  check("select all selects every row", (await count()) === String(nav.rows), await count());
+  await page.click("[role=group] button:nth-of-type(2)");
+  check("Clear (a handler passed to a child) clears the selection", (await count()) === "0" && !(await page.isVisible("[role=group]")));
+
+  await time("filter keystroke", () => {
+    const input = /** @type {HTMLInputElement} */ (document.querySelector("input[type=search]"));
+    input.value = "tidebreak";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const visible = await page.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).length);
+  const inSet = await page.$$eval("tbody tr", (rows) => rows.filter((r) => r.cells[2].textContent === "Tidebreak").length);
+  check("filter hides rows that do not match", visible === inSet && visible > 0, `${visible} of ${inSet}`);
+  const shownText = () => page.$eval("#item-count", (p) => p.previousElementSibling?.textContent ?? "");
+  check(
+    "the filter says how many it shows of how many, in the item count's place",
+    (await shownText()) === `${visible.toLocaleString("en")} of ${nav.rows.toLocaleString("en")} shown` && (await page.isHidden("#item-count")),
+    await shownText(),
+  );
+  await page.click("thead input[type=checkbox]");
+  check("select all with a filter selects only the visible rows", (await count()) === String(visible), await count());
+  await page.click("[role=group] button:nth-of-type(2)");
+  await page.fill("input[type=search]", "");
+  check("with the filter cleared the item count is back", (await page.isVisible("#item-count")) && (await shownText()) === "");
+  // Whether the page's handler cancelled each filter submit and header click, read by a listener on
+  // the window, which runs after the runtime's on the document: a navigation would be too late to see.
+  await page.evaluate(() => {
+    const cancelled = /** @type {any} */ (window).__cancelled = /** @type {boolean[]} */ ([]);
+    addEventListener("submit", (e) => cancelled.push(e.defaultPrevented));
+    addEventListener("click", (e) => e.target instanceof Element && e.target.closest("thead a") && cancelled.push(e.defaultPrevented));
+  });
+  const cancelled = () => page.evaluate(() => /** @type {boolean[]} */ (/** @type {any} */ (window).__cancelled.splice(0)));
+  await page.press("input[type=search]", "Enter");
+  const submitKept = await cancelled();
+  check("with JavaScript the Filter button is not drawn, and Enter keeps the page", !(await page.isVisible("form[role=search] button")) && submitKept.join() === "true", submitKept.join());
+  check("on a desktop the set and condition are their own columns, not repeated under the name", await page.isHidden("tbody tr td:nth-child(2) small"));
+
+  await time("sort by price (moves every row)", () => /** @type {HTMLAnchorElement} */ (document.querySelectorAll("thead a")[3]).click());
+  const prices = await page.$$eval("tbody tr", (rows) => rows.slice(0, 5).map((r) => Number(/** @type {HTMLInputElement} */ (r.cells[5].querySelector("input")).value)));
+  check("sort orders rows by price", prices.every((p, i) => i === 0 || prices[i - 1] <= p), prices.join(" "));
+  await time("sort again (descending)", () => /** @type {HTMLAnchorElement} */ (document.querySelectorAll("thead a")[3]).click());
+  await page.click("thead a >> nth=0");
+  const clicksKept = await cancelled();
+  check("a header's click sorts in place, not by following its link", clicksKept.length === 3 && clicksKept.every(Boolean), clicksKept.join());
+  const names = await page.$$eval("tbody tr", (rows) => rows.slice(0, 30).map((r) => r.cells[1].firstElementChild?.textContent ?? ""));
+  check("sort orders rows by name, read from the row's field", names.every((n, i) => i === 0 || names[i - 1].localeCompare(n, "en") <= 0), names.slice(0, 5).join(", "));
+  await page.click("tbody tr:first-child input[type=checkbox]");
+  check("handlers still run on rows after they moved", (await count()) === "1");
+  await page.click("[role=group] button:nth-of-type(2)");
+
+  // A price edit: Save shows, Escape restores, an invalid price comes back with its error, a
+  // valid one replaces the cell.
+  // Rows by id, so a sort below does not move the cells under the test.
+  const cell = `#${await page.$eval("tbody tr:nth-child(2)", (r) => r.id)} td:last-child`;
+  const before = await page.inputValue(`${cell} input`);
+  await page.fill(`${cell} input`, "abc");
+  check("typing a price shows Save", await page.isVisible(`${cell} button`));
+  check("the grid counts the unsaved price in the catalog's words", (await page.textContent("[role=group] + output")) === "1 price not saved", await page.textContent("[role=group] + output"));
+  // A second unsaved price: the plural message picks its other form in the browser.
+  const third = `#${await page.$eval("tbody tr:nth-child(4)", (r) => r.id)} td:last-child`;
+  const thirdBefore = await page.inputValue(`${third} input`);
+  await page.fill(`${third} input`, "abc");
+  check("two unsaved prices take the message's other form", (await page.textContent("[role=group] + output")) === "2 prices not saved", await page.textContent("[role=group] + output"));
+  // French in the browser too: the format module this page loaded picks one, other and many by
+  // the table the server writes for French (specs.tsv), and by a count's digits past 2^53.
+  const specs = readFileSync(new URL("../../crates/corten/src/i18n/specs.tsv", import.meta.url), "utf8");
+  const fr = specs.split("\n").map((line) => line.split("\t")).find(([tag, kind]) => tag === "fr" && kind === "plural")?.[2];
+  const picked = await page.evaluate(async (spec) => {
+    const src = /** @type {HTMLScriptElement} */ (document.querySelector('script[src$="/corten-format.js"]')).src;
+    const pick = (await import(src)).formatter(JSON.parse(spec));
+    return [1, 2, 2_000_000, 2_000_001, "1000000000000000000000"].map((count) => pick({ count }));
+  }, fr);
+  check("in French the page's format module picks one, other and many", picked.join(" ") === "one other many other many", picked.join(" "));
+  await page.press(`${third} input`, "Escape");
+  check("Escape there puts its price back and the count goes down", (await page.inputValue(`${third} input`)) === thirdBefore && (await page.textContent("[role=group] + output")) === "1 price not saved", await page.textContent("[role=group] + output"));
+  await page.press(`${cell} input`, "Escape");
+  check("Escape puts the saved price back", (await page.inputValue(`${cell} input`)) === before && !(await page.isVisible(`${cell} button`)));
+  await page.fill(`${cell} input`, "abc");
+  await page.click(`${cell} button`);
+  await page.waitForSelector(`${cell} input[aria-invalid=true]`, { timeout: 5000 }).catch(() => {});
+  check("an invalid price comes back with its error, focused", (await page.evaluate(() => document.activeElement?.getAttribute("aria-invalid"))) === "true");
+  // A second row refused too: each field is described by its own row's message.
+  const second = `#${await page.$eval("tbody tr:nth-child(3)", (r) => r.id)} td:last-child`;
+  await page.fill(`${second} input`, "xyz");
+  await page.click(`${second} button`);
+  await page.waitForSelector(`${second} input[aria-invalid=true]`, { timeout: 5000 }).catch(() => {});
+  const described = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("input[aria-invalid=true]"), (input) => {
+      const message = document.getElementById(input.getAttribute("aria-describedby") ?? "");
+      return { own: !!message && input.closest("form")?.contains(message), ids: document.querySelectorAll(`[id="${message?.id}"]`).length };
+    }),
+  );
+  check("two refused rows: each field is described by its own message", described.length === 2 && described.every((d) => d.own && d.ids === 1), JSON.stringify(described));
+  await page.click("thead a >> nth=3");
+  if ((await page.getAttribute("thead th:nth-child(6)", "aria-sort")) !== "ascending") await page.click("thead a >> nth=3");
+  const last = await page.$$eval("tbody tr", (rows) => rows.slice(-2).map((r) => /** @type {HTMLInputElement} */ (r.cells[5].querySelector("input")).value).sort().join(" "));
+  check("sorting by price puts the refused prices last", last === "abc xyz", last);
+  await page.fill(`${second} input`, "3");
+  await page.click(`${second} button`);
+  await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("aria-invalid") === null, `${second} input`, { timeout: 5000 }).catch(() => {});
+  await page.fill(`${cell} input`, "7.5");
+  await page.click(`${cell} button`);
+  await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("aria-invalid") === null, `${cell} input`, { timeout: 5000 }).catch(() => {});
+  check("a valid price replaces the cell", (await page.inputValue(`${cell} input`)) === "7.50");
+  await page.fill(`${cell} input`, "8");
+  await page.press(`${cell} input`, "Escape");
+  check("the patched cell's handlers know the new saved price", (await page.inputValue(`${cell} input`)) === "7.50");
+
+  // Text typed while the form is on its way is kept when the answer lands, with the focus and
+  // caret; the server's markup (the error) still applies.
+  // Each price request is held until `release()`. `held()` waits until one is, so a release never
+  // comes before its request, and a release with any other number held fails the run.
+  /** @type {(() => void)[]} */
+  const pending = [];
+  /** @type {() => void} */
+  let arrived = () => {};
+  await page.route("**/items/*/price", async (route) => {
+    await new Promise((resolve) => {
+      pending.push(() => resolve(undefined));
+      arrived();
+    });
+    await route.continue();
+  });
+  const held = () => (pending.length ? Promise.resolve() : new Promise((resolve) => (arrived = () => resolve(undefined))));
+  const release = () => {
+    if (pending.length !== 1) throw new Error(`expected one held price request, found ${pending.length}`);
+    pending.splice(0).forEach((go) => go());
+  };
+  await page.fill(`${cell} input`, "x");
+  await page.click(`${cell} button`);
+  await held();
+  await page.focus(`${cell} input`);
+  await page.keyboard.type("yz");
+  await page.keyboard.press("ArrowLeft");
+  release();
+  await page.waitForSelector(`${cell} input[aria-invalid=true]`, { timeout: 5000 }).catch(() => {});
+  const kept = await page.evaluate((sel) => {
+    const input = /** @type {HTMLInputElement} */ (document.querySelector(sel));
+    return { value: input.value, focused: document.activeElement === input, caret: input.selectionStart };
+  }, `${cell} input`);
+  check(
+    "a field edited while its form was sent keeps the edit, focus and caret",
+    kept.value === "xyz" && kept.focused && kept.caret === 2,
+    JSON.stringify(kept),
+  );
+  // Focus the user moved elsewhere while waiting is not pulled back to the invalid field.
+  await page.fill(`${cell} input`, "q");
+  await page.click(`${cell} button`);
+  const elsewhere = "tbody tr:nth-child(3) td:last-child input";
+  await page.focus(elsewhere);
+  await held();
+  const answered = page.waitForResponse("**/items/*/price");
+  await page.evaluate((sel) => ((/** @type {any} */ (window)).__oldCell = document.querySelector(sel)), `${cell} input`);
+  release();
+  await answered;
+  await page.waitForFunction((sel) => document.querySelector(sel) !== (/** @type {any} */ (window)).__oldCell, `${cell} input`, { timeout: 5000 }).catch(() => {});
+  check(
+    "an invalid answer does not take the focus from a field the user moved to",
+    await page.evaluate((sel) => document.activeElement === document.querySelector(sel), elsewhere),
+  );
+  pending.splice(0).forEach((go) => go());
+  await page.unroute("**/items/*/price");
+  await page.fill(`${cell} input`, "7.50");
+  await page.click(`${cell} button`);
+  await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("aria-invalid") === null, `${cell} input`, { timeout: 5000 }).catch(() => {});
+
+  // Archive two rows through the confirm dialog, which the bulk bar's button opens with commandfor,
+  // with the filter on: its count follows the rows the patch removes.
+  await page.fill("input[type=search]", "tidebreak");
+  const filtered = await page.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).length);
+  const ids = await page.$$eval("tbody tr", (rows) => rows.filter((r) => !r.hidden).slice(0, 2).map((r) => r.id));
+  await page.click(`#${ids[0]} input[type=checkbox]`);
+  await page.click(`#${ids[1]} input[type=checkbox]`);
+  await page.click("[role=group] button:nth-of-type(1)");
+  check("Archive opens the dialog", await page.isVisible("dialog[open]"));
+  const itemCount = () => page.textContent("#item-count");
+  const countBefore = await itemCount();
+  await page.click("dialog button[value=confirm]");
+  await page.waitForFunction(() => /Archived/.test(document.getElementById("desk-status")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
+  check("confirming archives the rows", (await page.textContent("#desk-status")) === "Archived 2 items.", await page.textContent("#desk-status"));
+  const left = await page.$$eval(ids.map((id) => `#${id}`).join(","), (rows) => rows.length);
+  check("the patch removed the archived rows and the selection is clear", left === 0 && (await count()) === "0", `${left} left`);
+  check(
+    "the filter's count follows the archive",
+    (await shownText()) === `${(filtered - 2).toLocaleString("en")} of ${(nav.rows - 2).toLocaleString("en")} shown`,
+    await shownText(),
+  );
+  await page.fill("input[type=search]", "");
+  check(
+    "the archive's answer counts the items left",
+    countBefore === `${nav.rows.toLocaleString("en")} items` && (await itemCount()) === `${(nav.rows - 2).toLocaleString("en")} items`,
+    `${countBefore} -> ${await itemCount()}`,
+  );
+  await page.click("tbody tr:nth-child(1) input[type=checkbox]");
+  check("the rows that moved up still select", (await count()) === "1");
+  await page.click("[role=group] button:nth-of-type(2)");
+  check("the dialog closed", !(await page.isVisible("dialog[open]")));
+
+  // Live levels: the feed changes some stock cells.
+  const levels = () => page.$$eval("tbody tr > td:nth-child(5)", (cells) => cells.map((c) => c.textContent).join());
+  const first = await levels();
+  const changed = await page
+    .waitForFunction((was) => [...document.querySelectorAll("tbody tr > td:nth-child(5)")].map((c) => c.textContent).join() !== was, first, { timeout: 10_000 })
+    .then(() => true, () => false);
+  check("live levels update stock cells", changed);
+  // A row at 0 is marked sold out, and only such a row: the live levels sell rows out and restock
+  // them, so wait for a row whose mark the script changed, then compare every row.
+  const marked = () => page.$$eval("tbody tr[data-sold-out]", (rows) => rows.map((r) => r.id).sort().join());
+  const marksBefore = await marked();
+  const flipped = await page
+    .waitForFunction((was) => [...document.querySelectorAll("tbody tr[data-sold-out]")].map((r) => r.id).sort().join() !== was, marksBefore, { timeout: 15_000 })
+    .then(() => true, () => false);
+  const soldOutMarked = await page.$$eval("tbody tr", (rows) => rows.every((r) => (r.querySelector("td:nth-child(5)")?.textContent === "0") === r.hasAttribute("data-sold-out")));
+  check("a row is marked sold out exactly while its quantity is 0, as the levels change", flipped && soldOutMarked && marksBefore !== "", `${flipped} ${soldOutMarked} ${marksBefore.split(",").length} marked before`);
+
+  // On a phone the table keeps the name, quantity and price, and a price being edited (its Save
+  // button, then its error) fits without the grid scrolling sideways.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const phoneCell = "tbody tr:not([hidden]) td:last-child";
+  const fits = () => page.evaluate((sel) => {
+    const scroll = /** @type {HTMLElement} */ (document.querySelector("tbody")?.closest("table")?.parentElement);
+    const box = scroll.getBoundingClientRect();
+    const parts = [...(document.querySelector(sel)?.querySelectorAll("input, button, p") ?? [])].map((el) => el.getBoundingClientRect());
+    const inside = parts.every((r) => r.width > 0 && r.left >= box.left && r.right <= box.right);
+    const headers = [...document.querySelectorAll("thead th")].filter((th) => getComputedStyle(th).display !== "none").length;
+    const under = document.querySelector("tbody tr:not([hidden]) td:nth-child(2) small");
+    const subline = under !== null && getComputedStyle(under).display !== "none" && /\S \u00b7 \S/.test(under.textContent ?? "");
+    const cells = [...(document.querySelector("tbody tr")?.children ?? [])].filter((td) => getComputedStyle(td).display !== "none").length;
+    return { inside, sideways: scroll.scrollWidth > scroll.clientWidth, headers, cells, parts: parts.length, subline };
+  }, phoneCell);
+  await page.fill(`${phoneCell} input`, "12.34");
+  const editing = await fits();
+  check(
+    "on a phone the edited price and its Save button fit, every cell under its header, the set and condition under the name",
+    editing.inside && !editing.sideways && editing.headers === 4 && editing.cells === 4 && editing.parts >= 2 && editing.subline,
+    JSON.stringify(editing),
+  );
+  await page.fill(`${phoneCell} input`, "abc");
+  await page.click(`${phoneCell} button`);
+  await page.waitForSelector(`${phoneCell} p`, { timeout: 5000 }).catch(() => {});
+  const refused = await fits();
+  check("on a phone a refused price's error fits too", refused.inside && !refused.sideways && refused.parts >= 3, JSON.stringify(refused));
+
+  // The statement draws each set's share as a bar from data (`style={SHARE.pct(..)}`), under a CSP
+  // that allows no style attribute: a full load gets the values from the page's style block (allowed
+  // by its hash), a client navigation and a patch from the runtime, through the CSSOM.
+  const shares = () => page.$$eval("tbody [data-vars]", (bars) => bars.map((bar) => {
+    const [name, want] = /** @type {string} */ (bar.getAttribute("data-vars")).split(":");
+    return { want, got: getComputedStyle(bar).getPropertyValue(name).trim() };
+  }));
+  const drawn = (/** @type {{ want: string, got: string }[]} */ list) => list.length > 1 && list.every((s) => s.got === s.want) && list.some((s) => s.want !== "0%");
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.evaluate(() => { /** @type {any} */ (window).__stayed = true; });
+  await page.click('header nav a[href="/statement"]');
+  await page.waitForSelector("tbody [data-vars]");
+  const navigated = await shares();
+  const swapped = await page.evaluate(() => /** @type {any} */ (window).__stayed === true);
+  check("a client navigation's bars get their shares from the runtime", swapped && drawn(navigated), JSON.stringify({ swapped, bars: navigated.slice(0, 3) }));
+  // The app's pages allow only the runtime's Trusted Types policy, so a patch from a string is
+  // refused. The two checks below hand the runtime a patch of their own: for this load only, the
+  // page's CSP also allows the test's policy, `smoke`.
+  const statement = new URL("/statement", base).href;
+  await page.route(statement, async (route) => {
+    // Unencoded: Playwright does not decode Firefox's zstd for a fulfilled body.
+    const response = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+    const headers = response.headers();
+    headers["content-security-policy"] = (headers["content-security-policy"] ?? "").replace("trusted-types corten", "trusted-types corten smoke");
+    await route.fulfill({ response, headers });
+  });
+  await page.goto(statement);
+  await page.unroute(statement);
+  const loaded = await shares();
+  check("a full load's bars get their shares from the page's style block", drawn(loaded), JSON.stringify(loaded.slice(0, 3)));
+  const patched = await page.evaluate(async () => {
+    const { patch } = await import("corten");
+    const name = /** @type {string} */ (document.querySelector("tbody [data-vars]")?.getAttribute("data-vars")).split(":")[0];
+    document.querySelector("main")?.append(Object.assign(document.createElement("span"), { id: "vars-probe" }));
+    // A rule of the stylesheet marked !important loses to markup's value, as on a full load.
+    const rule = new CSSStyleSheet();
+    rule.replaceSync(`#vars-probe { ${name}: 0% !important }`);
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, rule];
+    await patch(smokeHTML(`<span id="vars-probe" data-vars="${name}:61.5%"></span>`));
+    const got = getComputedStyle(/** @type {Element} */ (document.getElementById("vars-probe"))).getPropertyValue(name).trim();
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== rule);
+    return got;
+  });
+  check("a patch's values are set by the runtime, over an !important rule", patched === "61.5%", patched);
+  // Markup in a <template> keeps its values when a script moves it into the page.
+  const moved = await page.evaluate(async () => {
+    const { patch } = await import("corten");
+    const name = /** @type {string} */ (document.querySelector("tbody [data-vars]")?.getAttribute("data-vars")).split(":")[0];
+    document.querySelector("main")?.append(Object.assign(document.createElement("div"), { id: "vars-held" }));
+    await patch(smokeHTML(`<div id="vars-held"><template><span data-vars="${name}:33.5%"></span></template></div>`));
+    const holder = /** @type {Element} */ (document.getElementById("vars-held"));
+    holder.append(/** @type {HTMLTemplateElement} */ (holder.querySelector("template")).content);
+    const got = getComputedStyle(/** @type {Element} */ (holder.querySelector("span"))).getPropertyValue(name).trim();
+    holder.remove();
+    return got;
+  });
+  check("markup a patch brings in a <template> keeps its values when moved into the page", moved === "33.5%", moved);
+  // A row rows() copies from a <template> gets the template row's values through the CSSOM too,
+  // after a client navigation (the page's style block is from the first load and has none for it).
+  await page.click('header nav a[href="/"]');
+  await page.click('header nav a[href="/statement"]');
+  await page.waitForSelector("tbody [data-vars]");
+  const cloned = await page.evaluate(async () => {
+    const views = await import("corten/views").catch(() => null);
+    if (!views?.rows) return "no corten/views";
+    const name = /** @type {string} */ (document.querySelector("tbody [data-vars]")?.getAttribute("data-vars")).split(":")[0];
+    const parent = document.createElement("ul");
+    const template = document.createElement("template");
+    // Built element by element: the app's pages require Trusted Types, so markup from a string is refused.
+    const li = document.createElement("li");
+    const cell = document.createElement("span");
+    cell.setAttribute("data-vars", `${name}:12.5%`);
+    li.append(cell);
+    template.content.append(li);
+    document.querySelector("main")?.append(parent);
+    class Row { constructor(/** @type {Element} */ el) { this.el = el; } static key() { return ""; } static keyOf() { return ""; } static fill() {} }
+    views.rows(parent, /** @type {any} */ (Row), template).push([{}]);
+    const span = /** @type {Element} */ (parent.querySelector("span"));
+    const got = getComputedStyle(span).getPropertyValue(name).trim();
+    parent.remove();
+    return got;
+  });
+  check("a row rows() copies from a <template> gets the template row's values", cloned === "12.5%", cloned);
+  // Rows removed one by one by key, as a handler takes out a selection or a feed's removals:
+  // the rows left are the right ones, and a key set on a row since is the one get() finds.
+  const byKey = await page.evaluate(async () => {
+    const views = await import("corten/views").catch(() => null);
+    if (!views?.rows) return "no corten/views";
+    const parent = document.createElement("ul");
+    for (let i = 0; i < 200; i += 1) {
+      const li = document.createElement("li");
+      li.setAttribute("data-key", `k${i}`);
+      li.textContent = String(i);
+      parent.append(li);
+    }
+    document.querySelector("main")?.append(parent);
+    class Row {
+      constructor(/** @type {Element} */ el) { this.el = el; }
+      static key(/** @type {Element} */ el) { return el.getAttribute("data-key") ?? ""; }
+      static keyOf(/** @type {{ id: string }} */ data) { return data.id; }
+      static fill() {}
+    }
+    const list = views.rows(parent, /** @type {any} */ (Row));
+    for (let i = 1; i < 200; i += 2) list.remove(list.get(`k${i}`));
+    const left = Array.from(list, (/** @type {any} */ row) => row.el.getAttribute("data-key"));
+    const removed = left.length === 100 && left.every((k, i) => k === `k${i * 2}`) && !list.get("k1") && list.indexOf(list.get("k4")) === 2;
+    // at() as an array's: none past either end, a negative index counting back from the last.
+    const ends = list.at(list.length) === undefined && list.at(-list.length - 1) === undefined
+      && list.at(-1)?.el === parent.lastElementChild && list.at(-list.length)?.el === parent.firstElementChild;
+    // Set as a handler would after an await: the next get() is in a later task.
+    list.at(0).el.setAttribute("data-key", "renamed");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const renamed = list.get("renamed")?.el === parent.firstElementChild && !list.get("k0");
+    parent.remove();
+    return removed && ends && renamed ? "ok" : JSON.stringify({ first: left.slice(0, 4), left: left.length, removed, ends, renamed });
+  });
+  check("rows() removes rows found by key, finds a row by a key set on it since, and at() gives none past either end", byKey === "ok", byKey);
+
+  // A page the runtime swaps in fetches what its handler modules import (the grid's corten/views,
+  // the price cell's corten/events) with those modules, as a full load's head does, not once each
+  // module arrives: 300 ms added to every script request, a client navigation from the statement.
+  const slow = await (await browser.newContext()).newPage();
+  await slow.goto(new URL("/statement", base).href);
+  await slow.route(/\/(scripts\/[^/]+|views|events)\.js$/, async (route) => {
+    await new Promise((r) => setTimeout(r, 300));
+    await route.continue();
+  });
+  /** @type {Record<string, number>} */
+  const asked = {};
+  const t0 = Date.now();
+  slow.on("request", (r) => { asked[r.url().split("/").pop() ?? ""] ??= Date.now() - t0; });
+  await slow.click('header nav a[href="/"]');
+  await slow.waitForFunction(() => location.pathname === "/" && !document.querySelector("main")?.hasAttribute("aria-busy"));
+  const grid0 = asked["inventory_grid.js"] ?? NaN;
+  const imports = ["views.js", "events.js"].map((name) => (asked[name] ?? NaN) - grid0);
+  const leftover = await slow.evaluate(() => document.querySelectorAll('main link, link[rel="modulepreload"]:not(head > *)').length);
+  check(
+    "a swapped-in page fetches what its handler modules import with them, not after them",
+    imports.every((gap) => gap < 150) && leftover === 0,
+    JSON.stringify({ ...asked, leftover }),
+  );
+  await slow.context().close();
+
+
+  // The grid's header stays at the top of its scroll box as the rows scroll: the reason the grid
+  // writes the kit table's look itself (the kit's table wrapper scrolls sideways, and would be the
+  // box the header sticks to).
+  const grid = await (await browser.newContext({ viewport: { width: 1200, height: 800 } })).newPage();
+  await grid.goto(base);
+  const sticky = await grid.evaluate(() => {
+    const box = /** @type {HTMLElement} */ (document.querySelector("tbody")?.closest("div"));
+    box.scrollTop = 600;
+    const th = /** @type {Element} */ (box.querySelector("thead th:nth-child(2)"));
+    const r = th.getBoundingClientRect();
+    // Painted over the rows, and opaque, so they do not show through it.
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { scrolled: box.scrollTop, gap: Math.round(r.top - box.getBoundingClientRect().top - box.clientTop), onTop: !!top && th.contains(top), opaque: !/rgba\(.*, 0\)$|transparent/.test(getComputedStyle(th).backgroundColor) };
+  });
+  check("the grid's header stays at the top of its box, over the rows, as they scroll", sticky.scrolled > 0 && sticky.gap === 0 && sticky.onTop && sticky.opaque, JSON.stringify(sticky));
+  await grid.context().close();
+
+  // The kit's theme, recolored to the desk's palette, in the scheme the system asks for: the page,
+  // a price field (a field at rest, not only under the pointer) and the Save button take the
+  // colors of the token file for that scheme, as do the kit's own components: the search field
+  // (Input), Archive (an outline Button) and the dialog. The statement's amounts are the kit
+  // Table's numeric cells.
+  const radius = JSON.parse(readFileSync(new URL("tokens/ui.tokens.json", import.meta.url), "utf8")).radius.$value.value;
+  for (const [scheme, file] of [["light", "ui.tokens.json"], ["dark", "ui-dark.tokens.json"]]) {
+    const tokens = JSON.parse(readFileSync(new URL(`tokens/${file}`, import.meta.url), "utf8"));
+    const rgb = (/** @type {string} */ name) => {
+      const hex = tokens[name].$value.hex;
+      return `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(", ")})`;
+    };
+    const themed = await (await browser.newContext({ colorScheme: /** @type {"light" | "dark"} */ (scheme) })).newPage();
+    await themed.goto(base);
+    await themed.fill("tbody form[data-patch] input", "1.23");
+    const got = await themed.evaluate(() => {
+      const css = (/** @type {string} */ s) => getComputedStyle(/** @type {Element} */ (document.querySelector(s)));
+      return {
+        page: css("html").backgroundColor,
+        field: css("tbody form[data-patch] input:not(:focus)").borderTopColor,
+        save: css("tbody form[data-patch] button:not([hidden])").backgroundColor,
+        search: css("input[type=search]").borderTopColor,
+        archive: css('[aria-label="Selected items"] button[command]').borderTopColor,
+        dialog: css("dialog").backgroundColor,
+        archiveRadius: css('[aria-label="Selected items"] button[command]').borderTopLeftRadius,
+      };
+    });
+    const want = {
+      page: rgb("background"),
+      field: rgb("input"),
+      save: rgb("primary"),
+      search: rgb("input"),
+      archive: rgb("input"),
+      dialog: rgb("background"),
+      // The kit's buttons round by the theme's radius (set once, in the light file) less 2px, at
+      // the page's 16px rem.
+      archiveRadius: `${radius * 16 - 2}px`,
+    };
+    check(`in the ${scheme} scheme the page, a price field, Save and the kit's field, button and dialog take the theme's colors and radius`, JSON.stringify(got) === JSON.stringify(want), JSON.stringify(got));
+    if (scheme === "light") {
+      await themed.goto(new URL("/statement", base).href);
+      const aligned = await themed.evaluate(() => [...document.querySelectorAll("td[class*=numeric]")].map((td) => getComputedStyle(td).textAlign));
+      check("the statement's amounts are the kit table's numeric cells, aligned to the end", aligned.length > 0 && aligned.every((a) => a === "end"), aligned.join(" "));
+    }
+    await themed.context().close();
+  }
+
+  // Without JavaScript, in each engine (the `scripting` media feature is the engine's): the filter
+  // is a GET form the server answers, with its Filter button drawn, and a header is a link to the
+  // grid sorted by its column, the filter kept.
+  for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
+    const own = name === "Chromium" ? null : steady(await type.launch({ headless: true }));
+    const plainContext = await (own ?? browser).newContext({ javaScriptEnabled: false });
+    try {
+      const plain = await plainContext.newPage();
+      await plain.goto(base);
+      const button = "form[role=search] button";
+      const drawn = await plain.isVisible(button);
+      await plain.fill("input[type=search]", "tidebreak");
+      // The URL the answer comes to: a load state can be read before the navigation starts.
+      await Promise.all([plain.waitForURL(/[?&]q=tidebreak/), plain.click(button)]);
+      const sets = await plain.$$eval("tbody tr:not([hidden])", (rows) => rows.map((r) => r.cells[2].textContent));
+      const says = await plain.$eval("#item-count", (p) => p.previousElementSibling?.textContent?.trim() ?? "");
+      check(
+        `${name} without JavaScript: the filter is a GET form the server answers, and says how many rows it shows`,
+        drawn && new URL(plain.url()).searchParams.get("q") === "tidebreak" && sets.length > 0 && sets.every((s) => s === "Tidebreak") &&
+          says.startsWith(`${sets.length.toLocaleString("en")} of `) && (await plain.isHidden("#item-count")),
+        `button drawn: ${drawn}; ${sets.length} rows; "${says}"; ${plain.url()}`,
+      );
+      await Promise.all([plain.waitForURL(/[?&]sort=name/), plain.click("thead a >> nth=0")]);
+      const names = await plain.$$eval("tbody tr:not([hidden])", (rows) => rows.map((r) => (r.cells[1].firstElementChild?.textContent ?? "").toLowerCase()));
+      const at = new URL(plain.url()).searchParams;
+      check(
+        `${name} without JavaScript: a header is a link to the grid sorted by its column, the filter kept`,
+        at.get("sort") === "name" && at.get("q") === "tidebreak" && names.length === sets.length &&
+          names.every((n, i) => i === 0 || (names[i - 1] ?? "") <= n) && (await plain.getAttribute("thead th:nth-child(2)", "aria-sort")) === "ascending",
+        `${plain.url()}; ${names.slice(0, 3).join(", ")}`,
+      );
+    } finally {
+      await plainContext.close();
+      await own?.close();
+    }
+  }
+
+  // Memory with the page settled.
+  const heap = await page.evaluate(() => {
+    /** @type {any} */ (window).gc?.();
+    return /** @type {any} */ (performance).memory?.usedJSHeapSize ?? 0;
+  });
+  timings["JS heap after GC"] = `${(heap / 1048576).toFixed(1)} MB`;
+
+  const other = errors.filter((e) => !/Failed to load resource/.test(e));
+  check("no console errors", other.length === 0, other.join(" | "));
+} finally {
+  await browser.close();
+}
+for (const [name, value] of Object.entries(timings)) console.log(`time ${name}: ${value}`);
+console.log(failures.length ? `${failures.length} failed` : "all passed");
+process.exit(failures.length ? 1 : 0);

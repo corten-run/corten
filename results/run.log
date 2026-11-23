@@ -1,0 +1,92 @@
+checked 2 requests: differ only as /m/1846r4/expect-browser.diff says
+browser: pair 10 of 100 done
+browser: pair 20 of 100 done
+browser: pair 30 of 100 done
+browser: pair 40 of 100 done
+browser: pair 50 of 100 done
+browser: pair 60 of 100 done
+browser: pair 70 of 100 done
+browser: pair 80 of 100 done
+browser: pair 90 of 100 done
+browser: pair 100 of 100 done
+browser: done, /m/1846r4/results/cycles-browser.csv
+browser base: 102 of 102 starts: WARM browser: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1819 bytes
+browser head: 102 of 102 starts: WARM browser: /page accept-encoding "gzip, deflate, br, zstd": content-encoding br, age _, 1635 bytes
+check-warm: browser: br-smaller: base zstd age 0 1819 bytes; head br age 0 1635 bytes
+checked 2 requests: same
+gzip: pair 10 of 100 done
+gzip: pair 20 of 100 done
+gzip: pair 30 of 100 done
+gzip: pair 40 of 100 done
+gzip: pair 50 of 100 done
+gzip: pair 60 of 100 done
+gzip: pair 70 of 100 done
+gzip: pair 80 of 100 done
+gzip: pair 90 of 100 done
+gzip: pair 100 of 100 done
+gzip: done, /m/1846r4/results/cycles-gzip.csv
+gzip base: 102 of 102 starts: WARM gzip: /page accept-encoding "gzip": content-encoding gzip, age _, 1944 bytes
+gzip head: 102 of 102 starts: WARM gzip: /page accept-encoding "gzip": content-encoding gzip, age _, 1944 bytes
+check-warm: gzip: same:gzip: base gzip age 0 1944 bytes; head gzip age 0 1944 bytes
+checked 2 requests: same
+refused: pair 10 of 100 done
+refused: pair 20 of 100 done
+refused: pair 30 of 100 done
+refused: pair 40 of 100 done
+refused: pair 50 of 100 done
+refused: pair 60 of 100 done
+refused: pair 70 of 100 done
+refused: pair 80 of 100 done
+refused: pair 90 of 100 done
+refused: pair 100 of 100 done
+refused: done, /m/1846r4/results/cycles-refused.csv
+refused base: 102 of 102 starts: WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1819 bytes; FENCE ok in 102
+refused head: 102 of 102 starts: WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1819 bytes; FENCE ok in 102
+check-warm: refused: same:zstd: base zstd age 0 1819 bytes; head zstd age 0 1819 bytes
+checked 2 requests: differ only as /m/1846r4/expect-json-browser.diff says
+json-browser: pair 10 of 100 done
+json-browser: pair 20 of 100 done
+json-browser: pair 30 of 100 done
+json-browser: pair 40 of 100 done
+json-browser: pair 50 of 100 done
+json-browser: pair 60 of 100 done
+json-browser: pair 70 of 100 done
+json-browser: pair 80 of 100 done
+json-browser: pair 90 of 100 done
+json-browser: pair 100 of 100 done
+json-browser: done, /m/1846r4/results/cycles-json-browser.csv
+json-browser base: 102 of 102 starts: WARM json-browser: /records accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 328 bytes
+json-browser head: 102 of 102 starts: WARM json-browser: /records accept-encoding "gzip, deflate, br, zstd": content-encoding br, age _, 280 bytes
+check-warm: json-browser: br-smaller: base zstd age 0 328 bytes; head br age 0 280 bytes
+checked 2 requests: differ only as /m/1846r4/expect-browser.diff says
+browser-icache: pair 10 of 30 done
+browser-icache: pair 20 of 30 done
+browser-icache: pair 30 of 30 done
+browser-icache: done, /m/1846r4/results/counts-browser-icache.csv
+browser-icache base: 32 of 32 starts: WARM browser: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1819 bytes
+browser-icache head: 32 of 32 starts: WARM browser: /page accept-encoding "gzip, deflate, br, zstd": content-encoding br, age _, 1635 bytes
+check-warm: browser-icache: br-smaller: base zstd age 0 1819 bytes; head br age 0 1635 bytes
+checked 2 requests: same
+gzip-icache: pair 10 of 30 done
+gzip-icache: pair 20 of 30 done
+gzip-icache: pair 30 of 30 done
+gzip-icache: done, /m/1846r4/results/counts-gzip-icache.csv
+gzip-icache base: 32 of 32 starts: WARM gzip: /page accept-encoding "gzip": content-encoding gzip, age _, 1944 bytes
+gzip-icache head: 32 of 32 starts: WARM gzip: /page accept-encoding "gzip": content-encoding gzip, age _, 1944 bytes
+check-warm: gzip-icache: same:gzip: base gzip age 0 1944 bytes; head gzip age 0 1944 bytes
+checked 2 requests: same
+refused-icache: pair 10 of 30 done
+refused-icache: pair 20 of 30 done
+refused-icache: pair 30 of 30 done
+refused-icache: done, /m/1846r4/results/counts-refused-icache.csv
+refused-icache base: 32 of 32 starts: WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1819 bytes; FENCE ok in 32
+refused-icache head: 32 of 32 starts: WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1819 bytes; FENCE ok in 32
+check-warm: refused-icache: same:zstd: base zstd age 0 1819 bytes; head zstd age 0 1819 bytes
+checked 2 requests: differ only as /m/1846r4/expect-json-browser.diff says
+json-browser-icache: pair 10 of 30 done
+json-browser-icache: pair 20 of 30 done
+json-browser-icache: pair 30 of 30 done
+json-browser-icache: done, /m/1846r4/results/counts-json-browser-icache.csv
+json-browser-icache base: 32 of 32 starts: WARM json-browser: /records accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 328 bytes
+json-browser-icache head: 32 of 32 starts: WARM json-browser: /records accept-encoding "gzip, deflate, br, zstd": content-encoding br, age _, 280 bytes
+check-warm: json-browser-icache: br-smaller: base zstd age 0 328 bytes; head br age 0 280 bytes

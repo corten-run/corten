@@ -1,0 +1,3 @@
+@scope (:not(.list)) {
+  p { color: red; }
+}

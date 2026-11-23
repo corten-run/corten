@@ -1,0 +1,10 @@
+/* A set's share of the stock's value, which `style={SHARE.pct(..)}` sets on its bar. */
+@property --share { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
+/* The kit's table (src/ui/table.css) on the desk's card surface. */
+/* The rows' borders and the total's band run to the card's edge, as the grid's do. */
+.surface { overflow: hidden; background: var(--card); border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); }
+.surface :is(th, td) { padding-inline: .75rem; }
+/* A set's name heads its row, in the body's weight. */
+.set { font-weight: 400; }
+/* The bar is the share's picture; the number beside it is what a screen reader reads. */
+.bar { display: inline-block; vertical-align: middle; width: 5.25rem; height: 6px; margin-inline-end: 10px; border-radius: 3px; background: linear-gradient(to right, var(--primary) var(--share), var(--accent) var(--share)); }

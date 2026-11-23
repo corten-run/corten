@@ -1,0 +1,5 @@
+json-browser (cycles, 100 pairs): usable true
+  cycles user+kernel a request: base 48339.44, head 47726.32; median change -1.20%, bound (rank 59) -0.91%, range -6.25% to +6.13%
+  instructions:u a request: base 31157.97, head 31147.15; median change -0.03%, bound (rank 59) -0.03%, range -0.96% to +0.91%
+  gate (usable, 100 pairs, bound under +1%): met
+JSON {"workload":"json-browser","kind":"cycles","pairs":100,"boundRank":59,"usable":true,"problems":[],"cycles user+kernel":{"base":48339.436556855144,"head":47726.321861072334,"change":-0.012033169637269303,"bound":-0.009095819644789782,"min":-0.06253871504883712,"max":0.061307236862443215},"instructions:u":{"base":31157.969580572782,"head":31147.151204609832,"change":-0.0003472270455838755,"bound":-0.0002695590926092839,"min":-0.009561723379453824,"max":0.009105119059351185},"met":true}

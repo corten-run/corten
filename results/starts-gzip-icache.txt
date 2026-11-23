@@ -1,0 +1,2 @@
+gzip-icache base: 32 of 32 starts: WARM gzip: /page accept-encoding "gzip": content-encoding gzip, age _, 1944 bytes
+gzip-icache head: 32 of 32 starts: WARM gzip: /page accept-encoding "gzip": content-encoding gzip, age _, 1944 bytes

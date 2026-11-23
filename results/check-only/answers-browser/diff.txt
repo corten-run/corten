@@ -1,0 +1,10 @@
+== check 1: /page -H 'accept-encoding: gzip, deflate, br, zstd' -o /dev/null -D - -w 'body %{size_download}'
+16c16
+< content-encoding: zstd
+---
+> content-encoding: br
+== check 2: /page -H 'accept-encoding: gzip, deflate, br, zstd' --compressed
+16c16
+< content-encoding: zstd
+---
+> content-encoding: br

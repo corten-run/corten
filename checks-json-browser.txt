@@ -1,0 +1,2 @@
+/records -H 'accept: application/json' -H 'accept-encoding: gzip, deflate, br, zstd' -o /dev/null -D - -w 'body %{size_download}'
+/records -H 'accept: application/json' -H 'accept-encoding: gzip, deflate, br, zstd' --compressed

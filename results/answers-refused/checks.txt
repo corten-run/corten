@@ -1,0 +1,2 @@
+/page -H 'accept-encoding: gzip, deflate, br, zstd' -o /dev/null -D - -w 'body %{size_download}'
+/page -H 'accept-encoding: gzip, deflate, br, zstd' --compressed

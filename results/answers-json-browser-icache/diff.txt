@@ -1,0 +1,10 @@
+== check 1: /records -H 'accept: application/json' -H 'accept-encoding: gzip, deflate, br, zstd' -o /dev/null -D - -w 'body %{size_download}'
+13c13
+< content-encoding: zstd
+---
+> content-encoding: br
+== check 2: /records -H 'accept: application/json' -H 'accept-encoding: gzip, deflate, br, zstd' --compressed
+13c13
+< content-encoding: zstd
+---
+> content-encoding: br

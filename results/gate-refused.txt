@@ -1,0 +1,5 @@
+refused (cycles, 100 pairs): usable true
+  cycles user+kernel a request: base 49479.28, head 48949.10; median change -1.22%, bound (rank 59) -0.74%, range -7.77% to +6.59%
+  instructions:u a request: base 30153.94, head 30148.10; median change +0.04%, bound (rank 59) +0.04%, range -0.09% to +0.16%
+  gate (usable, 100 pairs, bound under +1%): met
+JSON {"workload":"refused","kind":"cycles","pairs":100,"boundRank":59,"usable":true,"problems":[],"cycles user+kernel":{"base":49479.28052752446,"head":48949.095120850514,"change":-0.0122298339000666,"bound":-0.007418539632628507,"min":-0.07770777186177136,"max":0.06591521146028012},"instructions:u":{"base":30153.944545786813,"head":30148.102985156944,"change":0.00038599976085551546,"bound":0.0003915688224505054,"min":-0.0008560049502150946,"max":0.0016328236128457796},"met":true}

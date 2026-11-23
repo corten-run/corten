@@ -1,0 +1,105 @@
+# deck-builder
+
+A deck builder: a player's collection of 240 cards on one side, the deck they build from it on the
+other. It is the example of a rich client screen: everything a change does on the page happens in
+the browser with no round trip, and the deck rules stay on the server. Read it when a screen keeps
+state in the browser (selection, drag and drop, undo, a chart drawn from what is on the page) and
+saves it as the user works.
+
+| In the browser | How |
+|---|---|
+| Filter, sort and select the collection | a handler per column; the rows are `CollectionRow` views, read and written by name |
+| Add a card, add the selected ones, type a count | a change: the next deck is drawn (`rows(lines, DeckLine, template).replace`) and saved |
+| Drag a card onto the deck, or a line back out | HTML drag and drop on a grip; the same change |
+| Reorder deck lines | drag a deck grip onto another line; the presentation order stays in this page while the server continues to own counts |
+| The same moves by keyboard | Space picks up, Left/Right moves between the collection and deck, Up/Down reorders a deck line, Space drops, Escape puts back, each announced |
+| Undo and redo | the buttons, Ctrl+Z and Ctrl+Shift+Z; each step is a change, saved like any other |
+| The count, the cost curve, the count by kind, the deck list | drawn again from the deck after each change (the curve is SVG bars, no `style`) |
+| Autosave | the deck's form, sent one save at a time with the version it was built on (the deck feed's generation and number); the answer is the save note, whose event says what became of it. A save whose answer was lost is sent again with its submit key, and the server answers with what it did |
+| A refused change | the page goes back to the saved deck, and its history to what it was then, with the rule's words |
+| Another tab's edit | the page follows the saved deck's feed: with nothing unsaved it takes the edit; with a change of its own it offers to keep both or take the other tab's deck |
+
+Without JavaScript the same deck is built with forms: Add and Add selected post the deck with the
+cards added, Save posts the counts as typed, and the filter and the column headers are a `GET`
+form and links the server answers.
+
+## Run it
+
+From this directory:
+
+```sh
+corten dev     # http://localhost:3000
+```
+
+`corten` is the framework's command (`cargo install corten-cli`).
+
+Or in Docker, from the repository root:
+
+```sh
+docker build -f examples/deck-builder/Dockerfile -t corten-deck-builder .
+docker run --rm -p 3000:8080 corten-deck-builder
+```
+
+`DECK_CARDS` sets how many cards the collection has (240). The deck is kept in memory: a restart
+starts again from the starter deck, in a new generation, so a page left open across it is told the
+deck changed.
+
+## Where things are
+
+The routes and what each does are in the table at the top of [`src/app.rs`](src/app.rs).
+
+| Piece | File |
+|---|---|
+| The routes, the save (version, submit key, rules), the deck's feed | [`src/app.rs`](src/app.rs) |
+| The collection and the deck rules, which only the server applies | [`src/cards.rs`](src/cards.rs) |
+| The layout, and the screen in the order the address asks for | [`src/views.rs`](src/views.rs) |
+| The builder: its markup, its script (every change, autosave, moves, the collection) and its styles | [`src/views/deck_builder.rs`](src/views/deck_builder.rs), [`src/views/deck_builder.js`](src/views/deck_builder.js), [`src/views/deck_builder.css`](src/views/deck_builder.css) |
+| A collection row and a deck line | [`src/views/collection_row.rs`](src/views/collection_row.rs), [`src/views/deck_line.rs`](src/views/deck_line.rs) |
+| The save note, which tells the builder a save's answer | [`src/views/save_note.rs`](src/views/save_note.rs), [`src/views/save_note.js`](src/views/save_note.js) |
+
+Its browser test, which also times the screen: [`smoke.mjs`](smoke.mjs).
+
+## Nested Preview
+
+Open **Deck list** for two independent preview owners, Plan A and Plan B. Each switches between
+an editor and summary. The editor has a real draft-notes child and disclosure grandchild; both
+branches contain an export child with the kit's ID-based CopyButton. Typed IDs keep labels,
+descriptions and copy targets separate across instances and branches. Draft notes survive a
+switch in the owner; the removed children's editing timers, disclosure and copy feedback do not.
+The server renders a usable editor and export even without scripts.
+
+`view(host, View, template)` is the framework API for one replaceable branch. It returns a generated
+view, adopting the current root by its server-rendered ID or cloning another branch. The existing
+`keep`, typed events and `signal` still supply all state and lifecycle behavior. It adds no client
+renderer or child-prop synchronization. See [`preview-smoke.mjs`](preview-smoke.mjs) for the
+three-engine regression tests and [`preview-bench.mjs`](preview-bench.mjs) for the comparison
+against app-owned DOM switching on the same nested trees.
+
+### Evaluation
+
+The nested example supports a small framework API, not a second component model. App-owned
+switching is short until it must also adopt server markup without losing focus, follow an
+external replacement, reject ID collisions, forbid cloned scripts and apply template CSS
+variables under the CSP. `view` centralizes those rules; existing components, events, `keep`
+and `signal` still own composition, state and cleanup. Removed branches are discarded rather
+than cached, and durable state must be explicitly restored by the owner.
+
+Measured on 2026-11-06 in Chromium against the same connected trees at `fc09b98d`, six alternating
+rounds of 60 switches gave medians of 0.37 ms for the helper (round range 0.34-0.39 ms) and 0.29 ms
+for app-owned switching (0.28-0.42 ms). The ranges overlap and the app runs vary more than the
+medians differ. These are operation times, excluding asynchronous lifecycle work and layout;
+the app comparison omits the general safety checks. There is no speed claim.
+
+The minified view helper grows by 833 bytes, or 320 gzip bytes (1,829 to 2,149). Every page that
+already loads the view module pays that cost, even if it does not call `view`; the main runtime
+is unchanged. The complete two-preview example adds 9,753 raw document bytes, about 852 gzip
+bytes, 1,965 gzip bytes of loaded JavaScript and 82 gzip bytes of CSS versus the original deck
+builder at `62eb57f7`. Document gzip is the median of six alternating nonce-normalized responses
+(baseline 11,858.5 bytes, range 11,856-11,861; example 12,710.5, range 12,707-12,713); assets are
+compressed individually. This is the cost of the demonstration as well as the helper, not the
+API alone.
+
+`view` is a narrow framework primitive exercised by this example and its regression tests.
+Keep child-prop synchronization, branch caches, automatic ID rewriting and a reactive
+renderer out. The benefit is one maintained safety boundary shared by applications, while plain
+HTML, explicit updates and ordinary component cancellation remain the defaults.

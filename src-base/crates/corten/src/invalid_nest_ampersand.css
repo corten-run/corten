@@ -1,0 +1,3 @@
+.list {
+  :is(main, [foo=&]) { color: red; }
+}
