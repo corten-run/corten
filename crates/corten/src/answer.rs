@@ -1572,6 +1572,8 @@ impl Media {
         use http::header;
         use http::HeaderValue;
         let mut res = Response::new(crate::body::Body::from(bytes.into()));
+        // Room for the headers `App` adds too, so the map is allocated once.
+        res.headers_mut().reserve(crate::response::APP_HEADERS);
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
         Media(res)
     }
@@ -1678,6 +1680,8 @@ impl Media {
             }
         });
         let mut res = Response::new(crate::body::Body::from_stream(checked));
+        // Room for the headers `App` adds too, as `Media::new` leaves.
+        res.headers_mut().reserve(crate::response::APP_HEADERS);
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
         res.extensions_mut().insert(Streamed);
         Media(res)
