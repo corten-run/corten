@@ -121,8 +121,8 @@ test("server deployment descriptions match the refreshed production runtimes", (
   for (const [group, app, runtime] of [
     ["catalog-page", "fastapi", "CPython 3.15.2"],
     ["localized-marketplace", "django", "CPython 3.15.2"],
-    ["json-api", "spring", "Temurin 27.0.1.0.2+1 JRE"],
-    ["fullstack-browser", "rails", "CRuby 4.0.9"],
+    ["json-api", "spring", "Temurin 27.0.1.1+4 JRE"],
+    ["fullstack-browser", "rails", "CRuby 4.0.10"],
     ["fullstack-browser", "laravel", "PHP 8.5.12 ZTS"],
   ]) {
     assert.equal(manifest(group, app).configuration.runtime, runtime, `${app}: stale runtime description`);
@@ -213,7 +213,7 @@ test("live representatives use dispatched native ports and missing recovery port
 
 test("native live runtime descriptions match their checked-in build inputs", () => {
   const sources = [
-    ["rails", "CRuby 4.0.9", "ruby:4.0.9-slim@sha256:"],
+    ["rails", "CRuby 4.0.10", "ruby:4.0.10-slim@sha256:"],
     ["phoenix", "Elixir 1.20.5 / OTP 29.1.2 release", "elixir:1.20.5-otp-29@sha256:"],
     ["gin", "Go 1.27.4 native", "golang:1.27.4-alpine@sha256:"],
   ];
