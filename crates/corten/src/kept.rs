@@ -216,20 +216,9 @@ fn age_value(seconds: u64) -> HeaderValue {
 /// An `Age` past [`DIGITS`]: its digits written here and copied into a value, which is one
 /// allocation where a value made from the number is two (docs/design.md#choice-kept-pages).
 fn older(seconds: u64) -> HeaderValue {
-    // A `u64` is at most twenty digits.
-    let mut digits = [0; 20];
-    let (mut at, mut left) = (digits.len(), seconds);
-    loop {
-        at -= 1;
-        digits[at] = b'0' + (left % 10) as u8;
-        left /= 10;
-        if left == 0 {
-            break;
-        }
-    }
     // Digits are a header value's bytes, so this does not fail; the number made into a value
     // is the same value.
-    HeaderValue::from_bytes(&digits[at..]).unwrap_or_else(|_| HeaderValue::from(seconds))
+    HeaderValue::from_bytes(crate::ascii::digits(seconds, &mut [0; 20])).unwrap_or_else(|_| HeaderValue::from(seconds))
 }
 
 /// A copy of a kept answer's `head`, each line where it was, with room for [`ADDED`] more
