@@ -31,14 +31,29 @@ export function timedContainerEvidence(info) {
     mounts: info.Mounts.map(({ Type, Source, Destination, RW }) => ({ Type, Source, Destination, RW })).sort((a, b) => a.Destination.localeCompare(b.Destination)) };
 }
 
+// The producer's request outcomes (load-outcome.js, which a replay does not load). A summary has
+// either these series or, from a producer before the HTTP failures were split, the legacy four;
+// never a mixture. Each request is in exactly one.
+export const timedOutcomes = Object.freeze(["successes", "timeouts", "http_429", "http_502", "http_503", "http_5xx",
+  "transport_errors", "invalid_responses"]);
+const legacyOutcomes = ["successes", "timeouts", "http_errors", "invalid_responses"];
+const httpOutcomes = ["http_429", "http_502", "http_503", "http_5xx"];
+
 export function readTimedLoad(summary) {
   const metric = (name) => summary?.metrics?.[name]?.values ?? summary?.metrics?.[name];
   const requests = metric("http_reqs"), duration = metric("http_req_duration"), failed = metric("http_req_failed"), checks = metric("checks");
   assert.ok(count(requests?.count) && requests.count > 0 && finite(requests.rate) && requests.rate > 0, "timed requests missing");
   for (const key of ["avg", "p(50)", "p(95)", "p(99)", "max"]) assert.ok(finite(duration?.[key]), "timed latency missing");
   assert.ok(duration.avg <= duration.max && duration["p(50)"] <= duration["p(95)"] && duration["p(95)"] <= duration["p(99)"] && duration["p(99)"] <= duration.max, "timed latency order differs");
-  const counts = Object.fromEntries(["successes", "timeouts", "http_errors", "invalid_responses"].map((name) => [name, metric(`catalog_${name}`)?.count]));
+  const legacy = metric("catalog_http_errors") !== undefined, names = legacy ? legacyOutcomes : timedOutcomes;
+  for (const name of new Set([...legacyOutcomes, ...timedOutcomes]))
+    assert.equal(metric(`catalog_${name}`) !== undefined, names.includes(name), "timed request classification missing or mixed");
+  const counts = Object.fromEntries(names.map((name) => [name, metric(`catalog_${name}`)?.count]));
   assert.ok(Object.values(counts).every(count), "timed request classification missing");
+  if (!legacy) {
+    assert.equal(counts.transport_errors, 0, "timed request ended in a transport error without an app response");
+    counts.http_errors = httpOutcomes.reduce((sum, name) => sum + counts[name], 0);
+  }
   assert.equal(counts.invalid_responses, 0, "unclassified or corrupt response");
   const errors = counts.timeouts + counts.http_errors;
   assert.equal(counts.successes + errors, requests.count, "request classifications do not cover requests");

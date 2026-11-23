@@ -512,14 +512,41 @@ test("timed parser rejects unclassified/content failures and contradictory count
   assert.throws(() => readTimedLoad(loadSummary({ invalid: 1 })), /corrupt response/);
 });
 
+test("timed parser splits HTTP errors by status, still reads legacy series, and never a mixture", () => {
+  const statuses = { http_429: 1, http_502: 2, http_503: 3, http_5xx: 4 };
+  const split = readTimedLoad(loadSummary({ httpErrors: 10, statuses }));
+  const legacy = readTimedLoad(loadSummary({ httpErrors: 10, legacy: true }));
+  assert.deepEqual(split, legacy);
+  assert.equal(split.httpErrors, 10); assert.equal(split.failed, 10); assert.equal(split.outcome, "failed");
+  assert.deepEqual(readTimedLoad(loadSummary({ timeouts: 6 })), readTimedLoad(loadSummary({ timeouts: 6, legacy: true })));
+  for (const mutate of [
+    (s) => { s.metrics.catalog_http_errors = { count: 10 }; },
+    (s) => { delete s.metrics.catalog_http_503; },
+    (s) => { delete s.metrics.catalog_transport_errors; },
+    (s) => { s.metrics.catalog_http_502.count--; },
+    (s) => { s.metrics.catalog_http_5xx.count++; },
+    (s) => { s.metrics.catalog_http_429.count = -1; },
+  ]) { const summary = loadSummary({ httpErrors: 10, statuses }); mutate(summary); assert.throws(() => readTimedLoad(summary)); }
+  for (const mutate of [(s) => { s.metrics.catalog_http_502 = { count: 0 }; }, (s) => { s.metrics.catalog_transport_errors = { count: 0 }; }]) {
+    const summary = loadSummary({ httpErrors: 10, legacy: true }); mutate(summary);
+    assert.throws(() => readTimedLoad(summary), /missing or mixed/);
+  }
+  assert.throws(() => readTimedLoad(loadSummary({ transport: 1 })), /transport error without an app response/);
+  assert.throws(() => readTimedLoad(loadSummary({ invalid: 1, legacy: true })), /corrupt response/);
+});
+
 test("timed request classification does not turn bad content types or arbitrary transport errors into target outcomes", () => {
   const response = (status, type = "text/html", error_code = 0) => ({ status, headers: { "Content-Type": type }, error_code });
   assert.equal(requestOutcome(response(200), "page"), "successes");
   assert.equal(requestOutcome(response(0, "", 1050), "page"), "timeouts");
-  for (const status of [429, 500, 502, 503, 504]) for (const type of ["text/html", "application/json", "application/problem+json", "text/plain", ""])
-    for (const target of ["page", "json"]) assert.equal(requestOutcome(response(status, type), target), "http_errors");
-  for (const r of [response(200, "application/json"), response(404), response(302), response(0, "", 1000)])
+  for (const [status, outcome] of [[429, "http_429"], [500, "http_5xx"], [502, "http_502"], [503, "http_503"], [504, "http_5xx"]])
+    for (const type of ["text/html", "application/json", "application/problem+json", "text/plain", ""])
+      for (const target of ["page", "json"]) assert.equal(requestOutcome(response(status, type), target), outcome);
+  for (const r of [response(200, "application/json"), response(404), response(302), response(0, "")])
     assert.equal(requestOutcome(r, "page"), "invalid_responses");
+  // A transport error is told apart, and a replay still refuses it as a target outcome.
+  assert.equal(requestOutcome(response(0, "", 1000), "page"), "transport_errors");
+  assert.throws(() => readTimedLoad(loadSummary({ transport: 1 })), /transport error/);
 });
 
 test("timed HTTP error accounting retains errors whose media type differs from a successful page", () => {

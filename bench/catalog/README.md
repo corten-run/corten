@@ -310,13 +310,19 @@ pass or unsuccessful request is filtered or retried. Request settings, CPU and
 memory budgets, duration, warmup, fixed rate and pass count are unchanged.
 
 The k6 producer adds exhaustive counters for successful responses, request
-timeouts (native error code 1050), HTTP 429/5xx responses, and invalid/unclassified
-responses. HTTP errors may use a different representation, such as Problem JSON
-or plain text, but remain failed requests, never successful pages. Unknown transport
-errors, other status codes and incorrect content types on 200 responses are not
-completed target outcomes. Each active VU initializes all four counter series with
-zero once, then increments only the request's classified outcome. This retains
-zero-valued categories without four counter updates on every request. Counts,
+timeouts (native error code 1050), HTTP 429, 502, 503 and other 5xx responses, k6
+transport errors (status 0 with another k6 error code) and invalid/unclassified
+responses. A success is decided by the first test; only a failure is split further.
+HTTP errors may use a different representation, such as Problem JSON
+or plain text, but remain failed requests, never successful pages; their sum is the
+phase's `httpErrors`. Transport errors, other status codes and incorrect content types
+on 200 responses are not completed target outcomes: a replay still refuses such a phase,
+naming a transport error apart from an invalid response. Each active VU initializes all
+eight counter series with zero once, then increments only the request's classified
+outcome. This retains zero-valued categories without eight counter updates on every
+request. Summaries from the producer before this split carry the four series
+`successes`, `timeouts`, `http_errors` and `invalid_responses` instead, and replay to the
+same metrics; a summary with both kinds of series is refused. Counts,
 root checks, rates, completed iterations and all three threshold results must
 agree exactly. Existing full page/JSON content and browser correctness gates
 remain mandatory; timed requests still discard bodies and check status/type,

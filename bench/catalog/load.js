@@ -1,9 +1,9 @@
 import http from "k6/http";
 import { check } from "k6";
 import { Counter } from "k6/metrics";
-import { requestOutcome } from "./load-outcome.js";
+import { outcomes, requestOutcome } from "./load-outcome.js";
 const observed = __ENV.CATALOG_TIMED_EVIDENCE === "1";
-const counters = observed ? Object.fromEntries(["successes", "timeouts", "http_errors", "invalid_responses"].map((name) => [name, new Counter(`catalog_${name}`)])) : null;
+const counters = observed ? Object.fromEntries(outcomes.map((name) => [name, new Counter(`catalog_${name}`)])) : null;
 let countersInitialized = false;
 const target = __ENV.TARGET;
 if (!["page", "json"].includes(target)) throw new Error("TARGET must be page or json");

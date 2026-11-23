@@ -5,9 +5,15 @@ import { aggregate, phases } from "./contract.mjs";
 import { summarizeSamples } from "./stats.mjs";
 import { timingPlan } from "./group.mjs";
 
-export function loadSummary({ timeouts = 0, httpErrors = 0, dropped = 0, invalid = 0, httpErrorType = true } = {}) {
-  const successes = 100 - timeouts - httpErrors - invalid, errors = timeouts + httpErrors + invalid;
+// `statuses` splits the HTTP errors as the producer does; `legacy` writes the four series of a
+// producer from before that split.
+export function loadSummary({ timeouts = 0, httpErrors = 0, dropped = 0, invalid = 0, transport = 0, httpErrorType = true,
+  statuses = { http_5xx: httpErrors }, legacy = false } = {}) {
+  const successes = 100 - timeouts - httpErrors - invalid - transport, errors = timeouts + httpErrors + invalid + transport;
   const typePasses = successes + (httpErrorType ? httpErrors : 0), checkPasses = successes + typePasses;
+  const classified = legacy ? { catalog_http_errors: { count: httpErrors } } : {
+    ...Object.fromEntries(["http_429", "http_502", "http_503", "http_5xx"].map((name) => [`catalog_${name}`, { count: statuses[name] ?? 0 }])),
+    catalog_transport_errors: { count: transport } };
   return { metrics: {
     http_reqs: { count: 100, rate: 10 }, iterations: { count: 100 },
     http_req_duration: { avg: 1, "p(50)": 1, "p(95)": 2, "p(99)": 3, max: 10000 },
@@ -15,7 +21,7 @@ export function loadSummary({ timeouts = 0, httpErrors = 0, dropped = 0, invalid
     checks: { passes: checkPasses, fails: 200 - checkPasses,
       value: checkPasses / 200, thresholds: { "rate==1": errors > 0 } },
     dropped_iterations: { count: dropped, thresholds: { "count==0": dropped > 0 } },
-    catalog_successes: { count: successes }, catalog_timeouts: { count: timeouts }, catalog_http_errors: { count: httpErrors }, catalog_invalid_responses: { count: invalid },
+    catalog_successes: { count: successes }, catalog_timeouts: { count: timeouts }, ...classified, catalog_invalid_responses: { count: invalid },
   }, root_group: { checks: {
     "catalog status 200": { passes: successes, fails: errors },
     "catalog content type": { passes: typePasses, fails: 100 - typePasses },
