@@ -1893,6 +1893,10 @@ mod tests {
             same(&n);
             same(&(n as u64));
             same(&(n as i8));
+            same(&(n as u16));
+            same(&(n as i32));
+            same(&(n as usize));
+            same(&(n as isize));
             same(&(n as u128));
             same(&(n as i128 * 1_000_000_000_000));
         }
@@ -1900,7 +1904,13 @@ mod tests {
         let mut by_id = HashMap::new();
         by_id.insert(7u32, "seven");
         by_id.insert(70, "seventy");
+        by_id.insert(7_000, "seven thousand");
         same(&by_id);
+        let mut by_change = BTreeMap::new();
+        by_change.insert(-100i64, "down");
+        by_change.insert(-7, "less");
+        by_change.insert(100, "up");
+        same(&by_change);
         let mut flags = BTreeMap::new();
         flags.insert(true, 'y');
         flags.insert(false, 'n');
@@ -1912,11 +1922,12 @@ mod tests {
     }
 
     /// `longer` writes any number, one digit too, though `unsigned` gives it none: every number to
-    /// four digits, and the longest of each width.
+    /// four digits, then the last number of each count of digits and the first of the next, to
+    /// the longest.
     #[test]
     fn longer_writes_any_number() {
-        let widths = [u8::MAX as u64, u16::MAX as u64, u32::MAX as u64, i64::MAX as u64, u64::MAX];
-        for n in (0..10_000).chain(widths) {
+        let ends = (1..20).flat_map(|digits| [10u64.pow(digits) - 1, 10u64.pow(digits)]).chain([u64::MAX]);
+        for n in (0..10_000).chain(ends) {
             let mut out = Vec::new();
             longer(&mut out, n);
             assert_eq!(out, n.to_string().into_bytes());
