@@ -107,7 +107,8 @@ impl From<UploadError> for Error {
             UploadError::Fields(_) => StatusCode::UNPROCESSABLE_ENTITY,
             UploadError::Stalled => StatusCode::REQUEST_TIMEOUT,
         };
-        Error::new(error.to_string()).with_status(status)
+        // The request's, read by Corten: never shared, wherever the handler answers it.
+        Error::corten(error.to_string()).with_status(status)
     }
 }
 
@@ -288,7 +289,7 @@ impl<T, S: Send + Sync> FromRequest<S> for Upload<T> {
     async fn from_request(req: Request, _: &S) -> Result<Self, Response> {
         let boundary = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).and_then(boundary);
         let Some(boundary) = boundary else {
-            return Err(Error::new("Upload requests must have Content-Type: multipart/form-data with a boundary")
+            return Err(Error::corten("Upload requests must have Content-Type: multipart/form-data with a boundary")
                 .with_status(StatusCode::UNSUPPORTED_MEDIA_TYPE)
                 .into_response());
         };

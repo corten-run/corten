@@ -2034,7 +2034,11 @@ rules something out.
     `404`, a page with and without a middleware, an API request and an unstaged route in step 2's
     harness at that head and that main against axum's router
     at `7e897bd68` (jemalloc, three rounds alternating the three builds, every run within 16 of
-    the others).
+    the others); 2026-11-23, the router's `404` (the default error page) and the plain page at
+    `ef2c15eb8` (round 12's head) against main `04530f7e0` (its code as at `a02c81e86`, with the
+    head's probe; three rounds alternating the two builds, every run within 1.2 of the others):
+    the `404` 1,146 more (19,144.6 against 17,998.5), the plain page 105 more (16,384.6 against
+    16,279.7).
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -2257,7 +2261,8 @@ rules something out.
     The stage future holds the request once. Each stage moves its handle to the next, and
     dispatch consumes it to give the request to the first middleware or, when there is none,
     the route. The compiler rejects a stage that reads it after hand-off. An answer that is no handler's
-    own (a refusal, an extractor's rejection, a panic's or the deadline's failure, and the page,
+    own (a refusal, an extractor's or a protocol's rejection, a panic's or the deadline's failure,
+    a debug build's error about the app's code, `/health/ready`'s `503`, and the page,
     JSON failure or sign-in redirect Corten draws in place of one, the router's own failures, the
     static files' `404` for a file the version lacks and `400` for a path that is not one, a
     failure Corten sends in place of a page whose layout reads it could not fill (and a debug
@@ -2268,9 +2273,14 @@ rules something out.
     from the final answer alone on every exit, success or failure (`cache::settle`). The mark goes
     wherever the answer goes: out of a task the handler spawned, from before the request came in,
     from another app whose answer a middleware relays inline, under any status a middleware gives
-    it, in place or by moving the answer's parts. Code that draws a new answer in place of one
-    (the error page, a debug build's error, the failure sent for a page whose layout reads could
-    not be filled) copies the old one's marks onto it (`cache::Marks`), `NoStore` included. It replaced a count of refusals on the thread compared before and after each poll
+    it, in place or by moving the answer's parts. The error page drawn in place of an answer copies
+    its marks onto the page (`cache::Marks`), `NoStore` included; a failure Corten sends in place of
+    an answer it could not send as it was (a debug build's error, a page whose layout reads could
+    not be filled or that could not be read to be kept) is marked whatever that answer was and keeps
+    its `NoStore` (`cache::unshared_in_place_of`). Every failure Corten makes is made through
+    `Error::corten`, `cache::unshared` or `cache::unshared_in_place_of`, and `tests::cache` holds the
+    crate's source to them and checks each exit, since rounds 10 to 12 of the review each found
+    another exit made without the mark (round 13). It replaced a count of refusals on the thread compared before and after each poll
     (`402a11a08`), which lost the answers other code drew in a refusal's place (another app's
     error page and sign-in redirect relayed inline, a JSON failure turned into a `200`) and a
     refusal made outside the stages; a mark on the answer is what the answer is, wherever it was
@@ -2630,7 +2640,10 @@ rules something out.
     much, which only lowers the measurement. Measure both profiles again before moving a
     measurement.
 
-    Last checked: 2026-11-22, the plain page, the unstaged route and the `service_fn` control in
+    Last checked: 2026-11-23, the plain page in `tests::cache::what_settling_a_page_costs` at
+    `ef2c15eb8` (round 12's head) against main `04530f7e0` (its code as at `a02c81e86`, with the
+    head's probe; three rounds alternating the two builds, every run within 1.2 of the others):
+    105 more (16,384.6 against 16,279.7); 2026-11-22, the plain page, the unstaged route and the `service_fn` control in
     `tests::cache::what_settling_a_page_costs` at `30cadaaeb` against main `a138e2391` (three
     rounds alternating the two builds, every run within 2.3 of the others): 111 more on the
     plain page (16,509.6 against 16,398.6), 11 on the unstaged route (6,400.9 against 6,390.0)

@@ -532,29 +532,44 @@ pub(crate) fn drop_cdn_caching(headers: &mut HeaderMap) {
     }
 }
 
-/// The mark of an answer that is no handler's own, put on it by the code that made it: an
-/// extractor's rejection (`crate::handler`, and an app's error page's own extractors), a typed
-/// [`crate::Refused`] whoever returned it, and as an [`crate::Error`] at another status, a handler
-/// that panicked or passed its deadline (`crate::page`), the router's own `404`, `405`, `501` and
-/// its `400` for a named post none of the page's handlers is for (`crate::router`), the static
-/// files' `404` for a file the version lacks and `400` for a path that is not one
-/// (`crate::assets`), the failure Corten sends in place of a page whose layout reads it could not
-/// fill and a debug build's diagnostic there, whatever that page was (`crate::layout`), and the
-/// page, redirect or debug build's diagnostic Corten draws in the place of any of those ([`Marks`]).
-/// Such an answer may be about who is asking (the error page can read the request's `Cookie` and
-/// `Authorization` without reading a caller), so it is never shared, in whatever form and with
-/// whatever status it goes out ([`settle`]). The mark stays on the answer: a middleware that
-/// changes the answer in place (its status, headers or body) keeps it, another Corten app that
-/// relays the answer inline settles it the same way, and an answer a middleware builds in its
-/// place is its own.
+/// The mark of an answer that is no handler's own: every failure or refusal Corten makes itself,
+/// rather than one a handler chose to answer with, and the page, redirect or plain text Corten draws
+/// in the place of one. It is put on as the answer is made, by one of three constructors:
+/// [`crate::Error::corten`] for a failure made as an error (an extractor's, a protocol's, a debug
+/// build's error about the app's code, a body that cannot be read), [`unshared`] for one made as a
+/// response (the router's `404`, `405`, `501` and named post's `400`, a typed [`crate::Refused`]
+/// whoever returned it, a panic or a passed deadline, a static file the version lacks), and
+/// [`unshared_in_place_of`] for one sent in the place of an answer Corten could not send (a page
+/// it could not fill or keep, a debug build's diagnostic), which keeps that answer's `NoStore`. A
+/// typed rejection ([`crate::extract::BodyRejection`], the form's and the path's) marks itself as
+/// it becomes a response, and every extractor's rejection is marked where the handler or the error
+/// page meets it too. The audit of these places is in #1890; `tests::cache` checks each one and
+/// holds the crate's source to the constructors. Such an answer may be about who is asking (the
+/// error page can read the request's `Cookie` and `Authorization` without reading a caller), so it
+/// is never shared, in whatever form and with whatever status it goes out ([`settle`]). The mark
+/// stays on the answer: a middleware that changes the answer in place (its status, headers or
+/// body) keeps it, another Corten app that relays the answer inline settles it the same way, and
+/// an answer a middleware builds in its place is its own. A handler's own failure (its `404`, an
+/// `Error` it made) is its answer, and the error page in its place takes only its marks
+/// ([`Marks`]).
 #[derive(Clone, Copy)]
 pub(crate) struct Unshared;
 
-/// `res`, marked [`Unshared`].
+/// `res`, a failure or refusal Corten made itself, marked [`Unshared`].
 #[cold]
 pub(crate) fn unshared(mut res: Response) -> Response {
     res.extensions_mut().insert(Unshared);
     res
+}
+
+/// `failed`, a failure Corten sends in the place of the answer whose extensions are `answer`, which
+/// it could not send as it was (a page it could not fill or keep, a debug build's diagnostic):
+/// marked [`Unshared`] whatever that answer was, and a `NoStore` one's replacement is `NoStore` too
+/// ([`Marks`]), whatever a middleware then makes of its headers.
+#[cold]
+pub(crate) fn unshared_in_place_of(answer: &http::Extensions, mut failed: Response) -> Response {
+    Marks { unshared: true, ..Marks::of(answer) }.put(&mut failed);
+    failed
 }
 
 /// What an answer's replacement keeps of it, read from the answer it replaces: that it is no

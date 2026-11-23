@@ -1187,16 +1187,21 @@ impl Served {
 }
 
 /// `GET /health/live` (the process answers) and `GET /health/ready` (`ready` says it can serve:
-/// database reachable, feeds loaded). Both answer `no-store` plain text.
+/// database reachable, feeds loaded). Both answer `no-store` plain text. The `503` is Corten's own
+/// failure ([`cache::unshared`]), so it goes out `private, no-store`, and a browser that asks for
+/// it gets the app's error page.
 pub(crate) fn health<F, Fut>(ready: F) -> router::Table
 where
     F: Fn() -> Fut + Clone + Send + Sync + 'static,
     Fut: std::future::Future<Output = bool> + Send,
 {
     let answer = |ok: bool| {
-        let status = if ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
-        (status, [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))], if ok { "ok" } else { "unavailable" })
-            .into_response()
+        let no_store = [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))];
+        if ok {
+            (StatusCode::OK, no_store, "ok").into_response()
+        } else {
+            cache::unshared((StatusCode::SERVICE_UNAVAILABLE, no_store, "unavailable").into_response())
+        }
     };
     router::Table::new().route("/health/live", router::get(move || async move { answer(true) })).route(
         "/health/ready",
@@ -1334,11 +1339,25 @@ pub async fn shutdown_signal() {
 pub struct Error {
     status: StatusCode,
     source: Box<dyn std::error::Error + Send + Sync>,
+    /// Made by Corten itself ([`Error::corten`]), not by the handler: its answer is never shared.
+    corten: bool,
 }
 
 impl Error {
     pub fn new(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
-        Error { status: StatusCode::INTERNAL_SERVER_ERROR, source: error.into() }
+        Error { status: StatusCode::INTERNAL_SERVER_ERROR, source: error.into(), corten: false }
+    }
+
+    /// A failure Corten makes itself rather than one a handler chose: a request it cannot read, an
+    /// extractor's or a protocol's refusal, a debug build's error about the app's code, a page it
+    /// cannot send. Its answer, in every form it goes out in, is marked as no handler's own
+    /// ([`cache::Unshared`]): the error page drawn in its place may read the request's `Cookie`
+    /// without reading a caller. A handler that passes it on with `?`, or gives it another status,
+    /// keeps the mark; one that wraps it (`Error::new(error)`) makes the failure its own. Every
+    /// failure Corten makes is one of these, [`cache::unshared`] or [`cache::unshared_in_place_of`]
+    /// (`tests::cache`'s source check holds the crate to it).
+    pub(crate) fn corten(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+        Error { corten: true, ..Error::new(error) }
     }
 
     /// An error with a specific status, for example 409 for a write that lost a race (404 is
@@ -1347,7 +1366,7 @@ impl Error {
     /// check refuses with [`Refused`] instead (`Err(Refused::forbidden())?`), so the error page
     /// treats it as the request's fault.
     pub fn status(status: StatusCode) -> Self {
-        Error { status, source: status.canonical_reason().unwrap_or("error").into() }
+        Error { status, source: status.canonical_reason().unwrap_or("error").into(), corten: false }
     }
 
     /// 404, for a record that is not there: `load(id).await?.ok_or_else(Error::not_found)?`. The
@@ -1441,7 +1460,7 @@ impl From<Error> for Box<dyn std::error::Error + Send + Sync> {
 /// ```
 impl From<Refused> for Error {
     fn from(refused: Refused) -> Self {
-        Error { status: refused.status(), source: Box::new(caller::AsError(refused)) }
+        Error { status: refused.status(), source: Box::new(caller::AsError(refused)), corten: false }
     }
 }
 
@@ -1460,12 +1479,10 @@ impl IntoResponse for Error {
             // reason, so a 404 that hides a record does not say it was a 403. The log has the cause.
             // It drops the refusal's challenge or redirect, not its privacy: the refusal was about
             // who is asking, whatever status it is sent with ([`cache::Unshared`]).
-            Ok(refused) if refused.message().is_some() => {
-                cache::unshared(Error { status: self.status, source: refused }.answer())
-            }
+            Ok(refused) if refused.message().is_some() => Error { status: self.status, source: refused, corten: true }.answer(),
             Ok(refused) => {
                 let reason = self.status.canonical_reason().unwrap_or("Error");
-                cache::unshared(Error { status: self.status, source: refused }.answer_saying(Arc::from(reason)))
+                Error { status: self.status, source: refused, corten: true }.answer_saying(Arc::from(reason))
             }
             Err(source) => {
                 // A second error that carries headers should share one mechanism with `Refused`
@@ -1473,7 +1490,7 @@ impl IntoResponse for Error {
                 // hides the socket, a 500) drops them, as a re-statused `Refused` drops its own.
                 let wrong_version = matches!(self.status, StatusCode::BAD_REQUEST | StatusCode::UPGRADE_REQUIRED)
                     && source.is::<upgrade::WrongVersion>();
-                let mut res = Error { status: self.status, source }.answer();
+                let mut res = Error { status: self.status, source, corten: self.corten }.answer();
                 if wrong_version {
                     upgrade::WrongVersion::headers(self.status, res.headers_mut());
                 }
@@ -1506,6 +1523,9 @@ impl Error {
         }
         let mut res = (self.status, self.status.canonical_reason().unwrap_or("Error")).into_response();
         res.extensions_mut().insert(Failed(detail));
+        if self.corten {
+            res.extensions_mut().insert(cache::Unshared);
+        }
         res
     }
 }

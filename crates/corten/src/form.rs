@@ -556,13 +556,15 @@ impl fmt::Display for FormRejection {
 
 impl std::error::Error for FormRejection {}
 
+/// Corten's refusal of the request's form, never shared wherever it is answered
+/// ([`crate::cache::Unshared`]).
 impl IntoResponse for FormRejection {
     fn into_response(self) -> Response {
         match self {
             FormRejection::Body(rejection) => rejection.into_response(),
-            FormRejection::Invalid(status, text) => {
-                (status, [(header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))], text).into_response()
-            }
+            FormRejection::Invalid(status, text) => crate::cache::unshared(
+                (status, [(header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))], text).into_response(),
+            ),
         }
     }
 }

@@ -3895,7 +3895,7 @@ impl ParamsRejection {
         use crate::response::IntoResponse as _;
         tracing::error!("corten: {why}");
         let status = http::StatusCode::INTERNAL_SERVER_ERROR;
-        ParamsRejection(Box::new((status, format!("corten: {why}")).into_response()))
+        ParamsRejection(Box::new(crate::cache::unshared((status, format!("corten: {why}")).into_response())))
     }
 }
 
@@ -4608,7 +4608,10 @@ where
     })
     .await;
     let res = polled.unwrap_or_else(|| {
-        crate::response::IntoResponse::into_response((http::StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"))
+        crate::cache::unshared(crate::response::IntoResponse::into_response((
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal Server Error",
+        )))
     });
     let res = unstaged_headers(res);
     match &lane.json {

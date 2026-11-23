@@ -600,12 +600,12 @@ impl IntoResponse for Refused {
         // later: the mark is on the answer ([`crate::cache::Unshared`]).
         match self.0 {
             Why::SignIn(to, message) => {
-                let mut res = StatusCode::UNAUTHORIZED.into_response();
+                let mut res = crate::cache::unshared(StatusCode::UNAUTHORIZED.into_response());
                 res.extensions_mut().insert(SignIn(to));
                 if let Some(message) = message {
                     res.extensions_mut().insert(crate::Failed(message));
                 }
-                crate::cache::unshared(res)
+                res
             }
             Why::Refusal { status, message, header } => refused(status, message, header),
             Why::Unavailable(message) => unidentified(&message),
@@ -617,11 +617,11 @@ impl IntoResponse for Refused {
 /// `Refused::unavailable`: the error page's [`crate::Failure::Unidentified`], not a plain
 /// `Error::status(SERVICE_UNAVAILABLE)`.
 fn unidentified(message: &str) -> Response {
-    let mut res = Error::new(format!("who is asking cannot be known: {message}"))
+    let mut res = Error::corten(format!("who is asking cannot be known: {message}"))
         .with_status(StatusCode::SERVICE_UNAVAILABLE)
         .into_response();
     res.extensions_mut().insert(crate::page::Cause::Unidentified);
-    crate::cache::unshared(res)
+    res
 }
 
 /// A 401, 403 or 429 for a request without the caller its handler reads, with what the client is

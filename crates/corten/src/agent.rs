@@ -726,6 +726,8 @@ impl<A: Send + 'static> Tools<A> {
         let malformed = |code, message: &str| {
             let mut res = reply(Value::Null, Err((code, message.into())));
             if !speaks {
+                // Corten's refusal ([`crate::cache::Unshared`]).
+                res = crate::cache::unshared(res);
                 *res.status_mut() = StatusCode::BAD_REQUEST;
             }
             res
@@ -790,14 +792,15 @@ impl<A: Send + 'static> Tools<A> {
 
     /// A request [`Tools::auth`] turned away, before any tool ran: 401 or 403 with the challenge
     /// for a token the check did not take, 403 for a caller it knows and refuses, 503 when it
-    /// could not check (its provider is down), 500 (logged) for anything else. Never the answer.
+    /// could not check (its provider is down), 500 (logged) for anything else. Never the answer,
+    /// and never shared ([`crate::cache::Unshared`]): each is about who is asking.
     fn refused(&self, id: Value, error: ToolError, headers: &HeaderMap) -> Response {
         let (status, message) = match error {
             ToolError::Unauthorized => return self.unauthorized(id, sent_bearer(headers)),
             ToolError::InsufficientScope(scope) => return self.forbidden(id, &scope),
             // A malformed request (RFC 6750 3.1), told so in the challenge.
             ToolError::Invalid(message) => {
-                let mut res = reply(id, Err((-32600, format!("invalid request: {message}"))));
+                let mut res = crate::cache::unshared(reply(id, Err((-32600, format!("invalid request: {message}")))));
                 *res.status_mut() = StatusCode::BAD_REQUEST;
                 let challenge = crate::Challenge::scheme("Bearer").param("error", "invalid_request");
                 res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge.value().clone());
@@ -814,7 +817,7 @@ impl<A: Send + 'static> Tools<A> {
             }
         };
         let code = if status == StatusCode::FORBIDDEN { -32001 } else { -32603 };
-        let mut res = reply(id, Err((code, message)));
+        let mut res = crate::cache::unshared(reply(id, Err((code, message))));
         *res.status_mut() = status;
         res
     }
@@ -825,7 +828,7 @@ impl<A: Send + 'static> Tools<A> {
     /// the name is empty or not printable ASCII, since RFC 6750 (3) has `Bearer` followed by a
     /// parameter.
     fn unauthorized(&self, id: Value, sent: bool) -> Response {
-        let mut res = reply(id, Err((-32001, "unauthorized".into())));
+        let mut res = crate::cache::unshared(reply(id, Err((-32001, "unauthorized".into()))));
         *res.status_mut() = StatusCode::UNAUTHORIZED;
         let mut challenge = match self.challenge.get() {
             Some(protected) => protected.unauthorized.clone(),
@@ -840,7 +843,7 @@ impl<A: Send + 'static> Tools<A> {
 
     /// The 403 for a token without a scope the request needs.
     fn forbidden(&self, id: Value, scope: &str) -> Response {
-        let mut res = reply(id, Err((-32001, "insufficient scope".into())));
+        let mut res = crate::cache::unshared(reply(id, Err((-32001, "insufficient scope".into()))));
         *res.status_mut() = StatusCode::FORBIDDEN;
         res.headers_mut().insert(header::WWW_AUTHENTICATE, self.insufficient_scope(scope));
         res
@@ -992,7 +995,7 @@ fn unsupported_version(headers: &HeaderMap) -> Response {
     let message = format!("unsupported MCP-Protocol-Version; this server speaks {}", PROTOCOL_VERSIONS.join(", "));
     let data = json!({ "supported": PROTOCOL_VERSIONS, "requested": requested });
     let error = json!({ "code": -32600, "message": message, "data": data });
-    let mut res = json_response(json!({ "jsonrpc": "2.0", "error": error }).to_string());
+    let mut res = crate::cache::unshared(json_response(json!({ "jsonrpc": "2.0", "error": error }).to_string()));
     *res.status_mut() = StatusCode::BAD_REQUEST;
     res
 }
@@ -1106,6 +1109,53 @@ mod tests {
         let status = res.status();
         let bytes = res.into_body().collect().await.unwrap().to_bytes();
         (status, if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap() })
+    }
+
+    /// Each of the endpoint's refusals is Corten's, not a handler's: marked so as it is made, so no
+    /// shared cache keeps it wherever it is answered ([`crate::cache::Unshared`]).
+    #[tokio::test]
+    async fn every_refusal_is_marked_as_corten_s() {
+        // With an [`Authorization`], so every failure of the check is answered as a refusal.
+        let tools = Tools::new("test", "1.0")
+            .authorization(Authorization::new::<Mcp>("https://cards.example", "https://auth.example"))
+            .auth(|headers| match headers.get("authorization").and_then(|v| v.to_str().ok()) {
+                Some("Bearer banned") => Err(ToolError::Forbidden("suspended".into())),
+                Some("Bearer narrow") => Err(ToolError::InsufficientScope("inventory:write".into())),
+                Some("Bearer idp-down") => Err(ToolError::Upstream("the identity provider timed out".into())),
+                Some("Bearer broken") => Err(ToolError::internal("bad key")),
+                Some("Bearer two words") => Err(ToolError::Invalid("one token".into())),
+                Some(_) => Ok(Agent("writer".into())),
+                None => Err(ToolError::Unauthorized),
+            })
+            .tool("inventory.adjust", "Adjust quantity", |_: Agent, input: Adjust| async move {
+                Ok(Adjusted { id: input.id, quantity: input.delta })
+            });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let listed = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
+        // A request in a revision the endpoint does not speak is refused with a 400; without the
+        // header it is 2025-03-26's, whose malformed message is a 200 with a JSON-RPC error.
+        let unspoken = Some("1999-01-01");
+        for (item, body, token, version, status) in [
+            ("not JSON", "{", Some("good"), unspoken, StatusCode::BAD_REQUEST),
+            ("a revision it does not speak", &listed[..], Some("good"), unspoken, StatusCode::BAD_REQUEST),
+            ("no token", &listed[..], None, None, StatusCode::UNAUTHORIZED),
+            ("not allowed", &listed[..], Some("banned"), None, StatusCode::FORBIDDEN),
+            ("a scope it lacks", &listed[..], Some("narrow"), None, StatusCode::FORBIDDEN),
+            ("the check cannot run", &listed[..], Some("idp-down"), None, StatusCode::SERVICE_UNAVAILABLE),
+            ("the check failed", &listed[..], Some("broken"), None, StatusCode::INTERNAL_SERVER_ERROR),
+            ("a malformed token", &listed[..], Some("two words"), None, StatusCode::BAD_REQUEST),
+        ] {
+            let mut req = Request::post("/mcp").header("content-type", "application/json");
+            if let Some(version) = version {
+                req = req.header(PROTOCOL_VERSION_HEADER, version);
+            }
+            if let Some(token) = token {
+                req = req.header("authorization", format!("Bearer {token}"));
+            }
+            let res = app.clone().oneshot(req.body(Body::from(body.to_owned())).unwrap()).await.unwrap();
+            assert_eq!(res.status(), status, "{item}");
+            assert!(res.extensions().get::<crate::cache::Unshared>().is_some(), "{item}: not marked");
+        }
     }
 
     #[tokio::test]

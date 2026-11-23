@@ -968,10 +968,11 @@ fn byte_range(value: &[u8], len: usize) -> Option<Result<std::ops::Range<usize>,
 }
 
 /// The 416 for a range past the end of a body `len` bytes long, naming its length: sent as it is,
-/// not as the app's error page, which would drop `Content-Range`.
+/// not as the app's error page, which would drop `Content-Range`, and never shared, as no file's
+/// answer ([`crate::cache::Unshared`]).
 fn unsatisfiable(len: usize) -> Response {
     let whole = HeaderValue::try_from(format!("bytes */{len}")).expect("digits");
-    let mut res = (StatusCode::RANGE_NOT_SATISFIABLE, [(header::CONTENT_RANGE, whole)]).into_response();
+    let mut res = crate::cache::unshared((StatusCode::RANGE_NOT_SATISFIABLE, [(header::CONTENT_RANGE, whole)]).into_response());
     res.extensions_mut().insert(crate::page::AsIs);
     res
 }

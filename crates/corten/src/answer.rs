@@ -1352,7 +1352,7 @@ impl JsonError {
             std::panic::Location::caller()
         );
         assert!(!strict, "corten: {message}");
-        JsonError::Error(Error::new(message))
+        JsonError::Error(Error::corten(message))
     }
 }
 

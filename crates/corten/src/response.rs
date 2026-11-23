@@ -254,9 +254,11 @@ where
     }
 }
 
+/// The `500` in place of an answer whose header is not one: Corten's failure, not the answer the
+/// handler meant ([`crate::cache::Unshared`]).
 #[cold]
 fn invalid_header(error: String) -> Response {
-    (StatusCode::INTERNAL_SERVER_ERROR, error).into_response()
+    crate::cache::unshared((StatusCode::INTERNAL_SERVER_ERROR, error).into_response())
 }
 
 impl<T: IntoResponseParts> IntoResponseParts for Option<T> {

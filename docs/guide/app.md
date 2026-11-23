@@ -1430,7 +1430,7 @@ the next: `CDN-Cache-Control` (RFC 9213), `Cloudflare-CDN-Cache-Control`,
 submit key, or is a `Public` answer to a request with credentials. A `no-store` on it goes out
 `private, no-store`: some CDNs ignore a bare `no-store`, and none keeps a `private` answer. A
 `NoStore` answer, a `Public` one the third row sends as the browser's alone, a refused write's
-error page, the error page for a failure no handler answered, and a refusal or the router's own
+error page, the error page for a failure Corten made rather than a handler, and a refusal or the router's own
 failure in any other form it goes out in (all below) lose those headers too,
 whatever a middleware made of their `Cache-Control` (a `NoStore` one still goes out
 `private, no-store`, below, and so does a `Public` one sent as the browser's alone whose header
@@ -1514,7 +1514,14 @@ middleware makes in a refusal's place is its own. Corten marks each of these ans
 out with the answer: a refusal made in a task the handler spawned, before the request came in, or
 by another app of Corten's that a middleware asks for an answer inline (the error page or sign-in
 redirect that app drew in a refusal's place included) is never shared, whatever status the
-middleware sends it with. A handler's own failure is its answer, a plain-text one too: the error
+middleware sends it with. So is every other failure Corten makes rather than a handler: an
+extractor's or a protocol's refusal of the request (a body over its limit, too slow, or not what
+the route reads, a WebSocket handshake, an MCP endpoint's), the 503 of `/health/ready`, a static
+file's 416, the 421 for another host, the 403 for a cross-site write, the 500 for an answer whose
+header is not one, a document with no `<Corten />` or a kept page that cannot be read, and a debug
+build's error about the app's code, which keeps a `NoStore` answer's `private, no-store` where it
+replaces one. A handler that passes such a failure on with `?`, or gives it another status, keeps
+the mark; one that wraps it (`Error::new(error)`) makes it its own. A handler's own failure is its answer, a plain-text one too: the error
 page a browser gets in its place keeps what a middleware wrote, as for its own 404. An unstaged route's `NoStore`
 answer goes out `private, no-store` with none of them either
 ([a route outside the stages](#a-route-outside-the-stages)); its other answers, refusals
@@ -3143,7 +3150,7 @@ wins, except a `Cache-Control` that names `no-store` (`NoStore`, `no_store` on i
 of its lines and however a cache could find it): the failure said nothing may keep it, so the
 error page goes out `no-store`. It is `private, no-store` for `NoStore` and `no_store`, whatever a
 middleware made of the failure's header, and on a page Corten never lets be shared
-([Caching](#caching): in place of a failure no handler answered, a refusal, or the router's own
+([Caching](#caching): in place of a failure Corten made rather than a handler, a refusal, or the router's own
 404, 405, 501 or a named post's 400), where a `no-store` written by hand goes out so as well and none of the failure's
 CDN caching headers is kept. On the page for a handler's own failure, a `no-store` written by hand
 goes out bare unless the page is personal.

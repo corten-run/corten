@@ -1362,7 +1362,7 @@ impl Applied {
         if !Origin::checks(method) || from_mount || origin.permits(&self.allowed_origins, self.hsts) {
             return None;
         }
-        Some((StatusCode::FORBIDDEN, "Cross-site request refused.").into_response())
+        Some(crate::cache::unshared((StatusCode::FORBIDDEN, "Cross-site request refused.").into_response()))
     }
 
     /// The security headers. `csp` is the policy of the area at the request's path (the app's
@@ -1729,9 +1729,10 @@ fn named<'h>(uri: &http::Uri, host: impl FnOnce() -> Option<&'h HeaderValue>, ho
     named
 }
 
-/// The answer to a request for a host the app does not answer to.
+/// The answer to a request for a host the app does not answer to: Corten's refusal
+/// ([`crate::cache::Unshared`]), for an app that relays it inline too.
 pub(crate) fn misdirected() -> Response {
-    (StatusCode::MISDIRECTED_REQUEST, "Misdirected request.").into_response()
+    crate::cache::unshared((StatusCode::MISDIRECTED_REQUEST, "Misdirected request.").into_response())
 }
 
 /// The `form-action` sources of the app's policy and of each area's that adds to it (innermost

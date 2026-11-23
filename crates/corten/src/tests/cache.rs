@@ -5598,3 +5598,822 @@ async fn settle_fill_fails(req: Req) -> Response {
     let body = Body::from_stream(futures_util::stream::iter([Err::<bytes::Bytes, _>(std::io::Error::other("cut off"))]));
     Response::from_parts(head, body)
 }
+
+/// A body that says it is 4 KiB long and fails as it is read: a page Corten cannot send.
+struct CutOff;
+
+impl http_body::Body for CutOff {
+    type Data = bytes::Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<std::result::Result<http_body::Frame<bytes::Bytes>, std::io::Error>>> {
+        std::task::Poll::Ready(Some(Err(std::io::Error::other("cut off"))))
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(4096)
+    }
+}
+
+/// Staged middleware that takes the `Cookie` off the request before the route sees it (as one that
+/// keeps a session of its own may), then marks the answer for a CDN as [`CdnRecaches`] does: the
+/// route's answer may be kept, and the app's error page still reads the cookie the request came
+/// with.
+struct HidesTheCookie;
+
+impl crate::Middleware for HidesTheCookie {
+    async fn call(&self, mut req: Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        req.headers_mut().remove(header::COOKIE);
+        crate::Middleware::call(&CdnRecaches(Some("public, max-age=60")), req, next).await
+    }
+}
+
+/// A document whose head has no `<Corten />`, which `html!` does not build: a page of it fails.
+struct NoCortenHead;
+
+impl Render for NoCortenHead {
+    fn render(&self, out: &mut String) {
+        out.push_str("<!DOCTYPE html><html><head><title>None</title></head><body><main></main></body></html>");
+    }
+}
+
+impl crate::view::Document for NoCortenHead {
+    fn render_part(&self, out: &mut String, _: crate::view::Part) {
+        self.render(out);
+    }
+}
+
+/// `res`'s status, headers and body, and whether it carries the mark of an answer no shared cache
+/// keeps.
+async fn read_marked(res: Response) -> (StatusCode, http::HeaderMap, String, bool) {
+    let marked = res.extensions().get::<crate::cache::Unshared>().is_some();
+    let (parts, body) = res.into_parts();
+    let body = String::from_utf8_lossy(&body.collect().await.unwrap().to_bytes()).into_owned();
+    (parts.status, parts.headers, body, marked)
+}
+
+/// Every failure Corten makes itself, rather than one a handler chose to answer with, as the audit
+/// of #1890 lists them: no shared cache keeps it, in any form it goes out in. Behind a staged
+/// middleware that marks every answer for a CDN, the app's error page drawn in its place greets Ann
+/// by her cookie without reading a caller, and still goes out `private` (`private, no-store` in a
+/// `NoStore` answer's place) with none of the caching headers a CDN reads first. The ones the
+/// stages never meet, or that go out as they are, carry the same mark for an app that relays them
+/// inline. A handler's own failure is the handler's answer and keeps them (the control).
+#[tokio::test]
+async fn every_failure_corten_makes_is_never_shared() {
+    let minute = Duration::from_secs(60);
+    let cut = move |req: Req| async move {
+        Public::new(
+            minute,
+            req.test_page_for("Kept", html! { <p>"kept"</p> }).map(|mut page| {
+                *page.body_mut() = Body::new(CutOff);
+                page
+            }),
+        )
+    };
+    let routes = Table::new()
+        .route("/", get(|| async { "home" }).post(|| async { "saved" }).named("save"))
+        .route("/form", crate::router::post(|| async { "saved" }))
+        .route("/style", get(|req: Req| async move { req.asset(RefusedStatic::STYLE_CSS).to_string() }))
+        .route("/own", get(|| async { Err::<&'static str, Error>(Error::new("the store is down")) }))
+        .route("/refused", get(|| async { Err::<&'static str, Error>(Refused::forbidden().into()) }))
+        .route(
+            "/hidden",
+            get(|| async { Err::<&'static str, Error>(Error::from(Refused::forbidden()).with_status(StatusCode::NOT_FOUND)) }),
+        )
+        .route("/unidentified", get(|| async { Err::<&'static str, Error>(Refused::unavailable("down").into()) }))
+        .route(
+            "/panics",
+            get(|| async {
+                if true {
+                    panic!("broken")
+                } else {
+                    "never"
+                }
+            }),
+        )
+        .route(
+            "/late",
+            get(|| async {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                "late"
+            }),
+        )
+        .route("/ip", get(|crate::ClientIp(ip): crate::ClientIp| async move { ip.to_string() }))
+        .route("/ws", get(|upgrade: crate::upgrade::Upgrade| async move { upgrade.websocket(|_, _| async {}) }))
+        .route("/upload", crate::router::post(|_: crate::Upload<()>| async { "uploaded" }))
+        .route(
+            "/sign-in",
+            get(|| async {
+                Err::<&'static str, Error>(Refused::sign_in(&"https://id.example/sign-in".parse::<http::Uri>().unwrap()).into())
+            }),
+        )
+        .route(
+            "/key",
+            get(|| async { Err::<&'static str, Error>(Refused::unauthorized(crate::Challenge::bearer("keys")).into()) }),
+        )
+        .route("/slow-down", get(|| async { Err::<&'static str, Error>(Refused::too_many(Duration::from_secs(30)).into()) }))
+        .route("/text", crate::router::post(|text: String| async move { text }))
+        .route(
+            "/fields",
+            get(|crate::Form(_): crate::Form<std::collections::HashMap<String, u32>>| async { "read" })
+                .post(|crate::Form(_): crate::Form<std::collections::HashMap<String, u32>>| async { "read" }),
+        )
+        .route("/connection", get(|_: crate::ConnectionInfo<&'static str>| async { "connection" }))
+        .route("/zone", get(|_: Option<crate::ClientZone>| async { "zone" }))
+        .route("/bad-header", get(|| async { (StatusCode::OK, [("bad name", "1")], "body") }))
+        .route("/no-head", get(|req: Req| async move { req.page::<ForOne>(NoCortenHead) }))
+        .route("/resend", get(|req: Req| async move { req.resend_to::<ForOne>(&crate::Local::parse("/").unwrap()) }))
+        // Made as an app's routes are (`corten::get`), which is where an answer is known to be `Public`.
+        .route("/kept-cut", crate::route::get(cut).0)
+        .route(
+            "/hint",
+            get(|req: Req| async move { req.test_page("Hint", html! { <p id={crate::form::HintId(&QtyId)}>"Pick one."</p> }) }),
+        )
+        .route(
+            "/refresh",
+            get(|req: Req| async move {
+                req.test_page("Refresh", html! { <p>"again"</p> }).map(|mut page| {
+                    page.headers_mut().insert("refresh", HeaderValue::from_static("5"));
+                    page
+                })
+            }),
+        )
+        .route(
+            "/refresh-secret",
+            get(|req: Req| async move {
+                NoStore(req.test_page("Refresh", html! { <p>"again"</p> }).map(|mut page| {
+                    page.headers_mut().insert("refresh", HeaderValue::from_static("5"));
+                    page
+                }))
+            }),
+        )
+        .route("/patch", get(|| async { ([("corten-patch", "1")], "<p>part</p>") }))
+        .route(
+            "/go",
+            crate::router::post(
+                |req: Req| async move { req.redirect::<()>(&"https://else.example/x".parse::<http::Uri>().unwrap()) },
+            ),
+        );
+    #[cfg(feature = "json")]
+    let routes = routes
+        .route("/json", crate::router::post(|crate::Json(n): crate::Json<u32>| async move { n.to_string() }))
+        .route("/reports", crate::router::post(|_: crate::security::Violations| async { "read" }));
+    let app = || {
+        App::new(Routes::from(routes.clone()))
+            .assets(RefusedStatic)
+            .deadline(Duration::from_millis(50))
+            .body_limit(64)
+            .ready(|| async { false })
+            .error_page(greeting_error_page, ())
+    };
+    let router = app().middleware(CdnRecaches(Some("public, max-age=60"))).router();
+    let hides = app().middleware(HidesTheCookie).router();
+    // An error page whose own extractor refuses the request: its refusal is Corten's too.
+    let page_refuses = App::new(Routes::from(routes.clone()))
+        .middleware(CdnRecaches(Some("public, max-age=60")))
+        .error_page(
+            |_: Failure, crate::ClientIp(_): crate::ClientIp| async { Err::<HtmlResponse, Error>(Error::new("never drawn")) },
+            (),
+        )
+        .router();
+    // The stylesheet's URL at the version the app serves: `/assets/{version}/style.css`.
+    let (_, _, href) = from_ann(&router, "GET", "/style", &[]).await;
+    let missing = href.replace("style.css", "missing.css");
+    let not_a_path = href.replace("style.css", "%FF.css");
+    let html = &[("accept", "text/html")][..];
+    let range = &[("accept", "text/html"), ("range", "bytes=100000-")][..];
+    let same_site = &[("accept", "text/html"), ("sec-fetch-site", "same-origin")][..];
+    let switch = &[("accept", "text/html"), ("connection", "upgrade"), ("upgrade", "websocket")][..];
+    let cross_switch = &[
+        ("connection", "upgrade"),
+        ("upgrade", "websocket"),
+        ("origin", "https://evil.example"),
+        ("sec-fetch-site", "cross-site"),
+    ][..];
+    let no_boundary = &[("accept", "text/html"), ("sec-fetch-site", "same-origin"), ("content-type", "multipart/form-data")][..];
+    #[cfg(feature = "json")]
+    let plain_reports = &[("accept", "text/html"), ("sec-fetch-site", "same-origin"), ("content-type", "text/plain")][..];
+    let empty: &[u8] = b"";
+    let long = [b'a'; 100];
+    // What each item is, its request (its headers and body), its status, whether the error page drew,
+    // and what the answer's `Cache-Control` is.
+    let debug = cfg!(debug_assertions);
+    type Case<'a> =
+        (&'a str, &'a Router, &'a str, &'a str, &'a [(&'static str, &'static str)], &'a [u8], StatusCode, bool, &'a str);
+    let mut cases: Vec<Case> = vec![
+        ("router 404", &router, "GET", "/nowhere", html, empty, StatusCode::NOT_FOUND, true, "private, no-cache"),
+        ("router 405", &router, "GET", "/form", html, empty, StatusCode::METHOD_NOT_ALLOWED, true, "private, no-cache"),
+        ("router 501", &router, "PATCH", "/", html, empty, StatusCode::NOT_IMPLEMENTED, true, "private, no-cache"),
+        ("static file miss", &router, "GET", &missing, html, empty, StatusCode::NOT_FOUND, true, "private, no-cache"),
+        ("static path refused", &router, "GET", &not_a_path, html, empty, StatusCode::BAD_REQUEST, true, "private, no-cache"),
+        (
+            "static range past the end",
+            &router,
+            "GET",
+            &href,
+            range,
+            empty,
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            false,
+            "private, no-cache",
+        ),
+        ("handler's refusal", &router, "GET", "/refused", html, empty, StatusCode::FORBIDDEN, true, "private, no-cache"),
+        ("refusal at another status", &router, "GET", "/hidden", html, empty, StatusCode::NOT_FOUND, true, "private, no-cache"),
+        (
+            "caller unavailable",
+            &router,
+            "GET",
+            "/unidentified",
+            html,
+            empty,
+            StatusCode::SERVICE_UNAVAILABLE,
+            true,
+            "private, no-cache",
+        ),
+        ("panic", &router, "GET", "/panics", html, empty, StatusCode::INTERNAL_SERVER_ERROR, true, "private, no-cache"),
+        ("deadline", &router, "GET", "/late", html, empty, StatusCode::SERVICE_UNAVAILABLE, true, "private, no-cache"),
+        (
+            "extractor: no client address",
+            &router,
+            "GET",
+            "/ip",
+            html,
+            empty,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            true,
+            "private, no-cache",
+        ),
+        ("extractor: no switch asked", &router, "GET", "/ws", html, empty, StatusCode::BAD_REQUEST, true, "private, no-cache"),
+        (
+            "extractor: not multipart",
+            &router,
+            "POST",
+            "/upload",
+            html,
+            empty,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            true,
+            "private, no-cache",
+        ),
+        (
+            "header that is not one",
+            &router,
+            "GET",
+            "/bad-header",
+            html,
+            empty,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            true,
+            "private, no-cache",
+        ),
+        (
+            "document without <Corten />",
+            &router,
+            "GET",
+            "/no-head",
+            html,
+            empty,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            true,
+            "private, no-cache",
+        ),
+        (
+            "resend_to on a GET",
+            &router,
+            "GET",
+            "/resend",
+            html,
+            empty,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            true,
+            "private, no-cache",
+        ),
+        ("not ready", &router, "GET", "/health/ready", html, empty, StatusCode::SERVICE_UNAVAILABLE, true, "private, no-cache"),
+        (
+            "kept answer that cannot be read",
+            &hides,
+            "GET",
+            "/kept-cut",
+            html,
+            empty,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            true,
+            "private, no-cache",
+        ),
+        (
+            "chooser: a post the page has none of",
+            &router,
+            "POST",
+            "/?do=sell",
+            same_site,
+            empty,
+            StatusCode::BAD_REQUEST,
+            true,
+            "private, no-cache",
+        ),
+        ("refusal: sign in", &router, "GET", "/sign-in", html, empty, StatusCode::SEE_OTHER, false, "private, no-cache"),
+        ("refusal: 401", &router, "GET", "/key", html, empty, StatusCode::UNAUTHORIZED, true, "private, no-cache"),
+        ("refusal: 429", &router, "GET", "/slow-down", html, empty, StatusCode::TOO_MANY_REQUESTS, true, "private, no-cache"),
+        (
+            "extractor: body not UTF-8",
+            &router,
+            "POST",
+            "/text",
+            same_site,
+            &b"\xff"[..],
+            StatusCode::BAD_REQUEST,
+            true,
+            "private, no-cache",
+        ),
+        (
+            "extractor: body over the limit",
+            &router,
+            "POST",
+            "/text",
+            same_site,
+            &long[..],
+            StatusCode::PAYLOAD_TOO_LARGE,
+            true,
+            "private, no-cache",
+        ),
+        (
+            "extractor: form fields that do not fit",
+            &router,
+            "GET",
+            "/fields?n=x",
+            html,
+            empty,
+            StatusCode::BAD_REQUEST,
+            true,
+            "private, no-cache",
+        ),
+        (
+            "extractor: form not urlencoded",
+            &router,
+            "POST",
+            "/fields",
+            same_site,
+            empty,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            true,
+            "private, no-cache",
+        ),
+        (
+            "extractor: no connection value",
+            &router,
+            "GET",
+            "/connection",
+            html,
+            empty,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            true,
+            "private, no-cache",
+        ),
+        (
+            "extractor: a switch the connection cannot make",
+            &router,
+            "GET",
+            "/ws",
+            switch,
+            empty,
+            StatusCode::BAD_REQUEST,
+            true,
+            "private, no-cache",
+        ),
+        (
+            "extractor: a switch from another site",
+            &router,
+            "GET",
+            "/ws",
+            cross_switch,
+            empty,
+            StatusCode::FORBIDDEN,
+            true,
+            "private, no-cache",
+        ),
+        (
+            "extractor: multipart without a boundary",
+            &router,
+            "POST",
+            "/upload",
+            no_boundary,
+            empty,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            true,
+            "private, no-cache",
+        ),
+        (
+            "error page's own extractor",
+            &page_refuses,
+            "GET",
+            "/nowhere",
+            html,
+            empty,
+            StatusCode::NOT_FOUND,
+            false,
+            "private, no-cache",
+        ),
+    ];
+    #[cfg(feature = "json")]
+    let api = App::new(Routes::new().__route::<AnywhereRest>(crate::Methods::reads(get(|| async { "page" }))))
+        .api::<ApiItems>(|items| items.route::<ApiItem>(crate::Methods::reads(get(|| async { "item" }))))
+        .middleware(CdnRecaches(Some("public, max-age=60")))
+        .error_page(greeting_error_page, ())
+        .router();
+    #[cfg(feature = "json")]
+    cases.extend([
+        (
+            "extractor: reports that are not JSON",
+            &router,
+            "POST",
+            "/reports",
+            plain_reports,
+            empty,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            true,
+            "private, no-cache",
+        ),
+        (
+            "extractor: JSON without its type",
+            &router,
+            "POST",
+            "/json",
+            same_site,
+            empty,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            true,
+            "private, no-cache",
+        ),
+        (
+            "API: a path a route outside it matched",
+            &api,
+            "GET",
+            "/api/items/7/more",
+            &[("accept", "application/json")][..],
+            empty,
+            StatusCode::NOT_FOUND,
+            false,
+            "private, no-cache",
+        ),
+    ]);
+    if debug {
+        cases.extend([
+            (
+                "debug: hint no control names",
+                &router,
+                "GET",
+                "/hint",
+                html,
+                empty,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                true,
+                "private, no-cache",
+            ),
+            (
+                "debug: Refresh header",
+                &router,
+                "GET",
+                "/refresh",
+                html,
+                empty,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                true,
+                "private, no-cache",
+            ),
+            (
+                "debug: Refresh, NoStore",
+                &router,
+                "GET",
+                "/refresh-secret",
+                html,
+                empty,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                true,
+                "private, no-store",
+            ),
+            (
+                "debug: patch to a plain GET",
+                &router,
+                "GET",
+                "/patch",
+                html,
+                empty,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                true,
+                "private, no-cache",
+            ),
+            (
+                "debug: redirect outside form-action",
+                &router,
+                "POST",
+                "/go",
+                html,
+                empty,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                true,
+                "private, no-cache",
+            ),
+            (
+                "debug: ClientZone without App::client_zone",
+                &router,
+                "GET",
+                "/zone",
+                html,
+                empty,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                true,
+                "private, no-cache",
+            ),
+        ]);
+    }
+    let mut wrong = Vec::new();
+    for (item, router, method, uri, asked, body, status, greets, sent) in cases {
+        let mut req = Request::builder().method(method).uri(uri).header(header::COOKIE, "name=ann");
+        for (name, value) in asked {
+            req = req.header(*name, *value);
+        }
+        let res = router.clone().oneshot(req.body(Body::from(body.to_vec())).unwrap()).await.unwrap();
+        let (got, headers, body, marked) = read_marked(res).await;
+        if got != status {
+            wrong.push(format!("{item}: {method} {uri} answered {got}, not {status}: {body}"));
+            continue;
+        }
+        if greets != body.contains("Sorry, ann.") {
+            wrong.push(format!("{item}: the error page {} drawn: {body}", if greets { "was not" } else { "was" }));
+        }
+        if !marked {
+            wrong.push(format!("{item}: not marked as no handler's own"));
+        }
+        // What matters is the caching headers: the middleware's others are on the answer only
+        // where it ran after the route (not past a panic or the deadline, nor on a debug build's
+        // diagnostic, which keeps none of the answer's headers but its cookies).
+        for what in kept_from_cdns(&headers, sent).into_iter().filter(|what| !what.starts_with("lost ")) {
+            wrong.push(format!("{item}: {what}"));
+        }
+    }
+    // The control: a handler's own failure is its answer, and the page in its place keeps what the
+    // middleware wrote.
+    let (status, headers, body) = from_ann(&router, "GET", "/own", html).await;
+    assert!(status == StatusCode::INTERNAL_SERVER_ERROR && body.contains("Sorry, ann."), "{status}: {body}");
+    for name in CDN_OVERRIDES {
+        assert_eq!(headers[name], "public, max-age=60", "a handler's own failure keeps {name}");
+    }
+    // A failed error page: the plain text in its place is Corten's, whatever it replaced.
+    let broken = App::new(Routes::from(routes.clone()))
+        .middleware(CdnRecaches(Some("public, max-age=60")))
+        .error_page(|_: Failure| async { Err::<HtmlResponse, Error>(Error::new("the error page broke")) }, ())
+        .router();
+    let (status, headers, body) = from_ann(&broken, "GET", "/own", html).await;
+    assert!(status == StatusCode::INTERNAL_SERVER_ERROR && body.contains("could not be shown"), "{status}: {body}");
+    for what in kept_from_cdns(&headers, "private, no-cache") {
+        wrong.push(format!("failed error page: {what}"));
+    }
+    // Outside the stages, or past them: marked for an app that relays the answer inline.
+    let outside = |req: http::request::Builder| async {
+        let res = router.clone().oneshot(req.header(header::COOKIE, "name=ann").body(Body::empty()).unwrap()).await.unwrap();
+        read_marked(res).await
+    };
+    for (item, req, status) in [
+        ("another host", Request::get("/").header(header::HOST, "rebound.attacker.example"), StatusCode::MISDIRECTED_REQUEST),
+        (
+            "cross-site write",
+            Request::post("/form").header("origin", "https://evil.example").header("sec-fetch-site", "cross-site"),
+            StatusCode::FORBIDDEN,
+        ),
+    ] {
+        let (got, _, body, marked) = outside(req).await;
+        if got != status || !marked {
+            wrong.push(format!("{item}: {got} (want {status}), marked {marked}: {body}"));
+        }
+    }
+    let unstaged = App::new(super::unstaged::unstaged_url::router()).router();
+    let (got, _, body, marked) =
+        read_marked(unstaged.oneshot(Request::get("/boom").body(Body::empty()).unwrap()).await.unwrap()).await;
+    if got != StatusCode::INTERNAL_SERVER_ERROR || !marked {
+        wrong.push(format!("unstaged panic: {got}, marked {marked}: {body}"));
+    }
+    // The failures a handler meets as values and passes on with `?`: each is marked as it is made,
+    // so the error page in its place is drawn as the router's own is (above).
+    let unrouted = Request::get("/").body(()).unwrap().into_parts().0;
+    #[allow(unused_mut)]
+    let mut made = vec![
+        ("body over its limit", Error::from(crate::extract::BodyError::TooLarge { limit: 1 }).into_response()),
+        ("body stalled", Error::from(crate::extract::BodyError::Stalled).into_response()),
+        ("body broken", Error::from(crate::extract::BodyError::Broken("reset".into())).into_response()),
+        ("upload over its limit", Error::from(crate::UploadError::TooLarge { limit: 1 }).into_response()),
+        ("upload malformed", Error::from(crate::UploadError::Malformed("no end".into())).into_response()),
+        ("upload fields", Error::from(crate::UploadError::Fields("qty".into())).into_response()),
+        ("upload stalled", Error::from(crate::UploadError::Stalled).into_response()),
+        ("path parameters unread", crate::route::read_path::<(u32,)>(&unrouted).unwrap_err().into_response()),
+    ];
+    #[cfg(feature = "json")]
+    made.push((
+        "JSON route refusing with a 202",
+        crate::JsonError::refusal(crate::Json(7u32).with_status(StatusCode::ACCEPTED), false).into_response(),
+    ));
+    for (item, res) in made {
+        if res.extensions().get::<crate::cache::Unshared>().is_none() {
+            wrong.push(format!("{item}: {} not marked as no handler's own", res.status()));
+        }
+    }
+    assert!(wrong.is_empty(), "a failure Corten made, open to a CDN: {wrong:#?}");
+}
+
+/// The crate's source makes each failure of its own through the constructors that mark it
+/// ([`crate::cache::Unshared`]): `Error::corten`, `cache::unshared`, `cache::unshared_in_place_of`,
+/// or a rejection that marks itself as it becomes a response (`BodyRejection`, `FormRejection`, a
+/// refusal). Outside the tests, a line that names a 4xx or 5xx status to answer with, or makes an
+/// `Error` another way, is refused unless the function it is in uses one of them or it is listed
+/// below with why it may, so a new exit is marked as it is written or named where review sees it.
+/// It reads lines, not Rust: a status held in a variable is its constructor's to mark, and the
+/// behavior is `every_failure_corten_makes_is_never_shared`'s. (Skipped outside the repository.)
+#[test]
+fn corten_makes_its_failures_through_the_constructors_that_mark_them() {
+    const FAILING: &[&str] = &[
+        "BAD_REQUEST",
+        "UNAUTHORIZED",
+        "PAYMENT_REQUIRED",
+        "FORBIDDEN",
+        "NOT_FOUND",
+        "METHOD_NOT_ALLOWED",
+        "NOT_ACCEPTABLE",
+        "PROXY_AUTHENTICATION_REQUIRED",
+        "REQUEST_TIMEOUT",
+        "CONFLICT",
+        "GONE",
+        "LENGTH_REQUIRED",
+        "PRECONDITION_FAILED",
+        "PAYLOAD_TOO_LARGE",
+        "URI_TOO_LONG",
+        "UNSUPPORTED_MEDIA_TYPE",
+        "RANGE_NOT_SATISFIABLE",
+        "EXPECTATION_FAILED",
+        "IM_A_TEAPOT",
+        "MISDIRECTED_REQUEST",
+        "UNPROCESSABLE_ENTITY",
+        "LOCKED",
+        "FAILED_DEPENDENCY",
+        "TOO_EARLY",
+        "UPGRADE_REQUIRED",
+        "PRECONDITION_REQUIRED",
+        "TOO_MANY_REQUESTS",
+        "REQUEST_HEADER_FIELDS_TOO_LARGE",
+        "UNAVAILABLE_FOR_LEGAL_REASONS",
+        "INTERNAL_SERVER_ERROR",
+        "NOT_IMPLEMENTED",
+        "BAD_GATEWAY",
+        "SERVICE_UNAVAILABLE",
+        "GATEWAY_TIMEOUT",
+        "HTTP_VERSION_NOT_SUPPORTED",
+        "VARIANT_ALSO_NEGOTIATES",
+        "INSUFFICIENT_STORAGE",
+        "LOOP_DETECTED",
+        "NOT_EXTENDED",
+        "NETWORK_AUTHENTICATION_REQUIRED",
+    ];
+    const MARKS: &[&str] = &[
+        "Error::corten",
+        "unshared",
+        "corten: true",
+        "corten: self.corten",
+        "BodyRejection::new",
+        "FormRejection::invalid",
+        "Why::Refusal",
+    ];
+    // The file, what the line holds, and why it may.
+    const OWN: &[(&str, &str, &str)] = &[
+        ("assets.rs", "NO_FAVICON_CACHE)]).into_response()", "no icon: one 404 for everyone, public for an hour"),
+        ("lib.rs", "source: error.into(), corten: false }", "Error::new: a handler's own failure"),
+        ("lib.rs", "source: status.canonical_reason()", "Error::status: a handler's own failure"),
+        ("lib.rs", "Error::status(StatusCode::NOT_FOUND)", "Error::not_found: a handler's own failure"),
+        ("lib.rs", "Error::new(error)", "a handler's error passed on with `?`: its own"),
+        ("lib.rs", "source: Box::new(caller::AsError(refused))", "a refusal, answered as the refusal, which marks itself"),
+        ("router.rs", "Status(StatusCode::NOT_FOUND)", "the router's 404, which `Status` marks as it answers"),
+        ("router.rs", "Status(StatusCode::METHOD_NOT_ALLOWED)", "the router's 405, which `Status` marks as it answers"),
+        ("security/violations.rs", "StatusCode::UNSUPPORTED_MEDIA_TYPE,", "a reason, which the extractor marks as it answers"),
+        ("security/violations.rs", "let refused = |_| (StatusCode::BAD_REQUEST", "a reason, which the extractor marks"),
+        ("security/violations.rs", "_ => Err((StatusCode::BAD_REQUEST", "a reason, which the extractor marks"),
+    ];
+    fn is_word(byte: Option<&u8>) -> bool {
+        byte.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+    }
+    // Whether the line makes a failure: answers with a 4xx or 5xx (not compares one, matches it or
+    // maps a reason to it) or makes an `Error`.
+    fn makes(line: &str) -> bool {
+        let line = line.replace("crate::Error::", "Error::").replace("http::StatusCode::", "StatusCode::");
+        let named = FAILING.iter().any(|name| {
+            let key = format!("StatusCode::{name}");
+            line.match_indices(&key).any(|(at, _)| {
+                let end = at + key.len();
+                if is_word(line.as_bytes().get(end)) {
+                    return false;
+                }
+                let (before, after) = (line[..at].trim_end(), line[end..].trim_start());
+                let compared = before.ends_with("==") || before.ends_with("!=") || before.ends_with('|');
+                let pattern = after.starts_with('|') || after.starts_with("=>");
+                let mapped = before.ends_with("=>") && (after.is_empty() || after == ",");
+                !(compared || pattern || mapped || line.contains("matches!("))
+            })
+        });
+        let made = ["Error::new(", "Error::status(", "Error::not_found(", "Error { status"].iter().any(|key| {
+            line.match_indices(key)
+                .any(|(at, _)| at == 0 || !is_word(line.as_bytes().get(at - 1)) && line.as_bytes()[at - 1] != b':')
+        });
+        named || made
+    }
+    fn fn_start(line: &str) -> bool {
+        let mut rest = line.trim_start();
+        for prefix in ["pub(crate) ", "pub(super) ", "pub ", "const ", "async ", "unsafe "] {
+            rest = rest.strip_prefix(prefix).unwrap_or(rest);
+        }
+        rest.starts_with("fn ")
+    }
+    fn files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap().map(Result::unwrap) {
+            let path = entry.path();
+            let name = entry.file_name().into_string().unwrap();
+            if path.is_dir() {
+                if name != "tests" && name != "type_tests" {
+                    files(&path, out);
+                }
+            } else if name.ends_with(".rs") && name != "tests.rs" {
+                out.push(path);
+            }
+        }
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    if !src.join("cache.rs").is_file() {
+        return;
+    }
+    let mut paths = Vec::new();
+    files(&src, &mut paths);
+    let mut unmarked = Vec::new();
+    for path in paths {
+        let file = path.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
+        let text = std::fs::read_to_string(&path).unwrap();
+        // The code as it builds outside the tests: comments blanked, test modules left out.
+        let mut lines: Vec<&str> = text.lines().map(|line| if line.trim_start().starts_with("//") { "" } else { line }).collect();
+        let mut at = 0;
+        while at < lines.len() {
+            if lines[at].trim() == "#[cfg(test)]" {
+                let mut module = at + 1;
+                while lines.get(module).is_some_and(|line| line.trim_start().starts_with("#[")) {
+                    module += 1;
+                }
+                if let Some(line) = lines.get(module).filter(|line| line.trim_end().ends_with('{') && line.contains("mod ")) {
+                    let indent = &line[..line.len() - line.trim_start().len()];
+                    let close = format!("{indent}}}");
+                    let end = (module + 1..lines.len()).find(|&i| lines[i].trim_end() == close).unwrap_or(lines.len() - 1);
+                    lines[at..=end].fill("");
+                    at = end;
+                }
+            }
+            at += 1;
+        }
+        for (at, line) in lines.iter().enumerate() {
+            if !makes(line) {
+                continue;
+            }
+            // The function the line is in, to the brace that closes it.
+            let body = match (0..=at).rev().find(|&i| fn_start(lines[i])) {
+                Some(start) if !lines[start].trim_end().ends_with('}') => {
+                    let indent = &lines[start][..lines[start].len() - lines[start].trim_start().len()];
+                    let close = format!("{indent}}}");
+                    let end = (start + 1..lines.len()).find(|&i| lines[i].starts_with(&close)).unwrap_or(lines.len() - 1);
+                    lines[start..=end].join("\n")
+                }
+                _ => line.to_string(),
+            };
+            if !MARKS.iter().any(|mark| body.contains(mark)) {
+                unmarked.push((file.clone(), at + 1, line.trim().to_string()));
+            }
+        }
+    }
+    let mut wrong = Vec::new();
+    for (file, line, text) in &unmarked {
+        if !OWN.iter().any(|(own, holds, _)| own == file && text.contains(holds)) {
+            wrong.push(format!("{file}:{line}: {text}"));
+        }
+    }
+    for (file, holds, why) in OWN {
+        if !unmarked.iter().any(|(at, _, text)| at == file && text.contains(holds)) {
+            wrong.push(format!("{file}: no line holds {holds:?} ({why}): take it off the list"));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "a failure made without Error::corten, cache::unshared or cache::unshared_in_place_of; mark it, add it to \
+         every_failure_corten_makes_is_never_shared, or list it here with why it may: {wrong:#?}"
+    );
+}
+
+/// The mark of a failure Corten made (`Error::corten`) is a flag in what was the padding of
+/// `Error`: it takes no room in a handler's `Result`.
+#[test]
+fn the_mark_of_corten_s_failure_takes_no_room_in_an_error() {
+    assert_eq!(std::mem::size_of::<Error>(), std::mem::size_of::<(StatusCode, Box<dyn std::error::Error + Send + Sync>)>());
+}
