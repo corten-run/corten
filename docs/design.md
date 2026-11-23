@@ -7807,15 +7807,20 @@ rules something out.
     callgrind (valgrind 3.19.0, rustc 1.99.1, release, every feature) with the request-cost
     harness's `ROUTER_PUBLIC=page`, as (instructions at 1,200 requests less those at 200) over
     1,000, the median of three rounds in alternating order, each run with glibc's allocator and
-    again with jemalloc preloaded, `c08cf5aff` (this change's code, whose `made` case also asks
-    for one of its URLs again afterwards and asserts that it was kept) against `13fe3f987`
-    (main's `92bc32678` with the harness's `ROUTER_TARGET=made`): a kept page given again took
-    16,982.7 a request against 16,954.1 with glibc, 28.6 more (0.17%), and 15,398.9 against
-    15,379.9 with jemalloc, 19.0 more (0.12%), every round within 0.3; a page made and kept in a
-    store with room (`made`, a new URL each request) took 31,117.0 against 31,234.8 with glibc,
-    117.8 fewer (0.38%), and 26,095.7 against 25,990.0 with jemalloc, 105.7 more (0.41%), every
-    round within 7.4. The first version of this change (`2cd19ea94`, the same builds) took 29.9
-    and 23.0 more for the hit and 125.6 fewer and 94.2 more for the miss, so fencing the refresh
+    again with jemalloc preloaded, `9c203dcdd` (this change merged with main's `14126d2a8`, whose
+    `made` case also asks for one of its URLs again afterwards and asserts that it was kept)
+    against `14126d2a8` with only this change's `crates/corten/tests/router_cost.rs` (the
+    harness's `ROUTER_TARGET=made`): a kept page given again took 16,962.0 a request against
+    16,925.1 with glibc, 36.9 more (0.22%), and 15,380.9 against 15,351.0 with jemalloc, 29.9
+    more (0.19%), every round within 1.5; a page made and kept in a store with room (`made`, a
+    new URL each request) took 30,877.5 against 30,886.4 with glibc, 8.9 fewer (0.03%), and
+    25,577.4 against 25,483.9 with jemalloc, 93.5 more (0.37%), every round within 7.4. The
+    entry, to which this change adds a flag and two windows of 32 bits, is 432 bytes against
+    main's 424, so with its `Arc`'s counts it still fits jemalloc's class of 448, with no room
+    left in it. Before the merge, against main's `92bc32678` with the harness's `made` case
+    (`13fe3f987`), this change's `c08cf5aff` took 28.6 and 19.0 more for the hit and 117.8
+    fewer and 105.7 more for the miss, and its first version (`2cd19ea94`, the same builds) took
+    29.9 and 23.0 more for the hit and 125.6 fewer and 94.2 more for the miss, so fencing the refresh
     and the held copy against replacement moves either by 11.5 at most; a draft of that fencing
     that wrapped the miss's keeping in a second future and built the kept entry at two call
     sites cost 680 (glibc) and 416 (jemalloc) more on the miss than that, which one future and
@@ -8360,7 +8365,8 @@ rules something out.
     the next try; or a refresh is found outliving its window or the app's shutdown grace.
 
     Last checked: 2026-11-23 for a page given past its lifetime, the callgrind rounds above at
-    `c08cf5aff`, `2cd19ea94` and `13fe3f987`; 2026-11-23 for the cycles of the cut of what a kept answer holds, `d3bb2e0e4`
+    `9c203dcdd` and `14126d2a8`, and before the merge at `c08cf5aff`, `2cd19ea94` and
+    `13fe3f987`; 2026-11-23 for the cycles of the cut of what a kept answer holds, `d3bb2e0e4`
     against `04530f7e0` on the Xeon Platinum 8280 with jemalloc 5.3.0, kept under the tag
     `evidence/611749e1`; 2026-11-23 for what a kept answer holds, `23a98a7e9` against `a02c81e86`
     under jemalloc 5.3.0, and for its instructions, `4e53ff290` against `04530f7e0` under
