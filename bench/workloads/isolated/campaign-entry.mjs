@@ -63,7 +63,9 @@ export async function runCampaignEntry(args) {
   } });
   try {
     const control = bootstrapControl(input);
+    if (control.offlineHandoff) assert.ok(input.group, "offline handoff requires one group");
     const admission = await waitControlAdmission(control, "bootstrap", { signal: abort.signal, deadline: Date.now() + 45 * 60000 });
+    if (control.offlineHandoff) assert.equal(admission.apparatus, undefined, "offline handoff has a stream apparatus");
     if (admission.apparatus) {
       stream = await superviseControlStream(control, admission, abort);
     }
