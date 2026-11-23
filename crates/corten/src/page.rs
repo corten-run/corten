@@ -214,7 +214,10 @@ impl Mode {
     /// whether a kept page can answer without this function.
     fn read(headers: &HeaderMap, check_html: bool) -> ((Mode, bool), bool) {
         let (asked, accept) = Mode::said(headers.get(MODE_HEADER), || headers.get(header::ACCEPT));
-        (asked, check_html && asked.0 == Mode::Document && accept.contains("text/html"))
+        // A browser's navigation names HTML first, so the start is looked at before the line is
+        // searched: `str::contains` prepares a search made for long text before it looks.
+        let html = || accept.starts_with("text/html") || accept.contains("text/html");
+        (asked, check_html && asked.0 == Mode::Document && html())
     }
 }
 
