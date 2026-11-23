@@ -2026,8 +2026,8 @@ rules something out.
     and the `400` by function against that main; 2026-11-22, the router's `404`, with and without
     the app's error page, and the plain page at round 11's head, with and without the error page
     taking the failed answer's map, against main `a138e2391` (three rounds alternating the
-    builds, every run within 2 of the others), and by function; and a page's and an API's `404`,
-    a page and an API request in step 2's harness at that head and that main against axum's router
+    builds, every run within 2 of the others), and by function; 2026-11-22, a page's and an API's
+    `404`, a page and an API request in step 2's harness at that head and that main against axum's router
     at `7e897bd68` (jemalloc, three rounds alternating the three builds, every run within 16 of
     the others).
 
