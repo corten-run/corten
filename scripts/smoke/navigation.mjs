@@ -1327,6 +1327,8 @@ export async function fragmentTargets(browser) {
     "a client navigation to a #fragment that names nothing moves focus off the link kept outside <main>",
     "a focus handler that moves focus back in the browser's scroll to a kept :target keeps it there, not scrolled again",
     "focus moved while a page with a #fragment that names nothing loads stays where it was moved",
+    "a kept :target's own focus handler that blurs it in the browser's scroll is not scrolled again",
+    "a browser scroll to a #fragment that throws leaves no focus listener of the runtime's on the window",
   ];
   // Two spellings of one fragment, each an id, far enough apart that one is out of view when the
   // other is in it: the one HTML finds, and the one it would find if it dropped a leading U+FEFF
@@ -1335,8 +1337,15 @@ export async function fragmentTargets(browser) {
   const spellings = `<p id="smoke-bom">BOM dropped</p>${apart}<p id="\ufeffsmoke-bom">BOM kept</p>${apart}<p id="smoke-%41">As written</p>${apart}<p id="smoke-A">Decoded</p>`;
   // A heading Tab goes on from, and a button a focus handler is on, far from the place it sends the address to.
   const focusing = `<h2 id="smoke-heading">Heading</h2><button id="smoke-after-heading">After heading</button>${apart}<button id="smoke-focus-inside">Inside</button>${apart}<p id="smoke-after-focus">After focus</p>`;
-  // A navigation answer whose address has `hold` waits for `held.release()`, so focus can move while it loads.
-  const held = { asked: false, release: () => {} };
+  // A navigation answer whose address has `hold` waits for `held.release()`, so focus can move
+  // while it loads; `held.reached` settles once it waits. Both are made before the request.
+  const gate = () => {
+    let [reach, release] = [() => {}, () => {}];
+    const reached = new Promise((done) => (reach = () => done(true)));
+    const released = new Promise((done) => (release = () => done(undefined)));
+    return { reach, reached, release, released };
+  };
+  let held = gate();
   const open = async () => {
     const page = await browser.newPage({ viewport: { width: 360, height: 200 } });
     await page.route(
@@ -1357,8 +1366,9 @@ export async function fragmentTargets(browser) {
         const text = await res.text();
         const body = text.includes("</main>") ? text.replace("</main>", `${anchors}</main><p id="smoke-outside">Outside</p>${apart}<button id="smoke-outside-button">Outside</button>`) : text + anchors;
         if (asked && new URL(route.request().url()).searchParams.has("hold")) {
-          held.asked = true;
-          await new Promise((go) => (held.release = () => go(undefined)));
+          const { reach, released } = held;
+          reach();
+          await released;
         }
         await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
       },
@@ -1399,6 +1409,24 @@ export async function fragmentTargets(browser) {
       Element.prototype.scrollIntoView = function (/** @type {any} */ ...args) {
         w.__scrolledInto.push(this.id);
         return into.apply(this, args);
+      };
+      // The focus and scroll listeners on the window, as added and not yet removed, counted from
+      // before the runtime loads.
+      /** @type {Map<unknown, Set<string>>} */
+      const listening = new Map();
+      w.__listening = () => [...listening.values()].reduce((count, types) => count + types.size, 0);
+      /** @param {string} type @param {boolean | { capture?: boolean } | undefined} options */
+      const kind = (type, options) => /^(focus|focusin|blur|focusout|scroll)$/.test(type) && `${type} ${typeof options === "boolean" ? options : !!options?.capture}`;
+      const [add, remove] = [EventTarget.prototype.addEventListener, EventTarget.prototype.removeEventListener];
+      EventTarget.prototype.addEventListener = function (/** @type {any} */ type, /** @type {any} */ fn, /** @type {any} */ options) {
+        const as = (this ?? window) === window && kind(type, options);
+        if (as) listening.set(fn, (listening.get(fn) ?? new Set()).add(as));
+        return add.call(this ?? window, type, fn, options);
+      };
+      EventTarget.prototype.removeEventListener = function (/** @type {any} */ type, /** @type {any} */ fn, /** @type {any} */ options) {
+        const as = (this ?? window) === window && kind(type, options);
+        if (as) listening.get(fn)?.delete(as);
+        return remove.call(this ?? window, type, fn, options);
       };
       /**
        * @param {string} url @param {string} [place] a selector for the element the fragment names
@@ -1635,6 +1663,58 @@ export async function fragmentTargets(browser) {
     JSON.stringify(returned),
   );
 
+  // As the last two, but the button's own `focus` handler blurs it and scrolls elsewhere: no
+  // `focusin` follows (Chromium, WebKit), and focus ends where it was before the browser's scroll,
+  // on the body. The runtime still must not scroll to the button on top. Firefox's scroll goes
+  // neither there nor to the button, and the runtime scrolls to it.
+  page = await open();
+  await page.goto(`${base}/news`);
+  const blurred = await page.evaluate(async () => {
+    const w = /** @type {any} */ (window);
+    w.__marker = 1;
+    /** @type {Step} */
+    const first = await w.__to("/news?mine=on#smoke-outside-button", "#smoke-outside-button");
+    /** @type {HTMLElement} */ (document.activeElement).blur();
+    scrollTo(0, 0);
+    await w.__drawn();
+    w.__scrolledInto.length = 0;
+    const button = /** @type {HTMLElement} */ (document.querySelector("#smoke-outside-button"));
+    let fired = false;
+    button.addEventListener("focus", () => {
+      if (fired) return;
+      fired = true;
+      button.blur();
+      scrollTo(0, 500);
+    });
+    /** @type {Step} */
+    const again = await w.__to("/news?sector=energy#smoke-outside-button", "#smoke-outside-button", "replace");
+    return { first, again, fired, focus: w.__focus(), scrolledInto: /** @type {string[]} */ ([...w.__scrolledInto]) };
+  });
+  await page.close();
+  check(
+    names[16],
+    at(blurred.first, "smoke-outside-button", true) && blurred.again.swapped && !blurred.again.error && (blurred.fired ? blurred.scrolledInto.length === 0 : blurred.again.inView),
+    JSON.stringify(blurred),
+  );
+
+  // A handler of the page's own that calls the navigation's `scroll()` first makes the runtime's
+  // call throw, which rejects the navigation's `finished`: the runtime leaves no listener behind.
+  page = await open();
+  await page.goto(`${base}/news`);
+  const thrown = await page.evaluate(async () => {
+    const w = /** @type {any} */ (window);
+    w.__marker = 1;
+    const before = w.__listening();
+    const first = (/** @type {any} */ e) => e.intercept({ handler: () => e.scroll() });
+    w.navigation.addEventListener("navigate", first);
+    /** @type {Step} */
+    const step = await w.__to("/news?mine=on#briefing", "#briefing");
+    w.navigation.removeEventListener("navigate", first);
+    return { ...step, before, after: w.__listening() };
+  });
+  await page.close();
+  check(names[17], thrown.swapped && /InvalidState/.test(thrown.error) && thrown.after === thrown.before, JSON.stringify(thrown));
+
   // A full load at a heading's #fragment starts the next Tab from the heading (HTML's sequential
   // focus navigation starting point). A client navigation there from a link kept outside <main>
   // that has focus makes the heading `:target` too, but the Navigation API's focus reset after it
@@ -1670,10 +1750,12 @@ export async function fragmentTargets(browser) {
   check(names[13], nothing.swapped && !nothing.error && nothing.focus === "body", JSON.stringify({ client: nothing, full: nothingFull }));
 
   // The reset leaves focus alone when it moved during the navigation: one moved to another header
-  // link while the page loads stays there, though the fragment names nothing on the new page.
+  // link while the page loads stays there, though the fragment names nothing on the new page. An
+  // answer that never reaches the route in time fails the check; the gate is opened either way, so
+  // a late one goes through instead of holding the navigation.
   page = await open();
   await page.goto(`${base}/news`);
-  held.asked = false;
+  held = gate();
   await page.evaluate(() => {
     /** @type {any} */ (window).__marker = 1;
     /** @type {HTMLElement} */ (document.querySelectorAll("header a[href]")[0]).focus();
@@ -1684,7 +1766,7 @@ export async function fragmentTargets(browser) {
       (/** @type {Error} */ e) => String(e),
     ),
   );
-  for (let tries = 0; tries < 250 && !held.asked; tries++) await new Promise((wait) => setTimeout(wait, 20));
+  const asked = await Promise.race([held.reached, new Promise((late) => setTimeout(() => late(false), 5000))]);
   const during = await page.evaluate(() => {
     /** @type {HTMLElement} */ (document.querySelectorAll("header a[href]")[1]).focus();
     return /** @type {any} */ (window).__focus();
@@ -1697,7 +1779,8 @@ export async function fragmentTargets(browser) {
     return { url: location.pathname + location.search + location.hash, focus: w.__focus(), swapped: w.__marker === 1 };
   });
   await page.close();
-  check(names[15], held.asked && !error && stayed.swapped && stayed.url.endsWith("#smoke-nothing") && stayed.focus === during && during !== "body", JSON.stringify({ asked: held.asked, during, error, ...stayed }));
+  const gated = asked ? {} : { gate: "the navigation's answer did not reach the route within 5 seconds" };
+  check(names[15], asked && !error && stayed.swapped && stayed.url.endsWith("#smoke-nothing") && stayed.focus === during && during !== "body", JSON.stringify({ ...gated, asked, during, error, ...stayed }));
 }
 
 export async function earlyNavigation(browser) {

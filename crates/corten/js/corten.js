@@ -2765,20 +2765,26 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
     // once the page is swapped in (`scroll: "manual"`), so what it did can be checked after it:
     // Firefox's may neither scroll there nor set `:target` (as after a document's first fragment
     // scroll, a full load's included), may scroll to the top instead, or keeps an element the swap
-    // left in place (outside `<main>`) as the target without scrolling to it again. Only a focus
-    // it moved, there and back included, or a `:target` it set shows that it went there; else the
-    // element is scrolled to here. When it moved focus, the page's own code ran in it (a focus
-    // handler), and what it did stands: a scroll or a focus of its own, or a change to the
-    // address, which ends this navigation (its fragment is read before).
+    // left in place (outside `<main>`) as the target without scrolling to it again, so a changed
+    // position does not show where it went. Only a focus in it or a `:target` it set does; else the
+    // element is scrolled to here. A `focus` event, heard on the window before the element's own
+    // handlers (which may blur it again, so that no `focusin` follows), or another focused element
+    // after it, shows a focus whatever the page did next. Then the page's own code ran in it, and
+    // what it did stands: a scroll or a focus of its own, or a change to the address, which ends
+    // this navigation (its fragment is read before). `scroll()` may throw (a handler of the page's
+    // called it first), and the listener goes either way.
     const after = () => {
       if (event.signal.aborted) return;
       const fragment = location.hash.slice(1);
       const [was, focused] = [document.querySelector(":target"), document.activeElement];
       let moved = false;
       const move = () => (moved = true);
-      addEventListener("focusin", move, true);
-      event.scroll();
-      removeEventListener("focusin", move, true);
+      addEventListener("focus", move, true);
+      try {
+        event.scroll();
+      } finally {
+        removeEventListener("focus", move, true);
+      }
       if (event.signal.aborted || !fragment || moved || focused !== document.activeElement) return;
       const at = fragmentOf(fragment);
       if (at && (at === was || document.querySelector(":target") !== at)) elementOwn.scrollIntoView.call(at);
