@@ -8401,13 +8401,74 @@ rules something out.
     at that price, on the bet below that clients naming a coding are most of what asks for
     an app's `Public` bodies. The app's resident memory, about 10 MB, was at most 352 kB more
     with a body kept, and 1,270 kB more with the 1 MiB file kept, its second copy.
-    Two cuts to what a kept answer given again costs followed (`a0267d8a6`). Its `Age` was
-    made from the number, two allocations for every answer; it is a slice of a table of the
+    Two cuts to what a kept answer given again costs followed (`a0267d8a6`). The first: its
+    `Age` was made from the number, two allocations for every answer; it is a slice of a table of the
     numbers under 10,000 in decimal, 38,890 bytes of the binary, and an older answer's is made
     as before. Four digits, 2 hours 46 minutes, take in a lifetime of an hour, which is what
-    `seo` writes; a table of three digits is 2,890 bytes and covers 16 minutes 39 seconds, and
-    the digits written to a buffer and copied into a value need no table and one allocation by
-    the libraries' code, and neither was counted. And the answer carried the cache's mark as an extension of its own beside the
+    `seo` writes. The table's size was counted afterwards against three other forms
+    ([#1964 A kept answer's `Age` is read from a 38,890-byte table of four-digit numbers, chosen without measuring a 2,890-byte table or a form with no table and one allocation](https://github.com/corten-run/corten/issues/1964)),
+    each on `0a2dc9b32` with the benchmark's PNG of 8,000 bytes kept for four hours, so that
+    an answer could be counted at an age of one digit, of four and of five, each age reached
+    by waiting: the table of four digits itself (`48df6c67c`), a table of three
+    (`c25d263a9`), no table and the value made from the number (`77dde53d6`), and no table
+    and the digits written to a buffer and copied into a value (`09cddd7f1`). Callgrind
+    (valgrind 3.19.0) on one connection with a browser's twelve header lines and no coding
+    named, rustc 1.99.1, glibc's allocator, the catalog benchmark's app with its default
+    features, one build and one count of each form, where two counts of one build have
+    differed by 256 on this request, 178 of them the allocator's. Instructions a request
+    under ten seconds old, at 1,005 seconds and at 10,005, the allocations at each, and the
+    app's `.rodata`: the table of four digits 37,397, 37,491 and 38,435, with 25, 25 and 27
+    allocations, 1,132,672 bytes; the table of three, an older answer's made from the
+    number, 37,409 and 38,547 (not counted at 10,005), 25 and 27, 1,096,640 bytes; no table
+    and the number 38,512 and 38,450 (not counted at 10,005), 27 and 27, 1,093,760 bytes; no
+    table and the buffer 37,829, 37,892 and 38,022 (the last over 1,001 requests), 26 at
+    each, 1,093,824 bytes. The rule the issue set was that the smallest form within about
+    100 instructions of the table replaces it, and none is: the buffer is 432 over it under
+    ten seconds and 401 at 1,005, and the table of three, 12 from it under ten seconds,
+    which one count cannot tell from nothing, is 1,056 instructions and two allocations over
+    it at 1,005, for 36,032 fewer bytes of `.rodata` (the tables differ by 36,000). So the
+    table of four stays. An age of 1,000 to 9,999 seconds is one a lifetime of an hour
+    reaches, which `seo` writes and card-market's category page does, where its other
+    shared pages write a minute; how many answers an app in use gives at those ages is a
+    bet and not a count. Past the table the
+    number made into a value costs what it did before the cut, and an answer kept for a day
+    is past the table for 88% of its life. Writing an older answer's digits to a buffer, with
+    the writer a JSON number and a `Cache-Control` lifetime have, and copying them into a
+    value was counted and not made (`b0bc7ae32` against `9b0f2e6aa`, main's `fef1f83de` with
+    the file routes and the four-hour lifetime). Under callgrind as above the kept PNG at
+    10,005 seconds took 37,894 instructions where it took 38,364 and made 26 allocations
+    where it made 27, the allocator's count 5,755 where 6,289 and the rest 32,140 where
+    32,075, each rounded; under ten seconds it took 37,414 against 37,398, the PNG of 1,024
+    bytes 37,332 against 37,331 and a kept page 41,082 against 41,078, which is no change.
+    Under load the gain in user instructions was 27 to 51 a request where that count is 470,
+    and the cycles missed both margins set on the issue before any of them was read. On a
+    cloud host with a Xeon Platinum 8280 and Linux 6.12.117, the server on one CPU, `wrk`
+    4.1.0 with `-t2 -c64` and its three header lines on two others and `perf stat` on the
+    server's process, twelve starts of eight alternated pairs of three-second turns for each
+    comparison, every start's servers left running so that their answers aged, no request
+    failing and every counter running the whole of every turn: the answer past 10,000
+    seconds (10,005 to 11,702) took 0.21% fewer user instructions at the median of the
+    pairs, with a bound of -0.00% (the builds' own medians, 24,470 a request against
+    24,497.5, are 0.11% apart; an answer under half an hour old takes 24,208), and its
+    cycles, user and kernel together, held to a median at or under zero and a one-sided 95%
+    bound under 1% (the sign test's order statistic over the 96 pairs), read +1.56% and
+    +2.45% (user +2.44%, kernel +1.19%; 2,530 user instruction-cache misses a request against
+    2,405.5). The answer under half an hour old (0 to 1,696 seconds), which that build does
+    not alter (-0.04% in instructions) and which was held to a bound under 1%, read +1.60%
+    and +2.16% (2,467 misses against 2,400.5). In the same run the base against a second
+    copy of its own file read -0.85% with a bound of +0.29% and -1.18% with a bound of
+    +0.02%, and its twelve starts' medians ran from -7.43% to +6.79% and from -7.30% to
+    +6.38%, where the build's ran from -2.73% to +5.52% and from -1.57% to +6.68%. The build
+    read the same 1.6% on the answer whose code it changed and on the one whose code it left
+    alone, and identical bytes moved further from one start to the next than the two builds
+    differ: the run does not tell where the build's code sat from what its digits cost, and
+    the readings stand as measured. A touched request is held to 1% with no allowance for
+    placement ([Pull requests](../CONTRIBUTING.md#pull-requests), item 2;
+    [#1965 The cycle gate reads one build, and one build's placement moves a touched request's cycles by up to 4% either way, so a change of a few hundred instructions passes or misses +1% by where its code landed](https://github.com/corten-run/corten/issues/1965)
+    is about what such a reading can decide), so the form is not made; what it was counted
+    to save is one allocation and 0.1% to 0.2% of the user instructions of an answer more
+    than 2 hours 46 minutes old.
+    The second cut: the answer carried the cache's mark as an extension of its own beside the
     one for what was kept, an allocation and a place in the map; the mark is read from what
     was kept, which is a second lookup among the extensions for an answer that has some and
     carries neither mark (the one answer counted that carries neither, a page that is not
@@ -8508,7 +8569,11 @@ rules something out.
     asks; the kernel's part of the price with no coding on a load whose threads do not sleep;
     the cuts of `a0267d8a6` in cycles apart from where a build's code sits, a pair of builds
     having differed by more than they are worth, and at more than one placement without
-    `compress`; a kept answer older than 9,999 seconds, whose `Age` is made from the number;
+    `compress`; a kept answer older than 9,999 seconds other than the PNG of 8,000 bytes; the
+    smaller forms of `Age` under load or in cycles, each counted once under callgrind on one
+    connection, where the one form taken to load showed about a tenth of its count; the
+    table of three digits and no table with the number at 10,005 seconds, and any form at
+    an age of two or three digits;
     a browser's twelve header lines under load, which sends three; a new URL for every request for a
     file, which takes the path a body's does above; a body kept for a handler that waits on a database or another service,
     where the wait and not the compression is what a kept body saves (the benchmark's handler
@@ -8551,7 +8616,9 @@ rules something out.
     runs it, not by a task it spawned, one it handed a render to, or a thread of its own; no app finishes work again and again on the
     `Signal` of a write from before its first answer that may be kept; the clients that ask for a
     kept answer take brotli at the weight they take zstd, as a browser's `Accept-Encoding` does,
-    and most kept answers are read more than twice in a lifetime); value (fast and proven fast; standards
+    and most kept answers are read more than twice in a lifetime; an app's kept answers
+    are given again at ages of 1,000 to 9,999 seconds, which a lifetime of an hour reaches,
+    often enough to be worth the 36,000 bytes of the table's fourth digit); value (fast and proven fast; standards
     first, the app being a shared cache as RFC 9111 describes one; mistakes fail at compile time,
     what may be kept being known from the route's types, and which of a body route's answers
     are, as each is made; good defaults, easy overrides, with one
@@ -8593,9 +8660,13 @@ rules something out.
     the connection speaks HTTP/2, where a request's target carries its authority; an app
     is found finishing work again and again on the `Signal` of a write from before its first
     answer that may be kept, which empties its store each time, so such a write should keep
-    its path to count by; or an app
+    its path to count by; an app
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
-    thread of the handler's own, which the watch does not see.
+    thread of the handler's own, which the watch does not see; an app's binary is held to a
+    size where 36,000 bytes count and its answers are kept for under 16 minutes 39 seconds,
+    so the table of ages should be of three digits; or the rule for a touched request comes
+    to tell where a build's code sits from what the change costs, so an older answer's
+    digits written to a buffer can be read again.
 
     Last checked: 2026-11-23 for the fifth run's cycles and user first-level instruction-cache
     misses under load, `a14a80294` against `fef1f83de` on a DigitalOcean c-8 (Xeon Platinum 8280,
@@ -8607,7 +8678,13 @@ rules something out.
     6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded), kept under the tag `evidence/53fa534d`;
     2026-11-22 for the fourth run's cycles and user first-level instruction-cache misses under load,
     `ef8587ca0` against `7a275ef15` on such a host, every turn on a newly started build, kept
-    under the tag `evidence/1ccc71a3`; 2026-11-22 for the cuts to a kept answer given again, `7794749ad` (main's
+    under the tag `evidence/1ccc71a3`;
+    2026-11-22 for the forms of a kept answer's `Age`, `48df6c67c`, `c25d263a9`,
+    `77dde53d6` and `09cddd7f1` (this choice's `0a2dc9b32` with each form and the benchmark's
+    PNG kept for four hours), and for an older answer's, `9b0f2e6aa` (main's `fef1f83de` with
+    the file routes and that lifetime) and `b0bc7ae32` (the buffer past the table on it, not
+    made), kept under the tag
+    `evidence/age-forms-1964`; 2026-11-22 for the cuts to a kept answer given again, `7794749ad` (main's
     `7a275ef15` with five file routes and a kept page in the catalog benchmark) and `0a2dc9b32`
     (this change's `a0267d8a6` with them), and for where the code sits `abbd6113f`, `9f628467d`
     and `ba72c5f23` (those two, and the second with no body kept, each with a block of bytes
