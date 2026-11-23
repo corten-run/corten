@@ -26,10 +26,8 @@ corten-macros.workspace = true
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 getrandom = "0.4"
 # The HTTP vocabulary (`StatusCode`, `HeaderMap`, `Uri`, `request::Parts`), which apps name as
-# `corten::http`, the crate hyper and HTTP clients share. 1.1 for the `try_` forms of making and
-# filling a `HeaderMap`, so a kept answer's head too large to make a map of again is its handler's
-# to answer and not a panic.
-http = "1.1"
+# `corten::http`, the crate hyper and HTTP clients share.
+http = "1"
 # The body trait hyper reads and writes (`corten::http::Body` implements it).
 http-body = "1"
 # Already in hyper's tree: the projections `Body`'s wrappers and the event stream's pacing need,

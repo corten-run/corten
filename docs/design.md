@@ -7272,9 +7272,9 @@ rules something out.
     from the path as it was matched), with no cookie but the time zone's, no `Authorization`, no
     caller read by a middleware and no body. The answer must be a `200` of a known size with a
     lifetime that sets no cookie, drew neither the request's nonce nor a value made for this
-    request, varies on nothing else, and carries exactly the marks a page is known to carry: one
-    added later that this code does not know is not replayed by mistake, the page is simply not
-    kept.
+    request, varies on nothing else, has at most 1,024 header names, and carries exactly the
+    marks a page is known to carry: one added later that this code does not know is not
+    replayed by mistake, the page is simply not kept.
 
     While the store has room every such answer is kept, the first time it is made. Once it is
     full (the bytes kept within an eighth of the bound, which is the largest answer that is
@@ -8161,8 +8161,10 @@ rules something out.
     against 17,873, a page not `Public` 33,876 against 33,877, and the store off 37,264
     against 37,328. A kept answer given again copies its head out of the slice into a map with
     room for its names (counted once each when it was kept) and those the stages add, as it
-    copied it out of the map, and sends the same lines in the same order; a head no map can be
-    made of again is its handler's to answer. At 0.95
+    copied it out of the map, and sends the same lines in the same order. A head of more than
+    1,024 names is not kept, so that map with the stages' names stays far below the 24,576
+    `http` 1.5 holds, past which making or filling one panics, and an answer given again has the
+    room its handler's had. At 0.95
     kernel cycles a byte
     the bytes saved are worth about 509 kernel cycles a page kept with room; that is not
     measured in cycles yet.

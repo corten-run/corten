@@ -1563,7 +1563,7 @@ else a page could differ by, and the answer nothing made for one request:
 | the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
-| what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
+| what it carries | | more than 1,024 header names, a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
 not `/items`. Where the request's language chooses the page's (`App::messages`, or messages read

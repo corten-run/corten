@@ -35,7 +35,8 @@
 //! not the one for `/items`. The headers are compared as they were sent, so `fr` and `fr-FR`
 //! each have a copy. An answer is
 //! kept only when it is a `200` of a known size with a lifetime, sets no cookie, drew no nonce
-//! and no value made for this request alone, and varies on nothing but what the key covers.
+//! and no value made for this request alone, varies on nothing but what the key covers, and has
+//! at most [`NAMES`] header names.
 //!
 //! A `Public` route whose answer is JSON (`Json<T>`, `JsonResult<T>`), text or a file (`Media`,
 //! a sitemap or `robots.txt` of [`crate::seo`]) is kept the same
@@ -150,6 +151,13 @@ const GONE: usize = usize::MAX;
 /// it would any other.
 const ADDED: usize = 12;
 
+/// The most names a kept answer's head has: one with more is its handler's to answer for every
+/// request. Far more than a page's, and few enough that a map of them with room for [`ADDED`]
+/// more, and what crowding makes `http` grow it to, stays far below the most a map holds (24,576
+/// names in `http` 1.5, past which making or filling one panics), so a request given a kept
+/// answer adds its `Age` and the stages their headers as they would to its handler's.
+pub(crate) const NAMES: usize = 1024;
+
 /// `Last-Event-ID`, held once: a comparison with a name that is not the `http` crate's own
 /// would make the name each time.
 static LAST_EVENT_ID: header::HeaderName = header::HeaderName::from_static("last-event-id");
@@ -223,18 +231,16 @@ fn head_of(headers: &HeaderMap) -> Head {
     lines.into_boxed_slice()
 }
 
-/// A map of a kept answer's `head`, whose map had `names` names, each line where it was, with
-/// room for [`ADDED`] more names: a map made just large enough grows on the first name a stage
-/// adds, and moves its lines. The room is for names and not lines, since a name's second and
-/// later values are held beside the map's table. A head too near the most names a map holds to
-/// be given that room is given room for its own, and one no map can be made of again (`http`
-/// grows a map early where its places crowd) is `None`, and its handler's to answer.
-fn with_room(head: &[(header::HeaderName, HeaderValue)], names: usize) -> Option<HeaderMap> {
-    let mut copy = HeaderMap::try_with_capacity(names + ADDED).or_else(|_| HeaderMap::try_with_capacity(names)).ok()?;
+/// A map of a kept answer's `head`, whose map had `names` names (at most [`NAMES`]), each line
+/// where it was, with room for [`ADDED`] more names: a map made just large enough grows on the
+/// first name a stage adds, and moves its lines. The room is for names and not lines, since a
+/// name's second and later values are held beside the map's table.
+fn with_room(head: &[(header::HeaderName, HeaderValue)], names: usize) -> HeaderMap {
+    let mut copy = HeaderMap::with_capacity(names + ADDED);
     for (name, value) in head {
-        copy.try_append(name.clone(), value.clone()).ok()?;
+        copy.append(name.clone(), value.clone());
     }
-    Some(copy)
+    copy
 }
 
 /// The counts of writes, one for the paths whose hash names it: enough of them (256 KiB, made
@@ -648,7 +654,7 @@ pub(crate) struct Entry {
     lifetime: u64,
     head: Head,
     /// How many names `head` has, each counted once: what its map is made with room for
-    /// ([`with_room`]). `http` holds no more names in a map than this can count.
+    /// ([`with_room`]). At most [`NAMES`].
     names: u16,
     cache: crate::cache::Typed,
     style: Option<crate::security::StyleBlock>,
@@ -1110,15 +1116,15 @@ impl<'a> Asked<'a> {
     /// The kept answer for this request, as its handler gave it, with its age.
     pub(crate) fn find(&self) -> Option<Response> {
         let (entry, age) = self.answers.found(self.hash, self.at.as_str(), self.host, self.language, self.data)?;
-        let mut head = with_room(&entry.head, entry.names.into())?;
-        // So a cache after this one, the browser's too, does not start the lifetime over.
-        head.try_insert(header::AGE, age_value(age)).ok()?;
         // Kept for the language it was asked in: the answer names `Accept-Language` as it leaves
         // the app, whatever `Vary` a middleware puts on it after this (`crate::page::vary_on_language`).
         if entry.by_language {
             self.signal.ask_language();
         }
         let mut res = Response::new(Body::from(entry.body.clone()));
+        let mut head = with_room(&entry.head, entry.names.into());
+        // So a cache after this one, the browser's too, does not start the lifetime over.
+        head.insert(header::AGE, age_value(age));
         *res.headers_mut() = head;
         // The cache's mark is the entry's ([`Kept::typed`]): an extension is an allocation and
         // a place in the map, and this answer has one for the entry already.
@@ -1199,6 +1205,7 @@ impl Missed {
             || res.headers().contains_key(header::CONTENT_ENCODING)
             || res.headers().contains_key(header::CONTENT_RANGE)
             || res.headers().contains_key(header::ETAG)
+            || res.headers().keys_len() > NAMES
             || self.nonce.as_ref().is_some_and(|slot| slot.taken().is_some())
             || self.signal.as_ref().is_none_or(crate::Signal::is_personal)
             // Made over a time longer than it lasts: it would never be given.
@@ -1249,7 +1256,8 @@ impl Missed {
             made,
             lifetime,
             head: head_of(&parts.headers),
-            names: u16::try_from(parts.headers.keys_len()).unwrap_or(u16::MAX),
+            // At most `NAMES`, as checked above.
+            names: parts.headers.keys_len() as u16,
             cache,
             style,
             body: body.clone(),
@@ -1485,7 +1493,7 @@ mod tests {
         // Kept as its lines alone, in the map's order, and made a map of again line for line.
         let kept = head_of(&head);
         assert_eq!(kept.len(), head.len());
-        let mut copy = with_room(&kept, head.keys_len()).unwrap();
+        let mut copy = with_room(&kept, head.keys_len());
         assert_eq!(lines(&copy), lines(&head));
         // As many more names as the stages add, and the map is the size it was made, with each
         // line where it was put: the vector a map just large enough holds them in grows on the
@@ -1509,28 +1517,18 @@ mod tests {
             large.append(header::HeaderName::from_bytes(format!("x-{name}").as_bytes()).unwrap(), HeaderValue::from(name));
         }
         large.append("x-0", HeaderValue::from_static("again"));
-        let copy = with_room(&head_of(&large), large.keys_len()).unwrap();
+        let copy = with_room(&head_of(&large), large.keys_len());
         assert_eq!(lines(&copy), lines(&large));
         assert_eq!(copy.capacity(), HeaderMap::<HeaderValue>::with_capacity(129 + ADDED).capacity());
     }
 
     #[test]
-    fn a_head_with_the_most_names_a_map_holds_is_made_again_or_left_to_its_handler() {
-        // As many names as a map takes before it can grow no more: no map has room for these and
-        // the stages' too, so it is given room for its own.
-        let mut most = HeaderMap::new();
-        for name in 0.. {
-            let name = header::HeaderName::from_bytes(format!("x-{name}").as_bytes()).unwrap();
-            if most.try_append(name, HeaderValue::from_static("1")).is_err() {
-                break;
-            }
-        }
-        assert!(HeaderMap::<HeaderValue>::try_with_capacity(most.keys_len() + ADDED).is_err(), "{}", most.keys_len());
-        // Made again line for line, or `None` where `http` would grow it past the most it holds,
-        // and not a panic.
-        if let Some(copy) = with_room(&head_of(&most), most.keys_len()) {
-            assert_eq!(lines(&copy), lines(&most));
-        }
+    fn the_most_names_kept_and_the_stages_fit_a_map_grown_as_far_as_crowding_grows_one() {
+        // `http` grows a crowded map while it has at most five places a name, so to at most ten:
+        // a kept head of the most names with the stages' never asks for a map past the most it
+        // holds (making a map larger than that panics).
+        assert!(HeaderMap::<HeaderValue>::with_capacity(10 * (NAMES + ADDED)).capacity() >= 10 * (NAMES + ADDED));
+        assert!(u16::try_from(NAMES).is_ok());
     }
 
     #[test]
@@ -1547,7 +1545,7 @@ mod tests {
             head.append(header::LINK, HeaderValue::from(at));
         }
         assert_eq!((head.keys_len(), head.len()), (4, 64));
-        let copy = with_room(&head_of(&head), head.keys_len()).unwrap();
+        let copy = with_room(&head_of(&head), head.keys_len());
         assert_eq!(lines(&copy), lines(&head));
         assert_eq!(copy.capacity(), HeaderMap::<HeaderValue>::with_capacity(4 + ADDED).capacity());
     }
