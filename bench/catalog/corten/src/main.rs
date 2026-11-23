@@ -116,7 +116,7 @@ static LARGE: std::sync::LazyLock<corten::http::Bytes> = std::sync::LazyLock::ne
 
 /// A picture the app holds, of a type no build compresses.
 async fn picture() -> corten::Public<corten::Media> {
-    corten::Public::new(std::time::Duration::from_secs(60), corten::Media::new("image/png", PNG.clone()))
+    corten::Public::new(std::time::Duration::from_secs(14_400), corten::Media::new("image/png", PNG.clone()))
 }
 
 /// The same of 1,024 bytes.
