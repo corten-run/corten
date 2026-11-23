@@ -277,7 +277,7 @@ export function validateState(s, round, options) {
   if (s.benchPackage !== undefined) assert.equal(s.benchPackage, true, "bench package marker");
   // Saved reservations without this marker must regenerate the original job.
   if (s.quietBootstrap !== undefined)
-    assert.ok([true, "after-start"].includes(s.quietBootstrap) && dedicated && s.control?.monitor, "quiet bootstrap requires a supervised group");
+    assert.ok([true, "after-start", "prelogin"].includes(s.quietBootstrap) && dedicated && s.control?.monitor, "quiet bootstrap requires a supervised group");
   date(s.createdAt);
   assert.ok(["reserved", "creating", "preparing", "starting", "running", "collected", "retired"].includes(s.status));
   if (["preparing", "starting", "running", "collected", "retired"].includes(s.status)) assert.ok(s.id && s.ip, "owned host identity missing");
@@ -581,15 +581,35 @@ export const rootManagerDrainSeconds = 120;
 export const rootManagerCheckSeconds = 15;
 
 const rootManagerDropIn = "/run/systemd/system/user@0.service.d/90-corten-benchmark.conf";
+// Fixed create body, never caller-supplied cloud-init. Before the guardian
+// exists, the condition checks the drop-in itself. /run is private to this boot.
+export const preloginUserData = `#cloud-config
+bootcmd:
+  - |
+    set -eu
+    umask 077
+    d=/run/systemd/system/user@0.service.d
+    test ! -L "$d"
+    mkdir -p -- "$d"
+    dropin=${rootManagerDropIn}
+    test ! -e "$dropin" && test ! -L "$dropin" || exit 1
+    ( set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${rootManagerDropIn}' > "$dropin" )
+    systemctl daemon-reload
+`;
 const rootManagerBinding = (s) => s.group && s.control?.monitor ? `/run/corten-bench-control-${s.token}/binding.json` : null;
-const rootManagerPolicy = (marker) => `test -f '${marker}'
+const rootManagerPolicy = (marker, prelogin = false) => `test -f '${marker}'
 test ! -L '${marker}'
 dropin=${rootManagerDropIn}
 test ! -L /run/systemd/system/user@0.service.d
-mkdir -p -- /run/systemd/system/user@0.service.d
+${prelogin ? `test -f "$dropin" && test ! -L "$dropin" || exit 1
+test "$(stat -c '%u:%g:%a:%h' -- "$dropin")" = 0:0:600:1
+cmp -s -- "$dropin" <(printf '%s\\n' '[Unit]' 'ConditionPathExists=!${rootManagerDropIn}')
+test ! -e "$dropin.next" && test ! -L "$dropin.next" || exit 1
+( umask 077; set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${marker}' > "$dropin.next" )
+mv -T -- "$dropin.next" "$dropin"` : `mkdir -p -- /run/systemd/system/user@0.service.d
 test ! -e "$dropin"
 test ! -L "$dropin"
-( set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${marker}' > "$dropin" )
+( set -C; printf '%s\\n' '[Unit]' 'ConditionPathExists=!${marker}' > "$dropin" )`}
 `;
 const observeRootManager = `    echo "root-manager: querying ActiveState" >&2
     state=$(systemctl show user@0.service --property=ActiveState --value)
@@ -605,7 +625,7 @@ const observeRootManager = `    echo "root-manager: querying ActiveState" >&2
 export function installBenchmarkUnit(s) {
   const install = `bash -n /bench/job.sh && bash -n /bench/pack.sh && install -m 644 /bench/${s.unit} /etc/systemd/system/${s.unit} && systemd-analyze verify /etc/systemd/system/${s.unit}`;
   return s.quietBootstrap
-    ? `${install} || exit 1\n${rootManagerPolicy(rootManagerBinding(s))}systemctl daemon-reload`
+    ? `${install} || exit 1\n${rootManagerPolicy(rootManagerBinding(s), s.quietBootstrap === "prelogin")}systemctl daemon-reload`
     : `${install} && systemctl daemon-reload`;
 }
 
@@ -627,7 +647,7 @@ export function remoteFiles(s) {
   // Dedicated group runners are system services. Their root SSH sessions need
   // logind scopes, not a user service manager. Leave any existing session alone.
   const marker = rootManagerBinding(s);
-  const afterStart = s.quietBootstrap === "after-start";
+  const prelogin = s.quietBootstrap === "prelogin", afterStart = prelogin || s.quietBootstrap === "after-start";
   // Type=exec acknowledges this unit after exec. Anchor the host deadline to
   // that event, not to how long metadata collection or scheduling happened to take.
   const drain = afterStart ? `bootstrap_stage=root-manager-drain
@@ -679,7 +699,20 @@ sys.exit(not (reply[\\"type\\"] == \\"a(sbbsi)\\" and any(row[:4] == expected fo
 " "\${3#ConditionPathExists=!}" ||
       { echo "root-manager: effective binding condition missing" >&2; exit 1; }
 ${observeRootManager}
-    test "$state" = inactive && test "$main_pid" = 0
+${prelogin ? `    busctl --json=short call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager ListSessions |
+      python3 -I -c "
+import json, os, sys, time
+raw = sys.stdin.buffer.read(8193)
+assert len(raw) <= 8192
+reply = json.loads(raw)
+assert reply[\\"type\\"] == \\"a(susso)\\"
+sessions, = reply[\\"data\\"]
+assert isinstance(sessions, list) and all(len(s) == 5 and type(s[1]) is int for s in sessions)
+count = sum(s[1] == 0 for s in sessions)
+linger = os.path.exists(\\"/var/lib/systemd/linger/root\\")
+print(f\\"root-manager: monotonic-us={time.monotonic_ns() // 1000} root-sessions={count} linger-file={int(linger)}\\", file=sys.stderr)
+${stage === "root-manager-idle" ? 'if count: sys.exit(\\"root-manager: root session before provisioning\\")' : "# The registered monitor may now have a session."}"
+` : ""}    test "$state" = inactive && test "$main_pid" = 0
 ' root-manager '${marker}' '${rootManagerDropIn}' 'ConditionPathExists=!${marker}'
 `;
   const pack = `#!/bin/bash

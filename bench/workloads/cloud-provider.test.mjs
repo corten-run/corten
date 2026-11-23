@@ -11,7 +11,7 @@ import test from "node:test";
 import { createProviderEngine as providerTransport, isSettledAccountFailure } from "./cloud-engine-test-fixture.mjs";
 import { providerTransport as workerTransport } from "./cloud-provider.mjs";
 import { context, harness, syntheticPlacement } from "./cloud-fixtures.mjs";
-import { fleetCatalogCommand, tags } from "./cloud-contract.mjs";
+import { fleetCatalogCommand, preloginUserData, tags } from "./cloud-contract.mjs";
 
 const credential = "SYNTHETIC_ONLY_CREDENTIAL_A";
 const account = ["account", "get", "--output", "json", "--context", context];
@@ -39,6 +39,22 @@ test("provider engine refuses cross-mode or unbound create before consuming cred
       spawn() { consumes++; return spawn(); }, request() { requests++; return empty; } });
     await assert.rejects(run(args, 60000, true), /placement differs from authorized mode/);
     assert.equal(consumes, 0); assert.equal(requests, 0);
+  }
+});
+
+test("only a dedicated create sends fixed prelogin data; no command supplies user data", async () => {
+  for (const [mode, args] of [["dedicated", create], ["legacy", create.with(7, "sfo2")]]) {
+    const posts = [];
+    const run = providerTransport({ repo: resolve("."), createMode: mode, spawn, request({ method, body }) {
+      if (method === "POST") { posts.push(body); return publishedCreate(); }
+      return createAction();
+    } });
+    await assert.rejects(run([...args.slice(0, -2), "--user-data", "unreviewed", ...args.slice(-2)], 60000));
+    assert.deepEqual(posts, []);
+    await run(args, 60000);
+    assert.equal(posts.length, 1);
+    if (mode === "legacy") assert.ok(!Object.hasOwn(posts[0], "user_data"));
+    else assert.equal(posts[0].user_data, preloginUserData);
   }
 });
 
