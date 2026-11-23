@@ -23,16 +23,29 @@ views share evidence; they do not launch a second campaign.
 
 ## Public Source Permissions
 
-Fresh hosts and the CI tools image install stable upstream Git from the same
-Ubuntu Git maintainers' PPA. They fetch its public key over bounded HTTPS, require
-the exact primary fingerprint `F911AB184317630C59970973E363C90F8F1B6217`, and scope
-APT trust to that source with `signed-by`. This avoids the Launchpad metadata API
-whose truncated responses stopped image preparation before tests. A failed
-download, key parse or fingerprint check stops setup; distribution Git is not a
-fallback. The existing immutable-source Git capability check still runs.
-`git-ppa.test.mjs` executes both setup forms with local command fixtures, including
-wrong, extra and missing primary keys and failed downloads/parsing. This is not
-native framework or official-run qualification.
+New reservations save `gitSource: true`. Their guests build Git 2.56.1 from the
+signed upstream release before checkout, without the unavailable Launchpad PPA
+([#1993 Fresh benchmark guests depend on the unavailable Git PPA before checkout](https://github.com/corten-run/corten/issues/1993)).
+The generated job embeds the exact [CI verifier](../../scripts/benchmark-evidence-git.sh):
+it checks the pinned kernel.org archive SHA-256, then requires a valid detached
+signature with the pinned signing subkey and primary fingerprint. Extraction
+and the two-job, no-Rust build follow verification; package install, download
+verification, extraction, build and capability checks all have deadlines.
+The installed `/usr/local/bin/git` must have its HTTPS helper, the exact version,
+and demonstrate both no lazy fetch of an absent blob and no replacement of an
+original object. The host record keeps the version, release URL, SHA-256 and
+signer fingerprints. The CI tools image itself is not used on measured hosts.
+
+A failed step stops at `git-install`, with no fallback to distribution Git,
+checkout, native entry or bootstrap-ready marker. The job removes its private
+build tree on normal failure and uses the existing pre-entry exit archive;
+the exact-host cleanup requirements do not change. The `git-source.test.mjs`
+Linux fixture executes the generated stage and failure packer with local
+commands, not an upstream download or guest qualification.
+Reservations without the marker regenerate their original PPA job bytes.
+That preserves ordinary collection from the measured checkout. It does not
+make a new controller source-compatible with [grouped pre-plan retirement](#failed-native-custody-and-retirement).
+Keep the marked recipe fixed too; a future Git pin needs a distinct saved recipe.
 
 The production adapter in `cloud-remote.mjs` keeps the job at `umask 077` but
 runs only the fixed public Git clone, fetch and exact detached checkout in a
@@ -482,6 +495,44 @@ apparatus is not a result. An old bound host without confirmed cleanup is shown
 as such. Continuation then requires the same provider account and still refuses
 create if the existing pre-create census finds any foreign benchmark host.
 
+**Starting a new campaign after external cleanup.** A failed upload may leave
+the old continuation locked even after an operator has proved its droplet was
+destroyed. Do not unlock it, change its native state, or count deletion as a
+result. Ordinarily continue in the same root. A reviewed, one-time operator
+handoff to a fresh root is possible only when the old campaign is over:
+
+1. Stop dispatch to the old root. Account for every slot, launch intent and
+   owner, including scheduled dispatches. No owner may still be able to send a
+   create or upload. A manifest alone is not a launch. An ambiguous create
+   with no bound provider ID must be reconciled, not skipped.
+2. In the original provider account, check all bound IDs, including renamed
+   hosts. Retain native deletion receipts or separately reviewed external
+   deletion evidence (exact-ID 404 and absence from the complete account
+   list). A lookup error, an outstanding job or an unknown owner stops the
+   handoff. Preserve the old root, its locks, failure artifacts and issue
+   history unchanged.
+3. Inventory every old standalone slot read-only: check its state, receipts,
+   archives and extracted evidence, including slots reported busy or awaiting
+   cleanup. A 404 proves nothing about saved results. If a slot contains a
+   verified or potentially recoverable result, or its evidence cannot be
+   classified, stop. The unchanged index cannot carry standalone results.
+4. Copy the index into an empty root. If an indexed checkout cannot replay
+   (including missing or mismatched dependencies at the right commit),
+   provide a separate clean worktree at the measured commit with its pinned
+   installs at `NEW_ROOT-checkouts/MEASURED_SHA`; leave old worktrees intact.
+   Run the read-only continuation report there. Require native replay of the
+   full roster: the same verified groups, measured commits and archive hashes
+   and exactly the expected missing groups, with no blocked or ambiguous row.
+   Exit 1 is expected with missing groups; it does not prove those conditions.
+   Keep old failed and never-launched attempts in the handoff inventory, not
+   as results in the new root.
+5. Record both roots, the last round used, the inventory and the evidence in
+   the operator handoff. Switch the single dispatch target only after review.
+   Use new round numbers above the old campaign and the normal reviewed
+   preparation and pre-create census. Never resume or collect an old attempt
+   through the new root. The failed rounds remain failures; the verified
+   groups keep their original measured commits.
+
 If a standalone group failed before native entry and its collector recorded the
 archive but not deletion, an unrelated group can use that same census. Its
 launch approval includes the stopped host's original ID: even a renamed or
@@ -547,6 +598,73 @@ and free account capacity still have to pass. An unknown or unconfirmed
 benchmark host, a lost lease or changed peer refuses dispatch, not cleanup.
 An earlier controller that did not record peer leases cannot be treated as a
 running peer. Never clear a lock or recreate a group to force overlap.
+
+### Offline handoff
+
+For a **new single-group continuation attempt**, add `--offline-handoff` to
+the `--prepare` command above. Follow with the ordinary detach preview and
+exact approval; the prepared manifest binds the mode in both approvals. It
+cannot be added on detach, applied to an existing reservation, or used alongside
+a live peer. The attempt remains unresolved for further admission until terminal
+custody. The default path still uses the monitored lease.
+
+Wait for detach to return 3 with the child's `handoff: "acknowledged"`. This
+means the launcher pinned the host key and boot, and durably recorded the
+successful bootstrap seal. Native entry still waits for the sealed SSH/SFTP
+epoch to drain. At this point the systemd guest can proceed without the
+workstation; this receipt is not a native start, timed result, publication
+qualification, or cleanup proof. Do not repeat an unacknowledged launch.
+
+During every native phase an additional boot-local nftables rule on the guest
+blocks even the allowed peer's SSH packets. The existing owner ingress policy
+still drops other peers. A valid phase retains unchanged rule readbacks and a
+closed guardian window. Fresh TCP SYNs dropped before `sshd` within the guest's
+8-packet burst and 8/minute rate are recorded by phase as packet and byte
+counts. They do not disqualify untimed preparation. Official timing requires
+zero new hits, even when the fence denied them all: their effect on target
+hardware has not been bounded. Such a timing archive is retained as
+unqualified, not as a missing handoff or a native workload failure. Excess
+probes, other SSH packets at the fence, a changed rule, or an actual unexpected
+login/guardian intrusion still refuse the phase. The fence reopens at phase end;
+the service's stop hook removes it on an interrupted phase.
+
+For first qualification, arrange the independent audit rendezvous before
+timing. For JSON's untimed preparation or mixed's pre-build audit wait, use
+the existing [read-only owned-host observation](#independent-native-audits)
+(steps 2 and 3) before any audit delivery is authorized. Use
+`ConnectionAttempts=1` and `ConnectTimeout=3`, at most one observation every
+two minutes, and serialize each observation with delivery and collection.
+Connection refusal/timeout is no observation; do not attempt a transfer.
+Confirm the exact unit and the latest journal event for the matching audit wait.
+Stop all active probes before authorizing delivery, or before handoff for a group
+without an audit wait. During timing, observe only passively or from the provider
+side. There is no status listener or trustworthy out-of-band native completion
+signal in this apparatus: provider instance state alone is not native terminal
+proof. If there is no independently known terminal signal, wait for the planned
+hard runtime bound before attempting collection rather than guessing when timing ends.
+
+JSON still stops after preparation, and mixed still stops before its build,
+for [the independent native audit](#independent-native-audits). Use the existing
+fixed read-only export only at that group's audit wait, drain/close the export
+sessions, and separately approve delivery. The guest waits for the delivered
+audit epoch to drain, replays the exact receipt set and subject, then decides
+whether timing is eligible. A disconnection can delay delivery or collection;
+it cannot open either audit gate. If the sealed review wait expires after
+24 hours and no audit control or delivery began, the guest writes a failed
+terminal collection manifest and exits 2. This archive contains no qualified
+timing. The separately approved collector can retire that exact quiescent host
+only after replay proves the expiry and the original launch/boot/ownership
+binding; a missing archive or uncertain delivery is not that proof.
+
+Once timing cannot still be running, reconnect and preview then approve the **separate
+child** collection command below with the measured checkout. A live or
+unreachable unit is not terminal. Collection requires the pinned host/boot,
+unchanged unit and archive, current quiescence, native replay and a fresh
+pre-delete proof. Missing terminal evidence, an uncertain final bootstrap
+acknowledgement, or an incomplete archive can require operator custody; none is
+permission to delete or relaunch. The unit's 48-hour runtime limit bounds guest
+work, not billing: the guest holds no provider credential, does not destroy
+itself, and there is no independent provider-side billing watchdog.
 
 For collection or audit delivery use the ordinary per-host commands at the
 measured checkout. For the first attempt use state root
@@ -626,8 +744,10 @@ receipt and intent. It never overwrites unknown evidence, treats an old observat
 as current permission or repeats a saved deletion intent.
 
 Use the child collector's opt-in `--collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE`
-for a bound `preparing` host with a pending unregistered monitor and no seal. Preview and approve
-the exact pinned collection action with the same flag and absolute state root.
+for a bound `preparing` host with no seal and a pending unregistered monitor, or the exact
+interrupted first upload below in an offline-handoff reservation with prelogin policy and
+no monitor. Preview and approve the exact pinned collection action with the same flag and
+absolute state root.
 
 ```sh
 node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE_ROOT --collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE --print-approval
@@ -637,7 +757,7 @@ node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE
 - Before provisioning, the ledger must be empty (including after readiness exhaustion) or
   contain only the unacknowledged sequence-zero, 30-second bootstrap SSH `true` request
   ([#1618 Benchmark r21: first catalog SSH setup has no completion receipt and leaves an unused droplet outside ordinary recovery](https://github.com/corten-run/corten/issues/1618)).
-- After an interrupted upload, this path applies only to reservations launched from a commit
+- After a locally acknowledged upload, this path applies only to reservations launched from a commit
   that includes this recovery. Use that exact measured checkout and the original state
   directory; a different checkout refuses before provider access, even if it is newer.
   Only the successful, locally terminal prefix of the fixed no-op, directory setup and
@@ -648,6 +768,17 @@ node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE
   and an empty log, and every original registered session and watcher drained with no foreign
   actor. It binds the matching receipt digests to the unused retirement record
   ([#1744 Benchmark r21: an unused catalog host with six settled bootstrap entries is outside ordinary retirement](https://github.com/corten-run/corten/issues/1744)).
+- If only the very first `job.sh` upload lacks a reply, the measured checkout can retire a host
+  with a launch-pinned key **only if the upload never wrote the file**. The probe must find
+  only the empty log, the two preceding terminal session receipts, and the exact upload
+  request whose watcher failed before registration. Its deadline must have passed; neither
+  original PID, connection, transfer server, watcher job, trigger, nor occupied control
+  cgroup may remain. A partial file, later request, or missing proof preserves the host.
+  An unknown **final bootstrap seal** is not a first-upload failure. The same refusal
+  applies to ordinary unmonitored reservations and to offline reservations at any other
+  bootstrap step. This records an unused retirement receipt, not a native archive,
+  successful transfer, benchmark result, or reconciliation of an already externally deleted host
+  ([#1977 JSON r61 loses acknowledgement of the first bootstrap upload and cannot retire the unused host through ordinary collection](https://github.com/corten-run/corten/issues/1977)).
 
 Ordinary `--collect` refuses these pending-bootstrap cases before sending SSH. The pinned probe
 never adds, acknowledges or retries a ledger request or starts a unit. A settled SSH refusal
@@ -658,8 +789,17 @@ The original local controller, provider worker, SSH and their descendants must b
 affirmatively accounted for and gone. No elapsed timeout, absent PID or saved state
 alone proves that. Preserve original locks and intents; the controller never clears
 or takes over an old lock. Only after that local proof may the operator archive and
-release the exclusive child and fleet locks under the existing custody policy. Keep
-the proof and original lock bytes outside the fleet and child state roots. Separately verify the SSH
+release the exclusive child and fleet locks under the existing custody policy.
+For an interrupted first upload in a single-group continuation, also account for
+the owner of the outer `.continuation-operation.lock`. It serializes all groups:
+stop dispatch to that root and verify the lock's group, owner and process tree
+against the original launch. Keep the unchanged lock bytes and proof outside
+all three state roots before releasing any identified lock for in-place recovery.
+If ownership is uncertain or any process can still act, leave the locks and host
+alone. This is not the fresh-root handoff described above: after external
+deletion the old locks stay in place and no collection is attempted.
+
+Separately verify the SSH
 host key against the exact provider/metadata identity and supply a local OpenSSH
 `known_hosts` file for that key; the controller passes a private snapshot of the
 approved bytes to SSH and never falls back to global host keys. The unused retirement
@@ -770,7 +910,28 @@ wrapper archive; it cannot produce a benchmark result. Use a separate
 `--retire-failed-native --print-approval` from a clean, merged descendant. The
 preview must bind the consumed launch intent, reservation, launch key, registered
 boot, original archive and extraction, and the output roots for the measured
-group. The measured registry and remote-job definitions must still match.
+group. This is a narrow exception to ordinary collection at the measured SHA.
+Use a clean checkout of a **strict descendant** of the measured commit that
+implements grouped pre-plan retirement and is in the fetched `origin/main` history.
+The controller compares the complete committed contents of three files, not just
+the group roster or the generated job. To check a candidate using full commit IDs:
+
+```sh
+test "$measured" != "$candidate" &&
+  git merge-base --is-ancestor "$measured" "$candidate" &&
+  git merge-base --is-ancestor "$candidate" origin/main &&
+  git diff --quiet --no-ext-diff --no-textconv "$measured" "$candidate" -- \
+    bench/workloads/registry.mjs bench/workloads/cloud-contract.mjs bench/workloads/cloud-remote.mjs
+```
+
+For example, measured `52b25c556499a9c4f537577aa3fcb6df175dd073` and merged
+candidate `14126d2a8a12bccd173ec29032c1818d42904213` pass that source check.
+A controller with the changed Git-install contract does not pass it for that
+measured commit, even though it regenerates identical unmarked job bytes.
+If no compatible merged descendant is verified, stop; do not substitute the
+latest checkout or edit a reservation. Source compatibility is not evidence
+of native entry, permission to delete, or a reason to reopen a closed slot.
+An unacknowledged upload before checkout is not a pre-plan native failure.
 
 This path requires a revoked monitor with a settled local owner, wrapper exit
 2, an empty archived campaign directory, and the final failure line from the
@@ -1745,10 +1906,14 @@ access, not a new approval mechanism or permission to launch/deliver/delete.
    forwarding or multiplexing, and the same controlled environment as the existing
    transport. Do not export credentials, process environments or raw image `Env`.
    Missing host-key/ownership evidence stops this procedure, not a first-contact
-   accept or a switch to another host.
+   accept or a switch to another host. For offline handoff, require the launch
+   key file to match the saved `launchHostKeySha256`.
 3. Through that bounded read-only SSH session, save `systemctl show` for the exact
    saved unit with `Id`, `LoadState`, `FragmentPath`, `ActiveState`, `Restart`,
-   `MainPID`, `ExecMainCode` and `ExecMainStartTimestamp`. Require the expected
+   `MainPID`, `ExecMainCode` and `ExecMainStartTimestamp`. For offline status
+   discovery, also read `SubState`, `Job` and `ControlPID`; use the same
+   `cloud-sealed-collection.mjs::sealedUnit` predicate as collection. A terminal
+   observation ends discovery, not the collection checks. For audit export require the expected
    loaded unit/path, `Restart=no`, active state and nonzero MainPID. Read
    `/bench/bootstrap-ready.json` and `/bench/campaign/.host-attempt.json` to obtain
    the exact campaign ID. In that campaign directory identify the **latest**

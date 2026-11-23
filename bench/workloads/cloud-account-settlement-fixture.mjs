@@ -17,7 +17,7 @@ assert.deepEqual(process.execArgv, []); process.stdin.resume();
 const observed = { consumes: 0, requests: 0, requestClose: 0, responseClose: 0, socketClose: 0, credentialExited: false, credentialTimedOut: false };
 const save = () => writeFileSync(output, JSON.stringify(observed)); save();
 const exit = process.exit.bind(process);
-if (["withhold-exit", "deadline-exit", "exit"].includes(mode)) process.exit = (code) => { if (code !== 0) exit(code); };
+if (["withhold-exit", "exit"].includes(mode)) process.exit = (code) => { if (code !== 0) exit(code); };
 if (mode === "exit2") process.exit = (code) => exit(code === 0 ? 2 : code);
 let lastReset, retryClockSet = false, closedSamples = 0;
 function rewindNextSample() {
