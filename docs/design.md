@@ -8696,7 +8696,8 @@ rules something out.
     proposed and that pull request's run did, since each pad is a separate compile of each side,
     about two minutes a build where a relink and its checks take about a second, and a pad in the
     source moves only what follows it, by an amount inlining and alignment decide, where one at the
-    start of `.text` moves every function by exactly its size; the protocol for every change, at
+    start of `.text` moves every function by its size whenever no function is aligned past 16
+    bytes, which the run checks; the protocol for every change, at
     more than three times a single-build run's cost, for readings no placement could flip as well
     as those it could; a placement run only after a single-build miss, which reads a
     miss again and never a pass, though a lucky placement passes a real cost as easily as an
@@ -8726,7 +8727,10 @@ rules something out.
     places the sections of the symbols an ordering file names
     first in their output section and the rest in their default order, rustc 1.100.0 puts each
     function in its own `.text` section, aligns them to 16 bytes and links through LLD 23 on Linux
-    by default, so a pad of a multiple of 16 bytes moves every function by exactly its size);
+    by default; LLD aligns each section to its own alignment, so a pad of a multiple of 16 bytes
+    moves every function by exactly its size only when none is aligned past 16, which is why the
+    run checks each function's shift rather than assuming it, and the first run measured it for
+    every function it compared);
     reasoned (a release binary's placement moves with every later change, so a change's cost is
     read across placements, not at one; relinking the same objects with a pad changes placement
     alone, as the answers, the unchanged symbol set and the kept neighbours check; a bound inside

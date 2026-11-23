@@ -545,7 +545,10 @@ establish a general ranking.
       4. Resolution: the same run reads an A/A on the workload: the change's base commit against
          itself, compiled once with the change comparison's build inputs and run with its probe
          program, workload and load inputs, with the same K, R and statistic, base with pad p_i
-         against base with pad q_i from a second list of sizes, no size in both lists. The A/A is
+         against base with pad q_i from a second list of sizes, no size in both lists, chosen so the
+         pairs themselves differ in phase: across the K pairs, the 64-byte-line phases of p_i and
+         q_i (each size mod 64, in steps of 16) take all 16 ordered combinations (K distinct ones
+         when K is under 16), and q_i - p_i mod 4096 takes K distinct values, which the plan lists and the run records. The A/A is
          read twice from the same pairs: as recorded, and with its lists' labels swapped (each
          per-pair change B / A - 1 read as A / B - 1), since a list whose placements happened to
          run faster would lower one reading's bound and raise the other's. Its bounds in the two
