@@ -8,9 +8,9 @@ import { pathToFileURL } from "node:url";
 import { roundName, selection, stagedFleet } from "./cloud-contract.mjs";
 import { digest, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { full } from "./cloud-options.mjs";
-import { retainedInvalidOwner, setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
-import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, outside, present, readFleet, readGroup,
-  readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, reportBatch, sameReportBatch,
+import { setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyHistoricalFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
+import { continuationIndex, continuationIndexSha256, continuationPeer, fleetBatchLock, fleetLockSnapshot, fleetRoot, historicalChildLocks, outside, present, readFleet, readGroup,
+  readLaunchIntent, readRemainingIntent, recheckCollectedGroup, recheckIndexedLaunchCustody, recheckSetupAttempt, reportBatch, sameReportBatch,
   verifyCollectedGroup, verifyFleet } from "./fleet-verify.mjs";
 
 export const continuationLock = ".continuation-operation.lock";
@@ -56,8 +56,13 @@ async function measuredReplay(repo, checkout, commit) {
   } finally { hook.deregister(); }
 }
 
-const retryable = (row) => ["not-created", "native-failed-retired", "setup-failed-retired", "unused-retired"].includes(row.outcome)
+const setupCensusOutcome = "setup-failed-needs-census";
+const retryable = (row) => ["not-created", "native-failed-retired", "setup-failed-retired", "unused-retired", setupCensusOutcome].includes(row.outcome)
   || ["failed", "blocked"].includes(row.outcome) && !!row.destroyedAt;
+export function requireSetupRetryCommit(attempts, commit) {
+  assert.ok(!attempts.some((row) => row.outcome === setupCensusOutcome && row.commit === commit),
+    "retry after failed setup requires a different measured commit");
+}
 const acceptable = (row) => ["missing", "prepared", "verified", "running"].includes(row.outcome) || retryable(row);
 const unresolved = (row) => row.custodyUnresolved || row.outcome !== "known-result" && !acceptable(row) && !row.cleanupUnconfirmed;
 const manifestOnly = (fleet, entries = readdirSync(fleet.root)) =>
@@ -67,13 +72,19 @@ const known = ({ state }) => state?.id && state.status === "collected" && state.
 const retirementFile = (kind) => ({ "native-failed": "failed-native-host.json", "setup-failed": "failed-setup-host.json", unused: "unused-host.json" })[kind];
 const lockBytes = (root) => { const bytes = fleetBatchLock(root); return bytes && digest(bytes); };
 
-function verifyRetryRetirement(saved) {
+function verifyRetryRetirement(saved, processStart, retainedLocks) {
   const { local, state, stateRoot } = saved, { kind, evidenceSha256 } = state.retirement;
   assert.ok(!present(join(local, "stream-recovery.lock")), "group recovery remains active");
   if (kind === "native-failed") {
-    assert.ok(saved.outcome === "available" || state.control?.monitor?.phase === "invalid" && !retainedInvalidOwner(local, state),
-      "unresolved custody for the selected group");
-    verifyFailedNativeRetirement(local, state);
+    if (saved.outcome === "available") verifyFailedNativeRetirement(local, state);
+    else {
+      const sameLocks = historicalChildLocks(saved, processStart);
+      assert.ok(sameLocks, "unresolved custody for the selected group");
+      const check = () => assert.ok(sameLocks(), "historical child locks changed");
+      verifyHistoricalFailedNativeRetirement(local, state, check);
+      check();
+      retainedLocks.push(check);
+    }
   } else {
     assert.ok(saved.outcome === "available" && !present(join(stateRoot, ".groups-launch.lock")), "unresolved custody for the selected group");
     const bytes = regular(join(local, retirementFile(kind)), 4096), record = JSON.parse(bytes);
@@ -134,6 +145,15 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
   const indexedCustody = [];
   const proofs = [], retryEvidence = [], manifests = [], states = [], peers = [], unconfirmed = [], needsCensus = new Set(), liveIps = new Set();
   const retainedLocks = [];
+  const setupCensus = (fleet, saved, lock, launch) => {
+    const { group, state, stateSha256 } = saved, { round, provider, single } = fleet.manifest;
+    if (!(single && lock === null && launch && saved.outcome === "available"
+        && state?.status === "starting" && state.preBootstrapTerminal && state.evidence)) return;
+    const row = { group, round, accountId: provider.accountId, manifestSha256: fleet.manifestSha256,
+      stateSha256, id: state.id, root: fleet.root, launch };
+    retainedLocks.push(() => recheckSetupAttempt(root, row));
+    return row;
+  };
   const claim = (id) => { assert.ok(!ids.has(id), "duplicate continuation host identity"); ids.add(id); };
   const matchesCurrentContract = (selected) => groups.groups.some((s) => s.group === selected.group
     && s.contractSha256 === selected.contractSha256 && JSON.stringify(s.apps) === JSON.stringify(selected.apps));
@@ -175,17 +195,18 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       const pinned = archives && Object.hasOwn(archives, group);
       // Only bound historical allocations past create/bootstrap (or with a
       // recorded terminal setup) can have cleanup settled by an account census.
-      const censusRequired = !!(archives && state?.id && !terminal(saved)
+      const setup = setupCensus(fleet, saved, lock, launch);
+      const censusRequired = !!setup || !!(archives && state?.id && !terminal(saved)
         && (["running", "collected", "retired"].includes(state.status) || state.preBootstrapTerminal));
       assert.ok(!pinned || terminal(saved) || censusRequired, "unresolved custody: archive pin lacks a bound historical allocation");
       const noCreate = notCreated(fleet, saved, lock);
-      let outcome = noCreate ? "not-created" : saved.outcome === "available" ? "uncollected" : saved.outcome;
+      let outcome = noCreate ? "not-created" : setup ? setupCensusOutcome : saved.outcome === "available" ? "uncollected" : saved.outcome;
       let receipt;
       if (pinned || known(saved)) outcome = "known-result";
       else if (terminal(saved)) {
         if (state.status === "retired") {
           if (selected) {
-            try { verifyRetryRetirement(saved); }
+            try { verifyRetryRetirement(saved, processStart, retainedLocks); }
             catch (cause) { throw new Error("unresolved custody: selected group retirement is not verified", { cause }); }
             receipt = retirementFile(state.retirement.kind);
           }
@@ -208,7 +229,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       if (censusRequired) {
         const { accountId } = manifest.provider;
         needsCensus.add(accountId);
-        unconfirmed.push({ group, round, accountId, manifestSha256, stateSha256, id: state.id });
+        unconfirmed.push(setup ?? { group, round, accountId, manifestSha256, stateSha256, id: state.id });
       }
       states.push({ fleet, group, stateSha256, outcome: saved.outcome, noCreate, retirementFile: receipt });
       const attempt = { group, outcome, round, commit, manifestSha256, stateSha256, launch,
@@ -236,7 +257,8 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       const { group } = row;
       const saved = readGroup(fleet, group);
       assert.equal(saved.stateSha256, row.stateSha256, "continuation state changed");
-      const noCreate = notCreated(fleet, saved, lock), outcome = noCreate ? "not-created" : row.outcome;
+      const setup = row.outcome === "uncollected" && setupCensus(fleet, saved, lock, launch);
+      const noCreate = notCreated(fleet, saved, lock), outcome = noCreate ? "not-created" : setup ? setupCensusOutcome : row.outcome;
       if (manifest.single && (retryable({ ...row, outcome }) || outcome === "verified"))
         assert.ok(launch, "no original group launch intent");
       states.push({ fleet, group, stateSha256: saved.stateSha256, outcome: saved.outcome, noCreate,
@@ -257,7 +279,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       // monitor, without deletion confirmation. A bound host cannot be created
       // again by its old controller. The new launch still has to prove that no
       // foreign benchmark host is present in that same account's create census.
-      const censusRequired = !!(archives && row.id && ["busy", "uncollected", "cleanup-pending"].includes(outcome)
+      const censusRequired = !!setup || !!(archives && row.id && ["busy", "uncollected", "cleanup-pending"].includes(outcome)
         && saved.state.validation?.status !== "verified");
       if (censusRequired) needsCensus.add(manifest.provider.accountId);
       assert.ok(attempts.has(group) || censusRequired || acceptable(row), "unresolved custody for a historical group");
@@ -297,6 +319,7 @@ async function scanContinuation(root, { repo, interrupted, inspect, processStart
       const replacesUnlaunched = unlaunched.has(previous?.root) && previous.manifest.commit !== fleet.manifest.commit;
       assert.ok(previous && Number(previous.manifest.round.slice(1)) < Number(round.slice(1))
         && (retryable(attempts.get(group).at(-1)) || replacesUnlaunched), "earlier group attempt is not settled; never retry");
+      requireSetupRetryCommit(attempts.get(group), fleet.manifest.commit);
     }
     slots.set(group, fleet);
     await read(fleet, fleet.manifest.single.checkout);

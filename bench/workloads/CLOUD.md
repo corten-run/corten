@@ -158,9 +158,15 @@ before consuming its intent and before the first create. Remaining admission
 and its children recheck only the exact `c-8` placement bound into the reviewed
 remaining approval. Those checks refuse a missing pair; they never substitute
 another region after approval.
-`fleet-placement-preflight-failed` means the saved account
-or placement could not be verified; inspect both listings rather than editing the
-manifest. An acknowledged catalog HTTP denial or a fully received but invalid
+`fleet-placement-preflight-failed: STAGE` identifies the failed placement check:
+transport construction or close, either account read or identity check, catalog read or
+validation, the checkpoint before region selection, or region selection itself.
+The first account read also starts the worker and waits for its handshake:
+`first-account-read-or-worker-start` does not mean a request was sent. Only a safe
+provider code and HTTP status may follow the stage, with fixed flags if transport
+close also failed or custody is uncertain. No account data or response body is
+printed. Inspect the failed check rather than editing any manifest. An
+acknowledged catalog HTTP denial or a fully received but invalid
 listing stops without a create and releases settled locks. A truncated response,
 timeout or disconnected worker does not establish settlement; the lock stays.
 An already recorded launch intent still cannot be replayed. Each child has an
@@ -476,6 +482,17 @@ apparatus is not a result. An old bound host without confirmed cleanup is shown
 as such. Continuation then requires the same provider account and still refuses
 create if the existing pre-create census finds any foreign benchmark host.
 
+If a standalone group failed before native entry and its collector recorded the
+archive but not deletion, an unrelated group can use that same census. Its
+launch approval includes the stopped host's original ID: even a renamed or
+retagged host still present in the account prevents creation. An active cleanup
+blocks admission. This does not retire or retry the failed group, or publish a result.
+
+When retrying a group on a new host, a proved Windows PID reuse on a destroyed
+host does not make its old monitor active again. Preparation reads the original
+retirement evidence and rechecks the unchanged locks; it never removes them or
+authorizes collection or deletion on the old host.
+
 When the launcher checkout advances or a measured checkout moves, use the
 optional sibling directory `ABSOLUTE_ROOT-checkouts/MEASURED_SHA` for that
 commit's clean worktree. Here `MEASURED_SHA` is the full 40-character Git commit.
@@ -514,7 +531,7 @@ can name the failing stage: `continuation-admission` (including custody and
 eligibility), `prepare-reservation`, `initial-plan` or `locked-plan` (including exact approval checks),
 or `final-pre-intent-recheck`. These labels identify the check, not its cause or
 whether locks were released. Placement keeps its separate
-`fleet-placement-preflight-failed` diagnostic. Inspect saved intent and custody
+`fleet-placement-preflight-failed: STAGE` diagnostic. Inspect saved intent and custody
 before deciding what to do next; an unlabeled failure does not establish that
 intent was never written.
 
@@ -546,6 +563,18 @@ prepared sibling. Do not move attempts to a new index or root. An ambiguous or
 active attempt is refused; leave its evidence and locks in place and use the
 existing recovery procedure. Run the report after collection to select another
 missing group.
+
+If the operator independently confirmed external deletion of a standalone host
+whose setup stopped before native entry, continue with the same commands, a
+higher round, and a different reviewed merged commit. The report shows
+`setup-failed-needs-census` when the original terminal observation, launch
+intent, nonzero setup exit and campaign-free archive are preserved and no owner
+lock remains. This is local eligibility, not a retirement receipt or a result.
+The new reservation leaves the old attempt untouched. Its approval binds the
+old host ID and evidence; immediately before create, the worker checks the
+old ID is absent from the full census in the same account (even if the host was
+renamed), and rechecks the original locks and evidence. Do not interpret prepare
+or preview as proof of provider absence.
 
 If a standalone group was prepared but never launched, use the same prepare
 command in the same continuation root with an explicitly higher round and a
@@ -676,6 +705,23 @@ observations or a running unit preserves the host. Fleet output reports
 `setup-failed-retired`; repeat collection checks the same receipt and absence,
 without another DELETE. Native-started jobs use the separate collection and
 custody paths above. No retirement path can delete a running benchmark.
+
+For failure before monitor registration, `setup-watcher-proof-missing` means
+the preserved archive already records a watcher failure. `setup-host-proof-refused`
+means the registered terminal host query had an acknowledged nonzero exit, or
+exited zero but returned unusable proof. In the latter case the ledger retains
+code zero and records the proof rejection separately. Neither is a retirement receipt. Do not repeat collection to try
+to replace the missing proof. A missing transport acknowledgement remains
+uncertain. If cancellation leaves an acknowledged exit zero without a proof
+decision, the operation lock stays in place. Do not clear the locks or fill in
+a ledger result.
+
+For operator cleanup, bind the saved reservation to the exact account and numeric
+host ID. Independently establish the identity of the host, a terminal unit with
+no queued jobs or live benchmark work, and an intact archive matching the saved
+hash before authorizing any removal. If the host is already absent, do not
+delete again. Keep the operator decision and exact-ID absence confirmation
+separate from native state; neither qualifies the group or authorizes a retry.
 
 The common-bootstrap marker precedes native entry. It is not native evidence or
 a reason to strand a terminal host whose entry failed before writing any data.
@@ -923,6 +969,9 @@ Existing locks are never taken over or cleared by recovery.
 The saved measured commit and failure evidence remain unchanged; no validation,
 successful exit or collection result is invented. Fleet inspection reports
 `native-failed-retired` or `cleanup-pending`, never a qualified baseline.
+For the destroyed r27 and r41 marketplace hosts, replay uses the original
+per-locale roster to regenerate the three custody scripts and check their saved
+hashes. That roster cannot authorize a reservation, launch or live custody check.
 
 After independent review and merge, an operator previews the exact action with:
 
@@ -1401,14 +1450,47 @@ other user process from native cleanup evidence.
 
 On dedicated group hosts, the benchmark and Docker run as system services.
 Root SSH still needs a normal logind session, but not a separate user manager.
-During provisioning, a runtime systemd drop-in skips new starts of
-`user@0.service` while the host's control binding exists. It does not stop
-the current manager or change SSH or PAM. Before publishing the bootstrap
-marker, the job waits up to two minutes for the manager to exit naturally.
+For new dedicated reservations, the controller installs a runtime systemd
+drop-in with the job unit and waits for systemd to reload it. The drop-in skips
+new starts of `user@0.service` while the host's control binding exists. It does not stop
+the current manager or change SSH or PAM. For new reservations
+(`quietBootstrap: "after-start"`), the last login before the drain starts the
+unit. After that start is acknowledged, the controller opens no SSH session for
+135 seconds: two minutes for natural drain, then the existing 15-second idle
+check. The service uses its own monotonic exec-start timestamp for the window.
+The before-drain and after-drain snapshots record the manager's active state,
+main PID and monotonic activation time, not the time of either sample. A delayed
+job can take both samples back-to-back. Without boot-relative journal times for
+both samples, their spacing is unknown; do not infer what happened across the
+two-minute window. Two active samples with different nonzero PIDs show different
+manager processes, not why the process changed. Active followed by inactive
+with main PID zero is the expected drain, not evidence of reactivation.
+The job checks the installed and effective policy and requires an inactive
+manager with no main PID before cloud-init and again before native entry.
+A late early proof fails rather than admitting a sample from after polling
+could resume. Nothing retries the start, stops the manager or suppresses a failure.
+Saved `quietBootstrap: true` jobs retain the original check immediately after
+unit start; jobs without the marker retain their drain check near native entry.
 The run log records which property it is querying and the observed state and
 main PID, so a busy manager can be distinguished from a stalled query.
 If it stays busy the group fails setup, without terminating anyone's work.
 The normal login inventory and registered-monitor checks still apply.
+
+Before using this handoff across groups, rehearse on a disposable Ubuntu 24.04
+VM with the target image's systemd, sshd, PAM and logind settings, not a container.
+Use the production guarded upload/install/start and first status request. In the
+rehearsal job keep the generated supervisor, drain and both idle checks; replace
+the provisioning and workload body with a bounded stand-in. Record the rehearsal
+diff, image and controller commit. Do not register it as benchmark evidence.
+On a clean boot require both checks to pass and use boot-relative journal and
+guarded SSH timestamps to verify the first status login followed the early proof.
+On a second clean boot retain a fixture-owned root login with its active manager
+*before* installing the policy: the early check must fail before provisioning,
+with no second start. Bound each rehearsal to ten minutes, preserve the small
+logs and source hashes, then remove the VM and its disks and confirm absence.
+An ambiguous or failed result stops the rollout. Even a passing rehearsal needs
+one separately approved real group to pass the unchanged pre-timing gate and
+reach registration on the merged source before fan-out.
 
 On a newly allocated supervised dedicated group host, the controller's guarded
 workspace command captures the IPv4 peer of its authenticated OpenSSH

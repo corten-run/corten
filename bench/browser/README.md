@@ -9,6 +9,8 @@ on its own as first measured (2,291 B after the fixes below). Nothing in the fra
 
 Every app renders the same rows (the js-framework-benchmark word lists, the same 32-bit LCG and
 the same markup), and the harness measures all of them from outside with the same code.
+The versions in this table describe the historical setup, not the current
+[browser lock](package-lock.json). Updating that lock does not relabel the results below.
 
 | App | What it is | Code |
 |---|---|---|
@@ -32,7 +34,7 @@ the server-rendered pages come from each framework's own server renderer (`rende
 
 ```sh
 cd bench/browser
-npm install
+npm ci
 node build.mjs          # out/<app>/: index.html and app.js, and sizes (runs gen/ with cargo for the view apps)
 node list-check.mjs     # list() against 3,000 random edits in a real DOM
 node view-check.mjs     # rows() (corten/views) against 3,000 random edits, some made without it

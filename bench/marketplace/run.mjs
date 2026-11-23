@@ -8,7 +8,7 @@ import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterPhase, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, phases, readLoadSummary, readOutcome, resultSchema, sources, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
-import { workload } from "./contract.mjs";
+import { locales, workload } from "./contract.mjs";
 import { admitted, boundedFeatureProfile, boundedQualificationSettings, validateActiveQualification } from "./feature-contract.mjs";
 import { validateMarketplace } from "./records.mjs";
 import { sampleStats } from "../catalog/stats.mjs";
@@ -170,7 +170,7 @@ async function ready(base) {
 async function coldStart(name, source, target, image, raw) {
   await owned(["create", ...appArgs(name, source, image)], name);
   const probe = `${name}-probe`;
-  const path = target === "json" ? "/api/marketplace/item_1" : `/marketplace/${summary.currentLocale}/item_1`;
+  const path = target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locales[0]}/item_1`;
   try {
     await owned(["run", "-d", "--network", network, ...cpus.load.args, "--memory", "256m", ...mount, nodeImage, "node", "/bench/catalog/cold.mjs", `http://${name}:8080`, path, String(options.startupTimeout)], probe);
     retain(join(raw, "probe-container.json"), await receipt(probe));

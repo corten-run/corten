@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, fork } from "node:child_process";
 import * as fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
@@ -11,15 +12,17 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata, syntheticCatalogProvider, syntheticInspection, syntheticPlacement, userId } from "./cloud-fixtures.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
-import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
+import { fleetCli, fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { providerTransport } from "./cloud-provider.mjs";
 import { productionPlan } from "./cloud-production.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { bootstrapWorkspaceScript, captureSshOwner, fleetPlan, installSshIngress, reservation, savedLoadLayout, savedPlacement, verifySshIngress } from "./cloud-contract.mjs";
-import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { readFleet, recheckSetupAttempt, verifyCollectedGroup } from "./fleet-verify.mjs";
+import { unitQuery } from "./cloud-options.mjs";
+import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
-import { inspectContinuation } from "./group-continuation.mjs";
+import { continuationAdmission, inspectContinuation } from "./group-continuation.mjs";
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 import { registration } from "./test-fixtures/control-stream-fixture.mjs";
@@ -235,7 +238,10 @@ test("captured production composition ignores arbitrary hints, binds POST identi
     const check = events.find((row) => row.group === group && row.boundary === "ssh" &&
       row.options.input === `set -euo pipefail\n${bootstrapReadScript}\n`);
     const monitor = events.find((row) => row.group === group && row.boundary === "monitor");
-    const ordered = [capture, install, starts[0], check, monitor];
+    const status = events.find((row) => row.group === group && row.options?.input === `set -euo pipefail\n${unitQuery(saved)}\n`);
+    assert.equal(starts[0].quietMs, 0);
+    assert.equal(status.quietMs, 135000);
+    const ordered = [capture, install, starts[0], status, check, monitor];
     assert.ok(ordered.every((row, i) => row && (i === 0 || events.indexOf(ordered[i - 1]) < events.indexOf(row))));
     assert.ok(ordered.every((row) => row.argv.at(-2) === install.argv.at(-2)));
     assert.ok(events.indexOf(capture) < events.indexOf(uploads[0]));
@@ -258,6 +264,20 @@ test("captured production composition ignores arbitrary hints, binds POST identi
   assert.equal(events.filter((row) => row.method === "POST").length, 1);
   for (const group of groupNames.slice(1)) assert.equal(fs.existsSync(path.join(p.h.base, group)), false);
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
+});
+
+test("captured production cannot observe startup a second before the SSH-free window ends", { timeout: 30000 }, async (t) => {
+  const p = fixture(t, "short-clock");
+  assert.equal(await fleetMain(await p.prepare(), p.deps), 2);
+  const saved = p.saved(), events = p.events();
+  assert.equal(saved.status, "starting");
+  const remote = events.filter((row) => ["ssh", "sftp", "monitor"].includes(row.boundary));
+  const start = `set -euo pipefail\nsystemctl start ${saved.unit}\n`;
+  assert.equal(remote.filter((row) => row.options.input === start).length, 1);
+  assert.deepEqual(remote.slice(-2).map((row) => [row.options.input, row.quietMs]),
+    [[start, 0], [`set -euo pipefail\n${unitQuery(saved)}\n`, 134000]]);
+  assert.ok(!events.some((row) => row.boundary === "bootstrap-marker" || row.boundary === "monitor"));
+  assert.equal(events.filter((row) => row.method === "POST").length, 1);
 });
 
 function unusedRetirement(root, fleet, group) {
@@ -431,6 +451,141 @@ test("continuation schedules around pinned catalog and retired JSON without repl
     archives: { [next]: report.groups[groupNames.indexOf(next)].result.archiveSha256 } }]));
   await assert.rejects(inspectContinuation(fork, { repo: p.h.repo, inspect: p.deps.inspect }), /stay in their original continuation root/);
   assert.equal(treeHash(retained), oldTree, "historical bytes untouched");
+});
+
+for (const [retry, change] of [
+  ...["none", "cleanup lock", "late account lock", "reservation bytes", "renamed host"].map((change) => [false, change]),
+  ...["none", "late account lock", "archive bytes", "renamed host"].map((change) => [true, change]),
+]) test(`stopped ${retry ? "predecessor" : "sibling"}, after intent: ${change}`, { timeout: retry ? 90000 : 60000 }, async (t) => {
+  const p = fixture(t, "ssh-late"), group = retry ? "recoverable-live" : "fullstack-browser", other = "hardening";
+  const old = path.join(p.h.base, group), target = retry ? group : other, oldRound = retry ? "r20" : "r21", round = "r21";
+  const slot = path.join(p.h.base, retry ? `${group}--${round}` : other);
+  const historical = retry ? "b".repeat(40) : commit;
+  const oldDeps = retry ? { ...p.deps,
+    spawn: (binary, argv) => binary === "git" && argv[0] === "rev-parse" && argv[1] === "HEAD"
+      ? { status: 0, stdout: historical } : p.deps.spawn(binary, argv),
+    // Only seed the consumed predecessor intent at a synthetic commit. The
+    // new round uses the original role preflight and production worker.
+    plan: (options, deps) => productionPlan(options, { ...deps, roleCheck: () => [] }),
+  } : p.deps;
+  fs.writeFileSync(path.join(p.h.base, "index.json"), "[]");
+  const args = (g, round) => [round, "--continuation-root", p.h.base, "--group", g];
+  const prepare = (g, r, source = commit, deps = p.deps, account = accountId) => fleetMain([...args(g, r), "--prepare", "--commit", source,
+    "--ssh-key", "42", "--account-id", account, "--context", context], deps);
+  const approve = async (g, round, deps = p.deps) => {
+    assert.equal(await fleetMain([...args(g, round), "--detach", "--print-approval"], deps), 3);
+    return [...args(g, round), "--detach", "--approve-reviewed-merged-ready", p.output.at(-1).approvalSha256];
+  };
+  assert.equal(await prepare(group, oldRound, historical, oldDeps), 3);
+  assert.equal(await fleetMain(await approve(group, oldRound, oldDeps), { ...oldDeps, main: async () => 2 }), 2);
+  const fleet = readFleet(old, oldRound).manifest;
+  const state = reservation({ round: oldRound, commit: historical, token: fleet.jobs[0].token, group, fleet });
+  const local = path.join(old, group, `groups-${oldRound}`);
+  fs.mkdirSync(local, { recursive: true });
+  Object.assign(state, { status: "starting", provider: fleet.provider, fullGroupQualified: false, id: "701", ip: "192.0.2.1",
+    createIntentAt: state.createdAt, control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256,
+      ledger: [], sealed: [], monitor: { schema: "benchmark-supervised-control/v1", id: "1".repeat(32), phase: "pending" } } });
+  for (const command of [`systemctl start ${state.unit}`, unitQuery(state)])
+    state.control.ledger.push({ request: controlRequest(state, "ssh", [command], 60000, "bootstrap"), localTerminal: true, code: 0 });
+  const save = () => fs.writeFileSync(path.join(local, "state.json"), JSON.stringify(state));
+  save();
+  await assert.rejects(prepare(other, "r22"), /unresolved custody/);
+  if (retry) await assert.rejects(prepare(group, round), /unresolved custody/);
+  const evidence = path.join(local, "evidence-Synthetic"), tar = path.join(local, "results.tgz");
+  const exitFile = path.join(evidence, "exit-code");
+  fs.mkdirSync(evidence); fs.writeFileSync(exitFile, "124\n");
+  const bytes = archive([{ name: "exit-code", body: "124\n" }]);
+  Object.assign(state, { preBootstrapTerminal: { hostId: state.id, ip: state.ip, monitorId: state.control.monitor.id,
+    invocation: state.control.ledger.at(-1).request.invocation.id, stdout: `Id=${state.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${state.unit}\nActiveState=failed\nRestart=no\nMainPID=0\nExecMainCode=1\nExecMainStartTimestamp=Fri 2026-11-13 01:00:00 UTC\n` },
+    evidence: "evidence-Synthetic", extractionAttempts: ["evidence-Synthetic"], archiveSha256: digest(bytes), evidenceSha256: treeHash(evidence) });
+  save();
+  await assert.rejects(prepare(other, "r22"), /ENOENT/);
+  if (retry) await assert.rejects(prepare(group, round), /ENOENT/);
+  fs.writeFileSync(tar, "replaced"); await assert.rejects(prepare(other, "r22"), assert.AssertionError);
+  fs.writeFileSync(tar, bytes);
+  const original = treeHash(old);
+  if (retry) {
+    await assert.rejects(prepare(group, round, historical, oldDeps), /different measured commit/);
+    await assert.rejects(prepare(group, round, commit, p.deps, "user:other-account"), /same provider account/);
+    await assert.rejects(prepare(group, oldRound), /higher round/);
+    assert.ok(!fs.existsSync(slot));
+  } else await assert.rejects(prepare(group, "r22"), /different measured commit/);
+  if (retry && change === "none") {
+    const zeroExit = archive([{ name: "exit-code", body: "0\n" }]);
+    fs.writeFileSync(tar, zeroExit); fs.writeFileSync(exitFile, "0\n");
+    state.archiveSha256 = digest(zeroExit); state.evidenceSha256 = treeHash(evidence); save();
+    await assert.rejects(prepare(group, round), /nonzero setup exit/);
+    assert.ok(!fs.existsSync(slot), "a zero exit must not reserve a successor");
+    fs.writeFileSync(tar, bytes); fs.writeFileSync(exitFile, "124\n");
+    state.archiveSha256 = digest(bytes); state.evidenceSha256 = treeHash(evidence); save();
+
+    const campaign = path.join(evidence, "campaign"), entry = path.join(campaign, "entry");
+    const originalEvidence = state.evidenceSha256;
+    fs.mkdirSync(campaign); fs.writeFileSync(entry, "unexpected campaign evidence");
+    state.evidenceSha256 = treeHash(evidence); save();
+    await assert.rejects(prepare(group, round), /setup attempt entered the campaign/);
+    fs.unlinkSync(entry); fs.rmdirSync(campaign); state.evidenceSha256 = originalEvidence; save();
+    assert.equal(treeHash(old), original);
+  }
+  assert.equal(await prepare(target, round), 3);
+  if (retry) {
+    await assert.rejects(prepare(group, "r22", historical, oldDeps), /different measured commit/);
+    await assert.rejects(approve(group, oldRound, oldDeps), /group round not prepared/);
+    const deps = { repo: p.h.repo, inspect: syntheticInspection };
+    const selected = (await continuationAdmission(p.h.base, group, deps)).rows.find((row) => row.group === group);
+    const siblingView = (await continuationAdmission(p.h.base, other, deps)).rows.find((row) => row.group === group);
+    const reported = (await inspectContinuation(p.h.base, deps)).report.groups.find((row) => row.group === group);
+    for (const row of [selected, siblingView, reported]) {
+      assert.equal(row.outcome, "prepared");
+      assert.deepEqual(row.attempts.map(({ round, outcome }) => [round, outcome]), [
+        [oldRound, "setup-failed-needs-census"], [round, "prepared"],
+      ]);
+    }
+  }
+  const approved = await approve(target, round);
+  const census = p.output.at(-1).subject.continuation.unconfirmed;
+  assert.deepEqual(census, [{ group, round: oldRound, accountId, manifestSha256: fileHash(path.join(old, `fleet-${oldRound}.json`)),
+    stateSha256: fileHash(path.join(local, "state.json")), id: state.id, root: old, launch: fileHash(path.join(old, "launch-intent.json")) }]);
+  const lock = path.join(local, "operation.lock");
+  if (change === "late account lock") fs.writeFileSync(p.hosts + ".late-lock", lock);
+  if (change === "cleanup lock") {
+    const open = fs.openSync;
+    const mock = t.mock.method(fs.default, "openSync", (file, ...args) => {
+      const fd = open(file, ...args);
+      if (file === tar) fs.writeFileSync(lock, "hash in progress", { flag: "wx" });
+      return fd;
+    });
+    syncBuiltinESMExports();
+    try { assert.throws(() => recheckSetupAttempt(p.h.base, census[0]), /setup attempt recovery started/); }
+    finally { mock.mock.restore(); syncBuiltinESMExports(); }
+    fs.unlinkSync(lock);
+  }
+  let reached = false;
+  p.deps.WorkerClass = class extends p.deps.WorkerClass {
+    constructor(entry, options) {
+      assert.ok(fs.existsSync(path.join(slot, "launch-intent.json")));
+      if (change === "cleanup lock") fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }), { flag: "wx" });
+      if (change === "reservation bytes") fs.appendFileSync(path.join(local, "state.json"), "\n");
+      if (change === "archive bytes") fs.appendFileSync(tar, "changed");
+      if (change === "renamed host") fs.writeFileSync(p.hosts, JSON.stringify([{ id: 701, name: "renamed", tags: [] }]));
+      reached = true;
+      super(entry, options);
+    }
+  };
+  assert.equal(await fleetMain(approved, p.deps), change === "none" ? 3 : 2);
+  assert.ok(reached);
+  const trace = p.events().filter(({ boundary }) => boundary === "provider");
+  assert.ok(trace.some(({ method, path }) => method === "GET" && path.startsWith("/v2/droplets?")));
+  if (change === "none") assert.deepEqual(trace.filter(({ method }) => method === "POST").map(({ group }) => group), [target]);
+  else {
+    assert.ok(trace.every(({ method }) => method === "GET"), "no provider mutation after handoff");
+    const saved = JSON.parse(fs.readFileSync(path.join(slot, target, `groups-${round}`, "state.json")));
+    assert.equal(saved.createIntentAt, undefined);
+  }
+  if (change === "cleanup lock" || change === "late account lock") fs.unlinkSync(lock);
+  if (change === "reservation bytes") save();
+  if (change === "archive bytes") fs.writeFileSync(tar, bytes);
+  assert.equal(treeHash(old), original);
 });
 
 test("continuation child refuses a historical staged lock acquired after parent intent", { timeout: 60000 }, async (t) => {
@@ -808,6 +963,28 @@ const catalogFailure = (diagnostic) => (error) => {
   if (diagnostic) assert.deepEqual(error.providerDiagnostic, diagnostic);
   return true;
 };
+
+test("prepare CLI distinguishes provider startup, catalog validation and disconnect during the catalog read", { timeout: 15000 }, async (t) => {
+  for (const [mode, diagnostic] of [
+    ["startup-refusal", "first-account-read-or-worker-start; transport-close-failed; custody-uncertain"],
+    ["catalog-shape", "catalog-validation; catalog-response"],
+    ["catalog-disconnect", "catalog-read; transport-close-failed; custody-uncertain"],
+  ]) await t.test(mode, async (t) => {
+    const p = fixture(t), exitCode = realCatalog(p, mode), errors = [];
+    const disconnected = mode !== "catalog-shape";
+    assert.equal(await fleetCli(p.prepareArgs, { ...p.deps, writeError: (line) => errors.push(line) }), 2);
+    assert.deepEqual(errors, [`fleet-placement-preflight-failed: ${diagnostic}`]);
+    assert.equal(exitCode(), disconnected ? 2 : 0);
+    assert.deepEqual(fs.readdirSync(p.h.base), disconnected ? [".fleet-operation.lock"] : []);
+    assert.deepEqual(p.events().filter((row) => row.boundary === "provider").map((row) => [row.method, row.path]),
+      mode === "startup-refusal" ? [] : [["GET", "/v2/account"], ["GET", "/v2/sizes?page=1&per_page=200"]]);
+    if (mode === "startup-refusal") {
+      assert.ok(p.events().some((row) => row.boundary === "before-provider-boot"));
+      assert.ok(!p.events().some((row) => row.boundary === "synthetic-credential"));
+    }
+    assert.equal(p.workers.length, 0);
+  });
+});
 
 test("prepare can retry a settled invalid listing, but retains the lock on disconnect", { timeout: 15000 }, async (t) => {
   for (const [mode, diagnostic] of [["catalog-shape", refusedCatalog], ["catalog-disconnect", null]]) await t.test(mode, async (t) => {

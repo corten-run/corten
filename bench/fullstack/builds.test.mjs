@@ -296,6 +296,33 @@ const productionPrune = (/** @type {string} */ command) => /^npm prune --omit=de
 const postBuildPrune = (/** @type {string[]} */ commands, /** @type {number} */ index, /** @type {string | undefined} */ build) =>
   !!build && productionPrune(commands[index]) && commands.slice(0, index).includes(parts(build).at(-1) ?? "");
 
+// The separate build recipe runs the same locked install without the image diagnostics.
+// docker-rebuild.mjs instead times the image as written. Only this wrapper is equivalent.
+const nextImageInstall = /^timeout --verbose --kill-after=10s 10m (npm ci --no-audit --no-fund) --fetch-timeout=60000 --loglevel=http$/;
+const nextInstallInputs = ["WORKDIR /app", "ENV NEXT_TELEMETRY_DISABLED=1", "COPY package.json package-lock.json ./"];
+
+function checkNextInstall(/** @type {string[]} */ lines) {
+  const install = lines.findIndex((line) => line.startsWith("RUN ") && nextImageInstall.test(line.slice(4)));
+  assert.ok(install >= 0, "expected the exact Next.js image install with no RUN mount");
+  assert.ok(install < lines.indexOf("COPY . .") && install < lines.indexOf("RUN npm run build"),
+    "expected the Next.js image install before app source and build");
+  assert.equal(lines.filter((line) => /^RUN .*\bnpm ci\b/.test(line)).length, 1);
+  // Inspect raw instructions: the general equivalence check drops RUN mounts.
+  // No source, npm configuration, or extra ENV/ARG can reach the logged install.
+  assert.match(lines[0], /^FROM \S+ AS build$/);
+  assert.deepEqual(lines.slice(1, install), nextInstallInputs, "expected only the Next.js install inputs");
+}
+
+test("Next.js bounds the locked image install before copying app source or building", () => {
+  const lines = instructionsOf(readFileSync(join(repo, dockerfileOf("nextjs")), "utf8"));
+  checkNextInstall(lines);
+  const manifestCopy = nextInstallInputs.at(-1);
+  assert.throws(() => checkNextInstall(lines.filter((line) => line !== manifestCopy)), /only the Next.js install inputs/);
+  assert.throws(() => checkNextInstall(lines.map((line) => line === manifestCopy ? "COPY . ." : line)), /before app source and build/);
+  assert.throws(() => checkNextInstall(lines.map((line) => line.replace(/^RUN timeout /, "RUN --mount=type=bind,target=/app timeout "))),
+    /exact Next.js image install with no RUN mount/);
+});
+
 test("only exact production pruning after a build is packaging, never a recipe step", () => {
   for (const command of ["npm prune --omit=dev", "npm prune --omit=dev --no-audit --no-fund"]) {
     assert.equal(postBuildPrune(["npm run build", command], 1, "npm run build"), true);
@@ -330,7 +357,8 @@ test("each recipe runs its Dockerfile's commands, from its image, in its directo
     for (const stage of stages.filter((s) => s.run.some((c) => mine.some((m) => c.includes(m))))) {
       const commands = stage.run.flatMap((c) => c.split(" && ").map((x) => x.trim()));
       for (const [index, command] of commands.entries()) {
-        assert.ok(mine.includes(command) || packaging.some((p) => p.test(command)) || postBuildPrune(commands, index, r.build), `${name}: its Dockerfile runs ${command}, which its recipe does not`);
+        const recipeCommand = name === "nextjs" ? command.replace(nextImageInstall, "$1") : command;
+        assert.ok(mine.includes(recipeCommand) || packaging.some((p) => p.test(command)) || postBuildPrune(commands, index, r.build), `${name}: its Dockerfile runs ${command}, which its recipe does not`);
       }
       if (r.stage) assert.equal(stage.from, "tools", `${name}: its build stage starts from its tools stage`);
     }

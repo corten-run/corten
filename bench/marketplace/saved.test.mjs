@@ -3,7 +3,7 @@ import test from "node:test";
 import { summaryFixture, writeSavedFixture } from "./saved-fixture.mjs";
 import { report, validateSummary } from "./report.mjs";
 import { validateSaved } from "./validate.mjs";
-import { containerReceipt, evidenceVersion, imageReceipt, sourceTree } from "./raw-contract.mjs";
+import { containerReceipt, evidenceVersion, imageReceipt, producerSchema, sourceTree } from "./raw-contract.mjs";
 import childProcess, { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
-import { passPlan, stageAggregate, timedProfiles } from "./run-contract.mjs";
+import { passPlan, resultSchema, stageAggregate, timedProfiles, v5Schema } from "./run-contract.mjs";
 import { boundedFeatureProfile, featureProfile } from "./feature-contract.mjs";
 import { sampleStats, summarizeSamples } from "../catalog/stats.mjs";
 
@@ -23,6 +23,28 @@ function temporary(t) {
   const folder = mkdtempSync(join(tmpdir(), "marketplace-raw-test-"));
   t.after(() => rmSync(folder, { recursive: true, force: true }));
   return folder;
+}
+
+// Real Git reads even on a depth-one checkout. Only redirect their working
+// directory; no objects are added to the checkout.
+function measuredSource(t, schema, declaration = "  export\tconst resultSchema  =\n 'marketplace-results/v5' ;\n") {
+  if (schema === resultSchema) return { commit, tree: sourceTree(commit) };
+  const repo = temporary(t), exec = childProcess.execFileSync;
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key)));
+  const git = (args, input) => exec("git", args, { cwd: repo, env, input, encoding: "utf8", windowsHide: true }).trim();
+  git(["init", "-q", "--bare", "--object-format=sha1"]);
+  const blob = git(["hash-object", "-w", "--stdin"], declaration);
+  const app = git(["mktree"], `100644 blob ${blob}\trun-contract.mjs\n`);
+  const bench = git(["mktree"], `040000 tree ${app}\tmarketplace\n`);
+  const tree = git(["mktree"], `040000 tree ${bench}\tbench\n`);
+  const who = "fixture <fixture@example.invalid> 1 +0000";
+  const measured = git(["hash-object", "-t", "commit", "-w", "--stdin"], `tree ${tree}\nauthor ${who}\ncommitter ${who}\n\nSynthetic per-locale source\n`);
+  const redirect = t.mock.method(childProcess, "execFileSync", (file, args, options) => {
+    assert.equal(file, "git"); return exec(file, args, { ...options, cwd: repo });
+  });
+  syncBuiltinESMExports();
+  t.after(() => { redirect.mock.restore(); syncBuiltinESMExports(); });
+  return { commit: measured, tree };
 }
 
 test("a summary-only native round passes the read-only summary reader", () => {
@@ -169,23 +191,30 @@ test("native replay admits the producer's decimal sum overshoot, not an inconsis
   }
 });
 
-test("historical native evidence replays, but the two profiles' raw receipts cannot mix", (t) => {
-  for (const historical of [true, false]) {
-    const folder = temporary(t), args = { folder, round: "r17", commit };
-    const expected = writeSavedFixture(folder, commit, sourceTree(commit), { historical });
-    assert.equal(expected.measurement.featureProfile, historical ? featureProfile : boundedFeatureProfile);
-    assert.deepEqual(validateSaved(args), expected);
-    const other = summaryFixture(commit, { historical: !historical });
-    const raw = join(folder, "api/corten/qualification.json"), imagesPath = join(folder, "images.json");
-    const saved = readFileSync(raw);
-    writeFileSync(raw, JSON.stringify(other.apps.corten.qualification.api));
-    invalid(() => validateSaved(args));
-    writeFileSync(raw, saved);
-    const images = JSON.parse(readFileSync(imagesPath));
-    images.corten.labels["run.corten.marketplace.profile"] = other.measurement.featureProfile;
-    writeFileSync(imagesPath, JSON.stringify(images));
-    invalid(() => validateSaved(args));
-  }
+test("v6 cannot claim historical qualification even with matching raw receipts", (t) => {
+  const folder = temporary(t), args = { folder, round: "r17", commit };
+  const summary = writeSavedFixture(folder, commit, sourceTree(commit), { historical: true });
+  assert.throws(() => validateSummary(summary), /bounded qualification/);
+  assert.throws(() => validateSaved(args), /bounded qualification/);
+});
+
+for (const historical of [true, false]) test(`native historical=${historical} qualification replays but raw receipts cannot mix`, (t) => {
+  const schema = historical ? v5Schema : resultSchema;
+  const measured = measuredSource(t, schema);
+  const folder = temporary(t), args = { folder, round: "r17", commit: measured.commit };
+  const expected = writeSavedFixture(folder, measured.commit, measured.tree, { historical, schema });
+  assert.equal(expected.measurement.featureProfile, historical ? featureProfile : boundedFeatureProfile);
+  assert.deepEqual(validateSaved(args), expected);
+  const other = summaryFixture(commit, { historical: !historical });
+  const raw = join(folder, "api/corten/qualification.json"), imagesPath = join(folder, "images.json");
+  const saved = readFileSync(raw);
+  writeFileSync(raw, JSON.stringify(other.apps.corten.qualification.api));
+  invalid(() => validateSaved(args));
+  writeFileSync(raw, saved);
+  const images = JSON.parse(readFileSync(imagesPath));
+  images.corten.labels["run.corten.marketplace.profile"] = other.measurement.featureProfile;
+  writeFileSync(imagesPath, JSON.stringify(images));
+  invalid(() => validateSaved(args));
 });
 
 test("native replay requires the retained executable identity and raw version probe", (t) => {
@@ -205,10 +234,59 @@ test("native replay requires the retained executable identity and raw version pr
   invalid(() => validateSaved(args));
 });
 
+for (const schema of [v5Schema, resultSchema]) test(`native ${schema} binds page attempts, neutral JSON and cold path to the schema`, (t) => {
+  const { commit: measured, tree } = measuredSource(t, schema);
+  const folder = temporary(t), args = { folder, round: "r17", commit: measured };
+  const s = writeSavedFixture(folder, measured, tree, { schema });
+  assert.deepEqual(validateSaved(args), s);
+  const rotating = schema === resultSchema, locale = rotating ? "rotating" : "en-US";
+  const page = `fixture/corten/p1-${locale}-page`, json = "api/corten/p1-neutral-json";
+  const probe = (path, edit, expected) => {
+    const file = join(folder, path), saved = readFileSync(file), v = JSON.parse(saved);
+    try { edit(v); writeFileSync(file, JSON.stringify(v)); assert.throws(() => validateSaved(args), expected); }
+    finally { writeFileSync(file, saved); }
+  };
+  probe("summary.json", (v) => { v.schema = rotating ? v5Schema : resultSchema; }, /profile matrix/);
+  probe(`${json}/fixed-receipt.json`, (v) => { v.load.env.LOCALE = "en-US"; }, /LOCALE/);
+  probe(`${json}/fixed.json`, (v) => { v.metrics.marketplace_locale_en_US = { count: 0, rate: 0 }; }, /unexpected locale counter/);
+  probe(`${page}/fixed-receipt.json`, (v) => { v.load.env.LOCALE = rotating ? "en-US" : "rotating"; }, /LOCALE/);
+  const wrongCold = "/marketplace/fr-FR/item_1";
+  probe("summary.json", (v) => { v.apps.corten.runs[`fixture-${locale}-page`][0].cold.path = wrongCold; }, /item_1/);
+  probe(`${page}/probe-container.json`, (v) => { v.cmd[3] = wrongCold; }, /item_1/);
+  if (!rotating) {
+    probe(`${page}/fixed.json`, (v) => { v.metrics.marketplace_locale_en_US = v.metrics.http_reqs; }, /unexpected locale counter/);
+    return;
+  }
+  for (const [phase, edit, error] of [
+    ["warmup", (m) => { delete m.marketplace_locale_fr_FR; }, /cover HTTP/],
+    ["fixed", (m) => { m.marketplace_locale_en_US = m.http_reqs; m.marketplace_locale_fr_FR = m.marketplace_locale_de_DE = { rate: 0, count: 0 }; }, /rotation/],
+    ["sat64", (m) => { m.marketplace_locale_de_DE.rate = 0; }, /engine elapsed clock/],
+    ["sat256", (m) => { m.marketplace_locale_it_IT = { count: 0, rate: 0 }; }, /unexpected locale counter/],
+  ]) probe(`${page}/${phase}.json`, (v) => edit(v.metrics), error);
+});
+
+for (const schema of [v5Schema, resultSchema]) test(`coherent raw evidence cannot change the ${schema} producer at the same commit and tree`, (t) => {
+  const { commit: measured, tree } = measuredSource(t, schema), wrongSchema = schema === v5Schema ? resultSchema : v5Schema;
+  const folder = temporary(t);
+  const s = writeSavedFixture(folder, measured, tree, { schema: wrongSchema });
+  validateSummary(s); // Not just a relabeled summary: all reports and raw phases agree.
+  assert.equal(sourceTree(measured), tree);
+  assert.throws(() => validateSaved({ folder, round: "r17", commit: measured }), /measured producer schema/);
+});
+
+for (const [label, declaration] of [
+  ["ambiguous", `export const resultSchema = "${v5Schema}";\nexport const resultSchema = "${resultSchema}";`],
+  ["computed", `export const resultSchema = "${v5Schema}" + suffix;`],
+  ["oversized", " ".repeat(65536) + `export const resultSchema = "${v5Schema}";`],
+]) test(`reject ${label} measured schema contract`, (t) => {
+  const { tree } = measuredSource(t, v5Schema, declaration);
+  assert.throws(() => producerSchema(tree), /measured producer schema/);
+});
+
 test("hostile saved edits fail replay, even when the summary remains internally plausible", (t) => {
   const folder = temporary(t), args = { folder, round: "r17", commit };
   writeSavedFixture(folder, commit, sourceTree(commit));
-  const base = "fixture/corten/p1-en-US-page", api = "api/corten/p1-neutral-json";
+  const base = "fixture/corten/p1-rotating-page", api = "api/corten/p1-neutral-json";
   const change = (path, mutate) => {
     const full = join(folder, path), saved = readFileSync(full);
     try { const value = JSON.parse(saved); mutate(value); writeFileSync(full, JSON.stringify(value)); invalid(() => validateSaved(args)); }
@@ -250,11 +328,11 @@ test("hostile saved edits fail replay, even when the summary remains internally 
   change("source.json", (v) => { v.tree = "c".repeat(40); });
   change("summary.json", (v) => { v.host.cpu = "edited host"; });
   change("summary.json", (v) => { v.options.build = "true"; });
-  change("summary.json", (v) => { v.apps.corten.phases["fixture-en-US-page"].fixed.rps.median++; });
-  change("summary.json", (v) => { v.apps.corten.runs["fixture-en-US-page"][0].phases.fixed.cpuUsec++; });
+  change("summary.json", (v) => { v.apps.corten.phases["fixture-rotating-page"].fixed.rps.median++; });
+  change("summary.json", (v) => { v.apps.corten.runs["fixture-rotating-page"][0].phases.fixed.cpuUsec++; });
   change("summary.json", (v) => {
-    const a = v.apps.corten, runs = a.runs["fixture-en-US-page"], p = runs[0].phases.fixed;
-    p.cpuUsec *= 2; p.perCpuSecond = p.requests / (p.cpuUsec / 1e6); a.phases["fixture-en-US-page"].fixed = stageAggregate(runs, "fixed", 3);
+    const a = v.apps.corten, runs = a.runs["fixture-rotating-page"], p = runs[0].phases.fixed;
+    p.cpuUsec *= 2; p.perCpuSecond = p.requests / (p.cpuUsec / 1e6); a.phases["fixture-rotating-page"].fixed = stageAggregate(runs, "fixed", 3);
     validateSummary(v); // Self-consistent edited summary still disagrees with retained counters.
   });
   change("summary.json", (v) => { delete v.apps.corten.runs["api-neutral-json"]; });
@@ -332,10 +410,10 @@ test("native run windows follow the serial rotated pass plan and cannot overlap"
 test("coherent summary aggregates cannot hide a k6 count/rate/elapsed contradiction", (t) => {
   const folder = temporary(t), args = { folder, round: "r17", commit };
   const s = writeSavedFixture(folder, commit, sourceTree(commit));
-  const path = join(folder, "fixture/corten/p1-en-US-page/fixed.json"), raw = JSON.parse(readFileSync(path));
+  const path = join(folder, "fixture/corten/p1-rotating-page/fixed.json"), raw = JSON.parse(readFileSync(path));
   raw.metrics.http_reqs.rate = 1e9; writeFileSync(path, JSON.stringify(raw));
-  const a = s.apps.corten, runs = a.runs["fixture-en-US-page"];
-  runs[0].phases.fixed.rps = 1e9; a.phases["fixture-en-US-page"].fixed = stageAggregate(runs, "fixed", 3);
+  const a = s.apps.corten, runs = a.runs["fixture-rotating-page"];
+  runs[0].phases.fixed.rps = 1e9; a.phases["fixture-rotating-page"].fixed = stageAggregate(runs, "fixed", 3);
   validateSummary(s); writeFileSync(join(folder, "summary.json"), JSON.stringify(s)); invalid(() => validateSaved(args));
 });
 

@@ -229,7 +229,7 @@ with its raw qualification and no runs. The parts must be exactly the group's sp
 subset of candidates can pass as a round. Each part must have finished, with its checks passed,
 no failures or cleanup failures and a clean tree at the plan's commit; the merge refuses any
 other part and keeps each part's outcome in `split`, where the reader checks it again. The parts
-must have run together, each starting before any finished, and each with its own run id. The merged summary is a v5 round of the group, with
+must have run together, each starting before any finished, and each with its own run id. The merged summary retains its inputs' schema and group, with
 each droplet's candidates, CPU model, tools and Corten in `split`; the reader checks the split
 and each droplet's admission, and a whole round's check of the full group is unchanged. Its
 report's Feature Qualification table names each candidate's droplet, every table gets a Droplet
@@ -295,7 +295,8 @@ Still failures: a phase with no k6 summary or in which no request succeeded, a 2
 content type (before a stop too), an app container that stopped during its cold start or before
 a phase began (after its first 200, before warmup or between phases), and any error answer
 from the upstream to a record read. Results written
-this way are schema `marketplace-results/v5`, with raw feature qualification for named groups.
+this way use schema `marketplace-results/v6`, with raw feature qualification for named groups.
+v5 also qualified named groups but timed page locales separately; do not compare those timings with v6.
 The reporter and `compare.mjs` retain groupless v3/v4 history (under v3 an app that stopped
 failed the round). Historical full-inventory results do not compare with qualified groups.
 Archived `marketplace-production/v1` evidence is read under its original contract; it cannot
@@ -316,8 +317,8 @@ does not prove that save completed. Its continuing polls are not navigation:
 the correlated save and rendered message precede the full-page assertions, without
 requiring global network idle. Transport failures retain bounded diagnostics.
 
-New native runs retain `evidenceVersion: "marketplace-raw/v3"` alongside the unchanged
-`marketplace-results/v5` summary format. `validateSaved({ folder, round, commit })` from
+New native runs retain `evidenceVersion: "marketplace-raw/v3"` alongside the
+`marketplace-results/v6` summary format. `validateSaved({ folder, round, commit })` from
 `validate.mjs` returns the summary only after replaying the saved producer folder. Its CLI
 above exits nonzero for invalid evidence. A split round validates each native `dN` folder;
 the merged summary alone is not a producer folder. The historical summary reporter remains
@@ -347,7 +348,7 @@ an absent-proof fallback. No capability requirement or nightly capacity policy i
 
 The native memory mean uses the sampled steady window, while the peak uses every sample.
 Floating-point summation can put the mean slightly above the peak even for a constant
-decimal reading. The v5 summary check (including merged split summaries) bounds that case
+decimal reading. The named-group summary check (including merged split summaries) bounds that case
 by summing a history with every reading at the saved peak and the same sample count.
 An overshoot must also be a possible rounded quotient for that steady-window length.
 Native replay still requires both saved means to match the exact calculation from the
@@ -482,8 +483,11 @@ catalog gate and this gate for each of the twenty apps.
 Load uses a one-CPU app quota, a four-CPU load-generator quota and a two-CPU upstream quota.
 For disjoint pinning set `MARKETPLACE_APP_CPUS`, `MARKETPLACE_LOAD_CPUS` and
 `MARKETPLACE_API_CPUS`; overlaps are rejected. Without those settings quotas do not prove core
-isolation. Pages are measured separately in all three locales (`en-US`, `fr-FR`, `de-DE`);
-locale-neutral JSON is measured once per source per pass, not repeated as a locale control.
+isolation. Each source has two timed profiles: a localized page and locale-neutral JSON.
+The page cycles through `en-US`, `fr-FR`, `de-DE` by scenario iteration, starting at
+English each phase. k6 counts attempts for each locale; throughput and latency describe
+the mix, not any individual language. The page cold probe uses English. Conformance
+and browser checks still cover all three locales for both sources. JSON never selects a locale.
 Three passes rotate framework order.
 Warmup precedes fixed-rate, 64-user and 256-user phases. Results retain commit/dirty state,
 fixture hash, resolved image IDs, raw k6 output, counted cgroup CPU, memory, cold-start clock,
@@ -539,6 +543,15 @@ its conformance cases. A fixture-specific shortcut is not permitted. The capture
 always reports `readyForLoad: false`: no standalone formatting test certifies a full app.
 
 ## Before measuring
+
+If the Next.js image fails to build, check `build-nextjs.log` first. Its locked
+`npm ci` step logs package fetches and npm warnings/errors, including extraction
+failures, without a full npm trace. The step sets npm's `fetch-timeout` to 60
+seconds; the deadline for the whole install is 10 minutes (TERM, then KILL after
+another 10 seconds if needed).
+An install that ultimately fails is a setup failure, not a timing result. This
+step is included when `bench/fullstack/docker-rebuild.mjs` times a cold image
+build. The separate dependency timing in `bench/fullstack/builds.mjs` is unchanged.
 
 1. Run the twenty adapters' ecosystem-local tests and Docker/browser gate. Keep catalog
    behavior unchanged, and do not rewrite historical result files.

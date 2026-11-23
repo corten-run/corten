@@ -54,7 +54,7 @@ function fixture(original = descriptor(), { status = "complete", mutate = () => 
   const common = { schema: receiptSchema, bindingSha256: original.bindingSha256, author: "producer", reason: "Synthetic validation fixture only", status };
   const receipts = {
     implementation: { ...common, kind: "implementation", artifacts: [raw] },
-    "native-parity": { ...common, kind: "native-parity", cases: original.cases, artifacts: [raw] },
+    "native-parity": { ...common, kind: "native-parity", cases: original.parityCases ?? original.cases, artifacts: [raw] },
     performance: { ...common, kind: "performance", cases: original.cases, artifacts: [raw],
       runs: ["first", "second"].map((repeat) => ({ repeat, cases: original.cases.map((row) => ({ key: row.key, artifact: raw,
         metrics: { cpuUsec: 10, memoryBytes: 100, startupMs: 5, p95Ms: 2 } })) })),
@@ -77,7 +77,7 @@ test("all nine group contracts are pinned independently of historical catalog re
   const hashes = {
     "catalog-page": "67e0bffbf6bc138c570b7d3855b9dc440c2d11526a1321269f14433155dd98f0",
     "json-api": "b0015ffc90e28f85823f1e7a392e8ed5a97f2f2a6e56cf6c9287934589325fb9",
-    "localized-marketplace": "e7196bc53d5d9a48543dacdfa245c672d5dda68c514f43339779de58f022c9eb",
+    "localized-marketplace": "9aa3ff1dd0561a54fe37419a5e71af474381f0df8cf1837e90faa1f4e6a9813b",
     "mixed-production": "147a4689167b2bfa0edba103a5fdbe533f7f7b17126fe15e1d0f782983b9a894",
     "fullstack-browser": "d4c219c71546b7c8cfdeb8b0e9b4c44cacc30cd42837dcfa5580db9d125f62d4",
     "client-heavy": "29842bba6ec897e5a86a42cc7f8f777ac69f64b89f41d7c6f6774f9c067486d1",
@@ -344,6 +344,25 @@ test("exact whole matrix, independent review, raw captures and repeated CPU/memo
   for (const mutate of invalid) {
     const f = fixture(descriptor(), { mutate });
     assert.throws(() => screenDeployment(f.descriptor, f.validators));
+  }
+});
+
+test("marketplace screens actual per-locale parity independently of rotating page metrics", () => {
+  const d = descriptor("localized-marketplace", "django");
+  assert.equal(d.cases.length, 4);
+  for (const source of ["fixture", "api"]) {
+    assert.deepEqual(d.parityCases.filter((p) => p.source === source && p.target === "page").map((p) => p.locale), ["en-US", "fr-FR", "de-DE"]);
+  }
+  const good = fixture(d);
+  assert.equal(screenDeployment(good.descriptor, good.validators).status, "reviewed-for-selection");
+  for (const mutate of [
+    (r) => { r["native-parity"].cases = d.cases; },
+    (r) => { r["native-parity"].cases = d.parityCases.filter((c) => c.locale !== "de-DE"); },
+    (r) => { r.performance.cases = d.parityCases; },
+    (r) => { r.performance.runs[1].cases[0].key = "marketplace-v2-fixture-en-US-page"; },
+  ]) {
+    const bad = fixture(d, { mutate });
+    assert.throws(() => screenDeployment(bad.descriptor, bad.validators), /matrix/);
   }
 });
 

@@ -245,7 +245,7 @@ function candidates(group, app, baseline) {
 export function deploymentPlan(group) {
   const d = definition(group);
   return freeze({ schema: deploymentSchema, registry: registrySchema, group, contractSha256: contractSha256(group),
-    selected: selectedApps(group), cases: structuredClone(d.cases), capabilities: d.capabilities, retainedFamilies,
+    selected: selectedApps(group), cases: structuredClone(d.cases), ...(d.parityCases ? { parityCases: d.parityCases } : {}), capabilities: d.capabilities, retainedFamilies,
     budgetPolicy: "Exact group runner/reservation work and total CPU/memory/process/edge budgets; no overrides or enlargement here.",
     selectionPolicy: "One named deployment per app for the entire group, fixed before the round across every case, phase and pass. No automatic fallback or promotion.",
     execution: "plan-only; not execution authorization or certification",
@@ -343,8 +343,9 @@ export function deploymentDescriptor(group, app, id, binding) {
   assert.equal(configuration.edge, representative(group, app).configuration.edge, "native reservation is direct only; changing edge topology needs a reviewed reservation adapter");
   keys(binding.evidence, receiptKinds, "evidence references");
   for (const ref of Object.values(binding.evidence)) if (ref !== null) reference(ref);
+  const { cases, parityCases } = definition(group);
   const subject = { schema: deploymentSchema, registry: registrySchema, group, app, deployment: id, contractSha256: contractSha256(group),
-    cases: definition(group).cases, commit: binding.commit, images: binding.images, configuration, budget: binding.budget };
+    cases, ...(parityCases ? { parityCases } : {}), commit: binding.commit, images: binding.images, configuration, budget: binding.budget };
   const descriptor = { ...subject, bindingSha256: deploymentSha256(subject), evidence: binding.evidence };
   return freeze({ ...structuredClone(descriptor), descriptorSha256: deploymentSha256(descriptor) });
 }
@@ -382,7 +383,7 @@ export function screenDeployment(descriptor, { readArtifact, verifyNative, verif
   }
   if (receiptKinds.some((kind) => evidence[kind] === null)) return result("pending", "Missing exact deployment evidence; representative is not certified.");
   const parity = receipts["native-parity"], performance = receipts.performance, review = receipts["independent-review"];
-  assert.deepEqual(parity.cases, subject.cases, "native parity must cover the exact entire group matrix");
+  assert.deepEqual(parity.cases, subject.parityCases ?? subject.cases, "native parity must cover the exact entire parity matrix");
   assert.deepEqual(performance.cases, subject.cases, "performance review must cover the exact entire group matrix");
   for (const receipt of [receipts.implementation, parity, performance]) assert.notEqual(review.author, receipt.author, "reviewer must be independent of implementation and evidence authors");
   assert.deepEqual(review.reviewed, Object.fromEntries(receiptKinds.filter((kind) => kind !== "independent-review").map((kind) => [kind, evidence[kind]])), "review must bind all evidence references");
