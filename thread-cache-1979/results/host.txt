@@ -1,0 +1,25 @@
+## uname
+Linux 6.8.0-149-generic x86_64
+## cpu
+CPU(s):                                  16
+Model name:                              Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz
+BIOS Model name:                         pc-i440fx-6.1  CPU @ 2.0GHz
+Thread(s) per core:                      1
+Core(s) per socket:                      16
+## os
+PRETTY_NAME="Ubuntu 24.04.5 LTS"
+## docker
+29.10.0
+## perf
+perf version 6.8.12
+## wrk
+wrk debian/4.1.0-4build2 [epoll] Copyright (C) 2012 Will Glozer
+## node
+v24.22.3
+## image
+sha256:c4c54e080e6763f9c97c7a2ba6963dcae2f2a71be06c0c0b8b2b8c33389da134 2026-11-23T00:15:02.873209006Z
+## repository
+5a1158e20f122ea681188a85ac050e26639bc738
+## jemalloc
+libjemalloc2:amd64	5.3.0-3
+libzstd1:amd64	1.5.7+dfsg-1

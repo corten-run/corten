@@ -1,0 +1,834 @@
+{
+ "image": "corten-card-market-base",
+ "image_id": "sha256:c4c54e080e6763f9c97c7a2ba6963dcae2f2a71be06c0c0b8b2b8c33389da134",
+ "runs": 3,
+ "floods": 8,
+ "variants": {
+  "jemalloc-tuned": [
+   "-e",
+   "MALLOC_CONF=background_thread:true,tcache_max:65536"
+  ],
+  "jemalloc-tcache-1m": [
+   "-e",
+   "MALLOC_CONF=background_thread:true,tcache_max:1048576"
+  ]
+ },
+ "results": [
+  {
+   "variant": "jemalloc-tuned",
+   "run": 1,
+   "rest": {
+    "current": 4.9,
+    "anon": 2.6,
+    "file": 0
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 172.4,
+      "anon": 163.3,
+      "file": 0
+     },
+     "after": {
+      "current": 58.3,
+      "anon": 55.4,
+      "file": 0
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 181.4,
+      "anon": 172.5,
+      "file": 0
+     },
+     "after": {
+      "current": 69.7,
+      "anon": 63.1,
+      "file": 0
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 185.9,
+      "anon": 176.8,
+      "file": 0
+     },
+     "after": {
+      "current": 73.8,
+      "anon": 70.3,
+      "file": 0
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 182.9,
+      "anon": 173.5,
+      "file": 0
+     },
+     "after": {
+      "current": 72.7,
+      "anon": 69.3,
+      "file": 0
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 183.4,
+      "anon": 174,
+      "file": 0
+     },
+     "after": {
+      "current": 88,
+      "anon": 84.8,
+      "file": 0
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 193.7,
+      "anon": 184.7,
+      "file": 0
+     },
+     "after": {
+      "current": 77.1,
+      "anon": 73.5,
+      "file": 0
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 188.7,
+      "anon": 179.6,
+      "file": 0
+     },
+     "after": {
+      "current": 73.2,
+      "anon": 69.9,
+      "file": 0
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 180,
+      "anon": 170.7,
+      "file": 0
+     },
+     "after": {
+      "current": 82.4,
+      "anon": 79,
+      "file": 0
+     }
+    }
+   ],
+   "end": {
+    "current": 8.9,
+    "anon": 6,
+    "file": 0
+   }
+  },
+  {
+   "variant": "jemalloc-tcache-1m",
+   "run": 1,
+   "rest": {
+    "current": 4.8,
+    "anon": 2.6,
+    "file": 0
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 172.5,
+      "anon": 163.4,
+      "file": 0
+     },
+     "after": {
+      "current": 59.3,
+      "anon": 56.1,
+      "file": 0
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 183.7,
+      "anon": 174.8,
+      "file": 0
+     },
+     "after": {
+      "current": 83.3,
+      "anon": 80.4,
+      "file": 0
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 191.5,
+      "anon": 182.2,
+      "file": 0
+     },
+     "after": {
+      "current": 68,
+      "anon": 64.4,
+      "file": 0
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 182.7,
+      "anon": 173.4,
+      "file": 0
+     },
+     "after": {
+      "current": 70.9,
+      "anon": 67.5,
+      "file": 0
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 185.8,
+      "anon": 176.4,
+      "file": 0
+     },
+     "after": {
+      "current": 87,
+      "anon": 83.5,
+      "file": 0
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 194.3,
+      "anon": 185.2,
+      "file": 0
+     },
+     "after": {
+      "current": 77.3,
+      "anon": 74.3,
+      "file": 0
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 188.8,
+      "anon": 179.7,
+      "file": 0
+     },
+     "after": {
+      "current": 151.6,
+      "anon": 148.3,
+      "file": 0
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 209.9,
+      "anon": 200.5,
+      "file": 0
+     },
+     "after": {
+      "current": 103.9,
+      "anon": 100.8,
+      "file": 0
+     }
+    }
+   ],
+   "end": {
+    "current": 9.8,
+    "anon": 6.6,
+    "file": 0
+   }
+  },
+  {
+   "variant": "jemalloc-tuned",
+   "run": 2,
+   "rest": {
+    "current": 5.1,
+    "anon": 2.6,
+    "file": 0
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 172,
+      "anon": 163,
+      "file": 0
+     },
+     "after": {
+      "current": 60.5,
+      "anon": 57.3,
+      "file": 0
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 178.6,
+      "anon": 169.4,
+      "file": 0
+     },
+     "after": {
+      "current": 63.4,
+      "anon": 59.7,
+      "file": 0
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 183.9,
+      "anon": 174.9,
+      "file": 0
+     },
+     "after": {
+      "current": 71.4,
+      "anon": 67.6,
+      "file": 0
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 180.2,
+      "anon": 171.4,
+      "file": 0
+     },
+     "after": {
+      "current": 64.8,
+      "anon": 61.8,
+      "file": 0
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 185.2,
+      "anon": 175.8,
+      "file": 0
+     },
+     "after": {
+      "current": 67.7,
+      "anon": 64.6,
+      "file": 0
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 175.5,
+      "anon": 166.2,
+      "file": 0
+     },
+     "after": {
+      "current": 56.3,
+      "anon": 53.1,
+      "file": 0
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 187.8,
+      "anon": 178.3,
+      "file": 0
+     },
+     "after": {
+      "current": 75.2,
+      "anon": 72.3,
+      "file": 0
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 190.2,
+      "anon": 181.4,
+      "file": 0
+     },
+     "after": {
+      "current": 65.2,
+      "anon": 62,
+      "file": 0
+     }
+    }
+   ],
+   "end": {
+    "current": 9.5,
+    "anon": 6.2,
+    "file": 0
+   }
+  },
+  {
+   "variant": "jemalloc-tcache-1m",
+   "run": 2,
+   "rest": {
+    "current": 5.2,
+    "anon": 2.6,
+    "file": 0
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 171.5,
+      "anon": 163.1,
+      "file": 0
+     },
+     "after": {
+      "current": 94,
+      "anon": 90.8,
+      "file": 0
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 201.5,
+      "anon": 192.3,
+      "file": 0
+     },
+     "after": {
+      "current": 72.1,
+      "anon": 68.9,
+      "file": 0
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 192.8,
+      "anon": 183.8,
+      "file": 0
+     },
+     "after": {
+      "current": 72,
+      "anon": 68.9,
+      "file": 0
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 187.7,
+      "anon": 178.7,
+      "file": 0
+     },
+     "after": {
+      "current": 73.4,
+      "anon": 70.1,
+      "file": 0
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 192.3,
+      "anon": 183.2,
+      "file": 0
+     },
+     "after": {
+      "current": 67.4,
+      "anon": 64.1,
+      "file": 0
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 187.9,
+      "anon": 178.8,
+      "file": 0
+     },
+     "after": {
+      "current": 65.9,
+      "anon": 62.7,
+      "file": 0
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 188.1,
+      "anon": 178.7,
+      "file": 0
+     },
+     "after": {
+      "current": 70.1,
+      "anon": 66.8,
+      "file": 0
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 188.5,
+      "anon": 179.4,
+      "file": 0
+     },
+     "after": {
+      "current": 71.7,
+      "anon": 68.5,
+      "file": 0
+     }
+    }
+   ],
+   "end": {
+    "current": 10,
+    "anon": 6.4,
+    "file": 0
+   }
+  },
+  {
+   "variant": "jemalloc-tuned",
+   "run": 3,
+   "rest": {
+    "current": 5.1,
+    "anon": 2.6,
+    "file": 0
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 172,
+      "anon": 162.8,
+      "file": 0
+     },
+     "after": {
+      "current": 65.2,
+      "anon": 62.5,
+      "file": 0
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 185.3,
+      "anon": 176.1,
+      "file": 0
+     },
+     "after": {
+      "current": 80.4,
+      "anon": 77.2,
+      "file": 0
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 182.4,
+      "anon": 173.2,
+      "file": 0
+     },
+     "after": {
+      "current": 65.9,
+      "anon": 62.9,
+      "file": 0
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 180.4,
+      "anon": 171.1,
+      "file": 0
+     },
+     "after": {
+      "current": 77.4,
+      "anon": 74.2,
+      "file": 0
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 187.8,
+      "anon": 178.5,
+      "file": 0
+     },
+     "after": {
+      "current": 69.7,
+      "anon": 66.9,
+      "file": 0
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 189.2,
+      "anon": 179.8,
+      "file": 0
+     },
+     "after": {
+      "current": 74.4,
+      "anon": 71.5,
+      "file": 0
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 205.4,
+      "anon": 196,
+      "file": 0
+     },
+     "after": {
+      "current": 81.9,
+      "anon": 78.5,
+      "file": 0
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 186.4,
+      "anon": 177.4,
+      "file": 0
+     },
+     "after": {
+      "current": 62.8,
+      "anon": 59.5,
+      "file": 0
+     }
+    }
+   ],
+   "end": {
+    "current": 9.3,
+    "anon": 6.1,
+    "file": 0
+   }
+  },
+  {
+   "variant": "jemalloc-tcache-1m",
+   "run": 3,
+   "rest": {
+    "current": 4.9,
+    "anon": 2.6,
+    "file": 0
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 171.3,
+      "anon": 162.7,
+      "file": 0
+     },
+     "after": {
+      "current": 54.8,
+      "anon": 52,
+      "file": 0
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 184.4,
+      "anon": 175.2,
+      "file": 0
+     },
+     "after": {
+      "current": 69.4,
+      "anon": 66.3,
+      "file": 0
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 176.6,
+      "anon": 167.6,
+      "file": 0
+     },
+     "after": {
+      "current": 60.9,
+      "anon": 57.9,
+      "file": 0
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 178.3,
+      "anon": 169.4,
+      "file": 0
+     },
+     "after": {
+      "current": 69.5,
+      "anon": 66.3,
+      "file": 0
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 183.3,
+      "anon": 174.3,
+      "file": 0
+     },
+     "after": {
+      "current": 62.6,
+      "anon": 59.1,
+      "file": 0
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 188,
+      "anon": 178.8,
+      "file": 0
+     },
+     "after": {
+      "current": 71.1,
+      "anon": 68.1,
+      "file": 0
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 185.1,
+      "anon": 176,
+      "file": 0
+     },
+     "after": {
+      "current": 69,
+      "anon": 65.5,
+      "file": 0
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 186.8,
+      "anon": 177.2,
+      "file": 0
+     },
+     "after": {
+      "current": 75.3,
+      "anon": 71.9,
+      "file": 0
+     }
+    }
+   ],
+   "end": {
+    "current": 9.4,
+    "anon": 6.4,
+    "file": 0
+   }
+  }
+ ]
+}

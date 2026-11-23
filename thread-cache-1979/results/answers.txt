@@ -1,0 +1,27 @@
+# After the cycles run, on the same host and image: two containers of card-market's image with
+# the 32,501-byte fixture, one with tcache_max:65536 and one with tcache_max:1048576; the item
+# page asked of each with curl, once keeping the body as sent and once decoded (--compressed).
+
+== Accept-Encoding: br
+headers but Date (diff):
+15c15
+< etag: W/"c283927afddc1604"
+---
+> etag: W/"8695b2a35c90fcdf"
+bodies as sent: the same (4,440 bytes)
+bodies decoded: the same (32,501 bytes)
+
+== Accept-Encoding: gzip, deflate, br, zstd
+headers but Date (diff):
+15c15
+< etag: W/"c283927afddc1604"
+---
+> etag: W/"8695b2a35c90fcdf"
+bodies as sent: the same (3,981 bytes)
+bodies decoded: the same (32,501 bytes)
+
+# A second request to one container gave the same body as its first.
+# Three starts of the app under tcache_max:65536, the tag of the same page with br:
+etag: W/"04d2f819630b1be3"
+etag: W/"c7eae759dfa885da"
+etag: W/"b71450d75ea2e8ef"

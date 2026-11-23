@@ -1,0 +1,11 @@
+# 06:41:42 n1 enc=identity pairs=61 load=1.78
+# answers identical but Date (10876 bytes, HTTP/1.1 200 OK)
+# done 06:53:38
+pairs used: 60 (skipped the first 1); pairs with failed requests or a counter under 100%: none
+user+kernel cycles/request: before median 106,702 best 101,777 range 101,777-116,585; after median 106,069 best 100,876 range 100,876-118,372
+user cycles/request: before median 51,209 best 48,342 range 48,342-57,201; after median 50,878 best 47,833 range 47,833-58,464
+kernel cycles/request: before median 55,536 best 53,234 range 53,234-59,385; after median 55,126 best 53,043 range 53,043-59,908
+user instructions/request: before median 76,958 best 76,938 range 76,938-76,964; after median 76,957 best 76,936 range 76,936-76,966
+total: per-pair change median -0.63%, range -11.54% to +15.11%, one-sided 95% upper bound on the median +0.57% (the 37th of 60 sorted); pairs lower in B: 33 of 60
+instr: per-pair change median -0.00%, range -0.03% to +0.02%, one-sided 95% upper bound on the median +0.00% (the 37th of 60 sorted); pairs lower in B: 30 of 60
+per-pair total changes: -1.71 +0.48 -9.29 -3.00 +0.57 +0.98 -2.76 -5.80 -1.75 +0.70 -3.25 +15.11 -5.92 +11.01 -1.66 -0.06 +6.56 -1.06 +7.48 +1.27 +7.89 -6.67 -1.53 -6.17 -2.00 -11.54 +6.25 +7.57 -3.72 +1.42 -2.27 +0.54 -1.96 -0.10 -3.28 -5.08 -4.12 +0.61 +1.30 +1.60 +2.70 +1.25 -3.43 -6.69 -3.07 -4.02 +6.46 +0.24 -9.24 -3.09 +5.69 -4.27 -0.21 +2.52 +4.94 -5.69 +5.18 -4.57 +5.62 +2.32
