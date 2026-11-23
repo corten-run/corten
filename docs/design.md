@@ -8045,6 +8045,43 @@ rules something out.
     is about what such a reading can decide), so the form is not made; what it was counted
     to save is one allocation and 0.1% to 0.2% of the user instructions of an answer more
     than 2 hours 46 minutes old.
+    It was read again once [design Choice 72](#choice-placement-runs) gave a reading that tells
+    a build's placement from what a change costs
+    ([#1983 An older kept answer's Age written to a buffer missed the cycle margins on single builds; read it across placements](https://github.com/corten-run/corten/issues/1983)),
+    written again on main `14126d2a8` (`8d02090bf`) under a plan posted on the issue before the
+    run (tag `evidence/ca2af2ab`; the results are tag `evidence/0c0c599c`), and is still not
+    made. Under callgrind as above, on that main with the file routes and the four-hour lifetime
+    (`a03547c3c`) and with the buffer on it (`149e0f5b4`), the kept PNG at 10,005 seconds took
+    37,908 instructions where it took 38,396 and made 26 allocations where it made 27, the
+    allocator's count 5,765 where 6,322 and the rest 32,143 where 32,075, each rounded; under
+    ten seconds it took 37,371 against 37,379, the PNG of 1,024 bytes 37,293 against 37,316 and
+    a kept page 41,050 against 41,050. Across placements, on a c-8 with a Xeon Platinum 8280 and
+    Linux 6.12.117, the first placement run's probe program with a route for that PNG, jemalloc
+    as there, 30 placements of 8 recorded pairs for each comparison and every turn on a freshly
+    started build: a start keeps the answer with its first request, and for the answer past the
+    table a preloaded library then moves the start's monotonic clock on 10,005 seconds, so that
+    each of the 1,080 starts of those two comparisons sent an `Age` of 10005 before its turn and
+    of 10010 at most after it, its handler run once, where the 1,080 starts of the other two
+    sent 0 to 3. No placement failed, every counter ran the whole of every turn and no request
+    failed. On the answer past the table the base against itself read -0.44% in cycles with a
+    bound of +0.79%, and +0.45% with a bound of +1.03% with its lists' labels swapped, so the
+    run does not resolve +1% there, and the buffer read +0.40% with a bound of +1.10% (user
+    +0.74%, kernel +0.39%; 2,213.1 user instruction-cache misses a request against 2,196.5),
+    which does not pass, and would have missed had the base's reading resolved. Its user
+    instructions read +0.04%, with both one-sided bounds at +0.04% and 22,591 a request against
+    22,582 at the builds' medians, where the base against itself read +0.00%: with jemalloc and
+    64 connections the buffer saves no instructions, and the 488 fewer under callgrind are the
+    557 fewer of glibc's allocator for the second allocation less the 68 more the buffer runs
+    outside it. On the answer in the table, which takes 22,381 instructions and whose `Age` the
+    buffer does not make, the base against itself read +0.46% with a bound of +0.85%, and -0.45%
+    with a bound of +0.14% swapped, which resolves, and the buffer read +0.03% with a bound of
+    +0.65%, which meets +1%. The plan made the form only if both answers met +1%, so it is not
+    made. The run's limits: a clock moved on is not an answer that has sat in memory for 2 hours
+    46 minutes; every reading of the clock by either build went through the library; Corten's
+    connection watch, whose own coarse clock a step leaves behind until its next tick, closed
+    connections opened in the first second after a step in the kit's container test, so a turn
+    began 2 s after it; and the host was logged into for a line of status about once a minute
+    for the run's first 70 minutes and every five after, which the kit asks a run to do without.
     The second cut: the answer carried the cache's mark as an extension of its own beside the
     one for what was kept, an allocation and a place in the map; the mark is read from what
     was kept, which is a second lookup among the extensions for an answer that has some and
@@ -8287,11 +8324,14 @@ rules something out.
     so the table of ages should be of three digits; or the rule for a touched request comes
     to tell where a build's code sits from what the change costs, so an older answer's
     digits written to a buffer can be read again. That rule is now
-    [design Choice 72](#choice-placement-runs) (2026-11-23); the buffer (`b0bc7ae32`) has not
-    been read under it, and stays not made until a run across placements reads a kept answer
-    past the table, as
-    [#1983 An older kept answer's Age written to a buffer missed the cycle margins on single builds; read it across placements](https://github.com/corten-run/corten/issues/1983)
-    asks.
+    [design Choice 72](#choice-placement-runs) (2026-11-23), and the buffer was read under it
+    (`8d02090bf`, above;
+    [#1983 An older kept answer's Age written to a buffer missed the cycle margins on single builds; read it across placements](https://github.com/corten-run/corten/issues/1983)):
+    the run did not resolve +1% on an answer past the table, the buffer's bound there was over
+    it, and with jemalloc it ran no fewer instructions. So what would have it read again is now
+    an app found giving answers that old with an allocator that charges for the second
+    allocation as glibc's does, and a run declared with more placements or pairs than the 30 of
+    8 that did not resolve that answer.
 
     Last checked: 2026-11-23 for the cycles of the cut of what a kept answer holds, `d3bb2e0e4`
     against `04530f7e0` on the Xeon Platinum 8280 with jemalloc 5.3.0, kept under the tag
@@ -8672,7 +8712,15 @@ rules something out.
     port opens; jemalloc 5.3.0 by `LD_PRELOAD` with
     `MALLOC_CONF=background_thread:true,tcache_max:65536`; every turn on a freshly started build,
     the server on one CPU, the load on two others and the driver and `perf` on a fourth,
-    `wrk -t2 -c64` and 3 s turns; and a Xeon Platinum 8358.
+    `wrk -t2 -c64` and 3 s turns; and a Xeon Platinum 8358. The second run recorded one more
+    (below: main `14126d2a8`, 2026-11-23, tag `evidence/0c0c599c`): `young` -2.26% to +2.22%,
+    for that tag's probe program (the first run's with a route for a PNG of 8,000 bytes kept for
+    four hours, features `json` and `compress`); a `GET /picture.png` with
+    `Accept-Encoding: identity` and `Accept: */*` to its `old` configuration, the answer kept by
+    the start's first request and under 16 seconds old; jemalloc as above, with that tag's clock
+    library preloaded after it and never signalled; the same turn protocol; and a Xeon Platinum
+    8280. Its A/A on that request with the answer 10,005 seconds old did not resolve, so it
+    records none.
 
     What ships is one placement. A release binary is one draw of where the linker put the code, and
     the next change to anything before a function moves it again, so the placement a change lands in
@@ -8742,6 +8790,42 @@ rules something out.
     itself, not the change's base `bd6b7741f`, so they calibrate the protocol on another commit
     than the one the change comparison built; and it counted no user L1 instruction-cache misses,
     which item 2 asks for when a change adds or moves code, as that pull request's does.
+
+    The second run
+    ([#1983 An older kept answer's Age written to a buffer missed the cycle margins on single builds; read it across placements](https://github.com/corten-run/corten/issues/1983),
+    whose change [design Choice 70](#choice-kept-pages) records; plan tag `evidence/ca2af2ab`,
+    results tag `evidence/0c0c599c`) is the first under the rule as written: its A/As are the
+    change's base `14126d2a8` against itself, it counted user instruction-cache misses, it
+    compared answers as received (the status, every header line but `Date` and the body's 8,000
+    bytes, the `Age`'s value alone set aside and checked against a range for every start), and
+    its plan gated a change. On a c-8 (Intel Xeon Platinum 8280, Debian 13, Linux 6.12.117,
+    2026-11-23), K = 30 and R = 8, four comparisons interleaved by placement: the 90 placements'
+    layouts have every function moved by exactly its pad (307,800 of 307,800) and every pair of
+    neighbours kept (301,590 of 301,590), the 92 binaries have 92 distinct SHA-256s, all 90
+    placements answered as their unpadded binary, and each of the 2,304 starts had its counters
+    at 100%, no `wrk` error and an `Age` in its range before and after its turn. Base against
+    base on `young`, a kept PNG under 16 seconds old: median of placement medians +0.46%, bound
+    +0.85%, placement medians from -2.26% to +2.22%, t bound +0.78%, their standard deviation
+    1.17% against 1.86% that a median of 8 pairs would have from the pairs' own spread (4.19%)
+    alone; with the labels swapped a bound of +0.14%, so it resolves +1% (19 of 30 placement
+    medians above zero, two-sided sign test p = 0.200). On `old`, the same answer 10,005 seconds
+    old: -0.44%, bound +0.79%, -3.63% to +4.38%, t bound +0.75%, 1.97% against 1.80% (4.06%);
+    with the labels swapped a bound of +1.03%, so it does not resolve +1%, the first A/A at
+    K = 30 the second reading turns away (14 of 30 above zero, p = 0.856). The pairs' own spread
+    is 4.1% to 4.2% here where the first run's was 2.9% to 3.0%, on another request and another
+    CPU model. The change on `young`: +0.03%, bound +0.65%, which meets +1%; on `old`: +0.40%,
+    bound +1.10%, not resolved, which does not pass. The base's unpadded build against eight
+    padded ones on `old`: the padded ones cost a median 1.30% fewer cycles (-1.88% to -0.13%; 8
+    of 8 fewer, two-sided sign test p = 0.008) and missed the instruction cache 2.11% more. With
+    the first run's 7 of 8 that is 15 of 16 padded builds under their unpadded one, on two
+    mains, two requests and two CPU models, which is the Revisit-when on the unpadded build
+    below;
+    [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996)
+    asks what the pad itself changes. Both sides of a comparison are padded, so it moves no
+    reading here. The four comparisons' turns took 164 minutes and the diagnostic's 13 more. Two
+    limits of this run: the clock library every server was started with, which a spread recorded
+    from it carries as part of its setup; and the logins for a line of status while it ran,
+    about once a minute for its first 70 minutes and every five after.
 
     Not chosen: a seeded shuffle of the function order (LLD's `--shuffle-sections`, this Choice's
     first version), since in that plan's container dry run seed 1 on main moved all 3,404
