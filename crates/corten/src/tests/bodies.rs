@@ -880,3 +880,32 @@ async fn a_relay_passes_the_upstreams_answer_on() {
 fn tokio_stream_of<T>(receive: tokio::sync::mpsc::Receiver<T>) -> impl futures_util::Stream<Item = T> {
     futures_util::stream::unfold(receive, |mut receive| async move { receive.recv().await.map(|item| (item, receive)) })
 }
+
+/// A browser's `Accept-Encoding` line is found in a list, not parsed (`compress::BROWSER_LINES`).
+/// The list says of each line what the parser reads from it, and an answer to a request with one
+/// has the coding the same line gets when it is parsed (in another case, which the list does not
+/// hold).
+#[cfg(feature = "compress")]
+#[tokio::test]
+async fn the_browsers_accept_encoding_lines_are_read_as_the_parser_reads_them() {
+    use crate::compress::{each_listed, BROWSER_LINES};
+    let routes = Table::new().route("/text", get(|| async { "text ".repeat(400) }));
+    let router = App::new(Routes::from(routes)).router();
+    let coding = |line: String| {
+        let router = router.clone();
+        async move {
+            let req = Request::get("/text").header("accept-encoding", line).body(Body::empty()).unwrap();
+            router.oneshot(req).await.unwrap().headers().get("content-encoding").cloned()
+        }
+    };
+    for (line, codings) in BROWSER_LINES {
+        let text = std::str::from_utf8(line).unwrap();
+        let mut parsed = Vec::new();
+        each_listed(line, |q, coding| parsed.push((q, coding)));
+        let listed: Vec<_> = codings.iter().map(|&coding| (1000, coding)).collect();
+        assert_eq!(parsed, listed, "{text}");
+        let sent = coding(text.to_string()).await;
+        assert!(sent.is_some(), "{text}");
+        assert_eq!(sent, coding(text.to_uppercase()).await, "{text}");
+    }
+}
