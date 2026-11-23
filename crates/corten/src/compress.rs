@@ -51,7 +51,8 @@ use crate::{body::Body, response::Response};
 pub(crate) const MIN_SIZE: u64 = 1024;
 const ZSTD_LEVEL: i32 = 1;
 const BROTLI_LEVEL: u32 = 1;
-const GZIP_LEVEL: u32 = 1;
+/// libdeflate's fastest level, for a body compressed per request ([`encode`]).
+const GZIP_LEVEL: i32 = 1;
 /// A stream's gzip level: deflate (miniz_oxide) at 1 finds few of an earlier event's matches, so a
 /// 2.7 KB redraw of one changed row costs 129 to 453 bytes a time; at 3 it costs 60 to 69
 /// (`what_a_redraw_sends`). An event made and sent through `apply` then takes about 286,650
@@ -160,6 +161,9 @@ fn compressible(essence: &str) -> bool {
 
 thread_local! {
     static ZSTD: RefCell<Option<zstd::bulk::Compressor<'static>>> = const { RefCell::new(None) };
+    /// Kept by each thread that has compressed a body with gzip: 200 KiB at level 1 (asked of
+    /// the C allocator, measured with glibc's), about what the zstd context holds.
+    static GZIP: RefCell<Option<libdeflater::Compressor>> = const { RefCell::new(None) };
 }
 
 /// How hard a one-shot compression tries.
@@ -182,7 +186,8 @@ pub(crate) enum Level {
     Best,
 }
 
-/// One-shot compression at `level`. zstd is only ever used per request.
+/// One-shot compression at `level`. zstd is only ever used per request, and so is libdeflate,
+/// which makes a request's gzip; a stored form's gzip 9 is flate2's.
 pub(crate) fn encode(coding: Coding, data: &[u8], level: Level) -> Vec<u8> {
     match coding {
         Coding::Zstd => ZSTD.with_borrow_mut(|slot| {
@@ -202,9 +207,20 @@ pub(crate) fn encode(coding: Coding, data: &[u8], level: Level) -> Vec<u8> {
             }
             out
         }
+        Coding::Gzip if level == Level::Fast => GZIP.with_borrow_mut(|slot| {
+            let compressor = slot.get_or_insert_with(|| {
+                libdeflater::Compressor::new(libdeflater::CompressionLvl::new(GZIP_LEVEL).expect("a libdeflate level"))
+            });
+            // libdeflate writes into a buffer it is given whole: the most the body can come to.
+            let mut out = vec![0; compressor.gzip_compress_bound(data.len())];
+            let written = compressor.gzip_compress(data, &mut out).expect("libdeflate compresses into its bound");
+            out.truncate(written);
+            // What is sent, or kept with a kept answer, is what was written, not the bound.
+            out.shrink_to_fit();
+            out
+        }),
         Coding::Gzip => {
-            let level = if level == Level::Fast { GZIP_LEVEL } else { 9 };
-            let mut writer = flate2::write::GzEncoder::new(Vec::with_capacity(data.len() / 3), flate2::Compression::new(level));
+            let mut writer = flate2::write::GzEncoder::new(Vec::with_capacity(data.len() / 3), flate2::Compression::new(9));
             writer.write_all(data).expect("gzip writes to memory");
             writer.finish().expect("gzip writes to memory")
         }
@@ -212,7 +228,7 @@ pub(crate) fn encode(coding: Coding, data: &[u8], level: Level) -> Vec<u8> {
 }
 
 /// What a request accepts, read before it moves on: each coding's q-value (in thousandths, `0`:
-/// not accepted), in the server's order of preference, zstd, brotli, gzip.
+/// not accepted), by coding (zstd, brotli, gzip).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Accepts([u16; 3]);
 
@@ -222,9 +238,12 @@ impl Accepts {
         self.now().is_some()
     }
 
-    /// The coding for a body compressed as it is sent: the highest q-value, then the server's order.
+    /// The coding for a body compressed as it is sent: the highest q-value, then the server's
+    /// order for one made now, zstd, gzip, brotli. gzip is ahead of brotli here because a
+    /// request's gzip is smaller than its brotli 1 and takes less to make (the module's figures);
+    /// a stored form's order is the other way ([`Accepts::stored`]).
     fn now(self) -> Option<Coding> {
-        self.best(&[Coding::Zstd, Coding::Brotli, Coding::Gzip])
+        self.best(&[Coding::Zstd, Coding::Gzip, Coding::Brotli])
     }
 
     /// The coding for a body compressed as it is sent and flushed a chunk at a time (an event
@@ -947,6 +966,11 @@ mod tests {
             (a.now(), a.stored())
         };
         assert_eq!(at("gzip, deflate, br, zstd"), (Some(Coding::Zstd), Some(Coding::Brotli)));
+        // Made now, gzip is ahead of brotli; a stored form is brotli first.
+        assert_eq!(at("gzip, deflate, br"), (Some(Coding::Gzip), Some(Coding::Brotli)));
+        assert_eq!(at("br, gzip"), (Some(Coding::Gzip), Some(Coding::Brotli)));
+        assert_eq!(at("br"), (Some(Coding::Brotli), Some(Coding::Brotli)));
+        assert_eq!(at("br, gzip;q=0.9"), (Some(Coding::Brotli), Some(Coding::Brotli)), "the client's ranking comes first");
         assert_eq!(at("zstd"), (Some(Coding::Zstd), None));
         assert_eq!(at("zstd, gzip"), (Some(Coding::Zstd), Some(Coding::Gzip)));
         assert_eq!(at("br;q=0.5, gzip"), (Some(Coding::Gzip), Some(Coding::Gzip)));
