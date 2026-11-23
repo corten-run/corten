@@ -8401,10 +8401,11 @@ rules something out.
     time over the load. A turn or count that does not show this is refused, and a qualification
     on the run's own host, which decides nothing, stops the run before its first deciding turn
     unless every gap of every one of its turns is at most 50 ms and a stall it puts at each edge
-    is refused on that edge's gap. Each server runs with the allocator setting of the measured
-    trees' own card-market image, the same in both. Each run stops before its first request on
-    a host where perf cannot count every event it reads. Until both pass, this change does not
-    merge.
+    is refused on that edge's gap. Each server runs with the allocator setting each measured
+    tree's built card-market image carries (its `LD_PRELOAD` and `MALLOC_CONF` as Docker reports
+    the image's environment), and a run stops unless that preloads jemalloc, sets `MALLOC_CONF` and
+    is the same in both. Each run stops before its first request on a host where perf cannot
+    count every event it reads. Until both pass, this change does not merge.
     Neither gate reads allocations or request times. The allocations and bytes a request on
     card-market's item page and item JSON, counted in process for both sides of `14126d2a8`
     against `6b6b38ef1` (whose change to `crates` is this pair's byte for byte), are in
