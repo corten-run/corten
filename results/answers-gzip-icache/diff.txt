@@ -1,0 +1,2 @@
+== check 1: /page -H 'accept-encoding: gzip' -o /dev/null -D - -w 'body %{size_download}'
+== check 2: /page -H 'accept-encoding: gzip' --compressed

@@ -1,0 +1,238 @@
+
+running 1 test
+test kept::probe_wait::wait_probe ... 
+head	idle	4021	-	7603.3	-1	-1	-1	-1	0	-
+head	room	4021	32768	9066.0	2026.1	2011.0	-1.0	-1.0	0	admitted
+head	refused	4021	32768	8502.8	2043.7	2042.2	-1.0	-1.0	0	refused
+head	contended	4021	32768	11878.8	3525.7	3523.3	961.7	2568.0	3802	refused
+head	idle	78967	-	20317.7	-1	-1	-1	-1	0	-
+head	room	78967	32768	20920.8	2063.3	2060.4	-1.0	-1.0	0	admitted
+head	refused	78967	32768	18142.0	1973.2	1971.1	-1.0	-1.0	0	refused
+head	contended	78967	32768	20709.4	3754.3	3750.8	938.6	2741.4	3802	refused
+head	enc	-	32768	1590.9	6628
+head	heldown	4021	-	8584.0
+head	heldown	78967	-	15088.3
+head	idle	4021	-	8495.7	-1	-1	-1	-1	0	-
+head	room	4021	32768	7574.7	1494.6	1491.7	-1.0	-1.0	0	admitted
+head	refused	4021	32768	7318.0	1367.7	1366.3	-1.0	-1.0	0	refused
+head	contended	4021	32768	11711.4	3816.8	3814.7	938.4	2885.6	3802	refused
+head	idle	78967	-	16151.5	-1	-1	-1	-1	0	-
+head	room	78967	32768	17048.4	1497.6	1495.1	-1.0	-1.0	0	admitted
+head	refused	78967	32768	16489.6	1426.5	1425.2	-1.0	-1.0	0	refused
+head	contended	78967	32768	20877.1	4144.6	4140.7	938.2	3147.9	3802	refused
+head	enc	-	32768	1505.2	6628
+head	heldown	4021	-	8636.0
+head	heldown	78967	-	15271.4
+head	idle	4021	-	8751.1	-1	-1	-1	-1	0	-
+head	room	4021	32768	9607.8	1547.4	1544.6	-1.0	-1.0	0	admitted
+head	refused	4021	32768	8919.4	1449.5	1448.1	-1.0	-1.0	0	refused
+head	contended	4021	32768	12347.6	4085.5	4082.0	948.0	3070.6	3802	refused
+head	idle	78967	-	16047.5	-1	-1	-1	-1	0	-
+head	room	78967	32768	16583.2	1483.3	1480.7	-1.0	-1.0	0	admitted
+head	refused	78967	32768	15750.6	1383.5	1382.1	-1.0	-1.0	0	refused
+head	contended	78967	32768	20217.8	3902.5	3899.1	938.9	2959.7	3802	refused
+head	enc	-	32768	1419.9	6628
+head	heldown	4021	-	8639.6
+head	heldown	78967	-	15219.9
+head	idle	4021	-	8511.8	-1	-1	-1	-1	0	-
+head	room	4021	32768	7933.6	1534.4	1531.2	-1.0	-1.0	0	admitted
+head	refused	4021	32768	7584.1	1403.9	1402.6	-1.0	-1.0	0	refused
+head	contended	4021	32768	11829.2	3911.1	3908.0	938.3	2909.5	3802	refused
+head	idle	78967	-	15674.1	-1	-1	-1	-1	0	-
+head	room	78967	32768	17261.8	1480.3	1478.0	-1.0	-1.0	0	admitted
+head	refused	78967	32768	16661.4	1406.9	1405.8	-1.0	-1.0	0	refused
+head	contended	78967	32768	20633.6	4070.3	4066.7	938.1	3065.4	3802	refused
+head	enc	-	32768	1465.3	6628
+head	heldown	4021	-	8585.2
+head	heldown	78967	-	15267.6
+head	idle	4021	-	8442.2	-1	-1	-1	-1	0	-
+head	room	4021	32768	7997.4	1528.9	1526.6	-1.0	-1.0	0	admitted
+head	refused	4021	32768	7285.1	1402.2	1401.1	-1.0	-1.0	0	refused
+head	contended	4021	32768	11624.9	3931.8	3928.5	938.2	2885.5	3802	refused
+head	idle	78967	-	15684.6	-1	-1	-1	-1	0	-
+head	room	78967	32768	16841.9	1469.3	1466.7	-1.0	-1.0	0	admitted
+head	refused	78967	32768	16612.3	1423.1	1421.7	-1.0	-1.0	0	refused
+head	contended	78967	32768	21165.5	4107.1	4103.5	938.2	3168.2	3802	refused
+head	enc	-	32768	1566.4	6628
+head	heldown	4021	-	9501.5
+head	heldown	78967	-	16175.0
+head	idle	4021	-	8576.6	-1	-1	-1	-1	0	-
+head	room	4021	32768	8357.3	1553.6	1550.7	-1.0	-1.0	0	admitted
+head	refused	4021	32768	8217.6	1434.5	1433.2	-1.0	-1.0	0	refused
+head	contended	4021	32768	12093.0	3883.3	3881.1	938.8	2948.3	3802	refused
+head	idle	78967	-	16199.7	-1	-1	-1	-1	0	-
+head	room	78967	32768	16789.2	1455.4	1453.1	-1.0	-1.0	0	admitted
+head	refused	78967	32768	16387.5	1447.0	1445.5	-1.0	-1.0	0	refused
+head	contended	78967	32768	21972.3	4042.4	4039.0	938.5	2994.8	3802	refused
+head	enc	-	32768	1511.3	6628
+head	heldown	4021	-	8980.0
+head	heldown	78967	-	16878.7
+head	idle	4021	-	8863.5	-1	-1	-1	-1	0	-
+head	room	4021	32768	8761.6	1667.1	1664.1	-1.0	-1.0	0	admitted
+head	refused	4021	32768	8083.8	1566.8	1565.2	-1.0	-1.0	0	refused
+head	contended	4021	32768	11959.3	3698.2	3695.6	938.6	2766.3	3802	refused
+head	idle	78967	-	16402.5	-1	-1	-1	-1	0	-
+head	room	78967	32768	17045.3	1551.5	1548.9	-1.0	-1.0	0	admitted
+head	refused	78967	32768	17046.9	1461.9	1460.3	-1.0	-1.0	0	refused
+head	contended	78967	32768	20625.6	3749.5	3746.1	938.7	2729.1	3802	refused
+head	enc	-	32768	1438.6	6628
+head	heldown	4021	-	7999.6
+head	heldown	78967	-	15543.8
+head	idle	4021	-	8525.6	-1	-1	-1	-1	0	-
+head	room	4021	32768	7712.5	1532.8	1530.4	-1.0	-1.0	0	admitted
+head	refused	4021	32768	6916.4	1380.3	1379.0	-1.0	-1.0	0	refused
+head	contended	4021	32768	11792.5	3712.8	3709.6	938.6	2698.8	3802	refused
+head	idle	78967	-	15968.3	-1	-1	-1	-1	0	-
+head	room	78967	32768	16885.3	1485.4	1483.1	-1.0	-1.0	0	admitted
+head	refused	78967	32768	15972.9	1399.1	1397.9	-1.0	-1.0	0	refused
+head	contended	78967	32768	20705.5	3844.5	3841.2	938.5	2836.1	3802	refused
+head	enc	-	32768	1472.7	6628
+head	heldown	4021	-	8140.0
+head	heldown	78967	-	14974.9
+head	idle	4021	-	8444.7	-1	-1	-1	-1	0	-
+head	room	4021	32768	7843.5	1512.1	1509.7	-1.0	-1.0	0	admitted
+head	refused	4021	32768	7142.1	1386.4	1385.1	-1.0	-1.0	0	refused
+head	contended	4021	32768	11643.6	3666.4	3663.4	938.5	2668.2	3802	refused
+head	idle	78967	-	16195.5	-1	-1	-1	-1	0	-
+head	room	78967	32768	16980.0	1482.4	1480.3	-1.0	-1.0	0	admitted
+head	refused	78967	32768	16718.0	1403.2	1401.8	-1.0	-1.0	0	refused
+head	contended	78967	32768	20302.5	3615.3	3612.2	938.7	2609.9	3802	refused
+head	enc	-	32768	1525.4	6628
+head	heldown	4021	-	8663.8
+head	heldown	78967	-	14962.0
+head	idle	4021	-	8518.8	-1	-1	-1	-1	0	-
+head	room	4021	32768	7561.6	1536.4	1533.9	-1.0	-1.0	0	admitted
+head	refused	4021	32768	6940.7	1384.4	1383.0	-1.0	-1.0	0	refused
+head	contended	4021	32768	11626.4	3515.2	3513.1	938.2	2582.0	3802	refused
+head	idle	78967	-	15813.1	-1	-1	-1	-1	0	-
+head	room	78967	32768	16818.5	1495.4	1493.0	-1.0	-1.0	0	admitted
+head	refused	78967	32768	16179.6	1416.2	1415.0	-1.0	-1.0	0	refused
+head	contended	78967	32768	20962.2	3847.4	3843.9	938.4	2836.4	3802	refused
+head	enc	-	32768	1458.2	6628
+head	heldown	4021	-	7930.6
+head	heldown	78967	-	14519.2
+head	idle	4021	-	8407.2	-1	-1	-1	-1	0	-
+head	room	4021	32768	7789.1	1513.4	1510.4	-1.0	-1.0	0	admitted
+head	refused	4021	32768	7117.5	1390.7	1389.5	-1.0	-1.0	0	refused
+head	contended	4021	32768	11833.6	3721.8	3718.6	938.5	2699.9	3802	refused
+head	idle	78967	-	16330.9	-1	-1	-1	-1	0	-
+head	room	78967	32768	16684.5	1488.3	1485.5	-1.0	-1.0	0	admitted
+head	refused	78967	32768	16164.0	1393.2	1391.7	-1.0	-1.0	0	refused
+head	contended	78967	32768	20681.7	3762.5	3758.8	938.7	2758.1	3802	refused
+head	enc	-	32768	1451.2	6628
+head	heldown	4021	-	8122.5
+head	heldown	78967	-	15077.5
+head	idle	4021	-	8622.5	-1	-1	-1	-1	0	-
+head	room	4021	32768	8837.0	1654.4	1651.4	-1.0	-1.0	0	admitted
+head	refused	4021	32768	9229.0	1587.2	1585.5	-1.0	-1.0	0	refused
+head	contended	4021	32768	12385.4	3836.0	3832.7	939.0	2832.7	3802	refused
+head	idle	78967	-	17297.6	-1	-1	-1	-1	0	-
+head	room	78967	32768	18599.2	1578.7	1575.9	-1.0	-1.0	0	admitted
+head	refused	78967	32768	17605.4	1438.6	1437.1	-1.0	-1.0	0	refused
+head	contended	78967	32768	20462.1	3716.8	3714.3	938.7	2788.3	3802	refused
+head	enc	-	32768	1430.2	6628
+head	heldown	4021	-	8217.9
+head	heldown	78967	-	15767.8
+head	idle	4021	-	8503.5	-1	-1	-1	-1	0	-
+head	room	4021	32768	8102.4	1540.3	1537.4	-1.0	-1.0	0	admitted
+head	refused	4021	32768	7406.9	1384.9	1383.4	-1.0	-1.0	0	refused
+head	contended	4021	32768	11841.9	3651.9	3648.2	938.2	2646.7	3802	refused
+head	idle	78967	-	15829.7	-1	-1	-1	-1	0	-
+head	room	78967	32768	16949.9	1478.6	1476.0	-1.0	-1.0	0	admitted
+head	refused	78967	32768	17057.4	1421.9	1420.5	-1.0	-1.0	0	refused
+head	contended	78967	32768	20299.9	3647.3	3643.9	938.4	2644.9	3802	refused
+head	enc	-	32768	1446.4	6628
+head	heldown	4021	-	9070.7
+head	heldown	78967	-	14782.5
+head	idle	4021	-	8581.2	-1	-1	-1	-1	0	-
+head	room	4021	32768	8177.3	1539.3	1536.9	-1.0	-1.0	0	admitted
+head	refused	4021	32768	7496.0	1399.4	1398.2	-1.0	-1.0	0	refused
+head	contended	4021	32768	11928.4	3791.9	3789.5	938.4	2860.5	3802	refused
+head	idle	78967	-	16339.5	-1	-1	-1	-1	0	-
+head	room	78967	32768	16694.9	1524.0	1521.8	-1.0	-1.0	0	admitted
+head	refused	78967	32768	16360.9	1392.9	1391.5	-1.0	-1.0	0	refused
+head	contended	78967	32768	20489.1	3681.6	3678.1	938.2	2671.3	3802	refused
+head	enc	-	32768	1463.7	6628
+head	heldown	4021	-	8219.5
+head	heldown	78967	-	15016.2
+head	idle	4021	-	8429.5	-1	-1	-1	-1	0	-
+head	room	4021	32768	7862.8	1519.7	1517.1	-1.0	-1.0	0	admitted
+head	refused	4021	32768	7205.8	1382.0	1380.8	-1.0	-1.0	0	refused
+head	contended	4021	32768	12484.7	3891.5	3887.8	938.8	2880.6	3802	refused
+head	idle	78967	-	16446.1	-1	-1	-1	-1	0	-
+head	room	78967	32768	17365.4	1531.9	1529.4	-1.0	-1.0	0	admitted
+head	refused	78967	32768	16348.8	1417.9	1416.2	-1.0	-1.0	0	refused
+head	contended	78967	32768	20805.6	3967.8	3964.5	938.4	2959.8	3802	refused
+head	enc	-	32768	1528.5	6628
+head	heldown	4021	-	8256.9
+head	heldown	78967	-	15044.0
+head	idle	4021	-	8397.4	-1	-1	-1	-1	0	-
+head	room	4021	32768	7484.5	1539.5	1537.2	-1.0	-1.0	0	admitted
+head	refused	4021	32768	7174.3	1367.0	1365.7	-1.0	-1.0	0	refused
+head	contended	4021	32768	12134.7	3749.0	3745.6	938.4	2740.4	3802	refused
+head	idle	78967	-	16035.7	-1	-1	-1	-1	0	-
+head	room	78967	32768	16263.5	1467.7	1465.4	-1.0	-1.0	0	admitted
+head	refused	78967	32768	15627.9	1383.1	1381.8	-1.0	-1.0	0	refused
+head	contended	78967	32768	20199.3	3554.7	3551.6	938.9	2539.5	3802	refused
+head	enc	-	32768	1648.0	6628
+head	heldown	4021	-	8105.4
+head	heldown	78967	-	15056.9
+head	idle	4021	-	8617.9	-1	-1	-1	-1	0	-
+head	room	4021	32768	8015.9	1598.8	1596.0	-1.0	-1.0	0	admitted
+head	refused	4021	32768	7384.6	1400.1	1398.8	-1.0	-1.0	0	refused
+head	contended	4021	32768	11687.2	3554.0	3551.4	938.8	2622.4	3802	refused
+head	idle	78967	-	16479.9	-1	-1	-1	-1	0	-
+head	room	78967	32768	18211.9	1568.7	1566.1	-1.0	-1.0	0	admitted
+head	refused	78967	32768	16589.0	1433.2	1431.7	-1.0	-1.0	0	refused
+head	contended	78967	32768	20448.7	3702.6	3700.3	938.4	2771.2	3802	refused
+head	enc	-	32768	1714.5	6628
+head	heldown	4021	-	8098.7
+head	heldown	78967	-	15211.6
+head	idle	4021	-	8479.0	-1	-1	-1	-1	0	-
+head	room	4021	32768	7937.1	1515.5	1512.8	-1.0	-1.0	0	admitted
+head	refused	4021	32768	7421.9	1378.9	1377.1	-1.0	-1.0	0	refused
+head	contended	4021	32768	11983.6	3597.6	3594.1	938.5	2594.8	3802	refused
+head	idle	78967	-	17002.9	-1	-1	-1	-1	0	-
+head	room	78967	32768	17296.3	1491.0	1487.8	-1.0	-1.0	0	admitted
+head	refused	78967	32768	16180.7	1416.7	1415.3	-1.0	-1.0	0	refused
+head	contended	78967	32768	20474.9	3697.8	3694.2	938.3	2681.1	3802	refused
+head	enc	-	32768	1565.9	6628
+head	heldown	4021	-	7972.9
+head	heldown	78967	-	14949.9
+head	idle	4021	-	8392.4	-1	-1	-1	-1	0	-
+head	room	4021	32768	7572.2	1544.0	1541.2	-1.0	-1.0	0	admitted
+head	refused	4021	32768	6965.3	1363.3	1361.9	-1.0	-1.0	0	refused
+head	contended	4021	32768	11569.4	3519.7	3516.2	938.6	2512.7	3802	refused
+head	idle	78967	-	16290.5	-1	-1	-1	-1	0	-
+head	room	78967	32768	17384.0	1527.6	1525.0	-1.0	-1.0	0	admitted
+head	refused	78967	32768	16199.8	1395.7	1394.3	-1.0	-1.0	0	refused
+head	contended	78967	32768	20396.8	3865.3	3862.0	941.1	2857.1	3802	refused
+head	enc	-	32768	1477.0	6628
+head	heldown	4021	-	9149.7
+head	heldown	78967	-	15458.6
+head	idle	4021	-	8470.7	-1	-1	-1	-1	0	-
+head	room	4021	32768	7692.0	1547.2	1544.5	-1.0	-1.0	0	admitted
+head	refused	4021	32768	7193.5	1394.8	1393.3	-1.0	-1.0	0	refused
+head	contended	4021	32768	11581.5	3908.9	3905.6	938.2	2900.3	3802	refused
+head	idle	78967	-	15762.7	-1	-1	-1	-1	0	-
+head	room	78967	32768	17156.2	1561.8	1559.5	-1.0	-1.0	0	admitted
+head	refused	78967	32768	16671.6	1446.3	1444.6	-1.0	-1.0	0	refused
+head	contended	78967	32768	20741.2	4059.9	4056.5	938.1	3116.8	3802	refused
+head	enc	-	32768	1474.9	6628
+head	heldown	4021	-	8318.9
+head	heldown	78967	-	15143.6
+head	idle	4021	-	8396.8	-1	-1	-1	-1	0	-
+head	room	4021	32768	7899.3	1532.1	1529.6	-1.0	-1.0	0	admitted
+head	refused	4021	32768	7288.5	1384.6	1383.2	-1.0	-1.0	0	refused
+head	contended	4021	32768	11838.3	3983.9	3980.8	938.2	3039.3	3802	refused
+head	idle	78967	-	16020.4	-1	-1	-1	-1	0	-
+head	room	78967	32768	17015.6	1471.0	1468.2	-1.0	-1.0	0	admitted
+head	refused	78967	32768	17341.8	1457.1	1455.6	-1.0	-1.0	0	refused
+head	contended	78967	32768	21677.7	4436.7	4433.3	938.6	3493.9	3802	refused
+head	enc	-	32768	1530.0	6628
+head	heldown	4021	-	9589.0
+head	heldown	78967	-	15331.4
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 920 filtered out; finished in 3.79s
+

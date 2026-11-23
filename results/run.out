@@ -1,0 +1,129 @@
+== 1846r2 calibrate 21:58:14
+REFUSED_BOUND=64576
+REFUSED_FILL=7
+# head zstd and kept from 63760 to 65392, br above; base zstd and kept at the bound (calibrate.log)
+== 1846r2 check start 21:58:26
+checked 2 requests: differ only as /m/1846r2/expect-browser.diff says
+browser base: 1 of 1 starts: WARM browser: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1819 bytes
+browser head: 1 of 1 starts: WARM browser: /page accept-encoding "gzip, deflate, br, zstd": content-encoding br, age _, 1635 bytes
+checked 2 requests: same
+gzip base: 1 of 1 starts: WARM gzip: /page accept-encoding "gzip": content-encoding gzip, age _, 1944 bytes
+gzip head: 1 of 1 starts: WARM gzip: /page accept-encoding "gzip": content-encoding gzip, age _, 1944 bytes
+checked 2 requests: same
+refused base: 1 of 1 starts: WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1819 bytes; FENCE ok in 1
+refused head: 1 of 1 starts: WARM refused: /page accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 1819 bytes; FENCE ok in 1
+checked 2 requests: differ only as /m/1846r2/expect-json-browser.diff says
+json-browser base: 1 of 1 starts: WARM json-browser: /records accept-encoding "gzip, deflate, br, zstd": content-encoding zstd, age _, 328 bytes
+json-browser head: 1 of 1 starts: WARM json-browser: /records accept-encoding "gzip, deflate, br, zstd": content-encoding br, age _, 280 bytes
+== 1846r2 checks ok 21:58:27
+== browser start 21:58:27
+== browser ok 22:11:05
+/m/1846r2/results/cycles-browser.csv: 100 pairs; the one-sided 95% upper bound is the 59th smallest change
+| per request | base median | head median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| cycles user+kernel | 49765 | 49409 | -1.03% | -0.68% | -5.68% to +4.57% |
+| cycles user | 23507 | 23224 | -1.51% | -0.92% | -9.35% to +6.85% |
+| cycles kernel | 26311 | 26257 | -0.09% | +0.11% | -4.06% to +2.84% |
+| instructions user | 30638.9 | 30625.7 | -0.05% | -0.05% | -0.17% to +0.08% |
+base: median requests/s 68246
+head: median requests/s 68661
+cycles margin (bound on user+kernel change under +1%): met (-0.68%)
+instructions:u per request (medians): 30638.9 -> 30625.7 (-13.2); bound on the change -0.05%, at or below -2%: false
+== gzip start 22:11:05
+== gzip ok 22:23:42
+/m/1846r2/results/cycles-gzip.csv: 100 pairs; the one-sided 95% upper bound is the 59th smallest change
+| per request | base median | head median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| cycles user+kernel | 49514 | 48887 | -0.85% | -0.53% | -7.42% to +3.98% |
+| cycles user | 23346 | 22617 | -2.41% | -1.72% | -11.96% to +8.01% |
+| cycles kernel | 26223 | 26323 | +0.46% | +0.59% | -4.54% to +2.63% |
+| instructions user | 30070.9 | 30052.5 | +0.01% | +0.01% | -0.14% to +0.16% |
+base: median requests/s 68338
+head: median requests/s 68957
+cycles margin (bound on user+kernel change under +1%): met (-0.53%)
+instructions:u per request (medians): 30070.9 -> 30052.5 (-18.4); bound on the change +0.01%, at or below -2%: false
+== refused start 22:23:42
+== refused ok 22:35:19
+/m/1846r2/results/cycles-refused.csv: 100 pairs; the one-sided 95% upper bound is the 59th smallest change
+| per request | base median | head median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| cycles user+kernel | 49812 | 49460 | -0.68% | -0.29% | -5.02% to +6.16% |
+| cycles user | 23616 | 23191 | -1.86% | -1.25% | -8.52% to +8.14% |
+| cycles kernel | 26271 | 26373 | +0.37% | +0.67% | -3.87% to +4.43% |
+| instructions user | 30638.4 | 30644.5 | +0.02% | +0.02% | -0.10% to +0.14% |
+base: median requests/s 67812
+head: median requests/s 68460
+cycles margin (bound on user+kernel change under +1%): met (-0.29%)
+instructions:u per request (medians): 30638.4 -> 30644.5 (+6.1); bound on the change +0.02%, at or below -2%: false
+== json-browser start 22:35:19
+== json-browser ok 22:47:56
+/m/1846r2/results/cycles-json-browser.csv: 100 pairs; the one-sided 95% upper bound is the 59th smallest change
+| per request | base median | head median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| cycles user+kernel | 48928 | 48178 | -1.57% | -1.14% | -6.01% to +5.26% |
+| cycles user | 24045 | 23369 | -2.92% | -2.09% | -8.37% to +6.81% |
+| cycles kernel | 24878 | 24789 | -0.16% | +0.09% | -3.94% to +3.79% |
+| instructions user | 31582.3 | 31573.8 | -0.03% | -0.03% | -0.95% to +0.89% |
+base: median requests/s 69248
+head: median requests/s 69961
+cycles margin (bound on user+kernel change under +1%): met (-1.14%)
+instructions:u per request (medians): 31582.3 -> 31573.8 (-8.5); bound on the change -0.03%, at or below -2%: false
+== browser-icache start 22:47:56
+== browser-icache ok 22:49:45
+/m/1846r2/results/counts-browser-icache.csv: 30 pairs; the one-sided 95% upper bound is the change of rank 20 from the smallest (A = base rows, B = head rows)
+| per request | A median | B median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| L1_icache_load_misses_u | 2699.54 | 2716.99 | +0.34% | +1.33% | -5.34% to +4.30% |
+| instructions user | 30671.35 | 30639.75 | -0.05% | -0.05% | -0.17% to +0.08% |
+median requests/s: A 68164, B 68505
+== gzip-icache start 22:49:45
+== gzip-icache ok 22:51:34
+/m/1846r2/results/counts-gzip-icache.csv: 30 pairs; the one-sided 95% upper bound is the change of rank 20 from the smallest (A = base rows, B = head rows)
+| per request | A median | B median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| L1_icache_load_misses_u | 2645.90 | 2697.29 | +1.51% | +3.87% | -7.00% to +6.59% |
+| instructions user | 30102.26 | 30084.59 | +0.01% | +0.01% | -0.13% to +0.09% |
+median requests/s: A 69037, B 68756
+== refused-icache start 22:51:34
+== refused-icache ok 22:53:04
+/m/1846r2/results/counts-refused-icache.csv: 30 pairs; the one-sided 95% upper bound is the change of rank 20 from the smallest (A = base rows, B = head rows)
+| per request | A median | B median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| L1_icache_load_misses_u | 2680.85 | 2671.52 | -0.36% | +0.38% | -6.77% to +4.27% |
+| instructions user | 30654.37 | 30659.58 | +0.02% | +0.03% | -0.10% to +0.15% |
+median requests/s: A 68023, B 68228
+== json-browser-icache start 22:53:04
+== json-browser-icache ok 22:54:53
+/m/1846r2/results/counts-json-browser-icache.csv: 30 pairs; the one-sided 95% upper bound is the change of rank 20 from the smallest (A = base rows, B = head rows)
+| per request | A median | B median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| L1_icache_load_misses_u | 2866.06 | 2814.66 | -2.00% | +0.17% | -6.47% to +3.71% |
+| instructions user | 31614.17 | 31602.97 | -0.03% | -0.02% | -0.94% to +0.44% |
+median requests/s: A 68865, B 69905
+== wait start 22:54:53
+== wait ok 22:57:20
+# 1846r2 pass 3: a held value's forms behind a kept page's brotli 5 job (ms)
+
+| case | held B | kept B | pairs | base median (range) | head median (range) | median head - base | one-sided 95% bound | head job median (range) | outcomes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| contended | 4021 | 32768 | 420 | 8.32 (7.18 to 9.69) | 12.12 (11.38 to 13.26) | 3.81 | 3.89 (rank 228) | 3.83 (3.33 to 4.91) | refused 420 |
+| contended | 78967 | 32768 | 420 | 17.30 (16.26 to 21.62) | 20.74 (19.97 to 24.34) | 3.47 | 3.55 (rank 228) | 3.89 (3.47 to 5.25) | refused 420 |
+| idle | 4021 | - | 420 | 8.68 (7.09 to 10.51) | 8.62 (7.12 to 9.40) | -0.04 | -0.02 (rank 228) | - | - 420 |
+| idle | 78967 | - | 420 | 16.58 (15.77 to 20.47) | 16.30 (15.67 to 20.88) | -0.31 | -0.25 (rank 228) | - | - 420 |
+| refused | 4021 | 32768 | 420 | 5.76 (5.14 to 9.05) | 7.48 (6.53 to 9.87) | 1.72 | 1.77 (rank 228) | 1.41 (0.95 to 2.04) | refused 420 |
+| refused | 78967 | 32768 | 420 | 15.27 (14.29 to 19.75) | 16.68 (15.63 to 20.31) | 1.35 | 1.43 (rank 228) | 1.42 (1.37 to 1.98) | refused 420 |
+| room | 4021 | 32768 | 420 | 6.24 (5.70 to 7.97) | 8.05 (7.44 to 9.65) | 1.84 | 1.89 (rank 228) | 1.54 (1.47 to 2.06) | admitted 420 |
+| room | 78967 | 32768 | 420 | 15.85 (15.00 to 20.15) | 17.16 (16.26 to 23.01) | 1.31 | 1.39 (rank 228) | 1.49 (1.43 to 2.42) | admitted 420 |
+
+enc 32768 B: base 1.50 ms (1.40 to 1.87), head 1.52 ms (1.40 to 1.97), 420 and 420
+heldown 4021 B: base 8.25 ms (7.37 to 9.41), head 8.52 ms (7.83 to 9.59), 420 and 420
+heldown 78967 B: base 15.27 ms (14.59 to 18.02), head 15.22 ms (14.50 to 17.28), 420 and 420
+
+H, the base's median of a 4021-byte held value's own forms (brotli 9 and gzip 9) on this host: 8.25 ms
+met: room: bound 1.89 ms under H 8.25 ms
+met: refused: bound 1.77 ms under H 8.25 ms
+met: contended: bound 3.89 ms under H + I = 8.25 + 3.28 ms (I, the base's median 4 MiB insertion's store.keep call)
+usable: true
+pass 3 gate: met
+failed: none
+ALL-DONE

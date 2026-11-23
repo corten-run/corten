@@ -1,0 +1,7 @@
+/m/1846r2/results/counts-json-browser-icache.csv: 30 pairs; the one-sided 95% upper bound is the change of rank 20 from the smallest (A = base rows, B = head rows)
+| per request | A median | B median | median per-pair change | one-sided 95% bound | range |
+| --- | ---: | ---: | ---: | ---: | --- |
+| L1_icache_load_misses_u | 2866.06 | 2814.66 | -2.00% | +0.17% | -6.47% to +3.71% |
+| instructions user | 31614.17 | 31602.97 | -0.03% | -0.02% | -0.94% to +0.44% |
+median requests/s: A 68865, B 69905
+JSON {"file":"/m/1846r2/results/counts-json-browser-icache.csv","pairs":30,"boundRank":20,"measures":{"L1_icache_load_misses_u":{"a":2866.0555046288273,"b":2814.664890955819,"change":-0.02002066550288434,"bound":0.0017386950360680498,"min":-0.06471504141236062,"max":0.037138473492792645},"instructions user":{"a":31614.171412770193,"b":31602.969508600196,"change":-0.00034517213914320166,"bound":-0.00022815372996676242,"min":-0.009417785688418001,"max":0.004376858838470499}},"aRequestsPerSecond":68864.5,"bRequestsPerSecond":69905}

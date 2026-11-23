@@ -1,0 +1,2 @@
+gzip base: 1 of 1 starts: WARM gzip: /page accept-encoding "gzip": content-encoding gzip, age _, 1944 bytes
+gzip head: 1 of 1 starts: WARM gzip: /page accept-encoding "gzip": content-encoding gzip, age _, 1944 bytes

@@ -1,0 +1,24 @@
+# 1846r2 pass 3: a held value's forms behind a kept page's brotli 5 job (ms)
+
+| case | held B | kept B | pairs | base median (range) | head median (range) | median head - base | one-sided 95% bound | head job median (range) | outcomes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| contended | 4021 | 32768 | 420 | 8.32 (7.18 to 9.69) | 12.12 (11.38 to 13.26) | 3.81 | 3.89 (rank 228) | 3.83 (3.33 to 4.91) | refused 420 |
+| contended | 78967 | 32768 | 420 | 17.30 (16.26 to 21.62) | 20.74 (19.97 to 24.34) | 3.47 | 3.55 (rank 228) | 3.89 (3.47 to 5.25) | refused 420 |
+| idle | 4021 | - | 420 | 8.68 (7.09 to 10.51) | 8.62 (7.12 to 9.40) | -0.04 | -0.02 (rank 228) | - | - 420 |
+| idle | 78967 | - | 420 | 16.58 (15.77 to 20.47) | 16.30 (15.67 to 20.88) | -0.31 | -0.25 (rank 228) | - | - 420 |
+| refused | 4021 | 32768 | 420 | 5.76 (5.14 to 9.05) | 7.48 (6.53 to 9.87) | 1.72 | 1.77 (rank 228) | 1.41 (0.95 to 2.04) | refused 420 |
+| refused | 78967 | 32768 | 420 | 15.27 (14.29 to 19.75) | 16.68 (15.63 to 20.31) | 1.35 | 1.43 (rank 228) | 1.42 (1.37 to 1.98) | refused 420 |
+| room | 4021 | 32768 | 420 | 6.24 (5.70 to 7.97) | 8.05 (7.44 to 9.65) | 1.84 | 1.89 (rank 228) | 1.54 (1.47 to 2.06) | admitted 420 |
+| room | 78967 | 32768 | 420 | 15.85 (15.00 to 20.15) | 17.16 (16.26 to 23.01) | 1.31 | 1.39 (rank 228) | 1.49 (1.43 to 2.42) | admitted 420 |
+
+enc 32768 B: base 1.50 ms (1.40 to 1.87), head 1.52 ms (1.40 to 1.97), 420 and 420
+heldown 4021 B: base 8.25 ms (7.37 to 9.41), head 8.52 ms (7.83 to 9.59), 420 and 420
+heldown 78967 B: base 15.27 ms (14.59 to 18.02), head 15.22 ms (14.50 to 17.28), 420 and 420
+
+H, the base's median of a 4021-byte held value's own forms (brotli 9 and gzip 9) on this host: 8.25 ms
+met: room: bound 1.89 ms under H 8.25 ms
+met: refused: bound 1.77 ms under H 8.25 ms
+met: contended: bound 3.89 ms under H + I = 8.25 + 3.28 ms (I, the base's median 4 MiB insertion's store.keep call)
+usable: true
+pass 3 gate: met
+JSON {"pairs":{"contended 4021 32768":{"pairs":420,"base":8.318850000000001,"head":12.12115,"change":3.81285,"bound":3.8881999999999985,"boundRank":228,"min":2.1568000000000005,"max":5.1674,"job":3.8295500000000002,"outcomes":{"refused":420},"baseInsertion":3.2771},"contended 78967 32768":{"pairs":420,"base":17.30035,"head":20.744349999999997,"change":3.46875,"bound":3.5467999999999975,"boundRank":228,"min":-0.4181999999999988,"max":7.444599999999998,"job":3.8895999999999997,"outcomes":{"refused":420},"baseInsertion":3.24735},"idle 4021 -":{"pairs":420,"base":8.67695,"head":8.62155,"change":-0.03704999999999892,"bound":-0.015600000000000946,"boundRank":228,"min":-1.8902,"max":1.1101,"job":null,"outcomes":{"-":420},"baseInsertion":null},"idle 78967 -":{"pairs":420,"base":16.580299999999998,"head":16.3,"change":-0.3081000000000005,"bound":-0.24730000000000274,"boundRank":228,"min":-4.111699999999999,"max":4.313700000000001,"job":null,"outcomes":{"-":420},"baseInsertion":null},"refused 4021 32768":{"pairs":420,"base":5.755599999999999,"head":7.47975,"change":1.7205499999999994,"bound":1.7690000000000001,"boundRank":228,"min":-0.8535000000000004,"max":3.9692000000000016,"job":1.4051,"outcomes":{"refused":420},"baseInsertion":null},"refused 78967 32768":{"pairs":420,"base":15.274049999999999,"head":16.678800000000003,"change":1.3468500000000008,"bound":1.4306,"boundRank":228,"min":-2.931099999999997,"max":5.232200000000001,"job":1.4240499999999998,"outcomes":{"refused":420},"baseInsertion":null},"room 4021 32768":{"pairs":420,"base":6.2397,"head":8.045549999999999,"change":1.8384000000000005,"bound":1.8941000000000008,"boundRank":228,"min":0.08720000000000017,"max":3.549499999999999,"job":1.53945,"outcomes":{"admitted":420},"baseInsertion":null},"room 78967 32768":{"pairs":420,"base":15.845299999999998,"head":17.15725,"change":1.3071999999999981,"bound":1.388600000000002,"boundRank":228,"min":-2.1517000000000017,"max":7.390100000000002,"job":1.48875,"outcomes":{"admitted":420},"baseInsertion":null}},"gates":{"room":{"ok":true,"say":"bound 1.89 ms under H 8.25 ms"},"refused":{"ok":true,"say":"bound 1.77 ms under H 8.25 ms"},"contended":{"ok":true,"say":"bound 3.89 ms under H + I = 8.25 + 3.28 ms (I, the base's median 4 MiB insertion's store.keep call)"}},"usable":true,"problems":[]}
