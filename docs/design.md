@@ -7472,6 +7472,28 @@ rules something out.
     its `Age`), or a request's `Cache-Control: no-cache`. How long a page stands is the app's
     to say, and a reload is not a reason to render it.
 
+    Past its lifetime a kept answer is still given where the answer said a shared cache may give
+    it stale (RFC 5861), as the cache it is. The windows are read from the answer's typed mark
+    (`cache::Typed`), not from its header, and are none with `s-maxage`, which forbids a shared
+    cache to serve stale (RFC 9111 section 5.2.2.10). Within `stale-while-revalidate` the copy is
+    given at once, and the request that found it, already one the store answers, has the route's
+    handler make it again on a task apart from its answer: one request at a time for each copy
+    (a flag on the entry), with a signal of its own that aborts at the request's deadline, the
+    window's end, shutdown (which waits for it as for `Signal::finish` work) or once it has
+    answered. What it makes is kept as a miss's answer is (in a full store too: its URL has a
+    copy, so it was asked for), under the path's write count read before it ran, so a write
+    while it runs keeps it out; a `500`, `502`, `503` or `504`, a panic
+    or a passed deadline leaves the old copy given until its window ends, and any other answer
+    takes it out. Within `stale-if-error`, past the other window, the request runs the handler
+    as a miss does, with the copy held on its signal: a `500`, `502`, `503` or `504` from the
+    route, a panic or a passed deadline (both caught where every handler's are) is answered with
+    the copy and its `Age`, and a `4xx` is the handler's, since the page is gone, not failing. A
+    write to the path ends both windows, as it ends the lifetime. A copy in either window counts
+    against the bound and goes, as one past its lifetime does, when the hand comes to it, before
+    one that stands and was read. A request that finds no copy within its lifetime pays for a
+    second look along its URL's copies; one that finds one pays for a third value in what the
+    lookup returns (below).
+
     Not chosen: in front of the middleware, for the reasons above, though it would save the
     stages too; holding a page's whole render buffer, which is an eighth larger than the page
     and as large as the last page rendered, or asking the allocator to shrink it to the page,
@@ -7503,9 +7525,14 @@ rules something out.
     worth keeping (a second way to say what `Public` says, until an app shows the handler it
     would be for), a count over all of a route's answers in place of a run (a route whose
     bodies grew would wait on its past), one copy
-    of a body for both ways of asking where its handler does not take `Req`, a page served stale
-    while it is made again, one render for requests that miss together, and one copy for each
-    locale rather than for each `Accept-Language` sent.
+    of a body for both ways of asking where its handler does not take `Req`, one render for
+    requests that miss together, and one copy for each locale rather than for each
+    `Accept-Language` sent. For a page past its lifetime: a refresh by a task of the store's own
+    rather than by the request that found the copy (a second place work starts from); the app's
+    middleware run again for the refresh, which met the request already; a pause before the
+    handler is tried again within
+    `stale-if-error`, where each request runs it, failing or not; and a window kept under
+    `s-maxage`, which RFC 9111 forbids.
 
     Stands on: measured (the catalog benchmark's app with its page marked `Public` for a minute,
     `44323327e` on this change's `f7e53a594` against `60a77b231` on main's `6045710b0`, each
@@ -8232,6 +8259,9 @@ rules something out.
     so the table of ages should be of three digits; or the rule for a touched request comes
     to tell where a build's code sits from what the change costs, so an older answer's
     digits written to a buffer can be read again.
+    Or, for a page past its lifetime: an app's failing handler, which every request runs within
+    `stale-if-error`, costs enough to show while its store is down, so a failure should hold off
+    the next try; or a refresh is found outliving its window or the app's shutdown grace.
 
     Last checked: 2026-11-22 for the forms of a kept answer's `Age`, `48df6c67c`, `c25d263a9`,
     `77dde53d6` and `09cddd7f1` (this choice's `0a2dc9b32` with each form and the benchmark's

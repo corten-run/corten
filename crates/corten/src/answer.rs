@@ -2147,6 +2147,8 @@ impl<A: Shareable> Public<A> {
     }
 
     /// After `max_age`, a cache may still serve it for up to `stale` while it fetches a fresh one.
+    /// The app's own store of the answer does too (`App::kept_answers`): within `stale` it is
+    /// given at once, and the request that finds it has the handler make it again.
     pub fn stale_while_revalidate(mut self, stale: Duration) -> Self {
         self.cache = self.cache.stale_while_revalidate(stale);
         self
@@ -2159,7 +2161,9 @@ impl<A: Shareable> Public<A> {
     /// the answer is sent privately, since RFC 5861 does not limit it to shared caches.
     /// `s-maxage` forbids a shared cache to serve the response stale (RFC 9111, 5.2.2.10), so a
     /// shared cache that follows RFC 9111 serves neither stale directive on an answer that also has
-    /// `shared`.
+    /// `shared`. The app's own store of the answer follows it too (`App::kept_answers`): within
+    /// `if_error` a request runs the handler, and the kept answer is sent in the place of its
+    /// `500`, `502`, `503` or `504`, a panic or a passed deadline.
     pub fn stale_if_error(mut self, if_error: Duration) -> Self {
         self.cache = self.cache.stale_if_error(if_error);
         self

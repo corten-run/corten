@@ -112,7 +112,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize,
 #[cfg(feature = "compress")]
 use std::sync::Weak;
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
-use std::time::Instant;
+use std::task::Poll;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http::uri::PathAndQuery;
@@ -648,6 +649,8 @@ pub(crate) struct Entry {
     #[cfg(feature = "compress")]
     coded: [OnceLock<Bytes>; 3],
     used: AtomicBool,
+    /// A request given it past its lifetime is having it made again ([`Refresh`]).
+    refreshing: AtomicBool,
     /// What it counts for in the store's bytes, or [`GONE`].
     size: AtomicUsize,
 }
@@ -750,6 +753,24 @@ impl Entry {
     /// Within its lifetime, with no write to its path since its handler read.
     fn stands(&self, store: &Store, now: Instant) -> bool {
         self.age(now) < self.lifetime && self.written.stands(store)
+    }
+
+    /// How a request may still be given it past its lifetime, with no write to its path since
+    /// its handler read: for `stale-while-revalidate` past it, at once while it is made again
+    /// ([`Standing::Stale`]); then for `stale-if-error` past it, in place of its handler's
+    /// failure ([`Standing::Held`]). None within its lifetime and past both.
+    fn past(&self, store: &Store, now: Instant) -> Option<Standing> {
+        let over = self.age(now).checked_sub(self.lifetime)?;
+        if !self.written.stands(store) {
+            return None;
+        }
+        if over < self.cache.stale() {
+            Some(Standing::Stale)
+        } else if over < self.cache.if_error() {
+            Some(Standing::Held)
+        } else {
+            None
+        }
     }
 
     /// The `Accept-Language` it was asked with, when its `Vary` names the header.
@@ -868,7 +889,7 @@ impl Answers {
         self.0.bytes.load(Ordering::Acquire)
     }
 
-    /// [`Answers::found`], for a test.
+    /// [`Answers::found`] of a copy within its lifetime, for a test.
     #[cfg(test)]
     fn find(
         &self,
@@ -877,11 +898,13 @@ impl Answers {
         language: Option<&HeaderValue>,
         data: bool,
     ) -> Option<(Arc<Entry>, u64)> {
-        self.found(self.0.keys.hash_one(at), at, host, language, data)
+        let (entry, age, standing) = self.found(self.0.keys.hash_one(at), at, host, language, data)?;
+        (standing == Standing::Fresh).then_some((entry, age))
     }
 
     /// The answer kept for a request for `at`, whose hash by the store's keys is `hash`, while it
-    /// stands, with its age in seconds.
+    /// stands or may still be given past its lifetime ([`Entry::past`]), with its age in seconds
+    /// and which of those it is.
     fn found(
         &self,
         hash: u64,
@@ -889,20 +912,29 @@ impl Answers {
         host: Option<&HeaderValue>,
         language: Option<&HeaderValue>,
         data: bool,
-    ) -> Option<(Arc<Entry>, u64)> {
+    ) -> Option<(Arc<Entry>, u64, Standing)> {
         let inner = self.0.inner.read().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
-        // The copy that stands: one that no longer does is in no other's way until it goes.
-        let entry =
-            inner.at.get(&hash)?.iter().find(|entry| {
-                entry.key.at() == at.as_bytes() && entry.is_for(host, language, data) && entry.stands(&self.0, now)
-            })?;
+        let copies = inner.at.get(&hash)?;
+        let mine = |entry: &&Arc<Entry>| entry.key.at() == at.as_bytes() && entry.is_for(host, language, data);
+        // The copy that stands: one that no longer does is in no other's way until it goes, and
+        // is looked at only when none stands, for a request that may be given it all the same.
+        let (entry, standing) = match copies.iter().find(|entry| mine(entry) && entry.stands(&self.0, now)) {
+            Some(entry) => (entry, Standing::Fresh),
+            None => past(copies.iter().filter(mine), &self.0, now)?,
+        };
         let age = entry.age(now);
         // Stored only when it changes: a page read often is marked once for each pass of the hand.
         if !entry.used.load(Ordering::Relaxed) {
             entry.used.store(true, Ordering::Relaxed);
         }
-        Some((entry.clone(), age))
+        Some((entry.clone(), age, standing))
+    }
+
+    /// Takes `entry` out of the store, if it is still there.
+    fn forget(&self, entry: &Arc<Entry>) {
+        let mut inner = self.0.inner.write().unwrap_or_else(PoisonError::into_inner);
+        self.0.drop_entry(&mut inner, entry);
     }
 
     /// Keeps `entry`, in the place of the copy it stands for, and makes room for it.
@@ -983,6 +1015,249 @@ impl Answers {
     fn counts(&self) {
         self.0.written.get_or_init(|| (0..WRITES).map(|_| AtomicU32::new(0)).collect());
     }
+}
+
+/// How a copy found for a request stands ([`Answers::found`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Standing {
+    /// Within its lifetime: given in the handler's place.
+    Fresh,
+    /// Past it, within `stale-while-revalidate`: given in the handler's place while it is made
+    /// again ([`Refresh`]).
+    Stale,
+    /// Past that, within `stale-if-error`: held while the handler runs, for its failure ([`Held`]).
+    Held,
+}
+
+/// The first of `copies` a request may still be given past its lifetime, and how.
+#[cold]
+fn past<'a>(mut copies: impl Iterator<Item = &'a Arc<Entry>>, store: &Store, now: Instant) -> Option<(&'a Arc<Entry>, Standing)> {
+    copies.find_map(|entry| entry.past(store, now).map(|standing| (entry, standing)))
+}
+
+/// A failure a kept copy may be given in place of (`stale-if-error`): a `500`, `502`, `503` or
+/// `504`, as RFC 5861 section 4 names them. A `4xx` is the request's or says the page is gone.
+fn failed(status: StatusCode) -> bool {
+    matches!(status.as_u16(), 500 | 502 | 503 | 504)
+}
+
+/// What a request finds kept for it ([`Asked::find`]).
+pub(crate) enum Found {
+    /// A copy within its lifetime, given in the handler's place.
+    Kept(Response),
+    /// A copy past its lifetime within `stale-while-revalidate`, given in the handler's place;
+    /// with what having it made again needs where no other request is making it.
+    Stale(Response, Option<Refresh>),
+    /// A copy past that within `stale-if-error`: the handler answers, and the copy is given in
+    /// the place of its failure.
+    Held(Held),
+    Nothing,
+}
+
+/// `entry` as the answer to a request, `age` seconds after it was asked for: its body and head
+/// as its handler gave them, with its `Age`.
+#[inline]
+fn given(entry: Arc<Entry>, age: u64, signal: &crate::Signal) -> Response {
+    // Kept for the language it was asked in: the answer names `Accept-Language` as it leaves
+    // the app, whatever `Vary` a middleware puts on it after this (`crate::page::vary_on_language`).
+    if entry.by_language {
+        signal.ask_language();
+    }
+    let mut res = Response::new(Body::from(entry.body.clone()));
+    let mut head = with_room(&entry.head);
+    // So a cache after this one, the browser's too, does not start the lifetime over.
+    head.insert(header::AGE, age_value(age));
+    *res.headers_mut() = head;
+    // The cache's mark is the entry's ([`Kept::typed`]): an extension is an allocation and
+    // a place in the map, and this answer has one for the entry already.
+    let extensions = res.extensions_mut();
+    if let Some(style) = &entry.style {
+        extensions.insert(style.clone());
+    }
+    extensions.insert(Kept(entry));
+    res
+}
+
+/// A copy past its lifetime within `stale-while-revalidate`, which the request that holds this
+/// has made again apart from its answer, one request at a time for each copy: the entry is marked
+/// until this goes ([`Entry::refreshing`]).
+pub(crate) struct Refresh(Arc<Entry>);
+
+impl Refresh {
+    /// Marks `entry` as being made again, unless another request is making it.
+    fn claim(entry: &Arc<Entry>) -> Option<Self> {
+        let claimed = entry.refreshing.compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed);
+        claimed.ok().map(|_| Refresh(entry.clone()))
+    }
+
+    /// Readies `req`, which was given the copy, for its handler to make it again apart from its
+    /// answer: with a signal of its own, since the request's aborts once its answer is sent, and
+    /// so does work its handler started on it; a nonce of its own, since the request's is the
+    /// answer's it was sent; and where it has one, the layout's fill of its own. None outside an
+    /// app.
+    pub(crate) fn again(self, req: &mut Request, shape: Shape, route: Option<Arc<Unkept>>) -> Option<Again> {
+        let asked = req.extensions().get::<crate::Signal>()?;
+        let shared = asked.shared()?.clone();
+        let signal = crate::Signal::for_app(shared.clone(), asked.body_limit());
+        let until = self.until(&shared, req.uri().path());
+        let extensions = req.extensions_mut();
+        extensions.insert(signal.clone());
+        if let Some(slot) = extensions.get::<crate::security::NonceSlot>() {
+            let own = crate::security::NonceSlot::new(slot.1, slot.2);
+            extensions.insert(own);
+        }
+        if extensions.get::<crate::layout::StartHere>().is_some() {
+            extensions.insert(crate::layout::StartHere::new(shared, until));
+        }
+        let req = &*req;
+        // Kept as a miss's answer is, but in a full store too: its URL was asked for before.
+        let missed = Asked::of(req, shape)?.missing(req, route);
+        Some(Again { refresh: self, missed, signal, until })
+    }
+
+    /// Until when it is made: the request's deadline, and no later than the end of the window
+    /// the copy is given in meanwhile, after which a request waits for its handler.
+    fn until(&self, shared: &crate::page::Shared, path: &str) -> Option<tokio::time::Instant> {
+        let Refresh(entry) = self;
+        let window = Duration::from_secs(entry.lifetime.saturating_add(entry.cache.stale()));
+        let window = entry.made.checked_add(window).map(tokio::time::Instant::from_std);
+        let deadline = shared.scopes.as_ref().and_then(|scopes| scopes.at(path).deadline());
+        let deadline = deadline.and_then(|limit| tokio::time::Instant::now().checked_add(limit));
+        match (window, deadline) {
+            (Some(window), Some(deadline)) => Some(window.min(deadline)),
+            (window, deadline) => window.or(deadline),
+        }
+    }
+}
+
+impl Drop for Refresh {
+    fn drop(&mut self) {
+        self.0.refreshing.store(false, Ordering::Release);
+    }
+}
+
+/// A copy past its lifetime made again by the request it was given to, apart from its answer
+/// ([`Refresh::again`]).
+pub(crate) struct Again {
+    refresh: Refresh,
+    missed: Missed,
+    /// The signal its handler is given.
+    signal: crate::Signal,
+    until: Option<tokio::time::Instant>,
+}
+
+impl Again {
+    /// Runs `made` (the handler's answer, and whether it drew a form's new submit key) on a task of
+    /// its own, which shutdown waits for as it waits for work a handler finishes
+    /// ([`crate::Signal::finish`]) and stops: its signal aborts then, at its deadline, and once it
+    /// has answered. Its answer is kept as a miss's would be, in the copy's place. A failure (one
+    /// a cache may give a stale answer for, a panic, a passed deadline) leaves the copy as it
+    /// was, to be given until its window ends; any other answer not kept (a `404`, a redirect, a
+    /// page that may not be kept) takes the copy out, since it is no longer what the handler
+    /// makes. A write to its path while it runs keeps its answer from being kept
+    /// ([`Missed::keep`]), and work a write left counts when it ends, as for any answer kept.
+    pub(crate) fn spawn<F>(self, made: F)
+    where
+        F: std::future::Future<Output = (Response, bool)> + Send + 'static,
+    {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
+        let Some(finishing) = self.signal.shared().map(|shared| shared.finishing.clone()) else { return };
+        let (counted, stop) = (finishing.enter(), finishing.signal().clone());
+        let made = async move {
+            let _counted = counted;
+            self.run(made, stop).await;
+        };
+        runtime.spawn(tracing::Instrument::instrument(made, tracing::Span::current()));
+    }
+
+    async fn run<F: std::future::Future<Output = (Response, bool)>>(self, made: F, stop: crate::Signal) {
+        let Again { refresh, missed, signal, until } = self;
+        let at = missed.at.clone();
+        let mut made = std::pin::pin!(made);
+        // A panic is the handler's failure, logged as a request's is.
+        let answered =
+            std::future::poll_fn(|cx| match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| made.as_mut().poll(cx))) {
+                Ok(polled) => polled.map(Some),
+                Err(panic) => {
+                    let message = crate::task::panic_message(&*panic);
+                    tracing::error!("corten: GET {} panicked as its kept answer was made again: {message}", at.path());
+                    Poll::Ready(None)
+                }
+            });
+        let late = async {
+            match until {
+                Some(until) => tokio::time::sleep_until(until).await,
+                None => std::future::pending().await,
+            }
+        };
+        let answered = tokio::select! {
+            biased;
+            answered = answered => answered,
+            () = late => {
+                signal.abort(crate::Abort::Deadline);
+                tracing::warn!("corten: GET {} passed its deadline as its kept answer was made again", at.path());
+                None
+            }
+            reason = stop.aborted() => {
+                signal.abort(reason);
+                None
+            }
+        };
+        if let Some((res, drew_key)) = answered.filter(|(res, _)| !failed(res.status())) {
+            if !drew_key {
+                drop(missed.keep(res).await);
+            }
+            if let Some(kept) = signal.shared().and_then(|shared| shared.kept.as_ref()) {
+                kept.forget(&refresh.0);
+            }
+        }
+        signal.abort(crate::Abort::Responded);
+    }
+}
+
+/// A copy past its lifetime within `stale-if-error`, held on its request's signal while the
+/// handler runs ([`Held`]).
+struct HeldCopy(Arc<Entry>);
+
+impl HeldCopy {
+    /// The copy as the request's answer, while it is still held: no write to its path since its
+    /// handler read, and within its window.
+    fn given(self, signal: &crate::Signal) -> Option<Response> {
+        let store = &signal.shared()?.kept.as_ref()?.0;
+        let HeldCopy(entry) = self;
+        let now = Instant::now();
+        entry.past(store, now)?;
+        let age = entry.age(now);
+        Some(given(entry, age, signal))
+    }
+}
+
+/// A request whose handler runs with a copy past its lifetime held for it on its signal
+/// (`stale-if-error`): given in the place of the handler's failure ([`Held::instead_of`]), and
+/// of a panic or a passed deadline, which the stage that answers those finds on the signal
+/// ([`held`]).
+pub(crate) struct Held(crate::Signal);
+
+impl Held {
+    /// The copy in the place of `res`, the handler's answer, when that is a failure a cache may
+    /// give a stale answer for ([`failed`]) and the copy is still held. Any other answer is the
+    /// handler's, kept as a miss's would be, and takes the copy out: a `404` says the page is gone.
+    pub(crate) fn instead_of(self, res: &Response) -> Option<Response> {
+        let HeldCopy(entry) = self.0.take::<HeldCopy>()?;
+        if failed(res.status()) {
+            return HeldCopy(entry).given(&self.0);
+        }
+        if let Some(kept) = self.0.shared().and_then(|shared| shared.kept.as_ref()) {
+            kept.forget(&entry);
+        }
+        None
+    }
+}
+
+/// The copy held for a request whose handler panicked or passed its deadline before it answered
+/// ([`Held`]), as the answer in place of the failure.
+pub(crate) fn held(signal: &crate::Signal) -> Option<Response> {
+    signal.take::<HeldCopy>()?.given(signal)
 }
 
 /// A request a kept answer can stand for: a `GET` that shows nothing about who is asking, for
@@ -1094,27 +1369,25 @@ impl<'a> Asked<'a> {
         Some(Asked { answers, signal, at, hash, host, language, data })
     }
 
-    /// The kept answer for this request, as its handler gave it, with its age.
-    pub(crate) fn find(&self) -> Option<Response> {
-        let (entry, age) = self.answers.found(self.hash, self.at.as_str(), self.host, self.language, self.data)?;
-        // Kept for the language it was asked in: the answer names `Accept-Language` as it leaves
-        // the app, whatever `Vary` a middleware puts on it after this (`crate::page::vary_on_language`).
-        if entry.by_language {
-            self.signal.ask_language();
+    /// The kept answer for this request, as its handler gave it, with its age; or, past its
+    /// lifetime, how the request may still be given it.
+    #[inline]
+    pub(crate) fn find(&self) -> Found {
+        let Some((entry, age, standing)) = self.answers.found(self.hash, self.at.as_str(), self.host, self.language, self.data)
+        else {
+            return Found::Nothing;
+        };
+        match standing {
+            Standing::Fresh => Found::Kept(given(entry, age, self.signal)),
+            Standing::Stale => {
+                let refresh = Refresh::claim(&entry);
+                Found::Stale(given(entry, age, self.signal), refresh)
+            }
+            Standing::Held => {
+                self.signal.hold(HeldCopy(entry));
+                Found::Held(Held(self.signal.clone()))
+            }
         }
-        let mut res = Response::new(Body::from(entry.body.clone()));
-        let mut head = with_room(&entry.head);
-        // So a cache after this one, the browser's too, does not start the lifetime over.
-        head.insert(header::AGE, age_value(age));
-        *res.headers_mut() = head;
-        // The cache's mark is the entry's ([`Kept::typed`]): an extension is an allocation and
-        // a place in the map, and this answer has one for the entry already.
-        let extensions = res.extensions_mut();
-        if let Some(style) = &entry.style {
-            extensions.insert(style.clone());
-        }
-        extensions.insert(Kept(entry));
-        Some(res)
     }
 
     /// What keeping the handler's answer needs of the request, once no kept one stood for it:
@@ -1127,7 +1400,13 @@ impl<'a> Asked<'a> {
         if store.full() && !store.asked(self.host, self.at.as_str()) {
             return None;
         }
-        Some(Missed {
+        Some(self.missing(req, route))
+    }
+
+    /// What keeping the handler's answer needs of the request, in a full store too: for one
+    /// whose URL has a copy past its lifetime, which was asked for before.
+    pub(crate) fn missing(&self, req: &Request, route: Option<Arc<Unkept>>) -> Missed {
+        Missed {
             asked: Instant::now(),
             written: Written::of(&self.answers.0, self.at.as_str()),
             signal: req.extensions().get::<crate::Signal>().cloned(),
@@ -1138,7 +1417,7 @@ impl<'a> Asked<'a> {
             hash: self.hash,
             data: self.data,
             told: Told(route, false),
-        })
+        }
     }
 }
 
@@ -1243,6 +1522,7 @@ impl Missed {
             #[cfg(feature = "compress")]
             coded: Default::default(),
             used: AtomicBool::new(false),
+            refreshing: AtomicBool::new(false),
             size: AtomicUsize::new(size),
         });
         told.1 = true;
@@ -1590,8 +1870,79 @@ mod tests {
             #[cfg(feature = "compress")]
             coded: Default::default(),
             used: AtomicBool::new(false),
+            refreshing: AtomicBool::new(false),
             size: AtomicUsize::new(body + OVERHEAD),
         }
+    }
+
+    /// An answer for `at` as [`entry`] makes it, made `age` seconds ago with a lifetime of 10
+    /// and these windows past it.
+    fn windowed(answers: &Answers, at: &str, age: u64, stale: u64, if_error: u64) -> impl FnOnce(Place) -> Entry {
+        let entry = entry(answers, at, None, 10, 1000);
+        move |place| Entry {
+            made: Instant::now().checked_sub(Duration::from_secs(age)).expect("a clock that has run that long"),
+            cache: crate::cache::Typed::for_test_stale(stale, if_error),
+            ..entry(place)
+        }
+    }
+
+    /// Past its lifetime a copy is given at once within `stale-while-revalidate`, then held
+    /// for a failure within `stale-if-error`, each counted from the end of the lifetime; and
+    /// never after a write to its path, or past both, or with neither.
+    #[test]
+    fn a_copy_past_its_lifetime_stands_within_its_windows() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let standing = |at: &str| answers.found(answers.0.keys.hash_one(at), at, None, None, false).map(|found| found.2);
+        for (at, age, stale, if_error, expected) in [
+            ("/fresh", 9, 5, 20, Some(Standing::Fresh)),
+            ("/stale", 10, 5, 20, Some(Standing::Stale)),
+            ("/stale-end", 14, 5, 20, Some(Standing::Stale)),
+            ("/held", 15, 5, 20, Some(Standing::Held)),
+            ("/held-only", 12, 0, 20, Some(Standing::Held)),
+            ("/held-end", 29, 5, 20, Some(Standing::Held)),
+            ("/past-both", 30, 5, 20, None),
+            ("/past-stale", 15, 5, 0, None),
+            ("/neither", 10, 0, 0, None),
+        ] {
+            answers.keep(windowed(&answers, at, age, stale, if_error));
+            assert_eq!(standing(at), expected, "{at}");
+        }
+        // A test's lookup finds only a copy within its lifetime.
+        assert!(answers.find("/stale", None, None, false).is_none() && answers.find("/fresh", None, None, false).is_some());
+        // A write to its path drops it, whatever window it is in.
+        for at in ["/stale", "/held"] {
+            write(&answers, at).answered(&Response::default());
+            assert_eq!(standing(at), None, "{at} after a write");
+        }
+    }
+
+    /// One request at a time makes a stale copy again: a second is refused until the first
+    /// lets it go, however it ends.
+    #[test]
+    fn one_request_at_a_time_makes_a_stale_copy_again() {
+        let answers = Answers::new(1 << 20).expect("a bound");
+        let entry = answers.keep(windowed(&answers, "/s", 11, 5, 0));
+        let first = Refresh::claim(&entry).expect("the first claims it");
+        assert!(Refresh::claim(&entry).is_none(), "a second is refused while the first makes it");
+        drop(first);
+        assert!(Refresh::claim(&entry).is_some(), "and may claim it once the first is done");
+    }
+
+    /// A copy past its lifetime that may still be given goes, when room is needed, as one past
+    /// both its windows does: when the hand comes to it, before a copy that stands and was read.
+    #[test]
+    fn a_copy_held_past_its_lifetime_goes_before_one_that_stands() {
+        let size = 1000 + OVERHEAD;
+        let answers = Answers::new(size * 2).expect("a bound");
+        answers.keep(windowed(&answers, "/old", 11, 60, 60));
+        answers.keep(entry(&answers, "/b", None, 60, 1000));
+        let standing = |at: &str| answers.found(answers.0.keys.hash_one(at), at, None, None, false).map(|found| found.2);
+        assert_eq!(standing("/old"), Some(Standing::Stale), "read, too, which does not keep it");
+        assert_eq!(standing("/b"), Some(Standing::Fresh));
+        answers.keep(entry(&answers, "/c", None, 60, 1000));
+        assert_eq!(standing("/old"), None, "the one held past its lifetime went");
+        assert!(answers.find("/b", None, None, false).is_some() && answers.find("/c", None, None, false).is_some());
+        assert_eq!(answers.bytes(), size * 2);
     }
 
     /// A store with room is not full and has no marks. Full, it knows a URL asked for before,

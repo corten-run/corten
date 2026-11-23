@@ -498,6 +498,25 @@ impl Signal {
         cell
     }
 
+    /// Holds `value` for the request until [`Signal::take`] takes it, in the place of one of its
+    /// type held before: kept beside the lookups ([`Signal::found`]), so a request that holds
+    /// nothing has no room for it.
+    pub(crate) fn hold<T: Send + Sync + 'static>(&self, value: T) {
+        let mut found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        found.retain(|kept| !kept.is::<T>());
+        found.push(Arc::new(value));
+    }
+
+    /// What [`Signal::hold`] holds of type `T`, taken from the request.
+    pub(crate) fn take<T: Send + Sync + 'static>(&self) -> Option<T> {
+        let mut found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let at = found.iter().position(|kept| kept.is::<T>())?;
+        let kept = found.swap_remove(at);
+        drop(found);
+        // Only the signal held it.
+        kept.downcast::<T>().ok().and_then(|kept| Arc::try_unwrap(kept).ok())
+    }
+
     /// Marks the answer as differing by something of the visitor's that does not change the page
     /// around `<main>` (their time zone): private, but not part of the page's key.
     pub(crate) fn mark_personal(&self) {

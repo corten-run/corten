@@ -2229,6 +2229,14 @@ pub(crate) struct Scope {
     middleware: crate::middleware::Stack,
 }
 
+impl Scope {
+    /// The deadline its requests run under, for work made for one of them apart from its answer
+    /// ([`crate::kept::Refresh`]).
+    pub(crate) fn deadline(&self) -> Option<Duration> {
+        self.deadline
+    }
+}
+
 /// Every area's and API's scope and the app's, by path: for a request whose route cannot say
 /// which it is in (an unknown URL, whose `404` belongs to the prefix it is under, and a route
 /// whose parameter or catch-all can match under another prefix, [`Scopes::of_route`]), and for a

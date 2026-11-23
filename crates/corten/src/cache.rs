@@ -149,6 +149,17 @@ impl Cache {
         }
     }
 
+    /// The mark for this, which [`settle`] and the app's own keeping of the answer read.
+    fn typed(self) -> Typed {
+        // `s-maxage` forbids a shared cache to give the answer stale (RFC 9111 section 5.2.2.10),
+        // so with it neither window is the app's.
+        let (stale, if_error) = match self.kind {
+            Kind::Public { shared: None, stale, if_error, .. } => (stale, if_error),
+            _ => (0, 0),
+        };
+        Typed { named: self.kind == Kind::Immutable, lifetime: self.lifetime(), stale, if_error }
+    }
+
     fn header(self) -> HeaderValue {
         let (max_age, shared, stale, if_error) = match self.kind {
             Kind::Public { max_age, shared, stale, if_error } => (max_age, shared, stale, if_error),
@@ -178,7 +189,7 @@ impl Cache {
     /// Sets the response's `Cache-Control` to this, as [`settle`] reads it.
     pub(crate) fn apply(self, res: &mut Response) {
         res.headers_mut().insert(header::CACHE_CONTROL, self.header());
-        res.extensions_mut().insert(Typed { named: self.kind == Kind::Immutable, lifetime: self.lifetime() });
+        res.extensions_mut().insert(self.typed());
     }
 }
 
@@ -187,7 +198,7 @@ impl IntoResponseParts for Cache {
 
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
         res.headers_mut().insert(header::CACHE_CONTROL, self.header());
-        res.extensions_mut().insert(Typed { named: false, lifetime: self.lifetime() });
+        res.extensions_mut().insert(Typed { named: false, ..self.typed() });
         Ok(res)
     }
 }
@@ -200,6 +211,11 @@ pub(crate) struct Typed {
     named: bool,
     /// [`Cache::lifetime`], for the app's own keeping of the answer ([`crate::kept`]).
     lifetime: u64,
+    /// How long past `lifetime` the app may give the answer it keeps while it is made again
+    /// (`stale-while-revalidate`) and in place of a failure (`stale-if-error`), in seconds: 0 for
+    /// one with neither, or with `s-maxage` ([`Cache::typed`]).
+    stale: u64,
+    if_error: u64,
 }
 
 impl Typed {
@@ -210,9 +226,25 @@ impl Typed {
         (!typed.named && typed.lifetime > 0).then_some((typed, typed.lifetime))
     }
 
+    /// `stale-while-revalidate`, in seconds, as the app keeps the answer (0 with `s-maxage`).
+    pub(crate) fn stale(self) -> u64 {
+        self.stale
+    }
+
+    /// `stale-if-error`, in seconds, as the app keeps the answer (0 with `s-maxage`).
+    pub(crate) fn if_error(self) -> u64 {
+        self.if_error
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
-        Typed { named: false, lifetime: 60 }
+        Typed::for_test_stale(0, 0)
+    }
+
+    /// A mark with these windows, for a test.
+    #[cfg(test)]
+    pub(crate) fn for_test_stale(stale: u64, if_error: u64) -> Self {
+        Typed { named: false, lifetime: 60, stale, if_error }
     }
 }
 
@@ -775,7 +807,7 @@ mod tests {
             res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
         }
         if typed {
-            res.extensions_mut().insert(Typed { named: false, lifetime: 60 });
+            res.extensions_mut().insert(Typed::for_test());
         }
         if cookie {
             res.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_static("a=b"));

@@ -1409,6 +1409,7 @@ Public::new(Duration::from_secs(60), page)
 
 Both stale directives stay on an answer sent privately, for any private cache that implements
 them (Chromium and Firefox implement `stale-while-revalidate`, not `stale-if-error`).
+The app's own store of `Public` answers follows both ([below](#the-pages-the-app-keeps)).
 
 `App` still checks what it can see before it lets a shared cache keep the answer (on every route
 but an unstaged one):
@@ -1539,6 +1540,22 @@ must show at once a short lifetime, or leave it private. An answer given again c
 counted from when the request it was made for reached the handler, so a browser and a CDN count
 the lifetime from when the page was made.
 
+Past its lifetime a kept page is still given where its answer says a shared cache may give it
+stale ([RFC 5861](https://www.rfc-editor.org/rfc/rfc5861.html)), each window counted from the
+end of the lifetime. Within `.stale_while_revalidate(..)` it is given at once, with its `Age`,
+and the request that found it has the handler make it again apart from its answer, one request
+at a time for each page, under the request's deadline and no later than the window's end: what
+that makes takes the old page's place, as a miss's answer would. The app's middleware ran for
+the request that was given the old page, not again for the one made. Within
+`.stale_if_error(..)` (past the other window, where both are set) a request waits for the
+handler, as when nothing is kept, and when the handler answers `500`, `502`, `503` or `504`,
+panics or passes its deadline, the kept page is sent in the place of that failure with its
+`Age`. Any other answer is the handler's: a success is kept as a miss's would be, and a `404`
+or a redirect ends the old page. A failure while a page is made again leaves the old one
+given until its window ends, and in the `stale-if-error` window every request runs the
+handler, failing or not. A write to the page's path ends both windows, and with `.shared(..)`
+there are none, since `s-maxage` forbids a shared cache to give the page stale.
+
 A kept page stands where the handler does, after [your own middleware](#your-own-middleware). Every
 stage runs for every request: a middleware that refuses, counts or stamps a header still does, and
 sees the `200` with the whole body; the security headers and `Cache-Control` are written as for any
@@ -1563,6 +1580,7 @@ else a page could differ by, and the answer nothing made for one request:
 | the request | a `GET` for the whole document, at the URL the router matched | anything the runtime asks for (a navigation's swap, a page fetched whole: a `corten` header), a data client's JSON from a page route, a `HEAD`, a request with a body, a notice sent back, a stream resumed (`Last-Event-ID`), one whose URI a middleware changed or whose target names its host (a proxy's form) |
 | who asks | no `Cookie` (the time zone's alone does not count: a `Public` page is written in UTC), no `Authorization`, no caller read by a middleware | any other cookie, `Authorization`, a caller read |
 | the answer | a `200` page of a known size, with a lifetime | an error, a redirect, a stream, a lifetime of zero, a page larger than an eighth of the bound, the first answer for a URL once the kept pages are within an eighth of the bound |
+| past its lifetime | within `stale-while-revalidate`, given at once while the handler makes it again; within `stale-if-error`, given in the place of the handler's `500`, `502`, `503` or `504`, panic or passed deadline | past both windows, after a write to its path, with `.shared(..)`; within `stale-if-error`, any other answer |
 | what it carries | | a `Set-Cookie`, the request's nonce, a form's new submit key (drawn by the handler itself: one drawn by a task it spawned, a render it handed to a blocking task or a thread of its own is not seen), a `Vary` of the app's own |
 
 A page is kept for the `Host` and the URL it was asked with, path and query: `/items?page=2` is
@@ -1625,7 +1643,8 @@ walk over the same URLs is kept as the first was before this rule. The price is 
 of a page's handler: in a full store the answer to the first request for a URL the app does
 not remember is not kept, whether the page is new, or was kept while there was room or before
 the bits were last cleared and has since passed its lifetime or been dropped. A store that has filled mostly stays full, since a page past its lifetime keeps
-its room until another needs it. Nothing is kept under `corten dev`,
+its room until another needs it; one still given within a stale window counts against the bound
+too, and goes before a page within its lifetime that was read. Nothing is kept under `corten dev`,
 so a change shows on the next load. An app with no `Public` page and no `Public` JSON, text or file route keeps nothing whatever the
 bound, and its writes are not counted, so it pays nothing for pages it cannot keep; one whose `Public` JSON, text and files
 are all too small to keep, or streams or files at URLs that name their content, still holds a store, since a body's size is known only when it is made, and

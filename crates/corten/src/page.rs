@@ -3880,6 +3880,10 @@ async fn run<'r, F: Future<Output = Result<Response, Late>>>(
                 .or_else(|| panic.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "a panic with no message".to_string());
             tracing::error!("corten: {method} {} panicked: {message}", uri.path());
+            // A kept page held for the handler's failure is given in the place of this one.
+            if let Some(held) = crate::kept::held(signal) {
+                return held;
+            }
             let mut res = Error::new(format!("the handler panicked: {message}")).into_response();
             res.extensions_mut().insert(Cause::Panicked);
             res
@@ -3917,6 +3921,9 @@ fn deadline_failure(
             let limit = deadline.expect("timed out");
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline", uri.path());
+            if let Some(held) = crate::kept::held(signal) {
+                return held;
+            }
             let mut res = StatusCode::SERVICE_UNAVAILABLE.into_response();
             res.extensions_mut().insert(Cause::TimedOut);
             res

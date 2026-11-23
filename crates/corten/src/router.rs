@@ -135,27 +135,39 @@ impl Endpoint for Keeping {
         }
         // Any other request (a navigation, one with a cookie, a write) is the handler's as before.
         let Some(asked) = crate::kept::Asked::of(&req, self.shape) else { return self.inner.call(req) };
-        if let Some(kept) = asked.find() {
-            if let Some(route) = &self.unkept {
-                route.found();
+        let (held, missed) = match asked.find() {
+            crate::kept::Found::Kept(kept) => {
+                if let Some(route) = &self.unkept {
+                    route.found();
+                }
+                return Box::pin(std::future::ready(kept));
             }
-            return Box::pin(std::future::ready(kept));
-        }
-        // In a full store a URL not asked for before is the handler's as any other request.
-        let Some(missed) = asked.missed(&req, self.unkept.clone()) else { return self.inner.call(req) };
+            crate::kept::Found::Stale(kept, refresh) => {
+                if let Some(route) = &self.unkept {
+                    route.found();
+                }
+                if let Some(refresh) = refresh {
+                    self.again(req, refresh);
+                }
+                return Box::pin(std::future::ready(kept));
+            }
+            // Its URL has a copy, so it was asked for before: what the handler makes is kept in
+            // a full store too.
+            crate::kept::Found::Held(held) => (Some(held), asked.missing(&req, self.unkept.clone())),
+            crate::kept::Found::Nothing => match asked.missed(&req, self.unkept.clone()) {
+                Some(missed) => (None, missed),
+                // In a full store a URL not asked for before is the handler's as any other request.
+                None => return self.inner.call(req),
+            },
+        };
         let here = req.extensions().get::<crate::layout::StartHere>().cloned();
         let answer = self.inner.call(req);
         Box::pin(async move {
-            // An answer with a form's new submit key is this request's alone. A page's render
-            // marks one it drew (`cache::Unrepeatable`); markup rendered any other way (into
-            // JSON, text or a file, or to a string the page then
-            // holds as markup) has no mark to carry, so the handler is watched for one being
-            // drawn.
-            let (res, drew_key) = crate::form::watched(answer).await;
-            let res = match here {
-                Some(here) => here.fill(res).await,
-                None => res,
-            };
+            let (res, drew_key) = Keeping::made(answer, here).await;
+            // A failure in the place of which a page past its lifetime is given (`stale-if-error`).
+            if let Some(held) = held.and_then(|held| held.instead_of(&res)) {
+                return held;
+            }
             if drew_key {
                 return res;
             }
@@ -165,6 +177,31 @@ impl Endpoint for Keeping {
 
     fn action_patches(&self) -> bool {
         self.inner.action_patches()
+    }
+}
+
+impl Keeping {
+    /// The handler's answer, filled where the page is, and whether it drew a form's new submit
+    /// key: an answer with one is the request's alone. A page's render marks one it drew
+    /// (`cache::Unrepeatable`); markup rendered any other way (into JSON, text or a file, or to
+    /// a string the page then holds as markup) has no mark to carry, so the handler is watched
+    /// for one being drawn.
+    async fn made(answer: Answering, here: Option<crate::layout::StartHere>) -> (Response, bool) {
+        let (res, drew_key) = crate::form::watched(answer).await;
+        let res = match here {
+            Some(here) => here.fill(res).await,
+            None => res,
+        };
+        (res, drew_key)
+    }
+
+    /// Has the page given past its lifetime made again by its handler, for `req`, apart from
+    /// the answer (`stale-while-revalidate`, [`crate::kept::Refresh`]).
+    #[cold]
+    fn again(&self, mut req: Request, refresh: crate::kept::Refresh) {
+        let Some(again) = refresh.again(&mut req, self.shape, self.unkept.clone()) else { return };
+        let here = req.extensions().get::<crate::layout::StartHere>().cloned();
+        again.spawn(Keeping::made(self.inner.call(req), here));
     }
 }
 

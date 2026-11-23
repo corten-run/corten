@@ -2154,6 +2154,213 @@ async fn a_kept_page_lasts_its_lifetime() {
     assert!((1..60).contains(&age), "counted from before its handler ran: {age}");
 }
 
+/// What a kept page's handler does next, for the tests of a page past its lifetime: answers,
+/// fails (`Error`, 500), answers `502`, panics, passes the app's deadline, or says the page is
+/// gone (`404`).
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Does {
+    #[default]
+    Answers,
+    Fails,
+    BadGateway,
+    Panics,
+    Waits,
+    Gone,
+}
+
+/// A `Public` page for a second at `/`, `/written` (which takes a `POST`) and `/late`, that may
+/// be given stale for two (`stale-while-revalidate` where `revalidate`, else `stale-if-error`),
+/// whose handler counts its runs and does what `does` says. After the first three runs it waits
+/// for a permit from `gate` while the gate is open, so what happens while it runs is seen. Its
+/// text names the run that made it.
+fn held_routes(
+    runs: &Runs,
+    does: &std::sync::Arc<std::sync::Mutex<Does>>,
+    gate: &std::sync::Arc<tokio::sync::Semaphore>,
+    revalidate: bool,
+) -> Table {
+    let (runs, does, gate) = (runs.clone(), does.clone(), gate.clone());
+    let page = move |req: Req| {
+        runs.ran();
+        let (run, does, gate) = (runs.count(), *does.lock().unwrap(), gate.clone());
+        async move {
+            match does {
+                Does::Panics => panic!("the page's store is down"),
+                Does::Waits => tokio::time::sleep(Duration::from_secs(30)).await,
+                _ if run > 3 && !gate.is_closed() => drop(gate.acquire().await),
+                _ => {}
+            }
+            let page = req.test_page_for("Held", html! { <p>{format!("made by run {run} ")}{"held ".repeat(400)}</p> });
+            let page = page.and_then(|page| match does {
+                Does::Fails => Err(Error::new("the page's store is down")),
+                Does::BadGateway => Err(Error::status(StatusCode::BAD_GATEWAY)),
+                Does::Gone => Err(Error::status(StatusCode::NOT_FOUND)),
+                _ => Ok(page),
+            });
+            let public = Public::new(Duration::from_secs(1), page);
+            if revalidate {
+                public.stale_while_revalidate(Duration::from_secs(2))
+            } else {
+                public.stale_if_error(Duration::from_secs(2))
+            }
+        }
+    };
+    Table::new()
+        .route("/", crate::route::get(page.clone()).0)
+        .route("/written", crate::route::get(page.clone()).0.post(|| async { StatusCode::NO_CONTENT }))
+        .route("/late", crate::route::get(page).0)
+}
+
+/// The age a kept answer was given with, if it was one.
+fn age_of(headers: &HeaderMap) -> Option<u64> {
+    headers.get(header::AGE).map(|age| age.to_str().unwrap().parse().unwrap())
+}
+
+/// Past its lifetime, a page whose answer says `stale-if-error` is held for that long: a request
+/// for it runs the handler, and when the handler fails (an error answered 500, 502, 503 or 504, a
+/// panic, a passed deadline) the held page is sent in its place, with its age. A `404` is the
+/// handler's answer, after which the page is no longer held; and nothing is held past the window
+/// or after a write to its path.
+#[tokio::test]
+async fn a_kept_page_stands_in_for_a_failure_within_stale_if_error() {
+    let (runs, does, gate) = (Runs::default(), std::sync::Arc::default(), std::sync::Arc::new(tokio::sync::Semaphore::new(0)));
+    gate.close();
+    let router = App::new(Routes::from(held_routes(&runs, &does, &gate, false))).deadline(Duration::from_millis(300)).router();
+    let set = |next: Does| *does.lock().unwrap() = next;
+    let mut made = std::collections::HashMap::new();
+    for at in ["/", "/written", "/late"] {
+        let (status, headers, body) = fetch(&router, "GET", at, &[]).await;
+        assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=1, stale-if-error=2");
+        assert!(status == StatusCode::OK && age_of(&headers).is_none());
+        made.insert(at, body);
+    }
+    assert_eq!(runs.count(), 3);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+
+    // Past its lifetime and within the window: each failure gets the held page.
+    for (failure, ran) in [(Does::Fails, 4), (Does::BadGateway, 5), (Does::Panics, 6), (Does::Waits, 7)] {
+        set(failure);
+        let (status, headers, body) = fetch(&router, "GET", "/", &[]).await;
+        assert_eq!(runs.count(), ran, "the handler ran");
+        assert_eq!(status, StatusCode::OK, "{headers:?}");
+        assert!(age_of(&headers).is_some_and(|age| (1..3).contains(&age)), "{headers:?}");
+        assert_eq!(body, made["/"], "the page held");
+    }
+    // A write to its path: the page it held may show what was there before.
+    set(Does::Answers);
+    let (status, _, _) = fetch(&router, "POST", "/written", &[("sec-fetch-site", "same-origin")]).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    set(Does::Fails);
+    assert_eq!(fetch(&router, "GET", "/written", &[]).await.0, StatusCode::INTERNAL_SERVER_ERROR, "after a write");
+    // The page is gone: its handler's answer, and nothing is held for it after.
+    set(Does::Gone);
+    let (status, headers, _) = fetch(&router, "GET", "/", &[]).await;
+    assert!(status == StatusCode::NOT_FOUND && age_of(&headers).is_none(), "{headers:?}");
+    set(Does::Fails);
+    assert_eq!(fetch(&router, "GET", "/", &[]).await.0, StatusCode::INTERNAL_SERVER_ERROR, "no longer held");
+
+    // Past the window, a failure is the handler's.
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+    let (status, headers, _) = fetch(&router, "GET", "/late", &[]).await;
+    assert!(status == StatusCode::INTERNAL_SERVER_ERROR && age_of(&headers).is_none(), "past the window: {headers:?}");
+    // And an answer is kept as a miss's would be.
+    set(Does::Answers);
+    assert!(age_of(&fetch(&router, "GET", "/late", &[]).await.1).is_none());
+    assert_eq!(age_of(&fetch(&router, "GET", "/late", &[]).await.1), Some(0));
+}
+
+/// Past its lifetime, a page whose answer says `stale-while-revalidate` is given at once for that
+/// long, and the request that finds it has its handler make it again apart from its answer, one
+/// such request at a time: the page made then takes the old one's place. A write while it is made
+/// again keeps it from being kept, a failure leaves the old page given, and past the window a
+/// request waits for its handler.
+#[tokio::test]
+async fn a_kept_page_is_given_at_once_within_stale_while_revalidate_and_made_again_once() {
+    let (runs, does, gate) = (Runs::default(), std::sync::Arc::default(), std::sync::Arc::new(tokio::sync::Semaphore::new(0)));
+    let router = App::new(Routes::from(held_routes(&runs, &does, &gate, true))).router();
+    let mut made = std::collections::HashMap::new();
+    for at in ["/", "/written", "/late"] {
+        let (_, headers, body) = fetch(&router, "GET", at, &[]).await;
+        assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=1, stale-while-revalidate=2");
+        made.insert(at, body);
+    }
+    assert_eq!(runs.count(), 3);
+    // Until the count of runs reaches `ran`, which a page made apart from its request leads to.
+    let ran = |ran: usize| {
+        let runs = runs.clone();
+        async move {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while runs.count() < ran {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("the page is made again");
+        }
+    };
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+
+    // Given at once, while its handler waits at the gate; asked for again meanwhile, it is not
+    // made a second time.
+    for _ in 0..4 {
+        let (status, headers, body) =
+            tokio::time::timeout(Duration::from_millis(500), fetch(&router, "GET", "/", &[])).await.expect("given at once");
+        assert!(status == StatusCode::OK && age_of(&headers).is_some_and(|age| age >= 1), "{headers:?}");
+        assert_eq!(body, made["/"]);
+    }
+    ran(4).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(runs.count(), 4, "made again once");
+    gate.add_permits(1);
+    // The page it made takes the old one's place.
+    let (headers, body) = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let (_, headers, body) = fetch(&router, "GET", "/", &[]).await;
+            if body != made["/"] {
+                return (headers, body);
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the page made again is kept");
+    assert_eq!(age_of(&headers), Some(0), "{headers:?}");
+    assert!(String::from_utf8_lossy(&body).contains("made by run 4 "));
+    assert_eq!(runs.count(), 4);
+
+    // A write while it is made again: what it made is not kept.
+    let (_, headers, _) = fetch(&router, "GET", "/written", &[]).await;
+    assert!(age_of(&headers).is_some());
+    ran(5).await;
+    let (status, _, _) = fetch(&router, "POST", "/written", &[("sec-fetch-site", "same-origin")]).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    gate.add_permits(1);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    gate.close();
+    let (_, headers, body) = fetch(&router, "GET", "/written", &[]).await;
+    assert!(age_of(&headers).is_none(), "made by its handler: {headers:?}");
+    assert!(String::from_utf8_lossy(&body).contains("made by run 6 "));
+    assert_eq!(age_of(&fetch(&router, "GET", "/written", &[]).await.1), Some(0), "and that one kept");
+
+    // Made again and failing: the old page is still given, and the next request has it made again.
+    *does.lock().unwrap() = Does::Fails;
+    for ran_by_now in [7, 8] {
+        let (status, headers, body) = fetch(&router, "GET", "/late", &[]).await;
+        assert!(status == StatusCode::OK && age_of(&headers).is_some(), "{headers:?}");
+        assert_eq!(body, made["/late"]);
+        ran(ran_by_now).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Past the window a request waits for its handler.
+    *does.lock().unwrap() = Does::Answers;
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+    let (status, headers, body) = fetch(&router, "GET", "/late", &[]).await;
+    assert!(status == StatusCode::OK && age_of(&headers).is_none(), "{headers:?}");
+    assert!(String::from_utf8_lossy(&body).contains("made by run 9 "));
+    assert_eq!(runs.count(), 9);
+}
+
 /// A page is kept for the `Host` it was asked with, and for the `Accept-Language` when its
 /// language follows the header (its `Vary` names the header then).
 #[tokio::test]
