@@ -140,7 +140,40 @@ jobs:
           node bench/fullstack/apps/fastapi/check-native.mjs cb-catalog-fastapi
           node bench/fullstack/apps/fastapi/check-trace.mjs cb-catalog-fastapi after --regressions-only
       - name: Build and verify localized marketplace sources
+        id: marketplace
         run: node bench/marketplace/run.mjs w1 --apps ${{ matrix.app }} --build --check-only
+      # The gate's script-free phone alert cases, repeated in both sources with exact POST,
+      # redirect, document and message checks (#1251). Its diagnostics upload with the results.
+      # It also runs after a failed gate, to diagnose it, when the gate built the image; the job
+      # still fails on the gate. Each source's probe stops between cases at its budget.
+      # --deadline is under the step's timeout and keeps its last two minutes for removal and
+      # cleanup.json, so a stalled probe cannot leave the step killed before its receipt. After a
+      # failed gate, the image check is bounded (30 s with its kill) inside the same 15 minutes. Only
+      # Docker's "No such image" skips the probe; a check that fails otherwise or times out fails
+      # the step and leaves preflight.log for the upload.
+      - name: Probe React Router script-free alert forms in both sources
+        if: always() && matrix.app == 'react-router' && (steps.marketplace.outcome == 'success' || steps.marketplace.outcome == 'failure')
+        timeout-minutes: 15
+        env:
+          GATE: ${{ steps.marketplace.outcome }}
+        run: |
+          results=bench/marketplace/results/alert-probe
+          if [ "$GATE" = failure ]; then
+            status=0
+            inspect=$(timeout -k 5 25 docker image inspect --format '{{.Id}}' cb-marketplace-react-router 2>&1) || status=$?
+            case "$status:$inspect" in
+              0:*) ;;
+              1:*"No such image"*)
+                echo "The marketplace gate failed before building cb-marketplace-react-router; no probe."
+                exit 0 ;;
+              *)
+                mkdir -p "$results"
+                printf 'docker image inspect cb-marketplace-react-router: exit %s (124 is a timeout)\n%s\n' "$status" "$inspect" > "$results/preflight.log"
+                echo "::error::Could not tell whether the marketplace gate built cb-marketplace-react-router (docker image inspect exit $status); no probe. See preflight.log."
+                exit 1 ;;
+            esac
+          fi
+          node bench/marketplace/alert-probe-run.mjs cb-marketplace-react-router 10 "$results" --budget 240 --deadline 840
       - name: Qualify Next.js marketplace methods and alert writes in both sources
         if: matrix.app == 'nextjs'
         working-directory: bench/fullstack/apps/nextjs
@@ -201,6 +234,7 @@ jobs:
           path: |
             bench/catalog/results/c1/
             bench/marketplace/results/w1/
+            bench/marketplace/results/alert-probe/
             bench/fullstack/apps/fastapi/tests/results/
             bench/fullstack/apps/gin/production-results/
             bench/fullstack/apps/nextjs/work/bounded-qualification-fixture.json

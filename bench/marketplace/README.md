@@ -316,6 +316,34 @@ the same session when polling. A POST acknowledgement or changed message alone
 does not prove that save completed. Its continuing polls are not navigation:
 the correlated save and rendered message precede the full-page assertions, without
 requiring global network idle. Transport failures retain bounded diagnostics.
+A JavaScript-disabled page runs no animation-frame or timer callbacks, so the gate's alert
+message wait keeps its predicate (the first `.marketplace__message` has non-whitespace
+`textContent`) but has Playwright re-evaluate it from outside the page, through a `:root`
+locator, rather than an in-page poll that never ran again once it had seen the POST document
+before its message. That stall matches r19's symptom in [#1251](https://github.com/corten-run/corten/issues/1251),
+though r19's cause is not established.
+`alert-probe-run.mjs IMAGE [ITERATIONS] [RESULTS_DIR] [--budget SECONDS] [--deadline SECONDS]` repeats the three
+English phone alert cases without JavaScript against an image in both sources, laid out like
+the gate. It uses the gate's own submission wait, then requires one document POST answered
+200 without a redirect, that POST to be the last main-frame document request (a refresh or
+redirect to a GET at the same URL fails), the full expected page and the exact message, and
+keeps a bounded diagnostic (case, POST chain, document requests, ready state, message and
+document tail) for each failure. Its containers and network carry the run's owner label and
+are removed by the IDs their creation returned after confirming that label; a removal that
+fails or an owner that cannot be confirmed fails the run, and `cleanup.json` records the
+outcome. The app and upstream join the network by its ID. Extra `--label` keys may not be the
+owner key `run.corten.marketplace.alert-probe` or a key in its dot-delimited namespace
+(`run.corten.marketplace.alert-probe.*`); other keys, even with the same literal prefix, are
+ordinary. A create that returns no ID, whatever its error (a daemon error can follow a create
+the daemon already made), is looked for by a label of its own for up to 10 seconds at teardown,
+each lookup cut to the time left; if nothing appears, its cleanup is reported unconfirmed and
+the run fails, since Docker may still make it. A failed lookup is reported and does not stop
+the sweep by the owner label.
+`--deadline` bounds the whole run: work stops starting two minutes before it, leaving that
+time for the app logs, removal and `cleanup.json`. Catalog Contract runs it for React Router
+at 10 iterations per source, including after a failed marketplace gate that built the image,
+with a 240-second probe budget and an 840-second deadline inside the step's 15 minutes. It is
+a functional check, not a measurement.
 
 New native runs retain `evidenceVersion: "marketplace-raw/v3"` alongside the
 `marketplace-results/v6` summary format. `validateSaved({ folder, round, commit })` from
