@@ -147,7 +147,14 @@ After the change, an OSV query batch over the live and fullstack Gin `go.mod` fi
 Go's standard library at 1.27.4), both Phoenix `mix.lock` files and both Rails
 `Gemfile.lock` files (270 package versions) returned no advisory; the same query on the
 previous files returned the advisories in the table. These are package-version queries, not
-an image or OS scan.
+an image or OS scan, and OSV did not index Rack 3.2.9's five advisories when queried, so it
+reported no Rack advisory before or after that change. The same query over the fullstack Nuxt
+app's `package-lock.json` (unchanged here) returns Nuxt 4.6.4 and `@nuxt/nitro-server` 4.6.4,
+whose advisories GitHub bounds below 4.6.4 on the 4.x line (OSV's 3.x ranges are open-ended),
+and two real matches: glob 13.0.7 (GHSA-3g3m-2fjr-6pw4, fixed in 14.0.2) and minimatch 10.2.6
+(GHSA-g3hv-75wg-m249, fixed in 11.0.1). Both are the newest releases of their majors, reached
+through Nitro's build-time `@vercel/nft` and `archiver`; neither is in the `.output` the Nuxt
+image runs. They stay until a follow-up takes those majors.
 
 Checks on the changed apps, run locally on Docker Desktop with the commit's sources, not on a
 benchmark host: catalog fixture and API checks for Spring, Rails and Phoenix (500 JSON records
@@ -161,4 +168,8 @@ recoverable-live parity for live Rails and Phoenix (6 of 6 each), the live Rails
 workloads live and deployments suites. The Phoenix catalog image first failed to build when
 ex_cldr could not reach `raw.githubusercontent.com` for the German locale; the same build
 passed on the next attempt. `mix format --check-formatted` reports seven unformatted files
-in the fullstack Phoenix app, the same seven at the commit before this change.
+in the fullstack Phoenix app, the same seven at the commit before this change. After Rack
+moved to 3.2.9: `check-app.mjs` for Rails and Phoenix, catalog and marketplace fixture and API
+checks for Rails, Phoenix and Nuxt (the same counts as above), live-delivery (2 of 2) and
+recoverable-live (6 of 6) parity for live Rails and Phoenix, the fullstack Rails tests (13
+runs, 203 assertions) and the live Rails store test (12 runs) all passed.
