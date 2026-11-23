@@ -236,6 +236,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
     if (manifest.single) {
       const root = dirname(fleet.root), { indexSha256, group } = manifest.single;
       assert.equal(intent.subject.continuation?.indexSha256, indexSha256, "continuation approval required");
+      if (manifest.single.offlineHandoff) assert.ok(!intent.subject.continuation.peers?.length, "offline handoff requires no live peer");
       assert.equal(continuationIndexSha256(root), indexSha256, "continuation index changed");
       assert.deepEqual(JSON.parse(regular(join(root, ".continuation-operation.lock"), 1024)), { pid: process.pid, group },
         "group launch requires the active continuation lock");
@@ -278,6 +279,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
       if (historicalIds.size) assert.equal(historicalHostsAbsent, true, "unconfirmed historical host not proved absent from the account census");
       const root = dirname(current.fleetRoot), { indexSha256, indexedCustody, peers } = current.subject.continuation;
       const currentPeers = recheckContinuationPeers(root, indexSha256, manifest.provider, options.group, peers);
+      if (manifest.single.offlineHandoff) assert.deepEqual(currentPeers, [], "offline handoff requires no live peer");
       if (beforeCreate === true) {
         recheckIndexedLaunchCustody(root, indexSha256, indexedCustody);
         const checks = unconfirmed.filter((row) => row.root !== undefined).map((row) => recheckSetupAttempt(root, row, manifest));
