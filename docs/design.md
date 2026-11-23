@@ -7915,14 +7915,45 @@ rules something out.
     +1% shows neither a lower cost nor what caused a difference, and the run is a result for
     `ef8587ca0` against `7a275ef15` only: this change merged with main's `fef1f83de`
     (`a14a80294`), whose main side changes how a kept answer is given again and how answers' header
-    maps are made, is another binary, and neither this run nor the wait's measures it. The first two runs on a quiet host did not count
+    maps are made, is another binary, and neither this run nor the wait's measures it. A fifth run
+    measured that pair, `a14a80294` against `fef1f83de`, on 2026-11-23 on a DigitalOcean c-8 with a
+    Xeon Platinum 8280 (Linux 6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded), with the fourth
+    run's first two passes, workloads, starts, fence, panic checks and margin, set before it ran,
+    and a wrapper that failed closed: a workload was usable only with every declared pair and turn,
+    every counter counted for all of every turn, no failed request, its CSV equal to its raw log and
+    every start warmed and, for `refused`, fenced, and the run exited non-zero unless all of it ran
+    and every bound was under +1%. Every workload of both passes was usable and no start of either
+    build printed a panic; the fence closed and the refused page was a kept 1,819-byte zstd 1 in all
+    102 starts of each build for the cycles and all 32 for the second pass (at a bound of 64,576
+    bytes calibrated on the head). The median change within a pair, its bound and range: `browser`
+    -1.96% (bound -1.72%, -6.69% to +7.57%), `gzip` -1.43% (bound -1.09%, -4.58% to +4.65%),
+    `refused` -1.47% (bound -0.99%, -25.53% to +10.71%) and `json-browser` -1.67% (bound -1.44%,
+    -7.38% to +10.66%), with user instructions -0.03% to +0.04% at the median, so the gate declared
+    for it was met for those commits. Its second pass counted user first-level instruction-cache
+    misses a request, a diagnostic held to no margin, from base to head: `browser` 2,619.2 to
+    2,698.7 (+2.94% at the median a pair, bound +3.81%), `gzip` 2,625.6 to 2,672.1 (+1.71%, bound
+    +2.46%), `refused` 2,615.7 to 2,720.5 (+3.58%, bound +5.00%) and `json-browser` 2,795.7 to
+    2,792.0 (+0.43%, bound +0.97%). It timed no held value's wait, which stays timed for
+    `76a9dc1e4` against `7a275ef15` alone (above). Its kit, results and receipts, each workload's
+    per-pair changes in its CSVs among them, are kept under the tag `evidence/2cc9a0c8`. As
+    declared, a bound under +1% shows neither a lower cost nor what caused a difference: the
+    instructions are flat, so no speedup is claimed, and the run is a result for `a14a80294`
+    against `fef1f83de` only. Main has since merged
+    [#1976 Push a JSON number's one digit where its field is written](https://github.com/corten-run/corten/pull/1976)
+    (`a02c81e86`), which changes only the JSON integer writer (`unsigned` in
+    `crates/corten/src/json.rs`, reached only by `ToJson` for integer types). None of the four
+    workloads runs it on the timed request: each is given its kept answer in the handler's place,
+    and the one handler of the four that writes JSON, `/records`, writes 24 pairs of strings, no
+    integer, and runs only in the warm-up. This change merged with that main is still another
+    binary, which the fifth run did not time. The first two runs on a quiet host did not count
     user first-level instruction-cache misses, which CONTRIBUTING.md asks for as a diagnostic when
     code is added or moved: each turn counted `cycles:u`, `cycles:k` and `instructions:u` alone,
     so that no turn's counters were multiplexed and perf ran all three for the whole of every turn;
     the simulated instruction misses above (callgrind's, 1,811 against 1,798 an answer) are another
-    measure and do not stand in for them, and the third and fourth runs' second passes count them.
-    Each workload's 100 per-pair changes in the four runs are listed in the description of
-    [#1846 Send a kept page in brotli 5, made off the request after its second answer](https://github.com/corten-run/corten/pull/1846).
+    measure and do not stand in for them, and the third, fourth and fifth runs' second passes count
+    them. Each workload's 100 per-pair changes in the first four runs are listed in the description of
+    [#1846 Send a kept page in brotli 5, made off the request after its second answer](https://github.com/corten-run/corten/pull/1846),
+    and the fifth run's are in its results under its tag.
     The levels'
     bytes and instructions above are a probe's that compresses as `compress::encode` does, whose
     level-1 bytes matched the app's answers, on the catalog benchmark's ten record pages and
@@ -8566,7 +8597,12 @@ rules something out.
     is found rendering a form's submit key in a task its `Public` handler spawned or on a
     thread of the handler's own, which the watch does not see.
 
-    Last checked: 2026-11-23 for how long a held value waits behind a kept page's whole job on a
+    Last checked: 2026-11-23 for the fifth run's cycles and user first-level instruction-cache
+    misses under load, `a14a80294` against `fef1f83de` on a DigitalOcean c-8 (Xeon Platinum 8280,
+    Linux 6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded), every turn on a newly started build,
+    kept under the tag `evidence/2cc9a0c8`, and for main's `a02c81e86` changing only the
+    JSON integer writer, which the run's probe source and `crates/corten/src/json.rs` show none of
+    its four workloads runs on the timed request; 2026-11-23 for how long a held value waits behind a kept page's whole job on a
     quiet host, `76a9dc1e4` against `7a275ef15` on a DigitalOcean c-8 (Xeon Platinum 8280, Linux
     6.12.117, rustc 1.100.0, jemalloc 5.3.0 preloaded), kept under the tag `evidence/53fa534d`;
     2026-11-22 for the fourth run's cycles and user first-level instruction-cache misses under load,
