@@ -1189,7 +1189,9 @@ rules something out.
    [#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852),
    [#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
    jemalloc's thread cache stops at 32 KiB unless set, and a brotli response, which a client
-   without zstd gets, allocates buffers above that, so jemalloc maps them again for every one: the
+   without zstd got for every body until [Choice 72](#choice-request-gzip) and gets for one past
+   16 KiB since (one that accepts only brotli, for every body), allocates buffers above that, so
+   jemalloc maps them again for every one: the
    item page sent with brotli took 19.3 to 19.4 minor page faults a request with jemalloc's
    defaults, its background thread, no decay, `retain:false` or `thp:never`, and none with
    `tcache_max` at 64 KiB or 8 MiB, as on glibc (`bench/fullstack/alloc-faults.mjs`, the server's
@@ -1219,6 +1221,21 @@ rules something out.
    image's three lines are the app's, which it removes to run on glibc's, and card-market's image
    has them too
    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
+   [Choice 72](#choice-request-gzip)'s probe, on a quiet Linux host (a
+   DigitalOcean c-16, card-market's image at `fdf94a6a7`, three rounds of 3,000 requests, medians),
+   agrees for the item page and not for a longer one. The 9.8 KB item page sent with brotli took
+   no fault a request with the image's settings, 19.37 with jemalloc's defaults and 2.00 on
+   glibc, and 150, 200 and 177 µs of CPU. A 32.5 KB page sent with brotli took 37.85 faults a
+   request with the image's settings and 39.92 with jemalloc's defaults, and none on glibc, and
+   347, 360 and 250 µs: the image gains nothing over jemalloc's defaults there and costs about
+   100 µs a request against glibc. With `tcache_max` at 256 KiB, 1 MiB or 8 MiB that page took
+   no fault and 260, 260 and 257 µs (the same probe, three rounds; at 64 KiB in that run 37.85
+   and 363 µs), and the process held 11.1 to 11.6 MB against 11.0, so at 32.5 KB brotli's
+   buffers are past the 64 KiB the thread cache keeps and within 256 KiB. A flood's memory with a larger thread
+   cache was not measured, nor a page between 10 and 32 KB or a longer one, so the setting stays
+   as it is here and this is open. Since Choice 72 a page up to 16 KiB goes to a client without
+   zstd as libdeflate's gzip, which took no fault with any of the three, so the brotli pages
+   this is about are those past 16 KiB and those of a client that accepts only brotli.
 
    Stands on: measured (memory after eight floods, three runs each, seven allocator settings; page
    faults a request, repeatable to 0.1 in every round; idle CPU, three rounds; instructions a
@@ -1238,7 +1255,9 @@ rules something out.
    the floods, the page faults and the rounds, images of `81f1f8ef` (but for the tuned image in
    `results/alloc-faults` and `alloc-idle`, a build whose commit was not recorded); 2026-11-19,
    Debian's libjemalloc2 5.3.0 (package 5.3.0-3) in `debian:trixie-slim` on amd64, its defaults
-   printed by `MALLOC_CONF=stats_print:true`.
+   printed by `MALLOC_CONF=stats_print:true`; 2026-11-23, the faults and CPU of brotli pages of
+   9.8 and 32.5 KB by thread cache limit, card-market's image at `fdf94a6a7`
+   ([Choice 72](#choice-request-gzip)).
 
 24. <a id="choice-openapi"></a>**An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
    cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
@@ -8439,6 +8458,135 @@ rules something out.
     `wrk` 4.1.0 and Debian's libjemalloc2 5.3.0. The host's own record gives the CPU model, topology
     and versions, but not the droplet size and region, which come from the account that made it and
     which a later calibration records with the rest.
+
+72. <a id="choice-request-gzip"></a>**A body compressed as it is sent is zstd, else the smaller of
+    libdeflate's gzip and brotli 1: gzip up to 16 KiB, brotli past it.** A client that accepts
+    gzip and not zstd (Safari before 26.3 and over HTTP, as the `compress` module reads caniuse;
+    an HTTP client that asks for `gzip` alone, as Go's `net/http` does) was sent brotli 1 when it
+    also accepted brotli and flate2's gzip 1 when it did not, and compressing was most of what
+    its request cost. libdeflate's gzip at its level 1 takes less to make than brotli 1, is
+    smaller than flate2's at every size measured, and is smaller than brotli 1 on a short body
+    but not on a long one that repeats. So for a page, a patch or JSON made for one request the
+    server's order after zstd is gzip then brotli for a body up to 16 KiB, and brotli then gzip
+    past it. A client that accepts one of the two gets that one at any size, and its own ranking
+    (q-values) comes before the server's order. One client can so be sent gzip for a short page
+    and brotli for a long one; both carry `Vary: Accept-Encoding`. Stored forms (assets, held
+    JSON) are brotli 11 or 9 first, unchanged, and a stream is zstd or flate2's gzip
+    ([Choice 32](#choice-stream-coding)): libdeflate compresses only a whole body into one
+    buffer, which a request's body is and a stream is not.
+
+    Where 16 KiB comes from: twelve bodies cut to sizes from 1 KB up, each cut compressed whole
+    by both (the `brotli` crate's level 1 with the window the server gives it, libdeflate's
+    level 1). The bodies are card-market's home page (1,203 bytes), the item page of its smoke
+    fixture (9,793) and that page with the item's contents and field values repeated twenty
+    times under varied names (32,501); this repository's README, two guides and this document
+    rendered to HTML by Python-Markdown (28 KB to 880 KB); and five JSON files (the HttpArena
+    benchmark's `dataset.json`, 13 KB; card-market's two fixtures, 31 and 68 KB;
+    `bench/workloads/latest-stable.json`, 83 KB; and a 231 KB `plan.json` under
+    `bench/live/evidence`).
+
+    | Cut to (bytes) | Bodies that long | libdeflate's gzip 1 against brotli 1 |
+    |---|---|---|
+    | 1,024 to 6,144 | 12 | 0.5% to 8.9% smaller on every one |
+    | 8,192 to 16,384 | 11 | 4.6% to 10.4% smaller on ten; 2.8% to 11.6% larger on card-market's smoke fixture (28 to 154 bytes) |
+    | 20,480 to 32,768 | 9 | 2.1% to 7.4% smaller on five (the four documents and the workloads file); 3.5% to 30.5% larger on four (92 to 927 bytes) |
+    | 49,152 and up | 6 | 0.7% to 5.9% smaller on the two guides at every cut; larger on the other four at some cut, by 0.1% to 27.9% (143 to 1,819 bytes) |
+
+    Between 16,384 and 20,480 bytes brotli 1 gains on a body that repeats (the long page: 3,242
+    bytes at 16,384 and 3,479 at 20,480, where libdeflate's grew from 3,092 to 3,670), so the
+    line is 16 KiB. Up to it gzip is the smaller on all but one body, where it adds 28 to 154
+    bytes; past it a body is coded as it was before this Choice, so none grows. The cuts are
+    prefixes: they show what length does to one content, not what another page of that length
+    holds. flate2's gzip 1, which a client with gzip alone was sent, was 1.9% to 28.3% larger
+    than libdeflate's at all 161 cuts.
+
+    Measured on the item page (9,793 bytes) and the long page (32,501), before at `bcf4aa073`
+    and after at `fdf94a6a7`:
+
+    | Page, `Accept-Encoding` | Sent before | Sent after | Instructions a request | Time a request in process | CPU a request on the starter's image | Page faults a request: that image, jemalloc's defaults, glibc |
+    |---|---|---|---|---|---|---|
+    | item, `gzip, deflate, br` | brotli 1, 2,475 bytes | gzip, 2,307 | 841,069 to 409,926 | 96.3 to 55.7 µs | 147 to 97 µs | 0, 19.35, 2.00 to 0, 0, 0 |
+    | item, `gzip` | gzip 1 (flate2), 2,612 | gzip, 2,307 | 866,175 to 409,526 | 178.8 to 55.2 µs | 163 to 103 µs | 1.62, 11.93, 53.01 to 0, 0, 0 |
+    | item, `br` | brotli 1, 2,475 | the same | 840,586 to 840,592 | 97.2 to 93.6 µs | 147 to 150 µs | 0, 19.37, 2.01 to 0, 19.37, 2.00 |
+    | item, `gzip, deflate, br, zstd` | zstd 1, 2,250 | the same | 335,265 to 335,326 | 40.7 to 41.1 µs | 83 to 87 µs | none before or after |
+    | item, `identity` | as it is | the same | 73,370 to 73,339 | 11.70 to 11.79 µs | not probed | not probed |
+    | long, `gzip, deflate, br` | brotli 1, 4,440 | the same | 2,079,617 to 2,079,523 | 337.7 to 332.5 µs | 357 to 347 µs | 37.84, 39.92, 0 to 37.85, 39.92, 0 |
+    | long, `gzip` | gzip 1 (flate2), 5,587 | gzip, 5,367 | 1,370,990 to 1,094,730 | 295.5 to 147.5 µs | 237 to 187 µs | 2.35, 17.32, 0 to 0, 0, 0 |
+    | long, `gzip, deflate, br, zstd` | zstd 1, 3,981 | the same | not counted | not timed | 183 to 140 µs | none before or after |
+
+    Instructions and the time in process are `route_loop`'s whole request (`LOOP_TARGET=document`,
+    card-market's release test build on glibc's allocator, no socket): instructions under
+    callgrind as the difference between a 4 s and a 16 s loop over the difference in requests,
+    three such pairs a build, the median, whose three values ranged by at most 1,332; the time
+    three 5 s loops a build, the builds taking turns, the median, ranging by at most 3.7 µs. The
+    CPU and the faults are card-market's image (`--cpus 1`; the page asked 3,000 times over 8
+    connections after 500, with `gzip, br` where the counts sent `gzip, deflate, br`; its
+    `/proc/1/stat` read before and after as `bench/fullstack/alloc-faults.mjs` reads it), three
+    rounds, the median; no request failed. The faults repeated to 0.04 a request. The CPU is
+    counted in 10 ms ticks, 3.3 µs a request, and its rounds ranged by up to 73 µs, so it shows
+    the size of a change and not a difference of a few µs: the rows whose coding did not change
+    moved by -43 to +13 µs across the three allocators. With jemalloc's defaults the item page
+    for `gzip, br` went from 230 to 100 µs, and on glibc from 167 to 103.
+
+    The dependency: `libdeflater`, whose `libdeflate-sys` compiles libdeflate's C (MIT)
+    with the C compiler `zstd-sys` already asks for, under the `compress` feature alone;
+    built alone it took 4.8 to 5.1 s of a clean release build (16 cores, three builds). A change
+    without it does not meet this. Each coder alone on one core (a program outside the
+    repository; bytes out, then the best of seven runs of 2,000 calls):
+
+    | Body | brotli 1 | libdeflate 1 | flate2 on zlib-rs, level 2 | flate2 on zlib-rs, level 1 | flate2 on miniz_oxide, level 1 (the gzip before) |
+    |---|---|---|---|---|---|
+    | JSON cut to 2,560 bytes | 692, 18.4 µs | 647, 12.0 | 646, 23.1 | 775, 12.5 | 695, 16.5 |
+    | item page cut to 4,096 | 1,378, 31.4 | 1,288, 17.1 | 1,315, 31.9 | 1,623, 17.7 | 1,401, 24.1 |
+    | JSON cut to 5,120 | 1,046, 26.3 | 964, 17.0 | 963, 27.9 | 1,170, 15.1 | 1,065, 19.4 |
+    | item page, 9,793 | 2,475, 70.0 | 2,307, 34.4 | 2,379, 52.3 | 2,920, 27.1 | 2,612, 43.1 |
+    | JSON, 13,298 | 2,081, 51.6 | 1,865, 35.3 | 1,903, 45.7 | 2,355, 24.3 | 2,076, 31.9 |
+
+    libdeflate takes 32% to 51% less time than brotli 1 and is 6% to 10% smaller. zlib-rs, a
+    deflate in Rust behind flate2, is 12% to 18% larger than brotli 1 at its level 1; at its
+    level 2, within 3.1% of libdeflate's size, it is slower than brotli 1 on the three bodies up
+    to 5 KB (2% to 26%) and 11% to 25% faster on the two larger, and it would also change the
+    gzip of every stream and stored form, which flate2 makes. miniz_oxide's level 2, the first of
+    its levels smaller than brotli 1 on the item page (2,340 bytes), took 84.8 µs there.
+    libdeflate's levels 2 to 4 gave 1.5% to 2.1% fewer bytes on the item page for 43% to 52%
+    more time, so level 1. Against the gzip before, libdeflate's time ranged from 29% less to 11%
+    more on these and four larger bodies. Each thread that has compressed a body keeps its
+    compressor, 200 KiB (asked of the C allocator, read with glibc's `mallinfo2`), where its
+    zstd context held 193 KiB after one 10 KB body. The buffer libdeflate writes into is the
+    most the body can come to, about the body's own size, zeroed, and what is sent or kept is
+    cut to what was written.
+
+    Not chosen: gzip past 16 KiB, which on the long page would take 985,000 fewer instructions
+    a request and send 927 more bytes (21%), because a faster encoder on the server does not pay
+    for more bytes to the visitor, and the server cannot tell a body that repeats from one that
+    does not without compressing it twice; libdeflate for a stored form's gzip 9 (made once per
+    file; not measured); gzip ahead of zstd (on the item page zstd 1 took 74,600 fewer
+    instructions and sent 57 fewer bytes); dropping brotli (a client may accept nothing else,
+    long bodies that repeat are smaller with it, and stored forms are brotli).
+
+    Stands on: measured (the sweep, whose bytes do not vary; instructions, three pairs a build;
+    time in process, three turns; CPU and faults on the image, three rounds; the coders alone,
+    one run on one host); platform (libdeflate 1.26.1 as `libdeflater` 1.26.1 builds it,
+    `brotli` 9.1.3, Go's `net/http` asking for gzip alone; which browsers send zstd is the
+    `compress` module's reading of caniuse, not checked again here); reasoned (up to 16 KiB gzip
+    is smaller on all but one body measured and at most 154 bytes larger there, which the first
+    congestion window holds either way, so no browser's load time was measured); bet (an app's
+    short bodies are like the twelve measured: one whose short bodies repeat as the smoke
+    fixture does sends a few percent more as gzip); value (Fast, and proven fast; Small surface,
+    deliberate dependencies: the C library is behind the feature that already compiles one,
+    README Values).
+
+    Revisit when: every browser Corten supports sends zstd, so that gzip and brotli made per
+    request serve only other clients; a deflate in Rust is as small as libdeflate's level 1 and
+    as fast on these bodies, which would take the C library out; the `brotli` crate's or
+    libdeflate's fast levels change, since the line was drawn between these two; an app's short
+    bodies are measured larger as gzip than as brotli 1; or bodies compressed per request are
+    far larger than those measured (the buffer is the body's size).
+
+    Last checked: 2026-11-23, at `bcf4aa073` and `fdf94a6a7`, on two DigitalOcean droplets with
+    a Xeon Platinum 8280: the counts and the times on a c-48 (Linux 7.0.0-43); the sweep, the
+    coders alone and the probe on a c-16 (Linux 6.8.0-149, Docker 29.10.0); rustc 1.100.0,
+    Debian's libjemalloc2 5.3.0 in the image.
 
 ## Rules
 

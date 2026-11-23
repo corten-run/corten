@@ -13,11 +13,11 @@
 //! 745,000 for 2,492. Up to 16 KiB gzip is ahead of brotli because libdeflate's is smaller than
 //! brotli 1 there and takes less: on the item page of card-market's smoke fixture (9,793 bytes;
 //! `route_loop`'s whole request in process under callgrind, three pairs of loops, at
-//! `df2f10f5d`) the request takes
-//! 335,488 instructions with zstd 1 for 2,250 bytes, 409,682 with libdeflate's gzip for 2,307, and
-//! 840,631 with brotli 1 for 2,475; flate2's gzip 1, which a client with gzip alone got before,
-//! took 866,039 for 2,612 (`docs/design.md#choice-request-gzip`, with the times and the page
-//! faults). Past 16 KiB a body that repeats is smaller with brotli 1: of eleven pages, documents
+//! `fdf94a6a7`) the request takes
+//! 335,326 instructions with zstd 1 for 2,250 bytes, 409,926 with libdeflate's gzip for 2,307, and
+//! 840,592 with brotli 1 for 2,475; flate2's gzip 1, which a client with gzip alone got before,
+//! took 866,175 for 2,612 (`docs/design.md#choice-request-gzip`, with the times and the page
+//! faults). Past 16 KiB a body that repeats is smaller with brotli 1: of twelve pages, documents
 //! and JSON files cut to sizes from 1 KB up, gzip was 4.6 to 9.9% smaller on eight of the nine
 //! that reach 16 KiB and 11.6% larger on one, and at 20 KB 3.5 to 30.5% larger on four of them.
 //! A client that accepts gzip alone gets libdeflate's at every size, smaller than flate2's gzip 1
@@ -71,8 +71,9 @@ const BROTLI_LEVEL: u32 = 1;
 /// libdeflate's fastest level, for a body compressed per request ([`encode`]).
 const GZIP_LEVEL: i32 = 1;
 /// The largest body gzip is ahead of brotli for when it is compressed per request
-/// ([`Accepts::now`]). Up to here libdeflate's gzip 1 was the smaller of the two on ten of eleven
-/// bodies; from 20 KB on brotli 1 was, by up to 30% (`docs/design.md#choice-request-gzip`).
+/// ([`Accepts::now`]). Up to here libdeflate's gzip 1 was the smaller of the two on all but one
+/// of twelve bodies; from 20 KB brotli 1 was on four of nine, by up to 30%
+/// (`docs/design.md#choice-request-gzip`).
 const GZIP_FIRST: u64 = 16 * 1024;
 /// A stream's gzip level: deflate (miniz_oxide) at 1 finds few of an earlier event's matches, so a
 /// 2.7 KB redraw of one changed row costs 129 to 453 bytes a time; at 3 it costs 60 to 69
@@ -1075,7 +1076,8 @@ mod tests {
 
     /// A page past `GZIP_FIRST`: rows that differ.
     fn long_page() -> String {
-        let page: String = (0..600).map(|i| format!(r#"<tr id="o{i}"><td>{}</td><td>row {i}</td></tr>"#, i * 7919 % 1000)).collect();
+        let page: String =
+            (0..600).map(|i| format!(r#"<tr id="o{i}"><td>{}</td><td>row {i}</td></tr>"#, i * 7919 % 1000)).collect();
         assert!(page.len() as u64 > GZIP_FIRST, "{}", page.len());
         page
     }
