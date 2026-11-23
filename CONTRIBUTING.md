@@ -585,10 +585,12 @@ establish a general ranking.
       run: 99 minutes of turns after 2 minutes of checks, besides setup and builds). That size is
       the first run's, not one to assume: in the second run one of two A/As of that size did not
       resolve, its placement medians spreading 1.97% where the other's spread 1.17%, and the
-      Choice works out that 30 placements fail a reading more often than not at the first figure
-      and about one time in five at the first run's own. More placements is the remedy that does
-      not rest on where the spread comes from, so a plan with an A/A already read on its setup
-      and workload takes K from how far that A/A's placement medians spread.
+      Choice works out, on a model of its own, that an A/A of 30 placements fails one of its two
+      readings more often than not at the first figure and about one time in five at the first
+      run's own. This rule sets no size. More placements narrow the bound wherever the spread
+      comes from, and a plan with an A/A already read on its setup and workload can take K from
+      that calculation at that A/A's spread; a plan with none has no such figure, and its A/A
+      may not resolve.
    2. Memory (allocation, buffer sizes, copies, data layout): the count and times, because a
       count does not see cache misses or memory stalls, and the same count can take longer.
       For the item page, `render_cost` in `examples/card-market` prints the times of building,

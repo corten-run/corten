@@ -8093,10 +8093,10 @@ rules something out.
     100 instructions and one allocation fewer at 10,005 seconds with the answer under ten
     seconds within 16; the last held and the first did not, so it is not made. The base's
     placement medians spread 1.97% past the table where they spread 1.17% on the answer in the
-    table, with pairs spreading the same; at 1.97% 30 placements fail one of the two readings
-    more often than not ([design Choice 72](#choice-placement-runs) works it out), and what
-    widened them, the answer's path, the clock's step or chance, was not separated. The run's
-    limits: a clock
+    table, with pairs spreading the same; at 1.97% an A/A of 30 placements fails one of its two
+    readings more often than not, by the model [design Choice 72](#choice-placement-runs) works
+    out, and why they spread further there was not separated (that Choice lists what could do
+    it). The run's limits: a clock
     moved on is not an answer that has sat in memory for 2 hours
     46 minutes; every reading of the clock by either build went through the library; Corten's
     connection watch, whose own coarse clock a step leaves behind until its next tick, closed
@@ -8353,7 +8353,7 @@ rules something out.
     it, and under load it ran no fewer instructions with jemalloc and 27 to 51 fewer with
     glibc's allocator. So what would have it read again is now an app found giving answers that
     old, with a count under its own load and allocator that shows the buffer saving what
-    callgrind counts. The reading that follows needs more placements than the 30 that did not
+    callgrind counts. A reading after that would take more placements than the 30 that did not
     resolve that answer ([design Choice 72](#choice-placement-runs) says how many, and on what
     assumption), and its plan puts to its reviewer first whether a pass can make the form
     against the sentence that a placement run declared after a single-build miss does not
@@ -8705,8 +8705,8 @@ rules something out.
 
     When it is required. A placement run of 30 placements costs about two hours of a c-8 for one
     workload's change and A/A beside an A/A on `plain` (the second run's four comparisons took 164
-    minutes, and more placements cost in proportion), against about 35 minutes for three single-build comparisons
-    of 100 pairs ([design Choice 71](#choice-layout-floor)'s runs), so it is not the rule for every
+    minutes, and more placements cost in proportion), against about 35 minutes for three
+    single-build comparisons of 100 pairs ([design Choice 71](#choice-layout-floor)'s runs), so it is not the rule for every
     change. Each placement run's A/A records the workload's
     placement spread here, its lowest and highest placement median. One test decides:
     a single-build bound's distance from its threshold (the bound less +1% for the margin, the
@@ -8808,8 +8808,8 @@ rules something out.
     verified them in 18, as the tag's `margin.md` records; its other output is not in the tag.
     Main against main on `plain`: median of placement medians +0.23%,
     bound +0.92%, placement medians from -2.42% to +2.92%, t bound +0.61%, their standard deviation
-    1.48% against 1.34% that a median of 8 pairs would have from the pairs' own spread (3.03%)
-    alone; on `kept`: -0.49%, bound +0.02%, -2.98% to +3.33%, t bound +0.05%, 1.44% against 1.26%
+    1.48% against 1.34% that a median of 8 pairs would have by the normal formula from the
+    pairs' own spread (3.03%) alone; on `kept`: -0.49%, bound +0.02%, -2.98% to +3.33%, t bound +0.05%, 1.44% against 1.26%
     (2.85%). Both resolve +1%, and still do read with the lists' labels swapped, as the rule now
     asks: bounds of +0.38% on `plain` and +0.90% on `kept` (recomputed from the tag's CSVs; as recorded, 18 and
     11 of 30 placement medians above zero, 12 and 19 with the labels swapped, two-sided sign tests
@@ -8845,40 +8845,46 @@ rules something out.
     at 100%, no `wrk` error and an `Age` in its range before and after its turn. Base against
     base on `young`, a kept PNG 0 to 3 seconds old: median of placement medians +0.46%, bound
     +0.85%, placement medians from -2.26% to +2.22%, t bound +0.78%, their standard deviation
-    1.17% against 1.86% that a median of 8 pairs would have from the pairs' own spread (4.19%)
-    alone; with the labels swapped a bound of +0.14%, so it resolves +1% (19 of 30 placement
+    1.17% against 1.86% that a median of 8 pairs would have by the normal formula from the
+    pairs' own spread (4.19%) alone; with the labels swapped a bound of +0.14%, so it resolves +1% (19 of 30 placement
     medians above zero, two-sided sign test p = 0.200). On `old`, the same answer 10,005 seconds
     old: -0.44%, bound +0.79%, -3.63% to +4.38%, t bound +0.75%, 1.97% against 1.80% (4.06%);
     with the labels swapped a bound of +1.03%, so it does not resolve +1%, the first A/A at
     K = 30 the second reading turns away (14 of 30 above zero, p = 0.856). The pairs' own spread
     is 4.1% to 4.2% here where the first run's was 2.9% to 3.0%, on another request and another
-    CPU model. The pairs' spread does not say how far a workload's placement medians spread:
-    `old`'s spread 1.97% and `young`'s 1.17% with pairs spreading the same, a ratio 0.8% of
-    200,000 permutations of the 60 medians between the two reach (1.6% either way). The pairs
-    are long-tailed (about their placement's median, 1.4826 times the median absolute deviation
-    is 2.6% to 2.9% where the standard deviation is 3.9% to 4.0%, single pairs out to 21%), so a
-    median of 8 drawn from an A/A's pooled
-    residuals spreads 1.1% to 1.2%, not the 1.8% to 1.9% the normal formula gives and the
-    report prints. `young`'s medians spread what its pairs alone give and `old`'s more, and
-    what widened `old`'s (the answer's path, the clock's step and the 2 s wait after it, or
-    chance) was not separated. What a standard deviation of placement medians costs a run: of
-    200,000 seeded draws of K normal medians with a common median of zero, an A/A fails one of
-    its two readings (at K = 30 the 20th smallest at or over +1%, or the 11th at or under -1%)
-    in 55% at `old`'s 1.97%, in 5% at `young`'s 1.17% and in 18% and 21% at the first run's 1.44%
-    and 1.48%; at 1.97%, 60 placements fail in 15% and 100 in 2.0%. So K = 30 is the first run's
-    size and not one to assume. More placements is the remedy that does not rest on where the
-    spread comes from, more pairs helps only the part the pairs give, and a setup has no such
-    figure before an A/A has been read on it and on the workload (the scripts for both
-    calculations are under the tag `evidence/c448780e`). The change on `young`: +0.03%, bound
+    CPU model, and the pairs' spread does not say how far a workload's placement medians
+    spread: the four A/As read so far have medians spreading 1.44% (`kept`) and 1.48% (`plain`)
+    with the narrower pairs, 1.17% (`young`) and 1.97% (`old`) with the wider. The figure given
+    beside each above is the normal formula's, which overstates what these pairs give a median
+    of 8: `young`'s medians spread 1.17% where it gives 1.86%, and the pairs are long-tailed
+    (about their placement's median, 1.4826 times the median absolute deviation is 2.6% to 2.9%
+    in this run's A/As where the standard deviation is 3.9% to 4.0%, single pairs out to 21%).
+    `old`'s medians spread 1.68 times as far as `young`'s, a ratio that 1.6% of 200,000
+    permutations of the 60 medians, each centred on its own A/A's, reach either way, in a
+    comparison chosen after the readings. Why one workload's medians spread further than
+    another's was not separated: the placements its two lists of pads give, which an A/A is
+    there to show, the answer's path, the clock's step and the 2 s wait after it, or chance.
+    What a spread of placement medians costs a run, on a model no run has tested: of 200,000
+    seeded draws of K normal medians with a common median of zero, an A/A fails one of its two
+    readings (at K = 30 the 20th smallest at or over +1%, or the 11th at or under -1%) in 55.5%
+    at `old`'s 1.97%, in 4.6% at `young`'s 1.17% and in 18.1% and 20.8% at the first run's 1.44%
+    and 1.48%; at 1.97%, 60 placements fail in 15.4% and 100 in 2.0%, and each figure is for a
+    standard deviation taken from 30 medians and a median of exactly zero. So K = 30 is the
+    first run's size and not one to assume. More placements narrow the bound wherever the
+    spread comes from, where more pairs narrow only the part the pairs give; and a setup has no
+    figure for its medians' spread before an A/A has been read on it and on its workload. The
+    scripts for both calculations, `resolve-sim.mjs` and `spread.mjs`, are under the tag
+    `evidence/c448780e` with what they print. The change on `young`: +0.03%, bound
     +0.65%, which meets +1%; on `old`: +0.40%, bound +1.10%, not resolved, which does not pass. The base's unpadded build against
     eight padded ones on `old`: the padded ones cost a median 1.30% fewer cycles (-1.88% to
     -0.13%; 8 of 8 fewer, two-sided sign test p = 0.008) and missed the instruction cache 2.11%
     more. With the first run's 7 of 8 that is 15 of 16 padded builds under their unpadded one,
     the same eight pad sizes both times, on two mains, two requests and two CPU models. Each
-    diagnostic's eight signs share one unpadded binary and its own placement, so what has been
-    read is two unpadded builds, not sixteen: one of nine builds taken at random is the dearest
-    one time in nine. It still meets the Revisit-when on the unpadded build as it was first
-    written;
+    diagnostic's eight signs share one unpadded binary and its own placement, so they are not
+    sixteen independent signs and the sign tests given for them, which take them as
+    independent, overstate: were the unpadded build one of nine alike, it would be the dearest
+    one time in nine, as in this run, and the dearest or second dearest two in nine, as in the
+    first. It still meets the Revisit-when on the unpadded build as it was first written;
     [#1996 Padded placements cost fewer cycles than the unpadded build in 15 of 16 read so far, so a pad may move cost as well as spread it](https://github.com/corten-run/corten/issues/1996)
     asks what the pad itself changes. The Choice stands through it on this: the gate reads a
     change as the difference of two builds with one pad, so what a pad takes from both alike
@@ -8950,8 +8956,8 @@ rules something out.
     pads may understate a spread that comes from that; whatever a pad itself takes from a
     build's cycles (padded builds read under their unpadded one in 15 of 16, against two
     unpadded builds), it takes from both sides of a comparison alike; an A/A whose placement
-    medians spread as `old`'s did, 1.97%, resolves +1% at 100 placements, by a model of normal
-    medians with a common median that no run has tested; and a spread measured on one setup holds
+    medians spread 1.97%, as `old`'s 30 did, resolves +1% at 100 placements, by a model of
+    normal medians with a common median of zero that no run has tested; and a spread measured on one setup holds
     for another kernel or toolchain with the same CPU model, allocator and preloaded libraries,
     protocol and code); value
     (Fast, and proven fast: a touched
@@ -8959,13 +8965,13 @@ rules something out.
     assumed: the run's own A/A says whether it can resolve +1%, and a run that cannot does not
     pass, README Values).
 
-    Revisit when: a run's A/A on a workload does not resolve +1% at a K for which normal medians
-    of the standard deviation an earlier A/A on its setup and workload measured fail in under 5%
-    of draws, as worked out above, which asks for another reading (this entry first named an A/A
-    not resolving at K = 30, which asks for more placements or pairs; the second run's on `old`
-    did not, its medians spreading 1.97%, where 30 fail more often than not, so the Choice
-    stands on the rule turning away a run that does not resolve and on the bet below that more
-    placements resolve it); a placement run's
+    Revisit when: a run's A/A on a workload does not resolve +1% at a K for which
+    `resolve-sim.mjs` (tag `evidence/c448780e`) gives under 5% of draws at the standard deviation
+    an earlier A/A on its setup and workload measured, which asks for another reading (this
+    entry first named an A/A not resolving at K = 30, which asks for more placements or pairs;
+    the second run's on `old` did not, its medians spreading 1.97%, where that calculation has
+    30 fail more often than not, so the Choice stands on the rule turning away a run that does
+    not resolve and on the bet above that more placements resolve it); a placement run's
     change and a single-build run
     on the same commits disagree past their bounds often enough to show the pads' placements are not
     those real builds land in, or that two functions' distance apart matters; a pad is found to
