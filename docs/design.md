@@ -1290,11 +1290,13 @@ rules something out.
    pairs of 100, each on the same instructions. So on that workload this protocol on this host
    read one setting as 1.56% apart from itself, and its bound there does not hold to 1%; the
    earlier run's 0.57% stands on the same footing. These are cycles on one runtime, not latency; a
-   client with gzip alone, a long page with a browser's encodings or uncompressed, pages past
-   496 KB and more than one runtime were not run under load.
+   client with gzip alone, pages past 496 KB and more than one runtime were not run under load,
+   and a long page with a browser's encodings or uncompressed was not until the third run below.
 
-   A second declared run, which the maintainer asked for after that result, changed one thing in
-   the protocol and compared a setting with itself before each comparison. First, what the first
+   A second declared run changed one thing in the protocol and compared a setting with itself
+   before each comparison. The maintainer asked its author for it after that result, in the
+   session that wrote this change; the request is not on the pull request, and asking for a run
+   is not deciding what it settles. First, what the first
    protocol could not tell apart was looked for with one setting (64 KiB, the uncompressed page, a
    c-16 with a Xeon Platinum 8280, 30 turns a mode, card-market's image of main `14126d2a8`): the
    cycles a request varied from turn to turn with a standard deviation of 3.99% of the mean behind
@@ -1326,19 +1328,48 @@ rules something out.
    ran for less than all of a turn, no pair was dropped, and each comparison's answers were the
    same but `Date` and `ETag`. The comparisons ran once each, in the plan's order.
 
-   The first run's miss is not undone by the second: it stands as its plan's result, under a
-   protocol that read one setting as 1.56% apart from itself on that workload. The limit rests on
-   the second run, a plan of its own declared before its own run, and that plan was written after
-   one that said a missed margin stops the change. The ground for it is in three parts: the first
-   protocol was shown, by its own same-setting diagnostic, unable to tell 1% on the workload it
-   missed; what made it so was found and removed before the second plan was written, by turns
-   of one setting; and the second plan could not count a comparison whose own same-setting
-   reading did not resolve 1% first. A second run under the first protocol would not have that
-   ground. One thing weakens it and is on record: a trial of the scripts ran on one host in the
-   72 seconds before the plan was posted, one pair of 512 KiB against 64 KiB with `br` on each of
-   the four page lengths and two pairs of 64 KiB against itself with `identity`. It ran no pair
-   of the change with `identity` or a browser's encodings, and one pair does not read 1%, but the
-   plan was not in the pull request before any turn of the change on the host's network.
+   A third declared run read what the review of that record found missing: every margin above
+   that holds a workload to no regression is on the 9,793-byte page, which takes no page fault
+   at either limit, while the limit keeps any buffer of 64 to 512 KiB. Its plan was in the pull
+   request eight seconds before the run started, with no trial of the script this time, and is
+   the second run's protocol and scripts unchanged on the two hosts with a Xeon Platinum 8280
+   and the image they had built: the 202,041-byte page with `identity` on one and with
+   `gzip, deflate, br, zstd` on the other, 200 recorded pairs after one that is not, each held
+   to +1% with no floor, and before each 64 KiB against itself as above. 64 KiB against itself:
+   with `identity` 0.02% more at the median with a bound of 0.30% more (0.25% with the labels
+   swapped), and with `gzip, deflate, br, zstd` 0.05% more with 0.20% (0.07%), so both resolved
+   1%. 512 KiB against 64 KiB: with `identity` 620,974 user and kernel cycles a request against
+   635,169 at the medians, 2.26% fewer at the median of 200 pairs (9.76% fewer to 17.76% more)
+   with a bound of 2.07% fewer, on 0.33% fewer user instructions (1,086,786 against 1,090,241);
+   with `gzip, deflate, br, zstd`, which this server answers with zstd, 1,572,721 against
+   1,585,423, 0.88% fewer (7.01% fewer to 5.73% more) with a bound of 0.69% fewer, on 0.19%
+   fewer instructions. Both margins were met; no request failed, no counter ran for less than
+   all of a turn and no pair was dropped. So a long page sent uncompressed or as zstd is not
+   shown to cost more with this limit, and on these hosts cost a little less. One page length,
+   one CPU model and one runtime; the plan said beforehand that this run does not bear on the
+   first run's miss or decide whether the change merges.
+
+   The first run's miss is not undone by the second, and by the rules it still binds: its plan
+   said a missed margin stops the change, Pull requests holds a touched workload to +1% with no
+   floor and says a declaration is never added after a run to clear its result, and nothing
+   there lets a later run under another protocol stand in for the one that missed
+   ([Choice 70](#choice-kept-pages) says of its own rerun that it is another protocol, not a
+   repeat, and does not clear the first run's misses, and took it as the merge gate "as a
+   judgment, not a result of either run"). So this Choice does not say the limit is carried.
+   Whether the second run is taken as the gate despite the first plan is such a judgment; it is
+   the maintainer's, to be recorded on the pull request, and until it is this change does not
+   merge. What can be
+   said for taking it: the first protocol was shown, by its own same-setting diagnostic, unable
+   to tell 1% on the workload it missed; most of its turn-to-turn spread was found to come from
+   the published port and was removed before the second plan was written, by turns of one
+   setting; and the second plan could not count a comparison whose own same-setting reading did
+   not resolve 1% first. What weakens it: the first self-comparison's lean, lower under the
+   second label in 65 pairs of 100, is not explained by the spread that was removed; and a trial
+   of the scripts ran on one host in the 72 seconds before the second plan was posted, one pair
+   of 512 KiB against 64 KiB with `br` on each of the four page lengths and two pairs of 64 KiB
+   against itself with `identity`. It ran no pair of the change with `identity` or a browser's
+   encodings, and one pair does not read 1%, but the plan was not in the pull request before
+   any turn of the change on the host's network.
 
    What a larger limit costs is memory, since a thread's cache keeps buffers its thread used.
    jemalloc 5.3.0 keeps up to 20 objects of a large size class in a thread's cache and trims a cache
@@ -1389,7 +1420,8 @@ rules something out.
    `431fe209d`, under `evidence/thread-cache-1979-second-trial`: its plan, the one-setting turns
    looked at before it, the scripts, every log, the readings and the script trial's logs; its
    parent `5fcf9d73b`, under `evidence/thread-cache-1979-second`, is that receipt before the
-   trial's logs were added.
+   trial's logs were added. The third run's is commit `e3cdc9658`, under
+   `evidence/thread-cache-1979-third`: its plan, its script, both hosts' logs and the readings.
 
    Stands on: measured (memory after eight floods, three runs each, seven allocator settings; page
    faults a request, repeatable to 0.1 in every round; idle CPU, three rounds; instructions a
@@ -1397,7 +1429,9 @@ rules something out.
    limit, three rounds; cycles under load, 40 and 60 pairs a workload on one host and one runtime,
    which met five of the six margins their plan declared and missed the uncompressed page's, and
    a second declared run on three hosts with the app on the host's network, 200 and 40 pairs a
-   workload, each short-page workload first read against itself, which met all six; memory
+   workload, each short-page workload first read against itself, which met all six, and a third
+   on two of those hosts, 200 pairs a workload on the 202,041-byte page uncompressed and as
+   zstd, each first read against itself, which met both; memory
    after floods on that host, three or six runs a setting, with eight CPUs, three rounds, and after
    bursts of slow readers, three runs); measured, noisy (CPU time and throughput in three rounds on
    a shared desktop, whose rounds moved by up to 2.4 times); platform (Debian 13's `libjemalloc2`,
@@ -1434,7 +1468,8 @@ rules something out.
    perf 6.8.12, `wrk` 4.1.0, libjemalloc2 5.3.0 and `brotli` 9.1.3, with jemalloc 5.3.0's
    `src/tcache.c` and the size classes in jemalloc's manual as they read that day; 2026-11-23,
    the second declared run, card-market's image of `faba240cd` on three DigitalOcean c-16s (two
-   with a Xeon Platinum 8280, one with an 8358), with that kernel, Docker, perf and `wrk`.
+   with a Xeon Platinum 8280, one with an 8358), with that kernel, Docker, perf and `wrk`, and
+   the third on the two with an 8280, the same image.
 
 24. <a id="choice-openapi"></a>**An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
    cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
