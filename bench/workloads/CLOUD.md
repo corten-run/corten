@@ -675,7 +675,7 @@ node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE
 - Before provisioning, the ledger must be empty (including after readiness exhaustion) or
   contain only the unacknowledged sequence-zero, 30-second bootstrap SSH `true` request
   ([#1618 Benchmark r21: first catalog SSH setup has no completion receipt and leaves an unused droplet outside ordinary recovery](https://github.com/corten-run/corten/issues/1618)).
-- After an interrupted upload, this path applies only to reservations launched from a commit
+- After a locally acknowledged upload, this path applies only to reservations launched from a commit
   that includes this recovery. Use that exact measured checkout and the original state
   directory; a different checkout refuses before provider access, even if it is newer.
   Only the successful, locally terminal prefix of the fixed no-op, directory setup and
@@ -686,6 +686,15 @@ node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE
   and an empty log, and every original registered session and watcher drained with no foreign
   actor. It binds the matching receipt digests to the unused retirement record
   ([#1744 Benchmark r21: an unused catalog host with six settled bootstrap entries is outside ordinary retirement](https://github.com/corten-run/corten/issues/1744)).
+- If only the very first `job.sh` upload lacks a reply, the measured checkout can retire a host
+  with a launch-pinned key **only if the upload never wrote the file**. The probe must find
+  only the empty log, the two preceding terminal session receipts, and the exact upload
+  request whose watcher failed before registration. Its deadline must have passed; neither
+  original PID, connection, transfer server, watcher job, trigger, nor occupied control
+  cgroup may remain. A partial file, later request, or missing proof preserves the host.
+  This records an unused retirement, not a successful transfer, benchmark result, or
+  reconciliation of an already externally deleted host
+  ([#1977 JSON r61 loses acknowledgement of the first bootstrap upload and cannot retire the unused host through ordinary collection](https://github.com/corten-run/corten/issues/1977)).
 
 Ordinary `--collect` refuses these pending-bootstrap cases before sending SSH. The pinned probe
 never adds, acknowledges or retries a ledger request or starts a unit. A settled SSH refusal

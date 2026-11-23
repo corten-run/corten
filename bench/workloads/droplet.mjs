@@ -14,7 +14,7 @@ import { inspectCampaign } from "./cloud-validation.mjs";
 import { idleArchiveScript, ownedR21, r21Validator, sealedUnit } from "./cloud-sealed-collection.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, groupedFailure, groupedFailureCandidate, groupedPreplanFailure, launchHostKey, retainedInvalidOwner, setupEvidence,
-  settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
+  interruptedFirstUpload, settledBootstrap, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript, verifyFailedNativeCustody, verifyFailedNativeReservation, verifyFailedNativeRetirement,
   verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { acknowledgedBootstrapSeal, controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { controlCheckpoint, pinnedHostOptions } from "./cloud-transport.mjs";
@@ -479,14 +479,17 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     verifyRetirementRecord(bytes, state.retirement.kind);
   };
   const requireUnusedBootstrapCustody = () => {
-    const settled = settledBootstrap(state, local);
-    assert.ok(unusedBootstrapApproval && (settled || unusedBootstrap(state)), "exact approved unused bootstrap required");
+    const interrupted = interruptedFirstUpload(state, local), uploads = interrupted || settledBootstrap(state, local);
+    assert.ok(unusedBootstrapApproval && (uploads || unusedBootstrap(state)), "exact approved unused bootstrap required");
     assert.equal(digest(regular(statePath, 1024 * 1024)), unusedBootstrapApproval.reservationSha256, "locked unused bootstrap reservation changed");
     const present = (path) => lstatSync(path, { throwIfNoEntry: false });
     assert.ok(!present(join(base, ".groups-launch.lock")) && (!state.group || !present(join(dirname(base), ".fleet-operation.lock"))),
       "original launch custody remains; preserve locks and host");
+    if (interrupted && state.fleet?.single) assert.ok(!present(join(dirname(dirname(base)), ".continuation-operation.lock")),
+      "continuation custody remains; preserve locks and host");
     const names = ["state.json", "operation.lock", "known_hosts", "unused-host.json"];
-    if (settled) {
+    if (uploads) {
+      if (interrupted) assert.equal(state.launchHostKeySha256, unusedBootstrapApproval.knownHostsSha256, "verified key differs from launch");
       assert.equal(fileHash(join(local, "known_hosts"), 1024 * 1024), unusedBootstrapApproval.knownHostsSha256, "saved host key changed");
       const uploaded = Math.ceil((state.control.ledger.length - 2) / 2), entries = Object.entries(remoteFiles(state));
       // The launcher saves the next file before its provider read and SFTP dispatch.
@@ -499,7 +502,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     }
     assert.ok(readdirSync(local).every((name) => names.includes(name)
       || /^unused-host\.interrupted-[a-f0-9]{64}\.json$/.test(name)), "unexpected local bootstrap custody; preserve host");
-    return settled;
+    return uploads;
   };
   const retire = async (kind, evidence, finishedAtMs) => {
     const pinned = options.unusedBootstrapKnownHosts !== undefined;
@@ -850,7 +853,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(options.collect, "collect options required");
       if (options.unusedBootstrapKnownHosts !== undefined) return locked(async () => {
         if (requireUnusedBootstrapCustody())
-          assert.equal((await execute("git", ["rev-parse", "HEAD"])).stdout.trim(), state.commit, "settled uploads require the measured checkout");
+          assert.equal((await execute("git", ["rev-parse", "HEAD"])).stdout.trim(), state.commit, "bootstrap uploads require the measured checkout");
         if (state.status === "preparing") return retireUnused();
         verifyRetirement(); await confirmDeleted();
         state.destroyedAt ??= new Date().toISOString(); save(); return 1;

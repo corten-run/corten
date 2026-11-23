@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { controller } from "./droplet.mjs";
 import { fleetCatalogCommand, reservation, selection, tags } from "./cloud-contract.mjs";
@@ -71,10 +71,10 @@ export function harness(t, flags = {}) {
   const temp = mkdtempSync(join(tmpdir(), "groups-cloud-test-"));
   t.after(() => { assert.ok(temp.startsWith(join(tmpdir(), "groups-cloud-test-"))); rmSync(temp, { recursive: true, force: true }); });
   const repo = join(temp, "repo"), base = flags.stateRoot
-    ?? (flags.fleetGroup === undefined ? join(temp, "control") : join(temp, "control", flags.fleetGroup));
+    ?? (flags.fleetGroup === undefined ? join(temp, "control") : join(temp, flags.fleetSlot ?? "control", flags.fleetGroup));
   const round = flags.round ?? "r21", local = join(base, `groups-${round}`), statePath = join(local, "state.json");
   mkdirSync(repo);
-  if (!flags.stateRoot) mkdirSync(flags.fleetGroup === undefined ? base : join(temp, "control"));
+  if (!flags.stateRoot) mkdirSync(flags.fleetGroup === undefined ? base : dirname(base));
   const hostId = flags.hostId ?? "123";
   let s = { ...reservation({ round, commit, token: flags.token ?? "0123456789abcdef" }), createIntentAt: new Date().toISOString(),
     status: "running", id: hostId, ip: "192.0.2.10", provider: { accountId, context }, fullGroupQualified: false };
