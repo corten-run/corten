@@ -8727,7 +8727,9 @@ rules something out.
     copy of the header map 576 (its slots 448 and its index 128), a 96-byte buffer behind
     `Cache-Control`, the key 48, the URL's list of copies 32, the header values' shared counts
     96 and the shell's key 16. Its head is now kept as a slice of its lines (320 for four), the
-    entry fits jemalloc's class of 448 (a test holds it there on 64-bit targets),
+    entry fits jemalloc's class of 448 (a test holds it there on 64-bit targets; a kept answer's
+    brotli 5, once made, holds its handle in a box of its own, 32 bytes counted with it, so the
+    entry keeps that class whether or not it is given one),
     `Cache-Control` is written at its own length (32) and a URL's list starts with room for one
     copy (8): 7,112 bytes in 10, 536 fewer, and 2,824 against 3,232 for a JSON body of 1,999
     bytes, 408 fewer. A request that keeps a page makes 39 calls to the allocator against 40,
