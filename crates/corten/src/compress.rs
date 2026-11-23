@@ -1052,16 +1052,22 @@ mod tests {
         assert_eq!(headers["content-encoding"], "zstd");
         assert_eq!(headers["vary"], "accept-encoding");
         assert_eq!(zstd::bulk::decompress(&body, 1 << 20).unwrap(), original.as_bytes());
-        let (headers, body) = get_with("/page", "gzip, br").await;
-        assert_eq!(headers["content-encoding"], "br");
-        let mut out = Vec::new();
-        brotli::BrotliDecompress(&mut &body[..], &mut out).unwrap();
-        assert_eq!(out, original.as_bytes());
-        let (headers, body) = get_with("/page", "gzip").await;
-        assert_eq!(headers["content-encoding"], "gzip");
-        let mut out = String::new();
-        std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(&body[..]), &mut out).unwrap();
-        assert_eq!(out, original);
+        // Without zstd, gzip (libdeflate's, read back by flate2's decoder) is ahead of brotli.
+        for accepted in ["gzip, br", "br, gzip", "gzip"] {
+            let (headers, body) = get_with("/page", accepted).await;
+            assert_eq!(headers["content-encoding"], "gzip", "{accepted}");
+            let mut out = String::new();
+            std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(&body[..]), &mut out).unwrap();
+            assert_eq!(out, original, "{accepted}");
+        }
+        // Brotli for a client that takes only that, or ranks it above gzip.
+        for accepted in ["br", "br, gzip;q=0.5"] {
+            let (headers, body) = get_with("/page", accepted).await;
+            assert_eq!(headers["content-encoding"], "br", "{accepted}");
+            let mut out = Vec::new();
+            brotli::BrotliDecompress(&mut &body[..], &mut out).unwrap();
+            assert_eq!(out, original.as_bytes(), "{accepted}");
+        }
         let (headers, body) = get_with("/page", "identity").await;
         assert!(!headers.contains_key("content-encoding"));
         assert_eq!(headers["vary"], "accept-encoding", "caches must still key on the coding");
