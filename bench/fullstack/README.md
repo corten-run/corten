@@ -1009,7 +1009,7 @@ and brotli 1 only past that size or for a client that accepts nothing else. On t
 card-market's smoke fixture (9,793 bytes, `route_loop` as above with pairs of 4 s and 16 s loops,
 three pairs, at `fdf94a6a7` against `bcf4aa073`) the request took 409,926 instructions and sent
 2,307 bytes, where brotli 1 took 841,069 for 2,475
-([design Choice 72](../../docs/design.md#choice-request-gzip)). The tables above are as they
+([design Choice 73](../../docs/design.md#choice-request-gzip)). The tables above are as they
 were measured.
 
 The rounds' page numbers (20,705 a second, 47 µs of CPU a page in r16) are for the request
